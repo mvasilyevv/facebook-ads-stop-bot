@@ -1082,6 +1082,96 @@
         }
       }
     },
+    "/api/campaigns/ad-account-timezone": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Get Ad Account Timezone",
+        "description": "Автоподхват таймзоны кабинета для start_time кампании.\n\n400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула\nошибку или кабинет не найден. read-only: один GET /act_{id} через Vision-сессию,\nбез открытия браузера.",
+        "operationId": "get_ad_account_timezone_api_campaigns_ad_account_timezone_get",
+        "parameters": [
+          {
+            "name": "act_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "ID рекламного кабинета (с префиксом act_ или без — нормализуется).",
+              "title": "Act Id"
+            },
+            "description": "ID рекламного кабинета (с префиксом act_ или без — нормализуется)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdAccountTimezoneResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/campaigns/ad-account-pages": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Get Ad Account Pages",
+        "description": "Список FB-страниц кабинета (promote_pages) для дропдауна page_id.\n\n400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула\nошибку или кабинет не найден. read-only: один GET /act_{id}/promote_pages через\nVision-сессию, без открытия браузера. Массив может быть пустым (нет страниц).",
+        "operationId": "get_ad_account_pages_api_campaigns_ad_account_pages_get",
+        "parameters": [
+          {
+            "name": "act_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "ID рекламного кабинета (с префиксом act_ или без — нормализуется).",
+              "title": "Act Id"
+            },
+            "description": "ID рекламного кабинета (с префиксом act_ или без — нормализуется)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdAccountPagesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboard/ads": {
       "get": {
         "tags": [
@@ -4077,7 +4167,7 @@
           "settings"
         ],
         "summary": "Get Vision Settings",
-        "description": "Возвращает VisionConfig и runtime-поля из Redis.\n\nhas_token = x_token_encrypted не пустой.\nRuntime-поля берутся из worker:heartbeat:browser-agent.",
+        "description": "Возвращает VisionConfig и runtime-поля из Redis.\n\nhas_token = токен есть в БД ИЛИ в .env (token_source говорит, где именно).\nRuntime-поля берутся из worker:heartbeat:browser-agent.",
         "operationId": "get_vision_settings_api_settings_vision_get",
         "responses": {
           "200": {
@@ -4173,6 +4263,128 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VisionEnsureCdpResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stats/today": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Get Stats Today",
+        "description": "Воронка текущих суток кабинета: тоталы, производные, почасовые дельты, трекер.",
+        "operationId": "get_stats_today_api_stats_today_get",
+        "parameters": [
+          {
+            "name": "breakdown",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Разрез: offer | campaign (опционально)",
+              "title": "Breakdown"
+            },
+            "description": "Разрез: offer | campaign (опционально)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTodayOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stats/period": {
+      "get": {
+        "tags": [
+          "stats"
+        ],
+        "summary": "Get Stats Period",
+        "description": "Воронка за период (max 90д): тоталы, производные, подневные серии Meta и трекера.",
+        "operationId": "get_stats_period_api_stats_period_get",
+        "parameters": [
+          {
+            "name": "from_iso",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO-8601 начало периода",
+              "title": "From Iso"
+            },
+            "description": "ISO-8601 начало периода"
+          },
+          {
+            "name": "to_iso",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ISO-8601 конец периода",
+              "title": "To Iso"
+            },
+            "description": "ISO-8601 конец периода"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsPeriodOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -4767,6 +4979,66 @@
         ],
         "title": "Account",
         "description": "Идентичность кабинета (preset)."
+      },
+      "AdAccountPage": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "AdAccountPage",
+        "description": "FB-страница, доступная кабинету для промо (id + человекочитаемое имя)."
+      },
+      "AdAccountPagesResponse": {
+        "properties": {
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/AdAccountPage"
+            },
+            "type": "array",
+            "title": "Pages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pages"
+        ],
+        "title": "AdAccountPagesResponse",
+        "description": "Список страниц кабинета для дропдауна page_id в шаге «Идентичность»."
+      },
+      "AdAccountTimezoneResponse": {
+        "properties": {
+          "tz_offset_hours": {
+            "type": "integer",
+            "title": "Tz Offset Hours"
+          },
+          "tz_offset_str": {
+            "type": "string",
+            "title": "Tz Offset Str"
+          },
+          "timezone_name": {
+            "type": "string",
+            "title": "Timezone Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tz_offset_hours",
+          "tz_offset_str",
+          "timezone_name"
+        ],
+        "title": "AdAccountTimezoneResponse",
+        "description": "Таймзона рекламного кабинета для start_time кампании."
       },
       "AdSnapshotOut": {
         "properties": {
@@ -5570,6 +5842,67 @@
         ],
         "title": "Body_upload_concepts_api_tools_campaigns_upload_post"
       },
+      "BreakdownRowOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "spend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spend"
+          },
+          "clicks": {
+            "type": "integer",
+            "title": "Clicks",
+            "default": 0
+          },
+          "leads": {
+            "type": "integer",
+            "title": "Leads",
+            "default": 0
+          },
+          "registrations": {
+            "type": "integer",
+            "title": "Registrations",
+            "default": 0
+          },
+          "deposits": {
+            "type": "integer",
+            "title": "Deposits",
+            "default": 0
+          },
+          "cpl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpl"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "BreakdownRowOut",
+        "description": "Строка разреза по офферу/кампании (за сегодня)."
+      },
       "Budget": {
         "properties": {
           "level": {
@@ -5596,7 +5929,7 @@
           "bid_strategy": {
             "type": "string",
             "title": "Bid Strategy",
-            "default": "LOWEST_COST_WITHOUT_CAP"
+            "default": "COST_CAP"
           },
           "bid_amount_cents": {
             "anyOf": [
@@ -5645,6 +5978,13 @@
           "count": {
             "type": "integer",
             "title": "Count"
+          },
+          "cancelled_task_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Cancelled Task Ids"
           }
         },
         "type": "object",
@@ -5653,7 +5993,7 @@
           "count"
         ],
         "title": "BulkDeleteAdsResponse",
-        "description": "Фактически удалённые fb_ad_id."
+        "description": "Фактически удалённые fb_ad_id + отменённые orphan-задачи task_queue."
       },
       "BulkDisableFailed": {
         "properties": {
@@ -6002,27 +6342,29 @@
             "type": "string",
             "title": "Name"
           },
-          "kind": {
-            "type": "string",
-            "title": "Kind"
-          },
           "adsets": {
             "items": {
               "$ref": "#/components/schemas/AdsetConfig"
             },
             "type": "array",
             "title": "Adsets"
+          },
+          "concept_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Concept Refs"
           }
         },
         "type": "object",
         "required": [
           "key",
           "name",
-          "kind",
           "adsets"
         ],
         "title": "CampaignBlock",
-        "description": "Одна кампания: тип медиа + список adset'ов."
+        "description": "Одна кампания: список adset'ов + смешанный набор концептов (фото/видео).\n\nТип каждого ad определяется по расширению файла концепта (ref_media_kind),\nне по кампании. concept_refs — единый источник концептов блока."
       },
       "CampaignConfig": {
         "properties": {
@@ -6125,6 +6467,11 @@
             "title": "Creative Prefix",
             "default": ""
           },
+          "code_start": {
+            "type": "integer",
+            "title": "Code Start",
+            "default": 1
+          },
           "launch_state": {
             "$ref": "#/components/schemas/LaunchState",
             "default": "campaign_paused"
@@ -6135,6 +6482,7 @@
           "account",
           "offer_code",
           "destination_link",
+          "budget",
           "targeting",
           "campaigns"
         ],
@@ -6254,7 +6602,18 @@
           "bid_strategy": {
             "type": "string",
             "title": "Bid Strategy",
-            "default": "LOWEST_COST_WITHOUT_CAP"
+            "default": "COST_CAP"
+          },
+          "bid_amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bid Amount Cents"
           },
           "countries": {
             "items": {
@@ -6266,7 +6625,7 @@
           "age_min": {
             "type": "integer",
             "title": "Age Min",
-            "default": 18
+            "default": 21
           },
           "age_max": {
             "type": "integer",
@@ -6527,10 +6886,6 @@
             "type": "string",
             "title": "Name"
           },
-          "kind": {
-            "type": "string",
-            "title": "Kind"
-          },
           "status": {
             "type": "string",
             "title": "Status"
@@ -6547,7 +6902,6 @@
         "required": [
           "key",
           "name",
-          "kind",
           "status",
           "adsets"
         ],
@@ -6703,9 +7057,16 @@
             "type": "string",
             "title": "Key"
           },
-          "kind": {
-            "type": "string",
-            "title": "Kind"
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
           },
           "adset_count": {
             "type": "integer",
@@ -6723,11 +7084,10 @@
         "type": "object",
         "required": [
           "key",
-          "kind",
           "adset_count"
         ],
         "title": "CampaignStructureIn",
-        "description": "Одна кампания в плоской структуре фронта.\n\nНесёт только `key`/`kind`/`adset_count`/`concept_refs`. Доменные имена adset'ов\nи dir/glob генерируются детерминированно в `to_domain` (фронт их не знает)."
+        "description": "Одна кампания в плоской структуре фронта.\n\nНесёт `key`/`label`/`adset_count`/`concept_refs`. Доменные имена adset'ов\nи dir/glob генерируются детерминированно в `to_domain` (фронт их не знает).\n`label` — произвольная метка кампании; если задана, добавляется в конец имени\nкампании и каждого adset'а. Пустая/None — ничего не добавляется."
       },
       "ChartBucketOut": {
         "properties": {
@@ -6885,6 +7245,62 @@
         "title": "CreativeUniquifyResponse",
         "description": "Результат уникализации: куда сохранено и сколько файлов создано."
       },
+      "DailyPointOut": {
+        "properties": {
+          "day": {
+            "type": "string",
+            "format": "date",
+            "title": "Day"
+          },
+          "spend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spend"
+          },
+          "impressions": {
+            "type": "integer",
+            "title": "Impressions",
+            "default": 0
+          },
+          "clicks": {
+            "type": "integer",
+            "title": "Clicks",
+            "default": 0
+          },
+          "leads": {
+            "type": "integer",
+            "title": "Leads",
+            "default": 0
+          },
+          "registrations": {
+            "type": "integer",
+            "title": "Registrations",
+            "default": 0
+          },
+          "deposits": {
+            "type": "integer",
+            "title": "Deposits",
+            "default": 0
+          },
+          "active_ads": {
+            "type": "integer",
+            "title": "Active Ads",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "day"
+        ],
+        "title": "DailyPointOut",
+        "description": "Точка подневной серии — дневной итог (UTC-день)."
+      },
       "DashboardBatchOut": {
         "properties": {
           "stats": {
@@ -6900,24 +7316,21 @@
           },
           "recent_alerts": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/AlertEventOut"
             },
             "type": "array",
             "title": "Recent Alerts"
           },
           "recent_disable_tasks": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/TaskQueueRowOut"
             },
             "type": "array",
             "title": "Recent Disable Tasks"
           },
           "recent_enable_tasks": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/TaskQueueRowOut"
             },
             "type": "array",
             "title": "Recent Enable Tasks"
@@ -6936,7 +7349,7 @@
           "stats"
         ],
         "title": "DashboardBatchOut",
-        "description": "Композитный ответ /api/dashboard/batch — снижает количество fetch'ей на фронте.\n\nКонтракт: даже если одна из секций упала, остальные возвращаются (см.\npartial-failure поведение в роутере). Списки могут быть пустыми.\n\nСекции:\n- recent_disable_tasks: задачи отключения (meta_api_mutation pause_ad / legacy disable)\n- recent_enable_tasks: задачи включения (meta_api_mutation activate_ad / legacy enable)"
+        "description": "Композитный ответ /api/dashboard/batch — снижает количество fetch'ей на фронте.\n\nКонтракт: даже если одна из секций упала, остальные возвращаются (см.\npartial-failure поведение в роутере). Списки могут быть пустыми.\n\nСекции:\n- recent_disable_tasks: задачи отключения (meta_api_mutation pause_ad / legacy disable)\n- recent_enable_tasks: задачи включения (meta_api_mutation activate_ad / legacy enable)\n\nrecent_alerts/recent_disable_tasks/recent_enable_tasks типизированы точными моделями\n(AlertEventOut/TaskQueueRowOut) — серилизаторы (alert_event_row_to_out/task_row_to_out)\nуже строят dict ровно под их форму, раньше тип был размыт до dict[str, Any], из-за чего\nфронт был вынужден небезопасно кастовать поля (M9-аудит). recent_incidents/\nenable_recommendations_pending оставлены dict — отдельных моделей под их форму нет."
       },
       "DashboardPerformanceOut": {
         "properties": {
@@ -7471,6 +7884,144 @@
         ],
         "title": "FakeDepositUpsertIn",
         "description": "Тело PUT /fake-deposits/{fb_ad_id}.\n\nfake_count >= 0 (отрицательные депозиты физически невозможны)."
+      },
+      "FunnelDerivedOut": {
+        "properties": {
+          "cpc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpc"
+          },
+          "cpl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpl"
+          },
+          "cpr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpr"
+          },
+          "cpa": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpa"
+          },
+          "ctr_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ctr Pct"
+          },
+          "cr_click_lead_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cr Click Lead Pct"
+          },
+          "cr_lead_reg_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cr Lead Reg Pct"
+          },
+          "cr_reg_dep_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cr Reg Dep Pct"
+          }
+        },
+        "type": "object",
+        "title": "FunnelDerivedOut",
+        "description": "Производные метрики (None = знаменатель нулевой)."
+      },
+      "FunnelTotalsOut": {
+        "properties": {
+          "spend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spend"
+          },
+          "impressions": {
+            "type": "integer",
+            "title": "Impressions",
+            "default": 0
+          },
+          "clicks": {
+            "type": "integer",
+            "title": "Clicks",
+            "default": 0
+          },
+          "leads": {
+            "type": "integer",
+            "title": "Leads",
+            "default": 0
+          },
+          "registrations": {
+            "type": "integer",
+            "title": "Registrations",
+            "default": 0
+          },
+          "deposits": {
+            "type": "integer",
+            "title": "Deposits",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "FunnelTotalsOut",
+        "description": "Тоталы воронки Meta за окно (Decimal-строки для денег)."
       },
       "HTTPValidationError": {
         "properties": {
@@ -8112,6 +8663,62 @@
         "title": "HistoryTotals",
         "description": "Суммарные метрики за период."
       },
+      "HourlyPointOut": {
+        "properties": {
+          "ts": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Ts"
+          },
+          "spend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spend"
+          },
+          "impressions": {
+            "type": "integer",
+            "title": "Impressions",
+            "default": 0
+          },
+          "clicks": {
+            "type": "integer",
+            "title": "Clicks",
+            "default": 0
+          },
+          "leads": {
+            "type": "integer",
+            "title": "Leads",
+            "default": 0
+          },
+          "registrations": {
+            "type": "integer",
+            "title": "Registrations",
+            "default": 0
+          },
+          "deposits": {
+            "type": "integer",
+            "title": "Deposits",
+            "default": 0
+          },
+          "active_ads": {
+            "type": "integer",
+            "title": "Active Ads",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "ts"
+        ],
+        "title": "HourlyPointOut",
+        "description": "Точка почасовой серии — ЧЕСТНАЯ дельта («сколько в этот час»)."
+      },
       "IncidentOut": {
         "properties": {
           "fb_ad_id": {
@@ -8441,6 +9048,20 @@
               }
             ],
             "title": "Idempotency Key"
+          },
+          "concept_counts": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Counts"
           }
         },
         "type": "object",
@@ -8448,7 +9069,7 @@
           "config"
         ],
         "title": "LaunchIn",
-        "description": "Запрос запуска залива: конфиг + опц. ссылка на пресет/upload.\n\n`config` — каноническая ПЛОСКАЯ форма фронта (`CampaignConfigIn`) ИЛИ вложенный\n`CampaignConfig` (legacy). `domain_config()` нормализует в доменный CampaignConfig."
+        "description": "Запрос запуска залива: конфиг + опц. ссылка на пресет/upload.\n\n`config` — каноническая ПЛОСКАЯ форма фронта (`CampaignConfigIn`) ИЛИ вложенный\n`CampaignConfig` (legacy). `domain_config()` нормализует в доменный CampaignConfig.\n`concept_counts_map()` даёт ту же раскладку K, что показал validate (симметрия превью↔залив)."
       },
       "LaunchOut": {
         "properties": {
@@ -8569,6 +9190,54 @@
         ],
         "title": "MetaApiChannelStatus",
         "description": "Статус сетевого канала Marketing API (auto-stop) по проактивному probe.\n\nПишется health_watchdog в Redis meta_api:channel:health. ONLINE — реальный GET /me\nпрошёл; DEGRADED — канал мёртв (network-down / протух токен); UNKNOWN — прободер не\nписал / ключ протух (нет данных, НЕ обязательно отказ)."
+      },
+      "MetaPeriodBlockOut": {
+        "properties": {
+          "totals": {
+            "$ref": "#/components/schemas/FunnelTotalsOut"
+          },
+          "derived": {
+            "$ref": "#/components/schemas/FunnelDerivedOut"
+          },
+          "series_daily": {
+            "items": {
+              "$ref": "#/components/schemas/DailyPointOut"
+            },
+            "type": "array",
+            "title": "Series Daily"
+          }
+        },
+        "type": "object",
+        "required": [
+          "totals",
+          "derived"
+        ],
+        "title": "MetaPeriodBlockOut",
+        "description": "Блок Meta «за период»: тоталы + производные + подневная серия."
+      },
+      "MetaTodayBlockOut": {
+        "properties": {
+          "totals": {
+            "$ref": "#/components/schemas/FunnelTotalsOut"
+          },
+          "derived": {
+            "$ref": "#/components/schemas/FunnelDerivedOut"
+          },
+          "series_hourly": {
+            "items": {
+              "$ref": "#/components/schemas/HourlyPointOut"
+            },
+            "type": "array",
+            "title": "Series Hourly"
+          }
+        },
+        "type": "object",
+        "required": [
+          "totals",
+          "derived"
+        ],
+        "title": "MetaTodayBlockOut",
+        "description": "Блок Meta «за сегодня»: тоталы + производные + почасовые дельты."
       },
       "MetricRow": {
         "properties": {
@@ -9123,6 +9792,13 @@
             "minItems": 1,
             "title": "Ad Account Ids"
           },
+          "countries": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Countries"
+          },
           "country_code": {
             "anyOf": [
               {
@@ -9290,6 +9966,25 @@
             "type": "array",
             "title": "Ad Account Ids"
           },
+          "countries": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Countries"
+          },
+          "cpa_threshold": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpa Threshold"
+          },
           "created_at": {
             "anyOf": [
               {
@@ -9345,18 +10040,6 @@
             ],
             "title": "Offer Id"
           },
-          "spend_no_event_threshold": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Spend No Event Threshold"
-          },
           "cpa_threshold": {
             "anyOf": [
               {
@@ -9369,30 +10052,6 @@
             ],
             "title": "Cpa Threshold"
           },
-          "cpm_threshold": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cpm Threshold"
-          },
-          "ctr_threshold": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ctr Threshold"
-          },
           "frequency_threshold": {
             "anyOf": [
               {
@@ -9404,18 +10063,6 @@
               }
             ],
             "title": "Frequency Threshold"
-          },
-          "funnel_ratio_threshold": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Funnel Ratio Threshold"
           },
           "stop_percent_of_rule": {
             "type": "string",
@@ -9436,22 +10083,6 @@
       },
       "OfferRuleUpsertIn": {
         "properties": {
-          "spend_no_event_threshold": {
-            "anyOf": [
-              {
-                "type": "number",
-                "minimum": 0.0
-              },
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Spend No Event Threshold"
-          },
           "cpa_threshold": {
             "anyOf": [
               {
@@ -9468,39 +10099,6 @@
             ],
             "title": "Cpa Threshold"
           },
-          "cpm_threshold": {
-            "anyOf": [
-              {
-                "type": "number",
-                "minimum": 0.0
-              },
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cpm Threshold"
-          },
-          "ctr_threshold": {
-            "anyOf": [
-              {
-                "type": "number",
-                "maximum": 100.0,
-                "minimum": 0.0
-              },
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ctr Threshold"
-          },
           "frequency_threshold": {
             "anyOf": [
               {
@@ -9516,23 +10114,6 @@
               }
             ],
             "title": "Frequency Threshold"
-          },
-          "funnel_ratio_threshold": {
-            "anyOf": [
-              {
-                "type": "number",
-                "maximum": 100.0,
-                "minimum": 0.0
-              },
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Funnel Ratio Threshold"
           },
           "stop_percent_of_rule": {
             "anyOf": [
@@ -9641,6 +10222,20 @@
               }
             ],
             "title": "Ad Account Ids"
+          },
+          "countries": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Countries"
           },
           "country_code": {
             "anyOf": [
@@ -10618,6 +11213,78 @@
         "title": "StartCabinetDayResponse",
         "description": "Ответ на POST /observer/start-new-cabinet-day."
       },
+      "StatsPeriodOut": {
+        "properties": {
+          "from_iso": {
+            "type": "string",
+            "format": "date-time",
+            "title": "From Iso"
+          },
+          "to_iso": {
+            "type": "string",
+            "format": "date-time",
+            "title": "To Iso"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/MetaPeriodBlockOut"
+          },
+          "tracker": {
+            "$ref": "#/components/schemas/TrackerBlockOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_iso",
+          "to_iso",
+          "meta",
+          "tracker"
+        ],
+        "title": "StatsPeriodOut",
+        "description": "Ответ GET /api/stats/period."
+      },
+      "StatsTodayOut": {
+        "properties": {
+          "cabinet_day_start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cabinet Day Start"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/MetaTodayBlockOut"
+          },
+          "tracker": {
+            "$ref": "#/components/schemas/TrackerBlockOut"
+          },
+          "breakdown": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BreakdownRowOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Breakdown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cabinet_day_start",
+          "generated_at",
+          "meta",
+          "tracker"
+        ],
+        "title": "StatsTodayOut",
+        "description": "Ответ GET /api/stats/today."
+      },
       "Targeting": {
         "properties": {
           "countries": {
@@ -10635,7 +11302,7 @@
           "age_min": {
             "type": "integer",
             "title": "Age Min",
-            "default": 18
+            "default": 21
           },
           "age_max": {
             "type": "integer",
@@ -11092,6 +11759,28 @@
             "title": "Can Open In Ads Manager",
             "default": false
           },
+          "creative_thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Thumb Url"
+          },
+          "creative_image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Image Url"
+          },
           "metrics": {
             "$ref": "#/components/schemas/TmaAdMetrics"
           },
@@ -11483,6 +12172,130 @@
         "title": "TopCampaignOut",
         "description": "Строка топа кампаний по spend за окно ?days."
       },
+      "TrackerBlockOut": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available",
+            "default": false
+          },
+          "day_utc": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Utc"
+          },
+          "attribution_note": {
+            "type": "string",
+            "title": "Attribution Note",
+            "default": ""
+          },
+          "totals": {
+            "$ref": "#/components/schemas/TrackerTotalsOut"
+          },
+          "series_daily": {
+            "items": {
+              "$ref": "#/components/schemas/TrackerDailyPointOut"
+            },
+            "type": "array",
+            "title": "Series Daily"
+          }
+        },
+        "type": "object",
+        "title": "TrackerBlockOut",
+        "description": "Блок трекера. available=false — данных нет/запрос упал (ответ не роняем)."
+      },
+      "TrackerDailyPointOut": {
+        "properties": {
+          "day": {
+            "type": "string",
+            "format": "date",
+            "title": "Day"
+          },
+          "installs": {
+            "type": "integer",
+            "title": "Installs",
+            "default": 0
+          },
+          "registrations": {
+            "type": "integer",
+            "title": "Registrations",
+            "default": 0
+          },
+          "deposits": {
+            "type": "integer",
+            "title": "Deposits",
+            "default": 0
+          },
+          "revenue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revenue"
+          }
+        },
+        "type": "object",
+        "required": [
+          "day"
+        ],
+        "title": "TrackerDailyPointOut",
+        "description": "Точка подневной серии трекера."
+      },
+      "TrackerTotalsOut": {
+        "properties": {
+          "installs": {
+            "type": "integer",
+            "title": "Installs",
+            "default": 0
+          },
+          "registrations": {
+            "type": "integer",
+            "title": "Registrations",
+            "default": 0
+          },
+          "deposits": {
+            "type": "integer",
+            "title": "Deposits",
+            "default": 0
+          },
+          "revenue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revenue"
+          },
+          "roi_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roi Pct"
+          }
+        },
+        "type": "object",
+        "title": "TrackerTotalsOut",
+        "description": "Тоталы трекера AdSet.pro (UTC-дни)."
+      },
       "UploadConceptsOut": {
         "properties": {
           "upload_id": {
@@ -11717,6 +12530,17 @@
             "type": "boolean",
             "title": "Has Token",
             "default": false
+          },
+          "token_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Source"
           },
           "profile_id": {
             "anyOf": [

@@ -95,3 +95,17 @@ export type TelegramSettings = components["schemas"]["TelegramSettingsResponse"]
 
 /** Детальная страница объявления в TMA */
 export type TmaAdDetail = components["schemas"]["TmaAdDetailResponse"];
+
+// ─── Статистика залива ───────────────────────────────────────────────────────
+
+/** Воронка текущих суток кабинета: тоталы + производные + почасовые дельты + трекер */
+export type StatsToday = components["schemas"]["StatsTodayOut"];
+
+/** Воронка за период: тоталы + производные + подневные серии Meta и трекера */
+export type StatsPeriod = components["schemas"]["StatsPeriodOut"];
+
+/** Тоталы воронки Meta (money-поля — Decimal-строки) */
+export type FunnelTotals = components["schemas"]["FunnelTotalsOut"];
+
+/** Производные метрики воронки (None = деление на ноль → «—») */
+export type FunnelDerived = components["schemas"]["FunnelDerivedOut"];

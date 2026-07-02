@@ -486,6 +486,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/campaigns/ad-account-timezone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Ad Account Timezone
+         * @description Автоподхват таймзоны кабинета для start_time кампании.
+         *
+         *     400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула
+         *     ошибку или кабинет не найден. read-only: один GET /act_{id} через Vision-сессию,
+         *     без открытия браузера.
+         */
+        get: operations["get_ad_account_timezone_api_campaigns_ad_account_timezone_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/campaigns/ad-account-pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Ad Account Pages
+         * @description Список FB-страниц кабинета (promote_pages) для дропдауна page_id.
+         *
+         *     400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула
+         *     ошибку или кабинет не найден. read-only: один GET /act_{id}/promote_pages через
+         *     Vision-сессию, без открытия браузера. Массив может быть пустым (нет страниц).
+         */
+        get: operations["get_ad_account_pages_api_campaigns_ad_account_pages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard/ads": {
         parameters: {
             query?: never;
@@ -1693,7 +1741,7 @@ export interface paths {
          * Get Vision Settings
          * @description Возвращает VisionConfig и runtime-поля из Redis.
          *
-         *     has_token = x_token_encrypted не пустой.
+         *     has_token = токен есть в БД ИЛИ в .env (token_source говорит, где именно).
          *     Runtime-поля берутся из worker:heartbeat:browser-agent.
          */
         get: operations["get_vision_settings_api_settings_vision_get"];
@@ -1755,6 +1803,46 @@ export interface paths {
          *     возвращает ok=false (run.sh покажет мягкий warning, а не ошибку 404/503).
          */
         post: operations["post_vision_ensure_cdp_api_vision_ensure_cdp_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/stats/today": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Stats Today
+         * @description Воронка текущих суток кабинета: тоталы, производные, почасовые дельты, трекер.
+         */
+        get: operations["get_stats_today_api_stats_today_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/stats/period": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Stats Period
+         * @description Воронка за период (max 90д): тоталы, производные, подневные серии Meta и трекера.
+         */
+        get: operations["get_stats_period_api_stats_period_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2082,6 +2170,36 @@ export interface components {
             tz_offset: string;
         };
         /**
+         * AdAccountPage
+         * @description FB-страница, доступная кабинету для промо (id + человекочитаемое имя).
+         */
+        AdAccountPage: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * AdAccountPagesResponse
+         * @description Список страниц кабинета для дропдауна page_id в шаге «Идентичность».
+         */
+        AdAccountPagesResponse: {
+            /** Pages */
+            pages: components["schemas"]["AdAccountPage"][];
+        };
+        /**
+         * AdAccountTimezoneResponse
+         * @description Таймзона рекламного кабинета для start_time кампании.
+         */
+        AdAccountTimezoneResponse: {
+            /** Tz Offset Hours */
+            tz_offset_hours: number;
+            /** Tz Offset Str */
+            tz_offset_str: string;
+            /** Timezone Name */
+            timezone_name: string;
+        };
+        /**
          * AdSnapshotOut
          * @description Композитный snapshot одного ad'а для /dashboard/ads и /dashboard/incidents.
          */
@@ -2404,6 +2522,40 @@ export interface components {
             files: string[];
         };
         /**
+         * BreakdownRowOut
+         * @description Строка разреза по офферу/кампании (за сегодня).
+         */
+        BreakdownRowOut: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Spend */
+            spend?: string | null;
+            /**
+             * Clicks
+             * @default 0
+             */
+            clicks: number;
+            /**
+             * Leads
+             * @default 0
+             */
+            leads: number;
+            /**
+             * Registrations
+             * @default 0
+             */
+            registrations: number;
+            /**
+             * Deposits
+             * @default 0
+             */
+            deposits: number;
+            /** Cpl */
+            cpl?: string | null;
+        };
+        /**
          * Budget
          * @description Бюджет и стратегия ставок с hard-cap валидацией (money-safe).
          */
@@ -2422,7 +2574,7 @@ export interface components {
             lifetime_cents?: number | null;
             /**
              * Bid Strategy
-             * @default LOWEST_COST_WITHOUT_CAP
+             * @default COST_CAP
              */
             bid_strategy: string;
             /** Bid Amount Cents */
@@ -2438,13 +2590,15 @@ export interface components {
         };
         /**
          * BulkDeleteAdsResponse
-         * @description Фактически удалённые fb_ad_id.
+         * @description Фактически удалённые fb_ad_id + отменённые orphan-задачи task_queue.
          */
         BulkDeleteAdsResponse: {
             /** Deleted */
             deleted: string[];
             /** Count */
             count: number;
+            /** Cancelled Task Ids */
+            cancelled_task_ids?: number[];
         };
         /**
          * BulkDisableFailed
@@ -2627,17 +2781,20 @@ export interface components {
         };
         /**
          * CampaignBlock
-         * @description Одна кампания: тип медиа + список adset'ов.
+         * @description Одна кампания: список adset'ов + смешанный набор концептов (фото/видео).
+         *
+         *     Тип каждого ad определяется по расширению файла концепта (ref_media_kind),
+         *     не по кампании. concept_refs — единый источник концептов блока.
          */
         CampaignBlock: {
             /** Key */
             key: string;
             /** Name */
             name: string;
-            /** Kind */
-            kind: string;
             /** Adsets */
             adsets: components["schemas"]["AdsetConfig"][];
+            /** Concept Refs */
+            concept_refs?: string[];
         };
         /**
          * CampaignConfig
@@ -2688,7 +2845,7 @@ export interface components {
              * @default
              */
             creo_root: string;
-            budget?: components["schemas"]["Budget"];
+            budget: components["schemas"]["Budget"];
             targeting: components["schemas"]["Targeting"];
             attribution?: components["schemas"]["Attribution"];
             ad_text?: components["schemas"]["AdText"];
@@ -2701,6 +2858,11 @@ export interface components {
              * @default
              */
             creative_prefix: string;
+            /**
+             * Code Start
+             * @default 1
+             */
+            code_start: number;
             /** @default campaign_paused */
             launch_state: components["schemas"]["LaunchState"];
         };
@@ -2769,14 +2931,16 @@ export interface components {
             daily_budget_cents: number;
             /**
              * Bid Strategy
-             * @default LOWEST_COST_WITHOUT_CAP
+             * @default COST_CAP
              */
             bid_strategy: string;
+            /** Bid Amount Cents */
+            bid_amount_cents?: number | null;
             /** Countries */
             countries?: string[];
             /**
              * Age Min
-             * @default 18
+             * @default 21
              */
             age_min: number;
             /**
@@ -2905,8 +3069,6 @@ export interface components {
             key: string;
             /** Name */
             name: string;
-            /** Kind */
-            kind: string;
             /** Status */
             status: string;
             /** Adsets */
@@ -2988,14 +3150,16 @@ export interface components {
          * CampaignStructureIn
          * @description Одна кампания в плоской структуре фронта.
          *
-         *     Несёт только `key`/`kind`/`adset_count`/`concept_refs`. Доменные имена adset'ов
+         *     Несёт `key`/`label`/`adset_count`/`concept_refs`. Доменные имена adset'ов
          *     и dir/glob генерируются детерминированно в `to_domain` (фронт их не знает).
+         *     `label` — произвольная метка кампании; если задана, добавляется в конец имени
+         *     кампании и каждого adset'а. Пустая/None — ничего не добавляется.
          */
         CampaignStructureIn: {
             /** Key */
             key: string;
-            /** Kind */
-            kind: string;
+            /** Label */
+            label?: string | null;
             /** Adset Count */
             adset_count: number;
             /** Concept Refs */
@@ -3061,6 +3225,49 @@ export interface components {
             duration_ms: number;
         };
         /**
+         * DailyPointOut
+         * @description Точка подневной серии — дневной итог (UTC-день).
+         */
+        DailyPointOut: {
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Spend */
+            spend?: string | null;
+            /**
+             * Impressions
+             * @default 0
+             */
+            impressions: number;
+            /**
+             * Clicks
+             * @default 0
+             */
+            clicks: number;
+            /**
+             * Leads
+             * @default 0
+             */
+            leads: number;
+            /**
+             * Registrations
+             * @default 0
+             */
+            registrations: number;
+            /**
+             * Deposits
+             * @default 0
+             */
+            deposits: number;
+            /**
+             * Active Ads
+             * @default 0
+             */
+            active_ads: number;
+        };
+        /**
          * DashboardBatchOut
          * @description Композитный ответ /api/dashboard/batch — снижает количество fetch'ей на фронте.
          *
@@ -3070,6 +3277,12 @@ export interface components {
          *     Секции:
          *     - recent_disable_tasks: задачи отключения (meta_api_mutation pause_ad / legacy disable)
          *     - recent_enable_tasks: задачи включения (meta_api_mutation activate_ad / legacy enable)
+         *
+         *     recent_alerts/recent_disable_tasks/recent_enable_tasks типизированы точными моделями
+         *     (AlertEventOut/TaskQueueRowOut) — серилизаторы (alert_event_row_to_out/task_row_to_out)
+         *     уже строят dict ровно под их форму, раньше тип был размыт до dict[str, Any], из-за чего
+         *     фронт был вынужден небезопасно кастовать поля (M9-аудит). recent_incidents/
+         *     enable_recommendations_pending оставлены dict — отдельных моделей под их форму нет.
          */
         DashboardBatchOut: {
             stats: components["schemas"]["DashboardStatsOut"];
@@ -3339,6 +3552,61 @@ export interface components {
              */
             note?: string | null;
         };
+        /**
+         * FunnelDerivedOut
+         * @description Производные метрики (None = знаменатель нулевой).
+         */
+        FunnelDerivedOut: {
+            /** Cpc */
+            cpc?: string | null;
+            /** Cpl */
+            cpl?: string | null;
+            /** Cpr */
+            cpr?: string | null;
+            /** Cpa */
+            cpa?: string | null;
+            /** Ctr Pct */
+            ctr_pct?: string | null;
+            /** Cr Click Lead Pct */
+            cr_click_lead_pct?: string | null;
+            /** Cr Lead Reg Pct */
+            cr_lead_reg_pct?: string | null;
+            /** Cr Reg Dep Pct */
+            cr_reg_dep_pct?: string | null;
+        };
+        /**
+         * FunnelTotalsOut
+         * @description Тоталы воронки Meta за окно (Decimal-строки для денег).
+         */
+        FunnelTotalsOut: {
+            /** Spend */
+            spend?: string | null;
+            /**
+             * Impressions
+             * @default 0
+             */
+            impressions: number;
+            /**
+             * Clicks
+             * @default 0
+             */
+            clicks: number;
+            /**
+             * Leads
+             * @default 0
+             */
+            leads: number;
+            /**
+             * Registrations
+             * @default 0
+             */
+            registrations: number;
+            /**
+             * Deposits
+             * @default 0
+             */
+            deposits: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -3584,6 +3852,49 @@ export interface components {
             active_ads_count: number;
         };
         /**
+         * HourlyPointOut
+         * @description Точка почасовой серии — ЧЕСТНАЯ дельта («сколько в этот час»).
+         */
+        HourlyPointOut: {
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+            /** Spend */
+            spend?: string | null;
+            /**
+             * Impressions
+             * @default 0
+             */
+            impressions: number;
+            /**
+             * Clicks
+             * @default 0
+             */
+            clicks: number;
+            /**
+             * Leads
+             * @default 0
+             */
+            leads: number;
+            /**
+             * Registrations
+             * @default 0
+             */
+            registrations: number;
+            /**
+             * Deposits
+             * @default 0
+             */
+            deposits: number;
+            /**
+             * Active Ads
+             * @default 0
+             */
+            active_ads: number;
+        };
+        /**
          * IncidentOut
          * @description AdSnapshotOut + incident-специфичные поля для /dashboard/incidents.
          */
@@ -3660,6 +3971,7 @@ export interface components {
          *
          *     `config` — каноническая ПЛОСКАЯ форма фронта (`CampaignConfigIn`) ИЛИ вложенный
          *     `CampaignConfig` (legacy). `domain_config()` нормализует в доменный CampaignConfig.
+         *     `concept_counts_map()` даёт ту же раскладку K, что показал validate (симметрия превью↔залив).
          */
         LaunchIn: {
             /** Config */
@@ -3668,6 +3980,10 @@ export interface components {
             preset_id?: string | null;
             /** Idempotency Key */
             idempotency_key?: string | null;
+            /** Concept Counts */
+            concept_counts?: {
+                [key: string]: number;
+            } | null;
         };
         /**
          * LaunchOut
@@ -3713,6 +4029,26 @@ export interface components {
             reason?: string | null;
             /** Checked At */
             checked_at?: string | null;
+        };
+        /**
+         * MetaPeriodBlockOut
+         * @description Блок Meta «за период»: тоталы + производные + подневная серия.
+         */
+        MetaPeriodBlockOut: {
+            totals: components["schemas"]["FunnelTotalsOut"];
+            derived: components["schemas"]["FunnelDerivedOut"];
+            /** Series Daily */
+            series_daily?: components["schemas"]["DailyPointOut"][];
+        };
+        /**
+         * MetaTodayBlockOut
+         * @description Блок Meta «за сегодня»: тоталы + производные + почасовые дельты.
+         */
+        MetaTodayBlockOut: {
+            totals: components["schemas"]["FunnelTotalsOut"];
+            derived: components["schemas"]["FunnelDerivedOut"];
+            /** Series Hourly */
+            series_hourly?: components["schemas"]["HourlyPointOut"][];
         };
         /**
          * MetricRow
@@ -3909,6 +4245,8 @@ export interface components {
             pixel_id?: string | null;
             /** Ad Account Ids */
             ad_account_ids: string[];
+            /** Countries */
+            countries?: string[];
             /** Country Code */
             country_code?: string | null;
             /** Use Vision Creator */
@@ -3965,6 +4303,10 @@ export interface components {
             is_active: boolean;
             /** Ad Account Ids */
             ad_account_ids?: string[];
+            /** Countries */
+            countries?: string[];
+            /** Cpa Threshold */
+            cpa_threshold?: string | null;
             /** Created At */
             created_at?: string | null;
             /** Updated At */
@@ -3985,18 +4327,10 @@ export interface components {
         OfferRuleOut: {
             /** Offer Id */
             offer_id?: string | null;
-            /** Spend No Event Threshold */
-            spend_no_event_threshold?: string | null;
             /** Cpa Threshold */
             cpa_threshold?: string | null;
-            /** Cpm Threshold */
-            cpm_threshold?: string | null;
-            /** Ctr Threshold */
-            ctr_threshold?: string | null;
             /** Frequency Threshold */
             frequency_threshold?: string | null;
-            /** Funnel Ratio Threshold */
-            funnel_ratio_threshold?: string | null;
             /**
              * Stop Percent Of Rule
              * @default 80
@@ -4015,18 +4349,10 @@ export interface components {
          *     Все поля nullable. Отрицательные пороги запрещены (ge=0).
          */
         OfferRuleUpsertIn: {
-            /** Spend No Event Threshold */
-            spend_no_event_threshold?: number | string | null;
             /** Cpa Threshold */
             cpa_threshold?: number | string | null;
-            /** Cpm Threshold */
-            cpm_threshold?: number | string | null;
-            /** Ctr Threshold */
-            ctr_threshold?: number | string | null;
             /** Frequency Threshold */
             frequency_threshold?: number | string | null;
-            /** Funnel Ratio Threshold */
-            funnel_ratio_threshold?: number | string | null;
             /**
              * Stop Percent Of Rule
              * @default 80
@@ -4058,6 +4384,8 @@ export interface components {
             is_active?: boolean | null;
             /** Ad Account Ids */
             ad_account_ids?: string[] | null;
+            /** Countries */
+            countries?: string[] | null;
             /** Country Code */
             country_code?: string | null;
             /** Use Vision Creator */
@@ -4436,6 +4764,44 @@ export interface components {
             archived_date: string;
         };
         /**
+         * StatsPeriodOut
+         * @description Ответ GET /api/stats/period.
+         */
+        StatsPeriodOut: {
+            /**
+             * From Iso
+             * Format: date-time
+             */
+            from_iso: string;
+            /**
+             * To Iso
+             * Format: date-time
+             */
+            to_iso: string;
+            meta: components["schemas"]["MetaPeriodBlockOut"];
+            tracker: components["schemas"]["TrackerBlockOut"];
+        };
+        /**
+         * StatsTodayOut
+         * @description Ответ GET /api/stats/today.
+         */
+        StatsTodayOut: {
+            /**
+             * Cabinet Day Start
+             * Format: date-time
+             */
+            cabinet_day_start: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            meta: components["schemas"]["MetaTodayBlockOut"];
+            tracker: components["schemas"]["TrackerBlockOut"];
+            /** Breakdown */
+            breakdown?: components["schemas"]["BreakdownRowOut"][] | null;
+        };
+        /**
          * Targeting
          * @description Таргет с авто-добавлением Антарктиды (+AQ) по SOP.
          */
@@ -4449,7 +4815,7 @@ export interface components {
             add_antarctica: boolean;
             /**
              * Age Min
-             * @default 18
+             * @default 21
              */
             age_min: number;
             /**
@@ -4800,6 +5166,80 @@ export interface components {
             active_ads_count: number;
         };
         /**
+         * TrackerBlockOut
+         * @description Блок трекера. available=false — данных нет/запрос упал (ответ не роняем).
+         */
+        TrackerBlockOut: {
+            /**
+             * Available
+             * @default false
+             */
+            available: boolean;
+            /** Day Utc */
+            day_utc?: string | null;
+            /**
+             * Attribution Note
+             * @default
+             */
+            attribution_note: string;
+            totals?: components["schemas"]["TrackerTotalsOut"];
+            /** Series Daily */
+            series_daily?: components["schemas"]["TrackerDailyPointOut"][];
+        };
+        /**
+         * TrackerDailyPointOut
+         * @description Точка подневной серии трекера.
+         */
+        TrackerDailyPointOut: {
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /**
+             * Installs
+             * @default 0
+             */
+            installs: number;
+            /**
+             * Registrations
+             * @default 0
+             */
+            registrations: number;
+            /**
+             * Deposits
+             * @default 0
+             */
+            deposits: number;
+            /** Revenue */
+            revenue?: string | null;
+        };
+        /**
+         * TrackerTotalsOut
+         * @description Тоталы трекера AdSet.pro (UTC-дни).
+         */
+        TrackerTotalsOut: {
+            /**
+             * Installs
+             * @default 0
+             */
+            installs: number;
+            /**
+             * Registrations
+             * @default 0
+             */
+            registrations: number;
+            /**
+             * Deposits
+             * @default 0
+             */
+            deposits: number;
+            /** Revenue */
+            revenue?: string | null;
+            /** Roi Pct */
+            roi_pct?: string | null;
+        };
+        /**
          * UploadConceptsOut
          * @description Ответ загрузки концептов: id временной папки + список файлов.
          */
@@ -4926,6 +5366,8 @@ export interface components {
              * @default false
              */
             has_token: boolean;
+            /** Token Source */
+            token_source?: string | null;
             /** Profile Id */
             profile_id?: string | null;
             /**
@@ -5709,6 +6151,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CleanupOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ad_account_timezone_api_campaigns_ad_account_timezone_get: {
+        parameters: {
+            query: {
+                /** @description ID рекламного кабинета (с префиксом act_ или без — нормализуется). */
+                act_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdAccountTimezoneResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ad_account_pages_api_campaigns_ad_account_pages_get: {
+        parameters: {
+            query: {
+                /** @description ID рекламного кабинета (с префиксом act_ или без — нормализуется). */
+                act_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdAccountPagesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -7472,6 +7978,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VisionEnsureCdpResponse"];
+                };
+            };
+        };
+    };
+    get_stats_today_api_stats_today_get: {
+        parameters: {
+            query?: {
+                /** @description Разрез: offer | campaign (опционально) */
+                breakdown?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatsTodayOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_stats_period_api_stats_period_get: {
+        parameters: {
+            query?: {
+                /** @description ISO-8601 начало периода */
+                from_iso?: string | null;
+                /** @description ISO-8601 конец периода */
+                to_iso?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatsPeriodOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
