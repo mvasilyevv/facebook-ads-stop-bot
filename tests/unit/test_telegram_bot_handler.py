@@ -196,6 +196,13 @@ async def test_spy_kicks_off_pipeline() -> None:
             "core.telegram.handlers.spy.format_short_summary",
             new=lambda res: "SUMMARY OK",
         ),
+        # Cooldown мокаем: иначе unit-тест ходит в ЖИВОЙ Redis (SET NX EX 120с)
+        # и повторный прогон в течение 2 минут флакует на ветке «Слишком часто».
+        # Сама логика cooldown покрыта отдельно в test_spy_cooldown.py.
+        patch(
+            "core.telegram.handlers.spy._check_and_set_cooldown",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         update = {
             "message": {
