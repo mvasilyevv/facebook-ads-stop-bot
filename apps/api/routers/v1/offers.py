@@ -442,12 +442,8 @@ async def get_offer_rules(
 
     return OfferRuleOut(
         offer_id=row["offer_id"],
-        spend_no_event_threshold=row["spend_no_event_threshold"],
         cpa_threshold=row["cpa_threshold"],
-        cpm_threshold=row["cpm_threshold"],
-        ctr_threshold=row["ctr_threshold"],
         frequency_threshold=row["frequency_threshold"],
-        funnel_ratio_threshold=row["funnel_ratio_threshold"],
         stop_percent_of_rule=row["stop_percent_of_rule"],
         warning_percent_of_stop=row["warning_percent_of_stop"],
     )
@@ -493,12 +489,8 @@ async def upsert_offer_rules(
             set_=conflict_set,
         ).returning(
             OfferRule.__table__.c.offer_id,
-            OfferRule.__table__.c.spend_no_event_threshold,
             OfferRule.__table__.c.cpa_threshold,
-            OfferRule.__table__.c.cpm_threshold,
-            OfferRule.__table__.c.ctr_threshold,
             OfferRule.__table__.c.frequency_threshold,
-            OfferRule.__table__.c.funnel_ratio_threshold,
             OfferRule.__table__.c.stop_percent_of_rule,
             OfferRule.__table__.c.warning_percent_of_stop,
         )
@@ -508,12 +500,8 @@ async def upsert_offer_rules(
 
     return OfferRuleOut(
         offer_id=row["offer_id"],
-        spend_no_event_threshold=row["spend_no_event_threshold"],
         cpa_threshold=row["cpa_threshold"],
-        cpm_threshold=row["cpm_threshold"],
-        ctr_threshold=row["ctr_threshold"],
         frequency_threshold=row["frequency_threshold"],
-        funnel_ratio_threshold=row["funnel_ratio_threshold"],
         stop_percent_of_rule=row["stop_percent_of_rule"],
         warning_percent_of_stop=row["warning_percent_of_stop"],
     )

@@ -485,13 +485,9 @@ async def test_get_offer_rules_no_rules_returns_default(pg_engine, fake_redis_cl
     assert resp.status_code == 200
     data = resp.json()
     assert str(data["offer_id"]) == str(offer_id)
-    # Все пороги должны быть null
-    assert data["spend_no_event_threshold"] is None
+    # Все пороги должны быть null (spend_no_event/cpm/ctr/funnel_ratio убраны из API — H-2)
     assert data["cpa_threshold"] is None
-    assert data["cpm_threshold"] is None
-    assert data["ctr_threshold"] is None
     assert data["frequency_threshold"] is None
-    assert data["funnel_ratio_threshold"] is None
 
 
 # ─────────────────────── PUT /offers/{id}/rules ───────────────────────
@@ -505,12 +501,8 @@ async def test_upsert_offer_rules_happy_path(pg_engine, fake_redis_client, clean
     offer_id = ids[0]
 
     body = {
-        "spend_no_event_threshold": "50.00",
         "cpa_threshold": "15.00",
-        "cpm_threshold": "5.00",
-        "ctr_threshold": "2.50",
         "frequency_threshold": "3.00",
-        "funnel_ratio_threshold": "0.30",
     }
 
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
@@ -519,9 +511,8 @@ async def test_upsert_offer_rules_happy_path(pg_engine, fake_redis_client, clean
 
     assert resp.status_code == 200
     data = resp.json()
-    assert Decimal(data["spend_no_event_threshold"]) == Decimal("50.00")
     assert Decimal(data["cpa_threshold"]) == Decimal("15.00")
-    assert Decimal(data["ctr_threshold"]) == Decimal("2.50")
+    assert Decimal(data["frequency_threshold"]) == Decimal("3.00")
 
     # Повторный upsert (обновление) тоже работает
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

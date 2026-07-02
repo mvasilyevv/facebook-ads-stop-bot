@@ -28,6 +28,8 @@ class OfferRule(UUIDPrimaryKey, Timestamp, Base):
         ForeignKey("offers.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # МЁРТВОЕ поле: evaluator не читает, из UI и API убрано (H-2 аудита 02.07);
+    # колонка оставлена намеренно — дроп не запрашивался (см. M1).
     spend_no_event_threshold: Mapped[Decimal | None] = mapped_column(
         Numeric(10, 2),
         nullable=True,
@@ -36,10 +38,14 @@ class OfferRule(UUIDPrimaryKey, Timestamp, Base):
         Numeric(10, 2),
         nullable=True,
     )
+    # МЁРТВОЕ поле: evaluator не читает, из UI и API убрано (H-2 аудита 02.07);
+    # колонка оставлена намеренно — дроп не запрашивался (см. M1).
     cpm_threshold: Mapped[Decimal | None] = mapped_column(
         Numeric(10, 2),
         nullable=True,
     )
+    # МЁРТВОЕ поле: evaluator не читает, из UI и API убрано (H-2 аудита 02.07);
+    # колонка оставлена намеренно — дроп не запрашивался (см. M1).
     ctr_threshold: Mapped[Decimal | None] = mapped_column(
         Numeric(5, 2),
         nullable=True,
@@ -48,6 +54,8 @@ class OfferRule(UUIDPrimaryKey, Timestamp, Base):
         Numeric(5, 2),
         nullable=True,
     )
+    # МЁРТВОЕ поле: evaluator не читает, из UI и API убрано (H-2 аудита 02.07);
+    # колонка оставлена намеренно — дроп не запрашивался (см. M1).
     funnel_ratio_threshold: Mapped[Decimal | None] = mapped_column(
         Numeric(5, 2),
         nullable=True,
