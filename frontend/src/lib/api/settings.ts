@@ -171,12 +171,20 @@ export interface CampaignOption {
   selected: boolean;
 }
 
-/** Список накопленных observer'ом кампаний по owner_tag (GET /settings/observer/campaigns). */
-export function useObserverCampaigns() {
+/**
+ * Список накопленных observer'ом кампаний по owner_tag (GET /settings/observer/campaigns).
+ * includeStale=false (дефолт): бэк прячет кампании с датой в имени старше 14 дней,
+ * кроме уже выбранных в allowlist (решение владельца 03.07 — старьё мешает выбирать).
+ */
+export function useObserverCampaigns(includeStale = false) {
   return useQuery<CampaignOption[]>({
-    queryKey: ["settings", "observer", "campaigns"],
+    queryKey: ["settings", "observer", "campaigns", { includeStale }],
     queryFn: ({ signal }) =>
-      apiGet<CampaignOption[]>("/settings/observer/campaigns", undefined, signal),
+      apiGet<CampaignOption[]>(
+        "/settings/observer/campaigns",
+        { include_stale: includeStale },
+        signal,
+      ),
     staleTime: 30_000,
   });
 }
@@ -187,10 +195,13 @@ export function useRefreshObserverCampaigns() {
   return useMutation({
     // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
     meta: { suppressGlobalError: true },
-    mutationFn: () =>
-      apiSend<CampaignOption[]>("POST", "/settings/observer/campaigns/refresh"),
-    onSuccess: (data) => {
-      qc.setQueryData(["settings", "observer", "campaigns"], data);
+    mutationFn: (includeStale: boolean = false) =>
+      apiSend<CampaignOption[]>(
+        "POST",
+        `/settings/observer/campaigns/refresh?include_stale=${includeStale}`,
+      ),
+    onSuccess: (data, includeStale) => {
+      qc.setQueryData(["settings", "observer", "campaigns", { includeStale }], data);
     },
   });
 }

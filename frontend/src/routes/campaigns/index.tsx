@@ -233,7 +233,10 @@ const CampaignName: FC<{ name: string }> = ({ name }) => {
 };
 
 const CampaignAllowlistSection: FC = () => {
-  const { data: campaigns, isLoading } = useObserverCampaigns();
+  // Старые кампании (дата в имени старше 14 дней, не выбранные) по умолчанию скрыты —
+  // бэк фильтрует по дате из названия; тумблер ниже списка показывает всё.
+  const [showStale, setShowStale] = useState(false);
+  const { data: campaigns, isLoading } = useObserverCampaigns(showStale);
   const refreshMut = useRefreshObserverCampaigns();
   const saveMut = useSetCampaignAllowlist();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -261,7 +264,7 @@ const CampaignAllowlistSection: FC = () => {
 
   const handleRefresh = async () => {
     try {
-      const data = await refreshMut.mutateAsync();
+      const data = await refreshMut.mutateAsync(showStale);
       // Честное сообщение: показываем число. 0 — не «успех», а подсказка почему пусто
       // (нет кампаний с тегом в кабинете ИЛИ Vision-канал недоступен).
       if (data.length === 0) {
@@ -372,7 +375,10 @@ const CampaignAllowlistSection: FC = () => {
         </div>
       )}
 
-      <div style={{ marginTop: "var(--s-4)" }}>
+      <div
+        className="flex items-center justify-between gap-4"
+        style={{ marginTop: "var(--s-4)" }}
+      >
         <Button
           variant="primary"
           onClick={() => void handleSaveAllowlist()}
@@ -381,6 +387,13 @@ const CampaignAllowlistSection: FC = () => {
         >
           Сохранить выбор ({selected.size})
         </Button>
+        <button
+          type="button"
+          onClick={() => setShowStale((v) => !v)}
+          className="text-[12px] text-bg-9 hover:text-bg-11 underline underline-offset-4 transition-colors"
+        >
+          {showStale ? "Скрыть старые кампании" : "Показать старые (>14 дней)"}
+        </button>
       </div>
     </div>
   );

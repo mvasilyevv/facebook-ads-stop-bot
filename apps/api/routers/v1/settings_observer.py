@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select, text
@@ -43,6 +43,49 @@ _SCAN_NOW_CHANNEL = "fb_agent:observer:trigger"
 # Дата в названии кампании (DD.MM или DD.MM.YY). У owner-кампаний она в КОНЦЕ имени
 # («MV | GH_CR | video | adset.pro | 18.06»), поэтому берём ПОСЛЕДНее совпадение.
 _NAME_DATE_RE = re.compile(r"(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?")
+
+
+# Горизонт свежести списка кампаний: старше N дней (по дате из названия) — прячем,
+# если кампания не выбрана в allowlist. Дата в имени = день запуска (нейминг-SOP),
+# кампании живут днями — старьё в списке только мешает выбирать.
+CAMPAIGN_LIST_HORIZON_DAYS = int(os.environ.get("CAMPAIGN_LIST_HORIZON_DAYS", "14"))
+
+
+def _campaign_name_date(name: str, *, today: date) -> date | None:
+    """Дата запуска из названия кампании (последний DD.MM[.YY]) или None.
+
+    Год в имени обычно опущен («28.06»): берём текущий, а если дата получается
+    в будущем дальше чем на 2 дня (нейминг today+1 допускает завтра) — значит
+    это прошлый год (декабрьские имена в январе). Невалидный день/месяц → None.
+    """
+    matches = _NAME_DATE_RE.findall(name or "")
+    if not matches:
+        return None
+    d, m, y = matches[-1]
+    try:
+        if y:
+            year = int(y) + 2000 if len(y) == 2 else int(y)
+            return date(year, int(m), int(d))
+        candidate = date(today.year, int(m), int(d))
+    except ValueError:
+        return None
+    if (candidate - today).days > 2:
+        candidate = candidate.replace(year=today.year - 1)
+    return candidate
+
+
+def _is_stale_campaign(name: str, *, today: date) -> bool:
+    """True — дата в имени старше CAMPAIGN_LIST_HORIZON_DAYS. Без даты → False (не прячем)."""
+    launched = _campaign_name_date(name, today=today)
+    if launched is None:
+        return False
+    return (today - launched).days > CAMPAIGN_LIST_HORIZON_DAYS
+
+
+def _filter_stale_options(options: list[CampaignOption]) -> list[CampaignOption]:
+    """Прячет старые невыбранные кампании (выбранные показываем всегда — их снимают тут же)."""
+    today = datetime.now(UTC).date()
+    return [o for o in options if o.selected or not _is_stale_campaign(o.name, today=today)]
 
 
 def _campaign_sort_key(name: str) -> tuple[int, int, int, str]:
@@ -185,12 +228,22 @@ async def patch_observer_campaigns(
 
 
 @router.get("/campaigns", response_model=list[CampaignOption])
-async def list_observer_campaigns(engine: DepEngine) -> list[CampaignOption]:
+async def list_observer_campaigns(
+    engine: DepEngine,
+    include_stale: bool = Query(
+        default=False,
+        description=f"Показать и старые кампании (дата в имени старше "
+        f"{CAMPAIGN_LIST_HORIZON_DAYS} дней). По умолчанию старьё скрыто, "
+        "кроме выбранных в allowlist.",
+    ),
+) -> list[CampaignOption]:
     """Список кампаний (накопленных observer'ом) для выбора allowlist (#3).
 
     Фильтр по owner_campaign_tag (word-boundary, через campaign_matches_owner).
     selected — входит ли кампания в текущий allowlist (cfg.campaign_ids).
     Кампании без Meta fb_campaign_id пропускаются — их нельзя заскоупить по campaign.id.
+    Свежесть: по умолчанию кампании с датой в имени старше CAMPAIGN_LIST_HORIZON_DAYS
+    скрываются (если не выбраны) — see include_stale.
     """
     async with AsyncSession(engine) as session:
         cfg = await _get_singleton(session)
@@ -215,6 +268,8 @@ async def list_observer_campaigns(engine: DepEngine) -> list[CampaignOption]:
         if not campaign_matches_owner(campaign_name=name or "", ad_name="", owner_tag=owner_tag):
             continue
         out.append(CampaignOption(id=str(cid), name=name or "", selected=str(cid) in allowlist))
+    if not include_stale:
+        out = _filter_stale_options(out)
     # Сортировка по дате из названия — свежие кампании выше.
     out.sort(key=lambda o: _campaign_sort_key(o.name), reverse=True)
     return out
@@ -228,6 +283,9 @@ async def refresh_observer_campaigns(
         default=None,
         description="L10: числовой ID кабинета — резолв из вкладки этого кабинета. "
         "Пусто → текущая primary-вкладка (legacy).",
+    ),
+    include_stale: bool = Query(
+        default=False, description="Показать и старые кампании (как в GET /campaigns)."
     ),
 ) -> list[CampaignOption]:
     """Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).
@@ -348,6 +406,9 @@ async def refresh_observer_campaigns(
         if not campaign_matches_owner(campaign_name=c["name"], ad_name="", owner_tag=owner_tag):
             continue
         result.append(CampaignOption(id=c["id"], name=c["name"], selected=c["id"] in allowlist))
+    if not include_stale:
+        # Апсерт выше сохранил ВСЁ в каталог; прячем старьё только из ответа.
+        result = _filter_stale_options(result)
     # Сортировка по дате из названия — свежие кампании выше.
     result.sort(key=lambda o: _campaign_sort_key(o.name), reverse=True)
     return result
