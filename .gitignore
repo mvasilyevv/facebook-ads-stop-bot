@@ -104,3 +104,6 @@ data/_syntx_snap*.md
 
 # Мониторинг: локальный пароль Grafana
 deploy/monitoring/.env.monitoring
+
+# Бэкапы .env с секретами — никогда не коммитить
+.env.bak*
