@@ -9,7 +9,7 @@
  * Два режима:
  *   full    — 5 ячеек (spend/клики/лиды/реги/депы), CPL+CPA в note-строке
  *             ячейки «Лиды»/«Депозиты».
- *   compact — 4 ячейки (spend/лиды/реги/депы) для встраивания на Dashboard.
+ *   compact — 4 ячейки (клики/лиды/реги/депы; spend уже в шапке hero-графика) для Dashboard.
  */
 
 import { Eyebrow } from "@/components/data/Eyebrow";
@@ -21,7 +21,7 @@ import type { FunnelDerived, FunnelTotals } from "@fb/shared";
 interface FunnelKpiRowProps {
   data?: { totals: FunnelTotals; derived: FunnelDerived };
   loading?: boolean;
-  /** compact — 4 ячейки без CPL/CPA note (для Dashboard). Default false (5 ячеек). */
+  /** compact — 4 ячейки воронки без spend (для Dashboard). Default false (5 ячеек). */
   compact?: boolean;
   className?: string;
 }
@@ -40,10 +40,17 @@ export function FunnelKpiRow({ data, loading, compact = false, className }: Funn
 
   const { totals, derived } = data;
 
+  // compact (Dashboard): БЕЗ spend — он уже в шапке hero-графика «SPEND × ЧАС»
+  // (жалоба владельца на дубль); вместо него клики — полная воронка одним взглядом.
   const cells: Cell[] = compact
     ? [
-        { key: "spend", eyebrow: "SPEND", value: formatSpend(totals.spend), note: "потрачено" },
-        { key: "leads", eyebrow: "ЛИДЫ", value: formatInt(totals.leads), note: "заявок" },
+        { key: "clicks", eyebrow: "КЛИКИ", value: formatInt(totals.clicks), note: "переходов" },
+        {
+          key: "leads",
+          eyebrow: "ЛИДЫ",
+          value: formatInt(totals.leads),
+          note: `CPL ${formatSpend(derived.cpl)}`,
+        },
         {
           key: "registrations",
           eyebrow: "РЕГИ",

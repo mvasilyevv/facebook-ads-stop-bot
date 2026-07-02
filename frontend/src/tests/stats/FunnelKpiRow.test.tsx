@@ -43,13 +43,15 @@ describe("FunnelKpiRow", () => {
     expect(screen.getByText(/CPA \$24\.69/)).toBeInTheDocument();
   });
 
-  // compact-режим — 4 ячейки (spend/лиды/реги/депы), без CPL/CPA note и без клика.
-  it("compact-режим рендерит 4 ячейки без CPL/CPA note", () => {
+  // compact-режим (Dashboard) — 4 ячейки воронки БЕЗ spend (он уже в шапке
+  // hero-графика — жалоба владельца на дубль), клики присутствуют, CPL в note лидов.
+  it("compact-режим: клики/лиды/реги/депы без дубля spend", () => {
     render(<FunnelKpiRow data={{ totals: TOTALS, derived: DERIVED }} compact />);
 
-    expect(screen.queryByText(/CPL/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/CPA/)).not.toBeInTheDocument();
-    expect(screen.getByText("$123.45")).toBeInTheDocument();
+    expect(screen.queryByText("SPEND")).not.toBeInTheDocument();
+    expect(screen.queryByText("$123.45")).not.toBeInTheDocument();
+    expect(screen.getByText("КЛИКИ")).toBeInTheDocument();
+    expect(screen.getByText(/CPL \$3\.09/)).toBeInTheDocument();
     expect(screen.getByText("40")).toBeInTheDocument();
   });
 

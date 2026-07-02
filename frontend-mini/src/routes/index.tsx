@@ -314,7 +314,7 @@ export function DashboardPage() {
 
         {/* ── статистика дня (→ /stats) ── */}
         <StatCard
-          spend={statsToday?.meta.totals.spend}
+          clicks={statsToday?.meta.totals.clicks}
           leads={statsToday?.meta.totals.leads}
           loading={statsLoading}
           onClick={() => {

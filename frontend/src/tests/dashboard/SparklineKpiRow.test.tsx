@@ -1,100 +1,78 @@
 /**
- * Тесты SparklineKpiRow — 4-ячейка KPI strip на Dashboard.
+ * SparklineKpiRow — KPI-строка FSM-состояний на Dashboard.
  *
- * Фикс (задача B): ACTIVE-спарклайн раньше питался spend-рядом «как прокси
- * активности» — визуально похож на график, но это другая метрика (spend почти
- * всегда растёт монотонно в течение суток, поэтому спарклайн выглядел «растущим»,
- * даже когда число активных объявлений падало 16→3). Теперь пропс называется
- * activeAdsSpark и ожидает реальный ряд active_ads по часам; WARNING/STOP/DISABLED
- * по-прежнему без спарклайна (честной почасовой истории по FSM-state в API нет).
+ * Контракт (после жалоб владельца 02-03.07): спарклайнов в ячейках НЕТ вообще —
+ * сначала там по ошибке рисовался spend-ряд как «прокси активности», потом честный
+ * active_ads по часам, но мини-график без подписи всё равно считывался неверно.
+ * Теперь — только чистые counts + deep-link клики; динамика — на /stats.
  */
+
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
-import { SparklineKpiRow, SparklineKpiRowSkeleton } from "@/components/dashboard/SparklineKpiRow";
+
+import { KPI_CELL_STATE, SparklineKpiRow } from "@/components/dashboard/SparklineKpiRow";
 import type { DashboardStats } from "@fb/shared";
 
 function makeStats(overrides: Partial<DashboardStats> = {}): DashboardStats {
   return {
-    total_ads_monitored: 100,
-    ads_in_normal: 80,
-    ads_in_warning: 5,
+    total_ads_monitored: 16,
+    ads_in_normal: 3,
+    ads_in_warning: 1,
     ads_in_stop: 2,
-    ads_in_claimed: 1,
-    ads_in_disabled: 12,
-    active_incidents: 7,
-    last_scan_at: new Date().toISOString(),
-    last_scan_outcome: "ok",
-    scans_today: 42,
+    ads_in_claimed: 0,
+    ads_in_disabled: 10,
+    active_incidents: 3,
+    current_day_spend: "3.36",
+    last_scan_at: null,
+    last_scan_outcome: null,
+    scans_today: 0,
     scans_today_with_errors: 0,
     observer_status: "running",
-    pending_disable_tasks: 3,
-    pending_enable_tasks: 1,
-    failed_tasks_24h: 0,
+    pending_disable_tasks: 0,
+    failed_disable_tasks: 0,
+    scan_blocked_reason: null,
     ...overrides,
-  };
+  } as DashboardStats;
 }
 
 describe("SparklineKpiRow", () => {
-  // 4 ячейки рендерятся с реальными counts из stats.
-  it("рендерит 4 ячейки с counts из stats", () => {
+  // Все 4 ячейки рендерятся с counts из stats
+  it("рендерит 4 ячейки с корректными counts", () => {
     render(<SparklineKpiRow stats={makeStats()} />);
 
-    expect(screen.getByRole("list", { name: "Ключевые показатели" })).toBeInTheDocument();
     expect(screen.getByText("ACTIVE")).toBeInTheDocument();
     expect(screen.getByText("WARNING")).toBeInTheDocument();
     expect(screen.getByText("STOP")).toBeInTheDocument();
     expect(screen.getByText("DISABLED")).toBeInTheDocument();
   });
 
-  // ACTIVE-ячейка получает activeAdsSpark (не spend!) — sparkline рисуется (>=2 точек).
-  it("ACTIVE-ячейка рисует sparkline из activeAdsSpark (не из spend)", () => {
-    const { container } = render(
-      <SparklineKpiRow stats={makeStats()} activeAdsSpark={[16, 12, 8, 5, 3]} />,
-    );
-
-    // 4 svg — по одному на ячейку, ACTIVE первая содержит polyline (>=2 точек).
-    const svgs = container.querySelectorAll("svg");
-    expect(svgs.length).toBe(4);
-    const activeSvg = svgs[0]!;
-    expect(activeSvg.querySelector("polyline")).toBeInTheDocument();
+  // Спарклайнов нет НИ В ОДНОЙ ячейке (решение владельца: убраны как вводящие
+  // в заблуждение — polyline в разметке отсутствует)
+  it("не рисует sparkline ни в одной ячейке", () => {
+    const { container } = render(<SparklineKpiRow stats={makeStats()} />);
+    expect(container.querySelector("polyline")).not.toBeInTheDocument();
   });
 
-  // WARNING/STOP/DISABLED не получают спарклайн (честной почасовой истории по FSM-state нет) —
-  // их svg пустые (без polyline), Sparkline сам ничего не рисует на пустом массиве.
-  it("WARNING/STOP/DISABLED без sparkline (нет фейковых данных)", () => {
-    const { container } = render(
-      <SparklineKpiRow stats={makeStats()} activeAdsSpark={[16, 12, 8, 5, 3]} />,
-    );
-
-    const svgs = container.querySelectorAll("svg");
-    // warning, stop, disabled — индексы 1,2,3
-    for (const svg of [svgs[1]!, svgs[2]!, svgs[3]!]) {
-      expect(svg.querySelector("polyline")).not.toBeInTheDocument();
-    }
-  });
-
-  // Без activeAdsSpark (не передан) — ACTIVE тоже без sparkline, не падает.
-  it("без activeAdsSpark ACTIVE-ячейка тоже без sparkline и не падает", () => {
-    expect(() => {
-      render(<SparklineKpiRow stats={makeStats()} />);
-    }).not.toThrow();
-  });
-
-  // Клик по ячейке вызывает onCellClick с правильным key.
-  it("клик по ячейке ACTIVE вызывает onCellClick('active')", async () => {
+  // Клик по ячейке вызывает onCellClick с правильным key (deep-link в /ads)
+  it("клик по ячейке ACTIVE вызывает onCellClick('active')", () => {
     const onCellClick = vi.fn();
     render(<SparklineKpiRow stats={makeStats()} onCellClick={onCellClick} />);
 
-    screen.getByText("ACTIVE").closest('[role="button"]')?.dispatchEvent(
-      new MouseEvent("click", { bubbles: true }),
-    );
+    screen
+      .getByText("ACTIVE")
+      .closest('[role="button"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onCellClick).toHaveBeenCalledWith("active");
   });
 
-  // Skeleton-версия рендерится (role=status) без реальных данных.
-  it("SparklineKpiRowSkeleton рендерит 4 плейсхолдера", () => {
-    render(<SparklineKpiRowSkeleton />);
-    expect(screen.getByRole("status", { name: "Загрузка KPI" })).toBeInTheDocument();
+  // Маппинг key → alert_state для deep-link не дрейфует
+  it("KPI_CELL_STATE маппит все 4 ячейки на канонические alert_state", () => {
+    expect(KPI_CELL_STATE).toEqual({
+      active: "normal",
+      warning: "warning_sent",
+      stop: "stop_sent",
+      disabled: "disabled",
+    });
   });
 });

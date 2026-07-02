@@ -1,22 +1,24 @@
 /**
  * StatCard — тап-карточка «Статистика дня» для Dashboard.
- * Заголовок + пара цифр (spend / лиды) + chevron → onClick навигация на /stats.
+ * Заголовок + пара цифр (клики / лиды) + chevron → onClick навигация на /stats.
+ * Spend здесь НЕ показываем — он уже в шапке SpendChart прямо над карточкой
+ * (жалоба владельца на дубль spend в двух местах).
  * loading=true — скелетон вместо цифр (карточка остаётся кликабельной).
  */
 import { ChevronRight, BarChart3 } from "lucide-react";
-import { formatSpend, formatInt } from "@fb/shared";
+import { formatInt } from "@fb/shared";
 import { Skeleton } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
 interface StatCardProps {
-  spend?: string | number | null;
+  clicks?: number | null;
   leads?: number | null;
   loading?: boolean;
   onClick: () => void;
   className?: string;
 }
 
-export function StatCard({ spend, leads, loading, onClick, className }: StatCardProps) {
+export function StatCard({ clicks, leads, loading, onClick, className }: StatCardProps) {
   return (
     <button
       type="button"
@@ -40,7 +42,7 @@ export function StatCard({ spend, leads, loading, onClick, className }: StatCard
           </div>
         ) : (
           <p className="font-display tabular-nums text-[12px] text-bg-9 mt-0.5">
-            {formatSpend(spend ?? null)} · {formatInt(leads ?? null)} лидов
+            {formatInt(clicks ?? null)} кликов · {formatInt(leads ?? null)} лидов
           </p>
         )}
       </div>

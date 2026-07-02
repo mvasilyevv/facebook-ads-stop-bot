@@ -3,27 +3,21 @@
  *
  * Канон design_handoff/web-dashboard.jsx:
  *   ячейка = eyebrow (ACTIVE/WARNING/STOP/DISABLED) + trend-chip + count-up число
- *   (34px, toned по state) + filled sparkline + «label · note».
+ *   (34px, toned по state) + «label · note». Sparkline убран (см. ниже).
  *
  * Реальные данные: counts из DashboardStats. Тренд-проценты в API отсутствуют →
  * trend не показываем (без фейка).
  *
- * Что показывает sparkline в каждой ячейке (честно, без выдумки):
- *   - ACTIVE — реальная почасовая история КОЛИЧЕСТВА активных объявлений
- *     (StatsToday.meta.series_hourly[].active_ads, сутки кабинета). Раньше здесь
- *     по ошибке рисовался ряд spend по часам как «прокси активности» — визуально
- *     похожий, но это другая метрика: spend почти всегда растёт монотонно в
- *     течение суток, поэтому спарклайн ACTIVE выглядел «растущим», даже когда
- *     число активных объявлений реально падало (16 → 3) — вводило в заблуждение.
- *   - WARNING/STOP/DISABLED — честной почасовой истории по каждому FSM-state
- *     в API нет (только текущий snapshot-count) → sparkline скрыт (пустой,
- *     Sparkline сам ничего не рисует при <2 точках). Рисовать её на основе
- *     spend или чего-то ещё было бы фейком — не делаем.
+ * Sparkline в ячейках УБРАН (решение владельца, 03.07): сначала он по ошибке
+ * рисовал spend-ряд как «прокси активности» (рос при падении активных), потом —
+ * честный active_ads по часам, но семантика мини-графика без подписи всё равно
+ * считывалась неверно. Динамика активных видна на /stats (почасовая серия);
+ * здесь — только чистые counts. По WARNING/STOP/DISABLED почасовой истории в
+ * API и не было.
  */
 
 import { Eyebrow } from "@/components/data/Eyebrow";
 import { TrendChip, type TrendTone } from "@/components/data/TrendChip";
-import { Sparkline } from "@/components/data/charts/Sparkline";
 import { useCountUp } from "@/lib/hooks/useCountUp";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils/cn";
@@ -44,7 +38,6 @@ interface KpiCellData {
   label: string;
   note: string;
   tone: TrendTone;
-  spark: number[];
 }
 
 function KpiCell({
@@ -89,15 +82,12 @@ function KpiCell({
         {/* Тренд-данных нет в API — рисуем «—» (TrendChip с value=null). */}
         <TrendChip value={null} pct="" tone={d.tone} />
       </div>
-      <div className="flex items-end justify-between gap-2">
-        <span
-          className="font-display font-medium tabular-nums"
-          style={{ fontSize: 34, lineHeight: 0.9, color }}
-        >
-          {value}
-        </span>
-        <Sparkline data={d.spark} color={color} w={72} h={26} fill />
-      </div>
+      <span
+        className="font-display font-medium tabular-nums"
+        style={{ fontSize: 34, lineHeight: 0.9, color }}
+      >
+        {value}
+      </span>
       <div className="text-[12px] text-bg-9">
         <span className="text-bg-10">{d.label}</span> · {d.note}
       </div>
@@ -115,20 +105,12 @@ export const KPI_CELL_STATE: Record<string, string> = {
 
 interface SparklineKpiRowProps {
   stats: DashboardStats;
-  /**
-   * Реальная почасовая история КОЛИЧЕСТВА активных объявлений (сутки кабинета) —
-   * StatsToday.meta.series_hourly[].active_ads. Используется только для ячейки
-   * ACTIVE. НЕ передавать сюда spend-ряд — это другая метрика (см. комментарий
-   * к компоненту).
-   */
-  activeAdsSpark?: number[];
   /** Клик по ячейке (key: active|warning|stop|disabled) → фильтр в Ads. */
   onCellClick?: (key: string) => void;
 }
 
 export function SparklineKpiRow({
   stats,
-  activeAdsSpark = [],
   onCellClick,
 }: SparklineKpiRowProps) {
   const cells: KpiCellData[] = [
@@ -139,7 +121,6 @@ export function SparklineKpiRow({
       label: "Норма",
       note: "активны сейчас",
       tone: "normal",
-      spark: activeAdsSpark,
     },
     {
       key: "warning",
@@ -148,7 +129,6 @@ export function SparklineKpiRow({
       label: "Предупреждение",
       note: "сейчас",
       tone: "warning",
-      spark: [],
     },
     {
       key: "stop",
@@ -157,7 +137,6 @@ export function SparklineKpiRow({
       label: "Стоп",
       note: "требуют решения",
       tone: "stop",
-      spark: [],
     },
     {
       key: "disabled",
@@ -166,7 +145,6 @@ export function SparklineKpiRow({
       label: "Отключено",
       note: "всего",
       tone: "disabled",
-      spark: [],
     },
   ];
 

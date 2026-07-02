@@ -136,13 +136,6 @@ function DashboardPage() {
   // полуночи кабинета). Не суммируем серию — кумулятивные снимки задвоят деньги.
   // При null/undefined (бэк не вернул) — 0, graceful прочерк через formatSpend.
   const spendTotal = parseFloat(stats?.current_day_spend ?? "0") || 0;
-  // Реальная почасовая история КОЛИЧЕСТВА активных объявлений — для ACTIVE-sparkline
-  // (было: spend-ряд как «прокси активности», вводил в заблуждение — см. комментарий
-  // в SparklineKpiRow.tsx). Отдельная метрика, не путать со spendSeries выше.
-  const activeAdsSeries = useMemo<number[]>(
-    () => (statsTodayQ.data?.meta.series_hourly ?? []).map((p) => p.active_ads ?? 0),
-    [statsTodayQ.data],
-  );
 
   // live-tail: реальные алерты. recent_alerts типизирован AlertEventOut на бэке
   // (M9-аудит) — каст больше не нужен.
@@ -269,7 +262,6 @@ function DashboardPage() {
           ) : (
             <SparklineKpiRow
               stats={stats}
-              activeAdsSpark={activeAdsSeries}
               onCellClick={(key) => {
                 // Клик по KPI → Ads с фильтром по соответствующему состоянию.
                 const state = KPI_CELL_STATE[key];
