@@ -9,12 +9,20 @@ CreatorService.RunPlan (gRPC stream) внутри Vision-сессии browser-ag
 - task_loop: claim → load plan из creator_plans → stream RunPlan → mark
 - graceful: SIGTERM/SIGINT → завершить текущий план и закрыть ресурсы
 
-Маршрутизация ошибок:
+Маршрутизация ошибок внутри process_one_task:
 - ValueError / NotImplementedError → mark_failed (плохой payload или незнакомый шаг)
 - "plan not found" / archived → mark_failed
 - StepFailed / PlanComplete(ok=false) → mark_failed (план упал на FB)
 - BrowserUnavailableError / TimeoutError / grpc.RpcError → requeue_for_retry (transient)
-- любое другое Exception → requeue (защитная сетка)
+- любое другое Exception внутри _execute_plan_stream → requeue (защитная сетка)
+
+Money-safety (H-3): plan_run — необратимая мутация (реальный залив FB-кампании через
+Vision), входит в core.tasks.queue.IRREVERSIBLE_TASK_TYPES — reconciler НЕ переводит
+зависшую в 'running' задачу обратно в 'retrying' (иначе повторный залив = дубль
+кампании и двойной открут бюджета). Поэтому task_loop оборачивает вызов
+process_one_task в try/except: неожиданный краш (напр. БД-сбой ДО входа во внутренние
+try/except process_one_task) логируется и задача явно уводится в mark_failed —
+цикл воркера не падает и задача не остаётся вечно висеть в 'running'.
 """
 
 from __future__ import annotations
@@ -377,7 +385,29 @@ async def task_loop(
                 pass
             continue
 
-        await process_one_task(engine, claim.task, client=client)
+        try:
+            await process_one_task(engine, claim.task, client=client)
+        except Exception:  # noqa: BLE001 — защитная сетка: неожиданный краш не должен ронять цикл
+            # process_one_task сам маршрутизирует ожидаемые ошибки (mark_failed/requeue),
+            # но здесь ловим то, что вылетело мимо (напр. БД-сбой в load_plan/mark_*).
+            # Без этого try/except задача осталась бы в 'running' навсегда: plan_run —
+            # необратимая мутация (залив FB-кампании), reconciler её не ретраит
+            # (IRREVERSIBLE_TASK_TYPES), поэтому единственный шанс закрыть задачу — здесь.
+            logger.exception(
+                "plan_run: непредвиденная ошибка обработки task id=%s — помечаю failed",
+                claim.task.id,
+            )
+            try:
+                await mark_failed(
+                    engine,
+                    task_id=claim.task.id,
+                    error="unexpected crash in task_loop — см. логи creator_worker",
+                )
+            except Exception:  # noqa: BLE001 — даже mark_failed не должен ронять воркер
+                logger.exception(
+                    "plan_run: mark_failed после краша тоже не удался task id=%s",
+                    claim.task.id,
+                )
 
 
 # ====================== entrypoint ======================

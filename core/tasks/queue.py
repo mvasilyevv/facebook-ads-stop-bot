@@ -365,7 +365,13 @@ async def fail_stuck_irreversible(
 # создание объектов в Meta (повтор = дубль кампании + двойной открут бюджета). Их
 # зависшие строки уводит в failed fail_stuck_campaign_create (НЕ retrying). Зеркалит
 # контракт IRREVERSIBLE_MUTATION_KINDS для meta_api_mutation, но на уровне task_type.
-IRREVERSIBLE_TASK_TYPES: frozenset[str] = frozenset({"campaign_create"})
+# plan_run (H-3, аудит): исполняется creator_worker'ом через Vision — тоже реальный
+# залив FB-кампании, повторное исполнение после zombie-краша = дубль. У plan_run нет
+# отдельной fail_stuck_* функции (в отличие от campaign_create) — creator_worker
+# закрывает зависшую задачу сам через mark_failed в task_loop при неожиданном
+# исключении; здесь же — страховка от слепого auto-retry реконсайлером, если задача
+# всё же осталась в 'running' (напр. воркер убит SIGKILL посреди process_one_task).
+IRREVERSIBLE_TASK_TYPES: frozenset[str] = frozenset({"campaign_create", "plan_run"})
 
 
 async def fail_stuck_campaign_create(
