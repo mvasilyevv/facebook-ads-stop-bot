@@ -31,7 +31,7 @@ from apps.api.deps import get_engine, get_settings
 from core.adset_pro import PostbackEvent
 from core.adset_pro.credentials import resolve_adsetpro_postback_secret
 from core.adset_pro.ingest import ingest_postback
-from core.config import Settings
+from core.config import Settings, reveal_secret
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ async def receive_adsetpro_postback(
     """Принять postback, записать в БД с дедупом. 202 ACCEPTED + меткой результата."""
     # Секрет: БД (adsetpro_credentials) → фолбэк .env. Ротация без рестарта.
     expected_secret = await resolve_adsetpro_postback_secret(
-        engine, fallback=settings.adsetpro_postback_secret.get_secret_value()
+        engine, fallback=reveal_secret(settings.adsetpro_postback_secret)
     )
     if not expected_secret:
         # Намеренно 503: пока секрет не задан, endpoint считается не настроенным —

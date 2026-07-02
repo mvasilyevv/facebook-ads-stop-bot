@@ -88,10 +88,11 @@ async def ws_dashboard(websocket: WebSocket) -> None:  # noqa: C901
     # rule_codes) без ключа. Токен в query-param (?api_key=), т.к. браузерный WebSocket
     # не умеет слать кастомные заголовки. Тот же X-API-Key, timing-safe сравнение.
     from core.config import get_settings as _get_settings
+    from core.config import reveal_secret
 
     settings = _get_settings()
     if settings.require_api_key:
-        expected = settings.api_key.get_secret_value() if settings.api_key else ""
+        expected = reveal_secret(settings.api_key) if settings.api_key else ""
         provided = (
             websocket.query_params.get("api_key") or websocket.query_params.get("token") or ""
         )

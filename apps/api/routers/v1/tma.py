@@ -48,7 +48,7 @@ from core.auth.tma import (
     validate_init_data,
     verify_session_token,
 )
-from core.config import Settings
+from core.config import Settings, reveal_secret
 from core.dashboard.snapshot import build_ad_snapshot
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
@@ -96,8 +96,8 @@ class TmaPrincipal:
 def _tma_secret(settings: Settings) -> str:
     """Секрет подписи токена: tma_session_secret или фолбэк на encryption_key."""
     if settings.tma_session_secret:
-        return settings.tma_session_secret.get_secret_value()
-    return settings.encryption_key.get_secret_value()
+        return reveal_secret(settings.tma_session_secret)
+    return reveal_secret(settings.encryption_key)
 
 
 @router.post("/auth", response_model=TmaAuthResponse)

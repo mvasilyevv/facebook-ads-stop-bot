@@ -245,6 +245,7 @@ async def refresh_observer_campaigns(
     import grpc
 
     from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+    from core.config import reveal_secret
     from core.crypto import decrypt
     from core.models.settings.vision_config import VisionConfig
 
@@ -255,7 +256,7 @@ async def refresh_observer_campaigns(
         vc = await session.scalar(
             select(VisionConfig).where(VisionConfig.singleton_key == "default")
         )
-        x_token = settings.vision_x_token.get_secret_value()
+        x_token = reveal_secret(settings.vision_x_token)
         profile_id = settings.vision_profile_id
         if vc:
             if vc.x_token_encrypted:

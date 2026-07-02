@@ -235,13 +235,14 @@ async def _reconnect_browser(engine: AsyncEngine, settings: object) -> None:
     Переиспользуется /vision/reconnect и /vision/ensure-cdp. Читает x_token/profile_id
     из БД (fallback в Settings).
     """
+    from core.config import reveal_secret
     from core.crypto import decrypt
 
     async with AsyncSession(engine) as session:
         config = await _load_config(session)
         snap = _snapshot(config)
 
-    x_token = settings.vision_x_token.get_secret_value()  # type: ignore[attr-defined]
+    x_token = reveal_secret(settings.vision_x_token)  # type: ignore[attr-defined]
     profile_id = settings.vision_profile_id  # type: ignore[attr-defined]
     api_url = settings.vision_api_url  # type: ignore[attr-defined]
 
