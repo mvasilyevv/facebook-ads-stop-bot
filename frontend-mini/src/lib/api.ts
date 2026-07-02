@@ -14,11 +14,15 @@ import type {
   HealthDetails,
   HistorySummary,
   ObserverConfig,
+  ObserverStatus,
   Offer,
   StatsPeriod,
   StatsToday,
 } from "@fb/shared";
+import type { components } from "@fb/shared/api/generated";
 import { getStoredToken, loginToBackend, logout } from "./auth";
+
+type RulePreviewOut = components["schemas"]["RulePreviewOut"];
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api";
 
@@ -376,6 +380,21 @@ export function useObserverSettings() {
   });
 }
 
+/**
+ * Статус observer-воркера из Redis observer:runtime (GET /observer/status).
+ * MID-22 аудита 02.07: даёт `extra.next_scan_at`/`extra.scan_mode` — тот же
+ * источник, что использует web (useObserverStatus в frontend/src/lib/api/settings.ts),
+ * для РЕАЛЬНОГО адаптивного отсчёта вместо локального таймера по default_interval_seconds.
+ */
+export function useObserverStatus() {
+  return useQuery({
+    queryKey: ["observer", "status"] as const,
+    queryFn: () => fetchJson<ObserverStatus>("/observer/status"),
+    staleTime: 10_000,
+    refetchInterval: 20_000,
+  });
+}
+
 /** Конфиг автостарта кабинета (owner-gated на запись через /tma/cabinet-autostart). */
 export interface CabinetAutostart {
   enabled: boolean;
@@ -530,6 +549,34 @@ export function useUpdateOfferRules() {
     onSuccess: (_data, { offerId }) => {
       void qc.invalidateQueries({ queryKey: QK_EXT.offerRules(offerId) });
     },
+  });
+}
+
+/**
+ * GET /offers/rules/preview — рассчитывает $-пороги (CPC/CPL/CPR + spend-диапазоны)
+ * из CPA и процентов чувствительности. Портировано из frontend/src/lib/api/offers.ts
+ * (MID-21 аудита 02.07, паритет с web): тот же RuleContext, что и у observer'а, —
+ * значения в preview ТОЧНО совпадают с реальными стоп-порогами.
+ * enabled только при cpa > 0; placeholderData держит прошлый результат, чтобы
+ * блок не мигал при движении ползунка.
+ */
+export function useRulesPreview(params: {
+  cpa: number | null;
+  stop_percent_of_rule: number;
+  warning_percent_of_stop: number;
+}) {
+  const enabled = params.cpa != null && params.cpa > 0;
+  const qs = new URLSearchParams({
+    cpa: String(params.cpa ?? ""),
+    stop_percent_of_rule: String(params.stop_percent_of_rule),
+    warning_percent_of_stop: String(params.warning_percent_of_stop),
+  });
+  return useQuery({
+    queryKey: ["offers", "rules", "preview", params] as const,
+    queryFn: () => fetchJson<RulePreviewOut>(`/offers/rules/preview?${qs.toString()}`),
+    enabled,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
   });
 }
 

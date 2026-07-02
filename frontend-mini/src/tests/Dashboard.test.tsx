@@ -1,12 +1,17 @@
 /**
- * Тест Dashboard: рендер с мок-данными useDashboardBatch.
+ * Тест Dashboard: рендер РЕАЛЬНОГО компонента DashboardPage (routes/index.tsx)
+ * поверх мокнутого @tanstack/react-router и @/lib/api — паттерн StatsPage
+ * (именованный экспорт компонента, без отдельного test.helper.tsx).
+ *
+ * MID-23 аудита 02.07: добавлен isError-рендер (недоступный batch → видимое
+ * состояние ошибки, не пустой экран) — этого сценария раньше не было.
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { DashboardBatch } from "@fb/shared";
 
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => ({ component: (c: unknown) => c }),
+  createFileRoute: () => (opts: { component: unknown }) => ({ options: opts, component: opts.component }),
   useNavigate: () => vi.fn(),
   useRouter: () => ({ navigate: vi.fn() }),
   useLocation: () => ({ pathname: "/" }),
@@ -56,42 +61,91 @@ const MOCK_BATCH: DashboardBatch = {
   enable_recommendations_pending: [],
 };
 
+const mockUseDashboardBatch = vi.fn();
+
 vi.mock("@/lib/api", () => ({
-  useDashboardBatch: () => ({
-    data: MOCK_BATCH,
-    isLoading: false,
-    isError: false,
-    error: null,
-    refetch: vi.fn(),
-  }),
+  useDashboardBatch: (...args: unknown[]) => mockUseDashboardBatch(...args),
   useObserverSettings: () => ({
-    data: { is_scanning_enabled: true },
+    data: { is_scanning_enabled: true, default_interval_seconds: 60 },
   }),
+  useObserverStatus: () => ({ data: undefined, isLoading: false, isError: false }),
   useToggleScanning: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useTriggerScan: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useTmaDisable: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useSpendSeries: () => ({ data: [] }),
+  useStatsToday: () => ({ data: undefined, isLoading: false }),
 }));
 
-import DashboardPageModule from "./Dashboard.test.helper";
+import { DashboardPage } from "@/routes/index";
 
 describe("DashboardPage", () => {
-  // KPI-плитки отображают числа
+  beforeEachSetup();
+
+  function beforeEachSetup() {
+    // Дефолт — happy path; переопределяется точечно в isError-тесте.
+    mockUseDashboardBatch.mockReturnValue({
+      data: MOCK_BATCH,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+  }
+
+  // KPI-плитки отображают числа (42 встречается дважды: hero-число + KPI «ВСЕГО»)
   it("показывает KPI: 42 активных, 3 стоп", () => {
-    render(<DashboardPageModule />);
-    expect(screen.getByText("42")).toBeInTheDocument();
-    expect(screen.getByText("3")).toBeInTheDocument();
-    expect(screen.getByText("7")).toBeInTheDocument();
+    mockUseDashboardBatch.mockReturnValue({
+      data: MOCK_BATCH,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    render(<DashboardPage />);
+    expect(screen.getAllByText("42").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("3").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("7").length).toBeGreaterThan(0);
   });
 
   // Активный сигнал отображается в списке
   it("показывает инцидент 'Test Ad Stop'", () => {
-    render(<DashboardPageModule />);
+    mockUseDashboardBatch.mockReturnValue({
+      data: MOCK_BATCH,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    render(<DashboardPage />);
     expect(screen.getByText("Test Ad Stop")).toBeInTheDocument();
   });
 
-  // Кнопка "Сканировать сейчас" есть
+  // Кнопка "Сканировать сейчас" есть (aria-label на кнопке, RefreshCw-иконка)
   it("показывает кнопку 'Сканировать сейчас'", () => {
-    render(<DashboardPageModule />);
-    expect(screen.getByText("Сканировать сейчас")).toBeInTheDocument();
+    mockUseDashboardBatch.mockReturnValue({
+      data: MOCK_BATCH,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    render(<DashboardPage />);
+    expect(screen.getByLabelText("Сканировать сейчас")).toBeInTheDocument();
+  });
+
+  // MID-23: недоступность batch (ошибка сети/сервера) → видимое error-состояние,
+  // не пустой/белый экран. Владелец должен понять, что данные не загрузились.
+  it("при ошибке batch показывает видимое состояние ошибки, а не пустой экран", () => {
+    mockUseDashboardBatch.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("Сеть недоступна"),
+      refetch: vi.fn(),
+    });
+    render(<DashboardPage />);
+    expect(screen.getByText("Ошибка загрузки")).toBeInTheDocument();
+    expect(screen.getByText("Сеть недоступна")).toBeInTheDocument();
+    // KPI из happy-path не должны просочиться на error-рендере.
+    expect(screen.queryByText("Test Ad Stop")).not.toBeInTheDocument();
   });
 });

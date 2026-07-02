@@ -19,3 +19,4 @@ export { Input } from "./Input";
 export { Tabs } from "./Tabs";
 export type { TabItem } from "./Tabs";
 export { Select } from "./Select";
+export { Slider } from "./Slider";

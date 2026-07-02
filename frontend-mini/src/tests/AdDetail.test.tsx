@@ -1,24 +1,30 @@
 /**
- * Тесты AdDetail под обновлённый канон.
- * Покрывает: рендер STOP_SENT, Eyebrow/бейдж/offer-pill, MetricsGrid,
- * AlertTimeline, кнопки действий (Disable confirm-flow, Claim),
- * кнопка Ads Manager, состояния loading/error.
+ * Тесты AdDetail: рендер РЕАЛЬНОГО компонента AdDetailPage (routes/ads/$fbAdId.tsx)
+ * поверх мокнутого @tanstack/react-router и @/lib/api — паттерн StatsPage
+ * (именованный экспорт компонента, без дублирования логики в test.helper.tsx).
+ *
+ * Покрывает: рендер STOP_SENT, Eyebrow/бейдж/offer-pill, MetricsGrid, AlertTimeline,
+ * кнопки действий (Disable confirm-flow, Claim), кнопка Ads Manager, loading/error.
+ *
+ * MID-23 аудита 02.07: добавлены сценарии — отклонённая disable-мутация показывает
+ * ошибку и возвращает кнопку в активное состояние (а не тихий catch), и явный
+ * regression-тест на анти-даблклик (кнопка disabled во время isPending).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { normalizeAlertState } from "@fb/shared";
-import { AlertStateBadge, Button, Pill } from "@/components/ui";
-import { Eyebrow } from "@/components/data";
-import { MetricsGrid } from "@/components/domain/MetricsGrid";
-import { AlertTimeline } from "@/components/domain/AlertTimeline";
-import { formatSpend, formatPercent, formatInt } from "@fb/shared";
 
 // ─── Моки роутера ────────────────────────────────────────────────────────────
+// Route.useParams() читается напрямую в компоненте — мок createFileRoute должен
+// вернуть объект с методом useParams (не просто { component }).
+
+let mockFbAdId = "ad_stop_001";
 
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => ({ component: (c: unknown) => c }),
+  createFileRoute: () => (opts: { component: unknown }) => ({
+    ...opts,
+    useParams: () => ({ fbAdId: mockFbAdId }),
+  }),
   useNavigate: () => vi.fn(),
   useRouter: () => ({ navigate: vi.fn(), history: { back: vi.fn() } }),
   useLocation: () => ({ pathname: "/ads/ad_stop_001" }),
@@ -32,7 +38,7 @@ const mockTgAlert = vi.fn();
 vi.mock("@/lib/tg", () => ({
   haptic: { impact: vi.fn(), notify: vi.fn(), selection: vi.fn() },
   tgConfirm: () => mockTgConfirm(),
-  tgAlert: () => mockTgAlert(),
+  tgAlert: (...args: unknown[]) => mockTgAlert(...args),
   openLink: vi.fn(),
   registerBackButton: () => () => {},
   hideBackButton: vi.fn(),
@@ -67,6 +73,8 @@ interface MockAdData {
   state: string;
   account_id: string | null;
   can_open_in_ads_manager: boolean;
+  creative_thumb_url?: string | null;
+  creative_image_url?: string | null;
   metrics: MockMetrics;
   recent_alerts: MockAlert[];
 }
@@ -107,12 +115,14 @@ const NORMAL_AD: MockAdData = {
 
 // ─── Моки API ────────────────────────────────────────────────────────────────
 
-const disableMutate = vi.fn().mockResolvedValue({ ok: true });
-const claimMutate = vi.fn().mockResolvedValue({ ok: true });
+const disableMutate = vi.fn();
+const claimMutate = vi.fn();
 
 let mockAdData: MockAdData | null = STOP_AD;
 let mockIsLoading = false;
 let mockIsError = false;
+let mockDisablePending = false;
+let mockClaimPending = false;
 
 vi.mock("@/lib/api", () => ({
   useTmaAd: () => ({
@@ -124,117 +134,25 @@ vi.mock("@/lib/api", () => ({
   }),
   useTmaDisable: () => ({
     mutateAsync: disableMutate,
-    isPending: false,
+    isPending: mockDisablePending,
   }),
   useTmaClaim: () => ({
     mutateAsync: claimMutate,
-    isPending: false,
+    isPending: mockClaimPending,
   }),
 }));
 
-// ─── Тестовый компонент ───────────────────────────────────────────────────────
+// ─── Компонент под тестом (реальный) ──────────────────────────────────────────
 
-import { useTmaAd, useTmaDisable, useTmaClaim } from "@/lib/api";
-import { tgConfirm, openLink } from "@/lib/tg";
-import type { TmaAdMetrics } from "@/lib/api";
+import { AdDetailPage } from "@/routes/ads/$fbAdId";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-interface TestAdDetailPageProps {
-  fbAdId?: string;
-}
+const makeQC = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-function TestAdDetailPage({ fbAdId = "ad_stop_001" }: TestAdDetailPageProps) {
-  const { data, isLoading, isError } = useTmaAd(fbAdId);
-  const disable = useTmaDisable();
-  const claim = useTmaClaim();
-  const busy = disable.isPending || claim.isPending;
-
-  if (isLoading) return <div data-testid="loading">Загрузка...</div>;
-  if (isError || !data) return <div data-testid="error">Ошибка</div>;
-
-  const ad = data as MockAdData;
-  const normalized = normalizeAlertState(ad.state);
-  const hasIncident = ["warning_sent", "stop_sent", "claimed"].includes(normalized);
-
-  const metrics: TmaAdMetrics = (ad.metrics ?? {}) as TmaAdMetrics;
-  const cplValue = metrics.cost_per_lead != null ? parseFloat(String(metrics.cost_per_lead)) : null;
-  const ctrValue = metrics.ctr != null ? parseFloat(String(metrics.ctr)) : null;
-
-  const metricCells = [
-    { label: "Spend", value: formatSpend(metrics.spend) },
-    { label: "CPL", value: cplValue != null ? formatSpend(cplValue) : "—" },
-    { label: "CTR", value: ctrValue != null ? formatPercent(ctrValue) : "—" },
-    { label: "Leads", value: metrics.leads != null ? formatInt(metrics.leads) : "—" },
-    { label: "Regs", value: metrics.registrations != null ? formatInt(metrics.registrations) : "—" },
-    { label: "Deposits", value: metrics.deposits != null ? formatInt(metrics.deposits) : "—" },
-  ];
-
-  async function handleDisable() {
-    const ok = await tgConfirm("Отключить объявление через API?");
-    if (!ok) return;
-    await disable.mutateAsync({ fbAdId });
-  }
-
-  async function handleClaim() {
-    await claim.mutateAsync({ fbAdId });
-  }
-
-  return (
-    <div>
-      {/* Eyebrow */}
-      <Eyebrow>ОБЪЯВЛЕНИЕ</Eyebrow>
-      {/* Заголовок */}
-      <h1>{ad.ad_name ?? fbAdId}</h1>
-      {/* FSM-бейдж + offer pill */}
-      <AlertStateBadge state={ad.state} withDot />
-      {ad.offer_code && (
-        <Pill variant="accent">{ad.offer_code}</Pill>
-      )}
-      {/* Метрики */}
-      <MetricsGrid cells={metricCells} />
-      {/* Алерты */}
-      {(ad.recent_alerts as MockAlert[]).length > 0 && (
-        <div data-testid="alert-timeline">
-          <AlertTimeline alerts={ad.recent_alerts as MockAlert[]} />
-          {(ad.recent_alerts as MockAlert[]).map((al, i) => (
-            <div key={i} data-testid={`alert-${i}`}>{al.reason_title}</div>
-          ))}
-        </div>
-      )}
-      {/* Кнопки */}
-      {hasIncident && (
-        <Button
-          variant="secondary"
-          disabled={busy}
-          onClick={() => void handleClaim()}
-          data-testid="btn-claim"
-        >
-          Снять алерт
-        </Button>
-      )}
-      <Button
-        variant="danger"
-        disabled={busy}
-        onClick={() => void handleDisable()}
-        data-testid="btn-disable"
-      >
-        Отключить объявление
-      </Button>
-      {ad.can_open_in_ads_manager && (
-        <Button onClick={() => openLink("test")} data-testid="btn-ads-manager">
-          Открыть в Ads Manager ↗
-        </Button>
-      )}
-    </div>
-  );
-}
-
-const makeQC = () =>
-  new QueryClient({ defaultOptions: { queries: { retry: false } } });
-
-function Wrapper({ fbAdId }: { fbAdId?: string }) {
+function Wrapper() {
   return (
     <QueryClientProvider client={makeQC()}>
-      <TestAdDetailPage fbAdId={fbAdId} />
+      <AdDetailPage />
     </QueryClientProvider>
   );
 }
@@ -243,9 +161,12 @@ function Wrapper({ fbAdId }: { fbAdId?: string }) {
 
 describe("AdDetail", () => {
   beforeEach(() => {
+    mockFbAdId = "ad_stop_001";
     mockAdData = STOP_AD;
     mockIsLoading = false;
     mockIsError = false;
+    mockDisablePending = false;
+    mockClaimPending = false;
     mockTgConfirm.mockReset().mockResolvedValue(true);
     mockTgAlert.mockReset().mockResolvedValue(undefined);
     disableMutate.mockReset().mockResolvedValue({ ok: true });
@@ -264,10 +185,9 @@ describe("AdDetail", () => {
     expect(screen.getByText("Стоп")).toBeInTheDocument();
   });
 
-  // Pill оффера виден (ищем по тексту, data-testid Pill не поддерживает)
+  // Pill оффера виден
   it("показывает pill с кодом оффера CR2", () => {
     render(<Wrapper />);
-    // Pill рендерится как <span> с текстом оффера
     const pills = screen.getAllByText("CR2");
     expect(pills.length).toBeGreaterThan(0);
   });
@@ -275,48 +195,41 @@ describe("AdDetail", () => {
   // MetricsGrid рендерится и содержит ячейки
   it("рендерит MetricsGrid с метриками", () => {
     render(<Wrapper />);
-    // Spend из фикстуры: formatSpend("150.50") → "$150.50"
     expect(screen.getByText("$150.50")).toBeInTheDocument();
   });
 
   // Метрика Leads
   it("показывает количество leads", () => {
     render(<Wrapper />);
-    expect(screen.getByText("5")).toBeInTheDocument();
+    expect(screen.getAllByText("5").length).toBeGreaterThan(0);
   });
 
   // AlertTimeline рендерится
   it("показывает ленту алертов", () => {
     render(<Wrapper />);
-    expect(screen.getByTestId("alert-timeline")).toBeInTheDocument();
-    // Текст может встречаться дважды (AlertTimeline + data-testid div)
-    expect(screen.getAllByText("Дорогой лид").length).toBeGreaterThan(0);
-  });
-
-  // Второй алерт тоже виден
-  it("показывает второй алерт", () => {
-    render(<Wrapper />);
-    expect(screen.getByTestId("alert-1")).toHaveTextContent("Расход без депа");
+    expect(screen.getByText("Дорогой лид")).toBeInTheDocument();
+    expect(screen.getByText("Расход без депа")).toBeInTheDocument();
   });
 
   // Claim виден для stop_sent
   it("показывает Claim для stop_sent", () => {
     render(<Wrapper />);
-    expect(screen.getByTestId("btn-claim")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Снять алерт" })).toBeInTheDocument();
   });
 
   // Claim скрыт для normal
   it("скрывает Claim для normal состояния", () => {
     mockAdData = NORMAL_AD;
+    mockFbAdId = "ad_normal_002";
     render(<Wrapper />);
-    expect(screen.queryByTestId("btn-claim")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Снять алерт" })).not.toBeInTheDocument();
   });
 
   // Disable confirm-flow: OK → mutateAsync вызван
   it("Disable: confirm → mutateAsync вызван", async () => {
     render(<Wrapper />);
     const user = userEvent.setup();
-    await user.click(screen.getByTestId("btn-disable"));
+    await user.click(screen.getByRole("button", { name: "Отключить объявление" }));
     expect(mockTgConfirm).toHaveBeenCalled();
     await waitFor(() => {
       expect(disableMutate).toHaveBeenCalledWith({ fbAdId: "ad_stop_001" });
@@ -328,23 +241,57 @@ describe("AdDetail", () => {
     mockTgConfirm.mockResolvedValue(false);
     render(<Wrapper />);
     const user = userEvent.setup();
-    await user.click(screen.getByTestId("btn-disable"));
+    await user.click(screen.getByRole("button", { name: "Отключить объявление" }));
     await waitFor(() => {
       expect(disableMutate).not.toHaveBeenCalled();
     });
   });
 
+  // MID-23: отклонённая disable-мутация (ошибка сети/сервера) → UI показывает
+  // ошибку через tgAlert, кнопка возвращается в активное (не залипшее) состояние.
+  it("Disable: отклонённая мутация → показывает ошибку, кнопка снова активна", async () => {
+    disableMutate.mockReset().mockRejectedValue(new Error("Сервер недоступен"));
+    render(<Wrapper />);
+    const user = userEvent.setup();
+    const btn = screen.getByRole("button", { name: "Отключить объявление" });
+    await user.click(btn);
+
+    await waitFor(() => {
+      expect(disableMutate).toHaveBeenCalledWith({ fbAdId: "ad_stop_001" });
+    });
+    await waitFor(() => {
+      expect(mockTgAlert).toHaveBeenCalledWith("Сервер недоступен");
+    });
+    // isPending снова false после отклонённого промиса — кнопка не задизейблена busy-состоянием.
+    expect(screen.getByRole("button", { name: "Отключить объявление" })).not.toBeDisabled();
+  });
+
+  // MID-23: анти-даблклик — во время isPending (disable ИЛИ claim) обе money-кнопки
+  // задизейблены, защита от дубля задачи в outbox при повторном тапе.
+  it("Disable и Claim задизейблены во время isPending (анти-даблклик)", () => {
+    mockDisablePending = true;
+    render(<Wrapper />);
+    expect(screen.getByRole("button", { name: "Отключить объявление" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Снять алерт" })).toBeDisabled();
+  });
+
+  it("Claim.isPending тоже блокирует кнопку Disable (общий busy)", () => {
+    mockClaimPending = true;
+    render(<Wrapper />);
+    expect(screen.getByRole("button", { name: "Отключить объявление" })).toBeDisabled();
+  });
+
   // Кнопка Ads Manager видна при can_open_in_ads_manager=true
   it("кнопка Ads Manager видна при can_open_in_ads_manager=true", () => {
     render(<Wrapper />);
-    expect(screen.getByTestId("btn-ads-manager")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Открыть в Ads Manager/ })).toBeInTheDocument();
   });
 
   // Кнопка Ads Manager скрыта при can_open_in_ads_manager=false
   it("кнопка Ads Manager скрыта при can_open_in_ads_manager=false", () => {
     mockAdData = { ...STOP_AD, can_open_in_ads_manager: false };
     render(<Wrapper />);
-    expect(screen.queryByTestId("btn-ads-manager")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Открыть в Ads Manager/ })).not.toBeInTheDocument();
   });
 
   // Состояние загрузки
@@ -352,7 +299,8 @@ describe("AdDetail", () => {
     mockIsLoading = true;
     mockAdData = null;
     render(<Wrapper />);
-    expect(screen.getByTestId("loading")).toBeInTheDocument();
+    // Skeleton-заглушки рендерятся вместо контента объявления
+    expect(screen.queryByText("CR2 | GH | Stop Test")).not.toBeInTheDocument();
   });
 
   // Состояние ошибки
@@ -360,13 +308,14 @@ describe("AdDetail", () => {
     mockIsError = true;
     mockAdData = null;
     render(<Wrapper />);
-    expect(screen.getByTestId("error")).toBeInTheDocument();
+    expect(screen.getByText("Ошибка сети")).toBeInTheDocument();
   });
 
   // Алерты не рендерятся для normal без алертов
-  it("не показывает таймлайн при пустых алертах", () => {
+  it("показывает пустой стейт для normal без алертов", () => {
     mockAdData = NORMAL_AD;
+    mockFbAdId = "ad_normal_002";
     render(<Wrapper />);
-    expect(screen.queryByTestId("alert-timeline")).not.toBeInTheDocument();
+    expect(screen.getByText("Нет активных алертов")).toBeInTheDocument();
   });
 });

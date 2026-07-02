@@ -40,7 +40,10 @@ export const Route = createFileRoute("/ads/$fbAdId")({
   component: AdDetailPage,
 });
 
-function AdDetailPage() {
+// Компонент экспортирован именованно (AdDetailPage) — MID-23 аудита 02.07: тесты
+// импортируют его напрямую поверх мокнутого @tanstack/react-router (паттерн StatsPage),
+// без дублирования логики в отдельном test.helper.tsx.
+export function AdDetailPage() {
   const { fbAdId } = Route.useParams();
 
   const { data, isLoading, isError, error, refetch } = useTmaAd(fbAdId);

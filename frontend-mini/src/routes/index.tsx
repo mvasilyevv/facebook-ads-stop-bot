@@ -16,6 +16,7 @@ import type { DashboardBatch } from "@fb/shared";
 import {
   useDashboardBatch,
   useObserverSettings,
+  useObserverStatus,
   useToggleScanning,
   useTriggerScan,
   useSpendSeries,
@@ -36,18 +37,50 @@ import { KpiPlate, AlertStateBadge, TaskStatusBadge, Skeleton, EmptyState } from
 import { useCountUp } from "@/lib/hooks/useCountUp";
 import { cn } from "@/lib/cn";
 
+// Компонент экспортирован именованно (DashboardPage) — MID-23 аудита 02.07: тесты
+// импортируют его напрямую поверх мокнутого @tanstack/react-router (паттерн StatsPage),
+// без дублирования логики в отдельном test.helper.tsx.
 export const Route = createFileRoute("/")({
   component: DashboardPage,
 });
 
 // ─── Живой обратный отсчёт до следующего скана ──────────────────────────────
+//
+// MID-22 аудита 02.07: раньше тикал только от фиксированного default_interval_seconds
+// и не знал про adaptive-режим (CRITICAL/ELEVATED/CALM/IDLE), поэтому расходился с
+// реальным временем скана. Теперь — два режима, зеркало web useScanCountdown
+// (frontend/src/lib/hooks/useScanCountdown.ts):
+//   1. РЕАЛЬНЫЙ: задан nextScanIso (observer:runtime.next_scan_at через
+//      GET /observer/status) — отсчёт от абсолютной метки, отражает адаптивный интервал.
+//   2. Фолбэк: nextScanIso недоступен (запрос ещё не пришёл/статус не в Redis) —
+//      локальный таймер по intervalSec, как раньше.
 
-function useScanCountdown(intervalSec: number, lastScanIso: string | null | undefined) {
+function secondsUntilIso(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, Math.round((t - Date.now()) / 1000));
+}
+
+function useScanCountdown(
+  intervalSec: number,
+  lastScanIso: string | null | undefined,
+  nextScanIso: string | null | undefined,
+) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  const realNext = secondsUntilIso(nextScanIso);
+  if (realNext !== null) {
+    // Реальный режим: отсчёт от адаптивной метки бэка, знаменатель — сам realNext
+    // (полный цикл неизвестен на mini, но кольцо всё равно двигается к нулю честно).
+    return { next: realNext, interval: Math.max(realNext, 1) };
+  }
+
+  // Фолбэк: старое поведение — локальный таймер от фиксированного интервала.
   if (!intervalSec || intervalSec <= 0) return { next: 0, interval: 0 };
   const last = lastScanIso ? new Date(lastScanIso).getTime() : now;
   const elapsed = Math.max(0, Math.floor((now - last) / 1000));
@@ -71,10 +104,14 @@ function HeroNumber({ value }: { value: number }) {
 
 // ─── Компонент ──────────────────────────────────────────────────────────────
 
-function DashboardPage() {
+export function DashboardPage() {
   const navigate = useNavigate();
   const { data, isLoading, isError, error, refetch } = useDashboardBatch({ refetchInterval: 20_000 });
   const { data: obsSettings } = useObserverSettings();
+  // MID-22: observer:runtime даёт next_scan_at/scan_mode — реальный адаптивный отсчёт
+  // (polling ~20с, как web useObserverStatus). Недоступность запроса не рушит экран —
+  // useScanCountdown откатывается на локальный таймер (фолбэк ниже).
+  const observerStatusQ = useObserverStatus();
   const { data: spend } = useSpendSeries(24);
   const { data: statsToday, isLoading: statsLoading } = useStatsToday();
   const toggleScanMutation = useToggleScanning();
@@ -90,7 +127,11 @@ function DashboardPage() {
   const stats = batch?.stats;
   const scanOn = obsSettings?.is_scanning_enabled ?? true;
   const interval = obsSettings?.default_interval_seconds ?? 60;
-  const { next } = useScanCountdown(interval, stats?.last_scan_at);
+  const nextScanAt =
+    typeof observerStatusQ.data?.extra?.["next_scan_at"] === "string"
+      ? (observerStatusQ.data.extra["next_scan_at"] as string)
+      : null;
+  const { next } = useScanCountdown(interval, stats?.last_scan_at, nextScanAt);
 
   const total = stats?.total_ads_monitored ?? 0;
   const normal = stats?.ads_in_normal ?? 0;

@@ -3,7 +3,7 @@
  * Шапка → список карточек → bottom-sheet деталей/формы/порогов.
  * Код оффера: mono 15px weight 600 text-bg-11 (канон OfferCard).
  */
-import { useState, useId } from "react";
+import { useEffect, useState, useId } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Plus, ChevronRight } from "lucide-react";
 import { MiniHeader } from "@/components/layout/MiniHeader";
@@ -13,6 +13,7 @@ import {
   Button,
   Input,
   Select,
+  Slider,
   Switch,
   Sheet,
   Skeleton,
@@ -26,6 +27,7 @@ import {
   useDeleteOffer,
   useOfferRules,
   useUpdateOfferRules,
+  useRulesPreview,
   type OfferCreatePayload,
   type OfferUpdatePayload,
   type OfferExt,
@@ -51,28 +53,43 @@ const VERTICAL_OPTIONS = [
 ];
 
 // ─── Конфиг порогов ───────────────────────────────────────────────────────────
+//
+// Модель CPA + 2 ползунка чувствительности (stop_percent_of_rule/warning_percent_of_stop)
+// портирована из frontend/src/components/offers/OfferRulesFields.tsx (MID-21 аудита
+// 02.07 — паритет mini/web). Formulas и enabled-условие preview — РОВНО как в web,
+// не переизобретаем. frequency_threshold — отдельный независимый порог (не завязан
+// на CPA-расчёт), остаётся простым числовым полем как раньше.
+//
+// spend_no_event/cpm/ctr/funnel_ratio по-прежнему не показываем: движок их не
+// использует (см. комментарий предыдущей версии формы).
 
-interface ThresholdField {
-  key: keyof OfferRules;
-  label: string;
-  hint: string;
+/** Значения money-блока правил (CPA + чувствительность) — зеркало OfferRulesValues (web). */
+interface OfferRulesValues {
+  /** CPA как строка (для number-input). Пусто → правила неактивны (нет авторасчёта). */
+  cpa: string;
+  /** Стоп = N% от базового правила (1–100, дефолт 80). */
+  stop_percent_of_rule: number;
+  /** Warning = M% от стопа (1–100, дефолт 80). */
+  warning_percent_of_stop: number;
 }
 
-// Только пороги, которые реально читает evaluator. spend_no_event/cpm/ctr/funnel_ratio
-// убраны: движок их не использует (CPM/CTR — диагностика по решению байера, spend-без-
-// события дублирует guardrail'ы CPC/CPL), а в форме создавали ложное чувство настройки стопа.
-const THRESHOLD_FIELDS: ThresholdField[] = [
-  {
-    key: "cpa_threshold",
-    label: "CPA порог ($)",
-    hint: "Максимально допустимый CPA",
-  },
-  {
-    key: "frequency_threshold",
-    label: "Frequency порог",
-    hint: "Максимальная частота показа",
-  },
-];
+const DEFAULT_OFFER_RULES_VALUES: OfferRulesValues = {
+  cpa: "",
+  stop_percent_of_rule: 80,
+  warning_percent_of_stop: 80,
+};
+
+/** OfferRuleOut (с бэка) → OfferRulesValues для формы. NULL/пусто → дефолт 80/80. */
+function rulesValuesFromOut(rules: OfferRules | null | undefined): OfferRulesValues {
+  if (!rules) return DEFAULT_OFFER_RULES_VALUES;
+  return {
+    cpa: rules.cpa_threshold ?? "",
+    stop_percent_of_rule: rules.stop_percent_of_rule ? Number(rules.stop_percent_of_rule) : 80,
+    warning_percent_of_stop: rules.warning_percent_of_stop
+      ? Number(rules.warning_percent_of_stop)
+      : 80,
+  };
+}
 
 // ─── Форма создания/редактирования оффера ─────────────────────────────────────
 
@@ -279,32 +296,60 @@ interface ThresholdsFormProps {
   onClose: () => void;
 }
 
+// ─── Debounce (preview не дёргаем на каждый тик ползунка) — зеркало web ──────────
+
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const id = window.setTimeout(() => setV(value), ms);
+    return () => window.clearTimeout(id);
+  }, [value, ms]);
+  return v;
+}
+
 function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
   const { data: rules, isLoading } = useOfferRules(offerId);
   const updateRules = useUpdateOfferRules();
 
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<OfferRulesValues>(DEFAULT_OFFER_RULES_VALUES);
+  const [frequency, setFrequency] = useState("");
   const [initialized, setInitialized] = useState(false);
 
   // Инициализируем значения при загрузке данных
   if (rules && !initialized) {
-    const init: Record<string, string> = {};
-    for (const f of THRESHOLD_FIELDS) {
-      const v = rules[f.key];
-      init[f.key] = v != null ? String(v) : "";
-    }
-    setValues(init);
+    setValues(rulesValuesFromOut(rules));
+    setFrequency(rules.frequency_threshold ?? "");
     setInitialized(true);
   }
 
+  const cpaNum = parseFloat(values.cpa);
+  const cpaValid = Number.isFinite(cpaNum) && cpaNum > 0;
+
+  // Дебаунсим связку cpa/stop/warning → меньше запросов при движении ползунка.
+  const debounced = useDebounced(
+    {
+      cpa: cpaValid ? cpaNum : null,
+      stop: values.stop_percent_of_rule,
+      warning: values.warning_percent_of_stop,
+    },
+    250,
+  );
+  const preview = useRulesPreview({
+    cpa: debounced.cpa,
+    stop_percent_of_rule: debounced.stop,
+    warning_percent_of_stop: debounced.warning,
+  });
+
   async function handleSave() {
     haptic.impact("medium");
-    const payload: Partial<OfferRules> = {};
-    for (const f of THRESHOLD_FIELDS) {
-      const raw = values[f.key]?.trim();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (payload as any)[f.key] = raw ? Number(raw) : null;
-    }
+    const cpa = values.cpa.trim();
+    const freq = frequency.trim();
+    const payload: Partial<OfferRules> = {
+      cpa_threshold: cpa ? cpa : null,
+      stop_percent_of_rule: String(values.stop_percent_of_rule),
+      warning_percent_of_stop: String(values.warning_percent_of_stop),
+      frequency_threshold: freq ? freq : null,
+    };
     try {
       await updateRules.mutateAsync({ offerId, payload });
       haptic.notify("success");
@@ -324,24 +369,134 @@ function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
   }
 
   return (
-    <div className="flex flex-col gap-4 pb-6">
-      {THRESHOLD_FIELDS.map((f) => (
-        <div key={f.key}>
-          <Input
-            label={f.label}
-            placeholder="—"
-            type="number"
-            min="0"
-            step="any"
-            value={values[f.key] ?? ""}
-            onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
-          />
-          <p className="text-[11px] text-bg-8 mt-1">{f.hint}</p>
-        </div>
-      ))}
+    <div className="flex flex-col gap-5 pb-6">
+      <Input
+        label="CPA ставка ($)"
+        placeholder="10"
+        type="number"
+        step="any"
+        min="0"
+        value={values.cpa}
+        onChange={(e) => setValues((prev) => ({ ...prev, cpa: e.target.value }))}
+      />
+      <p className="text-[11px] text-bg-8 -mt-3">
+        Целевая цена действия (FTD/депозит). От неё автоматически считаются стоп-пороги.
+      </p>
+
+      <Slider
+        label="Стоп — % от правила"
+        value={values.stop_percent_of_rule}
+        onChange={(v) => setValues((prev) => ({ ...prev, stop_percent_of_rule: v }))}
+        hint="100% = базовое правило. Меньше — стоп срабатывает раньше (жёстче)."
+      />
+      <Slider
+        label="Warning — % от стопа"
+        value={values.warning_percent_of_stop}
+        onChange={(v) => setValues((prev) => ({ ...prev, warning_percent_of_stop: v }))}
+        hint="Ранний сигнал: warning = этот % от стоп-порога."
+      />
+
+      <RulesPreview
+        loading={preview.isLoading || preview.isFetching}
+        data={preview.data}
+        cpaValid={cpaValid}
+      />
+
+      <div className="border-t border-[var(--hairline)] pt-4">
+        <Input
+          label="Frequency порог"
+          placeholder="—"
+          type="number"
+          min="0"
+          step="any"
+          value={frequency}
+          onChange={(e) => setFrequency(e.target.value)}
+        />
+        <p className="text-[11px] text-bg-8 mt-1">
+          Максимальная частота показа — независимый порог (не связан с CPA-расчётом).
+        </p>
+      </div>
+
       <Button onClick={() => void handleSave()} loading={updateRules.isPending} fullWidth>
         Сохранить пороги
       </Button>
+    </div>
+  );
+}
+
+// ─── Живая разбивка порогов ─────────────────────────────────────────────────────
+
+type PreviewData = NonNullable<ReturnType<typeof useRulesPreview>["data"]>;
+
+function RulesPreview({
+  loading,
+  data,
+  cpaValid,
+}: {
+  loading: boolean;
+  data: PreviewData | undefined;
+  cpaValid: boolean;
+}) {
+  if (!cpaValid) {
+    return (
+      <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] text-[12px] text-bg-9 p-3">
+        Укажите CPA — покажу, при какой цене сработают стоп и warning по каждой метрике.
+      </div>
+    );
+  }
+  if (loading && !data) {
+    return <Skeleton className="h-40" />;
+  }
+  if (!data) return null;
+
+  return (
+    <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] p-3">
+      <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-3">
+        ПРИ КАКОЙ ЦЕНЕ СРАБОТАЕТ
+      </div>
+
+      {/* Денежные правила: CPC / CPL / CPR */}
+      <table className="w-full text-[12.5px]">
+        <thead>
+          <tr className="text-bg-8 font-display text-[10px] tracking-wider uppercase">
+            <th className="text-left font-normal pb-1.5">Метрика</th>
+            <th className="text-right font-normal pb-1.5">Warning</th>
+            <th className="text-right font-normal pb-1.5">Стоп</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.cost_rules.map((r) => (
+            <tr key={r.rule} className="border-t border-[var(--hairline)]">
+              <td className="py-1.5 text-bg-10">{r.label}</td>
+              <td className="py-1.5 text-right font-display tabular-nums text-warning">
+                ${r.warning}
+              </td>
+              <td className="py-1.5 text-right font-display tabular-nums text-danger">
+                ${r.stop}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* Диапазоны расхода без/с депозитом */}
+      {data.spend_ranges.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-[var(--hairline)] flex flex-col gap-1.5">
+          {data.spend_ranges.map((s) => (
+            <div key={s.rule} className="flex items-center justify-between text-[12px]">
+              <span className="text-bg-10">{s.label}</span>
+              <span className="font-display tabular-nums text-bg-11">
+                ${s.stop_from}–${s.stop_to}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-3 text-[11px] text-bg-8">
+        {data.regs_no_dep_stop_count} регистраций без депозитов → стоп. Базовые проценты правил
+        (CPC 2% / CPL 10% / CPR 20% от CPA) фиксированы.
+      </div>
     </div>
   );
 }
