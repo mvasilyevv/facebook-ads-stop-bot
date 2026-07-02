@@ -47,7 +47,11 @@ from core.observer.adaptive_interval import (
     resolve_scan_mode,
 )
 from core.observer.pipeline import CycleResult, process_scan_rows
-from core.observer.queries import load_observer_config, load_vision_auto_restart_flag
+from core.observer.queries import (
+    load_observer_config,
+    load_vision_auto_restart_flag,
+    multi_cabinet_requires_owner_tag,
+)
 from core.scanner.models import ScannedAdRow
 from core.telegram import format as fmt
 from core.telegram.worker_notify import notify_owners, notify_recipients
@@ -85,6 +89,14 @@ CHANNEL_RESTART = "fb_agent:worker:restart:observer"  # graceful restart
 DEGRADED_ALERT_THRESHOLD = int(os.environ.get("OBSERVER_DEGRADED_ALERT_THRESHOLD", "3"))
 DEGRADED_ALERT_TTL_SECONDS = int(os.environ.get("OBSERVER_DEGRADED_ALERT_TTL_SEC", "1800"))
 DEGRADED_ALERT_DEDUP_KEY = "observer:degraded:alerted"
+
+# Money-гард R4: мульти-каб (>1 кабинета) без owner_tag → скан остановлен ради безопасности
+# (иначе авто-стоп чужой рекламы в shared-кабинете). Дедуп ops-алерта, чтобы не спамить
+# каждый цикл, пока конфиг не исправят.
+MULTI_CAB_NO_OWNER_ALERT_TTL_SECONDS = int(
+    os.environ.get("OBSERVER_MULTI_CAB_NO_OWNER_ALERT_TTL_SEC", "3600")
+)
+MULTI_CAB_NO_OWNER_ALERT_DEDUP_KEY = "observer:multi_cab_no_owner:alerted"
 
 
 @dataclass
@@ -661,6 +673,48 @@ async def _prepare_workspace(
         await _notify_tg_simple(engine, tg_client, done_msg)
 
 
+async def _maybe_alert_multi_cab_no_owner(
+    engine: AsyncEngine,
+    redis_client,
+    tg_client,
+    *,
+    account_count: int,
+) -> None:
+    """Deduped ops-алерт R4: мульти-каб без owner_tag → скан остановлен ради безопасности.
+
+    Дедуп через Redis SET NX EX (как degraded-алерт): повтор не чаще TTL, чтобы не
+    спамить каждый цикл, пока конфиг не исправят. Redis недоступен → алерт всё равно
+    шлём (лучше шумнее, чем пропустить money-критичный сигнал).
+    """
+    allowed = True
+    if redis_client is not None:
+        try:
+            ok = await redis_client.set(
+                MULTI_CAB_NO_OWNER_ALERT_DEDUP_KEY,
+                "1",
+                ex=MULTI_CAB_NO_OWNER_ALERT_TTL_SECONDS,
+                nx=True,
+            )
+            allowed = bool(ok)
+        except Exception:
+            logger.exception("observer: ошибка SET дедупа multi_cab_no_owner")
+            allowed = True
+    if not allowed:
+        return
+    msg = (
+        f"🚨 {fmt.b('Скан остановлен ради безопасности')}\n"
+        f"Подключено кабинетов: {account_count}, но owner_campaign_tag не задан.\n"
+        "В мульти-кабинете без тега бот оценивал бы стоп-правила и мог авто-стопнуть "
+        "ЧУЖУЮ рекламу в общем кабинете.\n"
+        "Задай owner_campaign_tag в настройках observer, чтобы скан возобновился."
+    )
+    logger.critical(
+        "observer: мульти-каб (%d кабинетов) без owner_tag — скан остановлен ради безопасности",
+        account_count,
+    )
+    await _notify_tg_simple(engine, tg_client, msg)
+
+
 async def run_one_cycle(
     engine: AsyncEngine,
     *,
@@ -708,6 +762,22 @@ async def run_one_cycle(
             ),
         )
         return summary
+
+    # Money-гард R4: мульти-каб (>1 кабинета) без owner_tag → скоупинг чужих кампаний
+    # отсутствует (allowlist в мульти-кабе игнорируется, campaign_matches_owner→True для
+    # ВСЕХ). Без тега бот авто-стопнул бы чужую рекламу в shared-кабинете (необратимо).
+    # Зеркалит single-cab guard (allowlist_blocks_scan): скан этого набора кабинетов НЕ
+    # запускаем, шлём deduped ops-алерт. Возобновится, как только owner_tag будет задан.
+    if multi_cabinet_requires_owner_tag(len(accounts), config.get("owner_campaign_tag")):
+        await _maybe_alert_multi_cab_no_owner(
+            engine, redis_client, tg_client, account_count=len(accounts)
+        )
+        await _publish_runtime_status(
+            redis_client,
+            status="idle",
+            status_message="Скан остановлен: мульти-каб без owner_tag (безопасность)",
+        )
+        return {"outcome": "skipped", "scan_id": None, "reason": "multi_cab_no_owner_tag"}
 
     # Warning о выпавших из скана офферах (активны, но без кабинетов) — раз в цикл в лог.
     orphan_offers = await list_offers_without_accounts(engine)
