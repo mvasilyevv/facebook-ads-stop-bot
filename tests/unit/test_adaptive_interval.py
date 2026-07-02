@@ -20,16 +20,12 @@ from core.observer.adaptive_interval import (
 
 # Stop-хит → CRITICAL даже если есть warning и офферные ads (наивысший приоритет).
 def test_select_mode_stop_wins():
-    assert (
-        select_scan_mode(alerts_stop=1, alerts_warning=3, rows_with_offer=10) == "CRITICAL"
-    )
+    assert select_scan_mode(alerts_stop=1, alerts_warning=3, rows_with_offer=10) == "CRITICAL"
 
 
 # Warning без stop → ELEVATED.
 def test_select_mode_warning():
-    assert (
-        select_scan_mode(alerts_stop=0, alerts_warning=2, rows_with_offer=5) == "ELEVATED"
-    )
+    assert select_scan_mode(alerts_stop=0, alerts_warning=2, rows_with_offer=5) == "ELEVATED"
 
 
 # Есть офферные объявления, но алертов нет → CALM (штатный темп).
@@ -149,3 +145,128 @@ def test_resolve_empty_idle():
 # Отсутствие ключей в summary не роняет (дефолты 0 → IDLE).
 def test_resolve_missing_keys_defaults_idle():
     assert resolve_scan_mode({"outcome": "success"}) == "IDLE"
+
+
+# ── Удержание режима по стоячему инциденту (не только по переходам) ───────────
+
+
+# Ад сидит в warning_sent (переход был в прошлом цикле, новых нет) → ELEVATED
+# удерживается, а не откатывается к CALM (дефект инцидента 02.07).
+def test_select_mode_sustains_elevated_while_warning_state():
+    mode = select_scan_mode(
+        alerts_stop=0, alerts_warning=0, rows_with_offer=5, ads_in_warning_state=1
+    )
+    assert mode == "ELEVATED"
+
+
+# Ад в stop_sent/claimed (пауза ещё не подтверждена Meta) → CRITICAL удерживается.
+def test_select_mode_sustains_critical_while_stop_state():
+    mode = select_scan_mode(alerts_stop=0, alerts_warning=0, rows_with_offer=5, ads_in_stop_state=1)
+    assert mode == "CRITICAL"
+
+
+# Стоячий stop важнее стоячего warning (приоритет как у переходов).
+def test_select_mode_standing_stop_beats_standing_warning():
+    mode = select_scan_mode(
+        alerts_stop=0,
+        alerts_warning=0,
+        rows_with_offer=5,
+        ads_in_stop_state=1,
+        ads_in_warning_state=3,
+    )
+    assert mode == "CRITICAL"
+
+
+# Инцидент закрылся (счётчики состояний 0, переходов нет) → возврат к CALM.
+def test_select_mode_returns_to_calm_after_incident_closed():
+    mode = select_scan_mode(
+        alerts_stop=0,
+        alerts_warning=0,
+        rows_with_offer=5,
+        ads_in_stop_state=0,
+        ads_in_warning_state=0,
+    )
+    assert mode == "CALM"
+
+
+# resolve_scan_mode читает счётчики состояний из summary (reader-сторона контракта).
+def test_resolve_reads_state_counters_from_summary():
+    summary = {
+        "outcome": "success",
+        "alerts_stop": 0,
+        "alerts_warning": 0,
+        "rows_with_offer": 7,
+        "ads_in_warning_state": 2,
+        "ads_in_stop_state": 0,
+    }
+    assert resolve_scan_mode(summary) == "ELEVATED"
+
+
+# ── Контракт writer↔reader: pipeline → observer summary → resolve_scan_mode ───
+# Урок CRIT-2 (Round 10): счётчик, который writer не пишет или reader не читает,
+# молча превращает фичу в no-op. Прогоняем цепочку целиком на фейковых данных.
+
+
+# _bump_state_counters: warning_sent → warning-счётчик, stop_sent/claimed → stop-счётчик,
+# normal/disabled — инцидента нет, счётчики не растут.
+def test_bump_state_counters_by_state():
+    from core.observer.pipeline import CycleResult, _bump_state_counters
+
+    result = CycleResult()
+    for state in ("warning_sent", "stop_sent", "claimed", "normal", "disabled"):
+        _bump_state_counters(result, state)
+    assert result.ads_in_warning_state == 1
+    assert result.ads_in_stop_state == 2
+
+
+# Агрегация мульти-кабинетного цикла суммирует счётчики состояний, и итоговый
+# summary даёт удержание ELEVATED через resolve_scan_mode (E2E контракта).
+def test_aggregate_summary_carries_state_counters_to_resolver():
+    from apps.observer_worker.main import _aggregate_cycle_summary
+
+    per_account = [
+        {
+            "outcome": "success",
+            "scan_id": 1,
+            "duration_ms": 100,
+            "rows_total": 5,
+            "rows_with_offer": 5,
+            "alerts_warning": 0,
+            "alerts_stop": 0,
+            "ads_in_warning_state": 1,
+            "ads_in_stop_state": 0,
+            "tg_dispatched": None,
+            "error": None,
+            "ad_account_id": "act_1",
+        },
+        {
+            "outcome": "success",
+            "scan_id": 2,
+            "duration_ms": 100,
+            "rows_total": 3,
+            "rows_with_offer": 3,
+            "alerts_warning": 0,
+            "alerts_stop": 0,
+            "ads_in_warning_state": 1,
+            "ads_in_stop_state": 0,
+            "tg_dispatched": None,
+            "error": None,
+            "ad_account_id": "act_2",
+        },
+    ]
+    summary = _aggregate_cycle_summary(per_account)
+    assert summary["ads_in_warning_state"] == 2
+    assert summary["ads_in_stop_state"] == 0
+    assert resolve_scan_mode(summary) == "ELEVATED"
+
+
+# Writer-сторона per-account summary: _run_account_scan обязан прокидывать оба
+# счётчика из CycleResult в dict (анти-регресс имён ключей, стиль Round 11).
+def test_account_summary_source_contains_state_counters():
+    import inspect
+
+    import apps.observer_worker.main as ow
+
+    src = inspect.getsource(ow._run_account_scan)
+    assert '"ads_in_warning_state": cycle_result.ads_in_warning_state' in src
+    assert '"ads_in_stop_state": cycle_result.ads_in_stop_state' in src

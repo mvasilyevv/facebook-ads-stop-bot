@@ -487,6 +487,8 @@ async def _run_account_scan(
         "rows_with_offer": cycle_result.rows_with_offer if cycle_result else 0,
         "alerts_warning": cycle_result.alerts_warning if cycle_result else 0,
         "alerts_stop": cycle_result.alerts_stop if cycle_result else 0,
+        "ads_in_warning_state": cycle_result.ads_in_warning_state if cycle_result else 0,
+        "ads_in_stop_state": cycle_result.ads_in_stop_state if cycle_result else 0,
         "tg_dispatched": dispatched,
         "error": error_msg,
     }
@@ -527,6 +529,8 @@ def _aggregate_cycle_summary(per_account: list[dict]) -> dict:
         "rows_with_offer": sum(s.get("rows_with_offer", 0) for s in per_account),
         "alerts_warning": sum(s.get("alerts_warning", 0) for s in per_account),
         "alerts_stop": sum(s.get("alerts_stop", 0) for s in per_account),
+        "ads_in_warning_state": sum(s.get("ads_in_warning_state", 0) for s in per_account),
+        "ads_in_stop_state": sum(s.get("ads_in_stop_state", 0) for s in per_account),
         "tg_dispatched": next(
             (s["tg_dispatched"] for s in per_account if s.get("tg_dispatched")), None
         ),

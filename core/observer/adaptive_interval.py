@@ -40,20 +40,33 @@ def select_scan_mode(
     alerts_stop: int,
     alerts_warning: int,
     rows_with_offer: int,
+    ads_in_stop_state: int = 0,
+    ads_in_warning_state: int = 0,
 ) -> str:
     """Выбирает режим скана по итогу цикла. Приоритет: stop > warning > офферные ads > пусто.
+
+    Режим держится, пока объявление СИДИТ в открытом инциденте, а не только в цикл
+    перехода: warning-переход случается один раз (FSM не ре-эмитит в warning_sent),
+    и без учёта состояния ускорение жило ровно один цикл, после чего ад стоял у порога
+    на базовом темпе до самой эскалации (инцидент 02.07). stop_sent/claimed без
+    подтверждённой паузы — деньги ещё капают, поэтому CRITICAL тоже удерживается.
 
     Args:
         alerts_stop: число stop-переходов FSM в этом цикле.
         alerts_warning: число warning-переходов FSM в этом цикле.
         rows_with_offer: число просканированных объявлений, сматченных с оффером.
+        ads_in_stop_state: сколько ads после цикла в stop_sent/claimed (пауза не
+            подтверждена). Держит CRITICAL до развязки (обычно 1-2 цикла; при
+            сломанном канале паузы — осознанно частый скан на живом money-инциденте).
+        ads_in_warning_state: сколько ads после цикла в warning_sent (у порога).
+            Держит ELEVATED до эскалации или закрытия инцидента.
 
     Returns:
         Имя режима: "CRITICAL" | "ELEVATED" | "CALM" | "IDLE".
     """
-    if alerts_stop > 0:
+    if alerts_stop > 0 or ads_in_stop_state > 0:
         return "CRITICAL"
-    if alerts_warning > 0:
+    if alerts_warning > 0 or ads_in_warning_state > 0:
         return "ELEVATED"
     if rows_with_offer > 0:
         return "CALM"
@@ -80,6 +93,8 @@ def resolve_scan_mode(summary: dict) -> str:
         alerts_stop=summary.get("alerts_stop", 0),
         alerts_warning=summary.get("alerts_warning", 0),
         rows_with_offer=summary.get("rows_with_offer", 0),
+        ads_in_stop_state=summary.get("ads_in_stop_state", 0),
+        ads_in_warning_state=summary.get("ads_in_warning_state", 0),
     )
 
 

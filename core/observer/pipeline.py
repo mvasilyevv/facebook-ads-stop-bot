@@ -55,6 +55,12 @@ class CycleResult:
     rows_foreign: int = 0  # отброшено owner-фильтром (чужие кампании без owner-тега)
     alerts_warning: int = 0
     alerts_stop: int = 0
+    # Сколько объявлений ПОСЛЕ цикла сидят в открытом инциденте (не переходы, а состояние):
+    # warning_sent → удержание ELEVATED; stop_sent/claimed (пауза не подтверждена, деньги
+    # ещё капают) → удержание CRITICAL. Без этого адаптив ускорялся ровно на один цикл
+    # после перехода и возвращался к базе, пока ад стоял у порога (инцидент 02.07).
+    ads_in_warning_state: int = 0
+    ads_in_stop_state: int = 0
     disable_tasks_created: int = 0
     transitions: list[str] = field(default_factory=list)
     # fb_ad_ids, для которых выполнен тихий sync инцидента → disabled (ад уже OFF в Meta)
@@ -397,6 +403,10 @@ async def _process_one_row(
         elif transition.alert_stage == "stop":
             result.alerts_stop += 1
 
+    # Учёт стоячих инцидентов для адаптивного интервала. Снуз НЕ исключаем:
+    # частота скана — про свежесть данных, а не про нотификации.
+    _bump_state_counters(result, transition.new_state)
+
     # --- Outbox: disable task если auto-stop ---
     task_id = await maybe_create_disable_task(
         engine,
@@ -410,6 +420,20 @@ async def _process_one_row(
 
     if transition.transition_reason:
         result.transitions.append(f"{row.fb_ad_id}: {transition.transition_reason}")
+
+
+def _bump_state_counters(result: CycleResult, new_state: str) -> None:
+    """Инкрементирует счётчики стоячих инцидентов по итоговому FSM-состоянию строки.
+
+    warning_sent — ад у порога (80% от стопа), нужен учащённый скан до развязки.
+    stop_sent/claimed — стоп отправлен/кнопка нажата, но пауза ещё не подтверждена
+    Meta (fsm_sync переведёт в disabled) — деньги капают, скан максимально частый.
+    disabled/normal — инцидента нет, счётчики не трогаем.
+    """
+    if new_state == "warning_sent":
+        result.ads_in_warning_state += 1
+    elif new_state in ("stop_sent", "claimed"):
+        result.ads_in_stop_state += 1
 
 
 def _suppress_emit(transition, *, reason: str):
