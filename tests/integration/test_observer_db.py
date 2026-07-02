@@ -507,21 +507,20 @@ async def test_snooze_expired_between_scans_emits_on_third(pg_engine, offer_kr2)
     )
 
 
-# C1/M3: после истечения snooze залипший stop_sent создаёт pause-задачу (money-recovery).
-# Проверяем task_queue НАПРЯМУЮ (а не только alert_events) и без ручного сброса alert_state —
-# именно эту money-границу старый снуз-тест маскировал.
+# C1/M3 + MID-2 (аудит 02.07): снуз глушит ТОЛЬКО TG-алерты, НЕ авто-стоп — pause-задача
+# создаётся и под активным снузом (раньше подавлялась → заснуженный убыточный ад крутился
+# без стопа до конца окна). Recovery после истечения снуза не создаёт дубль (idempotency).
 @pytest.mark.asyncio
 async def test_snooze_stop_recovery_creates_pause_task(pg_engine, offer_kr2) -> None:
-    """Снуз → залипание в stop_sent под снузом (pause-задача подавлена) → снуз истёк →
-    следующий скан создаёт meta_api_mutation pause_ad. Закрывает C1: без recovery ад
-    навсегда залипал в stop_sent без авто-отключения и продолжал жечь бюджет."""
+    """Снуз → stop_sent под снузом (pause-задача СОЗДАЁТСЯ — MID-2, авто-стоп работает) →
+    снуз истёк → recovery-скан не плодит вторую задачу (одна на инцидент)."""
     row = _make_row(spend=Decimal("20.0"), deposits=0, leads=0, registrations=0)
 
     # Scan #1 → ад уходит в stop_sent (трата без событий).
     ts1 = datetime(2026, 5, 28, 12, 0, 0, tzinfo=UTC)
     await process_scan_rows(pg_engine, rows=[row], scan_id=1, cycle_ts=ts1)
 
-    # Снуз активен до ts1+2мин + эмулируем «pause-задача не создавалась» (снуз/краш-сценарий):
+    # Снуз активен до ts1+2мин + эмулируем «pause-задача не создавалась» (краш-сценарий):
     snooze_exp = ts1 + timedelta(minutes=2)
     async with pg_engine.begin() as conn:
         await conn.execute(
@@ -530,7 +529,8 @@ async def test_snooze_stop_recovery_creates_pause_task(pg_engine, offer_kr2) -> 
         )
         await conn.execute(text("DELETE FROM task_queue WHERE task_type = 'meta_api_mutation'"))
 
-    # Scan #2 под активным снузом: pause-задача НЕ создаётся (suppress).
+    # Scan #2 под активным снузом: pause-задача СОЗДАЁТСЯ (MID-2 — снуз не выключает
+    # авто-стоп; подавляется только TG-алерт).
     ts2 = ts1 + timedelta(minutes=1)
     await process_scan_rows(pg_engine, rows=[row], scan_id=2, cycle_ts=ts2)
     async with pg_engine.connect() as conn:
@@ -539,9 +539,10 @@ async def test_snooze_stop_recovery_creates_pause_task(pg_engine, offer_kr2) -> 
                 text("SELECT COUNT(*) FROM task_queue WHERE payload->>'mutation_kind' = 'pause_ad'")
             )
         ).scalar()
-    assert n_under_snooze == 0, "под активным снузом pause-задача должна быть подавлена"
+    assert n_under_snooze == 1, "под снузом авто-стоп обязан работать (MID-2): одна pause-задача"
 
-    # Scan #3 после истечения снуза: recovery создаёт ровно одну pause_ad.
+    # Scan #3 после истечения снуза: recovery НЕ плодит дубль — по-прежнему ровно одна
+    # pause_ad на инцидент (idempotency_key по open_token).
     ts3 = ts1 + timedelta(minutes=3)
     await process_scan_rows(pg_engine, rows=[row], scan_id=3, cycle_ts=ts3)
     async with pg_engine.connect() as conn:
@@ -554,7 +555,7 @@ async def test_snooze_stop_recovery_creates_pause_task(pg_engine, offer_kr2) -> 
             )
         ).fetchall()
     assert len(recovered) == 1, (
-        f"recovery создаёт ровно одну pause-задачу, получено {len(recovered)}"
+        f"ровно одна pause-задача на инцидент (без дубля от recovery), получено {len(recovered)}"
     )
     assert recovered[0].kind == "pause_ad"
     assert recovered[0].target == "230011223344"

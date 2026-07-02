@@ -19,13 +19,15 @@ from datetime import date
 import pytest
 
 from core.adset_pro import AdsetProClient, StatsQueryRequest
-from core.config import get_settings
+from core.config import get_settings, reveal_secret
 
 
 def _skip_if_no_real_key() -> None:
     """Если MCP-ключа нет в .env / окружении — тест пропускается."""
     settings = get_settings()
-    if not settings.adsetpro_mcp_key or not settings.adsetpro_mcp_key.startswith("mcp_"):
+    if not settings.adsetpro_mcp_key or not reveal_secret(settings.adsetpro_mcp_key).startswith(
+        "mcp_"
+    ):
         pytest.skip("ADSETPRO_MCP_KEY не задан или не начинается с mcp_ — пропускаем live тест")
 
 

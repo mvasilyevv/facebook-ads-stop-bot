@@ -26,7 +26,7 @@ from sqlalchemy import text
 from apps.api.deps import get_engine
 from apps.api.main import create_app
 from core.auth.tma import issue_session_token
-from core.config import get_settings
+from core.config import get_settings, reveal_secret
 
 
 def _make_app(engine):
@@ -38,7 +38,9 @@ def _make_app(engine):
 def _token_for(uid: int) -> str:
     """Выпускает валидный сессионный токен тем же секретом, что и guard."""
     s = get_settings()
-    secret = s.tma_session_secret or s.encryption_key
+    # SecretStr → str: itsdangerous ждёт строку-ключ (SecretStr итерируется как
+    # список ключей и падает TypeError) — тот же резолв, что _tma_secret в роутере.
+    secret = reveal_secret(s.tma_session_secret) or reveal_secret(s.encryption_key)
     return issue_session_token(str(uid), s.tma_session_ttl_seconds, secret)
 
 

@@ -146,7 +146,7 @@ async def ensure_observer_config_enabled(pg_engine):
         await conn.execute(
             text(
                 "UPDATE observer_config SET interval_seconds = 90, jitter_seconds = 15, "
-                "campaign_ids = ARRAY[]::text[] "
+                "campaign_ids = ARRAY[]::text[], owner_campaign_tag = NULL "
                 "WHERE singleton_key = 'default'"
             )
         )
@@ -499,6 +499,13 @@ async def test_multi_cabinet_sequential_scan(
             ),
             {"i": uuid.uuid4()},
         )
+        # Money-гард R4: мульти-каб (>1 кабинета) без owner_campaign_tag скан пропускает —
+        # задаём тег (совпадает с 'MV' в campaign_name строк _row()).
+        await conn.execute(
+            text(
+                "UPDATE observer_config SET owner_campaign_tag = 'MV' WHERE singleton_key = 'default'"
+            )
+        )
 
     gate = _MultiAccountGate(
         {
@@ -542,6 +549,12 @@ async def test_multi_cabinet_error_does_not_break_others(
     async with pg_engine.begin() as conn:
         await conn.execute(
             text("UPDATE offers SET ad_account_ids = ARRAY['111', '222'] WHERE code = 'CR2'")
+        )
+        # Money-гард R4: мульти-каб без owner_campaign_tag скан пропускает — задаём тег.
+        await conn.execute(
+            text(
+                "UPDATE observer_config SET owner_campaign_tag = 'MV' WHERE singleton_key = 'default'"
+            )
         )
 
     gate = _MultiAccountGate(

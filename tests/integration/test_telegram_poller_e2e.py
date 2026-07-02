@@ -184,7 +184,15 @@ async def test_spy_full_flow(
     fake_ad_lib_client,
     fake_ad_lib_scenario,
     clean_ad_library_tables,
+    monkeypatch,
 ) -> None:
+    # Rate-limit /spy (MID-9) мокаем: живой Redis-cooldown (SET NX EX 120с) делает
+    # тест зависимым от порядка/повторов прогона — сама логика покрыта test_spy_cooldown.py.
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    import core.telegram.handlers.spy as _spy_mod
+
+    monkeypatch.setattr(_spy_mod, "_check_and_set_cooldown", _AsyncMock(return_value=True))
     fake_ad_lib_scenario.ad_count = 2
     fake_ad_lib_scenario.ads = [
         {
