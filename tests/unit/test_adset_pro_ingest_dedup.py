@@ -99,10 +99,18 @@ def _event(**overrides) -> PostbackEvent:
     return PostbackEvent(**base)
 
 
+# Advisory-lock — первый execute внутри begin(); _FakeResult(row=None) достаточно, он
+# ничего не возвращает. Держим общий хелпер, чтобы план тестов читался ближе к реальному SQL.
+def _lock_step() -> _FakeResult:
+    """Шаг плана под SELECT pg_advisory_xact_lock(...) — результат не важен."""
+    return _FakeResult(row=None)
+
+
 # Сценарий: pre-INSERT SELECT уже нашёл postback → возвращаем is_duplicate=True без INSERT'а.
 @pytest.mark.asyncio
 async def test_ingest_marks_duplicate_when_select_finds_row() -> None:
     plan = [
+        _lock_step(),  # pg_advisory_xact_lock
         _FakeResult(row=_FakeRow((42,))),  # pre-INSERT SELECT нашёл запись
     ]
     engine = _FakeEngine(plan)
@@ -113,15 +121,17 @@ async def test_ingest_marks_duplicate_when_select_finds_row() -> None:
     assert result.inserted is False
     assert result.is_duplicate is True
     assert result.event_id is None
-    # Должен быть только SELECT, без INSERT.
-    assert len(engine.conn.executed) == 1
-    assert "SELECT id FROM adsetpro_postback_events" in engine.conn.executed[0][0]
+    # Должны быть только advisory-lock и SELECT, без INSERT.
+    assert len(engine.conn.executed) == 2
+    assert "pg_advisory_xact_lock" in engine.conn.executed[0][0]
+    assert "SELECT id FROM adsetpro_postback_events" in engine.conn.executed[1][0]
 
 
 # Сценарий: pre-INSERT SELECT пуст + INSERT RETURNING строку → inserted=True.
 @pytest.mark.asyncio
 async def test_ingest_inserts_when_no_prior_row() -> None:
     plan = [
+        _lock_step(),  # pg_advisory_xact_lock
         _FakeResult(row=None),  # pre-INSERT SELECT — пусто
         _FakeResult(row=_FakeRow((1234,))),  # INSERT RETURNING id
     ]
@@ -133,15 +143,16 @@ async def test_ingest_inserts_when_no_prior_row() -> None:
     assert result.inserted is True
     assert result.is_duplicate is False
     assert result.event_id == 1234
-    # Должно быть 2 операции: SELECT (dedup) + INSERT.
-    assert len(engine.conn.executed) == 2
-    assert "INSERT INTO adsetpro_postback_events" in engine.conn.executed[1][0]
+    # Должно быть 3 операции: advisory-lock + SELECT (dedup) + INSERT.
+    assert len(engine.conn.executed) == 3
+    assert "INSERT INTO adsetpro_postback_events" in engine.conn.executed[2][0]
 
 
 # Сценарий: SELECT пуст + INSERT RETURNING None (race на UNIQUE) → is_duplicate=True.
 @pytest.mark.asyncio
 async def test_ingest_handles_race_on_unique_constraint() -> None:
     plan = [
+        _lock_step(),  # pg_advisory_xact_lock
         _FakeResult(row=None),  # pre-INSERT SELECT — пусто
         _FakeResult(row=None),  # INSERT RETURNING — None из-за ON CONFLICT DO NOTHING
     ]
@@ -161,6 +172,7 @@ async def test_ingest_resolves_fb_ad_fk_from_lookup() -> None:
     ad_uuid = uuid.uuid4()
     plan = [
         _FakeResult(row=_FakeRow((ad_uuid,))),  # _resolve_fb_ad_fk: SELECT fb_ads
+        _lock_step(),  # pg_advisory_xact_lock
         _FakeResult(row=None),  # pre-INSERT SELECT — пусто
         _FakeResult(row=_FakeRow((99,))),  # INSERT RETURNING id
     ]
@@ -171,7 +183,7 @@ async def test_ingest_resolves_fb_ad_fk_from_lookup() -> None:
 
     assert result.inserted is True
     assert result.fb_ad_fk == ad_uuid
-    # Первый запрос — это LOOKUP к fb_ads, до dedup-проверки.
+    # Первый запрос — это LOOKUP к fb_ads, до advisory-lock и dedup-проверки.
     assert "SELECT id FROM fb_ads" in engine.conn.executed[0][0]
 
 
@@ -179,6 +191,7 @@ async def test_ingest_resolves_fb_ad_fk_from_lookup() -> None:
 @pytest.mark.asyncio
 async def test_ingest_skips_lookup_when_no_fb_ad_id() -> None:
     plan = [
+        _lock_step(),  # pg_advisory_xact_lock
         _FakeResult(row=None),  # pre-INSERT SELECT — пусто
         _FakeResult(row=_FakeRow((7,))),  # INSERT RETURNING id
     ]
@@ -191,3 +204,65 @@ async def test_ingest_skips_lookup_when_no_fb_ad_id() -> None:
     assert result.fb_ad_fk is None
     # SELECT в fb_ads не должен делаться.
     assert not any("FROM fb_ads" in sql for sql, _ in engine.conn.executed)
+
+
+# Сценарий (H-5): advisory-lock берётся ПЕРВЫМ в транзакции (до pre-SELECT), с ключом
+# click_id:event_type — сериализация конкурентного дедупа одного события.
+@pytest.mark.asyncio
+async def test_ingest_takes_advisory_lock_with_expected_key_before_select() -> None:
+    plan = [
+        _lock_step(),  # pg_advisory_xact_lock
+        _FakeResult(row=None),  # pre-INSERT SELECT — пусто
+        _FakeResult(row=_FakeRow((5,))),  # INSERT RETURNING id
+    ]
+    engine = _FakeEngine(plan)
+    event = _event(click_id="lock-key-1", event_type="ftd", fb_ad_id=None)
+
+    await ingest_postback(engine, event)
+
+    executed = engine.conn.executed
+    # Первый SQL внутри транзакции — advisory-lock, СТРОГО до pre-SELECT дедупа.
+    assert "pg_advisory_xact_lock" in executed[0][0]
+    assert "hashtext" in executed[0][0]
+    # Ключ лока == дедуп-ключ pre-SELECT'а: click_id:event_type.
+    assert executed[0][1]["lock_key"] == "lock-key-1:ftd"
+    # Именно после лока идёт pre-INSERT SELECT.
+    assert "SELECT id FROM adsetpro_postback_events" in executed[1][0]
+    # Индекс advisory-lock строго меньше индекса SELECT.
+    lock_idx = next(i for i, (sql, _) in enumerate(executed) if "pg_advisory_xact_lock" in sql)
+    select_idx = next(
+        i for i, (sql, _) in enumerate(executed) if "SELECT id FROM adsetpro_postback_events" in sql
+    )
+    assert lock_idx < select_idx
+
+
+# Сценарий (H-5 регресс): поведение дедупа для последовательных дублей не изменилось —
+# добавление advisory-lock не сломало старую логику pre-SELECT → is_duplicate.
+@pytest.mark.asyncio
+async def test_advisory_lock_does_not_change_sequential_dedup_behavior() -> None:
+    # Первый ingest: лок + пустой pre-SELECT + INSERT RETURNING id → inserted=True.
+    first_plan = [
+        _lock_step(),
+        _FakeResult(row=None),
+        _FakeResult(row=_FakeRow((100,))),
+    ]
+    first_engine = _FakeEngine(first_plan)
+    event = _event(click_id="seq-dup-1", event_type="ftd")
+    first = await ingest_postback(first_engine, event)
+    assert first.inserted is True
+    assert first.is_duplicate is False
+
+    # Повторный ingest того же события: лок + pre-SELECT нашёл строку → is_duplicate=True без INSERT.
+    second_plan = [
+        _lock_step(),
+        _FakeResult(row=_FakeRow((100,))),
+    ]
+    second_engine = _FakeEngine(second_plan)
+    second = await ingest_postback(second_engine, event)
+    assert second.inserted is False
+    assert second.is_duplicate is True
+    assert second.event_id is None
+    # INSERT второй раз не выполнялся.
+    assert not any(
+        "INSERT INTO adsetpro_postback_events" in sql for sql, _ in second_engine.conn.executed
+    )

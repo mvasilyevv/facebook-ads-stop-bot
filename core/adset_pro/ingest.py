@@ -4,6 +4,10 @@
 См. META_INTEGRATION_PLAN.md §4.4 / Этап 6 / Волна 3.
 
 Логика:
+0. pg_advisory_xact_lock по (click_id, event_type) в начале транзакции — сериализует
+   конкурентный дедуп одного события. Без него UNIQUE (включает received_at с
+   микросекундами → у параллельных запросов он разный) не ловит дубль, а pre-SELECT под
+   READ COMMITTED не видит незакоммиченный INSERT соседа.
 1. По fb_ad_id (ext_sub6) пытаемся разрезолвить fb_ad_fk через fb_ads.fb_ad_id.
 2. Проверяем существующие записи с (click_id, event_type) внутри окна дедупа
    (по умолчанию 24h) — защита от ретраев AdSet.pro, у которых каждый раз будет
@@ -70,7 +74,26 @@ async def ingest_postback(
 
     dedup_after = event.received_at - _DEDUP_WINDOW
 
+    # Ключ сериализации конкурентного дедупа == ключ pre-SELECT'а: (click_id, event_type).
+    # Это то, что образует «одно событие» с точки зрения дедупа.
+    lock_key = f"{event.click_id}:{event.event_type}"
+
     async with engine.begin() as conn:
+        # Шаг 0: advisory-lock на транзакцию по (click_id, event_type). Закрывает дыру
+        # конкурентного дедупа: UNIQUE включает received_at с микросекундами (у двух
+        # параллельных запросов он разный → ON CONFLICT не срабатывает), а pre-SELECT под
+        # READ COMMITTED не видит незакоммиченный INSERT соседней транзакции. Advisory-lock
+        # сериализует SELECT+INSERT для одного события: второй писатель ждёт COMMIT первого,
+        # затем его pre-SELECT уже видит вставленную строку → корректный is_duplicate.
+        # Лок висит до конца ЭТОЙ транзакции (engine.begin) и снимается на COMMIT/ROLLBACK.
+        # hashtext() может коллизировать разные ключи в один bigint — это безопасно:
+        # ложная сериализация двух несвязанных событий лишь чуть замедляет, но не задваивает
+        # и не теряет депозиты.
+        await conn.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+            {"lock_key": lock_key},
+        )
+
         # Шаг 1: пред-INSERT проверка окна дедупа — защищает от ретраев AdSet.pro.
         existing = await conn.execute(
             text(
