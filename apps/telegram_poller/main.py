@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from core.db import WORKER_ENGINE_KWARGS
 from core.pubsub import RedisPubSub
 from core.telegram.bot_handler import handle_update
-from core.telegram.client import TelegramBotClient
+from core.telegram.client import TelegramAPIError, TelegramBotClient
 from core.telegram.service import (
     load_telegram_config,
     save_poller_offset,
@@ -43,6 +43,11 @@ _ERROR_RETRY_DELAY_SECONDS = 3
 _LONG_POLL_TIMEOUT_SECONDS = 25
 # Как часто в idle-режиме (нет токена) перечитывать config в ожидании ввода через UI.
 _IDLE_RELOAD_INTERVAL_SECONDS = 10
+# MID-7 (аудит 02.07): Telegram отвечает 409 Conflict на getUpdates, если параллельно
+# запущен второй поллер с тем же токеном (два процесса/деплоя одновременно). Раньше это
+# падало в общий except и ретраилось через 3с — ретрай-шторм двух процессов, дерущихся
+# за offset. Держим отдельный (более долгий) backoff специально для этого случая.
+_CONFLICT_RETRY_DELAY_SECONDS = 30
 
 
 async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
@@ -215,6 +220,23 @@ async def main_loop(db_url: str) -> None:
                     offset=offset + 1 if offset > 0 else None,
                     timeout_seconds=_LONG_POLL_TIMEOUT_SECONDS,
                 )
+            except TelegramAPIError as exc:
+                if exc.error_code == 409:
+                    # MID-7: 409 Conflict — Telegram видит два одновременных getUpdates
+                    # с одним токеном (второй поллер запущен параллельно, например
+                    # старый деплой не остановлен). Мгновенный ретрай только усиливает
+                    # драку за offset — ждём дольше и явно сигналим причину в лог.
+                    logger.error(
+                        "getUpdates 409 Conflict — похоже, запущен второй поллер с этим "
+                        "же токеном (два процесса/деплоя одновременно?). Жду %sс перед "
+                        "повтором.",
+                        _CONFLICT_RETRY_DELAY_SECONDS,
+                    )
+                    await asyncio.sleep(_CONFLICT_RETRY_DELAY_SECONDS)
+                else:
+                    logger.warning("get_updates Telegram API error: %s", exc)
+                    await asyncio.sleep(_ERROR_RETRY_DELAY_SECONDS)
+                continue
             except (httpx.HTTPError, asyncio.TimeoutError) as exc:
                 logger.warning("get_updates network error: %s", exc)
                 await asyncio.sleep(_ERROR_RETRY_DELAY_SECONDS)

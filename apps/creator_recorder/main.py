@@ -32,6 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+from core.control.pubsub_listener import RedisPubSubListener
 from core.db import WORKER_ENGINE_KWARGS
 from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
@@ -258,44 +259,50 @@ async def pubsub_loop(
     poll_timeout: float = 1.0,
     tg_client: TelegramBotClient | None = None,
 ) -> None:
-    """Подписка на каналы recorder + диспетчер. Завершается по stop event."""
-    pubsub = redis_client.pubsub()
+    """Подписка на каналы recorder + диспетчер. Завершается по stop event.
+
+    MID-13 (аудит 02.07): раньше подписка (redis_client.pubsub().subscribe())
+    делалась ОДИН раз до while, а при обрыве соединения посреди цикла
+    get_message бросал исключение, которое просто логировалось и `continue` —
+    БЕЗ переподписки на мёртвом pubsub-объекте. После восстановления сети
+    recorder оставался глухим к record_start/record_stop навсегда (до рестарта
+    процесса). Переиспользуем RedisPubSubListener (core/control/pubsub_listener.py) —
+    его run_forever пересоздаёт pubsub и переподписывается при любом исключении
+    (с паузой 1с), это уже проверенный паттерн для остальных воркеров (observer).
+    poll_timeout сохранён в сигнатуре для обратной совместимости вызовов/тестов,
+    сам RedisPubSubListener использует собственный короткий POLL_INTERVAL.
+    """
+    _ = poll_timeout  # оставлено для совместимости сигнатуры, не используется листенером
+
+    listener = RedisPubSubListener(redis_client, list(CHANNELS))
+
+    # RedisPubSubListener диспетчеризует по каналу с уже распарсенным payload,
+    # а _process_message ожидает сырую строку (raw_data). Заворачиваем обратно
+    # в JSON, чтобы сохранить единый вход _process_message (используется в тестах
+    # напрямую с raw-строками) без дублирования логики парсинга/обработки ошибок.
+    async def _dispatch(channel: str, payload: dict[str, Any]) -> None:
+        raw = payload.get("raw") if set(payload.keys()) == {"raw"} else payload
+        raw_data = raw if isinstance(raw, str) else json.dumps(payload, ensure_ascii=False)
+        await _process_message(
+            channel,
+            raw_data,
+            client=client,
+            engine=engine,
+            tg_client=tg_client,
+        )
+
+    for channel in CHANNELS:
+        listener.register(channel, lambda p, ch=channel: _dispatch(ch, p))
+
+    listener_task = asyncio.create_task(listener.run_forever())
     try:
-        await pubsub.subscribe(*CHANNELS)
-        logger.info("recorder: подписан на каналы %s", ", ".join(CHANNELS))
-        while not stop.is_set():
-            try:
-                msg = await pubsub.get_message(
-                    ignore_subscribe_messages=True,
-                    timeout=poll_timeout,
-                )
-            except Exception:  # noqa: BLE001
-                logger.exception("recorder: ошибка чтения pubsub")
-                await asyncio.sleep(poll_timeout)
-                continue
-            if msg is None:
-                continue
-            channel = msg.get("channel")
-            if isinstance(channel, bytes):
-                channel = channel.decode("utf-8", errors="replace")
-            data = msg.get("data")
-            if isinstance(data, bytes):
-                data = data.decode("utf-8", errors="replace")
-            await _process_message(
-                channel or "",
-                data,
-                client=client,
-                engine=engine,
-                tg_client=tg_client,
-            )
+        await stop.wait()
     finally:
+        await listener.stop()
+        listener_task.cancel()
         try:
-            await pubsub.unsubscribe(*CHANNELS)
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            await pubsub.aclose()
-        except Exception:  # noqa: BLE001
+            await listener_task
+        except asyncio.CancelledError:
             pass
 
 

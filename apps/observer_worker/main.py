@@ -1105,9 +1105,24 @@ async def main_loop(
                     tg_client=tg_client,
                 )
                 logger.info("cycle done: %s", summary)
-            except Exception:
+            except Exception as exc:
+                # MID-6 (аудит 02.07): падение ВНЕ _run_account_scan (например DB-ошибка
+                # в load_observer_config/resolve_scan_account_ids) раньше просто
+                # пересоздавало gate и уходило на следующую итерацию молча — мимо Layer 3
+                # degraded-детектора (он считает только summary["outcome"] == "error" из
+                # штатного пути). Теперь такой краш тоже засчитывается в тот же счётчик
+                # consecutive_scan_failures — иначе воркер мог биться в этой ветке часами
+                # (heartbeat/observer:runtime живы) без единого алерта.
                 logger.exception("run_one_cycle crashed — пересоздаю gate")
                 gate = None
+                state.consecutive_scan_failures += 1
+                if state.consecutive_scan_failures >= DEGRADED_ALERT_THRESHOLD:
+                    await _maybe_alert_degraded(
+                        engine,
+                        redis_client,
+                        consecutive_failures=state.consecutive_scan_failures,
+                        last_error=f"{type(exc).__name__}: {exc}",
+                    )
                 await asyncio.sleep(10.0)
                 continue
 

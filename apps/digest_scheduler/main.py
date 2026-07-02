@@ -20,6 +20,7 @@ import os
 import signal
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -38,6 +39,12 @@ HEARTBEAT_TTL_SECONDS = 60
 
 # Главный цикл — раз в минуту (как и health_watchdog).
 CHECK_INTERVAL_SECONDS = int(os.environ.get("DIGEST_CHECK_INTERVAL_SEC", "60"))
+
+# MID-11 (аудит 02.07): пауза перед перезапуском упавшего цикла (_supervised, по
+# образцу apps/health_watchdog/main.py, коммит 246000c7) — раньше голый gather
+# без этой обёртки: одно необработанное исключение в tick_loop гасило ВЕСЬ
+# scheduler (включая heartbeat_loop) молча, до следующего рестарта процесса.
+LOOP_RESTART_DELAY_SECONDS = float(os.environ.get("DIGEST_LOOP_RESTART_SEC", "5"))
 
 # Плановое время дайджеста в UTC.
 DIGEST_HOUR_UTC = int(os.environ.get("DIGEST_HOUR_UTC", "9"))
@@ -133,7 +140,15 @@ async def run_one_tick(
     """Один проход: проверка окна → защита от повтора → build → render → send.
 
     Возвращает короткий статус ('out_of_window' / 'already_sent' /
-    'no_tg_config' / 'no_recipients' / 'sent').
+    'no_tg_config' / 'no_recipients' / 'sent' / 'send_failed').
+
+    MID-12 (аудит 02.07): sent_key ставится ТОЛЬКО если хотя бы одному получателю
+    digest реально доставлен (ok > 0). Раньше флаг ставился безусловно после
+    попытки рассылки — если у ВСЕХ recipients отправка упала (например TG токен
+    протух в момент тика), sent-флаг всё равно вставал на 26 часов и catch-up
+    (is_in_send_window) на следующих тиках того же дня уже не срабатывал —
+    digest молча пропадал на сутки. 'no_recipients' — отдельная (документированная)
+    ветка: пустых получателей не с кем повторять, флаг там ставится намеренно.
 
     tg_client_factory — callable, который возвращает (client, chat_id, thread_id).
     Вынесен в параметр для тестирования (monkeypatch отдельной фабрики).
@@ -181,6 +196,16 @@ async def run_one_tick(
             logger.exception("Ошибка закрытия TG-клиента")
 
     logger.info("Digest отправлен: ok=%d fail=%d из %d получателей", ok, fail, len(recipients))
+
+    if ok == 0:
+        # MID-12: 0 доставленных — флаг НЕ ставим, чтобы следующий тик в пределах
+        # окна (catch-up) попробовал снова, а не молчал 26 часов.
+        logger.warning(
+            "Digest не доставлен НИ ОДНОМУ получателю (fail=%d) — sent-флаг не ставлю, "
+            "повтор на следующем тике",
+            fail,
+        )
+        return "send_failed"
 
     try:
         await redis_client.set(sent_key, "1", ex=DIGEST_SENT_TTL_SECONDS, nx=True)
@@ -236,6 +261,31 @@ async def tick_loop(
             pass
 
 
+async def _supervised(
+    name: str,
+    factory: Any,
+    stop: asyncio.Event,
+) -> None:
+    """Перезапускает упавший цикл вместо тихой смерти (MID-11, по образцу health_watchdog).
+
+    factory — zero-arg callable, возвращающий корутину цикла; цикл сам крутится
+    до stop. Исключение → лог + пауза LOOP_RESTART_DELAY_SECONDS + новый запуск.
+    """
+    while not stop.is_set():
+        try:
+            await factory()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "цикл %s упал — перезапуск через %sс", name, LOOP_RESTART_DELAY_SECONDS
+            )
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=LOOP_RESTART_DELAY_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+
+
 # ====================== entrypoint ======================
 
 
@@ -285,15 +335,22 @@ async def main_loop(
         CHECK_INTERVAL_SECONDS,
     )
     try:
+        # Каждый цикл под _supervised: упавший цикл перезапускается, а не гасит
+        # весь воркер молча (MID-11).
         await asyncio.gather(
-            heartbeat_loop(redis_client, stop),
-            tick_loop(
-                engine=engine,
-                redis_client=redis_client,
-                tg_client_factory=tg_client_factory,
-                window=window,
-                stop=stop,
+            _supervised("heartbeat_loop", lambda: heartbeat_loop(redis_client, stop), stop),
+            _supervised(
+                "tick_loop",
+                lambda: tick_loop(
+                    engine=engine,
+                    redis_client=redis_client,
+                    tg_client_factory=tg_client_factory,
+                    window=window,
+                    stop=stop,
+                ),
+                stop,
             ),
+            return_exceptions=True,
         )
     finally:
         try:
@@ -308,6 +365,7 @@ __all__ = [
     "DIGEST_SENT_KEY_PREFIX",
     "DIGEST_SENT_TTL_SECONDS",
     "DigestWindow",
+    "_supervised",
     "digest_sent_key",
     "heartbeat_loop",
     "is_in_send_window",
