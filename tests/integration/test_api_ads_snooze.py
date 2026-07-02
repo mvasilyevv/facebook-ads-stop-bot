@@ -2,8 +2,9 @@
 """Тесты desktop snooze: POST /api/dashboard/ads/{id}/snooze + bulk-snooze.
 
 Покрытие: happy (snoozed_until выставлен), 404 (нет ad), 409 (нет состояния),
-граничные minutes (валидация ge/le → 422), bulk partial-failure (snoozed/failed
-с разбивкой no_ad / no_alert_state), bulk cap → 422.
+422 (ад в normal — снуз запрещён, MID-2), граничные minutes (валидация ge/le → 422),
+bulk partial-failure (snoozed/failed с разбивкой no_ad / no_alert_state / normal_state),
+bulk cap → 422.
 
 Требует Postgres. Cleanup id-scoped по префиксу 99SNZ.
 """
@@ -47,8 +48,12 @@ async def clean_snz(pg_engine):
     await _cleanup()
 
 
-async def _seed_ad(conn, suffix: str, *, with_state: bool) -> str:
-    """offer→campaign→adset→ad (+опц. ad_alert_state). Возвращает fb_ad_id."""
+async def _seed_ad(conn, suffix: str, *, with_state: bool, state: str = "warning_sent") -> str:
+    """offer→campaign→adset→ad (+опц. ad_alert_state). Возвращает fb_ad_id.
+
+    state — начальное alert_state, если with_state=True (по умолчанию warning_sent =
+    активный инцидент, снуз разрешён). 'normal' — для тестов запрета снуза (MID-2).
+    """
     offer_id, campaign_id, adset_id, ad_id = (uuid.uuid4() for _ in range(4))
     fb_ad_id = f"99SNZ{suffix}"
     await conn.execute(
@@ -69,8 +74,8 @@ async def _seed_ad(conn, suffix: str, *, with_state: bool) -> str:
     )
     if with_state:
         await conn.execute(
-            text("INSERT INTO ad_alert_state (ad_id, alert_state) VALUES (:ad, 'warning_sent')"),
-            {"ad": ad_id},
+            text("INSERT INTO ad_alert_state (ad_id, alert_state) VALUES (:ad, :st)"),
+            {"ad": ad_id, "st": state},
         )
     return fb_ad_id
 
@@ -154,6 +159,23 @@ async def test_snooze_minutes_bounds(pg_engine, fake_redis_client, clean_snz) ->
     assert edge.status_code == 200
 
 
+# ─── Тест 4b: 422 — снуз ада в normal запрещён (MID-2, money-дыра) ─────────────
+@pytest.mark.asyncio
+async def test_snooze_normal_state_rejected(pg_engine, fake_redis_client, clean_snz) -> None:
+    """POST snooze для ad в normal → 422: снуз на normal-аде заглушил бы будущий STOP."""
+    sfx = uuid.uuid4().hex[:6]
+    async with pg_engine.begin() as conn:
+        fid = await _seed_ad(conn, sfx, with_state=True, state="normal")
+
+    app = _make_app(pg_engine, fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(f"/api/dashboard/ads/{fid}/snooze", json={"minutes": 60})
+
+    assert resp.status_code == 422
+    # snoozed_until не должен выставиться.
+    assert await _read_snooze(pg_engine, fid) is None
+
+
 # ─── Тест 5: bulk happy — все валидные снузятся одним until ────────────────────
 @pytest.mark.asyncio
 async def test_bulk_snooze_happy(pg_engine, fake_redis_client, clean_snz) -> None:
@@ -200,6 +222,31 @@ async def test_bulk_snooze_partial_failure(pg_engine, fake_redis_client, clean_s
     assert data["snoozed"] == [ok]
     reasons = {f["fb_ad_id"]: f["reason"] for f in data["failed"]}
     assert reasons == {no_state: "no_alert_state", missing: "no_ad"}
+
+
+# ─── Тест 6b: bulk — normal-ад попадает в failed(normal_state), не снузится ────
+@pytest.mark.asyncio
+async def test_bulk_snooze_normal_state_failed(pg_engine, fake_redis_client, clean_snz) -> None:
+    """bulk: активный инцидент → snoozed; normal → failed(normal_state) (MID-2)."""
+    sfx = uuid.uuid4().hex[:6]
+    async with pg_engine.begin() as conn:
+        active = await _seed_ad(conn, f"{sfx}AC", with_state=True, state="stop_sent")
+        normal = await _seed_ad(conn, f"{sfx}NM", with_state=True, state="normal")
+
+    app = _make_app(pg_engine, fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/dashboard/ads/bulk-snooze",
+            json={"fb_ad_ids": [active, normal], "minutes": 45},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["snoozed"] == [active]
+    reasons = {f["fb_ad_id"]: f["reason"] for f in data["failed"]}
+    assert reasons == {normal: "normal_state"}
+    # normal-ад не снузился.
+    assert await _read_snooze(pg_engine, normal) is None
 
 
 # ─── Тест 7: bulk cap — превышение лимита → 422 ────────────────────────────────

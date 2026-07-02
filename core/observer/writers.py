@@ -374,11 +374,15 @@ async def apply_fsm_transition(
                     warning_rule_codes = EXCLUDED.warning_rule_codes,
                     stop_rule_codes = EXCLUDED.stop_rule_codes,
                     last_scan_id = EXCLUDED.last_scan_id,
-                    -- H1: incident закрыт (→normal) → сбрасываем snooze. Иначе устаревший
-                    -- snoozed_until от закрытого инцидента подавил бы НОВЫЙ STOP (money-дыра:
-                    -- убыточный ад крутится без стопа до истечения старого снуза, ~2ч).
+                    -- H1/MID-2: сбрасываем snooze при закрытии инцидента (→normal) И при
+                    -- СТАРТЕ нового инцидента из normal (normal→warning_sent/stop_sent).
+                    -- Иначе устаревший snoozed_until (закрытого инцидента или ошибочно
+                    -- поставленный на normal-ад) подавил бы НОВЫЙ STOP до истечения окна —
+                    -- money-дыра (убыточный ад крутится без стопа ~2ч). Снуз действует
+                    -- только внутри инцидента, для которого его поставили.
                     snoozed_until = CASE
                         WHEN EXCLUDED.alert_state = 'normal' THEN NULL
+                        WHEN ad_alert_state.alert_state = 'normal' THEN NULL
                         ELSE ad_alert_state.snoozed_until
                     END,
                     last_transition_at = CASE

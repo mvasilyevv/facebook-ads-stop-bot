@@ -17,13 +17,14 @@ from core.observer.state_machine import (
 )
 
 
-def _input(state, *, warning=(), stop=(), stage=None, token=None) -> FsmInput:
+def _input(state, *, warning=(), stop=(), stage=None, token=None, cabinet_reset=False) -> FsmInput:
     return FsmInput(
         current_state=state,
         current_stage=stage,
         current_open_token=token,
         warning_rule_codes=tuple(warning),
         stop_rule_codes=tuple(stop),
+        is_cabinet_reset=cabinet_reset,
     )
 
 
@@ -95,6 +96,49 @@ def test_stop_recovers_to_normal() -> None:
     assert t.new_state == "normal"
     assert t.emit_alert is False
     assert t.create_disable_task is False
+
+
+# MID-1: zero-scan начала нового кабинетного дня (все метрики обнулены Meta) НЕ должен
+# деэскалировать активный stop_sent → normal. Иначе инцидент теряется на границе суток:
+# нет хитов, но это артефакт reset счётчиков, а не восстановление объявления.
+def test_cabinet_reset_does_not_deescalate_stop() -> None:
+    tok = uuid.uuid4()
+    t = decide(_input("stop_sent", stage="stop", token=tok, cabinet_reset=True))
+    assert t.new_state == "stop_sent"  # удерживаем инцидент, не деэскалируем
+    assert t.new_open_token == tok  # token сохранён — старые кнопки валидны
+    assert t.emit_alert is False  # без повторного алерта
+    assert t.new_stage == "stop"
+
+
+# MID-1: то же для warning_sent — reset-строка не должна деэскалировать warning → normal.
+def test_cabinet_reset_does_not_deescalate_warning() -> None:
+    tok = uuid.uuid4()
+    t = decide(_input("warning_sent", stage="warning", token=tok, cabinet_reset=True))
+    assert t.new_state == "warning_sent"
+    assert t.new_open_token == tok
+    assert t.emit_alert is False
+
+
+# MID-1 (регресс): реальная деэскалация в середине дня (НЕ reset-скан, cabinet_reset=False)
+# продолжает работать — нулевые хиты на живом дне = восстановление ада → normal.
+def test_real_deescalation_still_works_without_reset() -> None:
+    tok = uuid.uuid4()
+    t = decide(_input("stop_sent", stage="stop", token=tok, cabinet_reset=False))
+    assert t.new_state == "normal"
+    assert t.new_open_token is None
+    assert t.emit_alert is False
+
+
+# MID-1: reset-флаг НЕ мешает эскалации/старту инцидента — если на reset-скане каким-то
+# образом есть STOP-хиты, FSM всё равно эскалирует (флаг влияет только на ветку без хитов).
+def test_cabinet_reset_does_not_block_escalation() -> None:
+    tok = uuid.uuid4()
+    t = decide(
+        _input("warning_sent", stop=("cpc_stop",), stage="warning", token=tok, cabinet_reset=True)
+    )
+    assert t.new_state == "stop_sent"
+    assert t.create_disable_task is True
+    assert t.emit_alert is True
 
 
 # Сценарий: STOP всё ещё активен → алерт не дублируем, но включаем recovery pause-задачи (C1).

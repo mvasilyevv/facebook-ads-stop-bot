@@ -47,6 +47,12 @@ class FsmInput:
     warning_rule_codes: tuple[str, ...]
     stop_rule_codes: tuple[str, ...]
 
+    # MID-1: строка принадлежит zero-scan'у начала новых суток кабинета (все метрики
+    # обнулены Meta на границе дня). Первая строка нового дня всегда без хитов —
+    # НЕ признак восстановления, а артефакт сброса счётчиков. При True FSM не
+    # деэскалирует активный инцидент (warning_sent/stop_sent) по нулевой строке.
+    is_cabinet_reset: bool = False
+
 
 @dataclass(frozen=True)
 class FsmTransition:
@@ -125,8 +131,8 @@ def decide(inp: FsmInput) -> FsmTransition:
             # создаём её на следующем скане. idempotency_key привязан к open_token
             # инцидента → если задача уже есть/исполнена, повтор даёт UNIQUE conflict
             # → no-op (одна задача на инцидент). Закрывает money-залип в stop_sent.
-            # Во время активного снуза _suppress_emit обнулит create_disable_task
-            # (юзер просил не трогать); после истечения снуза recovery сработает.
+            # MID-2: снуз (_suppress_emit) больше НЕ обнуляет create_disable_task —
+            # авто-стоп работает и под снузом, снуз глушит только TG-алерт.
             return FsmTransition(
                 new_state="stop_sent",
                 new_stage="stop",
@@ -185,6 +191,22 @@ def decide(inp: FsmInput) -> FsmTransition:
 
     # --- Нет ни WARNING ни STOP → потенциальное восстановление ---
     if cur in ("warning_sent", "stop_sent"):
+        # MID-1: на границе кабинетных суток Meta обнуляет метрики → первая строка
+        # нового дня всегда без хитов. Это НЕ восстановление, а reset счётчиков.
+        # Деэскалация активного инцидента по такой строке потеряла бы stop_sent
+        # (человек решил бы, что ад закрыт, хотя он лишь «обнулился»). Удерживаем
+        # текущее состояние без emit; реальная деэскалация (не все нули среди дня)
+        # сюда не попадает — там is_cabinet_reset=False.
+        if inp.is_cabinet_reset:
+            return FsmTransition(
+                new_state=cur,
+                new_stage=inp.current_stage,
+                new_open_token=inp.current_open_token,
+                emit_alert=False,
+                transition_reason=(
+                    f"{cur} → {cur} (zero-scan нового кабинетного дня — не деэскалируем)"
+                ),
+            )
         return FsmTransition(
             new_state="normal",
             new_stage=None,

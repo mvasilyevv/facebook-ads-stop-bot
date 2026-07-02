@@ -399,6 +399,8 @@ async def tma_snooze_ad(
     """Снуз: ad_alert_state.snoozed_until = now + minutes.
 
     404 — объявления нет. 409 — у ad нет строки состояния (нечего снузить).
+    422 — ад в normal (нет активного инцидента): снуз на normal-аде заглушил бы
+    будущий STOP до конца окна — money-дыра (MID-2). Зеркало dashboard snooze_ad.
     """
     until = datetime.now(timezone.utc) + timedelta(minutes=body.minutes)
     async with engine.begin() as conn:
@@ -416,14 +418,26 @@ async def tma_snooze_ad(
                 UPDATE ad_alert_state
                 SET snoozed_until = :until, updated_at = NOW()
                 WHERE ad_id = :ad_id
+                  AND alert_state != 'normal'
                 """
             ),
             {"until": until, "ad_id": ad_row.id},
         )
-    if (result.rowcount or 0) == 0:
-        raise HTTPException(
-            status_code=409, detail="У объявления нет состояния алерта — нечего снузить"
-        )
+        if (result.rowcount or 0) == 0:
+            state_row = (
+                await conn.execute(
+                    text("SELECT alert_state FROM ad_alert_state WHERE ad_id = :ad_id"),
+                    {"ad_id": ad_row.id},
+                )
+            ).first()
+            if state_row is None:
+                raise HTTPException(
+                    status_code=409, detail="У объявления нет состояния алерта — нечего снузить"
+                )
+            raise HTTPException(
+                status_code=422,
+                detail="Нельзя снузить объявление в состоянии normal — нет активного инцидента",
+            )
     logger.info("TMA snooze: ad=%s by=tma:%s до %s", fb_ad_id, principal.telegram_user_id, until)
     return TmaSnoozeResponse(ok=True, snoozed_until=until.isoformat())
 

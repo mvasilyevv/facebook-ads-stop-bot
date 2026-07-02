@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.adset_pro.queries import load_external_deposits_batch
+from core.cabinet_day import is_cabinet_day_reset_scan
 from core.observer.queries import (
     OfferRules,
     campaign_matches_owner,
@@ -216,6 +217,12 @@ async def process_scan_rows(
     # 3. Внешние депозиты от AdSet.pro batch'ом (закрывают gap attribution с Meta).
     external_deposits = await load_external_deposits_batch(engine, fb_ad_ids=fb_ids)
 
+    # MID-1: zero-scan начала кабинетных суток — ВСЕ строки без ненулевых метрик
+    # (Meta обнулила счётчики на границе дня). Флаг вычисляем один раз на весь цикл
+    # и прокидываем в FSM: активный инцидент (stop_sent/warning_sent) НЕ деэскалируем
+    # по нулевой строке, иначе потеряли бы stop на границе суток.
+    is_cabinet_reset = is_cabinet_day_reset_scan(rows)
+
     # 4. Прогоняем каждую строку
     for row in rows:
         try:
@@ -230,6 +237,7 @@ async def process_scan_rows(
                 result=result,
                 owner_tag=owner_tag,
                 ad_account_id=ad_account_id,
+                is_cabinet_reset=is_cabinet_reset,
             )
         except Exception:
             logger.exception(
@@ -253,6 +261,7 @@ async def _process_one_row(
     result: CycleResult,
     owner_tag: str | None = None,
     ad_account_id: str | None = None,
+    is_cabinet_reset: bool = False,
 ) -> None:
     """Обработка одной строки. Вынесено отдельно ради читаемости + try/except в caller'е."""
 
@@ -375,6 +384,7 @@ async def _process_one_row(
         current_open_token=current.open_state_token if current else None,
         warning_rule_codes=warning_codes,
         stop_rule_codes=stop_codes,
+        is_cabinet_reset=is_cabinet_reset,
     )
     transition = decide(fsm_input)
 
@@ -437,12 +447,19 @@ def _bump_state_counters(result: CycleResult, new_state: str) -> None:
 
 
 def _suppress_emit(transition, *, reason: str):
-    """Возвращает копию FsmTransition с emit_alert=False (для snooze)."""
+    """Возвращает копию FsmTransition с emit_alert=False (для snooze).
+
+    MID-2 (money): снуз глушит ТОЛЬКО TG-уведомления (emit_alert), НЕ авто-стоп.
+    create_disable_task сохраняется — заснуженный ад при STOP всё равно ставит
+    pause-задачу (авто-стоп работает под снузом). Ранее здесь обнулялся
+    create_disable_task → заснуженный убыточный ад крутился без стопа до истечения
+    окна снуза (money-дыра): снуз задуман «не спамить алертами», а не «выключить
+    авто-стоп».
+    """
     from dataclasses import replace
 
     return replace(
         transition,
         emit_alert=False,
-        create_disable_task=False,
         transition_reason=f"{transition.transition_reason} [suppressed: {reason}]",
     )

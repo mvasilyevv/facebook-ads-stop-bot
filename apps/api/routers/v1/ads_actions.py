@@ -47,7 +47,9 @@ async def snooze_ad(
     """Снуз одного объявления: ad_alert_state.snoozed_until = now + minutes.
 
     404 — объявления нет в fb_ads. 409 — у ad нет строки состояния (нечего снузить).
-    Зеркало tma_snooze_ad (apps/api/routers/v1/tma.py).
+    422 — ад в normal (нет активного инцидента): снуз задуман «не спамить алертами по
+    активному инциденту», а не «выключить авто-стоп». Снуз на normal-аде заглушил бы
+    будущий STOP до конца окна — money-дыра (MID-2). Зеркало tma_snooze_ad.
     """
     until = datetime.now(timezone.utc) + timedelta(minutes=body.minutes)
     async with engine.begin() as conn:
@@ -59,20 +61,34 @@ async def snooze_ad(
         ).first()
         if ad_row is None:
             raise HTTPException(status_code=404, detail="Объявление не найдено")
+        # UPDATE только при активном инциденте: снуз на normal-аде запрещён (money-дыра).
         result = await conn.execute(
             text(
                 """
                 UPDATE ad_alert_state
                 SET snoozed_until = :until, updated_at = NOW()
                 WHERE ad_id = :ad_id
+                  AND alert_state != 'normal'
                 """
             ),
             {"until": until, "ad_id": ad_row.id},
         )
-    if (result.rowcount or 0) == 0:
-        raise HTTPException(
-            status_code=409, detail="У объявления нет состояния алерта — нечего снузить"
-        )
+        if (result.rowcount or 0) == 0:
+            # Различаем «нет строки состояния» (409) и «ад в normal» (422).
+            state_row = (
+                await conn.execute(
+                    text("SELECT alert_state FROM ad_alert_state WHERE ad_id = :ad_id"),
+                    {"ad_id": ad_row.id},
+                )
+            ).first()
+            if state_row is None:
+                raise HTTPException(
+                    status_code=409, detail="У объявления нет состояния алерта — нечего снузить"
+                )
+            raise HTTPException(
+                status_code=422,
+                detail="Нельзя снузить объявление в состоянии normal — нет активного инцидента",
+            )
     logger.info("dashboard snooze: ad=%s до %s (%d мин)", fb_ad_id, until, body.minutes)
     return SnoozeResultOut(ok=True, fb_ad_id=fb_ad_id, snoozed_until=until.isoformat())
 
@@ -115,7 +131,8 @@ async def bulk_snooze_ads(
     until = datetime.now(timezone.utc) + timedelta(minutes=body.minutes)
 
     async with engine.begin() as conn:
-        # UPDATE снузит только те ad, у которых есть строка ad_alert_state.
+        # UPDATE снузит только ad с активным инцидентом (state != normal). Снуз на
+        # normal-аде запрещён — заглушил бы будущий STOP (money-дыра, MID-2).
         updated_rows = (
             await conn.execute(
                 text(
@@ -125,6 +142,7 @@ async def bulk_snooze_ads(
                     FROM fb_ads a
                     WHERE s.ad_id = a.id
                       AND a.fb_ad_id = ANY(CAST(:ids AS text[]))
+                      AND s.alert_state != 'normal'
                     RETURNING a.fb_ad_id AS fb_ad_id
                     """
                 ),
@@ -133,8 +151,8 @@ async def bulk_snooze_ads(
         ).all()
         snoozed = [r.fb_ad_id for r in updated_rows]
 
-        # Классификация неуспешных: для каждого запрошенного id — есть ли ad и
-        # есть ли строка состояния. Один проход unnest+LEFT JOIN.
+        # Классификация неуспешных: для каждого запрошенного id — есть ли ad, есть ли
+        # строка состояния, в normal ли она. Один проход unnest+LEFT JOIN.
         snoozed_set = set(snoozed)
         leftover = [fid for fid in unique_ids if fid not in snoozed_set]
         failed: list[dict] = []
@@ -145,7 +163,8 @@ async def bulk_snooze_ads(
                         """
                         SELECT req.fid AS fid,
                                (a.id IS NOT NULL) AS ad_exists,
-                               (s.ad_id IS NOT NULL) AS has_state
+                               (s.ad_id IS NOT NULL) AS has_state,
+                               s.alert_state AS alert_state
                         FROM unnest(CAST(:ids AS text[])) AS req(fid)
                         LEFT JOIN fb_ads a ON a.fb_ad_id = req.fid
                         LEFT JOIN ad_alert_state s ON s.ad_id = a.id
@@ -155,7 +174,13 @@ async def bulk_snooze_ads(
                 )
             ).all()
             for r in class_rows:
-                reason = "no_alert_state" if r.ad_exists else "no_ad"
+                if not r.ad_exists:
+                    reason = "no_ad"
+                elif not r.has_state:
+                    reason = "no_alert_state"
+                else:
+                    # Строка состояния есть, но ад в normal — снуз запрещён.
+                    reason = "normal_state"
                 failed.append({"fb_ad_id": r.fid, "reason": reason})
 
     logger.info(

@@ -98,3 +98,27 @@ def test_suppress_emit_appends_reason() -> None:
     assert "snoozed" in suppressed.transition_reason, (
         "Причина suppression должна быть в transition_reason"
     )
+
+
+# MID-2 (money): снуз глушит ТОЛЬКО TG-алерт, НЕ авто-стоп. _suppress_emit обязан
+# сохранить create_disable_task=True — заснуженный ад при STOP всё равно ставит
+# pause-задачу. Иначе убыточный ад крутится без стопа до истечения окна снуза.
+def test_suppress_emit_keeps_disable_task() -> None:
+    """_suppress_emit НЕ обнуляет create_disable_task (авто-стоп работает под снузом)."""
+    from core.observer.pipeline import _suppress_emit
+    from core.observer.state_machine import FsmTransition
+
+    t = FsmTransition(
+        new_state=AlertState.STOP_SENT,
+        new_stage=AlertStage.STOP,
+        new_open_token=None,
+        emit_alert=True,
+        alert_stage=AlertStage.STOP,
+        create_disable_task=True,
+        transition_reason="normal → stop_sent",
+    )
+    suppressed = _suppress_emit(t, reason="snoozed")
+    assert suppressed.emit_alert is False, "TG-алерт должен быть подавлен снузом"
+    assert suppressed.create_disable_task is True, (
+        "Авто-стоп (create_disable_task) должен пережить снуз — снуз глушит только TG"
+    )
