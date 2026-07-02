@@ -170,7 +170,9 @@ async def _run_tool(args: list[str], *, tool: str) -> bytes:
             stderr=asyncio.subprocess.PIPE,
         )
     except FileNotFoundError as exc:
-        raise VideoUniquifyError(f"Не найден {tool} — установите ffmpeg (brew install ffmpeg)") from exc
+        raise VideoUniquifyError(
+            f"Не найден {tool} — установите ffmpeg (brew install ffmpeg)"
+        ) from exc
 
     stdout, stderr = await process.communicate()
     if process.returncode != 0:
@@ -334,9 +336,7 @@ async def uniquify_videos(
                 stem = _safe_source_stem(video.name, video_index)
                 output_name = f"{stem}_{copy_index}.mp4"
                 output_path = copy_dir / output_name
-                rnd = _seed_to_random(
-                    f"{iteration_name}:{video.name}:{video_index}:{copy_index}"
-                )
+                rnd = _seed_to_random(f"{iteration_name}:{video.name}:{video_index}:{copy_index}")
                 params = _make_params(rnd, speed_jitter=speed_jitter)
                 await uniquify_video_file(
                     video, output_path, probe=probe, params=params, ffmpeg_bin=ffmpeg_bin

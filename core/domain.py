@@ -68,18 +68,6 @@ class TelegramNotificationStream(StrEnum):
     OPS = "OPS"
 
 
-class CampaignCreatorTaskStatus(StrEnum):
-    """Статус задачи автоматического создания кампании."""
-
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    WAITING_CONFIRMATION = "WAITING_CONFIRMATION"
-    CONFIRMED = "CONFIRMED"
-    SUCCEEDED = "SUCCEEDED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
-
-
 class PlanRunStatus(StrEnum):
     """Статус запуска плана creator-агента."""
 

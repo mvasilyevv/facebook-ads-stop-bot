@@ -33,9 +33,7 @@ async def clean_mcab(pg_engine: AsyncEngine):
 
     async def _cleanup():
         async with pg_engine.begin() as conn:
-            await conn.execute(
-                text("DELETE FROM fb_ads WHERE ad_name LIKE :p"), {"p": f"{PFX}%"}
-            )
+            await conn.execute(text("DELETE FROM fb_ads WHERE ad_name LIKE :p"), {"p": f"{PFX}%"})
             await conn.execute(
                 text("DELETE FROM fb_adsets WHERE adset_name LIKE :p"), {"p": f"{PFX}%"}
             )

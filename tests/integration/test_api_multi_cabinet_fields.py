@@ -44,9 +44,7 @@ async def seeded_cabinet_catalog(pg_engine):
             await conn.execute(
                 text("DELETE FROM alert_events WHERE created_at >= NOW() - INTERVAL '1 day'")
             )
-            await conn.execute(
-                text("DELETE FROM scan_runs WHERE ad_account_id = '555'")
-            )
+            await conn.execute(text("DELETE FROM scan_runs WHERE ad_account_id = '555'"))
             await conn.execute(text("DELETE FROM fb_ads WHERE ad_name LIKE :p"), {"p": f"{PFX}%"})
             await conn.execute(
                 text("DELETE FROM fb_adsets WHERE adset_name LIKE :p"), {"p": f"{PFX}%"}
@@ -76,9 +74,7 @@ async def seeded_cabinet_catalog(pg_engine):
             {"i": campaign_id, "n": f"{PFX} campaign", "o": offer_id},
         )
         await conn.execute(
-            text(
-                "INSERT INTO fb_adsets (id, campaign_id, adset_name) VALUES (:i, :c, :n)"
-            ),
+            text("INSERT INTO fb_adsets (id, campaign_id, adset_name) VALUES (:i, :c, :n)"),
             {"i": adset_id, "c": campaign_id, "n": f"{PFX} adset"},
         )
         await conn.execute(

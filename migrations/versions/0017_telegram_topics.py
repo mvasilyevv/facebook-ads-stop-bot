@@ -24,8 +24,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.execute(
-        "ALTER TABLE telegram_config "
-        "ADD COLUMN IF NOT EXISTS forum_digest_thread_id INTEGER NULL;"
+        "ALTER TABLE telegram_config ADD COLUMN IF NOT EXISTS forum_digest_thread_id INTEGER NULL;"
     )
 
 

@@ -14,8 +14,6 @@ dependencies = [
   "asyncpg>=0.30.0,<1.0.0",
   "fastapi>=0.115.0,<1.0.0",
   "httpx>=0.28.1,<1.0.0",
-  "patchright>=1.52.0,<2.0.0",
-  # "rebrowser-patches>=0.5.0",  # пакет удалён из PyPI
   "pydantic-settings>=2.8.0,<3.0.0",
   "pydantic>=2.11.0,<3.0.0",
   "python-json-logger>=3.3.0,<4.0.0",
@@ -47,10 +45,6 @@ dev = [
   "respx>=0.21.0,<1.0",
   "ruff>=0.11.0,<1.0.0",
   "hypothesis>=6.0,<7.0",
-  # core/campaign_creator/* импортит playwright.async_api top-level (~28 модулей);
-  # тесты (test_humanizer, test_campaign_name) их собирают → нужен для CI-сбора.
-  # В проде не нужен (creator не активен; воркеры используют patchright).
-  "playwright>=1.52.0,<2.0.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -119,8 +113,6 @@ module = [
   "tenacity.*",
   "alembic.*",
   "uvicorn.*",
-  "playwright.*",
-  "patchright.*",
   "sentry_sdk.*",
 ]
 ignore_missing_imports = true

@@ -88,9 +88,7 @@ def caption(text: str, *, y: str = "top", fontsize: int = 54) -> TextOverlay:
 
 def banner(text: str, *, fontsize: int = 40, fontcolor: str = "#FFD400") -> TextOverlay:
     """Пресет: нижний баннер — жёлтый текст на тёмной подложке."""
-    return TextOverlay(
-        text=text, y="bottom", fontsize=fontsize, fontcolor=fontcolor, box=True
-    )
+    return TextOverlay(text=text, y="bottom", fontsize=fontsize, fontcolor=fontcolor, box=True)
 
 
 def cta(text: str, *, start: float, y: str = "bottom2", fontsize: int = 46) -> TextOverlay:

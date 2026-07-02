@@ -41,6 +41,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_fb_campaigns_campaign_name", table_name="fb_campaigns")
-    op.create_unique_constraint(
-        "uq_fb_campaigns_campaign_name", "fb_campaigns", ["campaign_name"]
-    )
+    op.create_unique_constraint("uq_fb_campaigns_campaign_name", "fb_campaigns", ["campaign_name"])
