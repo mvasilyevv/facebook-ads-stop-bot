@@ -19,7 +19,9 @@ import {
   useToggleScanning,
   useTriggerScan,
   useSpendSeries,
+  useStatsToday,
 } from "@/lib/api";
+import { StatCard } from "@/components/domain/StatCard";
 import { haptic, tgConfirm } from "@/lib/tg";
 import {
   Eyebrow,
@@ -74,6 +76,7 @@ function DashboardPage() {
   const { data, isLoading, isError, error, refetch } = useDashboardBatch({ refetchInterval: 20_000 });
   const { data: obsSettings } = useObserverSettings();
   const { data: spend } = useSpendSeries(24);
+  const { data: statsToday, isLoading: statsLoading } = useStatsToday();
   const toggleScanMutation = useToggleScanning();
   const triggerScanMutation = useTriggerScan();
 
@@ -267,6 +270,17 @@ function DashboardPage() {
           </div>
           <SpendChart data={spendSeries} height={120} live={scanOn} animate />
         </section>
+
+        {/* ── статистика дня (→ /stats) ── */}
+        <StatCard
+          spend={statsToday?.meta.totals.spend}
+          leads={statsToday?.meta.totals.leads}
+          loading={statsLoading}
+          onClick={() => {
+            haptic.selection();
+            void navigate({ to: "/stats" });
+          }}
+        />
 
         {/* ── KPI 2×2 ── */}
         <section

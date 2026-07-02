@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as StatsIndexRouteImport } from './routes/stats/index'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as ScriptsIndexRouteImport } from './routes/scripts/index'
 import { Route as OffersIndexRouteImport } from './routes/offers/index'
@@ -22,6 +23,11 @@ import { Route as AdsFbAdIdRouteImport } from './routes/ads/$fbAdId'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StatsIndexRoute = StatsIndexRouteImport.update({
+  id: '/stats/',
+  path: '/stats/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsIndexRoute = SettingsIndexRouteImport.update({
@@ -75,6 +81,7 @@ export interface FileRoutesByFullPath {
   '/offers/': typeof OffersIndexRoute
   '/scripts/': typeof ScriptsIndexRoute
   '/settings/': typeof SettingsIndexRoute
+  '/stats/': typeof StatsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -86,6 +93,7 @@ export interface FileRoutesByTo {
   '/offers': typeof OffersIndexRoute
   '/scripts': typeof ScriptsIndexRoute
   '/settings': typeof SettingsIndexRoute
+  '/stats': typeof StatsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -98,6 +106,7 @@ export interface FileRoutesById {
   '/offers/': typeof OffersIndexRoute
   '/scripts/': typeof ScriptsIndexRoute
   '/settings/': typeof SettingsIndexRoute
+  '/stats/': typeof StatsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -111,6 +120,7 @@ export interface FileRouteTypes {
     | '/offers/'
     | '/scripts/'
     | '/settings/'
+    | '/stats/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -122,6 +132,7 @@ export interface FileRouteTypes {
     | '/offers'
     | '/scripts'
     | '/settings'
+    | '/stats'
   id:
     | '__root__'
     | '/'
@@ -133,6 +144,7 @@ export interface FileRouteTypes {
     | '/offers/'
     | '/scripts/'
     | '/settings/'
+    | '/stats/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -145,6 +157,7 @@ export interface RootRouteChildren {
   OffersIndexRoute: typeof OffersIndexRoute
   ScriptsIndexRoute: typeof ScriptsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
+  StatsIndexRoute: typeof StatsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -154,6 +167,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stats/': {
+      id: '/stats/'
+      path: '/stats'
+      fullPath: '/stats/'
+      preLoaderRoute: typeof StatsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/': {
@@ -225,6 +245,7 @@ const rootRouteChildren: RootRouteChildren = {
   OffersIndexRoute: OffersIndexRoute,
   ScriptsIndexRoute: ScriptsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
+  StatsIndexRoute: StatsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

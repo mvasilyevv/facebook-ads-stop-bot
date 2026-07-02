@@ -16,6 +16,7 @@ const BACK_BUTTON_PATTERNS: RegExp[] = [
   /^\/offers$/,
   /^\/health$/,
   /^\/scripts$/,
+  /^\/stats$/,
 ];
 
 function needsBackButton(pathname: string): boolean {

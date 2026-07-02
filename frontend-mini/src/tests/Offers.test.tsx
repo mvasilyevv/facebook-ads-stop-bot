@@ -57,14 +57,12 @@ const MOCK_OFFERS: Offer[] = [
   },
 ];
 
+// Мёртвые пороги (spend_no_event/cpm/ctr/funnel_ratio) убраны из API-контракта
+// (H-2 аудита 02.07) — мок содержит только реально работающие поля.
 const MOCK_RULES: OfferRules = {
   offer_id: "uuid-1",
-  spend_no_event_threshold: "50.00",
   cpa_threshold: "20.00",
-  cpm_threshold: null,
-  ctr_threshold: null,
   frequency_threshold: "3.0",
-  funnel_ratio_threshold: null,
   stop_percent_of_rule: "100.00",
   warning_percent_of_stop: "80.00",
 };

@@ -15,6 +15,8 @@ import type {
   HistorySummary,
   ObserverConfig,
   Offer,
+  StatsPeriod,
+  StatsToday,
 } from "@fb/shared";
 import { getStoredToken, loginToBackend, logout } from "./auth";
 
@@ -328,6 +330,40 @@ export function useHistorySummary(days = 7) {
     queryKey: QK.historySummary(days),
     queryFn: () =>
       fetchJson<HistorySummary>(`/history/summary?from_iso=${encodeURIComponent(from)}&to_iso=${encodeURIComponent(to)}`),
+  });
+}
+
+// ─── Статистика залива ─────────────────────────────────────────────────────
+
+/** Экспортируем типы контракта — StatsPeriodDays используют компоненты экрана /stats. */
+export type StatsPeriodDays = 7 | 30;
+
+/**
+ * Воронка текущих суток кабинета (GET /stats/today): тоталы + производные +
+ * честные почасовые дельты + блок трекера. Умеренный refetch — не money-critical.
+ */
+export function useStatsToday() {
+  return useQuery({
+    queryKey: ["stats", "today"] as const,
+    queryFn: () => fetchJson<StatsToday>("/stats/today"),
+    refetchInterval: 45_000,
+  });
+}
+
+/**
+ * Воронка за период (GET /stats/period): 7 или 30 дней от текущего момента.
+ * from_iso считается на клиенте (now - days*86400000), to_iso — сейчас.
+ */
+export function useStatsPeriod(days: StatsPeriodDays) {
+  const to = new Date().toISOString();
+  const from = new Date(Date.now() - days * 86_400_000).toISOString();
+  return useQuery({
+    queryKey: ["stats", "period", days] as const,
+    queryFn: () =>
+      fetchJson<StatsPeriod>(
+        `/stats/period?from_iso=${encodeURIComponent(from)}&to_iso=${encodeURIComponent(to)}`,
+      ),
+    refetchInterval: 60_000,
   });
 }
 

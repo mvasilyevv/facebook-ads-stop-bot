@@ -4,7 +4,7 @@
  */
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
-import { ChevronRight, Heart, FileCode, FileText, RefreshCw } from "lucide-react";
+import { ChevronRight, Heart, FileCode, FileText, RefreshCw, BarChart3 } from "lucide-react";
 import {
   useObserverSettings,
   useToggleScanning,
@@ -474,6 +474,11 @@ function SettingsPage() {
             РАЗДЕЛЫ
           </Eyebrow>
           <div className="border border-[var(--hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)]">
+            <NavRow
+              icon={<BarChart3 size={16} strokeWidth={1.5} />}
+              label="Статистика дня"
+              onClick={() => navTo("/stats")}
+            />
             <NavRow
               icon={<Heart size={16} strokeWidth={1.5} />}
               label="Здоровье воркеров"
