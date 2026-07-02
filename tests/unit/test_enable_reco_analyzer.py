@@ -187,7 +187,9 @@ def test_custom_threshold_min_metrics() -> None:
     assert "мало метрик" in (decision.skip_reason or "")
 
 
-# Сценарий: snapshot содержит сводку — пригодится для записи в БД
+# Сценарий: snapshot содержит сводку — пригодится для записи в БД.
+# spend = ПОСЛЕДНИЙ кумулятивный снимок (не сумма): ad_metrics.spend нарастающий,
+# два снимка по 0.5 → итог 0.5 (свежий), не 1.0.
 def test_snapshot_summary_keys() -> None:
     decision = should_recommend(
         alert_state="stop_sent",
@@ -202,9 +204,36 @@ def test_snapshot_summary_keys() -> None:
     assert decision.recommend is True
     snap = decision.snapshot
     assert snap["metrics_count"] == 2
-    # total_spend = 0.5 + 0.5
-    assert snap["total_spend"] == "1.0"
+    # spend = последний снимок (0.5), не сумма снимков (1.0)
+    assert snap["total_spend"] == "0.5"
     assert "latest_cycle_ts" in snap
+
+
+# Сценарий R2 (CRIT-2): spend в ad_metrics кумулятивный (нарастающий с начала
+# cabinet-дня). После паузы рекламы все снимки в окне держат одно значение S.
+# Наивный SUM по 12 снимкам давал бы 12*S и ложно проваливал Rule 1
+# (spend ≤ 0.5*CPA), подавляя валидную рекомендацию включения. Берём ПОСЛЕДНИЙ
+# снимок: spend=4 при CPA=10 проходит порог 0.5*CPA=5, рекомендация выживает.
+def test_cumulative_spend_uses_latest_not_sum() -> None:
+    # 12 одинаковых кумулятивных снимков по 4.0 (реклама на паузе → spend плоский)
+    metrics = [
+        _metric(minutes_ago=15 * i, spend="4.0", cost_per_lead="999.0", deposits=0)
+        for i in range(12)
+    ]
+    decision = should_recommend(
+        alert_state="stop_sent",
+        snoozed_until=None,
+        now=_now(),
+        metrics=metrics,
+        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+    )
+    # Наивный SUM = 48 > 5 → Rule 1 провалена, рекомендации нет (баг).
+    # Latest = 4 ≤ 5 → Rule 1 проходит, единственный сигнал → warning.
+    assert decision.recommend is True
+    assert decision.level == "warning"
+    assert any("spend" in r for r in decision.reasons)
+    # snapshot тоже отражает последний снимок, не сумму
+    assert decision.snapshot["total_spend"] == "4.0"
 
 
 # ====================== alert renderer ======================
