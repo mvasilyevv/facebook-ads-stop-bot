@@ -69,7 +69,7 @@ async def receive_adsetpro_postback(
     """Принять postback, записать в БД с дедупом. 202 ACCEPTED + меткой результата."""
     # Секрет: БД (adsetpro_credentials) → фолбэк .env. Ротация без рестарта.
     expected_secret = await resolve_adsetpro_postback_secret(
-        engine, fallback=settings.adsetpro_postback_secret
+        engine, fallback=settings.adsetpro_postback_secret.get_secret_value()
     )
     if not expected_secret:
         # Намеренно 503: пока секрет не задан, endpoint считается не настроенным —

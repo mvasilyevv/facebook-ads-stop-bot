@@ -46,7 +46,7 @@ def _is_scanning_enabled_sync() -> bool:
                 host=settings.postgres_host,
                 port=settings.postgres_port,
                 user=settings.postgres_user,
-                password=settings.postgres_password,
+                password=settings.postgres_password.get_secret_value(),
                 database=settings.postgres_db,
                 timeout=3.0,
             )
@@ -154,7 +154,7 @@ def _send_telegram(text: str) -> None:
 
     # Создаём клиент заранее — передаём как fallback_client, чтобы тесты
     # могли мокировать TelegramBotClient и видеть вызовы send_message.
-    client = TelegramBotClient(bot_token=settings.telegram_bot_token)
+    client = TelegramBotClient(bot_token=settings.telegram_bot_token.get_secret_value())
 
     async def _send() -> None:
         try:

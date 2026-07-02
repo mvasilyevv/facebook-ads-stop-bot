@@ -127,7 +127,7 @@ class MCPContextManager:
             from redis.asyncio import Redis  # type: ignore[import-not-found]
 
             self.redis_client = Redis.from_url(redis_url, decode_responses=True)
-            logger.info("MCP context: Redis client инициализирован (%s)", redis_url)
+            logger.info("MCP context: Redis client инициализирован (%s)", _safe_dsn(redis_url))
         except Exception:
             logger.exception("Redis инициализация упала — продолжаем без rate-limit/health")
             self.redis_client = None

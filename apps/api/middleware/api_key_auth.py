@@ -25,7 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from core.config import Settings, get_settings
+from core.config import Settings, get_settings, reveal_secret
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         if any(request.url.path.startswith(p) for p in _EXEMPT_PATH_PREFIXES):
             return await call_next(request)
 
-        expected = settings.api_key or ""
+        expected = reveal_secret(settings.api_key) if settings.api_key else ""
         if not expected:
             # Ключ не сконфигурирован, но enforcement включён → явный отказ
             # (не fail-open: иначе тихо открыли бы money-эндпоинты).

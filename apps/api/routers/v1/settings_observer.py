@@ -255,7 +255,7 @@ async def refresh_observer_campaigns(
         vc = await session.scalar(
             select(VisionConfig).where(VisionConfig.singleton_key == "default")
         )
-        x_token = settings.vision_x_token
+        x_token = settings.vision_x_token.get_secret_value()
         profile_id = settings.vision_profile_id
         if vc:
             if vc.x_token_encrypted:

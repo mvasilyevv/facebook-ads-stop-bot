@@ -5,15 +5,48 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 
 # Путь к .env — корень проекта (рядом с run.sh)
 _ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+
+
+def reveal_secret(value: object) -> str:
+    """Достаёт строковое значение секрета: поддерживает `SecretStr` и обычный `str`.
+
+    Секретные поля `Settings` — `SecretStr` (H-6), но юнит-тесты нередко подменяют
+    `get_settings()` через `SimpleNamespace`/`MagicMock` с обычными `str`-полями.
+    Единая точка распаковки избавляет вызывающий код от `isinstance`-проверок и
+    не даёт случайно уйти в прод со строкой `"**********"` вместо токена.
+    """
+    getter = getattr(value, "get_secret_value", None)
+    if callable(getter):
+        return getter()
+    return value if isinstance(value, str) else str(value)
+
+
+def safe_url_for_log(url: str) -> str:
+    """host:port (+ путь/БД-индекс) без userinfo — для логов (H-6, п.3).
+
+    `database_url`/`redis_url` остаются обычным `str` (не `SecretStr`), т.к. это
+    строки подключения, а не голые секреты, — но целиком в лог их класть нельзя:
+    userinfo (`user:password@`) может содержать креды. Не логируем raw URL нигде,
+    только через эту функцию.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<url>"
+    netloc = parts.hostname or ""
+    if parts.port:
+        netloc = f"{netloc}:{parts.port}"
+    scheme = f"{parts.scheme}://" if parts.scheme else ""
+    return f"{scheme}{netloc}{parts.path}"
 
 
 class Settings(BaseSettings):
@@ -24,20 +57,20 @@ class Settings(BaseSettings):
     postgres_port: int = 5433
     postgres_db: str = "fb_stop_bot"
     postgres_user: str = "fb_stop_bot"
-    postgres_password: str = "fb_stop_bot"
+    postgres_password: SecretStr = SecretStr("fb_stop_bot")
 
     # --- Telegram ---
-    telegram_bot_token: str = ""
+    telegram_bot_token: SecretStr = SecretStr("")
     telegram_chat_id: str = ""
 
     # --- Шифрование (для хранения токенов в БД) ---
-    encryption_key: str = ""
-    encryption_key_verify: str = ""
+    encryption_key: SecretStr = SecretStr("")
+    encryption_key_verify: SecretStr = SecretStr("")
 
     # --- API ---
     api_host: str = "0.0.0.0"
     api_port: int = 8100
-    api_key: str = ""
+    api_key: SecretStr = SecretStr("")
     # Enforce X-API-Key на write-эндпоинтах (POST/PUT/PATCH/DELETE). Secure-by-default:
     # API биндится на 0.0.0.0 + Ingress, поэтому money-управление (выкл авто-стопа,
     # рестарт observer, подтверждение черновиков) закрыто ключом. run.sh прокидывает
@@ -51,7 +84,7 @@ class Settings(BaseSettings):
     default_observer_interval_seconds: int = 90
 
     # --- Vision Anti-detect браузер ---
-    vision_x_token: str = ""
+    vision_x_token: SecretStr = SecretStr("")
     vision_api_url: str = "http://127.0.0.1:3030"
     vision_profile_id: str = ""
     vision_auto_restart_on_missing_cdp: bool = True
@@ -61,7 +94,7 @@ class Settings(BaseSettings):
     alerts_queue_enabled: bool = True
 
     # --- Sentry (опционально) ---
-    sentry_dsn: str = ""
+    sentry_dsn: SecretStr = SecretStr("")
     sentry_environment: str = "production"
 
     # --- Telegram Mini App ---
@@ -69,7 +102,7 @@ class Settings(BaseSettings):
     web_app_url: str | None = None
     # Секрет для подписи TMA-сессионных токенов (itsdangerous). Пусто → фолбэк на
     # encryption_key. Должен быть стабильным между рестартами (иначе токены протухают).
-    tma_session_secret: str = ""
+    tma_session_secret: SecretStr = SecretStr("")
 
     # --- Telegram Daily Digest ---
     digest_enabled: bool = True
@@ -79,10 +112,10 @@ class Settings(BaseSettings):
     # --- AI Assistant (Claude + OpenAI fallback) ---
     ai_diagnostics_enabled: bool = True
     ai_chat_enabled: bool = True
-    anthropic_api_key: str = ""
+    anthropic_api_key: SecretStr = SecretStr("")
     anthropic_base_url: str = "https://api.claudehub.fun/v1"
     anthropic_model: str = "claude-sonnet-4.6"
-    openai_api_key: str = ""
+    openai_api_key: SecretStr = SecretStr("")
     openai_base_url: str = "https://gateway.nekocode.app/andromeda/v1"
     openai_model: str = "openai/gpt-5.4-mini"
     ai_diagnostics_cooldown_seconds: int = 1800
@@ -100,18 +133,18 @@ class Settings(BaseSettings):
     # Live verify (2026-05-27): AdSet.pro работает как MCP-сервер `platform-stats-mcp`
     # на https://adset.pro/mcp (JSON-RPC 2.0 + Bearer). REST вида /api/stats/query
     # не существует — host api.adset.pro вообще не резолвится.
-    adsetpro_mcp_key: str = ""
+    adsetpro_mcp_key: SecretStr = SecretStr("")
     adsetpro_base_url: str = "https://adset.pro"
     adsetpro_timeout_seconds: float = 15.0
     # Секрет для аутентификации входящего postback'а от AdSet.pro
     # (header X-Postback-Secret). Пустая строка → endpoint возвращает 503
     # «not configured», чтобы случайно не принимать неавторизованные постбэки.
-    adsetpro_postback_secret: str = ""
+    adsetpro_postback_secret: SecretStr = SecretStr("")
 
     # --- syntx.ai (прямой API генерации креативов, см. core/syntx/) ---
     # JWT из localStorage.auth_token залогиненного syntx (recon_profile), живёт 30 дней.
     # Пусто → клиент возьмёт env SYNTX_AUTH_TOKEN или строку в .env (см. core/syntx/auth.py).
-    syntx_auth_token: str = ""
+    syntx_auth_token: SecretStr = SecretStr("")
     syntx_base_url: str = "https://api.syntx.ai"
     syntx_timeout_seconds: float = 60.0
     syntx_poll_interval_seconds: float = 3.0
@@ -153,16 +186,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _warn_insecure_defaults(self) -> "Settings":
         """Предупреждаем о небезопасных настройках при старте."""
-        if self.postgres_password == self.postgres_db:
+        if self.postgres_password.get_secret_value() == self.postgres_db:
             logger.warning(
                 "Пароль Postgres совпадает с именем БД — "
                 "задайте уникальный POSTGRES_PASSWORD для продакшена"
             )
-        if not self.encryption_key:
+        if not self.encryption_key.get_secret_value():
             logger.warning("ENCRYPTION_KEY не задан — шифрование токенов в БД не будет работать")
-        if not self.telegram_bot_token:
+        if not self.telegram_bot_token.get_secret_value():
             logger.warning("TELEGRAM_BOT_TOKEN не задан — Telegram-бот не будет работать")
-        if not self.api_key and self.require_api_key:
+        if not self.api_key.get_secret_value() and self.require_api_key:
             # L6: НЕ генерим эфемерный ключ. Раньше пустой API_KEY → ротирующийся ключ
             # in-memory (свой на каждый из 12 процессов) → X-API-Key фронта ловил 401, а
             # честная ветка 503 в ApiKeyAuthMiddleware была мёртвой. Теперь оставляем ключ
@@ -178,7 +211,8 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         """Строка подключения к Postgres для asyncpg."""
         return (
-            f"postgresql+asyncpg://{self.postgres_user}:{quote_plus(self.postgres_password)}"
+            f"postgresql+asyncpg://{self.postgres_user}:"
+            f"{quote_plus(self.postgres_password.get_secret_value())}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 

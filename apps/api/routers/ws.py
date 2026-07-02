@@ -91,7 +91,7 @@ async def ws_dashboard(websocket: WebSocket) -> None:  # noqa: C901
 
     settings = _get_settings()
     if settings.require_api_key:
-        expected = settings.api_key or ""
+        expected = settings.api_key.get_secret_value() if settings.api_key else ""
         provided = (
             websocket.query_params.get("api_key") or websocket.query_params.get("token") or ""
         )

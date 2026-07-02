@@ -8,9 +8,46 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Названия переменных, значения которых нужно скрыть в событиях Sentry
+# Названия переменных, значения которых нужно скрыть в событиях Sentry (H-6, п.4).
+# Сравнение в _mask_sensitive_data идёт через .lower(), поэтому регистр здесь не важен —
+# держим нижний регистр как канонический. Список соответствует всем SecretStr-полям
+# core.config.Settings (см. H-6): пароли/токены/API-ключи/секреты постбэков.
 _SENSITIVE_KEYS = frozenset(
-    {"telegram_bot_token", "encryption_key", "TELEGRAM_BOT_TOKEN", "ENCRYPTION_KEY"}
+    {
+        "telegram_bot_token",
+        "encryption_key",
+        "encryption_key_verify",
+        "api_key",
+        "vision_x_token",
+        "sentry_dsn",
+        "tma_session_secret",
+        "anthropic_api_key",
+        "openai_api_key",
+        "adsetpro_mcp_key",
+        "adsetpro_postback_secret",
+        "syntx_auth_token",
+        "postgres_password",
+        # Env-var формы (UPPER_CASE) — сравнение через .lower(), но держим явно
+        # для читаемости и на случай прямого поиска по коду.
+        "TELEGRAM_BOT_TOKEN",
+        "ENCRYPTION_KEY",
+        "ENCRYPTION_KEY_VERIFY",
+        "API_KEY",
+        "VISION_X_TOKEN",
+        "SENTRY_DSN",
+        "TMA_SESSION_SECRET",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "ADSETPRO_MCP_KEY",
+        "ADSETPRO_POSTBACK_SECRET",
+        "SYNTX_AUTH_TOKEN",
+        "POSTGRES_PASSWORD",
+        # Составные URL с потенциальными кредами (userinfo) — не SecretStr, но маскируем.
+        "database_url",
+        "redis_url",
+        "DATABASE_URL",
+        "REDIS_URL",
+    }
 )
 
 

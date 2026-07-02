@@ -95,7 +95,9 @@ class TmaPrincipal:
 
 def _tma_secret(settings: Settings) -> str:
     """Секрет подписи токена: tma_session_secret или фолбэк на encryption_key."""
-    return settings.tma_session_secret or settings.encryption_key
+    if settings.tma_session_secret:
+        return settings.tma_session_secret.get_secret_value()
+    return settings.encryption_key.get_secret_value()
 
 
 @router.post("/auth", response_model=TmaAuthResponse)

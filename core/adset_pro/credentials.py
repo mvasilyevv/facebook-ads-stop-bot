@@ -82,7 +82,7 @@ async def resolve_adsetpro_api_key(engine: AsyncEngine, *, fallback: str | None 
         return fallback
     from core.config import get_settings
 
-    return get_settings().adsetpro_mcp_key
+    return get_settings().adsetpro_mcp_key.get_secret_value()
 
 
 async def resolve_adsetpro_postback_secret(
@@ -99,7 +99,7 @@ async def resolve_adsetpro_postback_secret(
         return fallback
     from core.config import get_settings
 
-    return get_settings().adsetpro_postback_secret
+    return get_settings().adsetpro_postback_secret.get_secret_value()
 
 
 async def upsert_adsetpro_credentials(
@@ -149,7 +149,9 @@ async def create_adsetpro_client(engine: AsyncEngine, **overrides: object):
     from core.config import get_settings
 
     settings = get_settings()
-    api_key = await resolve_adsetpro_api_key(engine, fallback=settings.adsetpro_mcp_key)
+    api_key = await resolve_adsetpro_api_key(
+        engine, fallback=settings.adsetpro_mcp_key.get_secret_value()
+    )
     params: dict[str, object] = {
         "api_key": api_key,
         "base_url": settings.adsetpro_base_url,

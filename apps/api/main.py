@@ -52,7 +52,7 @@ from core.adset_pro import (
 from core.adset_pro import (
     TemporaryError as AdsetProTemporaryError,
 )
-from core.config import get_settings
+from core.config import get_settings, safe_url_for_log
 from core.meta_api.errors import (
     MetaApiError,
 )
@@ -91,7 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not getattr(app.state, "redis", None):
         app.state.redis = redis_from_url(settings.redis_url, decode_responses=True)
         own_redis = True
-        logger.info("Redis-клиент создан в lifespan: %s", settings.redis_url)
+        logger.info("Redis-клиент создан в lifespan: %s", safe_url_for_log(settings.redis_url))
     app.state.settings = settings
     try:
         yield

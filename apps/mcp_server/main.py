@@ -36,7 +36,7 @@ from core.ai_assistant.tools import (
     check_and_increment,
     execute_tool,
 )
-from core.ai_assistant.tools._ratelimit import _DEFAULT_MAX_PER_HOUR
+from core.ai_assistant.tools._ratelimit import _DEFAULT_MAX_PER_HOUR, _check_memory_fallback
 from core.ai_assistant.tools.base import RiskLevel
 
 logger = logging.getLogger(__name__)
@@ -103,19 +103,25 @@ def build_server(ctx_mgr: MCPContextManager) -> Server:
 
         tool_ctx = ctx_mgr.build_tool_context()
 
-        # Rate-limit per client_key. Fail-open если Redis недоступен.
-        if tool_ctx.redis_client is not None:
-            try:
+        # Rate-limit per client_key. НЕ fail-open (H-7, см. HIGH #13 раунда 6):
+        # при недоступном Redis переключаемся на in-memory secondary cap
+        # (_check_memory_fallback — тот же, что использует check_and_increment
+        # при сбое Redis-вызова). Раньше redis_client=None (Redis не поднялся при
+        # старте MCPContextManager, см. context.py) ИЛИ любая ошибка check_and_increment
+        # пропускали лимит целиком — злоумышленник мог бомбардировать Meta API через
+        # AI-tools при мёртвом Redis.
+        try:
+            if tool_ctx.redis_client is None:
+                await _check_memory_fallback(tool_ctx.client_key)
+            else:
                 await check_and_increment(
                     tool_ctx.redis_client,
                     client_key=tool_ctx.client_key,
                     max_per_hour=_RATE_LIMIT_PER_HOUR,
                 )
-            except RateLimitExceeded as exc:
-                logger.warning("MCP rate-limit: %s", exc)
-                return [types.TextContent(type="text", text=f"⏱ {exc}")]
-            except Exception:
-                logger.exception("rate-limit check упал — пропускаю (fail-open)")
+        except RateLimitExceeded as exc:
+            logger.warning("MCP rate-limit: %s", exc)
+            return [types.TextContent(type="text", text=f"⏱ {exc}")]
 
         try:
             result_text = await execute_tool(name, arguments, tool_ctx)

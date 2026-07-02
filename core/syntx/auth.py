@@ -60,7 +60,11 @@ def resolve_syntx_token(explicit: str | None = None) -> str:
     try:
         from core.config import get_settings
 
-        token = getattr(get_settings(), "syntx_auth_token", "") or ""
+        raw_token = getattr(get_settings(), "syntx_auth_token", "") or ""
+        # SecretStr в проде, обычная str в тестовых SimpleNamespace-стабах — поддерживаем оба.
+        token = (
+            raw_token.get_secret_value() if hasattr(raw_token, "get_secret_value") else raw_token
+        )
         if token.strip():
             return token.strip()
     except Exception:  # noqa: BLE001 — конфиг опционален для CLI-сценариев

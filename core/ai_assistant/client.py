@@ -86,14 +86,14 @@ def get_ai_client(settings: Settings | None = None) -> AIClient:
 
     if settings.anthropic_api_key:
         primary = AnthropicProvider(
-            api_key=settings.anthropic_api_key,
+            api_key=settings.anthropic_api_key.get_secret_value(),
             base_url=settings.anthropic_base_url,
             model=settings.anthropic_model,
             timeout=float(settings.ai_timeout_seconds),
         )
     if settings.openai_api_key:
         fallback = OpenAIProvider(
-            api_key=settings.openai_api_key,
+            api_key=settings.openai_api_key.get_secret_value(),
             base_url=settings.openai_base_url,
             model=settings.openai_model,
             timeout=float(settings.ai_timeout_seconds),

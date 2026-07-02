@@ -91,7 +91,9 @@ class AdsetProClient:
         max_retries: int = 3,
     ) -> None:
         settings = get_settings()
-        self._api_key = api_key if api_key is not None else settings.adsetpro_mcp_key
+        self._api_key = (
+            api_key if api_key is not None else settings.adsetpro_mcp_key.get_secret_value()
+        )
         self._base_url = (base_url or settings.adsetpro_base_url).rstrip("/")
         self._timeout_seconds = (
             timeout_seconds

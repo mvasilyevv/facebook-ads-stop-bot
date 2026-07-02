@@ -15,14 +15,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
-from core.config import get_settings
+from core.config import get_settings, reveal_secret
 
 
 async def main() -> int:
     s = get_settings()
     client = BrowserAgentClient(
         BrowserAgentConfig(
-            vision_x_token=s.vision_x_token,
+            vision_x_token=reveal_secret(s.vision_x_token),
             vision_api_url=s.vision_api_url,
             vision_profile_id=s.vision_profile_id,
         )
