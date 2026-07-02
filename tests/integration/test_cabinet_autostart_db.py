@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -336,3 +336,92 @@ async def test_run_one_tick_no_owner_ads(
             )
         ).scalar_one()
     assert count == 0
+
+
+# ====================== R-money: фильтр свежести last_seen_at ======================
+
+
+# Свежий ад (last_seen_at недавно) включается, протухший (давно не виден) — исключён.
+# Защита от реактивации давно снятых ads: is_active=TRUE монотонно-истинный.
+@pytest.mark.asyncio
+async def test_resolve_by_campaign_freshness_filter(pg_engine, clean_autostart_tables) -> None:
+    fresh = _row("111900", "MV | KE | CR2 | 22.05", campaign_id="C950")
+    stale = _row("111901", "MV | KE | CR2 | 22.05", campaign_id="C950")
+    await process_scan_rows(pg_engine, rows=[fresh, stale], scan_id=1)
+
+    # Протухшему аду откатываем last_seen_at на 5 дней назад (старый cabinet-день).
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE fb_ads SET last_seen_at = NOW() - INTERVAL '5 days' "
+                "WHERE fb_ad_id = '111901'"
+            )
+        )
+
+    since = datetime.now(timezone.utc) - timedelta(hours=48)
+    ids, total = await resolve_owner_ad_ids_by_campaign_ids(
+        pg_engine, owner_tag="MV", campaign_ids=["C950"], since=since
+    )
+    assert ids == ["111900"], "только свежий ад; протухший НЕ реактивируем"
+    assert total == 1
+
+
+# Без since (None) фильтр свежести выключен — обратная совместимость (включаются оба).
+@pytest.mark.asyncio
+async def test_resolve_by_campaign_no_since_returns_all(pg_engine, clean_autostart_tables) -> None:
+    fresh = _row("111902", "MV | KE | CR2 | 22.05", campaign_id="C960")
+    stale = _row("111903", "MV | KE | CR2 | 22.05", campaign_id="C960")
+    await process_scan_rows(pg_engine, rows=[fresh, stale], scan_id=1)
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE fb_ads SET last_seen_at = NOW() - INTERVAL '5 days' "
+                "WHERE fb_ad_id = '111903'"
+            )
+        )
+
+    ids, total = await resolve_owner_ad_ids_by_campaign_ids(
+        pg_engine, owner_tag="MV", campaign_ids=["C960"]
+    )
+    assert set(ids) == {"111902", "111903"}, "без since оба ада (фильтр выключен)"
+    assert total == 2
+
+
+# run_one_tick автостарта НЕ включает протухший ад (передаёт since в резолв).
+@pytest.mark.asyncio
+async def test_run_one_tick_excludes_stale_ad(
+    pg_engine, fake_redis_client, clean_autostart_tables
+) -> None:
+    fresh = _row("111904", "MV | KE | CR2 | 29.05", campaign_id="C970")
+    stale = _row("111905", "MV | KE | CR2 | 29.05", campaign_id="C970")
+    await process_scan_rows(pg_engine, rows=[fresh, stale], scan_id=1)
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE fb_ads SET last_seen_at = NOW() - INTERVAL '5 days' "
+                "WHERE fb_ad_id = '111905'"
+            )
+        )
+    await _set_owner_tag(pg_engine, "MV", campaign_ids=["C970"])
+    await write_autostart_config(
+        pg_engine,
+        {"enabled": True, "hour_utc": 6, "minute_utc": 0},
+    )
+    now = datetime.now(timezone.utc).replace(hour=6, minute=0, second=0, microsecond=0)
+    summary = await run_one_tick(engine=pg_engine, redis_client=fake_redis_client, now=now)
+    assert summary["outcome"] == "started"
+    assert summary["ad_count"] == 1, "только свежий ад поднят"
+
+    # В payload задачи — только свежий ad_id.
+    async with pg_engine.connect() as conn:
+        payload = (
+            await conn.execute(
+                text(
+                    "SELECT payload FROM task_queue WHERE task_type = 'meta_api_mutation' "
+                    "ORDER BY created_at DESC LIMIT 1"
+                )
+            )
+        ).scalar_one()
+    payload_str = str(payload)
+    assert "111904" in payload_str, "свежий ад в задаче"
+    assert "111905" not in payload_str, "протухший ад НЕ должен попасть в autostart-activate"

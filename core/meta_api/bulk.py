@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -72,6 +73,7 @@ async def resolve_owner_ad_ids_by_campaign_ids(
     *,
     owner_tag: str | None,
     campaign_ids: list[str],
+    since: datetime | None = None,
     limit: int = MAX_BULK,
 ) -> tuple[list[str], int]:
     """Активные fb_ad_id ВЫБРАННЫХ кампаний (по Meta campaign_id), owner-scoped.
@@ -82,6 +84,16 @@ async def resolve_owner_ad_ids_by_campaign_ids(
     (owner-scoping через campaign_matches_owner). Двойная защита от включения
     чужих/не тех кампаний в общем кабинете.
 
+    Фильтр свежести (``since``): ``fb_ads.is_active`` монотонно-истинный — он
+    выставляется в TRUE на каждом скане и НИГДЕ не сбрасывается в FALSE, поэтому
+    сам по себе НЕ отличает живые объявления от давно снятых/удалённых. Без
+    фильтра автостарт каждое утро bulk-активировал бы ВСЕ когда-либо
+    отсканированные ad_id выбранных кампаний (включая объявления прошлых
+    cabinet-дней) → нецелевой открут бюджета. Если ``since`` задан, оставляем
+    только объявления со свежим ``last_seen_at >= since`` (т.е. виденные последним
+    сканом кабинета). ``None`` (дефолт) — фильтр выключен, обратная совместимость
+    для вызовов без свежести.
+
     Если campaign_ids пуст → ([], 0). НЕ включаем всё подряд — это была бы дыра
     в безопасности (без фильтра сработало бы по всему кабинету).
 
@@ -91,11 +103,17 @@ async def resolve_owner_ad_ids_by_campaign_ids(
     if not clean_ids:
         return [], 0
 
+    params: dict[str, object] = {"ids": clean_ids}
+    freshness_clause = ""
+    if since is not None:
+        freshness_clause = "AND a.last_seen_at >= :since"
+        params["since"] = since
+
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
                 text(
-                    """
+                    f"""
                     SELECT DISTINCT a.fb_ad_id, c.campaign_name, a.ad_name
                     FROM fb_ads a
                     JOIN fb_adsets s ON s.id = a.adset_id
@@ -103,9 +121,10 @@ async def resolve_owner_ad_ids_by_campaign_ids(
                     WHERE c.fb_campaign_id = ANY(:ids)
                       AND a.fb_ad_id IS NOT NULL
                       AND a.is_active = TRUE
+                      {freshness_clause}
                     """
                 ),
-                {"ids": clean_ids},
+                params,
             )
         ).all()
 
