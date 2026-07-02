@@ -2,10 +2,17 @@
 """Утилиты шифрования для хранения токенов в БД.
 
 Использует Fernet (AES-128-CBC) из библиотеки cryptography.
-Ключ берётся из ENCRYPTION_KEY в .env. Если ключ не задан —
-автоматически генерируется и записывается в .env при первом запуске.
+Ключ берётся из ENCRYPTION_KEY в .env. Ключ НЕ генерируется в рантайме воркера:
+это делал каждый из 13+ параллельно стартующих процессов, дописывая свой ключ в
+.env без блокировки → несколько строк ENCRYPTION_KEY, побеждала последняя →
+токены, зашифрованные другими ключами, становились нерасшифровываемы (канал
+авто-стопа молча слепнул). Теперь при пустом ключе _get_fernet бросает явную
+ошибку (fail-fast), а генерация вынесена в единый bootstrap-шаг ensure_encryption_key()
+под file-lock с double-check (его зовёт run.sh / scripts/ensure_encryption_key.py
+ДО старта воркеров).
 
 Дополнительно:
+- ensure_encryption_key()   — единый bootstrap: генерирует ключ под flock, если его нет
 - backup_encryption_key()   — сохраняет ключ в .encryption_key.backup (0600)
 - verify_encryption_key()   — проверяет ключ по ENCRYPTION_KEY_VERIFY из .env
 - rotate_encryption_key()   — перешифровывает все токены в БД при смене ключа
@@ -13,6 +20,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import stat
@@ -31,6 +39,34 @@ _fernet: Fernet | None = None
 _VERIFY_PLAINTEXT = "encryption_key_verify_v1"
 
 
+class EncryptionKeyMissingError(RuntimeError):
+    """ENCRYPTION_KEY не задан в окружении.
+
+    Бросается вместо тихой рантайм-генерации ключа воркером. Сгенерировать ключ
+    нужно единым bootstrap-шагом (run.sh / scripts/ensure_encryption_key.py).
+    """
+
+
+# Текст ошибки при пустом ключе — единый источник для _get_fernet и тестов.
+_MISSING_KEY_MESSAGE = (
+    "ENCRYPTION_KEY не задан — сгенерируйте его через scripts/ensure_encryption_key.py "
+    "(его вызывает run.sh ДО старта воркеров). Рантайм-генерация ключа отключена: "
+    "параллельные воркеры затирали .env разными ключами и портили зашифрованные токены."
+)
+
+
+def _reveal(value: object) -> str:
+    """Возвращает строковое значение настройки: поддерживает str и pydantic SecretStr.
+
+    Настройки секретов могут быть как `str`, так и `SecretStr` (миграция) — эта
+    обёртка снимает зависимость модуля от конкретного типа поля.
+    """
+    getter = getattr(value, "get_secret_value", None)
+    if callable(getter):
+        return getter()
+    return value if isinstance(value, str) else str(value)
+
+
 def _project_root() -> str:
     """Возвращает абсолютный путь к корню проекта."""
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,6 +75,96 @@ def _project_root() -> str:
 def _env_path() -> str:
     """Путь к файлу .env в корне проекта."""
     return os.path.join(_project_root(), ".env")
+
+
+def _lock_path() -> str:
+    """Путь к lock-файлу для эксклюзивной генерации ключа."""
+    return os.path.join(_project_root(), ".env.lock")
+
+
+def _read_env_key(var: str = "ENCRYPTION_KEY") -> str:
+    """Читает значение переменной прямо из .env (последнее вхождение — как в shell).
+
+    Отдельно от get_settings(): та кэширует Settings на процесс, а нам нужен
+    актуальный диск после double-check внутри flock. Побеждает последняя строка —
+    паттерн `set -a; . ./.env` в run.sh: повторное присваивание перекрывает.
+
+    Args:
+        var: имя переменной окружения в .env.
+
+    Returns:
+        Значение переменной (без кавычек/пробелов) или "" если не найдено.
+    """
+    env = _env_path()
+    value = ""
+    try:
+        with open(env, encoding="utf-8") as fp:
+            for raw in fp:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                name, _, val = line.partition("=")
+                if name.strip() != var:
+                    continue
+                val = val.strip()
+                # Снимаем окружающие кавычки, если есть.
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+                    val = val[1:-1]
+                value = val
+    except OSError:
+        return ""
+    return value
+
+
+def ensure_encryption_key() -> str:
+    """Единый bootstrap-шаг: гарантирует наличие ENCRYPTION_KEY в .env.
+
+    Money/security-критично. Вызывается ОДИН раз до старта воркеров (run.sh →
+    scripts/ensure_encryption_key.py). Идемпотентно: если ключ уже есть — ничего
+    не меняет и возвращает его. Генерация — только под эксклюзивным flock на
+    .env.lock, с double-check внутри критической секции (ключ мог появиться, пока
+    ждали захвата), поэтому конкурентные вызовы дают ровно один ключ в .env.
+
+    Returns:
+        Актуальный ENCRYPTION_KEY (существующий или только что сгенерированный).
+
+    Raises:
+        RuntimeError: если библиотека cryptography не установлена.
+    """
+    if Fernet is None:
+        raise RuntimeError("Библиотека cryptography не установлена")
+
+    # Быстрый путь без блокировки: ключ уже есть.
+    existing = _read_env_key()
+    if existing:
+        return existing
+
+    lock_path = _lock_path()
+    lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        # Эксклюзивная блокировка на межпроцессном уровне (flock переживает fork,
+        # снимается при close/exit процесса-владельца).
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        # Double-check: пока ждали lock, другой процесс мог записать ключ.
+        existing = _read_env_key()
+        if existing:
+            logger.info("ENCRYPTION_KEY уже присутствует в .env (записан параллельным процессом)")
+            return existing
+
+        key = Fernet.generate_key().decode()
+        env = _env_path()
+        with open(env, "a", encoding="utf-8") as f:
+            f.write(f"\nENCRYPTION_KEY={key}\n")
+        logger.info("Сгенерирован ENCRYPTION_KEY и записан в .env")
+
+        # Бэкап и верификационный токен — только при первой генерации.
+        backup_encryption_key(key)
+        _write_verify_token(key)
+        return key
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
 
 
 def backup_encryption_key(key: str) -> None:
@@ -282,9 +408,15 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
 def _get_fernet() -> Fernet:
     """Ленивая инициализация Fernet с ключом из env.
 
-    При первом запуске без ключа — генерирует ключ, сохраняет в .env,
-    создаёт резервную копию и записывает верификационный токен.
+    При пустом ключе — бросает EncryptionKeyMissingError (fail-fast). Рантайм-
+    генерация отключена намеренно: 13+ параллельных воркеров дописывали в .env
+    каждый свой ключ без блокировки → тихая порча зашифрованных токенов. Ключ
+    генерируется единым bootstrap-шагом (ensure_encryption_key через run.sh).
     При каждом запуске с ключом — верифицирует его по ENCRYPTION_KEY_VERIFY.
+
+    Raises:
+        EncryptionKeyMissingError: если ENCRYPTION_KEY не задан.
+        RuntimeError: если библиотека cryptography не установлена.
     """
     global _fernet
     if _fernet is not None:
@@ -296,28 +428,17 @@ def _get_fernet() -> Fernet:
     from core.config import get_settings
 
     settings = get_settings()
-    key = settings.encryption_key
-    is_new_key = False
+    # Поле может быть как str, так и pydantic SecretStr (миграция секретов) — берём
+    # значение единообразно через _reveal, чтобы модуль не зависел от типа настройки.
+    key = _reveal(settings.encryption_key)
 
     if not key:
-        # Генерируем ключ и дописываем в .env
-        key = Fernet.generate_key().decode()
-        env = _env_path()
-        try:
-            with open(env, "a") as f:
-                f.write(f"\nENCRYPTION_KEY={key}\n")
-            logger.info("Сгенерирован ENCRYPTION_KEY и записан в .env")
-        except OSError:
-            logger.warning("Не удалось записать ENCRYPTION_KEY в .env")
-        is_new_key = True
+        # Fail-fast: не самогенерируем ключ в рантайме воркера (тихая порча токенов).
+        logger.critical(_MISSING_KEY_MESSAGE)
+        raise EncryptionKeyMissingError(_MISSING_KEY_MESSAGE)
 
-    if is_new_key:
-        # Бэкап и верификационный токен только при первой генерации
-        backup_encryption_key(key)
-        _write_verify_token(key)
-    else:
-        # Верифицируем существующий ключ
-        verify_encryption_key(key, settings.encryption_key_verify)
+    # Верифицируем существующий ключ по эталонному токену.
+    verify_encryption_key(key, _reveal(settings.encryption_key_verify))
 
     _fernet = Fernet(key.encode() if isinstance(key, str) else key)
     return _fernet
