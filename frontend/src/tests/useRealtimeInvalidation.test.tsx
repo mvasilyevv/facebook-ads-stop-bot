@@ -71,6 +71,17 @@ describe("useRealtimeInvalidation", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["observer"] });
   });
 
+  // Статистика залива (воронка/трекер) зависит от свежих метрик скана — scan_finished
+  // должен инвалидировать её кэш, иначе /stats и compact-строка на Dashboard замирают.
+  it("scan_finished инвалидирует stats", () => {
+    renderWithClient();
+    const onMessage = mockUseDashboardSocket.mock.calls[0]![0].onMessage as (d: unknown) => void;
+
+    onMessage({ type: "scan_finished" });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["stats"] });
+  });
+
   // Неизвестный/пустой type не должен ничего инвалидировать и не должен падать.
   it("неизвестный type не вызывает инвалидацию", () => {
     renderWithClient();

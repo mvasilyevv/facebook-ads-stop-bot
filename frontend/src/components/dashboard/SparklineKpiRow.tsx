@@ -5,10 +5,20 @@
  *   ячейка = eyebrow (ACTIVE/WARNING/STOP/DISABLED) + trend-chip + count-up число
  *   (34px, toned по state) + filled sparkline + «label · note».
  *
- * Реальные данные: counts из DashboardStats. Тренд-проценты и поштучная история
- * по каждому state в API отсутствуют → trend не показываем (без фейка), sparkline
- * строим только там, где есть реальный ряд (ACTIVE — из общего spend-ряда как
- * прокси активности). Для остальных ячеек sparkline скрыт (плоский).
+ * Реальные данные: counts из DashboardStats. Тренд-проценты в API отсутствуют →
+ * trend не показываем (без фейка).
+ *
+ * Что показывает sparkline в каждой ячейке (честно, без выдумки):
+ *   - ACTIVE — реальная почасовая история КОЛИЧЕСТВА активных объявлений
+ *     (StatsToday.meta.series_hourly[].active_ads, сутки кабинета). Раньше здесь
+ *     по ошибке рисовался ряд spend по часам как «прокси активности» — визуально
+ *     похожий, но это другая метрика: spend почти всегда растёт монотонно в
+ *     течение суток, поэтому спарклайн ACTIVE выглядел «растущим», даже когда
+ *     число активных объявлений реально падало (16 → 3) — вводило в заблуждение.
+ *   - WARNING/STOP/DISABLED — честной почасовой истории по каждому FSM-state
+ *     в API нет (только текущий snapshot-count) → sparkline скрыт (пустой,
+ *     Sparkline сам ничего не рисует при <2 точках). Рисовать её на основе
+ *     spend или чего-то ещё было бы фейком — не делаем.
  */
 
 import { Eyebrow } from "@/components/data/Eyebrow";
@@ -105,13 +115,22 @@ export const KPI_CELL_STATE: Record<string, string> = {
 
 interface SparklineKpiRowProps {
   stats: DashboardStats;
-  /** Реальный ряд spend по часам — прокси-история для ячейки ACTIVE. */
-  spendSpark?: number[];
+  /**
+   * Реальная почасовая история КОЛИЧЕСТВА активных объявлений (сутки кабинета) —
+   * StatsToday.meta.series_hourly[].active_ads. Используется только для ячейки
+   * ACTIVE. НЕ передавать сюда spend-ряд — это другая метрика (см. комментарий
+   * к компоненту).
+   */
+  activeAdsSpark?: number[];
   /** Клик по ячейке (key: active|warning|stop|disabled) → фильтр в Ads. */
   onCellClick?: (key: string) => void;
 }
 
-export function SparklineKpiRow({ stats, spendSpark = [], onCellClick }: SparklineKpiRowProps) {
+export function SparklineKpiRow({
+  stats,
+  activeAdsSpark = [],
+  onCellClick,
+}: SparklineKpiRowProps) {
   const cells: KpiCellData[] = [
     {
       key: "active",
@@ -120,7 +139,7 @@ export function SparklineKpiRow({ stats, spendSpark = [], onCellClick }: Sparkli
       label: "Норма",
       note: "активны сейчас",
       tone: "normal",
-      spark: spendSpark,
+      spark: activeAdsSpark,
     },
     {
       key: "warning",

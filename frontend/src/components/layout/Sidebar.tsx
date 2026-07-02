@@ -20,6 +20,7 @@ import {
   Radar,
   Tag,
   Clock,
+  BarChart3,
   Settings,
   PanelLeft,
   Rocket,
@@ -68,7 +69,10 @@ const NAV_GROUPS: NavGroup[] = [
   {
     eyebrowNum: "03",
     eyebrow: "HISTORY",
-    items: [{ to: "/history", label: "История", icon: Clock }],
+    items: [
+      { to: "/history", label: "История", icon: Clock },
+      { to: "/stats", label: "Статистика", icon: BarChart3 },
+    ],
   },
   {
     eyebrowNum: "04",

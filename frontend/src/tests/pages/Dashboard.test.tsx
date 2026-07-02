@@ -23,6 +23,10 @@ vi.mock("@/lib/api/dashboard", () => ({
   useChartData: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
 }));
 
+vi.mock("@/lib/api/stats", () => ({
+  useStatsToday: vi.fn(() => ({ data: undefined, isLoading: false, isError: false, refetch: vi.fn() })),
+}));
+
 vi.mock("@/lib/api/ads", () => ({
   useDisableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
   useEnableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),

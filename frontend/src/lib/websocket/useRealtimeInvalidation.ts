@@ -28,6 +28,8 @@ export function useRealtimeInvalidation(): DashboardSocketState {
           qc.invalidateQueries({ queryKey: ["dashboard"] });
           qc.invalidateQueries({ queryKey: ["ads"] });
           qc.invalidateQueries({ queryKey: ["observer"] });
+          // Статистика залива (воронка/трекер) тоже зависит от свежих метрик скана.
+          qc.invalidateQueries({ queryKey: ["stats"] });
           break;
         case "alert_created":
           qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -68,6 +70,7 @@ export function useRealtimeInvalidation(): DashboardSocketState {
       qc.invalidateQueries({ queryKey: ["tasks"] });
       qc.invalidateQueries({ queryKey: ["health"] });
       qc.invalidateQueries({ queryKey: ["campaigns", "runs"] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
     }, POLLING_INVALIDATE_MS);
     return () => window.clearInterval(id);
   }, [state.pollingFallback, qc]);

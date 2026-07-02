@@ -38,8 +38,10 @@ import {
 } from "@/components/dashboard/SparklineKpiRow";
 import { LiveTail } from "@/components/dashboard/LiveTail";
 import { TaskQueues } from "@/components/dashboard/TaskQueues";
+import { FunnelKpiRow } from "@/components/stats/FunnelKpiRow";
 
 import { useDashboardBatch, useChartData } from "@/lib/api/dashboard";
+import { useStatsToday } from "@/lib/api/stats";
 import { useDisableTasks, useEnableTasks } from "@/lib/api/ads";
 import {
   useObserverSettings,
@@ -77,6 +79,8 @@ function DashboardPage() {
   const observerQ = useObserverSettings();
   const observerStatusQ = useObserverStatus();
   const toggleScanning = useToggleScanning();
+  // Воронка залива (spend/лиды/реги/депы за сутки кабинета) — compact-строка между hero и KPI.
+  const statsTodayQ = useStatsToday();
 
   const stats = batch?.stats;
 
@@ -123,7 +127,7 @@ function DashboardPage() {
   const totalControlled =
     stats?.total_ads_monitored ?? normal + warning + stop + claimed + disabled;
 
-  // Spend-ряд по часам (реальные данные) для графика и ACTIVE-sparkline.
+  // Spend-ряд по часам (реальные данные) для графика spend (SpendChart).
   const spendSeries = useMemo<number[]>(
     () => (chartQ.data ?? []).map((b) => Number(b.spend ?? 0)),
     [chartQ.data],
@@ -132,6 +136,13 @@ function DashboardPage() {
   // полуночи кабинета). Не суммируем серию — кумулятивные снимки задвоят деньги.
   // При null/undefined (бэк не вернул) — 0, graceful прочерк через formatSpend.
   const spendTotal = parseFloat(stats?.current_day_spend ?? "0") || 0;
+  // Реальная почасовая история КОЛИЧЕСТВА активных объявлений — для ACTIVE-sparkline
+  // (было: spend-ряд как «прокси активности», вводил в заблуждение — см. комментарий
+  // в SparklineKpiRow.tsx). Отдельная метрика, не путать со spendSeries выше.
+  const activeAdsSeries = useMemo<number[]>(
+    () => (statsTodayQ.data?.meta.series_hourly ?? []).map((p) => p.active_ads ?? 0),
+    [statsTodayQ.data],
+  );
 
   // live-tail: реальные алерты. recent_alerts типизирован AlertEventOut на бэке
   // (M9-аудит) — каст больше не нужен.
@@ -246,6 +257,11 @@ function DashboardPage() {
           </Card>
         </div>
 
+        {/* ── воронка залива (compact) ────────────────────────────────────── */}
+        <div className="mb-6">
+          <FunnelKpiRow data={statsTodayQ.data?.meta} loading={statsTodayQ.isLoading} compact />
+        </div>
+
         {/* ── sparkline KPI row ───────────────────────────────────────────── */}
         <div className="mb-8">
           {isLoading || !stats ? (
@@ -253,7 +269,7 @@ function DashboardPage() {
           ) : (
             <SparklineKpiRow
               stats={stats}
-              spendSpark={spendSeries}
+              activeAdsSpark={activeAdsSeries}
               onCellClick={(key) => {
                 // Клик по KPI → Ads с фильтром по соответствующему состоянию.
                 const state = KPI_CELL_STATE[key];
