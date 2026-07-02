@@ -47,6 +47,32 @@ async def _create_toggle_mutation(
     )
 
 
+async def _current_open_token_matches(engine: AsyncEngine, *, fb_ad_id: str, token: str) -> bool:
+    """Сверяет token из callback-кнопки с open_state_token текущего инцидента.
+
+    H-4 (replay-защита): token в кнопке `dis:<fb>:<token>` привязан к open_state_token
+    инцидента, в рамках которого алерт был отправлен. Если объявление успело восстановиться
+    (инцидент закрыт → open_state_token=NULL) или ушло в НОВЫЙ инцидент (новый token), клик
+    по СТАРОЙ кнопке из истории чата должен отклоняться — иначе восстановленное объявление
+    паузится по протухшей кнопке.
+
+    Эскалация warning_sent→stop_sent сохраняет open_state_token (см. state_machine.decide),
+    поэтому старая WARNING-кнопка того же инцидента продолжает совпадать — инвариант HIGH #10.
+
+    Возвращает True только при точном совпадении. Отсутствие строки state, NULL-token
+    (инцидент закрыт) или пустой token в кнопке → False (отказ).
+    """
+    from core.observer.queries import load_alert_state_by_fb_ad_id
+
+    if not token:
+        return False
+    snapshot_map = await load_alert_state_by_fb_ad_id(engine, fb_ad_ids=[fb_ad_id])
+    snapshot = snapshot_map.get(fb_ad_id)
+    if snapshot is None or snapshot.open_state_token is None:
+        return False
+    return str(snapshot.open_state_token) == token
+
+
 async def handle_dis_callback(
     *,
     engine: AsyncEngine,
@@ -56,8 +82,33 @@ async def handle_dis_callback(
     token: str,
     username: str,
 ) -> None:
-    """dis: создаёт задачу на отключение через Marketing API (pause_ad)."""
+    """dis: создаёт задачу на отключение через Marketing API (pause_ad).
+
+    Перед созданием задачи сверяет token кнопки с open_state_token текущего инцидента
+    (H-4): протухшая кнопка из прошлого инцидента отклоняется, задача не создаётся.
+    """
     requested_by = f"tg:{username}"
+
+    # H-4: replay-защита. Кнопка из закрытого/чужого инцидента — отказ до любых side-эффектов.
+    try:
+        token_ok = await _current_open_token_matches(engine, fb_ad_id=fb_ad_id, token=token)
+    except Exception:
+        logger.exception("dis: не удалось сверить open_state_token для %s", fb_ad_id)
+        token_ok = False
+    if not token_ok:
+        logger.warning(
+            "dis: отклонён устаревший алерт fb_ad_id=%s token=%s (состояние изменилось)",
+            fb_ad_id,
+            token or "<empty>",
+        )
+        try:
+            await client.answer_callback_query(
+                cq_id, text="Алерт устарел — состояние объявления изменилось"
+            )
+        except Exception:
+            pass
+        return
+
     try:
         task_id = await _create_toggle_mutation(
             engine,
