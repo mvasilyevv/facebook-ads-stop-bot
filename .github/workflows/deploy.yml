@@ -378,6 +378,33 @@ jobs:
                 cp -a .env /var/backups/fb_agent/.env.prev 2>/dev/null || true
                 install -m 600 "$TMP_ENV" .env
                 echo ".env материализован из GitHub Secrets ($(wc -l < .env) строк)"
+                # Инцидент 01.07: VISION_* — self-managed (авто-рефреш team-token пишет
+                # на ДИСК каждые ≤30 дней), а секрет статичен. Восстанавливаем их с диска
+                # поверх секрета, иначе каждый деплой откатывает живой токен/креды и
+                # кладёт канал авто-стопа. Нет на диске (первичная инициализация) →
+                # остаётся значение из секрета.
+                PREV_ENV=/var/backups/fb_agent/.env.prev
+                if [ -f "$PREV_ENV" ]; then
+                  for key in VISION_X_TOKEN VISION_USERNAME VISION_PASSWORD VISION_TEAM_ID; do
+                    prev_line=$(grep "^${key}=" "$PREV_ENV" | tail -n 1 || true)
+                    if [ -n "$prev_line" ]; then
+                      grep -v "^${key}=" .env > .env.selfmanaged.tmp || true
+                      printf '%s\n' "$prev_line" >> .env.selfmanaged.tmp
+                      install -m 600 .env.selfmanaged.tmp .env
+                      rm -f .env.selfmanaged.tmp
+                      echo "self-managed ${key}: восстановлен с диска (поверх секрета)"
+                    fi
+                  done
+                  # Детект дрейфа состава: ключи есть на диске, но отсутствуют в секрете —
+                  # добавлены руками без синхронизации PROD_ENV_B64 (так 30.06 пропали
+                  # VISION_USERNAME/VISION_PASSWORD). Warning в лог ранна, не фейлим.
+                  drift_keys=$(comm -23 \
+                    <(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$PREV_ENV" | tr -d '=' | sort -u) \
+                    <(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$TMP_ENV" | tr -d '=' | sort -u) || true)
+                  if [ -n "$drift_keys" ]; then
+                    echo "::warning::Дрейф .env: ключи на диске отсутствуют в PROD_ENV_B64 (обнови секрет): $(echo "$drift_keys" | tr '\n' ' ')"
+                  fi
+                fi
               else
                 echo "::error::PROD_ENV_B64 битый или без ENCRYPTION_KEY — оставляю текущий .env"
               fi
