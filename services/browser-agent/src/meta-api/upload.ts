@@ -324,6 +324,12 @@ async function uploadImageFromUrl(
 }
 
 /**
+ * ⚠️ МЁРТВЫЙ ПУТЬ (с 1f274bf4, 27.06.2026): chunked resumable-загрузка НЕ используется —
+ * Meta v22 отвергает upload_phase=start как 'Invalid parameter'. Боевой путь — только
+ * uploadVideoSingle ниже (service.ts импортирует ровно его). Класс оставлен как
+ * справка по протоколу chunked-фазы; НЕ подключать без повторной проверки против
+ * актуальной версии Graph API (инцидент MID-24: «VideoUploadSession не запущен»).
+ *
  * Видео-upload-сессия: держит state между client streaming chunks.
  *
  * Lifecycle:

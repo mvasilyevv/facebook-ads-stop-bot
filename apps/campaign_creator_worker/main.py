@@ -24,6 +24,7 @@ Money-инварианты: кампания всегда PAUSED (кривой �
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -82,6 +83,39 @@ def _build_meta_client() -> MetaApiClient:
         host=os.environ.get("BROWSER_AGENT_HOST", "localhost"),
         port=int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051")),
     )
+
+
+async def _persist_partial_created_ids(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    created_ids: dict[str, Any],
+    failed_step: str,
+) -> None:
+    """created_ids partial-провала — в task_queue.result, не только в логи/campaign_run.
+
+    Урок MID-24: у 8 старых failed-задач result был NULL, а id осиротевших объектов
+    Meta жили только в ротируемых логах. campaign_run.created_meta_ids уже пишется
+    (finalize_run_failed), но разбор очереди смотрит в task_queue — дублируем сюда.
+    Пишем ДО mark_failed (guard status='running' тот же); best-effort — сбой записи
+    не должен помешать mark_failed.
+    """
+    payload = {"partial_fail": True, "failed_step": failed_step, "created_ids": created_ids}
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE task_queue SET result = CAST(:r AS JSONB), updated_at = NOW() "
+                    "WHERE id = :id AND status = 'running'"
+                ),
+                {"id": task_id, "r": json.dumps(payload)},
+            )
+    except Exception:  # noqa: BLE001 — best-effort, mark_failed важнее
+        logger.warning(
+            "campaign_create: не удалось записать created_ids в task_queue.result (task=%s)",
+            task_id,
+            exc_info=True,
+        )
 
 
 # ====================== обработка одной задачи ======================
@@ -255,6 +289,9 @@ async def _execute_run(
             run_id,
             error=f"partial_fail (step={exc.failed_step}): проверь Meta вручную: {exc!r}",
             created_meta_ids=exc.created_ids,
+        )
+        await _persist_partial_created_ids(
+            engine, task_id=task.id, created_ids=exc.created_ids, failed_step=exc.failed_step
         )
         await _safe_mark_failed(engine, task, f"partial_fail: {exc!r}")
         # Концепты НЕ чистим при ошибке — нужны для ретрая (повтор залива тем же config).
