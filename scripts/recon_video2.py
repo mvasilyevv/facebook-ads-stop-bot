@@ -44,27 +44,27 @@ def parse_page_text(body: str, query: str) -> list[dict]:
     cards = []
 
     # Извлекаем все Library ID
-    ids = re.findall(r'Library ID:\s*(\d+)', body)
+    ids = re.findall(r"Library ID:\s*(\d+)", body)
     # Все диапазоны дат рядом с ID
     date_ranges = re.findall(
-        r'(\d{1,2}\s+\w+\s+\d{4})\s*[-–—]\s*(\d{1,2}\s+\w+\s+\d{4}|Present|present)',
-        body, re.I
+        r"(\d{1,2}\s+\w+\s+\d{4})\s*[-–—]\s*(\d{1,2}\s+\w+\s+\d{4}|Present|present)", body, re.I
     )
     # Числа копий
-    copies_all = re.findall(r'(\d+)\s+ads?\s+use this creative', body, re.I)
+    copies_all = re.findall(r"(\d+)\s+ads?\s+use this creative", body, re.I)
     # Статусы
-    statuses = re.findall(r'(Active|Inactive)\s*\n', body, re.I)
+    statuses = re.findall(r"(Active|Inactive)\s*\n", body, re.I)
     # Рекламодатели — строки после "Sponsored"
     # Разбиваем на блоки по Library ID
-    blocks = re.split(r'Library ID:\s*\d+', body)
+    blocks = re.split(r"Library ID:\s*\d+", body)
 
     for i, lid in enumerate(ids):
         block = blocks[i + 1] if i + 1 < len(blocks) else ""
 
         # Дата из блока
         date_m = re.search(
-            r'(\d{1,2}\s+\w+\s+\d{4})\s*[-–—]\s*(\d{1,2}\s+\w+\s+\d{4}|Present|present)',
-            block, re.I
+            r"(\d{1,2}\s+\w+\s+\d{4})\s*[-–—]\s*(\d{1,2}\s+\w+\s+\d{4}|Present|present)",
+            block,
+            re.I,
         )
         date_range = f"{date_m.group(1)} - {date_m.group(2)}" if date_m else ""
         start_raw = date_m.group(1) if date_m else ""
@@ -74,6 +74,7 @@ def parse_page_text(body: str, query: str) -> list[dict]:
         if date_m:
             try:
                 from datetime import datetime as dt
+
                 fmt = "%d %b %Y"
                 start = dt.strptime(date_m.group(1).strip(), fmt)
                 end_str = date_m.group(2).strip()
@@ -86,41 +87,43 @@ def parse_page_text(body: str, query: str) -> list[dict]:
                 pass
 
         # Копии из блока
-        copies_m = re.search(r'(\d+)\s+ads?\s+use this creative', block, re.I)
+        copies_m = re.search(r"(\d+)\s+ads?\s+use this creative", block, re.I)
         copies = int(copies_m.group(1)) if copies_m else 1
 
         # Статус (Active/Inactive) в блоке
-        status_m = re.search(r'(Active|Inactive)', block[:200], re.I)
+        status_m = re.search(r"(Active|Inactive)", block[:200], re.I)
         status = status_m.group(1).lower() if status_m else "unknown"
 
         # Рекламодатель — текст до "Sponsored" в блоке
-        adv_m = re.search(r'([A-Za-z0-9\s&\.\-\']{3,60})\s*\n\s*Sponsored', block[:300])
+        adv_m = re.search(r"([A-Za-z0-9\s&\.\-\']{3,60})\s*\n\s*Sponsored", block[:300])
         advertiser = adv_m.group(1).strip() if adv_m else ""
 
         # Если рекламодатель не найден — берём первую строку блока
         if not advertiser:
-            first_lines = [l.strip() for l in block[:200].split('\n') if len(l.strip()) > 2]
+            first_lines = [l.strip() for l in block[:200].split("\n") if len(l.strip()) > 2]
             advertiser = first_lines[0][:60] if first_lines else "(unknown)"
 
         # Основной текст — самый длинный кусок блока
-        block_lines = [l.strip() for l in block.split('\n') if len(l.strip()) > 10]
+        block_lines = [l.strip() for l in block.split("\n") if len(l.strip()) > 10]
         primary_text = max(block_lines, key=len, default="")[:400]
 
         # Сигнал скейла: копии * дни / 100 (относительный score)
         scale_score = (copies * max(duration_days, 1)) / 100
 
-        cards.append({
-            "query": query,
-            "libraryId": lid,
-            "dateRange": date_range,
-            "startDateRaw": start_raw,
-            "durationDays": duration_days,
-            "copies": copies,
-            "scaleScore": round(scale_score, 1),
-            "status": status,
-            "advertiser": advertiser,
-            "primaryText": primary_text,
-        })
+        cards.append(
+            {
+                "query": query,
+                "libraryId": lid,
+                "dateRange": date_range,
+                "startDateRaw": start_raw,
+                "durationDays": duration_days,
+                "copies": copies,
+                "scaleScore": round(scale_score, 1),
+                "status": status,
+                "advertiser": advertiser,
+                "primaryText": primary_text,
+            }
+        )
 
     return cards
 
@@ -162,8 +165,8 @@ async def scrape_query_fallback(page, geo: str, query: str) -> list[dict]:
         return []
 
     # Проверяем количество результатов
-    results_m = re.search(r'~?([\d,]+)\s+results?', body, re.I)
-    total_results = results_m.group(1).replace(',', '') if results_m else "?"
+    results_m = re.search(r"~?([\d,]+)\s+results?", body, re.I)
+    total_results = results_m.group(1).replace(",", "") if results_m else "?"
     print(f"  [INFO] ~{total_results} результатов на странице", flush=True)
 
     # Парсим карточки
@@ -221,28 +224,27 @@ async def main():
     deduped.sort(key=lambda x: (x.get("scaleScore", 0), x.get("copies", 1)), reverse=True)
 
     # Выводим топ скейлеров
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print(f"  ВИДЕО GH/Aviator — {len(deduped)} уникальных (топ по scale score)")
-    print("="*70)
+    print("=" * 70)
     for i, c in enumerate(deduped[:25], 1):
-        score = c.get('scaleScore', 0)
-        copies = c.get('copies', 1)
-        days = c.get('durationDays', 0)
-        print(f"\n[{i:02d}] {c.get('advertiser','?')[:45]}")
-        print(f"     LibID: {c.get('libraryId','')}  |  копий: {copies}  |  дней: {days}  |  score: {score}")
-        print(f"     дата: {c.get('dateRange','')}  |  статус: {c.get('status','')}")
-        txt = c.get('primaryText', '')[:180].replace('\n', ' ')
+        score = c.get("scaleScore", 0)
+        copies = c.get("copies", 1)
+        days = c.get("durationDays", 0)
+        print(f"\n[{i:02d}] {c.get('advertiser', '?')[:45]}")
+        print(
+            f"     LibID: {c.get('libraryId', '')}  |  копий: {copies}  |  дней: {days}  |  score: {score}"
+        )
+        print(f"     дата: {c.get('dateRange', '')}  |  статус: {c.get('status', '')}")
+        txt = c.get("primaryText", "")[:180].replace("\n", " ")
         if txt:
             print(f"     TEXT: {txt}")
-        print(f"     query: {c.get('query','')}")
+        print(f"     query: {c.get('query', '')}")
 
     # Сохраняем JSON
     ts = _ts()
     out_path = OUT_DIR / f"gh_video_recon_{ts}.json"
-    out_path.write_text(
-        json.dumps(deduped, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
+    out_path.write_text(json.dumps(deduped, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n[SAVED] {out_path}", flush=True)
 
     return deduped

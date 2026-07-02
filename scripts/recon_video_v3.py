@@ -54,19 +54,59 @@ QUERIES_V3 = [
 ]
 
 GAMBLING_KW = [
-    "aviator", "crash", "bet", "jackpot", "win", "momo", "sportybet",
-    "bangbet", "betika", "1xbet", "mostbet", "pawa", "betway", "spribe",
-    "flew away", "cashout", "multiplier", "stake", "ghana", "mobile money",
-    "mtn", "deposit", "withdraw", "lucky", "odds", "casino", "slot",
-    "bonus", "promo",
+    "aviator",
+    "crash",
+    "bet",
+    "jackpot",
+    "win",
+    "momo",
+    "sportybet",
+    "bangbet",
+    "betika",
+    "1xbet",
+    "mostbet",
+    "pawa",
+    "betway",
+    "spribe",
+    "flew away",
+    "cashout",
+    "multiplier",
+    "stake",
+    "ghana",
+    "mobile money",
+    "mtn",
+    "deposit",
+    "withdraw",
+    "lucky",
+    "odds",
+    "casino",
+    "slot",
+    "bonus",
+    "promo",
 ]
 
 NOISE_KW = [
-    "content creator.com", "newcastle united", "character.ai", "meta for developers",
-    "betway scores", "betconstruct", "goal africa", "pubg mobile",
-    "psg - paris saint", "xiaomi", "great wall motor", "leilo", "mob cooking",
-    "holy quran", "alpha books", "satellite view", "translator",
-    "share location", "gps camera", "ai photo", "smart translator",
+    "content creator.com",
+    "newcastle united",
+    "character.ai",
+    "meta for developers",
+    "betway scores",
+    "betconstruct",
+    "goal africa",
+    "pubg mobile",
+    "psg - paris saint",
+    "xiaomi",
+    "great wall motor",
+    "leilo",
+    "mob cooking",
+    "holy quran",
+    "alpha books",
+    "satellite view",
+    "translator",
+    "share location",
+    "gps camera",
+    "ai photo",
+    "smart translator",
 ]
 
 
@@ -187,10 +227,13 @@ async def try_download(url: str, out_path: Path, timeout: int = 25) -> bool:
         return False
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
-            r = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-                "Referer": "https://www.facebook.com/",
-            })
+            r = await client.get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                    "Referer": "https://www.facebook.com/",
+                },
+            )
             if r.status_code == 200 and len(r.content) > 2000:
                 out_path.write_bytes(r.content)
                 return True
@@ -202,10 +245,18 @@ async def try_download(url: str, out_path: Path, timeout: int = 25) -> bool:
 def ffprobe_info(mp4_path: Path) -> dict:
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries",
-             "format=duration:stream=width,height,codec_name",
-             "-of", "json", str(mp4_path)],
-            capture_output=True, timeout=15,
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration:stream=width,height,codec_name",
+                "-of",
+                "json",
+                str(mp4_path),
+            ],
+            capture_output=True,
+            timeout=15,
         )
         data = json.loads(result.stdout)
         duration = float(data.get("format", {}).get("duration", 0))
@@ -226,7 +277,8 @@ def run_ffmpeg_frames(mp4_path: Path, frames_subdir: Path, fps: float = 0.5) -> 
     try:
         subprocess.run(
             ["ffmpeg", "-y", "-i", str(mp4_path), "-vf", f"fps={fps}", "-q:v", "3", pattern],
-            capture_output=True, timeout=60,
+            capture_output=True,
+            timeout=60,
         )
         return sorted(frames_subdir.glob("frame_*.jpg"))
     except Exception as e:
@@ -267,7 +319,9 @@ async def scrape_one(page, geo: str, query: str) -> dict:
         for c in cards:
             c["query"] = query
             c["duration_days"] = parse_date_days(c.get("startDate", ""))
-        print(f"  [OK] '{query}': {len(cards)} ID-карточек, {len(media)} медиа-элементов", flush=True)
+        print(
+            f"  [OK] '{query}': {len(cards)} ID-карточек, {len(media)} медиа-элементов", flush=True
+        )
         return {"cards": cards, "media": media, "query": query}
     except Exception as e:
         print(f"  [ERROR] evaluate: {e}", flush=True)
@@ -275,25 +329,34 @@ async def scrape_one(page, geo: str, query: str) -> dict:
     # Полный fallback — text-parse
     try:
         body = await page.evaluate("() => document.body.innerText || ''")
-        ids = re.findall(r'Library ID:\s*(\d+)', body)
-        copies_all = re.findall(r'(\d+)\s+ads?\s+use this creative', body, re.I)
-        dates_all = re.findall(r'(\d{1,2}\s+\w+\s+\d{4})\s*[-–]\s*(\d{1,2}\s+\w+\s+\d{4}|Present)', body, re.I)
-        print(f"  [FALLBACK] IDs={ids[:5]}, copies={copies_all[:5]}, dates={dates_all[:3]}", flush=True)
+        ids = re.findall(r"Library ID:\s*(\d+)", body)
+        copies_all = re.findall(r"(\d+)\s+ads?\s+use this creative", body, re.I)
+        dates_all = re.findall(
+            r"(\d{1,2}\s+\w+\s+\d{4})\s*[-–]\s*(\d{1,2}\s+\w+\s+\d{4}|Present)", body, re.I
+        )
+        print(
+            f"  [FALLBACK] IDs={ids[:5]}, copies={copies_all[:5]}, dates={dates_all[:3]}",
+            flush=True,
+        )
         cards = []
         for i, lid in enumerate(ids[:20]):
-            cards.append({
-                "libraryId": lid,
-                "dateRange": f"{dates_all[i][0]} - {dates_all[i][1]}" if i < len(dates_all) else "",
-                "startDate": dates_all[i][0] if i < len(dates_all) else "",
-                "endDate": dates_all[i][1] if i < len(dates_all) else "",
-                "copies": int(copies_all[i]) if i < len(copies_all) else 1,
-                "status": "unknown",
-                "isDisabled": False,
-                "adText": "",
-                "blockText": "",
-                "query": query,
-                "duration_days": parse_date_days(dates_all[i][0] if i < len(dates_all) else ""),
-            })
+            cards.append(
+                {
+                    "libraryId": lid,
+                    "dateRange": f"{dates_all[i][0]} - {dates_all[i][1]}"
+                    if i < len(dates_all)
+                    else "",
+                    "startDate": dates_all[i][0] if i < len(dates_all) else "",
+                    "endDate": dates_all[i][1] if i < len(dates_all) else "",
+                    "copies": int(copies_all[i]) if i < len(copies_all) else 1,
+                    "status": "unknown",
+                    "isDisabled": False,
+                    "adText": "",
+                    "blockText": "",
+                    "query": query,
+                    "duration_days": parse_date_days(dates_all[i][0] if i < len(dates_all) else ""),
+                }
+            )
         return {"cards": cards, "media": [], "query": query}
     except Exception as e2:
         print(f"  [ERROR] fallback: {e2}", flush=True)
@@ -352,6 +415,7 @@ async def main(download: bool = True):
 
     # Сортировка: scale score = copies * ln(duration_days + 2)
     import math
+
     for c in deduped:
         d = max(1, c.get("duration_days", 1))
         copies = max(1, c.get("copies", 1))
@@ -385,9 +449,9 @@ async def main(download: bool = True):
                     print(f"  [IMG] {out_path.name}", flush=True)
 
     # Сводка
-    print("\n" + "="*72)
+    print("\n" + "=" * 72)
     print(f"  GH/AVI ВИДЕО v3 — {len(deduped)} gambling-карточек")
-    print("="*72)
+    print("=" * 72)
     for i, c in enumerate(deduped[:30], 1):
         lid = c.get("libraryId", "")
         copies = c.get("copies", 1)

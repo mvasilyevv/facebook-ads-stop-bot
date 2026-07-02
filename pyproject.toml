@@ -95,6 +95,9 @@ ignore = ["E501", "B008"]
 
 [tool.ruff.lint.per-file-ignores]
 "run_*.py" = ["E402"]
+# Standalone ops-скрипты разведки (своё окружение, не прод-код): не гоняем
+# async-пуризм и строгую гигиену переменных, важна работоспособность инструмента.
+"scripts/recon_*.py" = ["ASYNC109", "ASYNC240", "F841", "E741", "B904"]
 
 [tool.mypy]
 python_version = "3.12"

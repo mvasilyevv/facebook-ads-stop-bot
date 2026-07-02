@@ -29,7 +29,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("videos", nargs="+", help="Пути к исходным видео (mp4/mov)")
     parser.add_argument("--offer", required=True, help="Код оффера, напр. GH_AVI")
     parser.add_argument("--copies", type=int, default=3, help="Число копий (дефолт 3)")
-    parser.add_argument("--out", default=None, help="Корневая папка (дефолт ~/Documents/FB_Agent_Creo)")
+    parser.add_argument(
+        "--out", default=None, help="Корневая папка (дефолт ~/Documents/FB_Agent_Creo)"
+    )
     parser.add_argument(
         "--no-speed",
         action="store_true",

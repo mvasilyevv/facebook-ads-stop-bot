@@ -2,7 +2,6 @@
 """Диагностика: что видит headless-браузер на FB Ad Library."""
 
 import asyncio
-import re
 from pathlib import Path
 
 PROFILE = Path("data/recon_adlib_profile")
@@ -52,7 +51,7 @@ async def main():
         fb_cookies = [c for c in cookies if "facebook.com" in c.get("domain", "")]
         print(f"[COOKIES] FB куков: {len(fb_cookies)}")
         for c in fb_cookies[:5]:
-            print(f"  {c.get('name')} = {c.get('value','')[:30]}...")
+            print(f"  {c.get('name')} = {c.get('value', '')[:30]}...")
 
         # Переходим на Ad Library
         print(f"\n[2] Идём на Ad Library: {TEST_URL}")
@@ -71,7 +70,9 @@ async def main():
         print(f"\n[PAGE BODY]\n{body2[:800]}")
 
         # Считаем article-элементы
-        art_count = await page.evaluate("() => document.querySelectorAll('[role=\"article\"]').length")
+        art_count = await page.evaluate(
+            "() => document.querySelectorAll('[role=\"article\"]').length"
+        )
         print(f"\n[ARTICLES] role=article: {art_count}")
 
         # Смотрим URL после редиректов

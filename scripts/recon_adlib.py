@@ -19,7 +19,6 @@ import argparse
 import asyncio
 import json
 import re
-import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,9 +45,15 @@ DEFAULT_QUERIES_GH = [
 
 # Шум — B2B, predictor-скам, технические страницы
 NOISE_PATTERNS = [
-    "b2b", "igaming provider", "predictor app", "predictor hack",
-    "signal group", "hack algorithm", "predictor signal",
-    "aviator predictor", "crash predictor",
+    "b2b",
+    "igaming provider",
+    "predictor app",
+    "predictor hack",
+    "signal group",
+    "hack algorithm",
+    "predictor signal",
+    "aviator predictor",
+    "crash predictor",
 ]
 
 DEFAULT_LIMIT_PER_QUERY = 8
@@ -192,8 +197,10 @@ async def scrape_query(page, geo: str, query: str, limit: int) -> list[AdCard]:
 
     # Попытка раскрыть «See more» для полного текста
     try:
-        see_more = await page.query_selector_all('[role="button"][aria-label*="See more"], [aria-label*="see more"]')
-        for btn in see_more[:limit * 2]:
+        see_more = await page.query_selector_all(
+            '[role="button"][aria-label*="See more"], [aria-label*="see more"]'
+        )
+        for btn in see_more[: limit * 2]:
             try:
                 await btn.click(timeout=1500)
                 await asyncio.sleep(0.2)
@@ -229,16 +236,18 @@ async def scrape_query(page, geo: str, query: str, limit: int) -> list[AdCard]:
             chunks = [c.strip() for c in re.split(r"\n{3,}", body) if len(c.strip()) > 40]
             if chunks:
                 combined = "\n\n---\n\n".join(chunks[:20])
-                cards.append(AdCard(
-                    query=query,
-                    advertiser="(page_text_fallback)",
-                    primary_text=combined[:2500],
-                    headline="",
-                    description="",
-                    cta="",
-                    card_index=0,
-                    url=url,
-                ))
+                cards.append(
+                    AdCard(
+                        query=query,
+                        advertiser="(page_text_fallback)",
+                        primary_text=combined[:2500],
+                        headline="",
+                        description="",
+                        cta="",
+                        card_index=0,
+                        url=url,
+                    )
+                )
                 print("  [INFO] используем page_text_fallback", flush=True)
         except Exception:
             pass
@@ -275,7 +284,9 @@ async def run_all(geo: str, queries: list[str], limit: int, profile: Path) -> li
 
         # Проверяем FB-сессию
         try:
-            await page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=20_000)
+            await page.goto(
+                "https://www.facebook.com/", wait_until="domcontentloaded", timeout=20_000
+            )
             await asyncio.sleep(2)
             body_text = await page.evaluate("() => document.body.innerText || ''")
             if re.search(r"log in to facebook|create new account", body_text[:1500], re.I):
@@ -339,10 +350,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Recon FB Ad Library (Playwright, headless)")
     parser.add_argument("--geo", default="GH", help="код страны (GH, KE, ...)")
     parser.add_argument(
-        "--query", "--queries", default="",
+        "--query",
+        "--queries",
+        default="",
         help="Запросы через запятую (пусто = дефолт для GH)",
     )
-    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT_PER_QUERY, help="Карточек на запрос")
+    parser.add_argument(
+        "--limit", type=int, default=DEFAULT_LIMIT_PER_QUERY, help="Карточек на запрос"
+    )
     parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE, help="Путь к профилю")
     args = parser.parse_args()
 
@@ -363,7 +378,9 @@ def main() -> None:
 
     ts = _ts()
     out_json = OUT_DIR / f"gh_avi_adlib_{ts}.json"
-    out_json.write_text(json.dumps([asdict(c) for c in cards], ensure_ascii=False, indent=2), encoding="utf-8")
+    out_json.write_text(
+        json.dumps([asdict(c) for c in cards], ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     print(f"[SAVED] {out_json}")
 
 

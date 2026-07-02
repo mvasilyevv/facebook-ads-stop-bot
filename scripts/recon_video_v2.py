@@ -15,10 +15,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import re
 import subprocess
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -60,21 +58,53 @@ QUERIES = [
     "crash game ghana",
 ]
 
-LIMIT_PER_QUERY = 12   # карточек на запрос
+LIMIT_PER_QUERY = 12  # карточек на запрос
 
 # Ключевые слова гемблинга — фильтровать чужой шум
 GAMBLING_KEYWORDS = [
-    "aviator", "crash", "bet", "jackpot", "win", "momo", "sportybet",
-    "bangbet", "betika", "1xbet", "mostbet", "pawa", "betway", "spribe",
-    "flew away", "cashout", "multiplier", "stake", "ghana", "mobile money",
-    "mtn", "deposit", "withdraw",
+    "aviator",
+    "crash",
+    "bet",
+    "jackpot",
+    "win",
+    "momo",
+    "sportybet",
+    "bangbet",
+    "betika",
+    "1xbet",
+    "mostbet",
+    "pawa",
+    "betway",
+    "spribe",
+    "flew away",
+    "cashout",
+    "multiplier",
+    "stake",
+    "ghana",
+    "mobile money",
+    "mtn",
+    "deposit",
+    "withdraw",
 ]
 # Явный шум (нерелевантные рекламодатели)
 NOISE_ADVERTISERS = [
-    "content creator", "newcastle united", "character.ai", "meta for developers",
-    "betway scores", "betconstruct", "goal africa", "pub g", "pubg",
-    "psg", "paris saint", "xiaomi", "great wall motor", "leilo",
-    "alpha books", "mob cooking", "holy quran",
+    "content creator",
+    "newcastle united",
+    "character.ai",
+    "meta for developers",
+    "betway scores",
+    "betconstruct",
+    "goal africa",
+    "pub g",
+    "pubg",
+    "psg",
+    "paris saint",
+    "xiaomi",
+    "great wall motor",
+    "leilo",
+    "alpha books",
+    "mob cooking",
+    "holy quran",
 ]
 
 
@@ -249,9 +279,14 @@ def run_ffmpeg_frames(mp4_path: Path, frames_subdir: Path, fps: float = 1.0) -> 
     frames_subdir.mkdir(parents=True, exist_ok=True)
     pattern = str(frames_subdir / "frame_%02d.jpg")
     cmd = [
-        "ffmpeg", "-y", "-i", str(mp4_path),
-        "-vf", f"fps={fps}",
-        "-q:v", "3",
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(mp4_path),
+        "-vf",
+        f"fps={fps}",
+        "-q:v",
+        "3",
         pattern,
     ]
     try:
@@ -267,10 +302,18 @@ def ffprobe_info(mp4_path: Path) -> dict:
     """Извлекает длительность и разрешение через ffprobe."""
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries",
-             "format=duration:stream=width,height,codec_name",
-             "-of", "json", str(mp4_path)],
-            capture_output=True, timeout=15,
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration:stream=width,height,codec_name",
+                "-of",
+                "json",
+                str(mp4_path),
+            ],
+            capture_output=True,
+            timeout=15,
         )
         data = json.loads(result.stdout)
         duration = float(data.get("format", {}).get("duration", 0))
@@ -311,10 +354,9 @@ async def scrape_query(page, geo: str, query: str, limit: int) -> list[dict]:
     # Раскрываем «See more»
     try:
         btns = await page.query_selector_all(
-            '[aria-label*="See more"], [aria-label*="see more"], '
-            '[data-ad-preview="See more"]'
+            '[aria-label*="See more"], [aria-label*="see more"], [data-ad-preview="See more"]'
         )
-        for btn in btns[:limit * 3]:
+        for btn in btns[: limit * 3]:
             try:
                 await btn.click(timeout=1000)
                 await asyncio.sleep(0.1)
@@ -335,32 +377,36 @@ async def scrape_query(page, geo: str, query: str, limit: int) -> list[dict]:
     # Fallback: text-parse
     try:
         body = await page.evaluate("() => document.body.innerText || ''")
-        ids = re.findall(r'Library ID:\s*(\d+)', body)
-        copies_all = re.findall(r'(\d+)\s+ads?\s+use this creative', body, re.I)
-        dates = re.findall(r'(\d{1,2}\s+\w+\s+\d{4})\s*[-–]\s*(\d{1,2}\s+\w+\s+\d{4}|Present)', body, re.I)
+        ids = re.findall(r"Library ID:\s*(\d+)", body)
+        copies_all = re.findall(r"(\d+)\s+ads?\s+use this creative", body, re.I)
+        dates = re.findall(
+            r"(\d{1,2}\s+\w+\s+\d{4})\s*[-–]\s*(\d{1,2}\s+\w+\s+\d{4}|Present)", body, re.I
+        )
         print(f"  [FALLBACK] IDs={ids[:5]}, copies={copies_all[:5]}", flush=True)
         results = []
         for i, lid in enumerate(ids[:limit]):
-            results.append({
-                "query": query,
-                "idx": i,
-                "libraryId": lid,
-                "dateRange": f"{dates[i][0]} - {dates[i][1]}" if i < len(dates) else "",
-                "startDateRaw": dates[i][0] if i < len(dates) else "",
-                "endDateRaw": dates[i][1] if i < len(dates) else "",
-                "copies": int(copies_all[i]) if i < len(copies_all) else 1,
-                "status": "unknown",
-                "advertiser": "(fallback)",
-                "primaryText": "",
-                "headline": "",
-                "platforms": [],
-                "videoSrc": "",
-                "previewSrc": "",
-                "destination": "unknown",
-                "duration": "",
-                "textLines": [],
-                "_fallback": True,
-            })
+            results.append(
+                {
+                    "query": query,
+                    "idx": i,
+                    "libraryId": lid,
+                    "dateRange": f"{dates[i][0]} - {dates[i][1]}" if i < len(dates) else "",
+                    "startDateRaw": dates[i][0] if i < len(dates) else "",
+                    "endDateRaw": dates[i][1] if i < len(dates) else "",
+                    "copies": int(copies_all[i]) if i < len(copies_all) else 1,
+                    "status": "unknown",
+                    "advertiser": "(fallback)",
+                    "primaryText": "",
+                    "headline": "",
+                    "platforms": [],
+                    "videoSrc": "",
+                    "previewSrc": "",
+                    "destination": "unknown",
+                    "duration": "",
+                    "textLines": [],
+                    "_fallback": True,
+                }
+            )
         return results
     except Exception as e2:
         print(f"  [ERROR] fallback: {e2}", flush=True)
@@ -396,11 +442,16 @@ async def main(download: bool = True):
 
         # Проверяем FB-сессию
         try:
-            await page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=25_000)
+            await page.goto(
+                "https://www.facebook.com/", wait_until="domcontentloaded", timeout=25_000
+            )
             await asyncio.sleep(2.5)
             body = await page.evaluate("() => document.body.innerText || ''")
             logged_in = not re.search(r"log in to facebook|create new account", body[:2000], re.I)
-            print(f"[INFO] FB session: {'ACTIVE' if logged_in else 'NOT LOGGED IN — меньше данных'}", flush=True)
+            print(
+                f"[INFO] FB session: {'ACTIVE' if logged_in else 'NOT LOGGED IN — меньше данных'}",
+                flush=True,
+            )
         except Exception as e:
             print(f"[WARN] FB check: {e}", flush=True)
 
@@ -439,7 +490,7 @@ async def main(download: bool = True):
         print("\n[DOWNLOAD] скачиваем медиа для топ-20 карточек...", flush=True)
         for c in deduped[:20]:
             lid = c.get("libraryId", f"card_{c.get('idx', 0)}")
-            adv = re.sub(r'[^a-z0-9]', '', (c.get("advertiser") or "unknown").lower())[:15]
+            adv = re.sub(r"[^a-z0-9]", "", (c.get("advertiser") or "unknown").lower())[:15]
             prefix = f"{adv}_{lid}"
 
             # Постер
@@ -480,9 +531,9 @@ async def main(download: bool = True):
                     c["local_mp4"] = ""
 
     # Печатаем сводку
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print(f"  GH/AVI ВИДЕО-СКЕЙЛЕРЫ v2 — {len(deduped)} карточек")
-    print("="*70)
+    print("=" * 70)
     for i, c in enumerate(deduped[:25], 1):
         adv = (c.get("advertiser") or "?")[:50]
         lid = c.get("libraryId", "")

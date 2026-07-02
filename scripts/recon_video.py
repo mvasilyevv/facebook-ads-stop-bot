@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -178,7 +177,7 @@ async def scrape_video_query(page, geo: str, query: str, limit: int) -> list[dic
     # Раскрываем «See more»
     try:
         btns = await page.query_selector_all('[aria-label*="See more"], [aria-label*="see more"]')
-        for btn in btns[:limit * 2]:
+        for btn in btns[: limit * 2]:
             try:
                 await btn.click(timeout=1000)
                 await asyncio.sleep(0.15)
@@ -201,30 +200,34 @@ async def scrape_video_query(page, geo: str, query: str, limit: int) -> list[dic
     try:
         body = await page.evaluate("() => document.body.innerText || ''")
         # Ищем Library ID-ы и даты в тексте
-        ids = re.findall(r'Library ID:\s*(\d+)', body)
-        dates = re.findall(r'(\d{1,2}\s+\w+\s+\d{4})\s*[-–]\s*(\d{1,2}\s+\w+\s+\d{4}|Present)', body, re.I)
-        copies_all = re.findall(r'(\d+)\s+ads?\s+use this creative', body, re.I)
+        ids = re.findall(r"Library ID:\s*(\d+)", body)
+        dates = re.findall(
+            r"(\d{1,2}\s+\w+\s+\d{4})\s*[-–]\s*(\d{1,2}\s+\w+\s+\d{4}|Present)", body, re.I
+        )
+        copies_all = re.findall(r"(\d+)\s+ads?\s+use this creative", body, re.I)
         print(f"  [FALLBACK] IDs={ids[:5]}, dates={dates[:3]}, copies={copies_all[:5]}", flush=True)
-        return [{
-            "query": query,
-            "idx": 0,
-            "libraryId": ids[0] if ids else "",
-            "dateRange": f"{dates[0][0]} - {dates[0][1]}" if dates else "",
-            "copies": int(copies_all[0]) if copies_all else 1,
-            "status": "unknown",
-            "advertiser": "(fallback)",
-            "primaryText": body[:2000],
-            "headline": "",
-            "platforms": [],
-            "hasVideo": True,
-            "videoSrc": "",
-            "previewImg": "",
-            "textLines": [],
-            "_fallback": True,
-            "_all_ids": ids[:10],
-            "_all_copies": [int(x) for x in copies_all[:10]],
-            "_all_dates": [f"{d[0]} - {d[1]}" for d in dates[:10]],
-        }]
+        return [
+            {
+                "query": query,
+                "idx": 0,
+                "libraryId": ids[0] if ids else "",
+                "dateRange": f"{dates[0][0]} - {dates[0][1]}" if dates else "",
+                "copies": int(copies_all[0]) if copies_all else 1,
+                "status": "unknown",
+                "advertiser": "(fallback)",
+                "primaryText": body[:2000],
+                "headline": "",
+                "platforms": [],
+                "hasVideo": True,
+                "videoSrc": "",
+                "previewImg": "",
+                "textLines": [],
+                "_fallback": True,
+                "_all_ids": ids[:10],
+                "_all_copies": [int(x) for x in copies_all[:10]],
+                "_all_dates": [f"{d[0]} - {d[1]}" for d in dates[:10]],
+            }
+        ]
     except Exception as e2:
         print(f"  [ERROR] fallback: {e2}", flush=True)
         return []
@@ -257,11 +260,15 @@ async def main():
 
         # Проверяем сессию FB
         try:
-            await page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=25_000)
+            await page.goto(
+                "https://www.facebook.com/", wait_until="domcontentloaded", timeout=25_000
+            )
             await asyncio.sleep(2)
             body = await page.evaluate("() => document.body.innerText || ''")
             logged_in = not re.search(r"log in to facebook|create new account", body[:1500], re.I)
-            print(f"[INFO] FB session: {'ACTIVE ✓' if logged_in else 'NOT LOGGED IN ✗'}", flush=True)
+            print(
+                f"[INFO] FB session: {'ACTIVE ✓' if logged_in else 'NOT LOGGED IN ✗'}", flush=True
+            )
         except Exception as e:
             print(f"[WARN] FB check: {e}", flush=True)
             logged_in = False
@@ -293,17 +300,19 @@ async def main():
     print(f"\n[RESULT] всего={len(all_cards)}, после дедупа={len(deduped)}", flush=True)
 
     # Печатаем топ-скейлеров
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("  ТОП ВИДЕО-СКЕЙЛЕРЫ (сортировка по копиям)")
-    print("="*70)
+    print("=" * 70)
     for i, c in enumerate(deduped[:20], 1):
-        print(f"\n[{i:02d}] {c.get('advertiser','?')[:50]}")
-        print(f"     ID: {c.get('libraryId','')}  |  копий: {c.get('copies',1)}  |  дата: {c.get('dateRange','')}")
-        print(f"     query: {c.get('query','')}  |  статус: {c.get('status','')}")
-        txt = c.get('primaryText', '')[:200].replace('\n', ' ')
+        print(f"\n[{i:02d}] {c.get('advertiser', '?')[:50]}")
+        print(
+            f"     ID: {c.get('libraryId', '')}  |  копий: {c.get('copies', 1)}  |  дата: {c.get('dateRange', '')}"
+        )
+        print(f"     query: {c.get('query', '')}  |  статус: {c.get('status', '')}")
+        txt = c.get("primaryText", "")[:200].replace("\n", " ")
         if txt:
             print(f"     TEXT: {txt}")
-        hl = c.get('headline', '')
+        hl = c.get("headline", "")
         if hl:
             print(f"     HL:   {hl}")
 
