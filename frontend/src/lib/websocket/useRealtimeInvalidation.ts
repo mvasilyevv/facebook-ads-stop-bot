@@ -36,6 +36,10 @@ export function useRealtimeInvalidation(): DashboardSocketState {
         case "task_changed":
           qc.invalidateQueries({ queryKey: ["dashboard"] });
           qc.invalidateQueries({ queryKey: ["tasks"] });
+          // meta_api_mutation (pause_ad/activate_ad) — тоже task_queue-задача (H-8):
+          // без этого таблица /ads и AdDrawer показывали устаревший FSM-статус
+          // после реального pause/activate через meta_api_worker до ручного рефреша.
+          qc.invalidateQueries({ queryKey: ["ads"] });
           // campaign_create — тоже task_queue-задача (M10): без этого история
           // заливов (CampaignRunsHistory) не обновлялась live при смене статуса.
           qc.invalidateQueries({ queryKey: ["campaigns", "runs"] });

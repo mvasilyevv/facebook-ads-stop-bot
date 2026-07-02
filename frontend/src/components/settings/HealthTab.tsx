@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { useHealthDetails, useObserverStatus } from "@/lib/api/settings";
-import { formatRelativeTime, formatDuration } from "@fb/shared";
+import { formatRelativeTime, formatDuration, type HealthDetails } from "@fb/shared";
 import { RefreshCw } from "lucide-react";
 
 /** Цвет вердикта → Badge variant. */
@@ -19,6 +19,23 @@ function verdictVariant(v: string): "success" | "warning" | "stop" {
   if (v === "HEALTHY") return "success";
   if (v === "DEGRADED") return "warning";
   return "stop";
+}
+
+/** Тип статуса канала авто-стопа (probe из health_watchdog). */
+type MetaApiChannelStatus = NonNullable<HealthDetails["meta_api_channel"]>;
+
+/** ONLINE/DEGRADED/UNKNOWN → Badge variant. */
+function metaChannelVariant(status: MetaApiChannelStatus["status"]): "success" | "stop" | "neutral" {
+  if (status === "ONLINE") return "success";
+  if (status === "DEGRADED") return "stop";
+  return "neutral";
+}
+
+/** Пояснение под статусом канала — по каждому из трёх состояний. */
+function metaChannelDescription(status: MetaApiChannelStatus["status"]): string {
+  if (status === "ONLINE") return "Реальный запрос к Marketing API прошёл успешно.";
+  if (status === "DEGRADED") return "Канал недоступен: сеть не отвечает или токен протух. Авто-стоп объявлений может не сработать.";
+  return "Нет данных прободера — health_watchdog ещё не проверял канал или ключ протух.";
 }
 
 /** Читаемое имя воркера. */
@@ -66,6 +83,7 @@ export const HealthTab: FC = () => {
 
   const verdict = data?.overall ?? "CRITICAL";
   const workers = data?.workers ?? [];
+  const metaChannel = data?.meta_api_channel ?? null;
 
   const onlineCount = workers.filter((w) => w.status === "ONLINE").length;
   const offlineCount = workers.filter((w) => w.status === "OFFLINE").length;
@@ -105,6 +123,40 @@ export const HealthTab: FC = () => {
             />
           </Button>
         </div>
+      </Card>
+
+      {/* Канал авто-стопа (Marketing API) — проактивный probe health_watchdog.
+          Инцидент 01.07: остальной Health был зелёным, а канал авто-стопа молчал. */}
+      <Card eyebrow="Канал авто-стопа" padded>
+        {metaChannel ? (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[13px] text-bg-10">Статус</span>
+              <Badge
+                variant={metaChannelVariant(metaChannel.status)}
+                size="sm"
+                aria-label={`Канал авто-стопа: ${metaChannel.status}`}
+              >
+                {metaChannel.status}
+              </Badge>
+            </div>
+            <div className="text-[11px] text-bg-8 font-display">
+              {metaChannelDescription(metaChannel.status)}
+            </div>
+            {metaChannel.checked_at && (
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] text-bg-10">Проверено</span>
+                <span className="font-display text-[12px] text-bg-9">
+                  {formatRelativeTime(metaChannel.checked_at)}
+                </span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-[11px] text-bg-8 font-display">
+            Нет данных прободера — health_watchdog ещё не проверял канал.
+          </div>
+        )}
       </Card>
 
       {/* Observer Runtime (раньше был отдельный таб Workers — слит сюда) */}
