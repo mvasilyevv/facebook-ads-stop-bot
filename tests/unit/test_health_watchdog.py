@@ -418,3 +418,214 @@ async def test_check_meta_api_channel_alerts_when_scanning_on_and_down(monkeypat
         _Client(), redis, engine=None, now=datetime(2026, 1, 1, tzinfo=timezone.utc)
     )
     assert sent is True  # при включённом сканировании реальный отказ → CRITICAL
+
+
+# ====================== сторожок «тени отчётности Meta»: check_shadow_spend ======================
+
+
+class _ShadowRedis:
+    """Fake Redis: строки (get/set/delete) + список снимков (lpush/lrange/ltrim/expire)."""
+
+    def __init__(self, seed: dict[str, str] | None = None) -> None:
+        self.store: dict[str, str] = dict(seed or {})
+        self.lists: dict[str, list[str]] = {}
+        self.deleted: list[str] = []
+
+    async def get(self, key):
+        return self.store.get(key)
+
+    async def set(self, key, value, ex=None, nx=False):
+        if nx and key in self.store:
+            return None
+        self.store[key] = value
+        return True
+
+    async def delete(self, key):
+        self.deleted.append(key)
+        self.store.pop(key, None)
+        self.lists.pop(key, None)
+        return 1
+
+    async def lpush(self, key, value):
+        self.lists.setdefault(key, []).insert(0, value)
+        return len(self.lists[key])
+
+    async def lrange(self, key, start, end):
+        items = self.lists.get(key, [])
+        return items[start : end + 1]
+
+    async def ltrim(self, key, start, end):
+        if key in self.lists:
+            self.lists[key] = self.lists[key][start : end + 1]
+        return True
+
+    async def expire(self, key, ttl):
+        return True
+
+
+class _ShadowMetaClient:
+    """Fake MetaApiClient: execute_graph_call отдаёт amount_spent, флаг вызванности."""
+
+    def __init__(self, amount_spent: str = "1030") -> None:
+        self.amount_spent = amount_spent
+        self.called = False
+
+    async def execute_graph_call(self, **kwargs):
+        self.called = True
+        return {"amount_spent": self.amount_spent}
+
+
+def _fresh_runtime(now: datetime) -> str:
+    """JSON observer:runtime со свежим updated_at (гейт сторожка проходит)."""
+    return json.dumps({"worker_status": "scanning", "updated_at": now.isoformat()})
+
+
+# Гейт: сканирование выключено → Graph-вызов НЕ делается, алерта нет
+async def test_check_shadow_spend_skips_when_scanning_off(monkeypatch) -> None:
+    import apps.health_watchdog.main as hw
+    from core.observer import queries as obs_queries
+
+    async def _fake_config(engine):
+        return {"is_scanning_enabled": False}
+
+    monkeypatch.setattr(obs_queries, "load_observer_config", _fake_config)
+
+    now = datetime(2026, 7, 3, 8, 40, tzinfo=timezone.utc)
+    redis = _ShadowRedis(seed={hw.OBSERVER_RUNTIME_KEY: _fresh_runtime(now)})
+    client = _ShadowMetaClient()
+
+    sent = await hw.check_shadow_spend(client, redis, engine=None, now=now)
+
+    assert sent is False
+    assert client.called is False  # биллинг даже не запрашивался (гейт закрыт)
+
+
+# Гейт: сканирование включено, но observer:runtime устарел → Graph не зовётся (отчётность стоит по определению)
+async def test_check_shadow_spend_skips_when_observer_stale(monkeypatch) -> None:
+    import apps.health_watchdog.main as hw
+    from core.observer import queries as obs_queries
+
+    async def _fake_config(engine):
+        return {"is_scanning_enabled": True}
+
+    monkeypatch.setattr(obs_queries, "load_observer_config", _fake_config)
+
+    now = datetime(2026, 7, 3, 8, 40, tzinfo=timezone.utc)
+    stale = json.dumps(
+        {"worker_status": "idle", "updated_at": (now - timedelta(minutes=20)).isoformat()}
+    )
+    redis = _ShadowRedis(seed={hw.OBSERVER_RUNTIME_KEY: stale})
+    client = _ShadowMetaClient()
+
+    sent = await hw.check_shadow_spend(client, redis, engine=None, now=now)
+
+    assert sent is False
+    assert client.called is False
+
+
+# Вердикт: биллинг растёт (+30¢), отчётность стоит → notify + дедуп ставится
+async def test_check_shadow_spend_alerts_on_verdict(monkeypatch) -> None:
+    import apps.health_watchdog.main as hw
+    from core.dashboard import cabinet_spend
+    from core.meta_api import account_tz
+    from core.observer import queries as obs_queries
+
+    async def _fake_config(engine):
+        return {"is_scanning_enabled": True}
+
+    async def _fake_accounts(engine):
+        return ["111222"]
+
+    async def _fake_offset_map(redis, account_ids, **kwargs):
+        return {"111222": 0.0}
+
+    # Пер-адная отчётность стоит на $5.00 (500¢) оба тика.
+    async def _fake_reported(engine, *, tz_map, default_offset, now):
+        from decimal import Decimal
+
+        return Decimal("5.00")
+
+    monkeypatch.setattr(obs_queries, "load_observer_config", _fake_config)
+    monkeypatch.setattr(account_tz, "active_account_ids", _fake_accounts)
+    monkeypatch.setattr(account_tz, "load_offset_map", _fake_offset_map)
+    monkeypatch.setattr(cabinet_spend, "current_day_spend", _fake_reported)
+
+    captured: dict[str, object] = {}
+
+    async def _fake_alert(redis_client, *, dedup_key, text, engine, ttl_seconds):
+        captured["dedup_key"] = dedup_key
+        captured["text"] = text
+        captured["ttl"] = ttl_seconds
+        return True
+
+    monkeypatch.setattr(hw, "_maybe_alert_with_dedup", _fake_alert)
+
+    t0 = datetime(2026, 7, 3, 8, 40, tzinfo=timezone.utc)
+    redis = _ShadowRedis(seed={hw.OBSERVER_RUNTIME_KEY: _fresh_runtime(t0)})
+
+    # Тик 1: биллинг 1000¢ — сэмпл записан, пары ещё нет → алерта нет.
+    client1 = _ShadowMetaClient(amount_spent="1000")
+    sent1 = await hw.check_shadow_spend(client1, redis, engine=None, now=t0)
+    assert sent1 is False
+    assert "dedup_key" not in captured
+
+    # Тик 2 (через 5 мин): биллинг 1030¢ (+30¢), отчётность стоит → тревога.
+    t1 = t0 + timedelta(seconds=300)
+    redis.store[hw.OBSERVER_RUNTIME_KEY] = _fresh_runtime(t1)
+    client2 = _ShadowMetaClient(amount_spent="1030")
+    sent2 = await hw.check_shadow_spend(client2, redis, engine=None, now=t1)
+
+    assert sent2 is True
+    assert captured["dedup_key"] == f"{hw.SHADOW_DEDUP_PREFIX}111222"
+    assert captured["ttl"] == hw.SHADOW_ALERT_DEDUP_TTL_SECONDS
+    # Money-контекст в тексте: сумма прироста и «отчётность стоит».
+    assert "0.30" in captured["text"]
+    assert "act_111222" in captured["text"]
+
+
+# Недоставка алерта (notify вернул False) → дедуп НЕ ставится (re-arm на следующий тик)
+async def test_check_shadow_spend_rearms_on_undelivered(monkeypatch) -> None:
+    import apps.health_watchdog.main as hw
+    from core.dashboard import cabinet_spend
+    from core.meta_api import account_tz
+    from core.observer import queries as obs_queries
+
+    async def _fake_config(engine):
+        return {"is_scanning_enabled": True}
+
+    async def _fake_accounts(engine):
+        return ["111222"]
+
+    async def _fake_offset_map(redis, account_ids, **kwargs):
+        return {"111222": 0.0}
+
+    async def _fake_reported(engine, *, tz_map, default_offset, now):
+        from decimal import Decimal
+
+        return Decimal("5.00")
+
+    monkeypatch.setattr(obs_queries, "load_observer_config", _fake_config)
+    monkeypatch.setattr(account_tz, "active_account_ids", _fake_accounts)
+    monkeypatch.setattr(account_tz, "load_offset_map", _fake_offset_map)
+    monkeypatch.setattr(cabinet_spend, "current_day_spend", _fake_reported)
+
+    # Реальный _maybe_alert_with_dedup, но notify_recipients падает в «не доставлено».
+    async def _fake_notify(engine, redis, *, category, text):
+        return False
+
+    monkeypatch.setattr(hw, "notify_recipients", _fake_notify)
+
+    t0 = datetime(2026, 7, 3, 8, 40, tzinfo=timezone.utc)
+    redis = _ShadowRedis(seed={hw.OBSERVER_RUNTIME_KEY: _fresh_runtime(t0)})
+
+    client1 = _ShadowMetaClient(amount_spent="1000")
+    await hw.check_shadow_spend(client1, redis, engine=None, now=t0)
+
+    t1 = t0 + timedelta(seconds=300)
+    redis.store[hw.OBSERVER_RUNTIME_KEY] = _fresh_runtime(t1)
+    client2 = _ShadowMetaClient(amount_spent="1030")
+    sent = await hw.check_shadow_spend(client2, redis, engine=None, now=t1)
+
+    assert sent is False  # не доставлено
+    # Дедуп-ключ НЕ выставлен → следующий тик повторит попытку (алерт не потерян).
+    assert f"{hw.SHADOW_DEDUP_PREFIX}111222" not in redis.store

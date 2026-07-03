@@ -33,6 +33,20 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from core.db import WORKER_ENGINE_KWARGS
+from core.meta_api.shadow_spend import (
+    DEFAULT_BILLING_MIN_DELTA_CENTS as _SHADOW_DEFAULT_BILLING_MIN,
+)
+from core.meta_api.shadow_spend import (
+    DEFAULT_REPORTED_MAX_DELTA_CENTS as _SHADOW_DEFAULT_REPORTED_MAX,
+)
+from core.meta_api.shadow_spend import (
+    DEFAULT_WINDOW_SECONDS as _SHADOW_DEFAULT_WINDOW,
+)
+from core.meta_api.shadow_spend import (
+    ShadowSample,
+    ShadowVerdict,
+    detect_shadow,
+)
 from core.pubsub import CHANNEL_HEALTH_UPDATED
 from core.telegram.worker_notify import notify_recipients
 
@@ -97,6 +111,35 @@ META_CHANNEL_DEDUP_KEY = f"{ALERT_DEDUP_PREFIX}meta_channel"
 # TTL ключа = 2× интервал: если сам прободер (watchdog) мёртв, ключ протухает и
 # health_details показывает UNKNOWN, а не залипший «healthy».
 META_CHANNEL_HEALTH_TTL_SECONDS = META_PROBE_INTERVAL_SECONDS * 2
+
+# ====================== сторожок «тени отчётности Meta» (money-смежный, alert-only) ======================
+# Замер на проде 03.07 08:31–09:40 UTC: биллинговый счётчик кабинета (amount_spent,
+# lifetime в центах) двигается РАНЬШЕ пер-адной отчётности am_tabular (первый тик 08:38
+# против 08:41, +$1.54 против +$1.25 за час) — биллинг видит «тень» открута, которую
+# пер-адные снимки ещё не показывают. Класс утренних перекрутов (18 минут нулей при
+# реальном откруте). Сторожок ловит «кабинет тратит, отчётность стоит» → CRITICAL
+# владельцу. Alert-only, без авто-паузы (безопасно включён по умолчанию).
+SHADOW_SPEND_WATCH_ENABLED = os.environ.get(
+    "SHADOW_SPEND_WATCH_ENABLED", "true"
+).strip().lower() not in ("0", "false", "no", "off")
+SHADOW_SPEND_INTERVAL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_SHADOW_SPEND_SEC", "180"))
+# Окно среза и пороги детектора (в центах). Дефолты из shadow_spend.py, но env их переопределяет.
+SHADOW_WINDOW_SECONDS = int(
+    os.environ.get("HEALTH_WATCHDOG_SHADOW_WINDOW_SEC", str(_SHADOW_DEFAULT_WINDOW))
+)
+SHADOW_BILLING_MIN_DELTA_CENTS = int(
+    os.environ.get("HEALTH_WATCHDOG_SHADOW_BILLING_MIN_CENTS", str(_SHADOW_DEFAULT_BILLING_MIN))
+)
+SHADOW_REPORTED_MAX_DELTA_CENTS = int(
+    os.environ.get("HEALTH_WATCHDOG_SHADOW_REPORTED_MAX_CENTS", str(_SHADOW_DEFAULT_REPORTED_MAX))
+)
+# Redis-лист снимков per-account: meta:shadow:{act}. Обрезаем до ~20 (ltrim), TTL 1ч.
+SHADOW_SAMPLE_LIST_PREFIX = "meta:shadow:"
+SHADOW_SAMPLE_MAX_LEN = 20
+SHADOW_SAMPLE_TTL_SECONDS = 3600
+SHADOW_DEDUP_PREFIX = f"{ALERT_DEDUP_PREFIX}shadow:"
+# Дедуп алерта: 30 минут (пока проблема жива, не спамим).
+SHADOW_ALERT_DEDUP_TTL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_SHADOW_ALERT_TTL_SEC", "1800"))
 
 
 class _MetaProbeClient(Protocol):
@@ -298,6 +341,26 @@ def build_meta_channel_alert(*, reason: str, detail: str) -> str:
     )
 
 
+def build_shadow_spend_alert(account_id: str, verdict: ShadowVerdict) -> str:
+    """CRITICAL-текст «тень отчётности Meta»: кабинет тратит, а пер-адная отчётность стоит.
+
+    Биллинг (amount_spent) вырос на billing_delta за окно, пер-адная отчётность
+    практически стоит (reported_delta ≤ допуска). Реальный открут не виден скану →
+    свежая пачка под риском перекрута. Действие оператора — проверить Ads Manager руками.
+    """
+    acct = html.escape(str(account_id))
+    billing_usd = verdict.billing_delta_cents / 100.0
+    reported_usd = verdict.reported_delta_cents / 100.0
+    minutes = max(1, verdict.window_seconds // 60)
+    return (
+        f"⚠️ <b>Тень отчётности Meta (act_{acct})</b>\n"
+        f"Биллинг +${billing_usd:.2f} за {minutes} мин, пер-адная отчётность стоит "
+        f"(Δ +${reported_usd:.2f} ≤ $0.05).\n\n"
+        "Реальный открут не виден скану — свежая пачка под риском перекрута. "
+        "Проверь Ads Manager руками."
+    )
+
+
 # ====================== Telegram алерты ======================
 
 
@@ -307,12 +370,14 @@ async def _maybe_alert_with_dedup(
     dedup_key: str,
     text: str,
     engine: AsyncEngine,
+    ttl_seconds: int = ALERT_DEDUP_TTL_SECONDS,
 ) -> bool:
     """Сначала отправляет алерт, SET NX ставит ТОЛЬКО при успешной отправке.
 
     Порядок: GET(dedup_key) → если стоит, пропускаем; иначе отправка всем recipients
     через notify_recipients → SET NX EX только при sent=True. Это гарантирует, что при
     сбое TG ключ не блокирует повторную попытку на TTL (алерт не теряется).
+    ``ttl_seconds`` — окно дедупа (дефолт 1ч; сторожок тени задаёт своё 30 мин).
     Возвращает True, если алерт был успешно отправлен и дедуп установлен.
     """
     # Дедуп-проверка: уже алертили в этом окне?
@@ -338,7 +403,7 @@ async def _maybe_alert_with_dedup(
     logger.info("алерт %s отправлен активным recipients", dedup_key)
     # Ставим дедуп только после успешной доставки
     try:
-        await redis_client.set(dedup_key, "1", ex=ALERT_DEDUP_TTL_SECONDS, nx=True)
+        await redis_client.set(dedup_key, "1", ex=ttl_seconds, nx=True)
     except Exception:  # noqa: BLE001
         logger.exception("ошибка SET дедуп-ключа %s", dedup_key)
     return True
@@ -631,6 +696,245 @@ async def check_meta_api_channel(
     )
 
 
+# ====================== сторожок «тени отчётности Meta» ======================
+
+
+async def _is_reported_side_live(
+    redis_client: redis_asyncio.Redis,
+    engine: AsyncEngine,
+    *,
+    now: datetime,
+) -> bool:
+    """Гейт сторожка: reported-сторона (пер-адная отчётность) реально работает.
+
+    Работаем ТОЛЬКО когда сканирование включено И ``observer:runtime`` свежий. Иначе
+    пер-адная отчётность стоит ПО ОПРЕДЕЛЕНИЮ (скан не крутится) → сравнение с биллингом
+    даст сплошные ложные «тени». Тот же паттерн, что meta_probe_loop проверяет
+    scanning_disabled. Ошибку чтения конфига трактуем как «не работаем» (консервативно —
+    сторожок alert-only, лишний пропуск дешевле ложного money-CRITICAL).
+    """
+    try:
+        from core.observer.queries import load_observer_config
+
+        obs_config = await load_observer_config(engine)
+        scanning_on = bool(obs_config and obs_config.get("is_scanning_enabled"))
+    except Exception:  # noqa: BLE001
+        logger.warning("shadow: не удалось прочитать observer_config — тик пропущен")
+        return False
+
+    if not scanning_on:
+        return False
+
+    try:
+        payload_json = await redis_client.get(OBSERVER_RUNTIME_KEY)
+    except Exception:  # noqa: BLE001
+        logger.warning("shadow: не удалось прочитать observer:runtime — тик пропущен")
+        return False
+
+    is_stale, _reason = check_observer_runtime_freshness(payload_json, now=now)
+    return not is_stale
+
+
+async def _fetch_billing_cents(meta_client: Any, account_id: str) -> int | None:
+    """GET act_{id}?fields=amount_spent через Vision-сессию → lifetime-спенд в центах.
+
+    None при ошибке Graph-вызова / отсутствии поля (тик пропускается, канал probe
+    мониторит канал отдельно). amount_spent Meta отдаёт строкой в минимальных единицах
+    валюты (центах) — как есть, без конвертации.
+    """
+    acct = (account_id or "").removeprefix("act_")
+    if not acct:
+        return None
+    resp = await meta_client.execute_graph_call(
+        method="GET",
+        endpoint=f"/act_{acct}",
+        query_params={"fields": "amount_spent"},
+        ad_account_id=acct,
+    )
+    raw = resp.get("amount_spent")
+    if raw is None:
+        return None
+    try:
+        return int(str(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _load_shadow_samples(
+    redis_client: redis_asyncio.Redis, account_id: str
+) -> list[ShadowSample]:
+    """Читает накопленные снимки из Redis-листа meta:shadow:{act}. Битые записи пропускает."""
+    key = f"{SHADOW_SAMPLE_LIST_PREFIX}{account_id}"
+    try:
+        raw_items = await redis_client.lrange(key, 0, SHADOW_SAMPLE_MAX_LEN - 1)
+    except Exception:  # noqa: BLE001
+        logger.warning("shadow: не удалось прочитать список %s", key)
+        return []
+    samples: list[ShadowSample] = []
+    for raw in raw_items or []:
+        try:
+            data = json.loads(raw)
+            samples.append(
+                ShadowSample(
+                    ts=datetime.fromisoformat(str(data["ts"])),
+                    billing_cents=int(data["billing_cents"]),
+                    reported_cents=int(data["reported_cents"]),
+                )
+            )
+        except (ValueError, KeyError, TypeError):
+            continue
+    return samples
+
+
+async def _push_shadow_sample(
+    redis_client: redis_asyncio.Redis, account_id: str, sample: ShadowSample
+) -> None:
+    """Кладёт снимок в голову Redis-листа, обрезает до SHADOW_SAMPLE_MAX_LEN, ставит TTL."""
+    key = f"{SHADOW_SAMPLE_LIST_PREFIX}{account_id}"
+    payload = json.dumps(
+        {
+            "ts": sample.ts.isoformat(),
+            "billing_cents": sample.billing_cents,
+            "reported_cents": sample.reported_cents,
+        },
+        ensure_ascii=False,
+    )
+    try:
+        await redis_client.lpush(key, payload)
+        await redis_client.ltrim(key, 0, SHADOW_SAMPLE_MAX_LEN - 1)
+        await redis_client.expire(key, SHADOW_SAMPLE_TTL_SECONDS)
+    except Exception:  # noqa: BLE001
+        logger.warning("shadow: не удалось записать снимок в %s", key)
+
+
+async def _check_shadow_for_account(
+    meta_client: Any,
+    redis_client: redis_asyncio.Redis,
+    engine: AsyncEngine,
+    *,
+    account_id: str,
+    tz_map: dict[str, float],
+    default_offset: float,
+    now: datetime,
+) -> bool:
+    """Один тик сторожка для одного кабинета. Возвращает True, если алерт отправлен.
+
+    Шаги: (а) биллинг act_{id}?fields=amount_spent → центы; (б) пер-адная отчётность
+    current_day_spend ×100 → центы; (в) сэмпл в Redis-лист; (г) detect_shadow по
+    накопленным; при вердикте — deduped-алерт (SET NX EX, re-arm при недоставке).
+    """
+    from core.dashboard.cabinet_spend import current_day_spend
+
+    # (а) биллинг кабинета. Ошибка Graph-вызова → warning-лог, тик пропущен (probe и так
+    # мониторит канал отдельно). LoginRequired/TokenInvalid НЕ дублируем алертом — зона probe.
+    try:
+        billing_cents = await _fetch_billing_cents(meta_client, account_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("shadow: биллинг act_%s не получен: %s", account_id, exc)
+        return False
+    if billing_cents is None:
+        logger.warning("shadow: биллинг act_%s пуст (нет amount_spent)", account_id)
+        return False
+
+    # (б) пер-адная отчётность текущих суток кабинета → центы.
+    try:
+        reported_usd = await current_day_spend(
+            engine,
+            tz_map={account_id: tz_map.get(account_id, default_offset)},
+            default_offset=default_offset,
+            now=now,
+        )
+        reported_cents = int(reported_usd * 100)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("shadow: пер-адная отчётность act_%s не посчитана: %s", account_id, exc)
+        return False
+
+    # (в) сэмпл в Redis-лист.
+    sample = ShadowSample(ts=now, billing_cents=billing_cents, reported_cents=reported_cents)
+    await _push_shadow_sample(redis_client, account_id, sample)
+
+    # (г) детект по накопленным.
+    samples = await _load_shadow_samples(redis_client, account_id)
+    dedup_key = f"{SHADOW_DEDUP_PREFIX}{account_id}"
+    verdict = detect_shadow(
+        samples,
+        window_seconds=SHADOW_WINDOW_SECONDS,
+        billing_min_delta_cents=SHADOW_BILLING_MIN_DELTA_CENTS,
+        reported_max_delta_cents=SHADOW_REPORTED_MAX_DELTA_CENTS,
+    )
+    if verdict is None:
+        # Тени нет → снимаем дедуп (re-arm): следующая тень снова даст алерт.
+        try:
+            await redis_client.delete(dedup_key)
+        except Exception:  # noqa: BLE001
+            logger.warning("shadow: не удалось снять дедуп %s", dedup_key)
+        return False
+
+    logger.error(
+        "shadow: тень отчётности act_%s — биллинг +%d¢, отчётность +%d¢ за %dс",
+        account_id,
+        verdict.billing_delta_cents,
+        verdict.reported_delta_cents,
+        verdict.window_seconds,
+    )
+    return await _maybe_alert_with_dedup(
+        redis_client,
+        dedup_key=dedup_key,
+        text=build_shadow_spend_alert(account_id, verdict),
+        engine=engine,
+        ttl_seconds=SHADOW_ALERT_DEDUP_TTL_SECONDS,
+    )
+
+
+async def check_shadow_spend(
+    meta_client: Any,
+    redis_client: redis_asyncio.Redis,
+    *,
+    engine: AsyncEngine,
+    now: datetime | None = None,
+) -> bool:
+    """Один прогон сторожка по всем активным кабинетам. Возвращает True, если был алерт.
+
+    Гейт: работает только когда сканирование включено И observer:runtime свежий (иначе
+    reported-сторона стоит по определению → ложные тени). Graph-ошибки на конкретном
+    кабинете не валят остальные (best-effort per-account).
+    """
+    now = now or datetime.now(UTC)
+
+    if not await _is_reported_side_live(redis_client, engine, now=now):
+        logger.info("shadow: сканирование выключено/observer стоит — тик пропущен")
+        return False
+
+    from core.meta_api.account_tz import (
+        DEFAULT_OFFSET_HOURS,
+        active_account_ids,
+        load_offset_map,
+    )
+
+    account_ids = await active_account_ids(engine)
+    if not account_ids:
+        return False
+    tz_map = await load_offset_map(redis_client, account_ids)
+    default_offset = next(iter(tz_map.values()), DEFAULT_OFFSET_HOURS)
+
+    alerted = False
+    for account_id in account_ids:
+        try:
+            sent = await _check_shadow_for_account(
+                meta_client,
+                redis_client,
+                engine,
+                account_id=account_id,
+                tz_map=tz_map,
+                default_offset=default_offset,
+                now=now,
+            )
+            alerted = alerted or sent
+        except Exception:  # noqa: BLE001
+            logger.exception("shadow: тик кабинета act_%s упал", account_id)
+    return alerted
+
+
 async def _publish_health_updated(
     redis_client: redis_asyncio.Redis,
     *,
@@ -773,6 +1077,38 @@ async def meta_probe_loop(
             pass
 
 
+async def shadow_spend_loop(
+    meta_client: Any,
+    redis_client: redis_asyncio.Redis,
+    *,
+    stop: asyncio.Event,
+    engine: AsyncEngine,
+    interval: int = SHADOW_SPEND_INTERVAL_SECONDS,
+) -> None:
+    """Цикл сторожка «тени отчётности Meta» раз в ``interval`` секунд (alert-only).
+
+    Ловит money-класс перекрута: биллинг кабинета (amount_spent) растёт, а пер-адная
+    отчётность (am_tabular → current_day_spend) стоит → реальный открут не виден скану.
+    Гейт check_shadow_spend работает только при включённом сканировании и свежем
+    observer:runtime. Перед первой проверкой выжидает STARTUP_GRACE_SECONDS.
+    Best-effort: ошибки не валят цикл.
+    """
+    try:
+        await asyncio.wait_for(stop.wait(), timeout=STARTUP_GRACE_SECONDS)
+    except asyncio.TimeoutError:
+        pass
+
+    while not stop.is_set():
+        try:
+            await check_shadow_spend(meta_client, redis_client, engine=engine)
+        except Exception:  # noqa: BLE001
+            logger.exception("ошибка в shadow_spend_loop")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+
+
 async def _supervised(
     name: str,
     factory: Any,
@@ -850,7 +1186,7 @@ async def main_loop(database_url: str | None = None) -> None:
     try:
         # Каждый цикл под _supervised + return_exceptions: упавший цикл
         # перезапускается, а не гасит воркер молча (инцидент 01.07).
-        await asyncio.gather(
+        loops = [
             _supervised("heartbeat_loop", lambda: heartbeat_loop(redis_client, stop), stop),
             _supervised(
                 "check_loop",
@@ -872,8 +1208,24 @@ async def main_loop(database_url: str | None = None) -> None:
                 ),
                 stop,
             ),
-            return_exceptions=True,
-        )
+        ]
+        # Сторожок «тени отчётности» — alert-only, включён по умолчанию (выключатель SHADOW_SPEND_WATCH_ENABLED).
+        if SHADOW_SPEND_WATCH_ENABLED:
+            loops.append(
+                _supervised(
+                    "shadow_spend_loop",
+                    lambda: shadow_spend_loop(
+                        meta_client,
+                        redis_client,
+                        stop=stop,
+                        engine=engine,
+                    ),
+                    stop,
+                )
+            )
+        else:
+            logger.info("shadow_spend_loop выключен (SHADOW_SPEND_WATCH_ENABLED=false)")
+        await asyncio.gather(*loops, return_exceptions=True)
     finally:
         try:
             await meta_client.close()
