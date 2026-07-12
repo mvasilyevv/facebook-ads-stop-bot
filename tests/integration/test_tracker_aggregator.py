@@ -436,3 +436,58 @@ async def test_worker_run_once_aggregates_recent(pg_engine, clean_agg) -> None:
     assert result.rows_upserted >= 1
     agg = await _get_agg(pg_engine, ad_id, "KE", now.date())
     assert agg is not None and agg["deposits"] == 1 and agg["revenue"] == Decimal("9")
+
+
+async def _set_last_run_at(pg_engine, when: datetime) -> None:
+    """Проставить system_config.tracker_aggregator_runs.last_run_at для теста catch-up."""
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO system_config (key, value, description)
+                VALUES ('tracker_aggregator_runs', CAST(:v AS JSONB), 'test')
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+                """
+            ),
+            {"v": f'{{"last_run_at": "{when.isoformat()}"}}'},
+        )
+
+
+# M-7 (аудит 2026-07-12): простой воркера > lookback через полночь UTC. Событие
+# хвоста прошлого дня (23:30) вне фикс-окна [now-2h, now], но catch-up по last_run_at
+# из аудита расширяет окно и пересчитывает вчерашний день. Раньше терялось.
+@pytest.mark.asyncio
+async def test_worker_catchup_after_downtime_across_midnight(pg_engine, clean_agg) -> None:
+    ad_id = clean_agg
+    prev_day_tail = datetime(2026, 5, 27, 23, 30, tzinfo=UTC)
+    now = datetime(2026, 5, 28, 3, 0, tzinfo=UTC)  # 3.5ч спустя, за полночью
+    await _insert_event(
+        pg_engine,
+        click_id=f"{_PREFIX}cu1",
+        fb_ad_fk=ad_id,
+        event_type="ftd",
+        revenue=Decimal("15"),
+        received_at=prev_day_tail,
+        country="GH",
+    )
+    # Воркер «лежал» с 23:00 прошлого дня → фикс-окно [01:00, 03:00] не покрывает 23:30.
+    await _set_last_run_at(pg_engine, datetime(2026, 5, 27, 23, 0, tzinfo=UTC))
+
+    await run_once(pg_engine, now=now, lookback=timedelta(hours=2))
+
+    # Вчерашний день пересчитан благодаря catch-up.
+    agg = await _get_agg(pg_engine, ad_id, "GH", prev_day_tail.date())
+    assert agg is not None, "хвост прошлого дня должен пересчитаться через catch-up по last_run_at"
+    assert agg["deposits"] == 1 and agg["revenue"] == Decimal("15")
+
+
+# Catch-up ограничен MAX_CATCHUP: last_run в далёком прошлом не тянет всю историю.
+@pytest.mark.asyncio
+async def test_worker_catchup_capped_at_max(pg_engine, clean_agg) -> None:
+    from apps.tracker_aggregator_worker.worker import MAX_CATCHUP
+
+    now = datetime(2026, 5, 28, 12, 0, tzinfo=UTC)
+    # last_run 10 дней назад — окно всё равно не глубже now - MAX_CATCHUP.
+    await _set_last_run_at(pg_engine, now - timedelta(days=10))
+    result = await run_once(pg_engine, now=now, lookback=timedelta(hours=2))
+    assert result.window_start >= now - MAX_CATCHUP
