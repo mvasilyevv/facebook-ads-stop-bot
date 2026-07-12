@@ -14,10 +14,19 @@ from core.models.base import Base, CreatedAtOnly, UUIDPrimaryKey
 
 
 class AdAutoEnableDisabled(UUIDPrimaryKey, CreatedAtOnly, Base):
-    """Метка не включать автоматически.
+    """Метка «не включать это объявление автоматически» (против авто-recovery).
 
-    Сбрасывается при cabinet_day rollover (управляется enable_recommendation_worker).
-    Retention: CASCADE через fb_ads + DELETE при rollover.
+    Постоянная: ставится через POST /dashboard/auto-enable-disabled/{fb_ad_id},
+    снимается ТОЛЬКО вручную через DELETE. enable_recommendation_worker использует
+    таблицу как статичный NOT IN фильтр.
+
+    M-12 (аудит 2026-07-12): исходный docstring обещал сброс при cabinet_day
+    rollover, но такого кода нет НИГДЕ (проверено grep'ом по воркерам) — флаг
+    живёт до ручного снятия. Контракт приведён в соответствие с реальностью;
+    авто-сброс по дню НЕ реализован намеренно (объявление, отключённое от
+    авто-recovery, не должно тихо возвращаться в него на следующий день).
+    Поле cabinet_day_started_at сохранено как аудит-отметка момента установки.
+    Retention: CASCADE через fb_ads.
     """
 
     __tablename__ = "ad_auto_enable_disabled"
@@ -27,6 +36,7 @@ class AdAutoEnableDisabled(UUIDPrimaryKey, CreatedAtOnly, Base):
         ForeignKey("fb_ads.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Момент установки флага (аудит). НЕ триггер авто-сброса — см. docstring класса.
     cabinet_day_started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
