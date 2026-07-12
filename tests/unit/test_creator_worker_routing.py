@@ -182,7 +182,7 @@ async def test_process_one_task_browser_unavailable_requeues(monkeypatch) -> Non
         # Симулируем BrowserUnavailableError из circuit-breaker
         from core.browser.circuit_breaker import CircuitOpenError
 
-        raise BrowserUnavailableError(CircuitOpenError("test"))
+        raise BrowserUnavailableError(CircuitOpenError("test", 60))
 
     monkeypatch.setattr(worker_main, "_execute_plan_stream", _boom)
     requeue_mock = AsyncMock(return_value=True)
@@ -268,3 +268,89 @@ def _complete_event(
 
 def _checkpoint_event(url: str, detail: str) -> Any:
     return _event_with("checkpoint", SimpleNamespace(url=url, detail=detail))
+
+
+# ─── Аудит 2026-07-12 (H-1): обрыв стрима после старта исполнения ─────────────
+
+
+class _FakeInterruptedClient:
+    """Fake клиент: run_plan отдаёт события, затем рвёт стрим заданной ошибкой."""
+
+    def __init__(self, events: list[Any], error: BaseException) -> None:
+        self._events = events
+        self._error = error
+
+    def run_plan(self, plan_json: str, variables_json: str):
+        return self._gen()
+
+    async def _gen(self):
+        for item in self._events:
+            yield item
+        raise self._error
+
+
+# MONEY: обрыв стрима ПОСЛЕ событий → PlanStreamInterrupted (не сырой grpc.RpcError),
+# steps_executed сохраняется для диагностики.
+@pytest.mark.asyncio
+async def test_execute_plan_stream_interrupt_after_events() -> None:
+    from apps.creator_worker.main import PlanStreamInterrupted
+
+    events = [
+        _started_event("step_a", 0),
+        _finished_event("step_a", 0),
+        _started_event("step_b", 1),
+    ]
+    client = _FakeInterruptedClient(events, grpc.RpcError())
+    with pytest.raises(PlanStreamInterrupted) as exc_info:
+        await _execute_plan_stream(client, plan_json="{}", variables_json="{}", task_id=3)
+    assert exc_info.value.steps_executed == 1
+
+
+# Ошибка ДО первого события пробрасывается как есть — retry безопасен (план не начинался).
+@pytest.mark.asyncio
+async def test_execute_plan_stream_error_before_events_propagates() -> None:
+    from core.browser.circuit_breaker import CircuitOpenError
+
+    client = _FakeInterruptedClient([], BrowserUnavailableError(CircuitOpenError("test", 60)))
+    with pytest.raises(BrowserUnavailableError):
+        await _execute_plan_stream(client, plan_json="{}", variables_json="{}", task_id=4)
+
+
+# MONEY: PlanStreamInterrupted в process_one_task → mark_failed БЕЗ requeue
+# (раньше generic grpc.RpcError уходил в requeue → повторный прогон = дубль залива).
+@pytest.mark.asyncio
+async def test_process_one_task_interrupted_stream_marks_failed_not_requeued(
+    monkeypatch,
+) -> None:
+    from apps.creator_worker.main import PlanStreamInterrupted
+
+    task = _fake_task(payload={"plan_id": "11111111-2222-3333-4444-555555555555"})
+    monkeypatch.setattr(
+        worker_main,
+        "load_plan",
+        AsyncMock(
+            return_value={
+                "id": "11111111-2222-3333-4444-555555555555",
+                "name": "test",
+                "schema_version": 1,
+                "steps": [{"step": "noop"}],
+                "variables": {},
+            }
+        ),
+    )
+
+    async def _interrupted(*_a, **_kw):
+        raise PlanStreamInterrupted(grpc.RpcError(), steps_executed=2)
+
+    monkeypatch.setattr(worker_main, "_execute_plan_stream", _interrupted)
+    mark_failed_mock = AsyncMock()
+    requeue_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(worker_main, "mark_failed", mark_failed_mock)
+    monkeypatch.setattr(worker_main, "requeue_for_retry", requeue_mock)
+
+    await process_one_task(engine=None, task=task, client=AsyncMock())
+
+    requeue_mock.assert_not_awaited()
+    mark_failed_mock.assert_awaited_once()
+    err_msg = mark_failed_mock.call_args.kwargs["error"]
+    assert "проверь кабинет" in err_msg

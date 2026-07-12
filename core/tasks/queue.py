@@ -393,14 +393,12 @@ async def fail_stuck_irreversible(
 
 # task_type, которые НЕЛЬЗЯ слепо ретраить при зависании в 'running' — необратимое
 # создание объектов в Meta (повтор = дубль кампании + двойной открут бюджета). Их
-# зависшие строки уводит в failed fail_stuck_campaign_create (НЕ retrying). Зеркалит
-# контракт IRREVERSIBLE_MUTATION_KINDS для meta_api_mutation, но на уровне task_type.
-# plan_run (H-3, аудит): исполняется creator_worker'ом через Vision — тоже реальный
-# залив FB-кампании, повторное исполнение после zombie-краша = дубль. У plan_run нет
-# отдельной fail_stuck_* функции (в отличие от campaign_create) — creator_worker
-# закрывает зависшую задачу сам через mark_failed в task_loop при неожиданном
-# исключении; здесь же — страховка от слепого auto-retry реконсайлером, если задача
-# всё же осталась в 'running' (напр. воркер убит SIGKILL посреди process_one_task).
+# зависшие строки уводит в failed fail_stuck_campaign_create / fail_stuck_plan_run
+# (НЕ retrying). Зеркалит контракт IRREVERSIBLE_MUTATION_KINDS для meta_api_mutation,
+# но на уровне task_type. plan_run исполняется creator_worker'ом через Vision — тоже
+# реальный залив FB-кампании; штатно воркер закрывает задачу сам (mark_failed в
+# task_loop), fail_stuck_plan_run (M-3, аудит 2026-07-12) добивает SIGKILL/OOM-зомби
+# с алертом — раньше такая задача висела в 'running' вечно и невидимо.
 IRREVERSIBLE_TASK_TYPES: frozenset[str] = frozenset({"campaign_create", "plan_run"})
 
 
@@ -443,6 +441,49 @@ async def fail_stuck_campaign_create(
         logger.error(
             "reconcile: %d зависших campaign_create → failed без retry "
             "(возможен дубль/осиротевшая кампания в Meta — нужна ручная проверка)",
+            n,
+        )
+    return n
+
+
+async def fail_stuck_plan_run(
+    engine: AsyncEngine,
+    *,
+    stuck_after_seconds: int = 1800,
+) -> int:
+    """Зависшие в 'running' задачи task_type='plan_run' → 'failed' (НЕ retry).
+
+    Money-safety (аудит 2026-07-12, M-3), зеркало fail_stuck_campaign_create.
+    Крэш-путь: creator_worker начал исполнять план через Vision (кампания уже
+    создаётся в живом браузере) и убит SIGKILL/OOM ДО mark_failed/mark_succeeded —
+    задача застревала в 'running' НАВСЕГДА и невидимо (reconcile её исключает,
+    cleanup чистит только терминальные статусы). Слепой retry = дубль залива.
+    Помечаем 'failed' с явным error — оператор проверяет кабинет вручную.
+
+    Вызывать ПЕРЕД reconcile_stuck_running (тот безусловно исключает plan_run —
+    двойная защита). Возвращает число помеченных failed (>0 → caller шлёт алерт).
+    """
+    stmt = text(
+        """
+        UPDATE task_queue
+        SET status = 'failed',
+            completed_at = NOW(),
+            last_error = COALESCE(last_error, '')
+                || ' [stuck plan_run: creator_worker мог начать залив через Vision '
+                || 'до краша — НЕ ретраим (риск дубля кампании), проверь кабинет вручную]',
+            updated_at = NOW()
+        WHERE task_type = 'plan_run'
+          AND status = 'running'
+          AND updated_at < NOW() - make_interval(secs => :sec)
+        """
+    )
+    async with engine.begin() as conn:
+        result = await conn.execute(stmt, {"sec": int(stuck_after_seconds)})
+        n = int(result.rowcount or 0)
+    if n:
+        logger.error(
+            "reconcile: %d зависших plan_run → failed без retry "
+            "(возможен частичный залив через Vision — нужна ручная проверка кабинета)",
             n,
         )
     return n

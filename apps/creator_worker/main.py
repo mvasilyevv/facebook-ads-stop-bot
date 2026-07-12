@@ -13,8 +13,11 @@ CreatorService.RunPlan (gRPC stream) внутри Vision-сессии browser-ag
 - ValueError / NotImplementedError → mark_failed (плохой payload или незнакомый шаг)
 - "plan not found" / archived → mark_failed
 - StepFailed / PlanComplete(ok=false) → mark_failed (план упал на FB)
-- BrowserUnavailableError / TimeoutError / grpc.RpcError → requeue_for_retry (transient)
-- любое другое Exception внутри _execute_plan_stream → requeue (защитная сетка)
+- ошибка ДО первого события стрима (Vision недоступен, gRPC не установился) →
+  requeue_for_retry (transient — план гарантированно не начинался)
+- обрыв стрима ПОСЛЕ первого события (H-1, аудит 2026-07-12) →
+  PlanStreamInterrupted → mark_failed БЕЗ retry (план мог частично исполниться,
+  повтор = дубль кампании) + ручная проверка кабинета
 
 Money-safety (H-3): plan_run — необратимая мутация (реальный залив FB-кампании через
 Vision), входит в core.tasks.queue.IRREVERSIBLE_TASK_TYPES — reconciler НЕ переводит
@@ -70,13 +73,35 @@ _PERMANENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
     KeyError,
 )
 
-# Transient ошибки → requeue_for_retry.
+# Transient ошибки → requeue_for_retry. ВАЖНО (H-1): применимы только когда стрим
+# RunPlan ещё НЕ начал исполнение — обрыв после первого события заворачивается в
+# PlanStreamInterrupted и уходит в mark_failed (см. класс ниже).
 _TEMPORARY_EXCEPTIONS: tuple[type[BaseException], ...] = (
     BrowserUnavailableError,
     asyncio.TimeoutError,
     ConnectionError,
     grpc.RpcError,
 )
+
+
+class PlanStreamInterrupted(Exception):
+    """Стрим RunPlan оборвался ПОСЛЕ того, как исполнение началось.
+
+    Money-safety (аудит 2026-07-12, H-1): раз пришло хоть одно событие — браузер
+    уже исполняет план (кампания может быть частично создана). Requeue целого
+    плана = повторный залив = дубль кампании + двойной открут бюджета. Такой
+    обрыв НЕ ретраится: mark_failed + алерт «проверь кабинет вручную».
+    Ошибки ДО первого события (Vision недоступен, gRPC не установился) остаются
+    transient — план гарантированно не начинался, retry безопасен.
+    """
+
+    def __init__(self, cause: BaseException, *, steps_executed: int) -> None:
+        super().__init__(
+            f"стрим оборвался после старта исполнения "
+            f"(шагов завершено: {steps_executed}): {cause!r}"
+        )
+        self.cause = cause
+        self.steps_executed = steps_executed
 
 
 # ====================== config helpers ======================
@@ -173,6 +198,10 @@ async def _execute_plan_stream(
     """Запустить RunPlan stream и агрегировать события.
 
     Возвращает dict с полями ok/steps_executed/total_steps/duration_ms/error/checkpoints.
+
+    H-1 (аудит 2026-07-12): обрыв стрима ПОСЛЕ первого события заворачивается в
+    PlanStreamInterrupted — план уже исполняется в браузере, retry = дубль залива.
+    Ошибки до первого события пробрасываются как есть (transient, retry безопасен).
     """
     steps_executed = 0
     failed_step: str | None = None
@@ -180,52 +209,62 @@ async def _execute_plan_stream(
     total_steps = 0
     duration_ms = 0
     checkpoints: list[dict[str, str]] = []
+    # H-1: любое событие = браузер начал исполнение → обрыв дальше не ретраится.
+    events_seen = 0
 
-    async for event in client.run_plan(plan_json, variables_json):
-        if event.HasField("started"):
-            logger.debug(
-                "plan_run task=%s step started: %s (idx=%d)",
-                task_id,
-                event.started.step,
-                event.started.index,
-            )
-        elif event.HasField("finished"):
-            steps_executed += 1
-            logger.info(
-                "plan_run task=%s step finished: %s (idx=%d)",
-                task_id,
-                event.finished.step,
-                event.finished.index,
-            )
-        elif event.HasField("failed"):
-            failed_step = event.failed.step
-            last_error = event.failed.error or "step failed"
-            logger.warning(
-                "plan_run task=%s step failed: %s: %s",
-                task_id,
-                event.failed.step,
-                event.failed.error,
-            )
-        elif event.HasField("skipped"):
-            logger.info(
-                "plan_run task=%s step skipped: %s (%s)",
-                task_id,
-                event.skipped.step,
-                event.skipped.reason,
-            )
-        elif event.HasField("checkpoint"):
-            checkpoints.append({"url": event.checkpoint.url, "detail": event.checkpoint.detail})
-            logger.warning(
-                "plan_run task=%s CHECKPOINT detected: %s | %s",
-                task_id,
-                event.checkpoint.url,
-                event.checkpoint.detail,
-            )
-        elif event.HasField("complete"):
-            total_steps = int(event.complete.total_steps or 0)
-            duration_ms = int(event.complete.duration_ms or 0)
-            if not event.complete.ok:
-                last_error = event.complete.error or last_error or "plan failed"
+    try:
+        async for event in client.run_plan(plan_json, variables_json):
+            events_seen += 1
+            if event.HasField("started"):
+                logger.debug(
+                    "plan_run task=%s step started: %s (idx=%d)",
+                    task_id,
+                    event.started.step,
+                    event.started.index,
+                )
+            elif event.HasField("finished"):
+                steps_executed += 1
+                logger.info(
+                    "plan_run task=%s step finished: %s (idx=%d)",
+                    task_id,
+                    event.finished.step,
+                    event.finished.index,
+                )
+            elif event.HasField("failed"):
+                failed_step = event.failed.step
+                last_error = event.failed.error or "step failed"
+                logger.warning(
+                    "plan_run task=%s step failed: %s: %s",
+                    task_id,
+                    event.failed.step,
+                    event.failed.error,
+                )
+            elif event.HasField("skipped"):
+                logger.info(
+                    "plan_run task=%s step skipped: %s (%s)",
+                    task_id,
+                    event.skipped.step,
+                    event.skipped.reason,
+                )
+            elif event.HasField("checkpoint"):
+                checkpoints.append({"url": event.checkpoint.url, "detail": event.checkpoint.detail})
+                logger.warning(
+                    "plan_run task=%s CHECKPOINT detected: %s | %s",
+                    task_id,
+                    event.checkpoint.url,
+                    event.checkpoint.detail,
+                )
+            elif event.HasField("complete"):
+                total_steps = int(event.complete.total_steps or 0)
+                duration_ms = int(event.complete.duration_ms or 0)
+                if not event.complete.ok:
+                    last_error = event.complete.error or last_error or "plan failed"
+    except PlanStreamInterrupted:
+        raise
+    except Exception as exc:
+        if events_seen > 0:
+            raise PlanStreamInterrupted(exc, steps_executed=steps_executed) from exc
+        raise
 
     ok = failed_step is None and not last_error
     return {
@@ -292,6 +331,22 @@ async def process_one_task(
             variables_json=variables_json,
             task_id=task.id,
         )
+    except PlanStreamInterrupted as exc:
+        # H-1 (money): исполнение уже началось в браузере — requeue = дубль залива.
+        await mark_failed(
+            engine,
+            task_id=task.id,
+            error=f"{exc} [НЕ ретраим: план мог частично исполниться — "
+            "проверь кабинет вручную на дубли/недосозданные кампании]",
+        )
+        logger.error(
+            "plan_run: task id=%s → стрим оборвался после старта исполнения "
+            "(шагов: %d) — mark_failed без retry, нужна ручная проверка кабинета: %s",
+            task.id,
+            exc.steps_executed,
+            exc.cause,
+        )
+        return
     except _PERMANENT_EXCEPTIONS as exc:
         await mark_failed(engine, task_id=task.id, error=repr(exc))
         logger.warning("plan_run: task id=%s → permanent fail: %s", task.id, exc)

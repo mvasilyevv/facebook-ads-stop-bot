@@ -190,3 +190,73 @@ async def test_fresh_campaign_create_untouched(pg_engine, clean_task_queue) -> N
     assert failed == 0
     assert moved == 0
     assert await _status(pg_engine, task_id) == "pending"
+
+
+# ====================== plan_run (аудит 2026-07-12, M-3) ======================
+
+
+async def _make_stuck_plan_run(pg_engine) -> int:
+    """Создаёт plan_run задачу и эмулирует зависание в 'running' 2 часа (SIGKILL-зомби)."""
+    task_id = await create_task(
+        pg_engine,
+        task_type="plan_run",
+        idempotency_key=f"pr-{uuid.uuid4().hex[:10]}",
+        payload={"plan_id": str(uuid.uuid4())},
+        requested_by="test",
+    )
+    assert task_id is not None
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET status = 'running', updated_at = NOW() - INTERVAL '2 hours'
+                WHERE id = :i
+                """
+            ),
+            {"i": task_id},
+        )
+    return task_id
+
+
+# Зависший plan_run → fail_stuck_plan_run помечает failed (НЕ retry) — раньше
+# такой зомби висел в 'running' вечно и невидимо (частичный залив без алерта).
+@pytest.mark.asyncio
+async def test_stuck_plan_run_marked_failed(pg_engine, clean_task_queue) -> None:
+    from core.tasks.queue import fail_stuck_plan_run
+
+    task_id = await _make_stuck_plan_run(pg_engine)
+
+    n = await fail_stuck_plan_run(pg_engine)
+
+    assert n == 1
+    assert await _status(pg_engine, task_id) == "failed"
+
+
+# reconcile_stuck_running по-прежнему НЕ трогает plan_run (двойная защита от дубля).
+@pytest.mark.asyncio
+async def test_reconcile_does_not_retry_plan_run(pg_engine, clean_task_queue) -> None:
+    task_id = await _make_stuck_plan_run(pg_engine)
+
+    moved = await reconcile_stuck_running(pg_engine, exclude_kinds=None)
+
+    assert moved == 0
+    assert await _status(pg_engine, task_id) == "running"
+
+
+# Свежий plan_run (pending, не зависший) fail_stuck_plan_run не трогает.
+@pytest.mark.asyncio
+async def test_fresh_plan_run_untouched(pg_engine, clean_task_queue) -> None:
+    from core.tasks.queue import fail_stuck_plan_run
+
+    task_id = await create_task(
+        pg_engine,
+        task_type="plan_run",
+        idempotency_key=f"pr-fresh-{uuid.uuid4().hex[:8]}",
+        payload={"plan_id": str(uuid.uuid4())},
+        requested_by="test",
+    )
+    failed = await fail_stuck_plan_run(pg_engine)
+
+    assert failed == 0
+    assert await _status(pg_engine, task_id) == "pending"

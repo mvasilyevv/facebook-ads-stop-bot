@@ -30,6 +30,9 @@ from core.tasks.queue import (
     fail_stuck_irreversible as _canonical_fail_stuck_irreversible,
 )
 from core.tasks.queue import (
+    fail_stuck_plan_run as _canonical_fail_stuck_plan_run,
+)
+from core.tasks.queue import (
     reconcile_stuck_running as _canonical_reconcile_stuck_running,
 )
 
@@ -63,6 +66,16 @@ async def fail_stuck_campaign_create(engine: AsyncEngine) -> int:
     return await _canonical_fail_stuck_campaign_create(
         engine, stuck_after_seconds=stuck_after_seconds
     )
+
+
+async def fail_stuck_plan_run(engine: AsyncEngine) -> int:
+    """Зависшие задачи plan_run (необратимый Vision-залив) → failed (НЕ retry).
+
+    Money-safety (аудит 2026-07-12, M-3): см. core.tasks.queue.fail_stuck_plan_run.
+    Вызывать ДО reconcile_stuck_running. Returns: число помеченных failed.
+    """
+    stuck_after_seconds = _STUCK_TIMEOUT_MIN * 60
+    return await _canonical_fail_stuck_plan_run(engine, stuck_after_seconds=stuck_after_seconds)
 
 
 async def reconcile_stuck_running(engine: AsyncEngine) -> int:
@@ -130,6 +143,34 @@ async def _maybe_alert_irreversible(engine: AsyncEngine, count: int) -> None:
         logger.exception("reconciler: не удалось отправить алерт о необратимых мутациях")
 
 
+def render_plan_run_alert(count: int) -> str:
+    """HTML-текст алерта о зависших Vision-заливах (pure, для тестов)."""
+    return (
+        f"🛑 <b>Reconciler</b>\n"
+        f"Зависших Vision-заливов (plan_run): <b>{count}</b> — "
+        f"помечены failed без retry.\n"
+        f"creator_worker мог упасть ПОСЛЕ начала исполнения плана — "
+        f"<b>проверь кабинет вручную</b> на частично созданные/дублирующие кампании."
+    )
+
+
+async def _maybe_alert_plan_run(engine: AsyncEngine, count: int) -> None:
+    """Best-effort TG-алерт о failed зависших plan_run — рассылка recipients."""
+    if count <= 0:
+        return
+    try:
+        from core.telegram.worker_notify import notify_recipients
+
+        await notify_recipients(
+            engine,
+            None,  # redis не нужен: dedup_key не задан
+            category="reconciler_plan_run",
+            text=render_plan_run_alert(count),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("reconciler: не удалось отправить алерт о зависших plan_run")
+
+
 async def _maybe_alert_campaign_create(engine: AsyncEngine, count: int) -> None:
     """Best-effort TG-алерт о failed зависших campaign_create — рассылка recipients."""
     if count <= 0:
@@ -167,6 +208,12 @@ async def run_once(engine: AsyncEngine) -> dict[str, int]:
         counts["campaign_create_failed"] = -1
 
     try:
+        counts["plan_run_failed"] = await fail_stuck_plan_run(engine)
+    except Exception as exc:
+        logger.exception("fail_stuck_plan_run failed: %s", exc)
+        counts["plan_run_failed"] = -1
+
+    try:
         counts["stuck_to_retrying"] = await reconcile_stuck_running(engine)
     except Exception as exc:
         logger.exception("reconcile_stuck_running failed: %s", exc)
@@ -183,6 +230,9 @@ async def run_once(engine: AsyncEngine) -> dict[str, int]:
 
     if counts.get("campaign_create_failed", 0) > 0:
         await _maybe_alert_campaign_create(engine, counts["campaign_create_failed"])
+
+    if counts.get("plan_run_failed", 0) > 0:
+        await _maybe_alert_plan_run(engine, counts["plan_run_failed"])
 
     if any(v > 0 for v in counts.values()):
         logger.info("reconciler counts: %s", counts)
