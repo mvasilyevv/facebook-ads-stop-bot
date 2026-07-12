@@ -833,3 +833,47 @@ describe("StepLaunch — запуск без двойного fire", () => {
     expect(launchMutate).not.toHaveBeenCalled();
   });
 });
+
+// ─── StepLaunch (аудит 2026-07-12, H-6) — guard переживает remount ───────────
+
+describe("StepLaunch — guard в сторе (H-6)", () => {
+  const launchMutate = vi.fn();
+
+  beforeEach(() => {
+    useWizardStore.getState().reset();
+    useWizardStore.getState().setStep("launch");
+    launchMutate.mockReset().mockResolvedValue({ run_id: "run_1" });
+    mockUseLaunchCampaign.mockReturnValue({ mutateAsync: launchMutate, isPending: false });
+    mockUseCampaignRun.mockReturnValue({ data: undefined, isLoading: false });
+  });
+
+  // MONEY: remount ДО ответа сервера (StrictMode / kill-restore WebView) — POST ровно один:
+  // локальный useState-guard не переживал remount, guard в сторе — переживает.
+  it("remount до ответа сервера не даёт второй POST", async () => {
+    let resolveLaunch: (v: { run_id: string }) => void = () => {};
+    launchMutate.mockReset().mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveLaunch = res;
+        }),
+    );
+    const first = render(<TestProviders><StepLaunch /></TestProviders>);
+    first.unmount();
+    render(<TestProviders><StepLaunch /></TestProviders>);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(launchMutate).toHaveBeenCalledTimes(1);
+    resolveLaunch({ run_id: "run_1" });
+  });
+
+  // После ошибки guard сбрасывается: повторный вход на шаг = осознанный retry.
+  it("после ошибки повторный вход на шаг повторяет запуск", async () => {
+    launchMutate.mockReset().mockRejectedValueOnce(new Error("сеть моргнула"));
+    const first = render(<TestProviders><StepLaunch /></TestProviders>);
+    await waitFor(() => expect(launchMutate).toHaveBeenCalledTimes(1));
+    first.unmount();
+    launchMutate.mockResolvedValueOnce({ run_id: "run_2" });
+    render(<TestProviders><StepLaunch /></TestProviders>);
+    await waitFor(() => expect(launchMutate).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(useWizardStore.getState().runId).toBe("run_2"));
+  });
+});

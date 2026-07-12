@@ -30,6 +30,12 @@ export interface WizardState {
   // run_id после запуска
   runId: string | null;
 
+  // Guard одного запуска (аудит 2026-07-12, H-6): локальный useState в StepLaunch
+  // не переживал remount (StrictMode / kill-restore WebView) и давал дубль POST.
+  // Money-safety от дубля кампании — на сервере (config-hash idempotency_key),
+  // этот флаг — сетевая гигиена одного fire на попытку.
+  launchAttempted: boolean;
+
   // Действия
   setStep: (step: WizardStep) => void;
   nextStep: () => void;
@@ -39,6 +45,7 @@ export interface WizardState {
   updateConfig: (patch: Partial<CampaignConfig>) => void;
   setValidatePlan: (plan: ValidatePlanResponse | null) => void;
   setRunId: (id: string) => void;
+  setLaunchAttempted: (v: boolean) => void;
   reset: () => void;
 }
 
@@ -85,6 +92,7 @@ export const useWizardStore = create<WizardState>((set) => ({
   config: { ...DEFAULT_CONFIG },
   validatePlan: null,
   runId: null,
+  launchAttempted: false,
 
   setStep: (step) => set({ step }),
   nextStep: () => set((s) => ({ step: nextStepFrom(s.step) })),
@@ -118,6 +126,7 @@ export const useWizardStore = create<WizardState>((set) => ({
     set((s) => ({ config: { ...s.config, ...patch } })),
   setValidatePlan: (plan) => set({ validatePlan: plan }),
   setRunId: (id) => set({ runId: id }),
+  setLaunchAttempted: (v) => set({ launchAttempted: v }),
   reset: () =>
     set({
       step: "start",
@@ -127,5 +136,6 @@ export const useWizardStore = create<WizardState>((set) => ({
       config: { ...DEFAULT_CONFIG },
       validatePlan: null,
       runId: null,
+      launchAttempted: false,
     }),
 }));

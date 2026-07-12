@@ -87,19 +87,22 @@ function ProgressSection({ run }: { run: CampaignRunDetail }) {
 }
 
 export function StepLaunch() {
-  const { config, runId, setRunId, reset } = useWizardStore();
+  const { config, runId, setRunId, reset, launchAttempted, setLaunchAttempted } =
+    useWizardStore();
   const launch = useLaunchCampaign();
   const cleanup = useCleanupRun();
   const [launchError, setLaunchError] = useState<string | null>(null);
-  const [launched, setLaunched] = useState(!!runId);
 
   const runQuery = useCampaignRun(runId ?? "", !!runId);
   const run = runQuery.data ?? null;
 
-  // Запускаем залив при первом рендере (если не уже запущен)
+  // Запускаем залив при первом рендере (если не уже запущен).
+  // Guard в сторе (аудит 2026-07-12, H-6): локальный useState не переживал remount
+  // (StrictMode / kill-restore WebView) и давал дубль POST. Money-safety от дубля
+  // кампании — на сервере (config-hash idempotency_key + ON CONFLICT DO NOTHING).
   useEffect(() => {
-    if (launched) return;
-    setLaunched(true);
+    if (runId || launchAttempted) return;
+    setLaunchAttempted(true);
     haptic.impact("medium");
 
     launch.mutateAsync({
@@ -110,6 +113,8 @@ export function StepLaunch() {
       })
       .catch((err) => {
         setLaunchError((err as Error).message);
+        // Сброс guard'а: повторный вход на шаг = осознанный retry после ошибки.
+        setLaunchAttempted(false);
         haptic.notify("error");
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
