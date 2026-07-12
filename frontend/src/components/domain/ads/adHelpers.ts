@@ -22,11 +22,11 @@ export function num(v: string | number | null | undefined): number | null {
 // ─── Мульти-кабинет ──────────────────────────────────────────────────────────
 
 /**
- * Кабинет объявления (числовой ID без act_). Поле приходит с бэка с миграции
- * 0019; в generated-типах появляется после `pnpm gen:api` — до этого мягкий каст.
+ * Кабинет объявления (числовой ID без act_). Поле есть в generated-типах
+ * (AdSnapshotOut.ad_account_id) — читаем напрямую (M-26: устаревший каст убран).
  */
 export function adAccountId(ad: AdSnapshot): string | null {
-  return (ad as AdSnapshot & { ad_account_id?: string | null }).ad_account_id ?? null;
+  return ad.ad_account_id ?? null;
 }
 
 /**

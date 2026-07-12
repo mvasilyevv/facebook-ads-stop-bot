@@ -71,6 +71,40 @@ export async function fetchJson<T = unknown>(
   return resp.json() as Promise<T>;
 }
 
+/**
+ * Как fetchJson, но с сырым body (FormData/multipart): Content-Type НЕ выставляем —
+ * браузер сам проставит boundary. Тот же 401-relogin-once (M-21, аудит 2026-07-12):
+ * раньше multipart-аплой шёл мимо fetchJson и при истёкшем токене падал сырой 401.
+ */
+export async function fetchRaw<T = unknown>(
+  path: string,
+  body: BodyInit,
+  method = "POST",
+  _retry = false,
+): Promise<T> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const resp = await fetch(`${API_BASE}${path}`, { method, headers, body });
+
+  if (resp.status === 401 && !_retry) {
+    try {
+      logout();
+      await loginToBackend();
+      return fetchRaw(path, body, method, true);
+    } catch {
+      // повторный login не помог — падаем ниже с 401.
+    }
+  }
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: `Ошибка ${resp.status}` }));
+    throw new Error((err as { detail?: string }).detail ?? `Ошибка ${resp.status}`);
+  }
+  return resp.json() as Promise<T>;
+}
+
 // ─── TMA-специфические типы (из backend schemas/tma.py) ──────────────────
 
 export interface TmaAdMetrics {
@@ -844,21 +878,9 @@ export function useDeletePreset() {
  */
 export function useUploadConcepts() {
   return useMutation({
-    mutationFn: async (formData: FormData): Promise<UploadConceptsResponse> => {
-      const token = getStoredToken();
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const resp = await fetch(`${API_BASE}/tools/campaigns/upload`, {
-        method: "POST",
-        headers,
-        body: formData,
-      });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ detail: `Ошибка ${resp.status}` }));
-        throw new Error((err as { detail?: string }).detail ?? `Ошибка ${resp.status}`);
-      }
-      return resp.json() as Promise<UploadConceptsResponse>;
-    },
+    // M-21: fetchRaw даёт тот же 401-relogin-once, что и остальные запросы.
+    mutationFn: (formData: FormData): Promise<UploadConceptsResponse> =>
+      fetchRaw<UploadConceptsResponse>("/tools/campaigns/upload", formData),
   });
 }
 

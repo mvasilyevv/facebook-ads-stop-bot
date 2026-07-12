@@ -65,6 +65,14 @@ describe("StatsChartCard", () => {
     expect(screen.getByRole("status")).toBeInTheDocument();
   });
 
+  // M-24 (аудит 2026-07-12): «Итого»/«Пик» = реальная сумма/максимум точек, не shape.
+  // spend 10+20+15 = 45.00, пик = 20.00. Ловит регрессию агрегата (spend уже дельты).
+  it("MONEY: Итого = сумма точек, Пик = максимум", () => {
+    render(<StatsChartCard mode="hourly" points={HOURLY_POINTS} />);
+    expect(screen.getByText("Итого").parentElement).toHaveTextContent("$45.00");
+    expect(screen.getByText("Пик").parentElement).toHaveTextContent("$20.00");
+  });
+
   // Режим daily с подневными точками — тоже рендерится без ошибок.
   it("рендерится в режиме daily без ошибок", () => {
     const dailyPoints = [

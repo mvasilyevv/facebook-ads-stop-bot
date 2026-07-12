@@ -346,7 +346,9 @@ function AdsPage() {
                     width:        6,
                     height:       6,
                     borderRadius: "50%",
-                    background:   `var(--fsm-${f.id})`,
+                    // M-20: alertStateCssVar (не var(--fsm-${id})) — токенов
+                    // --fsm-warning_sent/stop_sent нет, точки были невидимы.
+                    background:   alertStateCssVar(normalizeAlertState(f.id)),
                     flexShrink:   0,
                   }}
                 />
