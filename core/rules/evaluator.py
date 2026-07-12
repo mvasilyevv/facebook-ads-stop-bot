@@ -185,6 +185,10 @@ def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit
 
 def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
     # Депозиты только из AdSet.pro (источник истины); Meta row.deposits не учитываем.
+    # Порог НАМЕРЕННО не масштабируется числом депозитов (решение владельца,
+    # аудит 2026-07-12 H-2): кап по spend/CPA один и тот же при 1 и при N депозитах —
+    # консервативный дневной потолок расхода на ад. Текст алерта не должен намекать
+    # на учёт количества депозитов в формуле.
     total_deposits = ctx.external_deposits
     return _evaluate_spend_range(
         enabled=ctx.spend_with_dep_enabled,
@@ -195,9 +199,10 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
         stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
         code="spend_with_dep_range",
         title=rule_label("spend_with_dep_range"),
-        summary_suffix=f"депозитов {total_deposits}",
+        summary_suffix=f"депозиты есть ({total_deposits}), кап по расходу на ад",
         reason_suffix=(
-            f"Депозит уже есть, но расход растёт до {total_deposits} депозита(ов) слишком быстро."
+            f"Депозиты уже есть ({total_deposits}), но расход достиг дневного капа "
+            "относительно CPA — кап не зависит от числа депозитов."
         ),
     )
 
