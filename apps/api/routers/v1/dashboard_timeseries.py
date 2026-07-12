@@ -23,6 +23,7 @@ from apps.api.routers.v1.schemas.dashboard_aggregates import (
     SpendPointOut,
 )
 from apps.api.utils.serialize import decimal_str, int_or_none
+from core.dashboard.stats_derived import hourly_deltas
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +145,11 @@ async def get_chart_data(
 ) -> list[dict[str, Any]]:
     """Бакетированный график для DashboardPage.
 
-    Бакет = `date_trunc(bucket, cycle_ts)`. SUM по spend/impressions/clicks/leads/
-    registrations/deposits + COUNT DISTINCT ad_id для active_ads.
+    bucket=day: последний snapshot на (день × ad) = суточный итог (кумулятив
+    сбрасывается посуточно) → SUM по дню. bucket=hour (аудит 2026-07-12, H-5):
+    последний snapshot в часе — это кумулятив С НАЧАЛА СУТОК кабинета, не «за час»;
+    поэтому считаем per-ad дельты через hourly_deltas (тот же движок, что /stats/today),
+    иначе почасовой график рисовал нарастающий кумулятив.
 
     cabinet_day=true (Волна 2/E): окно от начала текущих суток кабинета (TZ аккаунта),
     чтобы график спенда начинался с нуля в полночь кабинета, а не от скользящего 24ч.
@@ -170,9 +174,43 @@ async def get_chart_data(
 
     # CRIT-1: ad_metrics — кумулятивные snapshot'ы. Наивный SUM(spend) сложил бы
     # все промежуточные снимки внутри бакета и завысил spend в десятки раз.
-    # Правильно: внутри бакета кумулятив монотонен → берём ПОСЛЕДНИЙ snapshot
-    # на (бакет × ad) через DISTINCT ON, и только потом SUM по бакету.
+    # Правильно: берём ПОСЛЕДНИЙ snapshot на (бакет × ad) через DISTINCT ON.
     # date_trunc принимает строку. Подставляем безопасно (bucket предвалидирован).
+    if bucket == "hour":
+        # H-5: latest-в-часе = кумулятив с начала суток, не «за час» → per-ad дельты.
+        sql = f"""
+            SELECT DISTINCT ON (date_trunc('hour', m.cycle_ts), m.ad_id)
+                date_trunc('hour', m.cycle_ts) AS bucket_ts,
+                m.ad_id,
+                m.spend,
+                m.impressions,
+                m.clicks,
+                m.leads,
+                m.registrations,
+                m.deposits
+            FROM ad_metrics m
+            WHERE {window_floor}
+            ORDER BY date_trunc('hour', m.cycle_ts), m.ad_id, m.cycle_ts DESC
+        """
+        async with engine.connect() as conn:
+            raw_rows = (await conn.execute(text(sql), params)).mappings().all()
+
+        points = hourly_deltas(raw_rows)
+        return [
+            {
+                "ts": p["ts"],
+                "spend": decimal_str(p["spend"]),
+                "impressions": int_or_none(p["impressions"]),
+                "clicks": int_or_none(p["clicks"]),
+                "leads": int_or_none(p["leads"]),
+                "registrations": int_or_none(p["registrations"]),
+                "deposits": int_or_none(p["deposits"]),
+                "active_ads": int_or_none(p["active_ads"]),
+            }
+            for p in points
+        ]
+
+    # bucket=day: latest-в-дне = суточный итог (посуточный сброс кумулятива) → SUM корректен.
     sql = f"""
         WITH per_bucket_ad AS (
             SELECT DISTINCT ON (date_trunc('{bucket}', m.cycle_ts), m.ad_id)

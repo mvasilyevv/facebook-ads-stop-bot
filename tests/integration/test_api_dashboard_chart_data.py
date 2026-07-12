@@ -383,3 +383,73 @@ async def test_chart_partition_pruning(pg_engine, fake_redis_client, clean_chart
 
     # Endpoint возвращает наш в-окне бакет
     assert any(Decimal(str(b.get("spend", 0))) >= in_window_spend for b in buckets)
+
+
+# Тест (аудит 2026-07-12, H-5): bucket=hour отдаёт почасовые ДЕЛЬТЫ, не кумулятив.
+# Один ad, кумулятив 50 (час −2) → 80 (час −1). Дельта часа −1 = 30.00; регрессия
+# (старое поведение) показала бы в часе −1 кумулятив 80.00 — «нарастающий» график.
+@pytest.mark.asyncio
+async def test_chart_bucket_hour_returns_deltas_not_cumulative(
+    pg_engine, fake_redis_client, clean_chart
+) -> None:
+    """?bucket=hour: вклад ad'а в бакет = дельта за час, не кумулятив на конец часа."""
+
+    async def _insert_at_hour_offset(conn, ad_id, hours_back: int, minute: int, spend: Decimal):
+        # Якорим на середину прошлых полных часов (как _insert_metric_in_prev_hour).
+        await conn.execute(
+            text(
+                "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, impressions, clicks, "
+                "leads, registrations, deposits) VALUES (gen_random_uuid(), :a, "
+                "date_trunc('hour', NOW()) - make_interval(hours => :h) "
+                "+ make_interval(mins => :m), :s, 100, 5, 1, 1, 0)"
+            ),
+            {"a": ad_id, "h": hours_back, "m": minute, "s": spend},
+        )
+
+    async with pg_engine.begin() as conn:
+        ad_id = await _seed_ad(conn, "HD")
+        await _insert_at_hour_offset(conn, ad_id, hours_back=2, minute=30, spend=Decimal("50.00"))
+        await _insert_at_hour_offset(conn, ad_id, hours_back=1, minute=30, spend=Decimal("80.00"))
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/dashboard/chart-data", params={"hours": 24, "bucket": "hour"})
+
+    assert resp.status_code == 200
+    buckets = resp.json()
+
+    async with pg_engine.connect() as conn:
+        ts_h2 = (
+            await conn.execute(text("SELECT date_trunc('hour', NOW() - INTERVAL '2 hour')"))
+        ).scalar_one()
+        ts_h1 = (
+            await conn.execute(text("SELECT date_trunc('hour', NOW() - INTERVAL '1 hour')"))
+        ).scalar_one()
+        # Чужие ad'ы с метриками в окне (shared БД): при их наличии проверяем только
+        # нижние границы, при чистом окне — точные значения (семантика дельты).
+        foreign = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(DISTINCT ad_id) FROM ad_metrics "
+                    "WHERE cycle_ts >= NOW() - INTERVAL '24 hours' AND ad_id != :aid"
+                ),
+                {"aid": ad_id},
+            )
+        ).scalar_one()
+
+    by_ts = {b["ts"][:13]: Decimal(str(b["spend"])) for b in buckets}
+    h2_key, h1_key = ts_h2.isoformat()[:13], ts_h1.isoformat()[:13]
+    assert h2_key in by_ts, f"Бакет часа −2 ({ts_h2}) не найден"
+    assert h1_key in by_ts, f"Бакет часа −1 ({ts_h1}) не найден"
+
+    if foreign == 0:
+        # Чистое окно: точная семантика — час −2 = 50.00 (первый снимок), час −1 = 30.00
+        # (дельта 80−50). Регрессия к кумулятиву дала бы 80.00 в часе −1.
+        assert by_ts[h2_key] == Decimal("50.00"), f"час −2: {by_ts[h2_key]}, ожидалось 50.00"
+        assert by_ts[h1_key] == Decimal("30.00"), (
+            f"час −1: {by_ts[h1_key]}, ожидалось 30.00 (дельта), кумулятив 80.00 — регрессия H-5"
+        )
+    else:
+        # Shared БД: чужие дельты ≥ 0 → проверяем вклад нижней границей.
+        assert by_ts[h2_key] >= Decimal("50.00")
+        assert by_ts[h1_key] >= Decimal("30.00")
