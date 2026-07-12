@@ -58,15 +58,11 @@ import logging
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
-from core.meta_api.errors import (
-    MetaApiError,
-    MutationValidationError,
-    TemporaryError,
-    classify_graph_error,
-)
+from core.meta_api.errors import MutationValidationError, TemporaryError
 from core.meta_api.mutations._batch_helpers import (
     MAX_BATCH_ENTRIES,
     build_batch_payload,
+    classify_sub_failure,
     make_batch_entry,
     parse_batch_response,
 )
@@ -145,7 +141,7 @@ class BulkStatusChangeHandler:
         # body не несут — они уходят в task_queue.result компактными).
         failed_parsed = [r for r in parsed if not r["success"]]
         if failed_parsed and len(failed_parsed) == len(parsed):
-            classified = [self._classify_sub_failure(r) for r in failed_parsed]
+            classified = [classify_sub_failure(r) for r in failed_parsed]
             if all(isinstance(exc, TemporaryError) for exc in classified):
                 logger.warning(
                     "bulk_status_change: все %d саб-реквестов упали транзиентно "
@@ -166,22 +162,6 @@ class BulkStatusChangeHandler:
                 "sub_results": sub_results,
             },
         )
-
-    @staticmethod
-    def _classify_sub_failure(sub: dict[str, Any]) -> MetaApiError:
-        """Классифицировать один провалившийся sub-result по Graph-кодам из body.
-
-        null-саб (timeout) и body без error-структуры → code=None → Temporary
-        (могла быть сеть) — согласовано с classify_graph_error.
-        """
-        body = sub.get("body")
-        err = body.get("error") if isinstance(body, dict) else None
-        code = err.get("code") if isinstance(err, dict) else None
-        subcode = err.get("error_subcode") if isinstance(err, dict) else None
-        message = (err.get("message") if isinstance(err, dict) else None) or str(
-            sub.get("error") or "batch sub-request failed"
-        )
-        return classify_graph_error(code, subcode, message)
 
     @staticmethod
     def _extract_params(params: dict[str, Any]) -> tuple[list[str], str, str]:

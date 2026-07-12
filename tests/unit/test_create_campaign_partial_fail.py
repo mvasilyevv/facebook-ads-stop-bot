@@ -195,3 +195,71 @@ def test_partial_error_is_not_mutation_validation_error() -> None:
     assert isinstance(exc, Exception)
     assert not isinstance(exc, MutationValidationError)
     assert not isinstance(exc, ValueError)
+
+
+# ─── Аудит 2026-07-12 (M-2): ничего не создано + все провалы транзиентные → retry ──
+
+
+# Все sub-requests упали ЯВНЫМ rate-limit (code 613, ничего не создано) → TemporaryError
+# (воркер requeue'ит), а не CreateCampaignPartialError → «залив навсегда умер».
+@pytest.mark.asyncio
+async def test_nothing_created_all_transient_raises_temporary() -> None:
+    from core.meta_api.errors import TemporaryError
+
+    rate_limited = json.dumps({"error": {"message": "limit reached", "code": 613}})
+    response = [
+        {"code": 400, "body": rate_limited},
+        {"code": 400, "body": rate_limited},
+        {"code": 400, "body": rate_limited},
+        {"code": 400, "body": rate_limited},
+    ]
+    client = _make_client(response)
+    payload = MetaMutationPayload(
+        mutation_kind="create_campaign",
+        target_id="new",
+        params=_valid_params(),
+        ad_account_id="act_999",
+    )
+
+    with pytest.raises(TemporaryError):
+        await CreateCampaignHandler().execute(client, payload)
+
+
+# null-саб (timeout, code 0) среди провалов → операция могла выполниться без ответа →
+# остаётся PartialError (fail_irreversible), retry НЕ форсируется.
+@pytest.mark.asyncio
+async def test_nothing_created_with_null_sub_keeps_partial_error() -> None:
+    rate_limited = json.dumps({"error": {"message": "limit reached", "code": 613}})
+    response = [
+        None,  # timeout — кампания МОГЛА создаться
+        {"code": 400, "body": rate_limited},
+        {"code": 400, "body": rate_limited},
+        {"code": 400, "body": rate_limited},
+    ]
+    client = _make_client(response)
+    payload = MetaMutationPayload(
+        mutation_kind="create_campaign",
+        target_id="new",
+        params=_valid_params(),
+        ad_account_id="act_999",
+    )
+
+    with pytest.raises(CreateCampaignPartialError):
+        await CreateCampaignHandler().execute(client, payload)
+
+
+# Ничего не создано, но провалы PERMANENT (code 100) → прежний PartialError→fail.
+@pytest.mark.asyncio
+async def test_nothing_created_permanent_keeps_partial_error() -> None:
+    permanent = json.dumps({"error": {"message": "Invalid parameter", "code": 100}})
+    response = [{"code": 400, "body": permanent} for _ in range(4)]
+    client = _make_client(response)
+    payload = MetaMutationPayload(
+        mutation_kind="create_campaign",
+        target_id="new",
+        params=_valid_params(),
+        ad_account_id="act_999",
+    )
+
+    with pytest.raises(CreateCampaignPartialError):
+        await CreateCampaignHandler().execute(client, payload)

@@ -107,3 +107,40 @@ async def test_duplicate_campaign_partial_error_marks_failed_with_orphan_id(
     err = spy_fail.await_args.kwargs["error"]
     assert "888" in err
     assert "duplicate_partial_fail" in err
+
+
+# ─── Аудит 2026-07-12 (M-2): pre-send ошибки ретраятся даже для необратимых ──
+
+
+# SessionUnavailableError (circuit-open / Vision не готов) = запрос НЕ ушёл в Meta →
+# retry безопасен даже для create_campaign; раньше блип канала навсегда убивал залив.
+@pytest.mark.asyncio
+async def test_create_campaign_session_unavailable_requeues(monkeypatch, _patched) -> None:
+    from core.meta_api.errors import SessionUnavailableError
+
+    spy_fail, spy_requeue = _patched
+    monkeypatch.setattr(
+        meta,
+        "execute_mutation",
+        AsyncMock(side_effect=SessionUnavailableError("browser-agent недоступен")),
+    )
+    await meta.process_one_task(object(), _task("create_campaign"), client=AsyncMock())
+    spy_requeue.assert_awaited_once()
+    spy_fail.assert_not_awaited()
+
+
+# Контраст: mid-flight TemporaryError (-2 Failed to fetch / DEADLINE) для необратимой —
+# по-прежнему mark_failed (ответ мог потеряться ПОСЛЕ коммита Meta).
+@pytest.mark.asyncio
+async def test_duplicate_campaign_session_unavailable_requeues(monkeypatch, _patched) -> None:
+    from core.meta_api.errors import SessionUnavailableError
+
+    spy_fail, spy_requeue = _patched
+    monkeypatch.setattr(
+        meta,
+        "execute_mutation",
+        AsyncMock(side_effect=SessionUnavailableError("Vision-сессия не готова")),
+    )
+    await meta.process_one_task(object(), _task("duplicate_campaign"), client=AsyncMock())
+    spy_requeue.assert_awaited_once()
+    spy_fail.assert_not_awaited()

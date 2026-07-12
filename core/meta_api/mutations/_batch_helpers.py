@@ -241,3 +241,23 @@ def jsonpath_ref(name: str, path: str = "$.id") -> str:
     if not name or not name.replace("_", "").replace("-", "").isalnum():
         raise ValueError(f"jsonpath_ref name: разрешены [A-Za-z0-9_-], получено {name!r}")
     return f"{{result={name}:{path}}}"
+
+
+def classify_sub_failure(sub: dict[str, Any]):
+    """Классифицировать провалившийся sub-result по Graph-кодам из body.
+
+    Общий помощник для bulk_status_change/create_campaign (M-1/M-2, аудит
+    2026-07-12): достаёт error.code/error_subcode из body и прогоняет через
+    classify_graph_error. null-саб (timeout) и body без error-структуры →
+    code=None → TemporaryError (могла быть сеть).
+    """
+    from core.meta_api.errors import classify_graph_error
+
+    body = sub.get("body")
+    err = body.get("error") if isinstance(body, dict) else None
+    code = err.get("code") if isinstance(err, dict) else None
+    subcode = err.get("error_subcode") if isinstance(err, dict) else None
+    message = (err.get("message") if isinstance(err, dict) else None) or str(
+        sub.get("error") or "batch sub-request failed"
+    )
+    return classify_graph_error(code, subcode, message)

@@ -89,8 +89,10 @@ import logging
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
+from core.meta_api.errors import TemporaryError
 from core.meta_api.mutations._batch_helpers import (
     build_batch_payload,
+    classify_sub_failure,
     jsonpath_ref,
     make_batch_entry,
     parse_batch_response,
@@ -259,6 +261,23 @@ class CreateCampaignHandler:
                     created_ids,
                     failed_steps,
                 )
+            # M-2 (аудит 2026-07-12): ничего не создано И все провалы — ЯВНЫЕ Graph-ошибки
+            # (code>0: Meta обработала запрос и отклонила — объект точно не создан).
+            # Если при этом все они транзиентные (rate-limit) → Temporary: воркер
+            # безопасно ретраит вместо «залив навсегда умер при блипе». null/timeout-сабы
+            # (code 0) сюда не попадают — операция могла выполниться без ответа,
+            # остаётся PartialError → fail_irreversible.
+            if not created_ids:
+                failed_subs = [r for r in sub_results if not r["success"]]
+                if all(int(r.get("code") or 0) > 0 for r in failed_subs):
+                    classified = [classify_sub_failure(r) for r in failed_subs]
+                    if all(isinstance(e, TemporaryError) for e in classified):
+                        logger.warning(
+                            "create_campaign: ничего не создано, все %d провалов "
+                            "транзиентные — пробрасываем retry вместо fail",
+                            len(failed_subs),
+                        )
+                        raise classified[0]
             raise CreateCampaignPartialError(
                 f"create_campaign: batch не полностью успешен — {len(failed_steps)} шагов упали",
                 created_ids=created_ids,
