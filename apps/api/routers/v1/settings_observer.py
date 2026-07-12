@@ -3,8 +3,9 @@
 
 Endpoints под /api (благодаря auto-discovery с prefix="/api"):
 - GET  /settings/observer          — читает ObserverConfig singleton
-- PUT  /settings/observer          — обновляет все поля
+- PUT  /settings/observer          — обновляет все поля (гейт скана как в PATCH /scanning)
 - PATCH /settings/observer/scanning     — переключает is_scanning_enabled
+- PATCH /settings/observer/owner-tag    — точечно меняет owner_campaign_tag (анти лост-апдейт)
 - PATCH /settings/observer/auto-enable  — переключает auto_enable_recommendations
 - POST /settings/observer/scan-now — публикует Redis сигнал fb_agent:observer:trigger
 """
@@ -27,6 +28,7 @@ from apps.api.routers.v1.schemas.settings_observer import (
     CampaignOption,
     ObserverSettingsPutRequest,
     ObserverSettingsResponse,
+    OwnerTagPatchRequest,
     ScanningToggleRequest,
     ScanNowResponse,
 )
@@ -151,9 +153,24 @@ async def put_observer_settings(
     """Обновляет все поля ObserverConfig singleton.
 
     Валидация: default_interval_seconds от 30 до 600 (через Pydantic Field).
+    Гейт «нечего сканировать» (аудит 2026-07-12, C-1): PUT с is_scanning_enabled=true
+    проходит ту же проверку, что PATCH /scanning — иначе full-PUT включал скан
+    в обход гейта при пустом allowlist («всё зелёное, авто-стоп не работает»).
     """
     async with AsyncSession(engine) as session:
         cfg = await _get_singleton(session)
+        if body.is_scanning_enabled:
+            from core.observer.accounts import scan_nothing_monitored_reason
+
+            # Гейт проверяет allowlist ИЗ ЭТОГО ЖЕ тела (если прислан), иначе текущий.
+            effective_allowlist = (
+                list(body.campaign_ids)
+                if body.campaign_ids is not None
+                else list(cfg.campaign_ids or [])
+            )
+            reason = await scan_nothing_monitored_reason(engine, effective_allowlist)
+            if reason:
+                raise HTTPException(status_code=409, detail=reason)
         cfg.is_scanning_enabled = body.is_scanning_enabled
         cfg.interval_seconds = body.default_interval_seconds
         cfg.auto_enable_recommendations = body.auto_enable_recommendations
@@ -190,6 +207,24 @@ async def patch_observer_scanning(
                 raise HTTPException(status_code=409, detail=reason)
         cfg.is_scanning_enabled = body.enabled
         # Остальные поля не менялись — читаем из in-memory состояния до commit.
+        result = _to_response(cfg)
+        await session.commit()
+        return result
+
+
+@router.patch("/owner-tag", response_model=ObserverSettingsResponse)
+async def patch_observer_owner_tag(
+    body: OwnerTagPatchRequest,
+    engine: DepEngine,
+) -> ObserverSettingsResponse:
+    """Меняет только owner_campaign_tag, не трогая остальные поля.
+
+    Точечный PATCH против лост-апдейта (аудит 2026-07-12, C-1): фронты сохраняли тег
+    через full-PUT из закэшированного состояния и молча откатывали is_scanning_enabled.
+    """
+    async with AsyncSession(engine) as session:
+        cfg = await _get_singleton(session)
+        cfg.owner_campaign_tag = (body.owner_campaign_tag or "").strip() or None
         result = _to_response(cfg)
         await session.commit()
         return result

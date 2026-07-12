@@ -20,7 +20,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { toast } from "@/components/ui/Toast";
 import {
   useObserverSettings,
-  useUpdateObserverSettings,
+  useUpdateOwnerTag,
   useObserverCampaigns,
   useRefreshObserverCampaigns,
   useSetCampaignAllowlist,
@@ -60,7 +60,7 @@ const ScopeCard: FC = () => {
 
 const OwnerTagSection: FC = () => {
   const { data, isLoading, error, refetch } = useObserverSettings();
-  const updateMut = useUpdateObserverSettings();
+  const updateMut = useUpdateOwnerTag();
   // Тэги как список (на бэке хранятся одной строкой через запятую).
   const [tags, setTags] = useState<string[]>([]);
 
@@ -79,15 +79,10 @@ const OwnerTagSection: FC = () => {
   if (isLoading) return <Skeleton className="h-32 w-full" />;
   if (error) return <ErrorState error={error} onRetry={() => void refetch()} />;
 
-  // PUT требует ПОЛНЫЙ body (все обязательные поля), иначе 422.
+  // Точечный PATCH: full-PUT из кэша молча откатывал is_scanning_enabled (аудит C-1).
   const handleSave = async () => {
     try {
-      await updateMut.mutateAsync({
-        is_scanning_enabled: data?.is_scanning_enabled ?? false,
-        auto_enable_recommendations: data?.auto_enable_recommendations ?? false,
-        default_interval_seconds: data?.default_interval_seconds ?? 30,
-        owner_campaign_tag: tags.length ? tags.join(",") : null,
-      });
+      await updateMut.mutateAsync(tags.length ? tags.join(",") : null);
       toast.success("Owner Tag сохранён");
     } catch (e) {
       toast.error("Ошибка сохранения", e instanceof Error ? e.message : String(e));

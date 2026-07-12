@@ -178,12 +178,10 @@ function ObserverSection({ showToast }: { showToast: (t: string, ok?: boolean) =
   const handleSaveTag = async () => {
     haptic.impact("light");
     try {
-      await fetchJson("/settings/observer", {
-        method: "PUT",
+      // Точечный PATCH: full-PUT из кэша молча откатывал is_scanning_enabled (аудит C-1).
+      await fetchJson("/settings/observer/owner-tag", {
+        method: "PATCH",
         body: JSON.stringify({
-          is_scanning_enabled: cfg.is_scanning_enabled,
-          default_interval_seconds: cfg.default_interval_seconds,
-          auto_enable_recommendations: cfg.auto_enable_recommendations,
           owner_campaign_tag: ownerTag.trim() || null,
         }),
       });

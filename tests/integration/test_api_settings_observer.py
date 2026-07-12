@@ -271,3 +271,86 @@ async def test_patch_campaigns_sets_allowlist(pg_engine, fake_redis_client, clea
         assert r.json()["campaign_ids"] == ["120244801453970044", "120244530626090044"]
         g = await ac.get("/api/settings/observer")
         assert len(g.json()["campaign_ids"]) == 2
+
+
+# PUT с is_scanning_enabled=true проходит гейт «нечего сканировать» → 409 (аудит 2026-07-12, C-1).
+@pytest.mark.asyncio
+async def test_put_gates_scanning_enable_when_nothing_monitored(
+    pg_engine, fake_redis_client, clean_observer_config, monkeypatch
+):
+    async def _always_blocked(engine, campaign_ids):
+        return "Нет активных офферов с кабинетами — сканировать нечего."
+
+    monkeypatch.setattr("core.observer.accounts.scan_nothing_monitored_reason", _always_blocked)
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    body = {
+        "is_scanning_enabled": True,
+        "default_interval_seconds": 60,
+        "auto_enable_recommendations": False,
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.put("/api/settings/observer", json=body)
+        assert resp.status_code == 409
+        # Флаг НЕ включился — GET отражает прежнее состояние.
+        g = await ac.get("/api/settings/observer")
+        assert g.json()["is_scanning_enabled"] is False
+
+
+# PUT с is_scanning_enabled=false гейт не зовёт — выключение всегда разрешено (C-1).
+@pytest.mark.asyncio
+async def test_put_disable_scanning_skips_gate(
+    pg_engine, fake_redis_client, clean_observer_config, monkeypatch
+):
+    async def _always_blocked(engine, campaign_ids):
+        return "Нет активных офферов с кабинетами — сканировать нечего."
+
+    monkeypatch.setattr("core.observer.accounts.scan_nothing_monitored_reason", _always_blocked)
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    body = {
+        "is_scanning_enabled": False,
+        "default_interval_seconds": 60,
+        "auto_enable_recommendations": False,
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.put("/api/settings/observer", json=body)
+        assert resp.status_code == 200
+
+
+# PATCH /owner-tag меняет ТОЛЬКО тег, остальные поля не трогает (анти лост-апдейт, C-1).
+@pytest.mark.asyncio
+async def test_patch_owner_tag_touches_only_tag(
+    pg_engine, fake_redis_client, clean_observer_config
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # Подготовка: известное состояние остальных полей через PUT (скан выключен).
+        await ac.put(
+            "/api/settings/observer",
+            json={
+                "is_scanning_enabled": False,
+                "default_interval_seconds": 120,
+                "auto_enable_recommendations": True,
+            },
+        )
+        r = await ac.patch(
+            "/api/settings/observer/owner-tag", json={"owner_campaign_tag": "MV,ABC"}
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["owner_campaign_tag"] == "MV,ABC"
+        # Остальные поля не изменились.
+        assert data["is_scanning_enabled"] is False
+        assert data["default_interval_seconds"] == 120
+        assert data["auto_enable_recommendations"] is True
+
+
+# PATCH /owner-tag с пустой строкой нормализуется в null (фильтр выключен).
+@pytest.mark.asyncio
+async def test_patch_owner_tag_empty_string_becomes_null(
+    pg_engine, fake_redis_client, clean_observer_config
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        r = await ac.patch("/api/settings/observer/owner-tag", json={"owner_campaign_tag": "  "})
+        assert r.status_code == 200
+        assert r.json()["owner_campaign_tag"] is None

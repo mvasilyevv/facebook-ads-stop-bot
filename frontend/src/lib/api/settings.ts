@@ -148,6 +148,27 @@ export function useToggleScanning() {
   });
 }
 
+/**
+ * Точечное обновление owner_campaign_tag (PATCH /settings/observer/owner-tag).
+ * Анти лост-апдейт (аудит 2026-07-12, C-1): full-PUT из кэша молча откатывал
+ * is_scanning_enabled — тег сохраняем только точечным PATCH.
+ */
+export function useUpdateOwnerTag() {
+  const qc = useQueryClient();
+  return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
+    mutationFn: (ownerCampaignTag: string | null) =>
+      apiSend<ObserverConfig>("PATCH", "/settings/observer/owner-tag", {
+        owner_campaign_tag: ownerCampaignTag,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "observer"] });
+      qc.invalidateQueries({ queryKey: ["settings", "observer", "campaigns"] });
+    },
+  });
+}
+
 /** Переключение only auto_enable_recommendations (PATCH /settings/observer/auto-enable). */
 export function useToggleAutoEnable() {
   const qc = useQueryClient();

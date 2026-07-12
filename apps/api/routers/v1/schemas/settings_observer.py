@@ -69,6 +69,21 @@ class ScanningToggleRequest(BaseModel):
     enabled: bool
 
 
+class OwnerTagPatchRequest(BaseModel):
+    """Тело PATCH /settings/observer/owner-tag — точечное обновление тега.
+
+    Отдельный PATCH против лост-апдейта (аудит 2026-07-12, C-1): full-PUT из
+    закэшированного клиентского состояния молча перезаписывал is_scanning_enabled.
+    """
+
+    owner_campaign_tag: str | None = Field(
+        default=None,
+        max_length=255,
+        description="Теги владельца кампаний для owner-scoping. Один или несколько через "
+        "запятую. Пусто/null — фильтр выключен.",
+    )
+
+
 class AutoEnableToggleRequest(BaseModel):
     """Тело PATCH /settings/observer/auto-enable."""
 
