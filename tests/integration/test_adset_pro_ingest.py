@@ -210,3 +210,108 @@ async def test_ingest_unknown_fb_ad_id_no_match(pg_engine, clean_adsetpro_events
     result = await ingest_postback(pg_engine, event)
     assert result.inserted is True
     assert result.fb_ad_fk is None
+
+
+# ─── Аудит 2026-07-12 (H-4): повторные redep — легитимные депозиты, не дубли ──
+
+
+def _redep_event(click_id: str, received_at: datetime, raw: dict | None = None) -> PostbackEvent:
+    return PostbackEvent(
+        click_id=click_id,
+        fb_ad_id=None,
+        event_type="redep",
+        revenue=Decimal("25"),
+        currency="USD",
+        received_at=received_at,
+        raw=raw or {},
+    )
+
+
+# Повторный РЕАЛЬНЫЙ redep (11 минут спустя, без txn-id) вставляется — раньше
+# 24ч-окно глотало его → недосчёт депозитов → ложный STOP прибыльного ада.
+@pytest.mark.asyncio
+async def test_ingest_redep_repeat_after_retry_window_inserted(
+    pg_engine, clean_adsetpro_events
+) -> None:
+    now = datetime.now(UTC)
+    r1 = await ingest_postback(pg_engine, _redep_event("rdp-repeat", now - timedelta(minutes=11)))
+    r2 = await ingest_postback(pg_engine, _redep_event("rdp-repeat", now))
+    assert r1.inserted is True
+    assert r2.inserted is True, "повторный redep через 11 минут — реальный депозит, не дубль"
+
+    async with pg_engine.connect() as conn:
+        cnt = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM adsetpro_postback_events "
+                    "WHERE click_id = 'rdp-repeat' AND event_type = 'redep'"
+                )
+            )
+        ).scalar_one()
+    assert cnt == 2
+
+
+# Доставочный ретрай redep внутри 10 минут (без txn-id) — по-прежнему дубль.
+@pytest.mark.asyncio
+async def test_ingest_redep_retry_within_window_deduped(pg_engine, clean_adsetpro_events) -> None:
+    now = datetime.now(UTC)
+    r1 = await ingest_postback(pg_engine, _redep_event("rdp-retry", now - timedelta(minutes=3)))
+    r2 = await ingest_postback(pg_engine, _redep_event("rdp-retry", now))
+    assert r1.inserted is True
+    assert r2.inserted is False and r2.is_duplicate is True
+
+
+# Два redep с РАЗНЫМИ txn-id в пределах минут — оба реальные депозиты, оба вставляются.
+@pytest.mark.asyncio
+async def test_ingest_redep_distinct_txn_ids_both_inserted(
+    pg_engine, clean_adsetpro_events
+) -> None:
+    now = datetime.now(UTC)
+    r1 = await ingest_postback(
+        pg_engine,
+        _redep_event("rdp-txn", now - timedelta(minutes=2), raw={"transaction_id": "tx-1"}),
+    )
+    r2 = await ingest_postback(
+        pg_engine, _redep_event("rdp-txn", now, raw={"transaction_id": "tx-2"})
+    )
+    assert r1.inserted is True
+    assert r2.inserted is True, "другой txn-id = другой депозит, дедуп не должен глотать"
+
+
+# Ретрай с ТЕМ ЖЕ txn-id — дубль даже спустя часы (точный дедуп по транзакции).
+@pytest.mark.asyncio
+async def test_ingest_redep_same_txn_id_deduped_across_hours(
+    pg_engine, clean_adsetpro_events
+) -> None:
+    now = datetime.now(UTC)
+    r1 = await ingest_postback(
+        pg_engine,
+        _redep_event("rdp-sametxn", now - timedelta(hours=3), raw={"transaction_id": "tx-9"}),
+    )
+    r2 = await ingest_postback(
+        pg_engine, _redep_event("rdp-sametxn", now, raw={"transaction_id": "tx-9"})
+    )
+    assert r1.inserted is True
+    assert r2.inserted is False and r2.is_duplicate is True
+
+
+# ftd-семантика не изменилась: повтор в пределах суток — дубль.
+@pytest.mark.asyncio
+async def test_ingest_ftd_still_deduped_within_24h(pg_engine, clean_adsetpro_events) -> None:
+    now = datetime.now(UTC)
+
+    def _ftd(received_at: datetime) -> PostbackEvent:
+        return PostbackEvent(
+            click_id="ftd-24h",
+            fb_ad_id=None,
+            event_type="ftd",
+            revenue=Decimal("50"),
+            currency="USD",
+            received_at=received_at,
+            raw={},
+        )
+
+    r1 = await ingest_postback(pg_engine, _ftd(now - timedelta(hours=5)))
+    r2 = await ingest_postback(pg_engine, _ftd(now))
+    assert r1.inserted is True
+    assert r2.inserted is False and r2.is_duplicate is True

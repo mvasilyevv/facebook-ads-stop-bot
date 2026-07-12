@@ -266,3 +266,103 @@ async def test_advisory_lock_does_not_change_sequential_dedup_behavior() -> None
     assert not any(
         "INSERT INTO adsetpro_postback_events" in sql for sql, _ in second_engine.conn.executed
     )
+
+
+# ─── Аудит 2026-07-12 (H-4): повторяемые события и txn-дедуп ─────────────────
+
+
+# redep/baddep повторяемы по одному click_id — окно дедупа только анти-ретрай (минуты);
+# одноразовые (ftd и прочие) — прежние 24 часа. Регистр не влияет.
+def test_dedup_window_repeatable_vs_one_shot() -> None:
+    from datetime import timedelta
+
+    from core.adset_pro.ingest import (
+        _DEDUP_WINDOW,
+        _DEDUP_WINDOW_REPEATABLE,
+        dedup_window_for,
+    )
+
+    assert dedup_window_for("ftd") == _DEDUP_WINDOW == timedelta(hours=24)
+    assert dedup_window_for("redep") == _DEDUP_WINDOW_REPEATABLE == timedelta(minutes=10)
+    assert dedup_window_for("REDEP") == _DEDUP_WINDOW_REPEATABLE
+    assert dedup_window_for("baddep") == _DEDUP_WINDOW_REPEATABLE
+    assert dedup_window_for("") == _DEDUP_WINDOW
+    assert dedup_window_for("reg") == _DEDUP_WINDOW
+
+
+# txn-id извлекается по известным ключам (первый непустой), пустые/отсутствующие → None.
+def test_txn_id_from_raw() -> None:
+    from core.adset_pro.ingest import _txn_id_from_raw
+
+    assert _txn_id_from_raw({"transaction_id": "t-1"}) == "t-1"
+    assert _txn_id_from_raw({"txn_id": 42}) == "42"
+    assert _txn_id_from_raw({"transaction_id": "", "conversion_id": "c-9"}) == "c-9"
+    assert _txn_id_from_raw({"unrelated": "x"}) is None
+    assert _txn_id_from_raw({}) is None
+    assert _txn_id_from_raw(None) is None
+
+
+# Анти-дрейф контракта: каждый ключ из _TXN_ID_RAW_KEYS обязан присутствовать
+# в COALESCE dedup-SQL — иначе txn-дедуп молча перестанет видеть этот ключ.
+@pytest.mark.asyncio
+async def test_dedup_sql_covers_all_txn_keys() -> None:
+    from core.adset_pro.ingest import _TXN_ID_RAW_KEYS
+
+    plan = [
+        _lock_step(),
+        _FakeResult(row=None),  # pre-INSERT SELECT — пусто
+        _FakeResult(row=_FakeRow((1,))),  # INSERT RETURNING id
+    ]
+    engine = _FakeEngine(plan)
+    await ingest_postback(engine, _event(click_id="sqlkeys-1"))
+
+    select_sql = engine.conn.executed[1][0]
+    for key in _TXN_ID_RAW_KEYS:
+        assert f"raw_json->>'{key}'" in select_sql, f"ключ {key} выпал из dedup-SQL"
+
+
+# redep с txn-id: в dedup-SELECT уходят txn_id, анти-ретрай type_since (10 мин)
+# и широкая 24ч граница since (partition pruning).
+@pytest.mark.asyncio
+async def test_redep_dedup_params_short_window_and_txn() -> None:
+    from datetime import timedelta
+
+    plan = [
+        _lock_step(),
+        _FakeResult(row=None),
+        _FakeResult(row=_FakeRow((1,))),
+    ]
+    engine = _FakeEngine(plan)
+    now = datetime.now(UTC)
+    event = _event(
+        click_id="rdp-1",
+        event_type="redep",
+        received_at=now,
+        raw={"transaction_id": "tx-7"},
+    )
+    await ingest_postback(engine, event)
+
+    params = engine.conn.executed[1][1]
+    assert params["txn_id"] == "tx-7"
+    assert params["type_since"] == now - timedelta(minutes=10)
+    assert params["since"] == now - timedelta(hours=24)
+
+
+# ftd без txn-id: type_since совпадает с 24ч границей (поведение не изменилось).
+@pytest.mark.asyncio
+async def test_ftd_dedup_params_unchanged() -> None:
+    from datetime import timedelta
+
+    plan = [
+        _lock_step(),
+        _FakeResult(row=None),
+        _FakeResult(row=_FakeRow((1,))),
+    ]
+    engine = _FakeEngine(plan)
+    now = datetime.now(UTC)
+    await ingest_postback(engine, _event(click_id="ftd-1", event_type="ftd", received_at=now))
+
+    params = engine.conn.executed[1][1]
+    assert params["txn_id"] is None
+    assert params["type_since"] == now - timedelta(hours=24)
+    assert params["since"] == now - timedelta(hours=24)

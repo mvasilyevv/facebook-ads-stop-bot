@@ -35,10 +35,39 @@ from core.adset_pro.schemas import PostbackEvent
 
 logger = logging.getLogger(__name__)
 
-# Окно дедупа по (click_id, event_type). AdSet.pro обычно ретраит постбэк в течение
-# минут, но мы держим запас на сутки — false-positive дублей у нас нет, потому что
+# Окно дедупа по (click_id, event_type) для ОДНОРАЗОВЫХ событий (ftd/reg/...).
+# AdSet.pro обычно ретраит постбэк в течение минут, но держим запас на сутки —
 # повторный реальный FTD по тому же click_id это нонсенс.
 _DEDUP_WINDOW = timedelta(hours=24)
+
+# Аудит 2026-07-12 (H-4): redep/baddep по определению ПОВТОРЯЮТСЯ по одному click_id
+# (игрок делает несколько депозитов за сутки). 24ч-окно глотало реальные повторные
+# депозиты → недосчёт → ложный STOP прибыльного ада. Для повторяемых событий дедуп
+# защищает только от доставочных ретраев AdSet.pro (минуты), не от повторов события.
+_REPEATABLE_EVENT_TYPES = frozenset({"redep", "baddep"})
+_DEDUP_WINDOW_REPEATABLE = timedelta(minutes=10)
+
+# Возможные ключи идентификатора транзакции в raw postback'а. Если AdSet.pro его
+# шлёт — дедуп точнее любых окон: ретрай несёт тот же id, новый депозит — другой.
+_TXN_ID_RAW_KEYS = ("transaction_id", "txn_id", "conversion_id", "postback_id")
+
+
+def _txn_id_from_raw(raw: dict[str, Any] | None) -> str | None:
+    """Идентификатор транзакции из raw postback'а (первый непустой из известных ключей)."""
+    if not raw:
+        return None
+    for key in _TXN_ID_RAW_KEYS:
+        value = raw.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def dedup_window_for(event_type: str) -> timedelta:
+    """Окно дедупа для типа события: повторяемые (redep/baddep) — анти-ретрай минуты."""
+    if (event_type or "").lower() in _REPEATABLE_EVENT_TYPES:
+        return _DEDUP_WINDOW_REPEATABLE
+    return _DEDUP_WINDOW
 
 
 @dataclass(slots=True, frozen=True)
@@ -72,7 +101,11 @@ async def ingest_postback(
     if event.fb_ad_id:
         fb_ad_fk = await _resolve_fb_ad_fk(engine, fb_ad_id=event.fb_ad_id)
 
+    # H-4: широкая граница (24ч) — для partition pruning и txn-дедупа; типовое окно —
+    # для оконного дедупа (у redep/baddep только анти-ретрай минуты).
     dedup_after = event.received_at - _DEDUP_WINDOW
+    type_window_after = event.received_at - dedup_window_for(event.event_type)
+    incoming_txn = _txn_id_from_raw(event.raw)
 
     # Ключ сериализации конкурентного дедупа == ключ pre-SELECT'а: (click_id, event_type).
     # Это то, что образует «одно событие» с точки зрения дедупа.
@@ -94,7 +127,10 @@ async def ingest_postback(
             {"lock_key": lock_key},
         )
 
-        # Шаг 1: пред-INSERT проверка окна дедупа — защищает от ретраев AdSet.pro.
+        # Шаг 1: пред-INSERT проверка дедупа — защищает от ретраев AdSet.pro.
+        # H-4 (аудит 2026-07-12): если в raw есть txn-id — дубль это ТА ЖЕ транзакция
+        # в 24ч окне (ретрай несёт тот же id, новый депозит — другой). Без txn-id —
+        # оконный дедуп: 24ч для одноразовых (ftd), минуты для повторяемых (redep).
         existing = await conn.execute(
             text(
                 """
@@ -103,6 +139,15 @@ async def ingest_postback(
                   AND event_type = :event_type
                   AND received_at >= :since
                   AND received_at <= :until
+                  AND (
+                    CASE WHEN CAST(:txn_id AS TEXT) IS NOT NULL THEN
+                        COALESCE(
+                            raw_json->>'transaction_id', raw_json->>'txn_id',
+                            raw_json->>'conversion_id', raw_json->>'postback_id'
+                        ) = :txn_id
+                    ELSE received_at >= :type_since
+                    END
+                  )
                 ORDER BY received_at DESC
                 LIMIT 1
                 """
@@ -112,6 +157,8 @@ async def ingest_postback(
                 "event_type": event.event_type,
                 "since": dedup_after,
                 "until": event.received_at,
+                "txn_id": incoming_txn,
+                "type_since": type_window_after,
             },
         )
         existing_row = existing.first()
