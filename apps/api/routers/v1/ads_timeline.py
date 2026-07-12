@@ -8,7 +8,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select, text
@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ads"])
 
+# M-17 (аудит 2026-07-12): cap ширины окна (зеркало history._MAX_RANGE_DAYS) и число
+# точек. Раньше произвольное from/to без LIMIT отдавало многомегабайтные ответы
+# (десятки тысяч MetricRow при adaptive-скане). Partition pruning работал, размер — нет.
+_MAX_RANGE_DAYS = 90
+_MAX_ROWS_PER_SOURCE = 5000
+
 
 @router.get("/ads/{fb_ad_id}/timeline", response_model=AdTimelineResponse)
 async def get_ad_timeline(
@@ -56,6 +62,12 @@ async def get_ad_timeline(
             to_dt = datetime.fromisoformat(to_iso) if to_iso else datetime.now(UTC)
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=422, detail=f"Неверный формат даты: {exc}") from exc
+        if to_dt < from_dt:
+            raise HTTPException(status_code=422, detail="to_iso раньше from_iso")
+        if (to_dt - from_dt) > timedelta(days=_MAX_RANGE_DAYS):
+            raise HTTPException(
+                status_code=422, detail=f"Диапазон не может превышать {_MAX_RANGE_DAYS} дней"
+            )
     else:
         from_dt, to_dt = default_window()
 
@@ -91,6 +103,7 @@ async def get_ad_timeline(
                 .where(AdMetrics.cycle_ts >= from_dt)
                 .where(AdMetrics.cycle_ts <= to_dt)
                 .order_by(AdMetrics.cycle_ts.asc())
+                .limit(_MAX_ROWS_PER_SOURCE)
             )
             metrics_rows = (await conn.execute(metrics_stmt)).fetchall()
             metrics = [
@@ -114,6 +127,7 @@ async def get_ad_timeline(
                 .where(AlertEvent.created_at >= from_dt)
                 .where(AlertEvent.created_at <= to_dt)
                 .order_by(AlertEvent.created_at.asc())
+                .limit(_MAX_ROWS_PER_SOURCE)
             )
             alerts_rows = (await conn.execute(alerts_stmt)).fetchall()
             alerts = [
@@ -145,6 +159,7 @@ async def get_ad_timeline(
                 .where(TaskQueue.created_at >= from_dt)
                 .where(TaskQueue.created_at <= to_dt)
                 .order_by(TaskQueue.created_at.asc())
+                .limit(_MAX_ROWS_PER_SOURCE)
             )
             tasks_rows = (await conn.execute(tasks_stmt)).fetchall()
             tasks = [

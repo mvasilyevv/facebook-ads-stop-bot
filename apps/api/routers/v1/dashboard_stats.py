@@ -67,7 +67,13 @@ async def _query_ad_counts(engine: AsyncEngine) -> dict[str, int]:
         WITH scope AS (
             SELECT COALESCE(
                 (SELECT MAX(started_at) FROM scan_runs
-                   WHERE outcome = 'success' AND finished_at IS NOT NULL),
+                   -- M-18 (аудит 2026-07-12): нижняя граница по партиционному ключу
+                   -- started_at — иначе MAX по outcome/finished_at (не покрыты индексом)
+                   -- делал фильтрованный проход всех партиций на КАЖДЫЙ /dashboard/stats
+                   -- и /batch (горячий polling). Последний success-скан всегда свежий
+                   -- (< минут), 7d с огромным запасом.
+                   WHERE started_at >= NOW() - INTERVAL '7 days'
+                     AND outcome = 'success' AND finished_at IS NOT NULL),
                 NOW() - INTERVAL '24 hours'
             ) AS since
         )

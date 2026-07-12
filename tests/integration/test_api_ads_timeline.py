@@ -308,3 +308,38 @@ async def test_timeline_100_metrics_performance(pg_engine, fake_redis_client):
 
     async with pg_engine.begin() as conn:
         await conn.execute(text("DELETE FROM offers WHERE id = :i"), {"i": offer_id})
+
+
+# M-17 (аудит 2026-07-12): диапазон > 90 дней → 422 (защита от многомегабайтных ответов).
+@pytest.mark.asyncio
+async def test_timeline_range_cap_422(pg_engine, fake_redis_client, timeline_fixture):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    fb_ad_id = timeline_fixture["fb_ad_id"]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/api/ads/{fb_ad_id}/timeline",
+            params={
+                "from_iso": "2026-01-01T00:00:00+00:00",
+                "to_iso": "2026-06-01T00:00:00+00:00",  # ~150 дней
+            },
+        )
+    assert resp.status_code == 422
+    assert "90" in resp.json()["detail"]
+
+
+# to_iso раньше from_iso → 422.
+@pytest.mark.asyncio
+async def test_timeline_inverted_range_422(pg_engine, fake_redis_client, timeline_fixture):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    fb_ad_id = timeline_fixture["fb_ad_id"]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/api/ads/{fb_ad_id}/timeline",
+            params={
+                "from_iso": "2026-05-10T00:00:00+00:00",
+                "to_iso": "2026-05-01T00:00:00+00:00",
+            },
+        )
+    assert resp.status_code == 422
