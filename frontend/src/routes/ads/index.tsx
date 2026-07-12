@@ -167,7 +167,26 @@ function AdsPage() {
       reason: "bulk-disable via dashboard",
     });
     clearSelection();
-    toast.success(`Создано ${res?.created?.length ?? ids.length} disable-задач`);
+    // Partial-failure виден оператору (аудит 2026-07-12, H-8): молчание про failed
+    // означало «все остановятся», пока часть адов продолжала жечь бюджет.
+    const failed = res?.failed ?? [];
+    const skippedNonDup = (res?.skipped ?? []).filter((s) => s.reason !== "duplicate");
+    if (failed.length > 0) {
+      toast.error(
+        `Не удалось создать ${failed.length} disable-задач`,
+        failed.map((f) => `${f.fb_ad_id}: ${f.reason}`).join("; "),
+      );
+    }
+    if (skippedNonDup.length > 0) {
+      toast.error(
+        `Пропущено ${skippedNonDup.length} объявлений`,
+        skippedNonDup.map((s) => `${s.fb_ad_id}: ${s.reason}`).join("; "),
+      );
+    }
+    const createdCount = res?.created?.length ?? 0;
+    if (createdCount > 0 || (failed.length === 0 && skippedNonDup.length === 0)) {
+      toast.success(`Создано ${createdCount} disable-задач`);
+    }
   }
 
   // ── Hard-delete выбранных из каталога (необратимо) ──────────────────────────

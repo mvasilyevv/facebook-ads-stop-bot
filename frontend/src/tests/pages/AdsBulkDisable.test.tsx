@@ -10,7 +10,7 @@
  *   5. Empty state при отсутствии объявлений.
  */
 
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -221,5 +221,81 @@ describe("AdsPage — bulk disable money-flow", () => {
     await renderAdsPage();
 
     expect(screen.getByText(/Объявлений нет/i)).toBeInTheDocument();
+  });
+});
+
+// ─── Partial failure (аудит 2026-07-12, H-8) ─────────────────────────────────
+// Бэк возвращает HTTP 200 с {created, skipped, failed}; молчание про failed
+// означало «все остановятся», пока часть адов продолжала жечь бюджет.
+
+describe("AdsPage — bulk disable partial failure (H-8)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(useAds).mockReturnValue({
+      data: { data: MOCK_ADS, total: 2 },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useAds>);
+  });
+
+  // MONEY: непустой failed → оператор видит toast.error со списком провалившихся адов.
+  it("MONEY: failed в ответе bulk-disable показывает toast.error", async () => {
+    const { toast } = await import("../../components/ui/Toast");
+    const errorSpy = vi.spyOn(toast, "error");
+    const successSpy = vi.spyOn(toast, "success");
+    mockBulkDisable.mockResolvedValueOnce({
+      created: [{ id: "1" }],
+      skipped: [],
+      failed: [{ fb_ad_id: "222", reason: "ad не найден в каталоге" }],
+    });
+
+    const user = userEvent.setup();
+    await renderAdsPage();
+    await selectAllRows(user);
+    const bar = screen.getByRole("toolbar");
+    await user.click(within(bar).getByRole("button", { name: /Отключить 2 объявлений/i }));
+    const input = screen.getByPlaceholderText("DISABLE");
+    await user.type(input, "DISABLE");
+    await user.click(screen.getByRole("button", { name: /^Отключить 2$/i }));
+
+    await waitFor(() => {
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("1 disable-задач"),
+        expect.stringContaining("222"),
+      );
+    });
+    // Успешная часть тоже отражена (создана 1 задача).
+    expect(successSpy).toHaveBeenCalledWith(expect.stringContaining("Создано 1"));
+  });
+
+  // Все провалились → только error-toast, success не показываем.
+  it("MONEY: полный провал bulk-disable не показывает success-toast", async () => {
+    const { toast } = await import("../../components/ui/Toast");
+    const errorSpy = vi.spyOn(toast, "error");
+    const successSpy = vi.spyOn(toast, "success");
+    mockBulkDisable.mockResolvedValueOnce({
+      created: [],
+      skipped: [],
+      failed: [
+        { fb_ad_id: "111", reason: "гонка" },
+        { fb_ad_id: "222", reason: "гонка" },
+      ],
+    });
+
+    const user = userEvent.setup();
+    await renderAdsPage();
+    await selectAllRows(user);
+    const bar = screen.getByRole("toolbar");
+    await user.click(within(bar).getByRole("button", { name: /Отключить 2 объявлений/i }));
+    const input = screen.getByPlaceholderText("DISABLE");
+    await user.type(input, "DISABLE");
+    await user.click(screen.getByRole("button", { name: /^Отключить 2$/i }));
+
+    await waitFor(() => {
+      expect(errorSpy).toHaveBeenCalled();
+    });
+    expect(successSpy).not.toHaveBeenCalled();
   });
 });
