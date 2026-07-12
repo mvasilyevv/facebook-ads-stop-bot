@@ -28,14 +28,20 @@ class TrackerAggregate(UUIDPrimaryKey, Timestamp, Base):
 
     UNIQUE(ad_id, country, day) — гарантия идемпотентности UPSERT.
     Rebuild-паттерн через tracker_aggregator.
+
+    M-9 (аудит 2026-07-12): ad_id FK — ondelete=SET NULL, а не CASCADE. Hard-delete
+    fb_ads раньше каскадом уничтожал агрегаты и делал их невосстановимыми (постбэки
+    выживают через SET NULL, но aggregator скипает fb_ad_fk IS NULL → пересчитать
+    нечем). Теперь revenue-история переживает удаление ада (строка с ad_id=NULL).
     """
 
     __tablename__ = "tracker_aggregate"
 
-    ad_id: Mapped[uuid.UUID] = mapped_column(
+    # nullable + SET NULL: агрегат-история переживает hard-delete ада (M-9).
+    ad_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("fb_ads.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("fb_ads.id", ondelete="SET NULL"),
+        nullable=True,
     )
     country: Mapped[str] = mapped_column(String(2), nullable=False)
     day: Mapped[date] = mapped_column(Date, nullable=False)
