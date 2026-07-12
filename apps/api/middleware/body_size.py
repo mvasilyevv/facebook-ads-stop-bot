@@ -1,12 +1,20 @@
 # -*- coding: utf-8 -*-
 """Middleware с лимитом размера тела запроса (защита от DoS).
 
-Проверяет Content-Length до того, как handler начнёт читать body. Запросы без
-тела (GET/HEAD/OPTIONS) пропускаются мгновенно.
+Два уровня защиты (аудит 2026-07-12, H-9):
+1. Быстрый pre-check по Content-Length — отбивает честно объявленные большие
+   тела 413-м ДО чтения body.
+2. Фактический счётчик байт на receive-канале — закрывает обход через
+   Transfer-Encoding: chunked (без Content-Length) и лживый Content-Length:
+   раньше такой запрос проходил без ограничения, а request.json() читал всё
+   тело в память → OOM/DoS публичного POST /api/v1/postback/adsetpro.
 
 Лимит 64 KB подобран под публичный endpoint POST /api/v1/postback/adsetpro:
 постбэк трекера — это маленький JSON, на порядки меньше лимита. Остальные
 endpoints API тело не принимают, поэтому общий лимит на app-level безопасен.
+
+Реализация — pure ASGI (не BaseHTTPMiddleware): нужен доступ к receive-каналу
+для подсчёта фактических байт.
 
 Исключение (H7b): /api/tools/* грузят multipart с медиа (creative-uniquify и
 campaigns/upload — реальные файлы много больше 64 KB) — у них свой внутренний лимит
@@ -18,9 +26,8 @@ campaigns/* — X-API-Key (ApiKeyAuthMiddleware); общий — собстве�
 
 from __future__ import annotations
 
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 MAX_REQUEST_BODY_BYTES = 64 * 1024
 
@@ -31,32 +38,86 @@ _BODYLESS_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _EXEMPT_PATH_PREFIXES = ("/api/tools/",)
 
 
-class BodySizeLimitMiddleware(BaseHTTPMiddleware):
-    """Отбивает запросы с Content-Length больше лимита 413-м ответом."""
+class _BodyTooLargeError(Exception):
+    """Фактический размер тела превысил лимит во время чтения (chunked-путь)."""
 
-    async def dispatch(
-        self,
-        request: Request,
-        call_next: RequestResponseEndpoint,
-    ) -> Response:
-        if request.method.upper() not in _BODYLESS_METHODS and not any(
-            request.url.path.startswith(p) for p in _EXEMPT_PATH_PREFIXES
-        ):
-            raw = request.headers.get("content-length")
-            if raw is not None:
-                try:
-                    size = int(raw)
-                except ValueError:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"detail": "invalid content-length header"},
-                    )
-                if size > MAX_REQUEST_BODY_BYTES:
-                    return JSONResponse(
-                        status_code=413,
-                        content={
-                            "detail": "request body too large",
-                            "max_bytes": MAX_REQUEST_BODY_BYTES,
-                        },
-                    )
-        return await call_next(request)
+
+class BodySizeLimitMiddleware:
+    """Отбивает запросы с телом больше лимита 413-м ответом (pure ASGI)."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = str(scope.get("method", "")).upper()
+        path = str(scope.get("path", ""))
+        if method in _BODYLESS_METHODS or any(path.startswith(p) for p in _EXEMPT_PATH_PREFIXES):
+            await self.app(scope, receive, send)
+            return
+
+        # Уровень 1: быстрый pre-check по объявленному Content-Length.
+        raw = _header(scope, b"content-length")
+        if raw is not None:
+            try:
+                size = int(raw)
+            except ValueError:
+                await _reject(
+                    scope, receive, send, status=400, detail="invalid content-length header"
+                )
+                return
+            if size > MAX_REQUEST_BODY_BYTES:
+                await _reject_too_large(scope, receive, send)
+                return
+
+        # Уровень 2 (H-9): фактический счётчик байт — chunked и лживый Content-Length.
+        received_bytes = 0
+        response_started = False
+
+        async def limited_receive() -> Message:
+            nonlocal received_bytes
+            message = await receive()
+            if message["type"] == "http.request":
+                received_bytes += len(message.get("body") or b"")
+                if received_bytes > MAX_REQUEST_BODY_BYTES:
+                    raise _BodyTooLargeError()
+            return message
+
+        async def tracking_send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, tracking_send)
+        except _BodyTooLargeError:
+            # Ответ ещё не начат (handler упал на чтении body) → честный 413.
+            # Если start уже ушёл клиенту — перепослать нельзя, пробрасываем.
+            if response_started:
+                raise
+            await _reject_too_large(scope, receive, send)
+
+
+def _header(scope: Scope, name: bytes) -> bytes | None:
+    """Значение заголовка из ASGI-scope (первое совпадение, lower-case имя)."""
+    for key, value in scope.get("headers") or ():
+        if key == name:
+            return value
+    return None
+
+
+async def _reject(scope: Scope, receive: Receive, send: Send, *, status: int, detail: str) -> None:
+    response = JSONResponse(status_code=status, content={"detail": detail})
+    await response(scope, receive, send)
+
+
+async def _reject_too_large(scope: Scope, receive: Receive, send: Send) -> None:
+    response = JSONResponse(
+        status_code=413,
+        content={"detail": "request body too large", "max_bytes": MAX_REQUEST_BODY_BYTES},
+    )
+    await response(scope, receive, send)
