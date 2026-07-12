@@ -42,8 +42,11 @@ _MAX_LIMIT = 500
 # Статусы в которых допустим retry
 _RETRYABLE_STATUSES = {"failed", "cancelled"}
 
-# Терминальные статусы (cancel запрещён)
-_TERMINAL_STATUSES = {"succeeded", "cancelled"}
+# Статусы, в которых cancel запрещён: терминальные + running (аудит 2026-07-12, H-7).
+# Отмена во время исполнения meta_api_worker'ом приводила к рассинхрону: мутация в Meta
+# реально выполнялась, но mark_task_succeeded видел status='cancelled' → applied=False →
+# sync_fsm_after_mutation пропускался, ad_alert_state застревал в stop_sent.
+_CANCEL_BLOCKED_STATUSES = {"succeeded", "cancelled", "running"}
 
 # Статусы которые нельзя retry (активные)
 _ACTIVE_STATUSES = {"running", "succeeded", "pending"}
@@ -370,7 +373,8 @@ async def cancel_disable_task(
 
     Переводит status в 'cancelled'.
     404 если задача не найдена или не disable.
-    409 если задача уже в терминальном статусе (succeeded/cancelled).
+    409 если задача в терминальном статусе (succeeded/cancelled) или исполняется
+    прямо сейчас (running) — отмена running-задачи ломала FSM-sync (H-7).
     """
     async with engine.connect() as conn:
         row = (
@@ -386,10 +390,10 @@ async def cancel_disable_task(
     if row is None or not is_disable_row(row.task_type, row.mutation_kind):
         raise HTTPException(status_code=404, detail=f"disable-задача id={task_id} не найдена")
 
-    if row.status in _TERMINAL_STATUSES:
+    if row.status in _CANCEL_BLOCKED_STATUSES:
         raise HTTPException(
             status_code=409,
-            detail=f"Нельзя отменить задачу в терминальном статусе '{row.status}'",
+            detail=f"Нельзя отменить задачу в статусе '{row.status}'",
         )
 
     async with engine.begin() as conn:
@@ -400,7 +404,7 @@ async def cancel_disable_task(
                 SET status = 'cancelled',
                     completed_at = NOW(),
                     updated_at = NOW()
-                WHERE id = :tid AND status NOT IN ('succeeded', 'cancelled')
+                WHERE id = :tid AND status NOT IN ('succeeded', 'cancelled', 'running')
                 """
             ),
             {"tid": task_id},

@@ -376,3 +376,31 @@ async def test_list_includes_meta_api_pause_ad(pg_engine, fake_redis_client, cle
     assert items[0]["task_type"] == "meta_api_mutation"
     # fb_ad_id резолвится из payload->>'target_id' через COALESCE.
     assert items[0]["fb_ad_id"] == fb_ad_id
+
+
+# ─── Тест 12 ─────────────────────────────────────────────────────────────────
+# Аудит 2026-07-12 H-7: отмена running-задачи запрещена — иначе мутация в Meta
+# успевала выполниться, mark_task_succeeded видел 'cancelled' → FSM-sync пропускался,
+# ad_alert_state застревал в stop_sent при реально поставленной паузе.
+@pytest.mark.asyncio
+async def test_cancel_disable_task_running_conflict(
+    pg_engine, fake_redis_client, clean_tasks
+) -> None:
+    """DELETE для running-задачи → 409, статус в БД остаётся 'running'."""
+    suffix = uuid.uuid4().hex[:6]
+    async with pg_engine.begin() as conn:
+        fb_ad_id = await _seed_ad(conn, suffix)
+        task_id = await _insert_task(conn, fb_ad_id, "running", suffix)
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.delete(f"/api/dashboard/disable-tasks/{task_id}")
+
+    assert resp.status_code == 409
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status FROM task_queue WHERE id = :tid"), {"tid": task_id}
+            )
+        ).first()
+    assert row is not None and row.status == "running"
