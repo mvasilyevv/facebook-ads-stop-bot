@@ -15,7 +15,7 @@ Revises: 0032_tracker_revenue_scale
 
 from alembic import op
 
-revision = "0033_tracker_aggregate_ad_id_set_null"
+revision = "0033_tracker_agg_setnull"
 down_revision = "0032_tracker_revenue_scale"
 branch_labels = None
 depends_on = None
