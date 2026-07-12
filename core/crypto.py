@@ -83,7 +83,13 @@ def _lock_path() -> str:
 
 
 def _read_env_key(var: str = "ENCRYPTION_KEY") -> str:
-    """Читает значение переменной прямо из .env (последнее вхождение — как в shell).
+    """Читает значение ENCRYPTION_KEY: сперва os.environ, затем .env-файл.
+
+    M-13 (аудит 2026-07-12): раньше смотрели ТОЛЬКО файл .env, игнорируя реальную
+    env-переменную. get_settings()/Fernet читают через pydantic-settings, где env
+    имеет приоритет над .env-файлом. При env-only деплое (k8s/helm Secret → env, без
+    материализации в файл) bootstrap не видел ключ → генерировал ВТОРОЙ → verify-fail
+    краш / риск порчи зашифрованных токенов БД. Теперь os.environ — источник №1.
 
     Отдельно от get_settings(): та кэширует Settings на процесс, а нам нужен
     актуальный диск после double-check внутри flock. Побеждает последняя строка —
@@ -95,6 +101,10 @@ def _read_env_key(var: str = "ENCRYPTION_KEY") -> str:
     Returns:
         Значение переменной (без кавычек/пробелов) или "" если не найдено.
     """
+    env_value = os.environ.get(var, "").strip()
+    if env_value:
+        return env_value
+
     env = _env_path()
     value = ""
     try:

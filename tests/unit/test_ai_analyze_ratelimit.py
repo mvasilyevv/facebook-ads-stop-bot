@@ -44,14 +44,15 @@ def test_extract_client_key_xff_single_ip() -> None:
     assert _extract_client_key(req, trust_proxy=True) == "203.0.113.42"
 
 
-# X-Forwarded-For: цепочка proxy — берётся самый левый (реальный клиент, за прокси)
-def test_extract_client_key_xff_chain_takes_first() -> None:
-    """X-Forwarded-For с цепочкой → первый IP при trust_proxy=True."""
+# M-16: XFF-цепочка при 1 доверенном прокси → реальный клиент = ПРАВЫЙ IP (peer,
+# дописанный прокси), а не клиент-контролируемый левый.
+def test_extract_client_key_xff_chain_takes_real_client() -> None:
+    """X-Forwarded-For с цепочкой → правый IP при 1 доверенном прокси."""
     req = MagicMock()
     req.headers = {"X-Forwarded-For": "203.0.113.42, 10.0.0.1, 192.168.1.1"}
     req.client = MagicMock()
     req.client.host = "172.16.0.1"
-    assert _extract_client_key(req, trust_proxy=True) == "203.0.113.42"
+    assert _extract_client_key(req, trust_proxy=True, trusted_proxy_count=1) == "192.168.1.1"
 
 
 # X-Forwarded-For пустая строка → fallback на client.host

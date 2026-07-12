@@ -34,8 +34,31 @@ def test_client_key_spoofed_xff_no_bypass() -> None:
 
 # За доверенным прокси (trust_proxy=True) берётся первый (левый) IP из XFF
 def test_client_key_trusts_xff_when_enabled() -> None:
+    # M-16: за 1 доверенным прокси реальный клиент — ПРАВЫЙ IP (peer, дописанный
+    # прокси), а не клиент-присланный левый. "1.2.3.4, 10.0.0.1" → 10.0.0.1.
     req = _FakeRequest(xff="1.2.3.4, 10.0.0.1", peer="10.0.0.9")
-    assert _extract_client_key(req, trust_proxy=True) == "1.2.3.4"
+    assert _extract_client_key(req, trust_proxy=True, trusted_proxy_count=1) == "10.0.0.1"
+
+
+# M-16: клиент подделывает левый IP за прокси → ключ всё равно реальный peer справа.
+def test_client_key_spoofed_left_xff_no_bypass_behind_proxy() -> None:
+    req1 = _FakeRequest(xff="9.9.9.9, 10.0.0.1", peer="10.0.0.9")
+    req2 = _FakeRequest(xff="8.8.8.8, 10.0.0.1", peer="10.0.0.9")
+    k1 = _extract_client_key(req1, trust_proxy=True, trusted_proxy_count=1)
+    k2 = _extract_client_key(req2, trust_proxy=True, trusted_proxy_count=1)
+    assert k1 == k2 == "10.0.0.1"
+
+
+# M-16: 2 доверенных прокси → реальный клиент 2-й справа.
+def test_client_key_two_trusted_proxies() -> None:
+    req = _FakeRequest(xff="9.9.9.9, 203.0.113.5, 10.0.0.1", peer="10.0.0.9")
+    assert _extract_client_key(req, trust_proxy=True, trusted_proxy_count=2) == "203.0.113.5"
+
+
+# M-16: XFF короче цепочки прокси (аномалия) → клемп на самый левый.
+def test_client_key_xff_shorter_than_chain_clamps_left() -> None:
+    req = _FakeRequest(xff="10.0.0.1", peer="10.0.0.9")
+    assert _extract_client_key(req, trust_proxy=True, trusted_proxy_count=3) == "10.0.0.1"
 
 
 # Нет client и нет XFF → 'unknown'

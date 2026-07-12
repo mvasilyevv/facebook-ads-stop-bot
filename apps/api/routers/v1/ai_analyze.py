@@ -41,21 +41,30 @@ _ANALYZE_RATE_LIMIT = 20
 _RATE_LIMIT_NAMESPACE = "analyze"
 
 
-def _extract_client_key(request: Request, *, trust_proxy: bool = False) -> str:
+def _extract_client_key(
+    request: Request, *, trust_proxy: bool = False, trusted_proxy_count: int = 1
+) -> str:
     """Извлечь ключ клиента для rate-limit.
 
     trust_proxy=True (settings.trust_proxy_headers — API за доверенным reverse-proxy):
-    берём первый IP из X-Forwarded-For. Иначе (дефолт) — request.client.host (реальный
-    TCP-peer). H7a: XFF подделывается любым клиентом, доверие ему без проверки прокси =
-    обход IP-rate-limit от имени чужого IP → бесконтрольный расход AI-бюджета.
+    берём реальный client-IP из X-Forwarded-For. Иначе (дефолт) — request.client.host
+    (реальный TCP-peer). H7a: XFF подделывается любым клиентом.
+
+    M-16 (аудит 2026-07-12): при XFF `<client>, <proxy1>, ..., <proxyN>` каждый
+    доверенный прокси дописывает peer СПРАВА, поэтому реальный клиент — (N+1)-й справа,
+    а левые элементы клиент-контролируемы. Раньше брали самый левый → обход rate-limit
+    даже за корректным прокси. Берём элемент с индексом trusted_proxy_count с конца.
     """
     if trust_proxy:
         forwarded_for = request.headers.get("X-Forwarded-For", "")
         if forwarded_for:
-            # X-Forwarded-For: <client>, <proxy1>, <proxy2> — берём самый левый.
-            first_ip = forwarded_for.split(",")[0].strip()
-            if first_ip:
-                return first_ip
+            parts = [p.strip() for p in forwarded_for.split(",") if p.strip()]
+            if parts:
+                # Каждый доверенный прокси дописывает peer справа: реальный клиент —
+                # N-й элемент С КОНЦА (N = trusted_proxy_count). Если XFF короче цепочки
+                # прокси (аномалия) — берём самый левый (клемп, безопаснее).
+                n = min(trusted_proxy_count, len(parts))
+                return parts[-n]
     return (request.client.host if request.client else None) or "unknown"
 
 
@@ -109,7 +118,11 @@ async def ai_analyze(
     """
     # M9: rate-limit ПЕРВЫМ (до проверки провайдера), иначе незалимиченный enumeration
     # доступности AI. XFF учитывается только за доверенным прокси (H7a), иначе TCP-peer.
-    client_key = _extract_client_key(request, trust_proxy=settings.trust_proxy_headers)
+    client_key = _extract_client_key(
+        request,
+        trust_proxy=settings.trust_proxy_headers,
+        trusted_proxy_count=settings.trusted_proxy_count,
+    )
     try:
         await check_and_increment(
             redis,

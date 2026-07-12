@@ -99,6 +99,10 @@ class Settings(BaseSettings):
 
     # --- Telegram Mini App ---
     tma_session_ttl_seconds: int = 3600
+    # M-15 (аудит 2026-07-12): окно приёма initData при /tma/auth. Дефолт валидатора
+    # 86400с (24ч) — слишком широкий для replay перехваченного initData. Сужаем до 1ч:
+    # клиент шлёт свежий initData при каждом открытии Mini App.
+    tma_init_data_max_age_seconds: int = 3600
     web_app_url: str | None = None
     # Секрет для подписи TMA-сессионных токенов (itsdangerous). Пусто → фолбэк на
     # encryption_key. Должен быть стабильным между рестартами (иначе токены протухают).
@@ -182,6 +186,12 @@ class Settings(BaseSettings):
     # который сам выставляет XFF. По умолчанию False: XFF подделывается любым клиентом,
     # и доверие ему без прокси = обход IP-rate-limit (H7a) → используем реальный TCP-peer.
     trust_proxy_headers: bool = False
+    # M-16 (аудит 2026-07-12): число доверенных reverse-proxy перед API. При XFF
+    # `<client>, <proxy1>, ..., <proxyN>` реальный клиент — это (N+1)-й элемент СПРАВА
+    # (каждый доверенный прокси дописывает peer справа). Левые элементы контролируются
+    # клиентом. Брать самый левый (как раньше) = доверять клиент-присланному IP → обход
+    # rate-limit даже за корректно настроенным прокси. Дефолт 1 (один ingress).
+    trusted_proxy_count: int = 1
 
     @model_validator(mode="after")
     def _warn_insecure_defaults(self) -> "Settings":

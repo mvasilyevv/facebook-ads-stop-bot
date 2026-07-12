@@ -135,6 +135,33 @@ async def handle_dis_callback(
         pass
 
 
+async def _has_live_enable_reco(engine: AsyncEngine, *, fb_ad_id: str) -> bool:
+    """True если для fb_ad_id есть НЕ промоутнутая enable-рекомендация (свежая кнопка).
+
+    M-14 (аудит 2026-07-12): защита от устаревшей ereco-кнопки из истории чата.
+    Без неё старая кнопка безусловно включала объявление, которое сейчас может
+    корректно стоять убыточным. Зеркалит replay-guard кнопки dis (по open_token).
+    """
+    from sqlalchemy import text
+
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT 1 FROM enable_recommendations er
+                    JOIN fb_ads fa ON fa.id = er.ad_id
+                    WHERE fa.fb_ad_id = :fb_ad_id
+                      AND er.promoted_to_task_id IS NULL
+                    LIMIT 1
+                    """
+                ),
+                {"fb_ad_id": fb_ad_id},
+            )
+        ).first()
+    return row is not None
+
+
 async def handle_enable_reco_callback(
     *,
     engine: AsyncEngine,
@@ -146,6 +173,10 @@ async def handle_enable_reco_callback(
     """ereco: создаёт задачу на включение через Marketing API (activate_ad)."""
     requested_by = f"tg:{username}"
     try:
+        # M-14: отклоняем устаревшую кнопку (рекомендация уже промоутнута/снята).
+        if not await _has_live_enable_reco(engine, fb_ad_id=fb_ad_id):
+            await _answer(client, cq_id, "Рекомендация устарела")
+            return
         task_id = await _create_toggle_mutation(
             engine,
             mutation_kind="activate_ad",
@@ -157,8 +188,13 @@ async def handle_enable_reco_callback(
     except Exception:
         logger.exception("create enable task (ereco) failed")
         ack = "Ошибка"
+    await _answer(client, cq_id, ack)
+
+
+async def _answer(client: TelegramBotClient, cq_id: str, text: str) -> None:
+    """Best-effort ответ на callback query (не роняет обработчик)."""
     try:
-        await client.answer_callback_query(cq_id, text=ack)
+        await client.answer_callback_query(cq_id, text=text)
     except Exception:
         pass
 

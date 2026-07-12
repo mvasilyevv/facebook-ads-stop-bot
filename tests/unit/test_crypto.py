@@ -358,3 +358,32 @@ async def test_rotate_encryption_key_error_message_lists_problem_fields(
 
     with pytest.raises(crypto.EncryptionKeyRotationError, match=r"telegram_config\[7\]"):
         await crypto.rotate_encryption_key(old_key, new_key)
+
+
+# M-13 (аудит 2026-07-12): _read_env_key берёт ENCRYPTION_KEY из os.environ, если задан,
+# даже когда .env-файла нет / он содержит другое значение. env-only деплой (k8s Secret).
+def test_read_env_key_prefers_os_environ(monkeypatch, tmp_path) -> None:
+    # .env-файл содержит СТАРЫЙ ключ, env-переменная — новый.
+    env_file = tmp_path / ".env"
+    env_file.write_text("ENCRYPTION_KEY=file-value\n", encoding="utf-8")
+    monkeypatch.setattr(crypto, "_env_path", lambda: str(env_file))
+    monkeypatch.setenv("ENCRYPTION_KEY", "env-value")
+    assert crypto._read_env_key() == "env-value"
+
+
+# Без env-переменной падаем на .env-файл (прежнее bare-metal поведение сохранено).
+def test_read_env_key_falls_back_to_file(monkeypatch, tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("ENCRYPTION_KEY=file-value\n", encoding="utf-8")
+    monkeypatch.setattr(crypto, "_env_path", lambda: str(env_file))
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
+    assert crypto._read_env_key() == "file-value"
+
+
+# Пустая env-переменная не перебивает файл (пустое = не задано).
+def test_read_env_key_empty_env_falls_back(monkeypatch, tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("ENCRYPTION_KEY=file-value\n", encoding="utf-8")
+    monkeypatch.setattr(crypto, "_env_path", lambda: str(env_file))
+    monkeypatch.setenv("ENCRYPTION_KEY", "   ")
+    assert crypto._read_env_key() == "file-value"

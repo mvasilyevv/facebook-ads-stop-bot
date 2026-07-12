@@ -120,7 +120,12 @@ async def tma_auth(
         raise HTTPException(status_code=503, detail="TMA auth не настроен (нет secret)")
 
     try:
-        data = validate_init_data(body.init_data, cfg.bot_token)
+        # M-15: узкое окно replay (дефолт 1ч вместо 24ч валидатора).
+        data = validate_init_data(
+            body.init_data,
+            cfg.bot_token,
+            max_age_seconds=settings.tma_init_data_max_age_seconds,
+        )
     except InvalidInitDataError as exc:
         raise HTTPException(status_code=401, detail=f"initData невалиден: {exc}") from exc
 

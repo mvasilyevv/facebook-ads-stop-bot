@@ -266,6 +266,20 @@ async def test_double_ereco_callback_does_not_duplicate(
     pg_engine,
     stopped_ad_e2e,
 ) -> None:
+    # M-14: ereco-кнопка требует живую (не промоутнутую) рекомендацию — создаём её.
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO enable_recommendations
+                    (ad_id, snapshot_metrics, recommendation_level,
+                     live_batch_started_at, idempotency_key)
+                VALUES (:aid, CAST('{}' AS JSONB), 'ok', NOW(), :ik)
+                """
+            ),
+            {"aid": stopped_ad_e2e["ad_id"], "ik": f"ereco-{uuid.uuid4().hex[:10]}"},
+        )
+
     cb_tg = _FakeTGClient()
     # Первый клик создаёт activate_ad task
     await handle_enable_reco_callback(
@@ -299,3 +313,79 @@ async def test_double_ereco_callback_does_not_duplicate(
             )
         ).scalar()
     assert n == 1
+
+
+# M-14 (аудит 2026-07-12): устаревшая ereco-кнопка (нет живой рекомендации) →
+# отклоняется «Рекомендация устарела», задача activate_ad НЕ создаётся.
+@pytest.mark.asyncio
+async def test_ereco_stale_button_rejected(pg_engine, stopped_ad_e2e) -> None:
+    # Рекомендацию НЕ создаём (или она уже промоутнута) → кнопка устарела.
+    cb_tg = _FakeTGClient()
+    await handle_enable_reco_callback(
+        engine=pg_engine,
+        client=cb_tg,
+        cq_id="cb-stale",
+        fb_ad_id=stopped_ad_e2e["fb_ad_id"],
+        username="reviewer",
+    )
+    acks = [t for _, t in cb_tg.acks]
+    assert any("устарел" in a.lower() for a in acks)
+
+    async with pg_engine.connect() as conn:
+        n = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM task_queue "
+                    "WHERE task_type = 'meta_api_mutation' "
+                    "AND payload->>'mutation_kind' = 'activate_ad' "
+                    "AND payload->>'target_id' = :fb"
+                ),
+                {"fb": stopped_ad_e2e["fb_ad_id"]},
+            )
+        ).scalar()
+    assert n == 0
+
+
+# M-14: промоутнутая рекомендация (promoted_to_task_id задан) → кнопка тоже устарела.
+@pytest.mark.asyncio
+async def test_ereco_promoted_recommendation_rejected(pg_engine, stopped_ad_e2e) -> None:
+    async with pg_engine.begin() as conn:
+        # Создаём задачу-заглушку, на которую сошлёмся как promoted.
+        task_id = (
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO task_queue (task_type, status, idempotency_key, payload)
+                    VALUES ('meta_api_mutation', 'succeeded', :ik, CAST('{}' AS JSONB))
+                    RETURNING id
+                    """
+                ),
+                {"ik": f"promo-{uuid.uuid4().hex[:10]}"},
+            )
+        ).scalar()
+        await conn.execute(
+            text(
+                """
+                INSERT INTO enable_recommendations
+                    (ad_id, snapshot_metrics, recommendation_level,
+                     live_batch_started_at, idempotency_key, promoted_to_task_id)
+                VALUES (:aid, CAST('{}' AS JSONB), 'ok', NOW(), :ik, :tid)
+                """
+            ),
+            {
+                "aid": stopped_ad_e2e["ad_id"],
+                "ik": f"ereco-{uuid.uuid4().hex[:10]}",
+                "tid": task_id,
+            },
+        )
+
+    cb_tg = _FakeTGClient()
+    await handle_enable_reco_callback(
+        engine=pg_engine,
+        client=cb_tg,
+        cq_id="cb-promoted",
+        fb_ad_id=stopped_ad_e2e["fb_ad_id"],
+        username="reviewer",
+    )
+    acks = [t for _, t in cb_tg.acks]
+    assert any("устарел" in a.lower() for a in acks)
