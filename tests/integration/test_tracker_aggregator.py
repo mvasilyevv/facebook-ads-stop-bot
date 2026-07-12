@@ -293,9 +293,10 @@ async def test_aggregate_excludes_duplicates_and_null_fk(pg_engine, clean_agg) -
     assert agg["revenue"] == Decimal("20")
 
 
-# Событие без country в raw_json → не агрегируется (country в tracker_aggregate NOT NULL).
+# M-8 (аудит 2026-07-12): событие без country → бакет country='XX' (деньги
+# сохраняются), а НЕ дроп. Раньше deposits/revenue таких постбэков терялись.
 @pytest.mark.asyncio
-async def test_aggregate_excludes_missing_country(pg_engine, clean_agg) -> None:
+async def test_aggregate_missing_country_goes_to_sentinel(pg_engine, clean_agg) -> None:
     ad_id = clean_agg
     base = datetime(2026, 5, 24, 8, 0, tzinfo=UTC)
     await _insert_event(
@@ -307,20 +308,18 @@ async def test_aggregate_excludes_missing_country(pg_engine, clean_agg) -> None:
         received_at=base,
         country=None,
     )
-    await aggregate_postback_events(
+    result = await aggregate_postback_events(
         pg_engine,
         window_start=datetime(2026, 5, 24, 0, 0, tzinfo=UTC),
         window_end=datetime(2026, 5, 24, 23, 0, tzinfo=UTC),
     )
-    # Ни одной строки агрегата для этого ad за этот день (country неизвестен).
-    async with pg_engine.connect() as conn:
-        cnt = (
-            await conn.execute(
-                text("SELECT COUNT(*) FROM tracker_aggregate WHERE ad_id = :a AND day = :d"),
-                {"a": ad_id, "d": base.date()},
-            )
-        ).scalar()
-    assert cnt == 0
+    # Депозит и revenue не потеряны — они в sentinel-строке country='XX'.
+    agg = await _get_agg(pg_engine, ad_id, "XX", base.date())
+    assert agg is not None, "постбэк без country должен попасть в sentinel 'XX', не дропаться"
+    assert agg["deposits"] == 1
+    assert agg["revenue"] == Decimal("12")
+    # Счётчик-наблюдаемость по-прежнему считает такие постбэки (сигнал смены формата).
+    assert result.rows_dropped_invalid_country == 1
 
 
 # Инкремент: после агрегации добавили события того же дня → повторный прогон отражает ВСЕ.

@@ -68,9 +68,10 @@ class AggregationResult:
     rows_updated: int
     deposits_total: int
     revenue_total: Decimal
-    # LOW (аудит 02.07): постбэки с невалидным/отсутствующим country в этом окне —
-    # молча дропались раньше, теперь видны в логе прогона и в аудит-снимке
-    # system_config.tracker_aggregator_runs (apps/tracker_aggregator_worker/worker.py).
+    # Постбэки с невалидным/отсутствующим country в этом окне. M-8 (аудит 2026-07-12):
+    # больше НЕ дропаются (их deposits/revenue терялись из аналитики) — бакетятся в
+    # sentinel-строку country='XX'. Поле оставлено для наблюдаемости (сколько ушло в XX):
+    # видно в логе прогона и в system_config.tracker_aggregator_runs.
     rows_dropped_invalid_country: int = 0
 
 
@@ -114,8 +115,17 @@ _AGGREGATE_SQL = text(
           AND is_duplicate = FALSE
     ),
     filtered AS (
-        SELECT * FROM normalized
-        WHERE country IS NOT NULL AND char_length(country) = 2
+        -- M-8 (аудит 2026-07-12): события без валидного ISO-2 country НЕ дропаем —
+        -- иначе их deposits/revenue исчезали из аналитики трекера. Кладём в sentinel
+        -- 'XX' (агрегат-строка «страна неизвестна»), деньги сохраняются.
+        SELECT
+            ad_id,
+            CASE
+                WHEN country IS NOT NULL AND char_length(country) = 2 THEN country
+                ELSE 'XX'
+            END AS country,
+            day, event_type, revenue, received_at
+        FROM normalized
     )
     INSERT INTO tracker_aggregate
         (id, ad_id, country, day,
@@ -143,10 +153,10 @@ _AGGREGATE_SQL = text(
     """
 )
 
-# LOW (аудит 02.07): счётчик строк, отброшенных ИМЕННО из-за невалидного country (не
-# NULL fb_ad_fk и не is_duplicate — те исключения задокументированы и намеренны).
-# Раньше дроп был молчаливым — без счётчика невозможно было отличить "нет постбэков"
-# от "постбэки есть, но country не парсится" (например AdSet.pro сменил формат raw_json).
+# Счётчик строк без валидного country. M-8 (аудит 2026-07-12): они больше не
+# дропаются, а идут в sentinel country='XX' — счётчик остаётся сигналом «AdSet.pro
+# сменил формат raw_json» (например все постбэки внезапно в XX). NULL fb_ad_fk и
+# is_duplicate по-прежнему исключены (задокументированные намеренные исключения).
 _INVALID_COUNTRY_COUNT_SQL = text(
     """
     SELECT COUNT(*)
@@ -237,8 +247,8 @@ async def aggregate_postback_events(
     )
     if agg.rows_dropped_invalid_country > 0:
         logger.warning(
-            "tracker_aggregate: %d постбэков дня [%s..%s) отброшено из-за невалидного/"
-            "отсутствующего country в raw_json — проверь формат постбэков AdSet.pro",
+            "tracker_aggregate: %d постбэков дня [%s..%s) без валидного country → "
+            "sentinel 'XX' (деньги сохранены) — проверь формат постбэков AdSet.pro",
             agg.rows_dropped_invalid_country,
             day_floor.date(),
             day_ceil.date(),
