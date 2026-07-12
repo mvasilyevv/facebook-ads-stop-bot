@@ -46,12 +46,8 @@ def _offer() -> OfferRules:
         offer_id=uuid.uuid4(),
         code="CR2",
         name="Test Offer",
-        spend_no_event_threshold=None,
         cpa_threshold=Decimal("10"),
-        cpm_threshold=None,
-        ctr_threshold=None,
         frequency_threshold=None,
-        funnel_ratio_threshold=None,
     )
 
 

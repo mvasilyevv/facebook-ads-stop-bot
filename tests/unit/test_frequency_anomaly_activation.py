@@ -23,12 +23,8 @@ def _offer(*, frequency_threshold: Decimal | None, cpa: Decimal = Decimal("3")) 
         offer_id=uuid.uuid4(),
         code="TST",
         name="test offer",
-        spend_no_event_threshold=None,
         cpa_threshold=cpa,
-        cpm_threshold=None,
-        ctr_threshold=None,
         frequency_threshold=frequency_threshold,
-        funnel_ratio_threshold=None,
     )
 
 

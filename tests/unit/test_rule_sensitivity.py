@@ -31,12 +31,8 @@ def _offer(*, cpa, stop_pct=None, warn_pct=None) -> OfferRules:
         offer_id=None,
         code="X",
         name="X",
-        spend_no_event_threshold=None,
         cpa_threshold=cpa,
-        cpm_threshold=None,
-        ctr_threshold=None,
         frequency_threshold=None,
-        funnel_ratio_threshold=None,
         stop_percent_of_rule=stop_pct,
         warning_percent_of_stop=warn_pct,
     )

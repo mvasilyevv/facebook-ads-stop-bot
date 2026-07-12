@@ -14,12 +14,8 @@ def _offer(code: str) -> OfferRules:
         offer_id=uuid.uuid4(),
         code=code,
         name=f"Offer {code}",
-        spend_no_event_threshold=Decimal("10"),
         cpa_threshold=Decimal("5"),
-        cpm_threshold=Decimal("1"),
-        ctr_threshold=Decimal("0.5"),
         frequency_threshold=Decimal("2"),
-        funnel_ratio_threshold=Decimal("3"),
     )
 
 

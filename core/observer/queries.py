@@ -20,17 +20,18 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 @dataclass(frozen=True)
 class OfferRules:
-    """Конфиг 6 стоп-правил для одного оффера."""
+    """Пороговый конфиг оффера — только поля, которые реально читает evaluator.
+
+    Аудит 2026-07-12 (H-3): поля cpm/ctr/funnel_ratio/spend_no_event удалены —
+    загружались, но нигде не потреблялись (иллюзия защиты). Колонки в offer_rules
+    оставлены: подключение этих правил — отдельной задачей, если понадобятся.
+    """
 
     offer_id: uuid.UUID
     code: str
     name: str
-    spend_no_event_threshold: Decimal | None
     cpa_threshold: Decimal | None
-    cpm_threshold: Decimal | None
-    ctr_threshold: Decimal | None
     frequency_threshold: Decimal | None
-    funnel_ratio_threshold: Decimal | None
     # Чувствительность per-offer (NULL если у оффера ещё нет offer_rules → дефолт 80 в pipeline).
     stop_percent_of_rule: Decimal | None = None
     warning_percent_of_stop: Decimal | None = None
@@ -61,12 +62,8 @@ async def load_active_offers(engine: AsyncEngine) -> list[OfferRules]:
                     """
                     SELECT
                         o.id, o.code, o.name,
-                        r.spend_no_event_threshold,
                         r.cpa_threshold,
-                        r.cpm_threshold,
-                        r.ctr_threshold,
                         r.frequency_threshold,
-                        r.funnel_ratio_threshold,
                         r.stop_percent_of_rule,
                         r.warning_percent_of_stop
                     FROM offers o
@@ -82,14 +79,10 @@ async def load_active_offers(engine: AsyncEngine) -> list[OfferRules]:
             offer_id=row[0],
             code=str(row[1]),
             name=str(row[2]),
-            spend_no_event_threshold=row[3],
-            cpa_threshold=row[4],
-            cpm_threshold=row[5],
-            ctr_threshold=row[6],
-            frequency_threshold=row[7],
-            funnel_ratio_threshold=row[8],
-            stop_percent_of_rule=row[9],
-            warning_percent_of_stop=row[10],
+            cpa_threshold=row[3],
+            frequency_threshold=row[4],
+            stop_percent_of_rule=row[5],
+            warning_percent_of_stop=row[6],
         )
         for row in rows
     ]
