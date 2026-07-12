@@ -366,3 +366,38 @@ async def test_ftd_dedup_params_unchanged() -> None:
     assert params["txn_id"] is None
     assert params["type_since"] == now - timedelta(hours=24)
     assert params["since"] == now - timedelta(hours=24)
+
+
+# M-4 (аудит 2026-07-12): event_type нормализуется в lowercase в ingest'е.
+# 'FTD'/'Ftd' от AdSet.pro раньше молча не матчился в evaluator/aggregate
+# (DEPOSIT_EVENT_TYPES lowercase, SQL регистро-чувствителен) → недосчёт депозитов.
+@pytest.mark.asyncio
+async def test_ingest_normalizes_event_type_case() -> None:
+    plan = [
+        _lock_step(),
+        _FakeResult(row=None),  # pre-INSERT SELECT — пусто
+        _FakeResult(row=_FakeRow((1,))),  # INSERT RETURNING id
+    ]
+    engine = _FakeEngine(plan)
+    await ingest_postback(engine, _event(click_id="case-1", event_type="FTD"))
+
+    # И в pre-SELECT, и в INSERT event_type уже lowercase.
+    select_params = engine.conn.executed[1][1]
+    insert_params = engine.conn.executed[2][1]
+    assert select_params["event_type"] == "ftd"
+    assert insert_params["event_type"] == "ftd"
+
+
+# 'ReDep' с пробелами → 'redep' + повторяемое окно (10 мин), а не 24ч.
+@pytest.mark.asyncio
+async def test_ingest_normalizes_and_uses_repeatable_window() -> None:
+    from datetime import timedelta
+
+    plan = [_lock_step(), _FakeResult(row=None), _FakeResult(row=_FakeRow((1,)))]
+    engine = _FakeEngine(plan)
+    now = datetime.now(UTC)
+    await ingest_postback(engine, _event(click_id="case-2", event_type="  ReDep ", received_at=now))
+
+    params = engine.conn.executed[1][1]
+    assert params["event_type"] == "redep"
+    assert params["type_since"] == now - timedelta(minutes=10)

@@ -101,15 +101,21 @@ async def ingest_postback(
     if event.fb_ad_id:
         fb_ad_fk = await _resolve_fb_ad_fk(engine, fb_ad_id=event.fb_ad_id)
 
+    # M-4 (аудит 2026-07-12): нормализуем регистр в ЕДИНОЙ точке ingest — контракт
+    # DEPOSIT_EVENT_TYPES lowercase, матчинг в evaluator/aggregator регистро-чувствителен:
+    # 'FTD'/'Ftd' от AdSet.pro молча не считался бы депозитом (недосчёт → ложный STOP).
+    # Оригинал сохраняется в raw_json.
+    event_type = (event.event_type or "").strip().lower()
+
     # H-4: широкая граница (24ч) — для partition pruning и txn-дедупа; типовое окно —
     # для оконного дедупа (у redep/baddep только анти-ретрай минуты).
     dedup_after = event.received_at - _DEDUP_WINDOW
-    type_window_after = event.received_at - dedup_window_for(event.event_type)
+    type_window_after = event.received_at - dedup_window_for(event_type)
     incoming_txn = _txn_id_from_raw(event.raw)
 
     # Ключ сериализации конкурентного дедупа == ключ pre-SELECT'а: (click_id, event_type).
     # Это то, что образует «одно событие» с точки зрения дедупа.
-    lock_key = f"{event.click_id}:{event.event_type}"
+    lock_key = f"{event.click_id}:{event_type}"
 
     async with engine.begin() as conn:
         # Шаг 0: advisory-lock на транзакцию по (click_id, event_type). Закрывает дыру
@@ -154,7 +160,7 @@ async def ingest_postback(
             ),
             {
                 "click_id": event.click_id,
-                "event_type": event.event_type,
+                "event_type": event_type,
                 "since": dedup_after,
                 "until": event.received_at,
                 "txn_id": incoming_txn,
@@ -167,7 +173,7 @@ async def ingest_postback(
             logger.info(
                 "adsetpro postback: дубль click_id=%s event_type=%s — пропускаем INSERT",
                 event.click_id,
-                event.event_type,
+                event_type,
             )
             return IngestResult(
                 inserted=False,
@@ -195,7 +201,7 @@ async def ingest_postback(
                 "click_id": event.click_id,
                 "fb_ad_id": event.fb_ad_id,
                 "fb_ad_fk": fb_ad_fk,
-                "event_type": event.event_type,
+                "event_type": event_type,
                 "revenue": event.revenue,
                 "currency": event.currency,
                 "raw_json": _dumps_jsonable(event.raw),
@@ -217,7 +223,7 @@ async def ingest_postback(
     logger.info(
         "adsetpro postback: race на UNIQUE click_id=%s event_type=%s — second writer skipped",
         event.click_id,
-        event.event_type,
+        event_type,
     )
     return IngestResult(
         inserted=False,
