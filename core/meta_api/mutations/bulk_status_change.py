@@ -58,7 +58,12 @@ import logging
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
-from core.meta_api.errors import MutationValidationError
+from core.meta_api.errors import (
+    MetaApiError,
+    MutationValidationError,
+    TemporaryError,
+    classify_graph_error,
+)
 from core.meta_api.mutations._batch_helpers import (
     MAX_BATCH_ENTRIES,
     build_batch_payload,
@@ -129,6 +134,26 @@ class BulkStatusChangeHandler:
             for r in parsed
         ]
 
+        # M-1 (аудит 2026-07-12): полный отказ батча с ТРАНЗИЕНТНЫМИ саб-ошибками
+        # (rate-limit, null-таймаут, сеть) раньше сворачивался в result-dict →
+        # is_mutation_success=False → mark_failed БЕЗ retry: автостарт кабинета /
+        # bulk-pause тихо не доисполнялись. Статус-изменение идемпотентно (повторный
+        # PAUSED/ACTIVE безопасен) → бросаем Temporary, воркер сделает requeue с
+        # backoff. Частичный успех и permanent-провалы идут прежним путём
+        # (succeeded>0 → success + DM; все permanent → mark_failed + DM).
+        # Классифицируем по parsed (там есть body с Graph-кодами; sub_results
+        # body не несут — они уходят в task_queue.result компактными).
+        failed_parsed = [r for r in parsed if not r["success"]]
+        if failed_parsed and len(failed_parsed) == len(parsed):
+            classified = [self._classify_sub_failure(r) for r in failed_parsed]
+            if all(isinstance(exc, TemporaryError) for exc in classified):
+                logger.warning(
+                    "bulk_status_change: все %d саб-реквестов упали транзиентно "
+                    "(rate-limit/timeout) — пробрасываем retry вместо mark_failed",
+                    len(failed_parsed),
+                )
+                raise classified[0]
+
         return success_result(
             graph_response=graph_response,
             modified_ids=[r["id"] for r in sub_results if r["success"]],
@@ -141,6 +166,22 @@ class BulkStatusChangeHandler:
                 "sub_results": sub_results,
             },
         )
+
+    @staticmethod
+    def _classify_sub_failure(sub: dict[str, Any]) -> MetaApiError:
+        """Классифицировать один провалившийся sub-result по Graph-кодам из body.
+
+        null-саб (timeout) и body без error-структуры → code=None → Temporary
+        (могла быть сеть) — согласовано с classify_graph_error.
+        """
+        body = sub.get("body")
+        err = body.get("error") if isinstance(body, dict) else None
+        code = err.get("code") if isinstance(err, dict) else None
+        subcode = err.get("error_subcode") if isinstance(err, dict) else None
+        message = (err.get("message") if isinstance(err, dict) else None) or str(
+            sub.get("error") or "batch sub-request failed"
+        )
+        return classify_graph_error(code, subcode, message)
 
     @staticmethod
     def _extract_params(params: dict[str, Any]) -> tuple[list[str], str, str]:

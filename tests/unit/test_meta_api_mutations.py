@@ -468,3 +468,79 @@ async def test_bulk_invalid_object_type_raises() -> None:
 async def test_create_campaign_handler_is_registered() -> None:
     handler = CreateCampaignHandler()
     assert handler.mutation_kind == "create_campaign"
+
+
+# ─── Аудит 2026-07-12 (M-1): полный транзиентный отказ батча → retry ──────────
+
+
+# MONEY: все саб-реквесты упали rate-limit'ом (code 613) → handler бросает
+# Temporary (RateLimited), воркер сделает requeue — раньше сворачивалось в
+# result-dict → mark_failed без retry (автостарт кабинета тихо не доисполнялся).
+@pytest.mark.asyncio
+async def test_bulk_all_transient_failures_raise_temporary() -> None:
+    from core.meta_api.errors import TemporaryError
+
+    rate_limited = '{"error":{"message":"limit reached","code":613}}'
+    client = _make_client(
+        [
+            {"code": 400, "body": rate_limited},
+            {"code": 400, "body": rate_limited},
+            None,  # null-саб (timeout) — тоже транзиентный
+        ]
+    )
+    payload = MetaMutationPayload(
+        mutation_kind="bulk_status_change",
+        target_id="bulk:3",
+        params={
+            "object_ids": ["23847001", "23847002", "23847003"],
+            "status": "ACTIVE",
+            "object_type": "ad",
+        },
+    )
+
+    with pytest.raises(TemporaryError):
+        await BulkStatusChangeHandler().execute(client, payload)
+
+
+# Полный отказ с PERMANENT-ошибками (code 100) → прежний путь: result-dict,
+# воркер уведёт в mark_failed + DM (retry бессмысленен).
+@pytest.mark.asyncio
+async def test_bulk_all_permanent_failures_return_result() -> None:
+    permanent = '{"error":{"message":"Invalid parameter","code":100}}'
+    client = _make_client(
+        [
+            {"code": 400, "body": permanent},
+            {"code": 400, "body": permanent},
+        ]
+    )
+    payload = MetaMutationPayload(
+        mutation_kind="bulk_status_change",
+        target_id="bulk:2",
+        params={"ad_ids": ["23847001", "23847002"], "action": "pause"},
+    )
+
+    result = await BulkStatusChangeHandler().execute(client, payload)
+    assert result["succeeded"] == 0
+    assert result["failed"] == 2
+
+
+# Частичный успех с транзиентным провалом остатка → прежний путь (succeeded>0,
+# воркер: succeeded + FSM-sync + DM) — retry всего батча не форсируется.
+@pytest.mark.asyncio
+async def test_bulk_partial_transient_failure_returns_result() -> None:
+    rate_limited = '{"error":{"message":"limit reached","code":613}}'
+    client = _make_client(
+        [
+            {"code": 200, "body": "{}"},
+            {"code": 400, "body": rate_limited},
+        ]
+    )
+    payload = MetaMutationPayload(
+        mutation_kind="bulk_status_change",
+        target_id="bulk:2",
+        params={"ad_ids": ["23847001", "23847002"], "action": "pause"},
+    )
+
+    result = await BulkStatusChangeHandler().execute(client, payload)
+    assert result["succeeded"] == 1
+    assert result["failed"] == 1
