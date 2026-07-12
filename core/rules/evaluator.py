@@ -14,6 +14,10 @@ _HUNDRED = Decimal("100")
 _MONEY_STEP = Decimal("0.01")
 _PERCENT_STEP = Decimal("0.01")
 
+# M-10: множитель для эффективного потолка-выброса частоты относительно стоп-порога.
+# «Абсурдный выброс» = кратно (×3) выше того burnout'а, на который настроен стоп.
+_FREQUENCY_CAP_MULTIPLIER = Decimal("3")
+
 
 def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
     """Оценивает объявление по последовательной лесенке + независимые правила.
@@ -228,15 +232,22 @@ def _evaluate_frequency_anomaly(ctx: RuleContext) -> RuleHit | None:
 
     current = ctx.frequency_current
 
+    stop_thr = ctx.frequency_stop_threshold
+    warn_thr = ctx.frequency_warning_threshold
+
     # Потолок-выброс: FB на старте может временно показывать frequency 50-100 из-за
     # крошечного reach (300 показов / 7 человек) — это переходный шум, не burnout.
     # Отсекаем ТОЛЬКО абсурдные выбросы выше cap. Ожидания показов/охвата убраны
     # (решение байера: стопать жёстко по порогу частоты, не ждать накопления данных).
-    if current > ctx.frequency_outlier_cap:
+    #
+    # M-10 (аудит 2026-07-12): cap масштабируется с порогом. Раньше фикс 10.0 создавал
+    # два бага: (а) при stop_threshold >= 10 STOP был физически недостижим (freq>10 → cap
+    # → None до проверки STOP); (б) реальный burnout на узком GEO (freq 11-30) молча
+    # игнорировался. Эффективный cap = max(фикс, stop × 3): «абсурдный выброс» — это
+    # то, что кратно выше любого burnout'а, на который байер настроил стоп.
+    effective_cap = max(ctx.frequency_outlier_cap, stop_thr * _FREQUENCY_CAP_MULTIPLIER)
+    if current > effective_cap:
         return None
-
-    stop_thr = ctx.frequency_stop_threshold
-    warn_thr = ctx.frequency_warning_threshold
 
     # STOP: абсолютный порог
     if current > stop_thr:

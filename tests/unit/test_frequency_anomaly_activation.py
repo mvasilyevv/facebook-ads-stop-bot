@@ -185,3 +185,55 @@ def test_disabled_offer_never_stops_on_frequency() -> None:
     )
     result = evaluate_stop_rules(row, ctx)
     assert result.stage is None
+
+
+# ─── Аудит 2026-07-12 (M-10): cap масштабируется с порогом ───────────────────
+
+
+# Высокий stop-порог (12): freq 15 РАНЬШЕ глушился фикс-cap'ом 10 → STOP недостижим.
+# Теперь effective_cap = max(10, 12×3=36) → freq 15 корректно стопает.
+def test_high_threshold_stop_reachable_above_fixed_cap() -> None:
+    offer = _offer(frequency_threshold=Decimal("12.0"))
+    row = _row(frequency=Decimal("15.0"), impressions=5000, reach=400)
+    ctx = build_rule_context(
+        offer, frequency_current=row.frequency, impressions=row.impressions, reach=row.reach
+    )
+    result = evaluate_stop_rules(row, ctx)
+    assert result.stage == AlertStage.STOP
+    assert "frequency_anomaly" in result.stop_rule_codes
+
+
+# Реальный burnout freq 20 на узком GEO при пороге 8 (stop×3=24 → cap 24): стопаем,
+# раньше молчало (20 > фикс-cap 10 → None до проверки STOP).
+def test_real_burnout_above_fixed_cap_still_stops() -> None:
+    offer = _offer(frequency_threshold=Decimal("8.0"))
+    row = _row(frequency=Decimal("20.0"), impressions=6000, reach=300)
+    ctx = build_rule_context(
+        offer, frequency_current=row.frequency, impressions=row.impressions, reach=row.reach
+    )
+    result = evaluate_stop_rules(row, ctx)
+    assert result.stage == AlertStage.STOP
+    assert "frequency_anomaly" in result.stop_rule_codes
+
+
+# Абсурдный выброс всё ещё глушится: при пороге 8 (cap=24) freq 50 → None (стартовый шум).
+def test_absurd_outlier_still_suppressed_with_scaled_cap() -> None:
+    offer = _offer(frequency_threshold=Decimal("8.0"))
+    row = _row(frequency=Decimal("50.0"), impressions=2000, reach=40)
+    ctx = build_rule_context(
+        offer, frequency_current=row.frequency, impressions=row.impressions, reach=row.reach
+    )
+    result = evaluate_stop_rules(row, ctx)
+    assert result.stage is None
+
+
+# Низкий порог (default-подобный 3.5): cap остаётся ≈фиксом 10 (max(10, 10.5)) —
+# поведение для типовых офферов не изменилось, freq 45 глушится.
+def test_low_threshold_cap_unchanged() -> None:
+    offer = _offer(frequency_threshold=Decimal("3.5"))
+    row = _row(frequency=Decimal("45.0"), impressions=2000, reach=400)
+    ctx = build_rule_context(
+        offer, frequency_current=row.frequency, impressions=row.impressions, reach=row.reach
+    )
+    result = evaluate_stop_rules(row, ctx)
+    assert result.stage is None
