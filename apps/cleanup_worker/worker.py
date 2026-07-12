@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from apps.cleanup_worker.retention import (
@@ -106,21 +107,99 @@ async def drop_old_partitions(
     return dropped
 
 
+async def _partition_exists(conn, part_name: str) -> bool:
+    """True если таблица-партиция уже существует (to_regclass не NULL)."""
+    return (
+        await conn.execute(text("SELECT to_regclass(:n)"), {"n": part_name})
+    ).scalar() is not None
+
+
+async def _create_month_partition(
+    engine: AsyncEngine, table: str, col: str, fr: str, to: str
+) -> bool:
+    """Создаёт месячную партицию table для [fr, to). Возвращает True если реально создана.
+
+    M-5 (аудит 2026-07-12): если строки уже попали в <table>_default (пропуск партиции
+    при даунтайме на стыке месяца), обычный CREATE ... PARTITION OF падает
+    constraint-violation'ом (Postgres валидирует, что default не содержит строк нового
+    диапазона), и это раньше обрывало создание партиций для ЭТОЙ и всех следующих
+    таблиц. Восстановление: DETACH default → CREATE партиции → перелив пересекающихся
+    строк из default в родителя (роутятся в новую партицию) → ATTACH default.
+    """
+    part_name = f"{table}_{fr[:4]}_{fr[5:7]}"
+    default_name = f"{table}_default"
+    async with engine.begin() as conn:
+        if await _partition_exists(conn, part_name):
+            return False
+        try:
+            await conn.execute(
+                text(
+                    f"CREATE TABLE {part_name} PARTITION OF {table} "
+                    f"FOR VALUES FROM ('{fr}') TO ('{to}')"
+                )
+            )
+            return True
+        except (IntegrityError, ProgrammingError, InternalError) as exc:
+            # Скорее всего конфликт со строками в default — идём по detach-пути.
+            logger.warning(
+                "create partition %s: прямой CREATE не прошёл (%s) — пробуем через detach default",
+                part_name,
+                exc.__class__.__name__,
+            )
+
+    # Detach-recovery в отдельной транзакции (default мог не существовать → тогда
+    # исходная ошибка была реальной, пробрасываем её).
+    async with engine.begin() as conn:
+        if not await _partition_exists(conn, default_name):
+            # default нет — конфликт был не из-за него, создаём как есть (пусть упадёт явно).
+            await conn.execute(
+                text(
+                    f"CREATE TABLE IF NOT EXISTS {part_name} PARTITION OF {table} "
+                    f"FOR VALUES FROM ('{fr}') TO ('{to}')"
+                )
+            )
+            return True
+        await conn.execute(text(f"ALTER TABLE {table} DETACH PARTITION {default_name}"))
+        await conn.execute(
+            text(
+                f"CREATE TABLE {part_name} PARTITION OF {table} "
+                f"FOR VALUES FROM ('{fr}') TO ('{to}')"
+            )
+        )
+        moved = await conn.execute(
+            text(
+                f"WITH moved AS ("
+                f"  DELETE FROM {default_name} WHERE {col} >= '{fr}' AND {col} < '{to}' RETURNING *"
+                f") INSERT INTO {table} SELECT * FROM moved"
+            )
+        )
+        await conn.execute(text(f"ALTER TABLE {table} ATTACH PARTITION {default_name} DEFAULT"))
+        logger.warning(
+            "create partition %s: восстановлено через detach default, перелито %d строк",
+            part_name,
+            moved.rowcount or 0,
+        )
+    return True
+
+
 async def create_next_partition_if_missing(
     engine: AsyncEngine, *, now: datetime | None = None
 ) -> dict[str, int]:
-    """Создаёт партиции на текущий + следующий месяц для всех партиционированных таблиц."""
+    """Создаёт партиции на текущий + следующий месяц для всех партиционированных таблиц.
+
+    Каждая таблица обрабатывается изолированно: ошибка на одной (напр. неожиданный
+    constraint) логируется и НЕ обрывает создание партиций для остальных (M-5).
+    """
     now = now or datetime.now(timezone.utc)
     created: dict[str, int] = {}
 
-    months_to_ensure: list[tuple[int, int]] = []
-    months_to_ensure.append((now.year, now.month))
+    months_to_ensure: list[tuple[int, int]] = [(now.year, now.month)]
     if now.month == 12:
         months_to_ensure.append((now.year + 1, 1))
     else:
         months_to_ensure.append((now.year, now.month + 1))
 
-    for table, _col, _key in _PARTITIONED:
+    for table, col, _key in _PARTITIONED:
         count_created = 0
         for year, month in months_to_ensure:
             if month == 12:
@@ -129,14 +208,13 @@ async def create_next_partition_if_missing(
                 next_year, next_month = year, month + 1
             fr = f"{year:04d}-{month:02d}-01"
             to = f"{next_year:04d}-{next_month:02d}-01"
-            part_name = f"{table}_{year:04d}_{month:02d}"
-            stmt = (
-                f"CREATE TABLE IF NOT EXISTS {part_name} "
-                f"PARTITION OF {table} FOR VALUES FROM ('{fr}') TO ('{to}')"
-            )
-            async with engine.begin() as conn:
-                await conn.execute(text(stmt))
-            count_created += 1
+            try:
+                if await _create_month_partition(engine, table, col, fr, to):
+                    count_created += 1
+            except Exception as exc:  # noqa: BLE001 — одна таблица не должна валить остальные
+                logger.exception(
+                    "create partition для %s [%s..%s) не удалось: %s", table, fr, to, exc
+                )
         created[table] = count_created
     return created
 

@@ -98,3 +98,65 @@ def test_cleanup_orphan_media_files(tmp_path: Path) -> None:
     assert deleted == 1
     assert not orphan.exists()
     assert known.exists()
+
+
+# M-5 (аудит 2026-07-12): CREATE месячной партиции восстанавливается через detach,
+# если строки уже попали в _default (иначе constraint-violation обрывал весь цикл).
+# Используем изолированную партиционированную таблицу — основную схему не трогаем.
+@pytest.mark.asyncio
+async def test_create_month_partition_recovers_from_default(pg_engine) -> None:
+    from apps.cleanup_worker.worker import _create_month_partition
+
+    suffix = uuid.uuid4().hex[:8]
+    parent = f"t_part_{suffix}"
+    default_name = f"{parent}_default"
+    try:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(f"CREATE TABLE {parent} (id int, ts timestamptz) PARTITION BY RANGE (ts)")
+            )
+            await conn.execute(text(f"CREATE TABLE {default_name} PARTITION OF {parent} DEFAULT"))
+            # Строка мая-2026 уходит в default (месячной партиции ещё нет).
+            await conn.execute(
+                text(f"INSERT INTO {parent} (id, ts) VALUES (1, '2026-05-15T10:00:00+00')")
+            )
+
+        # Прямой CREATE упал бы (default содержит строку диапазона) → detach-recovery.
+        created = await _create_month_partition(pg_engine, parent, "ts", "2026-05-01", "2026-06-01")
+        assert created is True
+
+        async with pg_engine.connect() as conn:
+            # Партиция мая существует и строка переехала в неё из default.
+            part_exists = (
+                await conn.execute(text(f"SELECT to_regclass('{parent}_2026_05')"))
+            ).scalar()
+            assert part_exists is not None
+            in_month = (await conn.execute(text(f"SELECT COUNT(*) FROM {parent}_2026_05"))).scalar()
+            in_default = (await conn.execute(text(f"SELECT COUNT(*) FROM {default_name}"))).scalar()
+        assert in_month == 1, "строка должна переехать из default в месячную партицию"
+        assert in_default == 0, "default не должен держать строку майского диапазона"
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(text(f"DROP TABLE IF EXISTS {parent} CASCADE"))
+
+
+# Повторный вызов для существующей партиции — no-op (False), не падает.
+@pytest.mark.asyncio
+async def test_create_month_partition_idempotent(pg_engine) -> None:
+    from apps.cleanup_worker.worker import _create_month_partition
+
+    suffix = uuid.uuid4().hex[:8]
+    parent = f"t_part2_{suffix}"
+    try:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(f"CREATE TABLE {parent} (id int, ts timestamptz) PARTITION BY RANGE (ts)")
+            )
+            await conn.execute(text(f"CREATE TABLE {parent}_default PARTITION OF {parent} DEFAULT"))
+        first = await _create_month_partition(pg_engine, parent, "ts", "2026-05-01", "2026-06-01")
+        second = await _create_month_partition(pg_engine, parent, "ts", "2026-05-01", "2026-06-01")
+        assert first is True
+        assert second is False
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(text(f"DROP TABLE IF EXISTS {parent} CASCADE"))

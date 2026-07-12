@@ -149,7 +149,17 @@ async def _create_first_partitions(engine) -> None:
                 )
                 logger.info("  %s [%s, %s)", part_name, fr, to)
                 await conn.execute(text(stmt))
-    logger.info("Партиции созданы (текущий + следующий месяц).")
+            # M-6 (аудит 2026-07-12): DEFAULT-партиция как safety-net. На свежей БД
+            # (bootstrap: apply_schema + alembic stamp head — миграция 0031 штампуется,
+            # не выполняется) её раньше не было вовсе: любой пропуск месячной партиции →
+            # INSERT падал «no partition of relation found for row» = потеря scan-метрик/
+            # депозитов (деньги). Зеркалит migration 0031 для upgrade-пути.
+            default_name = f"{table}_default"
+            await conn.execute(
+                text(f"CREATE TABLE IF NOT EXISTS {default_name} PARTITION OF {table} DEFAULT")
+            )
+            logger.info("  %s DEFAULT", default_name)
+    logger.info("Партиции созданы (текущий + следующий месяц + default).")
 
 
 async def _seed_retention_policy(engine) -> None:
