@@ -133,6 +133,9 @@ def test_encrypt_with_missing_key_raises(monkeypatch, tmp_path) -> None:
 
 # C-1(б): ensure_encryption_key идемпотентен — второй вызов не меняет ключ.
 def test_ensure_encryption_key_idempotent(monkeypatch, tmp_path) -> None:
+    # M-13: изоляция от реального окружения (в CI ENCRYPTION_KEY задан → env-first
+    # закорачивал бы генерацию и тест терял смысл).
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
     monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
     env = tmp_path / ".env"
     env.write_text("FOO=bar\n", encoding="utf-8")
@@ -151,6 +154,9 @@ def test_ensure_encryption_key_idempotent(monkeypatch, tmp_path) -> None:
 
 # C-1: ensure_encryption_key не трогает уже заданный ключ (существующий побеждает).
 def test_ensure_encryption_key_keeps_existing(monkeypatch, tmp_path) -> None:
+    # M-13: изоляция от реального окружения (в CI ENCRYPTION_KEY задан → env-first
+    # закорачивал бы генерацию и тест терял смысл).
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
     monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
     existing = Fernet.generate_key().decode()
     env = tmp_path / ".env"
@@ -172,6 +178,9 @@ def _worker_ensure_key(project_root: str) -> None:
 # C-1(в): конкурентный вызов ensure_encryption_key из N процессов → ровно один ключ.
 # Гонка была money-багом: без flock+double-check каждый процесс дописывал свой ключ.
 def test_ensure_encryption_key_concurrent_single_key(monkeypatch, tmp_path) -> None:
+    # M-13: изоляция от реального окружения (в CI ENCRYPTION_KEY задан → env-first
+    # закорачивал бы генерацию и тест терял смысл).
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
     env = tmp_path / ".env"
     env.write_text("BASE=1\n", encoding="utf-8")
 
@@ -195,6 +204,9 @@ def test_ensure_encryption_key_concurrent_single_key(monkeypatch, tmp_path) -> N
 # C-1: double-check внутри flock — если ключ появился, пока ждали lock, генерации нет.
 # Симулируем: _read_env_key возвращает "" на быстром пути, затем реальный ключ под lock.
 def test_ensure_encryption_key_double_check_skips_generation(monkeypatch, tmp_path) -> None:
+    # M-13: изоляция от реального окружения (в CI ENCRYPTION_KEY задан → env-first
+    # закорачивал бы генерацию и тест терял смысл).
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
     monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
     existing = Fernet.generate_key().decode()
     env = tmp_path / ".env"
