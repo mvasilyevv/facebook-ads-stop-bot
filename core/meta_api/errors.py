@@ -107,6 +107,17 @@ class SessionUnavailableError(TemporaryError):
     """
 
 
+class NothingCommittedError(TemporaryError):
+    """Мутация ДОКАЗУЕМО не создала объектов в Meta — retry безопасен даже для
+    необратимых kinds (M-2, аудит 2026-07-12).
+
+    Бросается handler'ами (например create_campaign), когда все sub-провалы —
+    явные Graph-ошибки (code>0: Meta обработала запрос и отклонила) и все
+    транзиентные. Worker трактует наравне с SessionUnavailableError: requeue
+    вместо _fail_irreversible.
+    """
+
+
 # Маппинг Graph code → класс исключения. Default — PermanentError.
 _CODE_MAP: dict[int, type[MetaApiError]] = {
     # Отрицательные коды — ВНУТРЕННИЕ сигналы browser-agent (реальные Graph-коды

@@ -200,11 +200,13 @@ def test_partial_error_is_not_mutation_validation_error() -> None:
 # ─── Аудит 2026-07-12 (M-2): ничего не создано + все провалы транзиентные → retry ──
 
 
-# Все sub-requests упали ЯВНЫМ rate-limit (code 613, ничего не создано) → TemporaryError
-# (воркер requeue'ит), а не CreateCampaignPartialError → «залив навсегда умер».
+# Все sub-requests упали ЯВНЫМ rate-limit (code 613, ничего не создано) →
+# NothingCommittedError (worker: requeue даже для irreversible), а не
+# CreateCampaignPartialError → «залив навсегда умер». Голый Temporary не годится —
+# worker уводит его в _fail_irreversible.
 @pytest.mark.asyncio
 async def test_nothing_created_all_transient_raises_temporary() -> None:
-    from core.meta_api.errors import TemporaryError
+    from core.meta_api.errors import NothingCommittedError
 
     rate_limited = json.dumps({"error": {"message": "limit reached", "code": 613}})
     response = [
@@ -221,7 +223,7 @@ async def test_nothing_created_all_transient_raises_temporary() -> None:
         ad_account_id="act_999",
     )
 
-    with pytest.raises(TemporaryError):
+    with pytest.raises(NothingCommittedError):
         await CreateCampaignHandler().execute(client, payload)
 
 

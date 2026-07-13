@@ -89,7 +89,7 @@ import logging
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
-from core.meta_api.errors import TemporaryError
+from core.meta_api.errors import NothingCommittedError, TemporaryError
 from core.meta_api.mutations._batch_helpers import (
     build_batch_payload,
     classify_sub_failure,
@@ -277,7 +277,10 @@ class CreateCampaignHandler:
                             "транзиентные — пробрасываем retry вместо fail",
                             len(failed_subs),
                         )
-                        raise classified[0]
+                        # NothingCommittedError (не голый Temporary!): worker для
+                        # irreversible-kinds уводит Temporary в _fail_irreversible,
+                        # и только этот тип (как SessionUnavailable) идёт в requeue.
+                        raise NothingCommittedError(str(classified[0])) from classified[0]
             raise CreateCampaignPartialError(
                 f"create_campaign: batch не полностью успешен — {len(failed_steps)} шагов упали",
                 created_ids=created_ids,

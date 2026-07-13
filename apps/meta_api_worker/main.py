@@ -48,6 +48,7 @@ from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import (
     MutationValidationError,
     NotFoundError,
+    NothingCommittedError,
     PermanentError,
     RateLimitedError,
     SessionUnavailableError,
@@ -712,13 +713,15 @@ async def process_one_task(
         return
     except _TEMPORARY_EXCEPTIONS as exc:
         # Необратимые kinds не ретраим: transient мог прилететь после коммита Meta → дубль.
-        # Исключение (M-2, аудит 2026-07-12): SessionUnavailableError — pre-send семейство
-        # (circuit-open, FAILED_PRECONDITION browser-agent, EAA-токен не в DOM): запрос
-        # в Meta НЕ уходил, ничего не создано → retry безопасен. Раньше блип канала
-        # навсегда убивал залив кампании. Сетевые mid-flight ошибки (-2 Failed to fetch,
-        # DEADLINE) остаются TemporaryError → по-прежнему fail_irreversible.
+        # Исключения (M-2, аудит 2026-07-12) — доказуемо безопасные для retry:
+        # - SessionUnavailableError — pre-send семейство (circuit-open, FAILED_PRECONDITION
+        #   browser-agent, EAA-токен не в DOM): запрос в Meta НЕ уходил;
+        # - NothingCommittedError — handler проверил ответ: все sub-провалы явные
+        #   (Meta обработала и отклонила), объекты не созданы.
+        # Раньше блип канала навсегда убивал залив кампании. Сетевые mid-flight ошибки
+        # (-2 Failed to fetch, DEADLINE) остаются TemporaryError → fail_irreversible.
         if payload.mutation_kind in _IRREVERSIBLE_KINDS and not isinstance(
-            exc, SessionUnavailableError
+            exc, (SessionUnavailableError, NothingCommittedError)
         ):
             await _fail_irreversible(engine, task, payload, exc, reason="temporary")
             return

@@ -144,3 +144,21 @@ async def test_duplicate_campaign_session_unavailable_requeues(monkeypatch, _pat
     await meta.process_one_task(object(), _task("duplicate_campaign"), client=AsyncMock())
     spy_requeue.assert_awaited_once()
     spy_fail.assert_not_awaited()
+
+
+# M-2 (сквозной): create_campaign бросил NothingCommittedError (handler доказал —
+# в Meta ничего не создано) → worker делает requeue, а не _fail_irreversible.
+# Голый Temporary для irreversible по-прежнему уходит в mark_failed (тест выше).
+@pytest.mark.asyncio
+async def test_create_campaign_nothing_committed_requeues(monkeypatch, _patched) -> None:
+    from core.meta_api.errors import NothingCommittedError
+
+    spy_fail, spy_requeue = _patched
+    monkeypatch.setattr(
+        meta,
+        "execute_mutation",
+        AsyncMock(side_effect=NothingCommittedError("rate limit, ничего не создано")),
+    )
+    await meta.process_one_task(object(), _task("create_campaign"), client=AsyncMock())
+    spy_requeue.assert_awaited_once()
+    spy_fail.assert_not_awaited()
