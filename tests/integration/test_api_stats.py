@@ -114,7 +114,10 @@ async def test_stats_today_breakdown_not_inflated(pg_engine, fake_redis_client, 
     async with pg_engine.begin() as conn:
         ids = await _seed_chain(conn)
         for n, (s1, s2) in enumerate([(10, 5), (20, 10), (30, 15), (40, 20), (50, 25)]):
-            ts = f"date_trunc('hour', NOW()) + INTERVAL '5 minutes' + INTERVAL '{n} minutes'"
+            # Якорь строго в ПРОШЛОМ (флейк-фикс: hour-trunc + 5..9 мин был БУДУЩИМ в
+            # первые ~10 минут каждого часа → окно today отсекало сид → StopIteration).
+            # Остаточное окно: 9 минут после старта суток кабинета (0.6% вместо 15%).
+            ts = f"NOW() - INTERVAL '{9 - n} minutes'"
             await _insert_metric(
                 conn, ad_id=ids["ad1_id"], cycle_ts_sql=ts, spend=Decimal(s1), leads=s1
             )
@@ -128,7 +131,9 @@ async def test_stats_today_breakdown_not_inflated(pg_engine, fake_redis_client, 
 
     assert resp.status_code == 200
     body = resp.json()
-    row = next(r for r in body["breakdown"] if r["key"] == "STATS_OF")
+    offer_rows = [r for r in body["breakdown"] if r["key"] == "STATS_OF"]
+    assert offer_rows, f"строка оффера STATS_OF отсутствует в breakdown: {body['breakdown']!r}"
+    row = offer_rows[0]
     assert Decimal(row["spend"]) == Decimal("75")
     assert row["leads"] == 75
     assert row["clicks"] == 150
@@ -143,7 +148,8 @@ async def test_stats_today_series_telescopes_to_totals(pg_engine, fake_redis_cli
     async with pg_engine.begin() as conn:
         ids = await _seed_chain(conn)
         for n, spend in enumerate([Decimal("7"), Decimal("19")]):
-            ts = f"date_trunc('hour', NOW()) + INTERVAL '{5 + n} minutes'"
+            # Якорь в прошлом (см. флейк-фикс в breakdown-тесте выше).
+            ts = f"NOW() - INTERVAL '{6 - n} minutes'"
             await _insert_metric(conn, ad_id=ids["ad1_id"], cycle_ts_sql=ts, spend=spend, leads=n)
 
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
@@ -167,7 +173,8 @@ async def test_stats_period_daily_series_and_totals(pg_engine, fake_redis_client
             ts = f"date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '{10 + n} minutes'"
             await _insert_metric(conn, ad_id=ids["ad1_id"], cycle_ts_sql=ts, spend=spend, leads=n)
         for n, spend in enumerate([Decimal("5"), Decimal("30")]):
-            ts = f"date_trunc('day', NOW()) + INTERVAL '{10 + n} minutes'"
+            # Якорь в прошлом (см. флейк-фикс выше); день-bucket сохраняется.
+            ts = f"NOW() - INTERVAL '{6 - n} minutes'"
             await _insert_metric(conn, ad_id=ids["ad1_id"], cycle_ts_sql=ts, spend=spend, leads=n)
 
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
