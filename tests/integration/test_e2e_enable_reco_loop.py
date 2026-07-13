@@ -281,7 +281,8 @@ async def test_double_ereco_callback_does_not_duplicate(
         )
 
     cb_tg = _FakeTGClient()
-    # Первый клик создаёт activate_ad task
+    # Первый клик создаёт activate_ad task и «расходует» рекомендацию (M-14 follow-up:
+    # promoted_to_task_id проставляется — повторный клик отклоняется replay-guard'ом).
     await handle_enable_reco_callback(
         engine=pg_engine,
         client=cb_tg,
@@ -289,7 +290,7 @@ async def test_double_ereco_callback_does_not_duplicate(
         fb_ad_id=stopped_ad_e2e["fb_ad_id"],
         username="reviewer",
     )
-    # Второй клик от того же юзера — idem_key совпадает → no-op
+    # Второй клик — рекомендация уже промоутнута → «устарела», без второй задачи.
     await handle_enable_reco_callback(
         engine=pg_engine,
         client=cb_tg,
@@ -300,7 +301,19 @@ async def test_double_ereco_callback_does_not_duplicate(
 
     acks = [t for _, t in cb_tg.acks]
     assert any("принята" in a for a in acks)
-    assert any("Уже в очереди" in a for a in acks)
+    assert any("устарел" in a.lower() for a in acks)
+
+    # Рекомендация промоутнута на созданную задачу (replay-guard сработал по делу).
+    async with pg_engine.connect() as conn:
+        promoted = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM enable_recommendations "
+                    "WHERE promoted_to_task_id IS NOT NULL"
+                )
+            )
+        ).scalar()
+    assert promoted == 1
 
     async with pg_engine.connect() as conn:
         n = (

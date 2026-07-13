@@ -162,6 +162,31 @@ async def _has_live_enable_reco(engine: AsyncEngine, *, fb_ad_id: str) -> bool:
     return row is not None
 
 
+async def _promote_recommendation(engine: AsyncEngine, *, fb_ad_id: str, task_id: int) -> None:
+    """Проставить promoted_to_task_id — рекомендация «израсходована» кнопкой.
+
+    M-14 follow-up (ревью перед push): без этого _has_live_enable_reco продолжал
+    считать рекомендацию живой после создания задачи — повторные клики проходили
+    гейт. Симметрия с web POST /dashboard/enable-recommendations/{id}/enable.
+    """
+    from sqlalchemy import text
+
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE enable_recommendations er
+                SET promoted_to_task_id = :tid
+                FROM fb_ads fa
+                WHERE fa.id = er.ad_id
+                  AND fa.fb_ad_id = :fb_ad_id
+                  AND er.promoted_to_task_id IS NULL
+                """
+            ),
+            {"tid": task_id, "fb_ad_id": fb_ad_id},
+        )
+
+
 async def handle_enable_reco_callback(
     *,
     engine: AsyncEngine,
@@ -184,6 +209,9 @@ async def handle_enable_reco_callback(
             idempotency_key=f"manual:activate_ad:{fb_ad_id}:tg:{username}",
             requested_by=requested_by,
         )
+        if task_id:
+            # Кнопка израсходована: повторный клик получит «Рекомендация устарела».
+            await _promote_recommendation(engine, fb_ad_id=fb_ad_id, task_id=task_id)
         ack = "Задача на включение принята" if task_id else "Уже в очереди"
     except Exception:
         logger.exception("create enable task (ereco) failed")

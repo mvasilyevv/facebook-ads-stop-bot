@@ -113,6 +113,14 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # BodySizeLimit — ПЕРВЫМ add_middleware = ВНУТРЕННИЙ слой (ближайший к app).
+    # Критично для chunked-пути (H-9, ревью #3): limited_receive должен кормить FastAPI
+    # НАПРЯМУЮ — тогда 413 (fastapi.HTTPException) из receive ре-рейзится штатным
+    # `except HTTPException` парсера body. Если между BodySize и app стоит
+    # BaseHTTPMiddleware (RequestId), исключение из receive рвётся об его внутренний
+    # стрим — FastAPI видит ClientDisconnect → 400 «error parsing the body».
+    app.add_middleware(BodySizeLimitMiddleware)
+
     # CORS — только если фронт сконфигурирован (в проде/dev).
     # Wildcard "*" + allow_credentials=True = мгновенный CSRF (см. security audit HIGH #12).
     # Падаем на старте: лучше отказ деплоя, чем тихо открытый origin.
@@ -131,7 +139,6 @@ def create_app() -> FastAPI:
         )
 
     app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(BodySizeLimitMiddleware)
     # H-3: X-API-Key на write-эндпоинтах (secure-by-default; см. ApiKeyAuthMiddleware).
     app.add_middleware(ApiKeyAuthMiddleware)
 

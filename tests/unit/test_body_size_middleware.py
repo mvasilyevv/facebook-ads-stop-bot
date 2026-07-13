@@ -116,3 +116,27 @@ async def test_invalid_content_length_400() -> None:
     async with _client() as ac:
         resp = await ac.post("/x", content=b"abc", headers={"Content-Length": "not-a-number"})
     assert resp.status_code == 400
+
+
+# Ревью перед push (#3): chunked-обход через БОЕВОЙ стек create_app() (BodySize —
+# pure ASGI поверх BaseHTTPMiddleware-цепочки RequestId/ApiKeyAuth). Unit-тест выше
+# проверял голый echo-app — взаимодействие с реальным стеком оставалось непокрытым
+# (паттерн «стороны в изоляции» из Round 11). 413 отрабатывает в middleware ДО
+# handler'а → БД не нужна.
+@pytest.mark.asyncio
+async def test_chunked_large_body_413_through_real_app() -> None:
+    from apps.api.main import create_app
+
+    app = create_app()
+
+    async def _chunks():
+        for _ in range(65):  # 130 KB > 64 KB, без Content-Length
+            yield b"x" * 2048
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        resp = await ac.post("/api/v1/postback/adsetpro", content=_chunks())
+    # Внутри FastAPI-стека 413 отдаёт штатный exception-handler (detail без max_bytes).
+    assert resp.status_code == 413
+    assert "too large" in resp.text

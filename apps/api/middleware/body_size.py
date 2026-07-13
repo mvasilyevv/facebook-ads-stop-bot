@@ -26,6 +26,7 @@ campaigns/* — X-API-Key (ApiKeyAuthMiddleware); общий — собстве�
 
 from __future__ import annotations
 
+from fastapi import HTTPException as FastAPIHTTPException
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -38,8 +39,20 @@ _BODYLESS_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _EXEMPT_PATH_PREFIXES = ("/api/tools/",)
 
 
-class _BodyTooLargeError(Exception):
-    """Фактический размер тела превысил лимит во время чтения (chunked-путь)."""
+class _BodyTooLargeError(FastAPIHTTPException):
+    """Фактический размер тела превысил лимит во время чтения (chunked-путь).
+
+    Подкласс ИМЕННО fastapi.HTTPException (ревью перед push, #3): FastAPI при
+    чтении body оборачивает ошибки receive в `except Exception → 400 error
+    parsing the body`, пробрасывая как есть только СВОЙ HTTPException
+    (starlette'овский родитель под except не попадает — он ШИРЕ fastapi'шного).
+    Внутри FastAPI-стека ответ станет честным 413 через штатный
+    exception-handler; вне FastAPI (голый ASGI-app) исключение долетает до
+    нашего __call__ → 413 из _reject_too_large.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(status_code=413, detail="request body too large")
 
 
 class BodySizeLimitMiddleware:
