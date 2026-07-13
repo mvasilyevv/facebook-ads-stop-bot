@@ -368,8 +368,9 @@ async def test_ereco_promoted_recommendation_rejected(pg_engine, stopped_ad_e2e)
             await conn.execute(
                 text(
                     """
-                    INSERT INTO task_queue (task_type, status, idempotency_key, payload)
-                    VALUES ('meta_api_mutation', 'succeeded', :ik, CAST('{}' AS JSONB))
+                    INSERT INTO task_queue
+                        (task_type, status, idempotency_key, payload, requested_by)
+                    VALUES ('meta_api_mutation', 'succeeded', :ik, CAST('{}' AS JSONB), 'test')
                     RETURNING id
                     """
                 ),
