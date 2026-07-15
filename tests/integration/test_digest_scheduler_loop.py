@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
+from pydantic import SecretStr
 from sqlalchemy import text
 
 from apps.digest_scheduler.main import (
@@ -21,6 +22,7 @@ from apps.digest_scheduler.main import (
     digest_sent_key,
     run_one_tick,
 )
+from core.config import get_settings
 from core.crypto import encrypt
 
 
@@ -208,7 +210,12 @@ async def test_run_one_tick_out_of_window(pg_engine, fake_redis_client, clean_lo
 # В окне, но telegram_config пустой → ничего не шлём, но и не ставим флаг
 # (чтобы при появлении токена на следующем тике дойти до отправки)
 @pytest.mark.asyncio
-async def test_run_one_tick_no_tg_config(pg_engine, fake_redis_client, clean_loop_tables) -> None:
+async def test_run_one_tick_no_tg_config(
+    pg_engine, fake_redis_client, clean_loop_tables, monkeypatch
+) -> None:
+    # CI всегда задаёт TELEGRAM_BOT_TOKEN. Для сценария «не настроено нигде»
+    # явно выключаем env-bootstrap, иначе чистая БД корректно создаст singleton.
+    monkeypatch.setattr(get_settings(), "telegram_bot_token", SecretStr(""))
     now = datetime(2026, 5, 27, 9, 0, 0, tzinfo=timezone.utc)
     window = DigestWindow(hour=9, minute=0, window_minutes=5)
 
