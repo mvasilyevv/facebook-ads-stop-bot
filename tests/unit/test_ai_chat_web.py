@@ -142,3 +142,64 @@ async def test_endpoint_happy_path() -> None:
     assert "web_chat" in kwargs["skills"]
     # История дошла целиком (3 сообщения)
     assert len(session.ask.call_args.args[0]) == 3
+
+
+def _pulse_redis(cached: str | None = None) -> MagicMock:
+    r = MagicMock()
+    r.get = AsyncMock(return_value=cached)
+    r.set = AsyncMock()
+    return r
+
+
+# Пульс: сигналов нет → important=false, AI-текста нет, результат закэширован на час
+@pytest.mark.asyncio
+async def test_pulse_quiet_cached() -> None:
+    from apps.api.routers.v1.ai_chat_web import ai_pulse
+
+    redis = _pulse_redis()
+    with patch(
+        "apps.api.routers.v1.ai_chat_web.build_pulse", new=AsyncMock(return_value=None)
+    ) as bp:
+        resp = await ai_pulse(
+            _request_mock(), engine=MagicMock(), redis=redis, settings=_settings_mock()
+        )
+    data = json.loads(resp.body)
+    assert data["important"] is False
+    assert data["text"] is None
+    # html=False — веб-формат без Telegram-тегов
+    assert bp.call_args.kwargs["html"] is False
+    redis.set.assert_awaited()  # «тихий» час тоже кэшируется
+
+
+# Пульс: сигналы есть → important=true с текстом отчёта
+@pytest.mark.asyncio
+async def test_pulse_important_returns_text() -> None:
+    from apps.api.routers.v1.ai_chat_web import ai_pulse
+
+    with patch(
+        "apps.api.routers.v1.ai_chat_web.build_pulse",
+        new=AsyncMock(return_value="2 стопа за час: CR2_CR002 (cpl_stop)."),
+    ):
+        resp = await ai_pulse(
+            _request_mock(), engine=MagicMock(), redis=_pulse_redis(), settings=_settings_mock()
+        )
+    data = json.loads(resp.body)
+    assert data["important"] is True
+    assert "2 стопа" in data["text"]
+
+
+# Пульс: повторный опрос в тот же час отдаёт кэш, build_pulse не вызывается
+@pytest.mark.asyncio
+async def test_pulse_cache_hit_skips_rebuild() -> None:
+    from apps.api.routers.v1.ai_chat_web import ai_pulse
+
+    cached = json.dumps({"important": False, "text": None, "generated_at": "2026-07-15T13:00:00"})
+    with patch("apps.api.routers.v1.ai_chat_web.build_pulse", new=AsyncMock()) as bp:
+        resp = await ai_pulse(
+            _request_mock(),
+            engine=MagicMock(),
+            redis=_pulse_redis(cached=cached),
+            settings=_settings_mock(),
+        )
+    bp.assert_not_awaited()
+    assert json.loads(resp.body)["important"] is False

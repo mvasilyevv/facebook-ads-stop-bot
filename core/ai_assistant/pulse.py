@@ -140,9 +140,10 @@ def _facts_text(signals: PulseSignals) -> str:
     return "\n".join(lines)
 
 
-def _fallback_text(signals: PulseSignals) -> str:
+def _fallback_text(signals: PulseSignals, *, html: bool = True) -> str:
     """Детерминированный пульс без AI — сигнал важнее красоты."""
-    return "📟 <b>Пульс кабинета</b>\n" + _facts_text(signals)
+    header = "📟 <b>Пульс кабинета</b>\n" if html else ""
+    return header + _facts_text(signals)
 
 
 async def build_pulse(
@@ -150,9 +151,12 @@ async def build_pulse(
     *,
     since: datetime,
     now: datetime,
+    html: bool = True,
 ) -> str | None:
     """Собрать текст пульса. None — сигналов нет, слать нечего.
 
+    html=True — Telegram-формат (заголовок с <b>); html=False — чистый текст
+    для веб-виджета (заголовок рисует сам виджет).
     Никогда не бросает: при ошибке AI возвращает детерминированный фолбэк.
     """
     signals = await collect_pulse_signals(engine, since=since, now=now)
@@ -162,7 +166,7 @@ async def build_pulse(
     settings = get_settings()
     client = get_ai_client(settings)
     if not client.is_available:
-        return _fallback_text(signals)
+        return _fallback_text(signals, html=html)
 
     try:
         system = load_skill("pulse_report")
@@ -181,14 +185,14 @@ async def build_pulse(
         ai_text = (response.text or "").strip()
     except (TimeoutError, asyncio.TimeoutError, AIUnavailableError) as exc:
         logger.warning("pulse: AI недоступен (%s) — детерминированный фолбэк", exc)
-        return _fallback_text(signals)
+        return _fallback_text(signals, html=html)
     except Exception:  # noqa: BLE001
         logger.warning("pulse: ошибка провайдера — детерминированный фолбэк", exc_info=True)
-        return _fallback_text(signals)
+        return _fallback_text(signals, html=html)
 
     if not ai_text:
-        return _fallback_text(signals)
-    return f"📟 <b>Пульс кабинета</b>\n{ai_text}"
+        return _fallback_text(signals, html=html)
+    return f"📟 <b>Пульс кабинета</b>\n{ai_text}" if html else ai_text
 
 
 __all__ = ["PulseSignals", "build_pulse", "collect_pulse_signals"]

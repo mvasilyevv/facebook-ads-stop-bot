@@ -35,3 +35,14 @@ class AIChatResponse(BaseModel):
     tool_calls: list[ToolCallOut] = Field(default_factory=list)
     generated_at: str
     model: str
+
+
+class AIPulseResponse(BaseModel):
+    """Почасовой пульс для веб-виджета.
+
+    important=False → за окно ничего значимого, виджет молчит (text = null).
+    """
+
+    important: bool
+    text: str | None = None
+    generated_at: str
