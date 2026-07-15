@@ -147,6 +147,73 @@ async def test_mut_duplicate_campaign(monkeypatch) -> None:
     assert d.allowed is False and d.not_found is True
 
 
+@pytest.mark.asyncio
+async def test_mut_duplicate_adset_structure_checks_source_ad_and_generated_names(
+    monkeypatch,
+) -> None:
+    payload = MetaMutationPayload(
+        mutation_kind="duplicate_adset_structure",
+        target_id="draft",
+        params={
+            "source_ad_id": "101",
+            "source_adset_id": "201",
+            "campaign_names": ["CR2 | MV | duplicate 1", "CR2 | MV | duplicate 2"],
+        },
+    )
+    resolver = AsyncMock(return_value=("CR2", "MV | source ad"))
+    monkeypatch.setattr(own, "_resolve_ad", resolver)
+    engine = object()
+
+    decision = await check_mutation_ownership(engine, payload, owner_tag="MV")
+
+    assert decision.allowed is True
+    resolver.assert_awaited_once_with(engine, "101")
+
+
+@pytest.mark.asyncio
+async def test_mut_duplicate_adset_structure_rejects_generated_name_without_owner_tag(
+    monkeypatch,
+) -> None:
+    payload = MetaMutationPayload(
+        mutation_kind="duplicate_adset_structure",
+        target_id="draft",
+        params={
+            "source_ad_id": "101",
+            "campaign_names": ["CR2 | MV | duplicate 1", "CR2 | foreign duplicate"],
+        },
+    )
+    monkeypatch.setattr(own, "_resolve_ad", AsyncMock(return_value=("CR2 | MV", "source")))
+
+    decision = await check_mutation_ownership(object(), payload, owner_tag="MV")
+
+    assert decision.allowed is False
+    assert "campaign_names[1]" in decision.reason
+
+
+@pytest.mark.asyncio
+async def test_mut_duplicate_adset_structure_rejects_foreign_source_before_names(
+    monkeypatch,
+) -> None:
+    payload = MetaMutationPayload(
+        mutation_kind="duplicate_adset_structure",
+        target_id="draft",
+        params={
+            "source_ad_id": "101",
+            "campaign_names": ["CR2 | MV | duplicate"],
+        },
+    )
+    monkeypatch.setattr(
+        own,
+        "_resolve_ad",
+        AsyncMock(return_value=("CR2 | foreign", "source")),
+    )
+
+    decision = await check_mutation_ownership(object(), payload, owner_tag="MV")
+
+    assert decision.allowed is False
+    assert "чужая кампания" in decision.reason
+
+
 # ====================== check_mutation_ownership: bulk ======================
 
 

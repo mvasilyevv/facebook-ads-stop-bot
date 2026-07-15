@@ -465,6 +465,134 @@
         }
       }
     },
+    "/api/tools/adset-duplicates/preview": {
+      "post": {
+        "tags": [
+          "tools"
+        ],
+        "summary": "Preview Adset Duplicate",
+        "description": "Read-only dry-run; сохраняет канонический план в Redis на 15 минут.",
+        "operationId": "preview_adset_duplicate_api_tools_adset_duplicates_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsetDuplicatePreviewIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdsetDuplicatePreviewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/adset-duplicates/draft": {
+      "post": {
+        "tags": [
+          "tools"
+        ],
+        "summary": "Create Adset Duplicate Draft",
+        "description": "Создаёт только DRAFT; без успешной owner-нотификации сразу отменяет его.",
+        "operationId": "create_adset_duplicate_draft_api_tools_adset_duplicates_draft_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsetDuplicateDraftIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdsetDuplicateDraftOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/adset-duplicates/{task_id}": {
+      "get": {
+        "tags": [
+          "tools"
+        ],
+        "summary": "Get Adset Duplicate Status",
+        "description": "Статус только duplicate_adset_structure; чужие task IDs возвращают 404.",
+        "operationId": "get_adset_duplicate_status_api_tools_adset_duplicates__task_id__get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdsetDuplicateStatusOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ai/analyze": {
       "post": {
         "tags": [
@@ -4190,7 +4318,7 @@
           "settings"
         ],
         "summary": "Delete Telegram Settings",
-        "description": "Очищает bot_token_encrypted и chat_id в TelegramConfig.\n\nЕсли строки нет — возвращает пустой ответ без ошибки.",
+        "description": "Очищает bot_token_encrypted и chat_id в TelegramConfig.\n\nЕсли строки нет — создаёт пустую singleton-строку как tombstone. Это сохраняет\nявное отключение через UI: env-bootstrap не восстановит токен после DELETE.",
         "operationId": "delete_telegram_settings_api_settings_telegram_delete",
         "responses": {
           "200": {
@@ -5766,6 +5894,466 @@
         ],
         "title": "AdsetConfig",
         "description": "Один adset в структуре кампании."
+      },
+      "AdsetDuplicateBudget": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": [
+              "ABO",
+              "CBO"
+            ],
+            "title": "Level"
+          },
+          "unit_daily_budget_cents": {
+            "type": "integer",
+            "title": "Unit Daily Budget Cents"
+          },
+          "total_daily_budget_cents": {
+            "type": "integer",
+            "title": "Total Daily Budget Cents"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "unit_daily_budget_cents",
+          "total_daily_budget_cents",
+          "currency"
+        ],
+        "title": "AdsetDuplicateBudget"
+      },
+      "AdsetDuplicateCounts": {
+        "properties": {
+          "campaigns": {
+            "type": "integer",
+            "title": "Campaigns"
+          },
+          "adsets": {
+            "type": "integer",
+            "title": "Adsets"
+          },
+          "ads": {
+            "type": "integer",
+            "title": "Ads"
+          },
+          "total_objects": {
+            "type": "integer",
+            "title": "Total Objects"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaigns",
+          "adsets",
+          "ads",
+          "total_objects"
+        ],
+        "title": "AdsetDuplicateCounts"
+      },
+      "AdsetDuplicateDraftIn": {
+        "properties": {
+          "preview_token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 20,
+            "title": "Preview Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preview_token"
+        ],
+        "title": "AdsetDuplicateDraftIn"
+      },
+      "AdsetDuplicateDraftOut": {
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "title": "Task Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "status",
+          "expires_at"
+        ],
+        "title": "AdsetDuplicateDraftOut"
+      },
+      "AdsetDuplicateGeneratedNames": {
+        "properties": {
+          "campaigns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Campaigns"
+          },
+          "adsets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Adsets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "campaigns",
+          "adsets"
+        ],
+        "title": "AdsetDuplicateGeneratedNames"
+      },
+      "AdsetDuplicatePreviewIn": {
+        "properties": {
+          "source_ad_id": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "pattern": "^\\d+$",
+            "title": "Source Ad Id"
+          },
+          "selected_ad_ids": {
+            "items": {
+              "type": "string",
+              "maxLength": 32,
+              "minLength": 1,
+              "pattern": "^\\d+$"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Selected Ad Ids"
+          },
+          "campaign_count": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Campaign Count"
+          },
+          "adsets_per_campaign": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Adsets Per Campaign"
+          },
+          "budget_level": {
+            "type": "string",
+            "enum": [
+              "ABO",
+              "CBO"
+            ],
+            "title": "Budget Level"
+          },
+          "daily_budget_cents": {
+            "type": "integer",
+            "maximum": 10000000.0,
+            "minimum": 1.0,
+            "title": "Daily Budget Cents"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "campaign_name_base": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Name Base"
+          },
+          "adset_name_base": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adset Name Base"
+          },
+          "idempotency_token": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Idempotency Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_ad_id",
+          "selected_ad_ids",
+          "campaign_count",
+          "adsets_per_campaign",
+          "budget_level",
+          "daily_budget_cents",
+          "idempotency_token"
+        ],
+        "title": "AdsetDuplicatePreviewIn"
+      },
+      "AdsetDuplicatePreviewOut": {
+        "properties": {
+          "preview_token": {
+            "type": "string",
+            "title": "Preview Token"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AdsetDuplicateSource"
+          },
+          "format_code": {
+            "type": "string",
+            "title": "Format Code"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/AdsetDuplicateCounts"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/AdsetDuplicateBudget"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/AdsetDuplicateSchedule"
+          },
+          "generated_names": {
+            "$ref": "#/components/schemas/AdsetDuplicateGeneratedNames"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preview_token",
+          "source",
+          "format_code",
+          "counts",
+          "budget",
+          "schedule",
+          "generated_names",
+          "warnings",
+          "expires_at"
+        ],
+        "title": "AdsetDuplicatePreviewOut"
+      },
+      "AdsetDuplicateProgress": {
+        "properties": {
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "completed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "title": "AdsetDuplicateProgress"
+      },
+      "AdsetDuplicateSchedule": {
+        "properties": {
+          "timezone_name": {
+            "type": "string",
+            "title": "Timezone Name"
+          },
+          "offset": {
+            "type": "string",
+            "title": "Offset"
+          },
+          "start_time_utc": {
+            "type": "string",
+            "title": "Start Time Utc"
+          },
+          "start_time_local": {
+            "type": "string",
+            "title": "Start Time Local"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timezone_name",
+          "offset",
+          "start_time_utc",
+          "start_time_local"
+        ],
+        "title": "AdsetDuplicateSchedule"
+      },
+      "AdsetDuplicateSource": {
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/DuplicateSourceAccount"
+          },
+          "campaign": {
+            "$ref": "#/components/schemas/DuplicateSourceEntity"
+          },
+          "adset": {
+            "$ref": "#/components/schemas/DuplicateSourceEntity"
+          },
+          "ads": {
+            "items": {
+              "$ref": "#/components/schemas/DuplicateSourceAd"
+            },
+            "type": "array",
+            "title": "Ads"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account",
+          "campaign",
+          "adset",
+          "ads"
+        ],
+        "title": "AdsetDuplicateSource"
+      },
+      "AdsetDuplicateStatusOut": {
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "title": "Task Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdsetDuplicateProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_meta_ids": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Created Meta Ids"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "status",
+          "progress",
+          "error"
+        ],
+        "title": "AdsetDuplicateStatusOut"
       },
       "AdsetPlanOut": {
         "properties": {
@@ -7829,6 +8417,98 @@
         ],
         "title": "DisableTaskCreateIn",
         "description": "Тело POST /dashboard/disable-tasks."
+      },
+      "DuplicateSourceAccount": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "DuplicateSourceAccount"
+      },
+      "DuplicateSourceAd": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "fb_ad_id": {
+            "type": "string",
+            "title": "Fb Ad Id"
+          },
+          "delivery_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Status"
+          },
+          "creative_thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Thumb Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "fb_ad_id"
+        ],
+        "title": "DuplicateSourceAd"
+      },
+      "DuplicateSourceEntity": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "DuplicateSourceEntity"
       },
       "EnableRecommendationConfirmIn": {
         "properties": {

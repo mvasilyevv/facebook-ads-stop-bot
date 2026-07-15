@@ -19,7 +19,8 @@ dispatch_mutation. До Этапа 5 здесь была заглушка с Not
 - CreateCampaignPartialError → mark_failed + лог осиротевших id (нужна ручная чистка)
 - голый ValueError (неожиданный, баг в коде) → requeue (защитный retry, логируется как аномалия)
 - любое другое Exception → requeue (защитный retry на transient)
-- ИСКЛЮЧЕНИЕ для необратимых kinds (create_campaign/duplicate_campaign): transient/
+- ИСКЛЮЧЕНИЕ для необратимых kinds (create_campaign/duplicate_campaign/
+  duplicate_adset_structure): transient/
   ValueError/Exception → mark_failed (НЕ requeue), т.к. ответ мог потеряться после
   коммита Meta и retry создал бы дубль кампании. См. _IRREVERSIBLE_KINDS.
 """
@@ -27,6 +28,7 @@ dispatch_mutation. До Этапа 5 здесь была заглушка с Not
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -66,10 +68,17 @@ from core.meta_api.freshness import (
 from core.meta_api.fsm_sync import is_deactivating_bulk, sync_fsm_after_mutation
 from core.meta_api.mutations import dispatch_mutation
 from core.meta_api.mutations.create_campaign import CreateCampaignPartialError
+from core.meta_api.mutations.duplicate_adset_structure import (
+    DuplicateAdsetStructureHandler,
+    DuplicateAdsetStructurePartialError,
+    DuplicateProgressCallback,
+)
 from core.meta_api.mutations.duplicate_campaign import DuplicateCampaignPartialError
 from core.meta_api.ownership import check_mutation_ownership, load_owner_tag
 from core.meta_api.queue import (
+    checkpoint_duplicate_progress,
     claim_pending_task,
+    defer_duplicate_recovery,
     mark_task_failed,
     mark_task_succeeded,
     requeue_task,
@@ -232,11 +241,18 @@ async def execute_mutation(
     payload: MetaMutationPayload,
     *,
     client: MetaApiClient,
+    progress_callback: DuplicateProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Исполнить mutation через dispatch_mutation.
 
     Доменные ошибки Meta пробрасываются как есть — process_one_task маршрутизирует.
     """
+    if payload.mutation_kind == "duplicate_adset_structure":
+        return await DuplicateAdsetStructureHandler().execute(
+            client,
+            payload,
+            progress_callback=progress_callback,
+        )
     return await dispatch_mutation(client, payload)
 
 
@@ -285,6 +301,24 @@ async def _execute_with_touch(
     """
     touch_task = asyncio.create_task(_touch_loop(engine, task_id, touch_interval_seconds))
     try:
+        if payload.mutation_kind == "duplicate_adset_structure":
+
+            async def persist_progress(checkpoint: dict[str, Any]) -> None:
+                applied = await checkpoint_duplicate_progress(
+                    engine,
+                    task_id=task_id,
+                    checkpoint=checkpoint,
+                )
+                if not applied:
+                    raise RuntimeError(
+                        "duplicate checkpoint rejected: task is no longer the active create run"
+                    )
+
+            return await execute_mutation(
+                payload,
+                client=client,
+                progress_callback=persist_progress,
+            )
         return await execute_mutation(payload, client=client)
     finally:
         touch_task.cancel()
@@ -470,6 +504,163 @@ async def _alert_money_fail(
     )
 
 
+def _is_duplicate_recovery_task(task: Task, payload: MetaMutationPayload) -> bool:
+    checkpoint = getattr(task, "result", None)
+    return (
+        payload.mutation_kind == "duplicate_adset_structure"
+        and isinstance(checkpoint, dict)
+        and checkpoint.get("checkpoint_type") == "duplicate_adset_structure"
+        and checkpoint.get("recovery_requested") is True
+    )
+
+
+async def _notify_duplicate_recovery(
+    engine: AsyncEngine,
+    redis_client: redis_asyncio.Redis | None,
+    *,
+    task_id: int,
+    text: str,
+    suffix: str,
+) -> None:
+    try:
+        await notify_owners(
+            engine,
+            redis_client,
+            category="critical",
+            text=text,
+            dedup_key=f"meta_api:duplicate_adset_structure:recovery:{task_id}:{suffix}",
+            dedup_ttl_seconds=60 * 60,
+        )
+    except Exception:  # noqa: BLE001 — recovery state is already persisted
+        logger.exception("meta_api: duplicate recovery notification failed task=%s", task_id)
+
+
+async def _recover_duplicate_task(
+    engine: AsyncEngine,
+    task: Task,
+    payload: MetaMutationPayload,
+    *,
+    client: MetaApiClient,
+    redis_client: redis_asyncio.Redis | None,
+) -> None:
+    """Execute a PAUSE-only recovery; never replay the original create plan."""
+    checkpoint = dict(getattr(task, "result", None) or {})
+    handler = DuplicateAdsetStructureHandler()
+    try:
+        created, cleanup_failures = await handler.recover_checkpoint(
+            client,
+            payload,
+            checkpoint,
+        )
+    except asyncio.CancelledError:
+        # Leave the task running with its checkpoint. Reconciler will schedule
+        # another PAUSE-only recovery after the stale timeout.
+        raise
+    except Exception as exc:  # noqa: BLE001 — malformed checkpoint cannot be retried safely
+        invalid_result = {
+            **checkpoint,
+            "phase": "recovery_checkpoint_invalid",
+            "recovery_error": repr(exc),
+        }
+        applied = await mark_task_failed(
+            engine,
+            task_id=task.id,
+            error=f"duplicate recovery checkpoint invalid: {exc!r}",
+            result=invalid_result,
+        )
+        if applied:
+            await _notify_duplicate_recovery(
+                engine,
+                redis_client,
+                task_id=task.id,
+                suffix="invalid",
+                text=(
+                    "🚨 <b>Crash-recovery дублирования не смог прочитать checkpoint</b>\n"
+                    f"Task: <code>{task.id}</code>\n"
+                    f"Ошибка: <code>{html.escape(repr(exc))}</code>\n"
+                    "Проверь созданные объекты вручную в Ads Manager."
+                ),
+            )
+        return
+
+    recovery_attempt = int(checkpoint.get("recovery_attempt") or 0) + 1
+    recovered_result = {
+        **checkpoint,
+        "created_ids": created,
+        "recovery_requested": True,
+        "recovery_attempt": recovery_attempt,
+        "cleanup_failures": cleanup_failures,
+        "recovery_checked_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    }
+    if cleanup_failures:
+        recovered_result["phase"] = "recovery_retrying"
+        applied = await defer_duplicate_recovery(
+            engine,
+            task_id=task.id,
+            checkpoint=recovered_result,
+            error=(
+                f"duplicate crash recovery PAUSE incomplete: cleanup_failures={cleanup_failures!r}"
+            ),
+        )
+        if applied:
+            logger.error(
+                "meta_api: duplicate recovery task=%s incomplete, PAUSE retry scheduled: %s",
+                task.id,
+                cleanup_failures,
+            )
+            await _notify_duplicate_recovery(
+                engine,
+                redis_client,
+                task_id=task.id,
+                suffix="retrying",
+                text=(
+                    "🚨 <b>Crash-recovery дублирования: PAUSE выполнен не полностью</b>\n"
+                    f"Task: <code>{task.id}</code>\n"
+                    f"Ошибки: <code>{html.escape(repr(cleanup_failures))}</code>\n"
+                    "Recovery будет повторён автоматически; проверь Ads Manager."
+                ),
+            )
+        return
+
+    recovered_result.update(
+        {
+            "phase": "recovery_paused",
+            "recovered_after_crash": True,
+        }
+    )
+    applied = await mark_task_failed(
+        engine,
+        task_id=task.id,
+        error="duplicate_adset_structure crash recovery completed: all checkpointed IDs PAUSED",
+        result=recovered_result,
+    )
+    if not applied:
+        logger.warning(
+            "meta_api: duplicate recovery task=%s final mark_failed lost status race",
+            task.id,
+        )
+        return
+    await _publish_task_changed(
+        redis_client,
+        task_id=task.id,
+        task_type=task.task_type,
+        status="failed",
+    )
+    await _notify_duplicate_recovery(
+        engine,
+        redis_client,
+        task_id=task.id,
+        suffix="paused",
+        text=(
+            "🛑 <b>Crash-recovery дублирования завершён</b>\n"
+            f"Task: <code>{task.id}</code>\n"
+            f"Объекты из checkpoint поставлены на PAUSED: "
+            f"<code>{html.escape(repr(created))}</code>\n"
+            "Исходная задача помечена failed без повторного создания."
+        ),
+    )
+
+
 async def process_one_task(
     engine: AsyncEngine,
     task: Task,
@@ -510,6 +701,19 @@ async def process_one_task(
                 "— гонка с другим воркером",
                 task.id,
             )
+        return
+
+    # Reconciler can turn only a checkpointed stale duplicate into a recovery
+    # claim. Handle it before scanning/owner gates: PAUSE lowers spend risk and
+    # must remain possible even if the source disappeared from the local catalog.
+    if _is_duplicate_recovery_task(task, payload):
+        await _recover_duplicate_task(
+            engine,
+            task,
+            payload,
+            client=client,
+            redis_client=redis_client,
+        )
         return
 
     # Асимметричный стоп: на паузе сканирования откладываем АКТИВИРУЮЩИЕ mutations
@@ -810,6 +1014,80 @@ async def process_one_task(
             requested_by=getattr(task, "requested_by", ""),
             error=str(exc),
             kind_label=payload.mutation_kind,
+        )
+        return
+    except DuplicateAdsetStructurePartialError as exc:
+        # This executor may have created many campaigns/adsets/ads before one
+        # Graph call failed. The handler has already attempted to PAUSE every
+        # known id. Never retry: a lost create response could duplicate spend.
+        logger.error(
+            "meta_api: task id=%s duplicate_adset_structure partial fail — "
+            "created_ids=%s failed_steps=%s cleanup_failures=%s",
+            task.id,
+            exc.created_ids,
+            exc.failed_steps,
+            exc.cleanup_failures,
+        )
+        partial_result = {
+            "checkpoint_type": "duplicate_adset_structure",
+            "checkpoint_version": 1,
+            "phase": "recovery_retrying" if exc.cleanup_failures else "failed_cleanup",
+            "partial_fail": True,
+            "created_ids": exc.created_ids,
+            "activated_ids": {"campaigns": [], "adsets": [], "ads": []},
+            "failed_steps": exc.failed_steps,
+            "cleanup_failures": exc.cleanup_failures,
+            "recovery_requested": bool(exc.cleanup_failures),
+        }
+        error = (
+            "duplicate_adset_structure_partial_fail: "
+            f"created_ids={exc.created_ids!r} failed={exc.failed_steps!r} "
+            f"cleanup_failures={exc.cleanup_failures!r}"
+        )[:2000]
+        if exc.cleanup_failures:
+            # Do not terminally close while any known object failed to PAUSE.
+            # This is cleanup-only retry; the create plan is never replayed.
+            applied = await defer_duplicate_recovery(
+                engine,
+                task_id=task.id,
+                checkpoint=partial_result,
+                error=error,
+            )
+        else:
+            applied = await mark_task_failed(
+                engine,
+                task_id=task.id,
+                error=error,
+                result=partial_result,
+            )
+        if not applied:
+            logger.warning(
+                "meta_api: task id=%s finalize/recovery (adset structure partial) "
+                "не применился — гонка с другим воркером",
+                task.id,
+            )
+        source_campaign_id = str((payload.params or {}).get("source_campaign_id") or "—")
+        source_adset_id = str((payload.params or {}).get("source_adset_id") or "—")
+        await notify_owners(
+            engine,
+            redis_client,
+            category="critical",
+            text=(
+                "🚨 <b>Дублирование адсетов завершилось частично</b>\n"
+                f"Task: <code>{task.id}</code>\n"
+                f"Source campaign: <code>{html.escape(source_campaign_id)}</code>\n"
+                f"Source adset: <code>{html.escape(source_adset_id)}</code>\n"
+                f"Созданные ID: <code>{html.escape(repr(exc.created_ids))}</code>\n"
+                f"Ошибки cleanup: <code>{html.escape(repr(exc.cleanup_failures))}</code>\n"
+                + (
+                    "PAUSE-only recovery будет повторён автоматически. "
+                    if exc.cleanup_failures
+                    else "Созданные объекты поставлены на PAUSED. "
+                )
+                + "Проверь их вручную в Ads Manager."
+            ),
+            dedup_key=f"meta_api:duplicate_adset_structure:partial:{task.id}",
+            dedup_ttl_seconds=24 * 60 * 60,
         )
         return
     except _PERMANENT_EXCEPTIONS as exc:

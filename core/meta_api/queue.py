@@ -28,10 +28,12 @@ from core.meta_api.schemas import MetaMutationPayload
 from core.tasks.queue import (
     Task,
     TaskClaim,
+    checkpoint_duplicate_adset_structure,
     claim_next_task,
     create_task,
     mark_failed,
     mark_succeeded,
+    requeue_duplicate_recovery,
     requeue_for_retry,
 )
 
@@ -407,9 +409,42 @@ async def mark_task_failed(
     *,
     task_id: int,
     error: str,
+    result: dict[str, Any] | None = None,
 ) -> bool:
     """Прокси к core.tasks.queue.mark_failed. См. там про bool-семантику."""
-    return await mark_failed(engine, task_id=task_id, error=error)
+    return await mark_failed(engine, task_id=task_id, error=error, result=result)
+
+
+async def checkpoint_duplicate_progress(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    checkpoint: dict[str, Any],
+) -> bool:
+    """Persist progress only for a running duplicate_adset_structure task."""
+    return await checkpoint_duplicate_adset_structure(
+        engine,
+        task_id=task_id,
+        checkpoint=checkpoint,
+    )
+
+
+async def defer_duplicate_recovery(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    checkpoint: dict[str, Any],
+    error: str,
+    delay_seconds: int = 60,
+) -> bool:
+    """Requeue PAUSE-only crash recovery independently of create retry limits."""
+    return await requeue_duplicate_recovery(
+        engine,
+        task_id=task_id,
+        checkpoint=checkpoint,
+        error=error,
+        delay_seconds=delay_seconds,
+    )
 
 
 async def requeue_task(

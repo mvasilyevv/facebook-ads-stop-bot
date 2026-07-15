@@ -42,6 +42,7 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 # Точечные read-endpoint'ы с чувствительными данными/платным side effect.
 _PROTECTED_READ_PATHS = frozenset({"/api/ai/pulse"})
+_PROTECTED_READ_PREFIXES = ("/api/tools/adset-duplicates/",)
 
 # Префиксы путей со своим механизмом auth или публичные — ключ не требуем.
 _EXEMPT_PATH_PREFIXES = ("/api/v1/postback", "/api/tma")
@@ -109,7 +110,10 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         if not settings.require_api_key:
             return await call_next(request)
         method = request.method.upper()
-        is_protected_read = method in {"GET", "HEAD"} and request.url.path in _PROTECTED_READ_PATHS
+        is_protected_read = method in {"GET", "HEAD"} and (
+            request.url.path in _PROTECTED_READ_PATHS
+            or any(request.url.path.startswith(prefix) for prefix in _PROTECTED_READ_PREFIXES)
+        )
         if _has_own_auth(request.url.path):
             return await call_next(request)
 

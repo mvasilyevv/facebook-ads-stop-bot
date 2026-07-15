@@ -15,6 +15,7 @@ reconcile_stuck_running(exclude_kinds=...) их НЕ ретраит. Обрат�
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -25,8 +26,11 @@ from core.meta_api.schemas import IRREVERSIBLE_MUTATION_KINDS
 from core.tasks import create_task
 from core.tasks.queue import (
     fail_stuck_campaign_create,
+    fail_stuck_duplicate_without_checkpoint,
     fail_stuck_irreversible,
+    prepare_stuck_duplicate_recovery,
     reconcile_stuck_running,
+    requeue_duplicate_recovery,
 )
 
 
@@ -94,6 +98,130 @@ async def test_stuck_duplicate_campaign_marked_failed(pg_engine, clean_task_queu
     await fail_stuck_irreversible(pg_engine, mutation_kinds=IRREVERSIBLE_MUTATION_KINDS)
 
     assert await _status(pg_engine, task_id) == "failed"
+
+
+@pytest.mark.asyncio
+async def test_stale_checkpointed_duplicate_and_crashed_recovery_are_rescheduled(
+    pg_engine, clean_task_queue
+) -> None:
+    """SIGKILL-equivalent recovery claim remains recoverable, never generic-failed."""
+    task_id = await _make_stuck_running(
+        pg_engine,
+        mutation_kind="duplicate_adset_structure",
+    )
+    checkpoint = {
+        "checkpoint_type": "duplicate_adset_structure",
+        "phase": "activating",
+        "created_ids": {"campaigns": ["1001"], "adsets": ["2001"], "ads": ["3001"]},
+        "recovery_requested": True,
+    }
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET result = CAST(:checkpoint AS JSONB),
+                    updated_at = NOW() - INTERVAL '2 hours'
+                WHERE id = :id
+                """
+            ),
+            {"id": task_id, "checkpoint": json.dumps(checkpoint)},
+        )
+
+    # Defense-in-depth: even the full set cannot terminally fail this kind.
+    assert (
+        await fail_stuck_irreversible(
+            pg_engine,
+            mutation_kinds=IRREVERSIBLE_MUTATION_KINDS,
+        )
+        == 0
+    )
+    assert await fail_stuck_duplicate_without_checkpoint(pg_engine) == 0
+    assert await _status(pg_engine, task_id) == "running"
+
+    assert await prepare_stuck_duplicate_recovery(pg_engine) == 1
+    assert await _status(pg_engine, task_id) == "retrying"
+
+    # Recovery worker claims and itself dies: stale running + requested=true must
+    # be moved back to retrying for another PAUSE-only attempt.
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET status = 'running', updated_at = NOW() - INTERVAL '2 hours'
+                WHERE id = :id
+                """
+            ),
+            {"id": task_id},
+        )
+    assert await prepare_stuck_duplicate_recovery(pg_engine) == 1
+    assert await _status(pg_engine, task_id) == "retrying"
+
+
+@pytest.mark.asyncio
+async def test_stale_duplicate_without_checkpoint_fails_without_replay(
+    pg_engine, clean_task_queue
+) -> None:
+    task_id = await _make_stuck_running(
+        pg_engine,
+        mutation_kind="duplicate_adset_structure",
+    )
+
+    assert await prepare_stuck_duplicate_recovery(pg_engine) == 0
+    assert await fail_stuck_duplicate_without_checkpoint(pg_engine) == 1
+    assert await _status(pg_engine, task_id) == "failed"
+
+
+@pytest.mark.asyncio
+async def test_initial_partial_cleanup_failure_enters_recovery_without_existing_flag(
+    pg_engine, clean_task_queue
+) -> None:
+    task_id = await _make_stuck_running(
+        pg_engine,
+        mutation_kind="duplicate_adset_structure",
+    )
+    existing = {
+        "checkpoint_type": "duplicate_adset_structure",
+        "phase": "failed_cleanup",
+        "created_ids": {"campaigns": ["1001"], "adsets": ["2001"], "ads": []},
+        # Deliberately no recovery_requested: this is the first cleanup failure.
+    }
+    incoming = {
+        **existing,
+        "phase": "recovery_retrying",
+        "recovery_requested": True,
+        "cleanup_failures": [{"id": "2001", "error": "transport"}],
+    }
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET result = CAST(:checkpoint AS JSONB), updated_at = NOW()
+                WHERE id = :id
+                """
+            ),
+            {"id": task_id, "checkpoint": json.dumps(existing)},
+        )
+
+    assert await requeue_duplicate_recovery(
+        pg_engine,
+        task_id=task_id,
+        checkpoint=incoming,
+        error="initial PAUSE cleanup failed",
+        delay_seconds=1,
+    )
+    assert await _status(pg_engine, task_id) == "retrying"
+    async with pg_engine.connect() as conn:
+        result = (
+            await conn.execute(
+                text("SELECT result FROM task_queue WHERE id = :id"),
+                {"id": task_id},
+            )
+        ).scalar_one()
+    assert result["recovery_requested"] is True
+    assert result["phase"] == "recovery_retrying"
 
 
 # reconcile с exclude_kinds НЕ ретраит необратимую — остаётся running (двойная защита)

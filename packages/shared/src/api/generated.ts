@@ -209,6 +209,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tools/adset-duplicates/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Adset Duplicate
+         * @description Read-only dry-run; сохраняет канонический план в Redis на 15 минут.
+         */
+        post: operations["preview_adset_duplicate_api_tools_adset_duplicates_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tools/adset-duplicates/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Adset Duplicate Draft
+         * @description Создаёт только DRAFT; без успешной owner-нотификации сразу отменяет его.
+         */
+        post: operations["create_adset_duplicate_draft_api_tools_adset_duplicates_draft_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tools/adset-duplicates/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Adset Duplicate Status
+         * @description Статус только duplicate_adset_structure; чужие task IDs возвращают 404.
+         */
+        get: operations["get_adset_duplicate_status_api_tools_adset_duplicates__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/ai/analyze": {
         parameters: {
             query?: never;
@@ -1721,7 +1781,8 @@ export interface paths {
          * Delete Telegram Settings
          * @description Очищает bot_token_encrypted и chat_id в TelegramConfig.
          *
-         *     Если строки нет — возвращает пустой ответ без ошибки.
+         *     Если строки нет — создаёт пустую singleton-строку как tombstone. Это сохраняет
+         *     явное отключение через UI: env-bootstrap не восстановит токен после DELETE.
          */
         delete: operations["delete_telegram_settings_api_settings_telegram_delete"];
         options?: never;
@@ -2498,6 +2559,148 @@ export interface components {
             dir: string;
             /** Glob */
             glob: string;
+        };
+        /** AdsetDuplicateBudget */
+        AdsetDuplicateBudget: {
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "ABO" | "CBO";
+            /** Unit Daily Budget Cents */
+            unit_daily_budget_cents: number;
+            /** Total Daily Budget Cents */
+            total_daily_budget_cents: number;
+            /** Currency */
+            currency: string;
+        };
+        /** AdsetDuplicateCounts */
+        AdsetDuplicateCounts: {
+            /** Campaigns */
+            campaigns: number;
+            /** Adsets */
+            adsets: number;
+            /** Ads */
+            ads: number;
+            /** Total Objects */
+            total_objects: number;
+        };
+        /** AdsetDuplicateDraftIn */
+        AdsetDuplicateDraftIn: {
+            /** Preview Token */
+            preview_token: string;
+        };
+        /** AdsetDuplicateDraftOut */
+        AdsetDuplicateDraftOut: {
+            /** Task Id */
+            task_id: number;
+            /** Status */
+            status: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+        };
+        /** AdsetDuplicateGeneratedNames */
+        AdsetDuplicateGeneratedNames: {
+            /** Campaigns */
+            campaigns: string[];
+            /** Adsets */
+            adsets: string[];
+        };
+        /** AdsetDuplicatePreviewIn */
+        AdsetDuplicatePreviewIn: {
+            /** Source Ad Id */
+            source_ad_id: string;
+            /** Selected Ad Ids */
+            selected_ad_ids: string[];
+            /** Campaign Count */
+            campaign_count: number;
+            /** Adsets Per Campaign */
+            adsets_per_campaign: number;
+            /**
+             * Budget Level
+             * @enum {string}
+             */
+            budget_level: "ABO" | "CBO";
+            /** Daily Budget Cents */
+            daily_budget_cents: number;
+            /** Start Date */
+            start_date?: string | null;
+            /** Campaign Name Base */
+            campaign_name_base?: string | null;
+            /** Adset Name Base */
+            adset_name_base?: string | null;
+            /** Idempotency Token */
+            idempotency_token: string;
+        };
+        /** AdsetDuplicatePreviewOut */
+        AdsetDuplicatePreviewOut: {
+            /** Preview Token */
+            preview_token: string;
+            source: components["schemas"]["AdsetDuplicateSource"];
+            /** Format Code */
+            format_code: string;
+            counts: components["schemas"]["AdsetDuplicateCounts"];
+            budget: components["schemas"]["AdsetDuplicateBudget"];
+            schedule: components["schemas"]["AdsetDuplicateSchedule"];
+            generated_names: components["schemas"]["AdsetDuplicateGeneratedNames"];
+            /** Warnings */
+            warnings: string[];
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+        };
+        /** AdsetDuplicateProgress */
+        AdsetDuplicateProgress: {
+            /** Phase */
+            phase?: string | null;
+            /** Completed */
+            completed?: number | null;
+            /** Total */
+            total?: number | null;
+            /** Message */
+            message?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** AdsetDuplicateSchedule */
+        AdsetDuplicateSchedule: {
+            /** Timezone Name */
+            timezone_name: string;
+            /** Offset */
+            offset: string;
+            /** Start Time Utc */
+            start_time_utc: string;
+            /** Start Time Local */
+            start_time_local: string;
+        };
+        /** AdsetDuplicateSource */
+        AdsetDuplicateSource: {
+            account: components["schemas"]["DuplicateSourceAccount"];
+            campaign: components["schemas"]["DuplicateSourceEntity"];
+            adset: components["schemas"]["DuplicateSourceEntity"];
+            /** Ads */
+            ads: components["schemas"]["DuplicateSourceAd"][];
+        };
+        /** AdsetDuplicateStatusOut */
+        AdsetDuplicateStatusOut: {
+            /** Task Id */
+            task_id: number;
+            /** Status */
+            status: string;
+            progress: components["schemas"]["AdsetDuplicateProgress"] | null;
+            /** Created Meta Ids */
+            created_meta_ids?: {
+                [key: string]: string | string[];
+            };
+            /** Error */
+            error: string | null;
+            /** Expires At */
+            expires_at?: string | null;
         };
         /**
          * AdsetPlanOut
@@ -3558,6 +3761,35 @@ export interface components {
              * @default manual disable
              */
             reason: string;
+        };
+        /** DuplicateSourceAccount */
+        DuplicateSourceAccount: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Currency */
+            currency?: string | null;
+        };
+        /** DuplicateSourceAd */
+        DuplicateSourceAd: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Fb Ad Id */
+            fb_ad_id: string;
+            /** Delivery Status */
+            delivery_status?: string | null;
+            /** Creative Thumb Url */
+            creative_thumb_url?: string | null;
+        };
+        /** DuplicateSourceEntity */
+        DuplicateSourceEntity: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
         };
         /**
          * EnableRecommendationConfirmIn
@@ -5975,6 +6207,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdTimelineResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_adset_duplicate_api_tools_adset_duplicates_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdsetDuplicatePreviewIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdsetDuplicatePreviewOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_adset_duplicate_draft_api_tools_adset_duplicates_draft_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdsetDuplicateDraftIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdsetDuplicateDraftOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_adset_duplicate_status_api_tools_adset_duplicates__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdsetDuplicateStatusOut"];
                 };
             };
             /** @description Validation Error */

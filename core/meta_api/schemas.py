@@ -24,6 +24,7 @@ MUTATION_KINDS: frozenset[str] = frozenset(
         "activate_campaign",
         "set_adset_budget",
         "duplicate_campaign",
+        "duplicate_adset_structure",
         "bulk_status_change",
         "create_campaign",
         "custom_audience",
@@ -31,7 +32,7 @@ MUTATION_KINDS: frozenset[str] = frozenset(
     }
 )
 
-# Необратимые mutations: создают НОВЫЕ объекты в Meta (кампания/копия). Если ответ
+# Необратимые mutations: создают НОВЫЕ объекты в Meta (кампания/копия/структура). Если ответ
 # потерян ПОСЛЕ коммита на стороне Meta, повторный вызов = ДУБЛЬ кампании + двойной
 # открут бюджета. idempotency_key (на enqueue) от retry той же строки НЕ защищает.
 # Эти kinds нельзя ретраить: и в meta_api_worker (transient/неожиданная ошибка →
@@ -41,6 +42,7 @@ IRREVERSIBLE_MUTATION_KINDS: frozenset[str] = frozenset(
     {
         "create_campaign",
         "duplicate_campaign",
+        "duplicate_adset_structure",
     }
 )
 

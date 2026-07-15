@@ -313,6 +313,45 @@ async def check_mutation_ownership(
         resolved = (cname, "") if cname is not None else None
         return _decide_single(resolved, owner_tag, target=payload.target_id, level="adset")
 
+    if kind == "duplicate_adset_structure":
+        params = payload.params or {}
+        source_ad_id = str(params.get("source_ad_id") or "").strip()
+        resolved = await _resolve_ad(engine, source_ad_id)
+        source_decision = _decide_single(
+            resolved,
+            owner_tag,
+            target=source_ad_id,
+            level="ad",
+        )
+        if not source_decision.allowed:
+            return source_decision
+
+        campaign_names = params.get("campaign_names")
+        if not isinstance(campaign_names, list) or not campaign_names:
+            return OwnershipDecision(
+                allowed=False,
+                reason="duplicate_adset_structure: campaign_names отсутствуют",
+            )
+        for index, campaign_name in enumerate(campaign_names):
+            if not isinstance(campaign_name, str) or not campaign_matches_owner(
+                campaign_name=campaign_name,
+                ad_name="",
+                owner_tag=owner_tag,
+            ):
+                return OwnershipDecision(
+                    allowed=False,
+                    reason=(
+                        f"duplicate_adset_structure: campaign_names[{index}] не содержит owner-tag"
+                    ),
+                )
+        return OwnershipDecision(
+            allowed=True,
+            reason=(
+                f"ad {source_ad_id}: принадлежит owner; "
+                f"все campaign_names ({len(campaign_names)}) содержат owner-tag"
+            ),
+        )
+
     if kind == "bulk_status_change":
         return await _check_bulk(engine, payload, owner_tag)
 

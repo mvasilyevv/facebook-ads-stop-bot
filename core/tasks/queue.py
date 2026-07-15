@@ -67,6 +67,9 @@ class Task:
     # NULL, пока текущая попытка ещё не пересекла границу внешнего вызова.
     # Поле добавлено в конец для совместимости с тестовыми/legacy конструкторами.
     external_started_at: datetime | None = None
+    # Промежуточный crash-safe checkpoint длительных необратимых операций.
+    # Добавлено в конец, чтобы не ломать positional-конструкторы старых тестов.
+    result: dict[str, Any] | None = None
 
 
 @dataclass
@@ -88,6 +91,9 @@ def _row_to_task(row: Any) -> Task:
     payload = row[4]
     if isinstance(payload, str):
         payload = json.loads(payload)
+    raw_result = row[12] if len(row) > 12 else None
+    if isinstance(raw_result, str):
+        raw_result = json.loads(raw_result)
     return Task(
         id=int(row[0]),
         task_type=str(row[1]),
@@ -101,6 +107,7 @@ def _row_to_task(row: Any) -> Task:
         next_retry_at=row[9],
         created_at=row[10] if len(row) > 10 else None,
         external_started_at=row[11] if len(row) > 11 else None,
+        result=raw_result if isinstance(raw_result, dict) else None,
     )
 
 
@@ -191,7 +198,7 @@ _CLAIM_SQL = text(
     )
     RETURNING id, task_type, status, idempotency_key, payload,
               attempt_count, max_attempts, requested_by, last_error,
-              next_retry_at, created_at, external_started_at
+              next_retry_at, created_at, external_started_at, result
     """
 )
 
@@ -251,10 +258,15 @@ async def mark_failed(
     *,
     task_id: int,
     error: str,
+    result: dict[str, Any] | None = None,
 ) -> bool:
     """Финальный статус: задача провалена окончательно (исчерпан max_attempts).
 
     Если attempts < max_attempts — используй requeue_for_retry, не mark_failed.
+
+    result задаёт структурированный JSONB результата ошибки в том же атомарном
+    UPDATE (например created_ids partial mutation). Если result не передан,
+    уже существующий task_queue.result сохраняется без изменений.
 
     Returns: True если status был 'running' и переведён в 'failed'.
     False — update не применился (status уже не 'running'): race с воркером,
@@ -267,12 +279,17 @@ async def mark_failed(
                 UPDATE task_queue
                 SET status = 'failed',
                     last_error = :err,
+                    result = COALESCE(CAST(:res AS JSONB), result),
                     completed_at = NOW(),
                     updated_at = NOW()
                 WHERE id = :id AND status = 'running'
                 """
             ),
-            {"id": int(task_id), "err": error[:8000]},
+            {
+                "id": int(task_id),
+                "err": error[:8000],
+                "res": json.dumps(result) if result is not None else None,
+            },
         )
     return (result.rowcount or 0) > 0
 
@@ -303,6 +320,131 @@ async def touch_task_running(engine: AsyncEngine, *, task_id: int) -> bool:
                 """
             ),
             {"id": int(task_id)},
+        )
+    return (result.rowcount or 0) > 0
+
+
+async def checkpoint_duplicate_adset_structure(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    checkpoint: dict[str, Any],
+) -> bool:
+    """Persist one crash-safe duplicate progress boundary.
+
+    This writer is intentionally scoped to ``duplicate_adset_structure``. Once
+    the reconciler sets ``recovery_requested=true``, the original worker is no
+    longer allowed to advance the checkpoint even if its stale Graph call later
+    returns and another worker has already claimed the recovery task.
+    """
+    if checkpoint.get("checkpoint_type") != "duplicate_adset_structure":
+        raise ValueError("invalid duplicate checkpoint type")
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET result = CAST(:checkpoint AS JSONB),
+                    updated_at = NOW()
+                WHERE id = :id
+                  AND task_type = 'meta_api_mutation'
+                  AND status = 'running'
+                  AND payload->>'mutation_kind' = 'duplicate_adset_structure'
+                  AND COALESCE(result->>'recovery_requested', 'false') <> 'true'
+                """
+            ),
+            {"id": int(task_id), "checkpoint": json.dumps(checkpoint)},
+        )
+    return (result.rowcount or 0) > 0
+
+
+async def prepare_stuck_duplicate_recovery(
+    engine: AsyncEngine,
+    *,
+    stuck_after_seconds: int = 1800,
+) -> int:
+    """Move stale checkpointed ad-set duplicates into recovery-only execution.
+
+    The next meta worker must only PAUSE ``result.created_ids``; it must never
+    replay creation. This transition runs before the generic irreversible fail
+    pass. A recovery flag also fences a stale original worker from persisting
+    further activation progress after this transition.
+    """
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET status = 'retrying',
+                    next_retry_at = NOW(),
+                    last_error = COALESCE(last_error, '')
+                        || ' [stuck duplicate_adset_structure: scheduled PAUSE recovery]',
+                    result = result || jsonb_build_object(
+                        'recovery_requested', true,
+                        'phase', 'recovery_pending'
+                    ),
+                    updated_at = NOW()
+                WHERE task_type = 'meta_api_mutation'
+                  AND status = 'running'
+                  AND updated_at < NOW() - make_interval(secs => :sec)
+                  AND payload->>'mutation_kind' = 'duplicate_adset_structure'
+                  AND result->>'checkpoint_type' = 'duplicate_adset_structure'
+                  AND jsonb_typeof(result->'created_ids') = 'object'
+                """
+            ),
+            {"sec": int(stuck_after_seconds)},
+        )
+        count = int(result.rowcount or 0)
+    if count:
+        logger.error(
+            "reconcile: %d stale duplicate_adset_structure task(s) scheduled for PAUSE recovery",
+            count,
+        )
+    return count
+
+
+async def requeue_duplicate_recovery(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    checkpoint: dict[str, Any],
+    error: str,
+    delay_seconds: int = 60,
+) -> bool:
+    """Retry PAUSE-only recovery without replaying the original create plan.
+
+    Original duplicate drafts use ``max_attempts=1``. Cleanup retries therefore
+    have an independent, money-safe lifecycle and remain retryable until every
+    checkpointed object has been paused.
+    """
+    if (
+        checkpoint.get("checkpoint_type") != "duplicate_adset_structure"
+        or checkpoint.get("recovery_requested") is not True
+    ):
+        raise ValueError("invalid duplicate recovery checkpoint")
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET status = 'retrying',
+                    next_retry_at = NOW() + make_interval(secs => :sec),
+                    last_error = :err,
+                    result = CAST(:checkpoint AS JSONB),
+                    updated_at = NOW()
+                WHERE id = :id
+                  AND task_type = 'meta_api_mutation'
+                  AND status = 'running'
+                  AND payload->>'mutation_kind' = 'duplicate_adset_structure'
+                  AND result->>'checkpoint_type' = 'duplicate_adset_structure'
+                """
+            ),
+            {
+                "id": int(task_id),
+                "sec": max(1, int(delay_seconds)),
+                "err": error[:8000],
+                "checkpoint": json.dumps(checkpoint),
+            },
         )
     return (result.rowcount or 0) > 0
 
@@ -409,6 +551,51 @@ async def requeue_for_retry(
 # ====================== reconcile (вызывается reconciler_worker'ом) ======================
 
 
+async def fail_stuck_duplicate_without_checkpoint(
+    engine: AsyncEngine,
+    *,
+    stuck_after_seconds: int = 1800,
+) -> int:
+    """Fail a stale duplicate only when no recoverable created-ID checkpoint exists.
+
+    Creation calls always request PAUSED objects. Therefore an early crash before
+    the first persisted ID cannot create spend, while replaying the plan could
+    create duplicates. Checkpointed tasks are handled separately by
+    :func:`prepare_stuck_duplicate_recovery` and must never reach this UPDATE.
+    """
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET status = 'failed',
+                    completed_at = NOW(),
+                    last_error = COALESCE(last_error, '')
+                        || ' [stuck duplicate_adset_structure without recoverable checkpoint: '
+                        || 'НЕ ретраим; созданные до checkpoint объекты были requested PAUSED]',
+                    updated_at = NOW()
+                WHERE task_type = 'meta_api_mutation'
+                  AND status = 'running'
+                  AND updated_at < NOW() - make_interval(secs => :sec)
+                  AND payload->>'mutation_kind' = 'duplicate_adset_structure'
+                  AND NOT (
+                      COALESCE(result->>'checkpoint_type', '') = 'duplicate_adset_structure'
+                      AND COALESCE(jsonb_typeof(result->'created_ids'), '') = 'object'
+                  )
+                """
+            ),
+            {"sec": int(stuck_after_seconds)},
+        )
+        count = int(result.rowcount or 0)
+    if count:
+        logger.error(
+            "reconcile: %d stale duplicate_adset_structure task(s) without checkpoint "
+            "failed without retry",
+            count,
+        )
+    return count
+
+
 async def fail_stuck_irreversible(
     engine: AsyncEngine,
     *,
@@ -428,7 +615,11 @@ async def fail_stuck_irreversible(
     двойная защита: даже при гонке между двумя стейтментами requeue их не тронет).
     Возвращает число помеченных failed (>0 → caller шлёт алерт).
     """
-    kinds = [k for k in mutation_kinds if k]
+    # duplicate_adset_structure has its own checkpointed PAUSE recovery and
+    # no-checkpoint fail path. Never let this generic bulk UPDATE terminally
+    # close a recovery claim, even if a future caller accidentally passes the
+    # full irreversible set.
+    kinds = [k for k in mutation_kinds if k and k != "duplicate_adset_structure"]
     if not kinds:
         return 0
     stmt = text(

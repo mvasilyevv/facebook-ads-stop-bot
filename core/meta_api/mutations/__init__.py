@@ -32,6 +32,7 @@ from core.meta_api.mutations.base import MutationHandler
 from core.meta_api.mutations.bulk_status_change import BulkStatusChangeHandler
 from core.meta_api.mutations.create_campaign import CreateCampaignHandler
 from core.meta_api.mutations.custom_audience import CustomAudienceHandler
+from core.meta_api.mutations.duplicate_adset_structure import DuplicateAdsetStructureHandler
 from core.meta_api.mutations.duplicate_campaign import DuplicateCampaignHandler
 from core.meta_api.mutations.pause_ad import PauseAdHandler
 from core.meta_api.mutations.pause_campaign import PauseCampaignHandler
@@ -48,6 +49,7 @@ MUTATION_HANDLERS: dict[str, MutationHandler] = {
     "activate_campaign": ActivateCampaignHandler(),
     "set_adset_budget": SetAdsetBudgetHandler(),
     "duplicate_campaign": DuplicateCampaignHandler(),
+    "duplicate_adset_structure": DuplicateAdsetStructureHandler(),
     "bulk_status_change": BulkStatusChangeHandler(),
     "create_campaign": CreateCampaignHandler(),
     "custom_audience": CustomAudienceHandler(),

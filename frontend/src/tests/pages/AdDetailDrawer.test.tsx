@@ -158,6 +158,13 @@ describe("AdDrawer (deep-link /ads/$fbAdId)", () => {
     expect(screen.getByText("adset-android")).toBeInTheDocument();
   });
 
+  it("показывает действие быстрого дублирования структуры", async () => {
+    await renderDrawer();
+    expect(
+      screen.getByRole("button", { name: "Дублировать структуру объявления" }),
+    ).toBeInTheDocument();
+  });
+
   // Метрики-снимок: spend (money1 — один знак) + лейблы.
   it("отрисовывает metrics-snapshot grid с данными", async () => {
     await renderDrawer();
@@ -171,9 +178,7 @@ describe("AdDrawer (deep-link /ads/$fbAdId)", () => {
     await renderDrawer();
 
     expect(useStatsToday).toHaveBeenCalled();
-    expect(
-      screen.getByText("КОНВЕРСИИ КАБИНЕТА СЕГОДНЯ · ADSET.PRO · LIVE"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("КОНВЕРСИИ КАБИНЕТА СЕГОДНЯ · ADSET.PRO · LIVE")).toBeInTheDocument();
     expect(screen.getByText("FTD").parentElement).toHaveTextContent("5");
     expect(screen.getByText("Подтверждены").parentElement).toHaveTextContent("4");
     expect(screen.getByText("Редепозиты").parentElement).toHaveTextContent("2");
@@ -222,10 +227,7 @@ describe("AdDrawer (deep-link /ads/$fbAdId)", () => {
   it("для disabled не показывает кнопку Отключить, показывает статус", async () => {
     mockAdsWith(makeSnapshot({ alert_state: "disabled" }));
     await renderDrawer();
-    expect(
-      screen.queryByRole("button", { name: /Отключить объявление/i }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Отключить объявление/i })).not.toBeInTheDocument();
     expect(screen.getByText(/Объявление отключено/i)).toBeInTheDocument();
   });
-
 });

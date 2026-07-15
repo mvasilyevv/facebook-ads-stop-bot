@@ -51,6 +51,10 @@ def _app(
     async def _ai_pulse():
         return {"important": False}
 
+    @app.get("/api/tools/adset-duplicates/123")
+    async def _adset_duplicate_status():
+        return {"status": "draft"}
+
     @app.post("/api/v1/postback/adsetpro")
     async def _postback():
         return {"ok": True}
@@ -72,6 +76,14 @@ def test_ai_pulse_get_requires_key() -> None:
     client = _app()
     assert client.get("/api/ai/pulse").status_code == 401
     assert client.get("/api/ai/pulse", headers={"X-API-Key": _KEY}).status_code == 200
+
+
+def test_adset_duplicate_status_get_requires_owner_auth() -> None:
+    client = _app()
+    path = "/api/tools/adset-duplicates/123"
+
+    assert client.get(path).status_code == 401
+    assert client.get(path, headers={"X-API-Key": _KEY}).status_code == 200
 
 
 # POST без ключа → 401
@@ -139,6 +151,7 @@ def test_tma_recipient_cannot_use_shared_write_or_protected_read() -> None:
 
     assert client.post("/thing", headers=headers).status_code == 403
     assert client.get("/api/ai/pulse", headers=headers).status_code == 403
+    assert client.get("/api/tools/adset-duplicates/123", headers=headers).status_code == 403
 
 
 def test_tma_owner_can_use_shared_write_and_protected_read() -> None:
@@ -147,3 +160,4 @@ def test_tma_owner_can_use_shared_write_and_protected_read() -> None:
 
     assert client.post("/thing", headers=headers).status_code == 200
     assert client.get("/api/ai/pulse", headers=headers).status_code == 200
+    assert client.get("/api/tools/adset-duplicates/123", headers=headers).status_code == 200

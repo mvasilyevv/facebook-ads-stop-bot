@@ -14,6 +14,10 @@ interface ModalProps {
   onOpenChange: (open: boolean) => void;
   title?: ReactNode;
   description?: ReactNode;
+  /** Accessible title when the caller renders a custom visible header. */
+  ariaTitle?: string;
+  /** Accessible description when the caller renders custom explanatory copy. */
+  ariaDescription?: string;
   size?: "sm" | "md" | "lg";
   children: ReactNode;
   hideCloseButton?: boolean;
@@ -32,6 +36,8 @@ export function Modal({
   onOpenChange,
   title,
   description,
+  ariaTitle,
+  ariaDescription,
   size = "sm",
   children,
   hideCloseButton,
@@ -56,6 +62,12 @@ export function Modal({
             contentClassName,
           )}
         >
+          {!title && ariaTitle ? (
+            <Dialog.Title className="sr-only">{ariaTitle}</Dialog.Title>
+          ) : null}
+          {!description && ariaDescription ? (
+            <Dialog.Description className="sr-only">{ariaDescription}</Dialog.Description>
+          ) : null}
           {!hideCloseButton ? (
             <Dialog.Close
               aria-label="Закрыть"
@@ -88,15 +100,14 @@ export function Modal({
 }
 
 /** Вспомогательные под-компоненты для структуры Modal без лишних div'ов. */
-export function ModalFooter({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
+export function ModalFooter({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn("flex justify-end gap-2 mt-6 pt-4 border-t border-[var(--hairline)]", className)}>
+    <div
+      className={cn(
+        "flex justify-end gap-2 mt-6 pt-4 border-t border-[var(--hairline)]",
+        className,
+      )}
+    >
       {children}
     </div>
   );

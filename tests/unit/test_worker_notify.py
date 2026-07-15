@@ -61,6 +61,34 @@ async def test_success_sets_dedup_after_send(monkeypatch):
     assert redis.set.await_args.kwargs.get("ex") == 60
 
 
+# Money-draft из web должен доставлять тем же owner'ам inline-кнопки подтверждения.
+@pytest.mark.asyncio
+async def test_reply_markup_forwarded_to_every_owner(monkeypatch):
+    monkeypatch.setattr(wn, "load_telegram_config", AsyncMock(return_value=_cfg()))
+    monkeypatch.setattr(
+        wn,
+        "load_owner_recipients",
+        AsyncMock(return_value=[_owner(111), _owner(222)]),
+    )
+    client = AsyncMock()
+    monkeypatch.setattr(wn, "_client_for_token", lambda tok: client)
+    keyboard = {"inline_keyboard": [[{"text": "OK", "callback_data": "dr_ok:7"}]]}
+
+    sent = await wn.notify_owners(
+        object(),
+        None,
+        category="draft",
+        text="preview",
+        reply_markup=keyboard,
+    )
+
+    assert sent is True
+    assert client.send_message.await_count == 2
+    assert all(
+        call.kwargs["reply_markup"] == keyboard for call in client.send_message.await_args_list
+    )
+
+
 # Отправка упала → dedup НЕ ставится (чтобы ретрайнуть позже), возвращает False
 @pytest.mark.asyncio
 async def test_send_failure_keeps_dedup_unset(monkeypatch):

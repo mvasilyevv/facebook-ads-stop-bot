@@ -36,6 +36,7 @@ import { AdCreativeSection } from "./AdCreativeSection";
 import { AdMetricsPanel } from "./AdMetricsPanel";
 import { AdTaskHistory } from "./AdTaskHistory";
 import { AdDisableButton } from "./AdDisableButton";
+import { AdsetDuplicateAction } from "./AdsetDuplicateAction";
 
 type AlertRow = components["schemas"]["AlertRow"];
 type TaskRow = components["schemas"]["TaskRow"];
@@ -93,11 +94,7 @@ export function AdDrawer({
         eyebrow={<DrawerEyebrow geo="—" />}
         title={<span className="truncate">{resolvedId || "Объявление"}</span>}
       >
-        <div
-          className="flex flex-col gap-4"
-          role="status"
-          aria-label="Загрузка данных объявления"
-        >
+        <div className="flex flex-col gap-4" role="status" aria-label="Загрузка данных объявления">
           <Skeleton height={72} className="w-full" />
           <Skeleton height={120} className="w-full" />
           <div className="flex flex-col gap-2">
@@ -135,7 +132,10 @@ export function AdDrawer({
       title={<span className="truncate">{ad.ad_name}</span>}
       description={
         <span className="flex items-center gap-2 flex-wrap">
-          <Badge variant={stateUnknown ? "neutral" : alertStateToBadgeVariant(display.state)} size="sm">
+          <Badge
+            variant={stateUnknown ? "neutral" : alertStateToBadgeVariant(display.state)}
+            size="sm"
+          >
             {display.label}
           </Badge>
           {ad.offer_code ? (
@@ -156,13 +156,18 @@ export function AdDrawer({
         </span>
       }
       footer={
-        <AdDisableButton
-          fbAdId={resolvedId}
-          // При неизвестном статусе не утверждаем «уже отключено» — кнопка
-          // Disable остаётся доступной (сама по себе безопасна: создаёт задачу).
-          alreadyDisabled={!stateUnknown && display.state === "disabled"}
-          onDisabled={onClose}
-        />
+        <div className="flex w-full flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+          <AdsetDuplicateAction ad={ad} />
+          <div className="min-w-0 flex-1">
+            <AdDisableButton
+              fbAdId={resolvedId}
+              // При неизвестном статусе не утверждаем «уже отключено» — кнопка
+              // Disable остаётся доступной (сама по себе безопасна: создаёт задачу).
+              alreadyDisabled={!stateUnknown && display.state === "disabled"}
+              onDisabled={onClose}
+            />
+          </div>
+        </div>
       }
     >
       <div className="flex flex-col gap-6">

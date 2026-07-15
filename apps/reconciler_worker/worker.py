@@ -27,10 +27,16 @@ from core.tasks.queue import (
     fail_stuck_campaign_create as _canonical_fail_stuck_campaign_create,
 )
 from core.tasks.queue import (
+    fail_stuck_duplicate_without_checkpoint as _canonical_fail_stuck_duplicate_without_checkpoint,
+)
+from core.tasks.queue import (
     fail_stuck_irreversible as _canonical_fail_stuck_irreversible,
 )
 from core.tasks.queue import (
     fail_stuck_plan_run as _canonical_fail_stuck_plan_run,
+)
+from core.tasks.queue import (
+    prepare_stuck_duplicate_recovery as _canonical_prepare_stuck_duplicate_recovery,
 )
 from core.tasks.queue import (
     reconcile_stuck_running as _canonical_reconcile_stuck_running,
@@ -40,6 +46,24 @@ logger = logging.getLogger(__name__)
 
 _STUCK_TIMEOUT_MIN = int(os.environ.get("RECONCILER_STUCK_TIMEOUT_MIN", "30"))
 _DRAFT_TIMEOUT_HOURS = int(os.environ.get("RECONCILER_DRAFT_TIMEOUT_HOURS", "24"))
+_RECOVERABLE_DUPLICATE_KIND = "duplicate_adset_structure"
+_GENERIC_IRREVERSIBLE_KINDS = frozenset(IRREVERSIBLE_MUTATION_KINDS - {_RECOVERABLE_DUPLICATE_KIND})
+
+
+async def prepare_duplicate_recovery(engine: AsyncEngine) -> int:
+    """Stale checkpointed duplicate → PAUSE-only recovery claim."""
+    return await _canonical_prepare_stuck_duplicate_recovery(
+        engine,
+        stuck_after_seconds=_STUCK_TIMEOUT_MIN * 60,
+    )
+
+
+async def fail_duplicate_without_checkpoint(engine: AsyncEngine) -> int:
+    """Stale duplicate with no created-ID checkpoint → failed, never replayed."""
+    return await _canonical_fail_stuck_duplicate_without_checkpoint(
+        engine,
+        stuck_after_seconds=_STUCK_TIMEOUT_MIN * 60,
+    )
 
 
 async def fail_irreversible_stuck(engine: AsyncEngine) -> int:
@@ -51,7 +75,7 @@ async def fail_irreversible_stuck(engine: AsyncEngine) -> int:
     stuck_after_seconds = _STUCK_TIMEOUT_MIN * 60
     return await _canonical_fail_stuck_irreversible(
         engine,
-        mutation_kinds=IRREVERSIBLE_MUTATION_KINDS,
+        mutation_kinds=_GENERIC_IRREVERSIBLE_KINDS,
         stuck_after_seconds=stuck_after_seconds,
     )
 
@@ -126,6 +150,37 @@ def render_campaign_create_alert(count: int) -> str:
     )
 
 
+def render_duplicate_recovery_alert(count: int) -> str:
+    """Immediate owner warning: Meta worker may still be unavailable."""
+    return (
+        f"🛑 <b>Reconciler: crash дублирования адсетов</b>\n"
+        f"Задач с checkpoint: <b>{count}</b>. Поставлен PAUSE-only recovery без "
+        f"повторного создания.\n"
+        f"До завершения recovery <b>проверь созданные объекты вручную в Ads Manager</b>."
+    )
+
+
+async def _maybe_alert_duplicate_recovery(engine: AsyncEngine, count: int) -> None:
+    """Best-effort immediate warning when PAUSE recovery is scheduled."""
+    if count <= 0:
+        return
+    try:
+        from core.telegram.worker_notify import notify_recipients
+
+        await notify_recipients(
+            engine,
+            None,
+            category="reconciler_duplicate_recovery",
+            text=render_duplicate_recovery_alert(count),
+            # Scheduling is itself idempotent per stale running claim. The key is
+            # retained for transports that later provide Redis to this worker.
+            dedup_key="reconciler:duplicate_adset_structure:recovery_scheduled",
+            dedup_ttl_seconds=30 * 60,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("reconciler: duplicate recovery alert failed")
+
+
 async def _maybe_alert_irreversible(engine: AsyncEngine, count: int) -> None:
     """Best-effort TG-алерт о failed необратимых — рассылка всем активным recipients."""
     if count <= 0:
@@ -192,9 +247,24 @@ async def run_once(engine: AsyncEngine) -> dict[str, int]:
     """Один прогон reconciler. Возвращает counters."""
     counts: dict[str, int] = {}
 
-    # ВАЖЕН ПОРЯДОК: сначала уводим необратимые стак-задачи (meta-мутации + заливы
-    # кампаний) в failed, потом requeue остального (reconcile их и так исключает —
-    # двойная защита от дубля кампании).
+    # ВАЖЕН ПОРЯДОК: checkpointed duplicate_adset_structure сначала переводим в
+    # PAUSE-only recovery. Затем отдельно fail'им duplicate без checkpoint и только
+    # после этого — остальные необратимые kinds. Так generic UPDATE никогда не
+    # закроет задачу с известными created IDs до cleanup.
+    try:
+        counts["duplicate_recovery_scheduled"] = await prepare_duplicate_recovery(engine)
+    except Exception as exc:
+        logger.exception("prepare_duplicate_recovery failed: %s", exc)
+        counts["duplicate_recovery_scheduled"] = -1
+
+    try:
+        counts["duplicate_without_checkpoint_failed"] = await fail_duplicate_without_checkpoint(
+            engine
+        )
+    except Exception as exc:
+        logger.exception("fail_duplicate_without_checkpoint failed: %s", exc)
+        counts["duplicate_without_checkpoint_failed"] = -1
+
     try:
         counts["irreversible_failed"] = await fail_irreversible_stuck(engine)
     except Exception as exc:
@@ -227,6 +297,12 @@ async def run_once(engine: AsyncEngine) -> dict[str, int]:
 
     if counts.get("irreversible_failed", 0) > 0:
         await _maybe_alert_irreversible(engine, counts["irreversible_failed"])
+
+    if counts.get("duplicate_recovery_scheduled", 0) > 0:
+        await _maybe_alert_duplicate_recovery(
+            engine,
+            counts["duplicate_recovery_scheduled"],
+        )
 
     if counts.get("campaign_create_failed", 0) > 0:
         await _maybe_alert_campaign_create(engine, counts["campaign_create_failed"])

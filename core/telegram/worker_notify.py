@@ -49,6 +49,7 @@ async def notify_owners(
     *,
     category: str,
     text: str,
+    reply_markup: dict[str, Any] | None = None,
     dedup_key: str | None = None,
     dedup_ttl_seconds: int | None = None,
 ) -> bool:
@@ -79,7 +80,12 @@ async def notify_owners(
         delivered = False
         for owner in owners:
             try:
-                await client.send_message(chat_id=str(owner.chat_id), text=text, parse_mode="HTML")
+                await client.send_message(
+                    chat_id=str(owner.chat_id),
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=reply_markup,
+                )
                 delivered = True
             except Exception:
                 logger.exception(

@@ -16,6 +16,9 @@ import pytest
 
 import apps.meta_api_worker.main as meta
 from core.meta_api.errors import TemporaryError
+from core.meta_api.mutations.duplicate_adset_structure import (
+    DuplicateAdsetStructurePartialError,
+)
 from core.meta_api.mutations.duplicate_campaign import DuplicateCampaignPartialError
 
 
@@ -38,6 +41,7 @@ def _patched(monkeypatch):
     spy_requeue = AsyncMock(return_value=True)
     monkeypatch.setattr(meta, "mark_task_failed", spy_fail)
     monkeypatch.setattr(meta, "requeue_task", spy_requeue)
+    monkeypatch.setattr(meta, "notify_owners", AsyncMock(return_value=True))
     return spy_fail, spy_requeue
 
 
@@ -59,6 +63,57 @@ async def test_duplicate_campaign_value_error_marks_failed(monkeypatch, _patched
     await meta.process_one_task(object(), _task("duplicate_campaign"), client=AsyncMock())
     spy_fail.assert_awaited_once()
     spy_requeue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_adset_structure_temporary_marks_failed(monkeypatch, _patched) -> None:
+    spy_fail, spy_requeue = _patched
+    monkeypatch.setattr(meta, "execute_mutation", AsyncMock(side_effect=TemporaryError("deadline")))
+    await meta.process_one_task(object(), _task("duplicate_adset_structure"), client=AsyncMock())
+    spy_fail.assert_awaited_once()
+    spy_requeue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_adset_structure_partial_routes_created_ids(monkeypatch, _patched) -> None:
+    spy_fail, spy_requeue = _patched
+    defer_recovery = AsyncMock(return_value=True)
+    monkeypatch.setattr(meta, "defer_duplicate_recovery", defer_recovery)
+    monkeypatch.setattr(
+        meta,
+        "execute_mutation",
+        AsyncMock(
+            side_effect=DuplicateAdsetStructurePartialError(
+                "activation failed",
+                created_ids={"campaigns": ["800"], "adsets": ["801"], "ads": ["802"]},
+                failed_steps=[{"step": "activate_adset[801]", "error": "deadline"}],
+                cleanup_failures=[{"id": "802", "error": "pause failed"}],
+            )
+        ),
+    )
+    await meta.process_one_task(object(), _task("duplicate_adset_structure"), client=AsyncMock())
+    spy_fail.assert_not_awaited()
+    spy_requeue.assert_not_awaited()
+    defer_recovery.assert_awaited_once()
+    error = defer_recovery.await_args.kwargs["error"]
+    assert "duplicate_adset_structure_partial_fail" in error
+    assert "800" in error and "801" in error and "802" in error
+    assert defer_recovery.await_args.kwargs["checkpoint"] == {
+        "checkpoint_type": "duplicate_adset_structure",
+        "checkpoint_version": 1,
+        "phase": "recovery_retrying",
+        "partial_fail": True,
+        "created_ids": {"campaigns": ["800"], "adsets": ["801"], "ads": ["802"]},
+        "activated_ids": {"campaigns": [], "adsets": [], "ads": []},
+        "failed_steps": [{"step": "activate_adset[801]", "error": "deadline"}],
+        "cleanup_failures": [{"id": "802", "error": "pause failed"}],
+        "recovery_requested": True,
+    }
+    notify = meta.notify_owners
+    notify.assert_awaited_once()
+    assert notify.await_args.kwargs["category"] == "critical"
+    assert "800" in notify.await_args.kwargs["text"]
+    assert "cleanup" in notify.await_args.kwargs["text"]
 
 
 # create_campaign + неклассифицированный Exception → mark_failed, НЕ requeue
