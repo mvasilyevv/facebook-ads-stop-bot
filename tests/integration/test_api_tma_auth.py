@@ -17,10 +17,12 @@ import urllib.parse
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from pydantic import SecretStr
 from sqlalchemy import text
 
 from apps.api.deps import get_engine
 from apps.api.main import create_app
+from core.config import get_settings
 
 _BOT_TOKEN = "TEST_BOT_TOKEN_FAKE"  # совпадает с seeded_telegram_config
 
@@ -134,12 +136,15 @@ async def test_auth_no_recipient_403(pg_engine, seeded_telegram_config):
     assert resp.status_code == 403
 
 
-# Нет telegram_config (бот не настроен) → 503
+# Нет telegram_config и env-токена (бот не настроен) → 503
 @pytest.mark.asyncio
-async def test_auth_no_telegram_config_503(pg_engine, tma_recipient):
+async def test_auth_no_telegram_config_503(pg_engine, tma_recipient, monkeypatch):
     # Без seeded_telegram_config — гарантируем отсутствие строки.
     async with pg_engine.begin() as conn:
         await conn.execute(text("DELETE FROM telegram_config WHERE singleton_key = 'default'"))
+    # TELEGRAM_BOT_TOKEN может быть задан в локальном .env; для этого сценария
+    # явно выключаем env-bootstrap.
+    monkeypatch.setattr(get_settings(), "telegram_bot_token", SecretStr(""))
     uid = 7000004
     await tma_recipient(uid)
     app = _make_app(pg_engine)

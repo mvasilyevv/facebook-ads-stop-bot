@@ -12,9 +12,10 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from core.crypto import decrypt
+from core.config import get_settings, reveal_secret
+from core.crypto import decrypt, encrypt
 
 logger = logging.getLogger(__name__)
 
@@ -29,36 +30,114 @@ class TelegramConfig:
     poller_heartbeat_at: datetime | None
 
 
-async def load_telegram_config(engine: AsyncEngine) -> TelegramConfig | None:
-    """Читает singleton telegram_config + расшифровывает токен.
+@dataclass(frozen=True)
+class _StoredTelegramConfig:
+    """Сырые поля singleton-строки до расшифровки токена."""
 
-    Возвращает None если строки нет или токен пустой/невалидный.
+    bot_token_encrypted: str
+    chat_id: int | None
+    poller_offset: int
+    poller_heartbeat_at: datetime | None
+
+
+async def _select_telegram_config(conn: AsyncConnection) -> _StoredTelegramConfig | None:
+    """Читает singleton через уже открытое соединение."""
+    row = (
+        await conn.execute(
+            text(
+                """
+                SELECT bot_token_encrypted, chat_id,
+                       poller_offset, poller_heartbeat_at
+                FROM telegram_config
+                WHERE singleton_key = 'default'
+                """
+            )
+        )
+    ).first()
+    if row is None:
+        return None
+    return _StoredTelegramConfig(
+        bot_token_encrypted=str(row[0] or ""),
+        chat_id=row[1],
+        poller_offset=int(row[2] or 0),
+        poller_heartbeat_at=row[3],
+    )
+
+
+async def _bootstrap_telegram_config_from_env(
+    engine: AsyncEngine,
+) -> _StoredTelegramConfig | None:
+    """Однократно создаёт отсутствующий singleton из ``TELEGRAM_BOT_TOKEN``.
+
+    Существующая строка, включая пустую после явного DELETE в UI, всегда
+    авторитетна. ``ON CONFLICT DO NOTHING`` делает одновременный старт нескольких
+    воркеров безопасным: победившая запись затем перечитывается из БД.
     """
-    async with engine.connect() as conn:
-        row = (
+    token = reveal_secret(get_settings().telegram_bot_token).strip()
+    if not token:
+        return None
+
+    try:
+        encrypted = encrypt(token)
+    except Exception as exc:
+        # Не включаем ни plaintext/ciphertext, ни exception message в logger:
+        # сторонняя реализация crypto теоретически может вложить вход в текст ошибки.
+        logger.error(
+            "Не удалось зашифровать TELEGRAM_BOT_TOKEN для telegram_config (error_type=%s)",
+            type(exc).__name__,
+        )
+        return None
+
+    async with engine.begin() as conn:
+        inserted = (
             await conn.execute(
                 text(
                     """
-                    SELECT bot_token_encrypted, chat_id,
-                           poller_offset, poller_heartbeat_at
-                    FROM telegram_config
-                    WHERE singleton_key = 'default'
+                    INSERT INTO telegram_config (singleton_key, bot_token_encrypted)
+                    VALUES ('default', :bot_token_encrypted)
+                    ON CONFLICT (singleton_key) DO NOTHING
+                    RETURNING singleton_key
                     """
-                )
+                ),
+                {"bot_token_encrypted": encrypted},
             )
         ).first()
+        stored = await _select_telegram_config(conn)
 
-    if not row:
-        return None
+    if inserted is not None:
+        logger.info(
+            "telegram_config создан из TELEGRAM_BOT_TOKEN; дальнейшие настройки из БД "
+            "имеют приоритет"
+        )
+    return stored
 
-    enc = row[0]
+
+async def load_telegram_config(engine: AsyncEngine) -> TelegramConfig | None:
+    """Читает singleton telegram_config + расшифровывает токен.
+
+    На чистой БД один раз создаёт отсутствующую строку из ``TELEGRAM_BOT_TOKEN``.
+    Существующая строка из UI (даже пустая после явного отключения) приоритетна.
+    Возвращает None, если ни БД, ни env не настроены или токен пустой/невалидный.
+    """
+    async with engine.connect() as conn:
+        stored = await _select_telegram_config(conn)
+
+    if stored is None:
+        stored = await _bootstrap_telegram_config_from_env(engine)
+        if stored is None:
+            return None
+
+    enc = stored.bot_token_encrypted
     if not enc:
         return None
 
     try:
         token = decrypt(enc)
     except Exception as exc:
-        logger.exception("Не смог расшифровать bot_token_encrypted: %s", exc)
+        logger.error(
+            "Не смог расшифровать bot_token_encrypted (error_type=%s)",
+            type(exc).__name__,
+        )
         return None
 
     if not token:
@@ -66,9 +145,9 @@ async def load_telegram_config(engine: AsyncEngine) -> TelegramConfig | None:
 
     return TelegramConfig(
         bot_token=token,
-        chat_id=row[1],
-        poller_offset=int(row[2] or 0),
-        poller_heartbeat_at=row[3],
+        chat_id=stored.chat_id,
+        poller_offset=stored.poller_offset,
+        poller_heartbeat_at=stored.poller_heartbeat_at,
     )
 
 

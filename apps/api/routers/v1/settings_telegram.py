@@ -21,7 +21,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from apps.api.deps import DepEngine, DepRedis, DepSettings
@@ -229,14 +230,22 @@ async def put_telegram_token(
     encrypted = encrypt(body.bot_token)
 
     async with AsyncSession(engine) as session:
-        config = await _load_config(session)
-        if config is None:
-            config = TelegramConfig(bot_token_encrypted=encrypted)
-            session.add(config)
-        else:
-            config.bot_token_encrypted = encrypted
-        await session.flush()
-        await session.refresh(config)
+        # UPSERT закрывает гонку с env-bootstrap при одновременном старте чистой
+        # инсталляции: явно сохранённый через UI токен всегда становится итоговым.
+        config = (
+            await session.scalars(
+                pg_insert(TelegramConfig)
+                .values(singleton_key="default", bot_token_encrypted=encrypted)
+                .on_conflict_do_update(
+                    index_elements=[TelegramConfig.singleton_key],
+                    set_={
+                        "bot_token_encrypted": encrypted,
+                        "updated_at": func.now(),
+                    },
+                )
+                .returning(TelegramConfig)
+            )
+        ).one()
         snap = _snapshot(config)
         await session.commit()
 
@@ -253,15 +262,29 @@ async def put_telegram_token(
 async def delete_telegram_settings(engine: DepEngine, redis: DepRedis) -> TelegramSettingsResponse:
     """Очищает bot_token_encrypted и chat_id в TelegramConfig.
 
-    Если строки нет — возвращает пустой ответ без ошибки.
+    Если строки нет — создаёт пустую singleton-строку как tombstone. Это сохраняет
+    явное отключение через UI: env-bootstrap не восстановит токен после DELETE.
     """
     async with AsyncSession(engine) as session:
-        config = await _load_config(session)
-        if config is not None:
-            config.bot_token_encrypted = ""
-            config.chat_id = None
-            await session.flush()
-            await session.refresh(config)
+        config = (
+            await session.scalars(
+                pg_insert(TelegramConfig)
+                .values(
+                    singleton_key="default",
+                    bot_token_encrypted="",
+                    chat_id=None,
+                )
+                .on_conflict_do_update(
+                    index_elements=[TelegramConfig.singleton_key],
+                    set_={
+                        "bot_token_encrypted": "",
+                        "chat_id": None,
+                        "updated_at": func.now(),
+                    },
+                )
+                .returning(TelegramConfig)
+            )
+        ).one()
         snap = _snapshot(config)
         await session.commit()
 

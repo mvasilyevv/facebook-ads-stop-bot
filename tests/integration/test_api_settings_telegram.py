@@ -16,11 +16,14 @@ import fakeredis.aioredis as fakeredis_aio  # type: ignore[import-not-found]
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import get_engine, get_redis
 from apps.api.main import create_app
+from core.config import get_settings
+from core.telegram.service import load_telegram_config
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -133,6 +136,63 @@ async def test_delete_telegram_clears_token(app_client) -> None:
         resp2 = await app_client.get("/api/settings/telegram")
         assert resp2.status_code == 200
         assert resp2.json()["is_authorized"] is False
+
+
+# DELETE на чистой БД оставляет tombstone и не даёт env-bootstrap вернуть токен.
+@pytest.mark.asyncio
+async def test_delete_without_row_blocks_env_bootstrap(app_client, pg_engine, monkeypatch) -> None:
+    monkeypatch.setattr(
+        get_settings(),
+        "telegram_bot_token",
+        SecretStr("123456789:ENV_TOKEN_MUST_STAY_DISABLED"),
+    )
+
+    resp = await app_client.delete("/api/settings/telegram")
+
+    assert resp.status_code == 200
+    assert resp.json()["is_authorized"] is False
+    assert await load_telegram_config(pg_engine) is None
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT bot_token_encrypted, chat_id
+                    FROM telegram_config
+                    WHERE singleton_key = 'default'
+                    """
+                )
+            )
+        ).one()
+    assert row[0] == ""
+    assert row[1] is None
+
+
+# PUT из UI перезаписывает автоматически импортированный env-токен.
+@pytest.mark.asyncio
+async def test_put_token_overrides_env_bootstrap(app_client, pg_engine, monkeypatch) -> None:
+    monkeypatch.setattr(
+        get_settings(),
+        "telegram_bot_token",
+        SecretStr("123456789:ENV_BOOTSTRAP_TOKEN"),
+    )
+    bootstrapped = await load_telegram_config(pg_engine)
+    assert bootstrapped is not None
+    assert bootstrapped.bot_token == "123456789:ENV_BOOTSTRAP_TOKEN"
+
+    with patch(
+        "apps.api.routers.v1.settings_telegram.compute_bot_username",
+        new=AsyncMock(return_value=None),
+    ):
+        resp = await app_client.put(
+            "/api/settings/telegram/token",
+            json={"bot_token": "987654321:UI_TOKEN"},
+        )
+
+    assert resp.status_code == 200
+    configured = await load_telegram_config(pg_engine)
+    assert configured is not None
+    assert configured.bot_token == "987654321:UI_TOKEN"
 
 
 # compute_poller_status: ONLINE при свежем heartbeat
