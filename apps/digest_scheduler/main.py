@@ -25,7 +25,11 @@ from typing import Any
 import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from core.ai_assistant.digest_summary import summarize_digest
+from core.ai_assistant.pulse import build_pulse
+from core.config import get_settings
 from core.db import WORKER_ENGINE_KWARGS
+from core.telegram import format as fmt
 from core.telegram.client import TelegramAPIError, TelegramBotClient
 from core.telegram.digest_builder import build_digest
 from core.telegram.digest_renderer import render_digest
@@ -55,6 +59,9 @@ DIGEST_WINDOW_MINUTES = int(os.environ.get("DIGEST_WINDOW_MIN", "5"))
 # Redis-флаг «уже отправили» — 26 часов с запасом перекрывает окно следующего дня.
 DIGEST_SENT_TTL_SECONDS = int(os.environ.get("DIGEST_SENT_TTL_SEC", str(26 * 3600)))
 DIGEST_SENT_KEY_PREFIX = "digest:sent:"
+
+# «Пульс кабинета»: дедуп per (слот, дата) — тот же паттерн, что digest:sent.
+PULSE_SENT_KEY_PREFIX = "pulse:sent:"
 
 
 # ====================== pure helpers ======================
@@ -181,6 +188,11 @@ async def run_one_tick(
     payload = await build_digest(engine, day_start_utc=now)
     text_html = render_digest(payload)
 
+    # AI-резюме — best-effort надстройка: None (выключено/AI лёг) → дайджест как раньше.
+    summary = await summarize_digest(payload, redis_client=redis_client)
+    if summary:
+        text_html = f"{text_html}\n\n🤖 {fmt.b('Вывод ассистента')}\n{fmt.esc(summary)}"
+
     # Рассылаем только по личкам активных recipients (forum-топик убран в рамках волны 2)
     tg_client = tg_client_factory(cfg.bot_token)
     try:
@@ -212,6 +224,125 @@ async def run_one_tick(
     except Exception:
         logger.exception("Не смог поставить %s в Redis (digest всё равно отправлен)", sent_key)
 
+    return "sent"
+
+
+# ====================== пульс кабинета (2-3 слота в день) ======================
+
+
+def parse_pulse_slots(raw: str) -> list[tuple[int, int]]:
+    """Разобрать 'HH:MM,HH:MM,...' → [(hour, minute), ...]. Битые слоты пропускаются."""
+    slots: list[tuple[int, int]] = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        try:
+            h, m = part.split(":", 1)
+            hour, minute = int(h), int(m)
+        except ValueError:
+            continue
+        if 0 <= hour < 24 and 0 <= minute < 60:
+            slots.append((hour, minute))
+    return sorted(set(slots))
+
+
+def pulse_sent_key(now: datetime, slot: tuple[int, int]) -> str:
+    """Redis-ключ дедупа пульса per (дата UTC, слот)."""
+    now_utc = now.astimezone(timezone.utc)
+    return f"{PULSE_SENT_KEY_PREFIX}{now_utc.strftime('%Y-%m-%d')}:{slot[0]:02d}{slot[1]:02d}"
+
+
+def _due_pulse_slot(
+    now: datetime, slots: list[tuple[int, int]]
+) -> tuple[tuple[int, int], datetime] | None:
+    """Последний наступивший слот + начало его окна (предыдущий слот или 00:00 UTC).
+
+    Catch-up как у дайджеста: слот «должен» до конца суток, дедуп — Redis-ключом.
+    Окно сигналов = [предыдущий слот; сейчас) — слоты не пересекаются и не дырявят день.
+    """
+    now_utc = now.astimezone(timezone.utc)
+    cur = now_utc.hour * 60 + now_utc.minute
+    due = [s for s in slots if s[0] * 60 + s[1] <= cur]
+    if not due:
+        return None
+    slot = due[-1]
+    prev_minutes = due[-2][0] * 60 + due[-2][1] if len(due) >= 2 else 0
+    window_start = now_utc.replace(
+        hour=prev_minutes // 60, minute=prev_minutes % 60, second=0, microsecond=0
+    )
+    return slot, window_start
+
+
+async def run_pulse_tick(
+    *,
+    engine: AsyncEngine,
+    redis_client: redis_asyncio.Redis,
+    tg_client_factory,
+    now: datetime,
+) -> str:
+    """Один проход пульса: слот → дедуп → сигналы → (AI-)отчёт → отправка.
+
+    Статусы: 'disabled' / 'no_slot' / 'already_sent' / 'no_tg_config' /
+    'no_recipients' / 'quiet' (сигналов нет — молчим, слот закрыт) / 'sent' /
+    'send_failed'.
+    """
+    settings = get_settings()
+    if not settings.ai_pulse_enabled:
+        return "disabled"
+
+    slots = parse_pulse_slots(settings.ai_pulse_slots_utc)
+    due = _due_pulse_slot(now, slots)
+    if due is None:
+        return "no_slot"
+    slot, window_start = due
+
+    sent_key = pulse_sent_key(now, slot)
+    try:
+        if await redis_client.get(sent_key) is not None:
+            return "already_sent"
+    except Exception:
+        logger.exception("pulse: не смог прочитать %s — пропускаю прогон", sent_key)
+        return "already_sent"
+
+    cfg = await load_telegram_config(engine)
+    if cfg is None or not cfg.bot_token:
+        return "no_tg_config"
+
+    recipients = await load_active_recipients(engine)
+    if not recipients:
+        return "no_recipients"
+
+    text_html = await build_pulse(engine, since=window_start, now=now)
+    if text_html is None:
+        # Сигналов нет — слот закрываем молча (семантика «проверка в HH:MM»,
+        # события после проверки покроет следующий слот).
+        try:
+            await redis_client.set(sent_key, "quiet", ex=DIGEST_SENT_TTL_SECONDS, nx=True)
+        except Exception:
+            logger.exception("pulse: не смог поставить %s", sent_key)
+        return "quiet"
+
+    tg_client = tg_client_factory(cfg.bot_token)
+    try:
+        ok, fail = await _send_digest_to_recipients(
+            tg_client=tg_client, text_html=text_html, recipients=recipients
+        )
+    finally:
+        try:
+            await tg_client.close()
+        except Exception:
+            logger.exception("pulse: ошибка закрытия TG-клиента")
+
+    if ok == 0:
+        logger.warning("pulse: не доставлен ни одному получателю (fail=%d) — повтор", fail)
+        return "send_failed"
+
+    try:
+        await redis_client.set(sent_key, "1", ex=DIGEST_SENT_TTL_SECONDS, nx=True)
+    except Exception:
+        logger.exception("pulse: не смог поставить %s (пульс уже отправлен)", sent_key)
+    logger.info("pulse отправлен: ok=%d fail=%d (слот %02d:%02d)", ok, fail, slot[0], slot[1])
     return "sent"
 
 
@@ -255,6 +386,17 @@ async def tick_loop(
                 logger.info("digest tick status=%s", status)
         except Exception:
             logger.exception("Ошибка в digest tick")
+        try:
+            pulse_status = await run_pulse_tick(
+                engine=engine,
+                redis_client=redis_client,
+                tg_client_factory=tg_client_factory,
+                now=datetime.now(timezone.utc),
+            )
+            if pulse_status not in ("disabled", "no_slot", "already_sent"):
+                logger.info("pulse tick status=%s", pulse_status)
+        except Exception:
+            logger.exception("Ошибка в pulse tick")
         try:
             await asyncio.wait_for(stop.wait(), timeout=CHECK_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
@@ -364,12 +506,16 @@ async def main_loop(
 __all__ = [
     "DIGEST_SENT_KEY_PREFIX",
     "DIGEST_SENT_TTL_SECONDS",
+    "PULSE_SENT_KEY_PREFIX",
     "DigestWindow",
     "_supervised",
     "digest_sent_key",
     "heartbeat_loop",
     "is_in_send_window",
     "main_loop",
+    "parse_pulse_slots",
+    "pulse_sent_key",
     "run_one_tick",
+    "run_pulse_tick",
     "tick_loop",
 ]

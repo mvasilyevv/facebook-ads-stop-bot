@@ -236,11 +236,14 @@ class TelegramBotClient:
         message_thread_id: int | None = None,
         reply_markup: dict | None = None,
         parse_mode: str | None = "HTML",
+        reply_to_message_id: int | None = None,
     ) -> dict:
         """Отправляет сообщение в чат. Обрезает текст до лимита Telegram.
 
         parse_mode: режим разметки Telegram (HTML/MarkdownV2). None — без разметки.
         Дефолт HTML сохраняет обратную совместимость со старыми вызовами.
+        reply_to_message_id: ответ «реплаем» (AI-комментарий под алертом);
+        allow_sending_without_reply — если оригинал удалён, шлём обычным сообщением.
         """
         text = _truncate_message(text)
         payload: dict = {
@@ -253,6 +256,9 @@ class TelegramBotClient:
             payload["message_thread_id"] = message_thread_id
         if reply_markup:
             payload["reply_markup"] = reply_markup
+        if reply_to_message_id is not None:
+            payload["reply_to_message_id"] = reply_to_message_id
+            payload["allow_sending_without_reply"] = True
         data = await self._post_json("sendMessage", payload=payload)
         return dict(data["result"])
 

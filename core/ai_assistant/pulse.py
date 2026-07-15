@@ -1,0 +1,194 @@
+# -*- coding: utf-8 -*-
+"""«Пульс кабинета» — периодический проактивный отчёт от ассистента.
+
+Двухступенчатый контракт против спама:
+1. Детерминированный pre-check (`collect_pulse_signals`) — чистый SQL. Если
+   значимых сигналов нет (нет стопов, нет упавших задач, warnings ниже порога) —
+   возвращает None, AI НЕ вызывается, сообщение НЕ отправляется.
+2. Только при сигналах — AI-отчёт со скилом pulse_report; при недоступном AI
+   уходит детерминированный фолбэк (сигнал важнее красоты).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from core.ai_assistant.client import AIUnavailableError, get_ai_client
+from core.ai_assistant.prompts import PromptNotFoundError, load_skill
+from core.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+# Порог «warnings сами по себе»: меньше — не будим владельца из-за предупреждений.
+_WARNINGS_ALONE_THRESHOLD = 3
+
+
+@dataclass(frozen=True)
+class PulseSignals:
+    """Значимые события окна пульса (детерминированный pre-check)."""
+
+    window_start_utc: datetime
+    window_end_utc: datetime
+    stop_count: int
+    warning_count: int
+    failed_tasks_count: int
+    # Топ-3 стопнутых объявления: (ad_name, offer_code, rule_codes)
+    top_stops: list[tuple[str, str | None, list[str]]] = field(default_factory=list)
+
+    def has_signal(self) -> bool:
+        """Есть ли повод для пульса: стоп, упавшая задача или шквал warnings."""
+        return (
+            self.stop_count > 0
+            or self.failed_tasks_count > 0
+            or self.warning_count >= _WARNINGS_ALONE_THRESHOLD
+        )
+
+
+async def collect_pulse_signals(
+    engine: AsyncEngine,
+    *,
+    since: datetime,
+    now: datetime,
+) -> PulseSignals | None:
+    """Собрать сигналы окна [since, now). None — сигналов нет, пульс молчит.
+
+    alert_events партиционирована по created_at — фильтр по окну обязателен
+    (partition pruning).
+    """
+    async with engine.connect() as conn:
+        counts = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE stage = 'stop')    AS stops,
+                        COUNT(*) FILTER (WHERE stage = 'warning') AS warnings
+                    FROM alert_events
+                    WHERE created_at >= :since AND created_at < :now
+                    """
+                ),
+                {"since": since, "now": now},
+            )
+        ).first()
+        stops = int(counts[0] or 0) if counts else 0
+        warnings = int(counts[1] or 0) if counts else 0
+
+        failed = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM task_queue
+                    WHERE status = 'failed'
+                      AND updated_at >= :since AND updated_at < :now
+                    """
+                ),
+                {"since": since, "now": now},
+            )
+        ).scalar()
+
+        top_rows = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT a.ad_name, o.code, e.matched_rule_codes
+                    FROM alert_events e
+                    JOIN fb_ads a ON a.id = e.ad_id
+                    JOIN fb_adsets ads ON ads.id = a.adset_id
+                    JOIN fb_campaigns c ON c.id = ads.campaign_id
+                    LEFT JOIN offers o ON o.id = c.offer_id
+                    WHERE e.created_at >= :since AND e.created_at < :now
+                      AND e.stage = 'stop'
+                    ORDER BY e.created_at DESC
+                    LIMIT 3
+                    """
+                ),
+                {"since": since, "now": now},
+            )
+        ).all()
+
+    signals = PulseSignals(
+        window_start_utc=since,
+        window_end_utc=now,
+        stop_count=stops,
+        warning_count=warnings,
+        failed_tasks_count=int(failed or 0),
+        top_stops=[
+            (str(r[0] or "?"), str(r[1]) if r[1] else None, list(r[2] or [])) for r in top_rows
+        ],
+    )
+    return signals if signals.has_signal() else None
+
+
+def _facts_text(signals: PulseSignals) -> str:
+    """Факты окна для промпта / детерминированного фолбэка."""
+    lines = [
+        f"Окно: {signals.window_start_utc:%H:%M}–{signals.window_end_utc:%H:%M} UTC",
+        f"Стопов: {signals.stop_count}, предупреждений: {signals.warning_count}, "
+        f"упавших задач: {signals.failed_tasks_count}",
+    ]
+    for ad_name, offer, rules in signals.top_stops:
+        offer_part = f" [{offer}]" if offer else ""
+        rules_part = f" ({', '.join(rules)})" if rules else ""
+        lines.append(f"STOP: {ad_name}{offer_part}{rules_part}")
+    return "\n".join(lines)
+
+
+def _fallback_text(signals: PulseSignals) -> str:
+    """Детерминированный пульс без AI — сигнал важнее красоты."""
+    return "📟 <b>Пульс кабинета</b>\n" + _facts_text(signals)
+
+
+async def build_pulse(
+    engine: AsyncEngine,
+    *,
+    since: datetime,
+    now: datetime,
+) -> str | None:
+    """Собрать текст пульса. None — сигналов нет, слать нечего.
+
+    Никогда не бросает: при ошибке AI возвращает детерминированный фолбэк.
+    """
+    signals = await collect_pulse_signals(engine, since=since, now=now)
+    if signals is None:
+        return None
+
+    settings = get_settings()
+    client = get_ai_client(settings)
+    if not client.is_available:
+        return _fallback_text(signals)
+
+    try:
+        system = load_skill("pulse_report")
+    except PromptNotFoundError:
+        system = "Напиши короткий отчёт о состоянии рекламного кабинета по фактам."
+
+    try:
+        response = await asyncio.wait_for(
+            client.chat(
+                messages=[{"role": "user", "content": _facts_text(signals)}],
+                system=system,
+                max_tokens=300,
+            ),
+            timeout=float(settings.ai_timeout_seconds),
+        )
+        ai_text = (response.text or "").strip()
+    except (TimeoutError, asyncio.TimeoutError, AIUnavailableError) as exc:
+        logger.warning("pulse: AI недоступен (%s) — детерминированный фолбэк", exc)
+        return _fallback_text(signals)
+    except Exception:  # noqa: BLE001
+        logger.warning("pulse: ошибка провайдера — детерминированный фолбэк", exc_info=True)
+        return _fallback_text(signals)
+
+    if not ai_text:
+        return _fallback_text(signals)
+    return f"📟 <b>Пульс кабинета</b>\n{ai_text}"
+
+
+__all__ = ["PulseSignals", "build_pulse", "collect_pulse_signals"]

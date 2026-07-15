@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -18,7 +19,10 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.ai_assistant.explain import explain_alert
+from core.config import get_settings
 from core.pubsub import CHANNEL_ALERT_CREATED
+from core.telegram import format as fmt
 from core.telegram.client import TelegramAPIError, TelegramBotClient
 from core.telegram.renderer import (
     DEFAULT_PARSE_MODE,
@@ -30,6 +34,78 @@ from core.telegram.service import load_active_recipients, load_telegram_config
 from core.telegram.web_app_url import load_web_app_url, normalize_web_app_base
 
 logger = logging.getLogger(__name__)
+
+# Живые фоновые таски AI-комментариев: держим ссылки от GC, чистим по done.
+_ai_comment_tasks: set[asyncio.Task] = set()
+
+# hit.code → ключ порога, который понимает explain_alert._build_prompt.
+_THRESHOLD_KEY_BY_PREFIX = {
+    "cpl": "cpl_stop_threshold",
+    "cpr": "cpr_stop_threshold",
+    "cpc": "cpc_stop_threshold",
+}
+
+
+def _thresholds_from_hits(metrics_json: dict, rule_code: str) -> dict:
+    """Достать свёрнутый порог сработавшего правила из metrics_json['_hits']."""
+    for h in metrics_json.get("_hits") or []:
+        if h.get("code") == rule_code:
+            key = _THRESHOLD_KEY_BY_PREFIX.get(rule_code.split("_", 1)[0])
+            return {key: h.get("threshold")} if key else {"stop_threshold": h.get("threshold")}
+    return {}
+
+
+async def _post_ai_comment(
+    client: TelegramBotClient,
+    *,
+    chat_id: int,
+    message_id: int,
+    thread_id: int | None,
+    stage: str,
+    matched_codes: list,
+    metrics_json: dict,
+    offer_code: str | None,
+) -> None:
+    """💡-комментарий AI реплаем под алертом. Best-effort: любая ошибка — тихий skip.
+
+    Вызывается ПОСЛЕ успешной отправки алерта фоновым таском — money-путь
+    доставки не ждёт AI (алерт уже в чате, комментарий догоняет).
+    """
+    try:
+        rule_code = str((matched_codes or [""])[0] or "")
+        if not rule_code:
+            return
+        metrics = {k: v for k, v in (metrics_json or {}).items() if k != "_hits"}
+        comment = await explain_alert(
+            rule_name=rule_code,
+            stage=stage,
+            metrics=metrics,
+            thresholds=_thresholds_from_hits(metrics_json or {}, rule_code),
+            offer_context={"offer_code": offer_code} if offer_code else None,
+        )
+        if not comment:
+            return
+        await client.send_message(
+            chat_id=str(chat_id),
+            text=f"💡 {fmt.esc(comment)}",
+            message_thread_id=thread_id,
+            reply_to_message_id=message_id,
+            parse_mode="HTML",
+        )
+    except Exception:  # noqa: BLE001 — комментарий не money-путь
+        logger.debug("AI-комментарий к алерту не доставлен (некритично)", exc_info=True)
+
+
+def _spawn_ai_comment(**kwargs: Any) -> None:
+    """Запустить фоновый таск AI-комментария (если фича включена)."""
+    try:
+        if not get_settings().ai_explain_alerts_enabled:
+            return
+        task = asyncio.create_task(_post_ai_comment(**kwargs))
+        _ai_comment_tasks.add(task)
+        task.add_done_callback(_ai_comment_tasks.discard)
+    except Exception:  # noqa: BLE001 — нет loop'а / настройки битые: алерт уже отправлен
+        logger.debug("не смог запустить таск AI-комментария", exc_info=True)
 
 
 async def _publish_alert_created(
@@ -266,6 +342,19 @@ async def _deliver_one_alert(
     )
 
     counters["sent"] += 1
+
+    # 💡 AI-объяснение причины — фоновым таском ПОСЛЕ доставки: алерт уже в чате,
+    # комментарий догоняет реплаем; таймаут/ошибка AI money-путь не трогают.
+    _spawn_ai_comment(
+        client=client,
+        chat_id=int(chat_id),
+        message_id=message_id,
+        thread_id=thread_id,
+        stage=str(stage),
+        matched_codes=list(matched_codes or []),
+        metrics_json=dict(metrics_json or {}),
+        offer_code=str(offer_code) if offer_code else None,
+    )
 
 
 async def dispatch_pending_alerts(

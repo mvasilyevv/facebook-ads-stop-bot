@@ -364,6 +364,44 @@ def build_shadow_spend_alert(account_id: str, verdict: ShadowVerdict) -> str:
 # ====================== Telegram алерты ======================
 
 
+# Живые фоновые таски AI-диагнозов: держим ссылки от GC, чистим по done.
+_ai_diag_tasks: set[asyncio.Task] = set()
+
+
+async def _post_ai_diagnosis(
+    *,
+    engine: AsyncEngine,
+    redis_client: redis_asyncio.Redis,
+    alert_key: str,
+    alert_text: str,
+) -> None:
+    """AI-диагноз к CRITICAL-алерту отдельным сообщением. Best-effort, тихий skip."""
+    try:
+        from core.ai_assistant.diagnostics import diagnose_alert
+
+        diag = await diagnose_alert(alert_key=alert_key, context=alert_text)
+        if not diag:
+            return
+        await notify_recipients(
+            engine,
+            redis_client,
+            category=f"health_watchdog:diag:{alert_key}",
+            text=f"🩺 <b>AI-диагноз</b>\n{diag}",
+        )
+    except Exception:  # noqa: BLE001 — диагноз не money-путь
+        logger.debug("AI-диагноз не доставлен (некритично)", exc_info=True)
+
+
+def _spawn_ai_diagnosis(**kwargs: Any) -> None:
+    """Фоновый таск AI-диагноза (не блокирует цикл сторожка)."""
+    try:
+        task = asyncio.create_task(_post_ai_diagnosis(**kwargs))
+        _ai_diag_tasks.add(task)
+        task.add_done_callback(_ai_diag_tasks.discard)
+    except Exception:  # noqa: BLE001
+        logger.debug("не смог запустить таск AI-диагноза", exc_info=True)
+
+
 async def _maybe_alert_with_dedup(
     redis_client: redis_asyncio.Redis,
     *,
@@ -406,6 +444,13 @@ async def _maybe_alert_with_dedup(
         await redis_client.set(dedup_key, "1", ex=ttl_seconds, nx=True)
     except Exception:  # noqa: BLE001
         logger.exception("ошибка SET дедуп-ключа %s", dedup_key)
+
+    # 🩺 AI-диагноз причины — фоновым таском ПОСЛЕ доставки алерта: сам алерт
+    # уже ушёл, диагноз догоняет отдельным сообщением. Кулдаун — внутри
+    # diagnose_alert (ai_diagnostics_cooldown_seconds), спама не будет.
+    _spawn_ai_diagnosis(
+        engine=engine, redis_client=redis_client, alert_key=dedup_key, alert_text=text
+    )
     return True
 
 
