@@ -17,7 +17,6 @@ vi.mock("@/lib/websocket/useDashboardSocket", () => ({
 }));
 
 import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
-import { useChatWidget } from "@/stores/chatWidget";
 
 describe("useRealtimeInvalidation", () => {
   let qc: QueryClient;
@@ -27,7 +26,6 @@ describe("useRealtimeInvalidation", () => {
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     invalidateSpy = vi.spyOn(qc, "invalidateQueries");
     mockUseDashboardSocket.mockClear();
-    useChatWidget.setState({ open: false, unread: 0, messages: [], pending: false, lastModel: null });
   });
 
   function renderWithClient() {
@@ -92,39 +90,5 @@ describe("useRealtimeInvalidation", () => {
     onMessage({ type: "unknown_event" });
 
     expect(invalidateSpy).not.toHaveBeenCalled();
-  });
-
-  // alert_created должен пушить нотификацию в AI-виджет (плавающий чат), чтобы
-  // пользователь видел 🔔 STOP/WARNING без ручного открытия страницы алертов.
-  it("alert_created пушит нотификацию в чат-стор AI-виджета", () => {
-    renderWithClient();
-    const onMessage = mockUseDashboardSocket.mock.calls[0]![0].onMessage as (d: unknown) => void;
-
-    onMessage({
-      type: "alert_created",
-      payload: {
-        fb_ad_id: "123",
-        ad_name: "GH_CR2 | test",
-        offer_code: "GH_CR2",
-        stage: "stop",
-        matched_rule_codes: ["cpa_stop"],
-      },
-    });
-
-    const messages = useChatWidget.getState().messages;
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.kind).toBe("notification");
-    expect(messages[0]!.content).toContain("STOP: GH_CR2 | test [GH_CR2] — cpa_stop");
-    expect(useChatWidget.getState().unread).toBe(1);
-  });
-
-  // payload без stage (защита от мусора/неполного контракта) не должен ничего пушить.
-  it("alert_created без валидного payload.stage не пушит нотификацию", () => {
-    renderWithClient();
-    const onMessage = mockUseDashboardSocket.mock.calls[0]![0].onMessage as (d: unknown) => void;
-
-    onMessage({ type: "alert_created", payload: {} });
-
-    expect(useChatWidget.getState().messages).toHaveLength(0);
   });
 });

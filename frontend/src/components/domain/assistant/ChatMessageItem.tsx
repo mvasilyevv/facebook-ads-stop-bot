@@ -4,7 +4,8 @@
  * kind="user"/"assistant" — обычный пузырь (user справа, assistant слева),
  * под ответом ассистента — строка "проверил: <tool>, <tool>" если были tool_calls
  * (упавшие — зачёркнуты, title = текст ошибки).
- * kind="notification" — 🔔 алерт из WS, левая рамка danger (stop) / warning.
+ * kind="notification" — 📟 почасовой пульс кабинета (/ai/pulse), нейтральная
+ * accent-рамка слева + заголовок «Пульс кабинета».
  */
 import { Fragment } from "react";
 import { cn } from "@/lib/utils/cn";
@@ -39,15 +40,14 @@ interface ChatMessageItemProps {
 
 export function ChatMessageItem({ message }: ChatMessageItemProps) {
   if (message.kind === "notification") {
-    const isStop = message.stage === "stop";
     return (
       <div
         role="status"
-        className={cn(
-          "px-3 py-2 border-l-2 bg-bg-2 text-[12.5px] text-bg-11 leading-[1.4]",
-          isStop ? "border-l-danger" : "border-l-warning",
-        )}
+        className="px-3 py-2 border-l-2 border-l-accent bg-bg-2 text-[12.5px] text-bg-11 leading-[1.4]"
       >
+        <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-1">
+          📟 Пульс кабинета
+        </div>
         {renderContent(message.content)}
       </div>
     );

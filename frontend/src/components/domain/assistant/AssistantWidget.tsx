@@ -3,9 +3,12 @@
  *
  * Кнопка (fixed right-6 bottom-6) открывает панель чата (fixed right-6 bottom-20,
  * ~380px × min(560px, 70vh)). История — в сторе useChatWidget (в памяти вкладки,
- * без persist). WS-нотификации (fb_agent:alert:created) прилетают через
- * useRealtimeInvalidation → useChatWidget.pushNotification и растят unread-бейдж,
- * пока панель закрыта.
+ * без persist).
+ *
+ * Почасовой пульс: виджет раз в час опрашивает GET /ai/pulse (сервер кэширует
+ * ответ на календарный час — опрос дешёвый); в чат попадает сообщение ТОЛЬКО
+ * при important=true, тишина — ничего не появляется. Опрос идёт лишь при
+ * видимой вкладке; при возврате видимости после >55 мин простоя — опрос сразу.
  *
  * Esc закрывает панель — обычный div + window keydown listener (без Radix Dialog,
  * кнопка-триггер должна остаться видимой и кликабельной поверх панели).
@@ -17,6 +20,13 @@ import { cn } from "@/lib/utils/cn";
 import { ChatMessageList } from "./ChatMessageList";
 import { ChatComposer } from "./ChatComposer";
 
+/** Задержка первого опроса пульса после монтирования — не мешаем первичной загрузке. */
+const PULSE_INITIAL_DELAY_MS = 5_000;
+/** Период почасового опроса пульса. */
+const PULSE_INTERVAL_MS = 60 * 60 * 1000;
+/** Если вкладка стала видимой и с последнего опроса прошло больше — опросить сразу. */
+const PULSE_STALE_MS = 55 * 60 * 1000;
+
 export function AssistantWidget() {
   const open = useChatWidget((s) => s.open);
   const unread = useChatWidget((s) => s.unread);
@@ -24,6 +34,35 @@ export function AssistantWidget() {
   const setOpen = useChatWidget((s) => s.setOpen);
   const toggle = useChatWidget((s) => s.toggle);
   const clearMessages = useChatWidget((s) => s.clearMessages);
+  const fetchPulse = useChatWidget((s) => s.fetchPulse);
+
+  // Почасовой опрос /ai/pulse: старт через ~5с после монтирования, затем раз в час.
+  // Скрытая вкладка не опрашивает; при возврате видимости после >55 мин — опрос сразу.
+  useEffect(() => {
+    let lastPollAt = 0;
+
+    function poll() {
+      if (document.visibilityState !== "visible") return;
+      lastPollAt = Date.now();
+      void fetchPulse();
+    }
+
+    const initialTimer = window.setTimeout(poll, PULSE_INITIAL_DELAY_MS);
+    const intervalTimer = window.setInterval(poll, PULSE_INTERVAL_MS);
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible" && Date.now() - lastPollAt > PULSE_STALE_MS) {
+        poll();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(intervalTimer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [fetchPulse]);
 
   // Esc закрывает панель, пока она открыта.
   useEffect(() => {

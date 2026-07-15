@@ -9,7 +9,6 @@
 
 import { useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useChatWidget, type AlertCreatedNotificationPayload } from "@/stores/chatWidget";
 
 import { useDashboardSocket, type DashboardSocketState } from "./useDashboardSocket";
 
@@ -32,19 +31,10 @@ export function useRealtimeInvalidation(): DashboardSocketState {
           // Статистика залива (воронка/трекер) тоже зависит от свежих метрик скана.
           qc.invalidateQueries({ queryKey: ["stats"] });
           break;
-        case "alert_created": {
+        case "alert_created":
           qc.invalidateQueries({ queryKey: ["dashboard"] });
           qc.invalidateQueries({ queryKey: ["ads"] });
-          // Пуш в AI-виджет (плавающий чат): пометка появляется в ленте + unread-бейдж,
-          // пока панель закрыта. payload — fb_agent:alert:created (alert_dispatcher.py),
-          // поля-опционал (ad_name/offer_code) читаем defensively — не все каналы их шлют.
-          const payload = (data as { payload?: AlertCreatedNotificationPayload } | null)
-            ?.payload;
-          if (payload && typeof payload.stage === "string") {
-            useChatWidget.getState().pushNotification(payload);
-          }
           break;
-        }
         case "task_changed":
           qc.invalidateQueries({ queryKey: ["dashboard"] });
           qc.invalidateQueries({ queryKey: ["tasks"] });

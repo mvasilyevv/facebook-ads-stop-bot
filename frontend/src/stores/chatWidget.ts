@@ -5,25 +5,26 @@
  *
  * Три вида сообщений в ленте (`kind`):
  *   - "user" / "assistant" — обычный диалог, уходят в тело запроса (последние 12).
- *   - "notification" — 🔔 алерт из WS (fb_agent:alert:created), в тело запроса
+ *   - "notification" — 📟 почасовой пульс кабинета (GET /ai/pulse), в тело запроса
  *     НЕ попадает (иначе ассистент отвечал бы на собственные пуши как на вопрос).
+ *
+ * Пульс: fetchPulse() дёргает /ai/pulse; сервер кэширует ответ на календарный час
+ * (UTC), поэтому опрос дешёвый. Сообщение попадает в ленту ТОЛЬКО при
+ * important=true и только один раз за час (дедуп через lastPulseHour) — если
+ * тихо, ничего не появляется.
  *
  * В ленте держим не больше MAX_DISPLAYED_MESSAGES — старые обрезаются.
  */
 import { create } from "zustand";
-import { sendAiChatMessage, type AiChatMessageIn, type AiChatToolCall } from "@/lib/api/aiChat";
+import {
+  fetchAiPulse,
+  sendAiChatMessage,
+  type AiChatMessageIn,
+  type AiChatToolCall,
+} from "@/lib/api/aiChat";
 import { ApiError } from "@/lib/api/client";
 
 export type ChatMessageKind = "user" | "assistant" | "notification";
-
-/** Сырой payload канала fb_agent:alert:created (форвардится через /ws/dashboard). */
-export interface AlertCreatedNotificationPayload {
-  fb_ad_id?: string | null;
-  ad_name?: string | null;
-  offer_code?: string | null;
-  stage: string;
-  matched_rule_codes?: string[] | null;
-}
 
 export interface ChatWidgetMessage {
   id: string;
@@ -31,8 +32,6 @@ export interface ChatWidgetMessage {
   content: string;
   /** Только для kind="assistant" — какие read-only инструменты дёргал ассистент. */
   toolCalls?: AiChatToolCall[];
-  /** Только для kind="notification" — стадия алерта (влияет на цвет левой рамки). */
-  stage?: string;
   createdAt: string;
 }
 
@@ -47,6 +46,11 @@ function makeId(): string {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/** Ключ календарного часа UTC ("YYYY-MM-DDTHH") — гранулярность кэша пульса на бэке. */
+function hourKey(iso: string): string {
+  return iso.slice(0, 13);
 }
 
 /** Разбирает ApiError/сетевую ошибку в текст сообщения ассистента (в ленту, не тостом). */
@@ -69,13 +73,16 @@ interface ChatWidgetState {
   pending: boolean;
   /** Модель последнего успешного ответа — показываем в шапке панели. */
   lastModel: string | null;
+  /** Час (UTC, "YYYY-MM-DDTHH") последнего показанного пульса — дедуп в ленте. */
+  lastPulseHour: string | null;
 
   setOpen: (open: boolean) => void;
   toggle: () => void;
   clearUnread: () => void;
   clearMessages: () => void;
   sendMessage: (text: string) => Promise<void>;
-  pushNotification: (payload: AlertCreatedNotificationPayload) => void;
+  pushPulse: (text: string, generatedAt: string) => void;
+  fetchPulse: () => Promise<void>;
 }
 
 export const useChatWidget = create<ChatWidgetState>((set, get) => ({
@@ -84,6 +91,7 @@ export const useChatWidget = create<ChatWidgetState>((set, get) => ({
   messages: [],
   pending: false,
   lastModel: null,
+  lastPulseHour: null,
 
   setOpen: (open) => set({ open, unread: open ? 0 : get().unread }),
 
@@ -112,7 +120,7 @@ export const useChatWidget = create<ChatWidgetState>((set, get) => ({
       pending: true,
     }));
 
-    // Тело запроса: только user/assistant (нотификации исключены), последние 12.
+    // Тело запроса: только user/assistant (нотификации-пульсы исключены), последние 12.
     const history: AiChatMessageIn[] = get()
       .messages.filter((m) => m.kind === "user" || m.kind === "assistant")
       .slice(-MAX_HISTORY_FOR_REQUEST)
@@ -146,25 +154,30 @@ export const useChatWidget = create<ChatWidgetState>((set, get) => ({
     }
   },
 
-  pushNotification: (payload) => {
-    const isStop = payload.stage === "stop";
-    const label = isStop ? "STOP" : payload.stage === "warning" ? "WARNING" : payload.stage.toUpperCase();
-    const name = payload.ad_name ?? payload.fb_ad_id ?? "—";
-    const offerPart = payload.offer_code ? ` [${payload.offer_code}]` : "";
-    const codes = (payload.matched_rule_codes ?? []).filter(Boolean);
-    const codesPart = codes.length > 0 ? ` — ${codes.join(", ")}` : "";
-
-    const notification: ChatWidgetMessage = {
+  pushPulse: (text, generatedAt) => {
+    const pulse: ChatWidgetMessage = {
       id: makeId(),
       kind: "notification",
-      content: `🔔 ${label}: ${name}${offerPart}${codesPart}`,
-      stage: payload.stage,
-      createdAt: nowIso(),
+      content: text,
+      createdAt: generatedAt,
     };
-
     set((s) => ({
-      messages: [...s.messages, notification].slice(-MAX_DISPLAYED_MESSAGES),
+      messages: [...s.messages, pulse].slice(-MAX_DISPLAYED_MESSAGES),
       unread: s.open ? s.unread : s.unread + 1,
     }));
+  },
+
+  fetchPulse: async () => {
+    try {
+      const resp = await fetchAiPulse();
+      if (!resp.important || !resp.text) return; // тихо — виджет молчит
+      const hour = hourKey(resp.generated_at);
+      if (hour === get().lastPulseHour) return; // этот час уже показан — не дублируем
+      get().pushPulse(resp.text, resp.generated_at);
+      set({ lastPulseHour: hour });
+    } catch (err) {
+      // Пульс — фоновая некритичная фича: любая ошибка (сеть/503) — молчим.
+      console.warn("Пульс ассистента недоступен:", err);
+    }
   },
 }));

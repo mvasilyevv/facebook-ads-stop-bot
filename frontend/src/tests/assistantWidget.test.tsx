@@ -1,4 +1,4 @@
-// Тесты AssistantWidget — плавающий AI-ассистент (кнопка/панель/лента/инпут/WS-нотификации).
+// Тесты AssistantWidget — плавающий AI-ассистент (кнопка/панель/лента/инпут/почасовой пульс).
 // Fetch стабится вручную (vi.stubGlobal), как в tests/client.test.ts — MSW в проекте нет.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -27,6 +27,7 @@ function resetStore() {
     messages: [],
     pending: false,
     lastModel: null,
+    lastPulseHour: null,
   });
 }
 
@@ -157,21 +158,26 @@ describe("AssistantWidget — отправка сообщения", () => {
   });
 });
 
-describe("AssistantWidget — WS-нотификации алертов", () => {
-  // pushNotification при закрытой панели растит unread-бейдж на кнопке; открытие
-  // панели сбрасывает unread, а сама нотификация видна в ленте со стилем stage=stop.
-  it("бейдж растёт при закрытой панели, открытие сбрасывает unread, нотификация видна", async () => {
+describe("AssistantWidget — почасовой пульс", () => {
+  // fetchPulse при important=true кладёт пульс-сообщение «📟 Пульс кабинета» в ленту
+  // и растит unread-бейдж на закрытой кнопке; открытие панели сбрасывает unread.
+  it("important=true → сообщение пульса в ленте + бейдж при закрытой панели", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          important: true,
+          text: "2 стопа за час: GH_CR2 (CPA), GH_AVI (spend без лидов)",
+          generated_at: "2026-07-15T12:07:00+00:00",
+        }),
+      ),
+    );
+
     const user = userEvent.setup();
     render(<AssistantWidget />);
 
-    act(() => {
-      useChatWidget.getState().pushNotification({
-        fb_ad_id: "123456",
-        ad_name: "GH_CR2 | 15.07",
-        offer_code: "GH_CR2",
-        stage: "stop",
-        matched_rule_codes: ["cpa_stop"],
-      });
+    await act(async () => {
+      await useChatWidget.getState().fetchPulse();
     });
 
     const closedButton = screen.getByRole("button", { name: "Открыть AI-ассистента" });
@@ -183,25 +189,80 @@ describe("AssistantWidget — WS-нотификации алертов", () => {
     const openButton = screen.getByRole("button", { name: "Закрыть AI-ассистента" });
     expect(within(openButton).queryByText("1")).not.toBeInTheDocument();
 
-    expect(screen.getByText(/STOP: GH_CR2 \| 15\.07 \[GH_CR2\] — cpa_stop/)).toBeInTheDocument();
+    expect(screen.getByText(/Пульс кабинета/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/2 стопа за час: GH_CR2 \(CPA\), GH_AVI \(spend без лидов\)/),
+    ).toBeInTheDocument();
   });
 
-  // Несколько нотификаций подряд при закрытой панели суммируются в счётчике.
-  it("несколько нотификаций подряд суммируют unread", () => {
+  // important=false (тихий час) → в ленте пусто, бейджа нет — виджет молчит.
+  it("important=false → лента пуста, бейджа нет", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          important: false,
+          text: null,
+          generated_at: "2026-07-15T12:07:00+00:00",
+        }),
+      ),
+    );
+
     render(<AssistantWidget />);
 
-    act(() => {
-      useChatWidget.getState().pushNotification({ stage: "warning", ad_name: "A" });
-      useChatWidget.getState().pushNotification({ stage: "stop", ad_name: "B" });
+    await act(async () => {
+      await useChatWidget.getState().fetchPulse();
     });
 
+    expect(useChatWidget.getState().messages).toHaveLength(0);
     const btn = screen.getByRole("button", { name: "Открыть AI-ассистента" });
-    expect(within(btn).getByText("2")).toBeInTheDocument();
+    expect(within(btn).queryByText("1")).not.toBeInTheDocument();
+  });
+
+  // Повторный fetchPulse того же календарного часа (тот же generated_at из серверного
+  // кэша) не дублирует сообщение в ленте — дедуп через lastPulseHour.
+  it("повторный fetchPulse того же часа не дублирует сообщение", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          important: true,
+          text: "1 стоп за час: GH_CR2",
+          generated_at: "2026-07-15T12:07:00+00:00",
+        }),
+      ),
+    );
+
+    render(<AssistantWidget />);
+
+    await act(async () => {
+      await useChatWidget.getState().fetchPulse();
+      await useChatWidget.getState().fetchPulse();
+    });
+
+    expect(useChatWidget.getState().messages).toHaveLength(1);
+    expect(useChatWidget.getState().unread).toBe(1);
+  });
+
+  // Ошибка сети/бэка при опросе пульса — тихая: ни сообщения, ни бейджа, ни краша.
+  it("ошибка fetchPulse — молчание без сообщений и бейджа", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    render(<AssistantWidget />);
+
+    await act(async () => {
+      await useChatWidget.getState().fetchPulse();
+    });
+
+    expect(useChatWidget.getState().messages).toHaveLength(0);
+    expect(useChatWidget.getState().unread).toBe(0);
+    warnSpy.mockRestore();
   });
 });
 
-describe("AssistantWidget — нотификации не попадают в тело запроса", () => {
-  // Нотификация в ленте (kind: "notification") не должна уйти в /ai/chat вместе
+describe("AssistantWidget — пульсы не попадают в тело запроса", () => {
+  // Пульс-сообщение в ленте (kind: "notification") не должно уйти в /ai/chat вместе
   // с вопросом пользователя — иначе ассистент "отвечал" бы на собственные пуши.
   it("тело запроса содержит только user/assistant сообщения", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
@@ -214,10 +275,8 @@ describe("AssistantWidget — нотификации не попадают в т
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    useChatWidget.getState().pushNotification({
-      stage: "warning",
-      ad_name: "Шумный алерт",
-      matched_rule_codes: ["cpm_warning"],
+    act(() => {
+      useChatWidget.getState().pushPulse("Шумный пульс за час", "2026-07-15T12:07:00+00:00");
     });
 
     const user = userEvent.setup();
