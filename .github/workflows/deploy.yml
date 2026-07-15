@@ -316,218 +316,58 @@ jobs:
             ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:latest
 
   # ─────────────────────────────────────────────
-  # JOB 3: деплой на боевой сервер
-  # Запускается только из ветки main (не из PR)
+  # JOB 3: деплой на боевой сервер (релизная схема releases/ + shared/.env)
+  #
+  # Хост переведён на release-based деплой: scripts/deploy-server.sh →
+  # server-release.sh (rsync релиза, миграции, health-гейт, атомарное
+  # переключение current, авто-rollback). Старый git-checkout-флоу удалён —
+  # несовместим с раскладкой сервера (инцидент 15.07: cd в несуществующий
+  # DEPLOY_PROJECT_DIR + БД уже на миграции, которой нет в git).
+  #
+  # ГЕЙТ vars.CI_DEPLOY_ENABLED: автодеплой включается ТОЛЬКО когда весь боевой
+  # контур закоммичен (docker-compose с новыми сервисами, докерфайлы под
+  # релизные теги, миграция 0034 и её код). До этого автодеплой из чистого git
+  # ОТКАТИЛ бы прод — фичи там из ещё не закоммиченной работы. Пока гейт
+  # выключен, джоба скипается (пайплайн зелёный), деплой ручной одной командой:
+  #   ./scripts/deploy-server.sh
+  # Включение: gh variable set CI_DEPLOY_ENABLED --body true
   # ─────────────────────────────────────────────
   deploy:
-    name: Деплой на сервер
+    name: Деплой на сервер (релизная схема)
     runs-on: ubuntu-latest
-    needs: build  # только после успешной сборки всех образов
-    if: github.ref == 'refs/heads/main'
-    # GITHUB_TOKEN с правом read:packages — им логинимся в GHCR на сервере,
-    # без отдельного PAT (DEPLOY_GHCR_TOKEN больше не нужен).
-    permissions:
-      contents: read
-      packages: read
+    needs: build
+    if: github.ref == 'refs/heads/main' && vars.CI_DEPLOY_ENABLED == 'true'
 
     steps:
-      - name: SSH-деплой → ${{ secrets.DEPLOY_HOST }}
-        uses: appleboy/ssh-action@v1
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: SSH-ключ и known_hosts
         env:
-          # Прокидываем в SSH-сессию: встроенный токен ранна + параметры образов.
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.actor }}
-          IMAGE_BASE: ${{ env.IMAGE_BASE }}
-          GIT_SHA: ${{ github.sha }}
-          # Источник правды для секретов: base64 всего .env в GitHub Secret PROD_ENV_B64.
-          # Если секрет не задан — пусто, материализация выключена (используется .env на диске).
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: .env-фолбэк из PROD_ENV_B64
+        # deploy-server.sh требует локальный .env, но фактический источник
+        # секретов — shared/.env на сервере (скрипт сам подтягивает его, если
+        # существует). Фолбэк нужен только для инициализации чистого хоста.
+        env:
           PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          # Таймаут на всю операцию: pull тяжёлых образов может занять время
-          command_timeout: 15m
-          # appleboy/ssh-action не пробрасывает env автоматически — перечисляем явно
-          envs: GHCR_TOKEN,GHCR_USER,IMAGE_BASE,GIT_SHA,PROD_ENV_B64
-          script: |
-            set -euo pipefail
-            cd ${{ secrets.DEPLOY_PROJECT_DIR }}
+        run: |
+          if [ -n "$PROD_ENV_B64" ]; then
+            printf '%s' "$PROD_ENV_B64" | base64 -d > .env
+          else
+            touch .env
+          fi
+          chmod 600 .env
 
-            echo "=== [0/5] Обновление кода на сервере (docker-compose, миграции, скрипты) ==="
-            # Образы несут код api/воркеров, но docker-compose.yml/entrypoint/скрипты
-            # читаются с диска сервера — синхронизируем их с main. .env в .gitignore не тронется.
-            # Текущий SHA ДО обновления — нужен, чтобы понять, менялся ли код browser-agent
-            # (он нативный на хосте вне Docker; пересобираем dist только при изменении — [6/6]).
-            PREV_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
-            # Лэндим РОВНО тот SHA, по которому собраны образы (не подвижный origin/main):
-            # при двух быстрых пушах подряд origin/main мог уйти вперёд → код-на-диске
-            # (миграции/compose/entrypoint) разойдётся с кодом внутри образов.
-            git fetch --depth 1 origin "${GIT_SHA}"
-            git reset --hard "${GIT_SHA}"
-
-            echo "=== [0.5/5] Материализация .env из GitHub Secrets (источник правды) ==="
-            # PROD_ENV_B64 = base64 всего .env в GitHub Secrets (single-line — без проблем
-            # с многострочностью в ssh-action). Fail-safe: пусто/битый секрет → оставляем
-            # рабочий .env на диске (прод не падает). Перед записью — бэкап предыдущего.
-            if [ -n "${PROD_ENV_B64:-}" ]; then
-              mkdir -p /var/backups/fb_agent
-              TMP_ENV=$(mktemp)
-              if printf '%s' "$PROD_ENV_B64" | base64 -d > "$TMP_ENV" 2>/dev/null \
-                 && grep -q '^ENCRYPTION_KEY=' "$TMP_ENV"; then
-                cp -a .env /var/backups/fb_agent/.env.prev 2>/dev/null || true
-                install -m 600 "$TMP_ENV" .env
-                echo ".env материализован из GitHub Secrets ($(wc -l < .env) строк)"
-                # Инцидент 01.07: VISION_* — self-managed (авто-рефреш team-token пишет
-                # на ДИСК каждые ≤30 дней), а секрет статичен. Восстанавливаем их с диска
-                # поверх секрета, иначе каждый деплой откатывает живой токен/креды и
-                # кладёт канал авто-стопа. Нет на диске (первичная инициализация) →
-                # остаётся значение из секрета.
-                PREV_ENV=/var/backups/fb_agent/.env.prev
-                if [ -f "$PREV_ENV" ]; then
-                  for key in VISION_X_TOKEN VISION_USERNAME VISION_PASSWORD VISION_TEAM_ID; do
-                    prev_line=$(grep "^${key}=" "$PREV_ENV" | tail -n 1 || true)
-                    if [ -n "$prev_line" ]; then
-                      grep -v "^${key}=" .env > .env.selfmanaged.tmp || true
-                      printf '%s\n' "$prev_line" >> .env.selfmanaged.tmp
-                      install -m 600 .env.selfmanaged.tmp .env
-                      rm -f .env.selfmanaged.tmp
-                      echo "self-managed ${key}: восстановлен с диска (поверх секрета)"
-                    fi
-                  done
-                  # Детект дрейфа состава: ключи есть на диске, но отсутствуют в секрете —
-                  # добавлены руками без синхронизации PROD_ENV_B64 (так 30.06 пропали
-                  # VISION_USERNAME/VISION_PASSWORD). Warning в лог ранна, не фейлим.
-                  drift_keys=$(comm -23 \
-                    <(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$PREV_ENV" | tr -d '=' | sort -u) \
-                    <(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$TMP_ENV" | tr -d '=' | sort -u) || true)
-                  if [ -n "$drift_keys" ]; then
-                    echo "::warning::Дрейф .env: ключи на диске отсутствуют в PROD_ENV_B64 (обнови секрет): $(echo "$drift_keys" | tr '\n' ' ')"
-                  fi
-                fi
-              else
-                echo "::error::PROD_ENV_B64 битый или без ENCRYPTION_KEY — оставляю текущий .env"
-              fi
-              rm -f "$TMP_ENV"
-            else
-              echo "PROD_ENV_B64 не задан — материализация выключена, использую .env на диске"
-            fi
-
-            echo "=== [1/5] Авторизация в GHCR на сервере (GITHUB_TOKEN ранна) ==="
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-
-            echo "=== [2/5] Pull свежих образов (тег: $GIT_SHA) + сохранение текущих для отката ==="
-            # compose использует ЛОКАЛЬНЫЕ имена fb-stop-bot/<svc>:latest — тегаем
-            # ghcr-образ именно в них, иначе up берёт устаревший локальный образ
-            # и фиксы не доезжают (баг до 2026-06-21).
-            # ПЕРЕД перетегом сохраняем текущий рабочий latest под :rollback — чтобы
-            # при провале health-check вернуться на заведомо рабочие образы, а не
-            # оставить прод на битом билде (раньше отката не было: красный CI = тихо
-            # деградировавший прод, как в grpcio-инциденте 2026-06-21).
-            for svc in python-base api workers; do
-              if docker image inspect "fb-stop-bot/${svc}:latest" >/dev/null 2>&1; then
-                docker tag "fb-stop-bot/${svc}:latest" "fb-stop-bot/${svc}:rollback"
-              fi
-              docker pull "${IMAGE_BASE}-${svc}:${GIT_SHA}"
-              docker tag  "${IMAGE_BASE}-${svc}:${GIT_SHA}" "fb-stop-bot/${svc}:latest"
-            done
-
-            # Откат на предыдущие образы (только теги :rollback → :latest; схему БД НЕ
-            # трогаем — alembic-миграции аддитивны, старый код переживает новую схему).
-            # Best-effort, идемпотентно, вызывается один раз из провальной ветки.
-            rollback_stack() {
-              echo "!!! ОТКАТ: возвращаю :rollback → :latest и пересоздаю стек на предыдущих образах"
-              for svc in python-base api workers; do
-                if docker image inspect "fb-stop-bot/${svc}:rollback" >/dev/null 2>&1; then
-                  docker tag "fb-stop-bot/${svc}:rollback" "fb-stop-bot/${svc}:latest"
-                fi
-              done
-              docker compose up -d --remove-orphans --force-recreate || true
-            }
-
-            echo "=== [3/5] Миграции БД (alembic upgrade head) ==="
-            if ! docker compose run --rm migrate; then
-              echo "ДЕПЛОЙ ПРОВАЛЕН: миграции упали"; rollback_stack; exit 1
-            fi
-
-            echo "=== [4/5] Перезапуск core-стека (profiles web/agent исключены) ==="
-            # --force-recreate: контейнеры держатся за image ID на момент создания;
-            # после retag latest нужно пересоздать, иначе возьмут старый образ.
-            docker compose up -d --remove-orphans --force-recreate
-
-            echo "=== [5/5] Health-check (readyz + heartbeat) ==="
-            ok=0
-            for i in $(seq 1 18); do
-              if docker exec fb_agent-api-1 sh -c \
-                "curl -sf http://localhost:8100/readyz" 2>/dev/null | grep -q '"ready":true'; then
-                echo "readyz: ready"; ok=1; break
-              fi
-              echo "ждём readyz ($i/18)..."; sleep 5
-            done
-            if [ "$ok" -ne 1 ]; then
-              echo "ДЕПЛОЙ ПРОВАЛЕН: /readyz не стал ready за 90с"; rollback_stack; exit 1
-            fi
-            # heartbeat-гейт с retry-петлёй: воркеры пишут первый heartbeat не мгновенно,
-            # одноразовая проверка давала ложный fail на холодном старте (ран 27905809942).
-            hb_ok=0; HB=0
-            for i in $(seq 1 12); do
-              HB=$(docker exec fb_agent-redis-1 redis-cli --scan --pattern 'worker:heartbeat:*' | grep -c . || true)
-              echo "heartbeat воркеров ($i/12): $HB"
-              if [ "$HB" -ge 10 ]; then hb_ok=1; break; fi
-              sleep 5
-            done
-            if [ "$hb_ok" -ne 1 ]; then
-              echo "ДЕПЛОЙ ПРОВАЛЕН: воркеров с heartbeat $HB (<10) за 60с"; rollback_stack; exit 1
-            fi
-
-            echo "=== [6/6] browser-agent (host, вне Docker): пересборка dist + рестарт при изменении кода ==="
-            # browser-agent — нативный systemd-сервис на хосте, образы CI его не несут.
-            # Пересобираем dist и рестартим ТОЛЬКО если менялся его код — иначе зря рвём
-            # Vision-сессию на каждом деплое. При сомнении (нет PREV_SHA/ошибка diff) — пересобираем.
-            if [ -z "$PREV_SHA" ] || ! git diff --quiet "$PREV_SHA" "$GIT_SHA" -- services/browser-agent 2>/dev/null; then
-              echo "Код browser-agent изменился (или PREV_SHA неизвестен) — пересобираю dist"
-              if ( cd services/browser-agent && (npm ci || npm install) && npm run build ); then
-                systemctl restart fb-browser-agent
-                echo "browser-agent пересобран и перезапущен; жду свежий heartbeat"
-                for i in $(seq 1 6); do
-                  sleep 5
-                  if [ -n "$(docker exec fb_agent-redis-1 redis-cli --scan --pattern 'worker:heartbeat:browser-agent')" ]; then
-                    echo "browser-agent heartbeat жив"; break
-                  fi
-                  echo "ждём heartbeat browser-agent ($i/6)..."
-                done
-              else
-                echo "::warning::Сборка browser-agent упала — оставляю предыдущий dist, рестарт не делаю"
-              fi
-            else
-              echo "Код browser-agent не менялся — пропускаю пересборку (Vision-сессия не трогается)"
-            fi
-
-            echo "=== [7/7] Фронтенды (profile web): pull + пересоздание ==="
-            # frontend/mini-app — статика nginx, не входят в core-health-gate. Деплоим
-            # ПОСЛЕ здорового ядра; ошибка здесь НЕ валит деплой (веб некритичен, ядро ОК).
-            # web-new + api-old совместимы: новые поля схемы аддитивны (отсутствуют → UI
-            # graceful). Поэтому web вне rollback-критпути.
-            web_pulled=1
-            for svc in frontend mini-app; do
-              if docker pull "${IMAGE_BASE}-${svc}:${GIT_SHA}" 2>/dev/null; then
-                docker tag "${IMAGE_BASE}-${svc}:${GIT_SHA}" "fb-stop-bot/${svc}:latest"
-              else
-                echo "::warning::не удалось pull ${svc}:${GIT_SHA}"; web_pulled=0
-              fi
-            done
-            if [ "$web_pulled" -eq 1 ]; then
-              docker compose --profile web up -d --force-recreate frontend mini-app \
-                || echo "::warning::docker compose --profile web up не удался"
-            else
-              echo "::warning::пропускаю пересоздание web (образы не подтянулись)"
-            fi
-
-            echo "=== Очистка старых образов/build-cache (тома и активные образы не трогаем) ==="
-            # until=168h хранит неделю — свежие :latest/:rollback/ghcr остаются, копятся
-            # только старые SHA-теги (54 шт до фикса) и build-cache. -af не трогает образы,
-            # используемые контейнерами; --filter until защищает недавний :rollback.
-            docker image prune -af --filter until=168h >/dev/null 2>&1 || true
-            docker builder prune -f --filter until=168h >/dev/null 2>&1 || true
-
-            echo "=== Деплой здоров: SHA $GIT_SHA, heartbeat=$HB ==="
+      - name: Деплой релиза
+        timeout-minutes: 25
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+        run: ./scripts/deploy-server.sh
