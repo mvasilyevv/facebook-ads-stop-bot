@@ -114,6 +114,7 @@ class ChatSession:
         redis_client: Any | None = None,
         meta_api_client: MetaApiClient | None = None,
         skills: tuple[str, ...] | list[str] | None = None,
+        allowed_risk_levels: frozenset | set | None = None,
     ) -> None:
         self._allow_tools = allow_tools
         self._engine = engine
@@ -121,6 +122,16 @@ class ChatSession:
         self._meta_api = meta_api_client
         # Имена скилов из prompts/skills/*.md — подмешиваются в системный промпт.
         self._skills = tuple(skills or ())
+        # Ограничение по RiskLevel для канала (веб-чат: только READ_ONLY+CREATIVE,
+        # т.к. подтверждать драфты в вебе нечем — кнопки dr_ok живут в Telegram).
+        # None = все уровни (TG-канал). Фильтрует и schemas, и ИСПОЛНЕНИЕ (guard
+        # ниже: даже если модель галлюцинирует запрещённый tool — он не исполнится).
+        if allowed_risk_levels is None:
+            self._allowed_tool_names: frozenset[str] | None = None
+        else:
+            self._allowed_tool_names = frozenset(
+                h.name for rl in allowed_risk_levels for h in GLOBAL_REGISTRY.list_by_risk(rl)
+            )
 
     async def ask(
         self,
@@ -163,6 +174,8 @@ class ChatSession:
 
         system = build_chat_system_prompt(skills=self._skills)
         tools = GLOBAL_REGISTRY.schemas() if self._allow_tools else None
+        if tools is not None and self._allowed_tool_names is not None:
+            tools = [t for t in tools if t.get("name") in self._allowed_tool_names]
 
         messages: list[dict[str, Any]] = [
             {"role": m.role, "content": m.content}
@@ -248,6 +261,25 @@ class ChatSession:
 
             tool_results: list[dict[str, Any]] = []
             for tu in response.tool_uses:
+                # Guard канала: tool вне разрешённых risk-уровней не исполняется,
+                # даже если модель вернула его вопреки отфильтрованным schemas.
+                if self._allowed_tool_names is not None and tu.name not in self._allowed_tool_names:
+                    refusal = (
+                        f"Инструмент {tu.name} недоступен в этом канале — "
+                        "действия выполняются через Telegram-бота."
+                    )
+                    traces.append(
+                        ToolCallTrace(name=tu.name, args=dict(tu.input), result="", error=refusal)
+                    )
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tu.id,
+                            "content": [{"type": "text", "text": refusal}],
+                            "is_error": True,
+                        }
+                    )
+                    continue
                 try:
                     result = await execute_tool(tu.name, tu.input, ctx)
                     traces.append(ToolCallTrace(name=tu.name, args=dict(tu.input), result=result))
