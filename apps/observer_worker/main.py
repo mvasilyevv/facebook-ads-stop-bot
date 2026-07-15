@@ -46,6 +46,7 @@ from core.observer.adaptive_interval import (
     compute_adaptive_interval,
     resolve_scan_mode,
 )
+from core.observer.enable_grace import load_enable_grace_map
 from core.observer.pipeline import CycleResult, process_scan_rows
 from core.observer.queries import (
     load_observer_config,
@@ -430,12 +431,16 @@ async def _run_account_scan(
                 accounts_done=accounts_done,
                 accounts_total=accounts_total,
             )
+            # Grace-маркеры «держать до цены лида» (кейс куратора) — один SCAN
+            # на цикл; ошибка Redis → пустая карта (fail-safe к обычным правилам).
+            grace_map = await load_enable_grace_map(redis_client)
             cycle_result = await process_scan_rows(
                 engine,
                 rows=scan_out.rows,
                 scan_id=scan_id,
                 owner_tag=config.get("owner_campaign_tag"),
                 ad_account_id=ad_account_id,
+                enable_grace_map=grace_map,
             )
 
             # Нотификация owner'а при тихом sync OFF→disabled

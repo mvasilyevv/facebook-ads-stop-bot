@@ -59,6 +59,9 @@ DEDUP_TTL_SECONDS = int(os.environ.get("ENABLE_RECO_DEDUP_TTL_SEC", str(6 * 3600
 MAX_CANDIDATES_PER_CYCLE = int(os.environ.get("ENABLE_RECO_MAX_PER_CYCLE", "50"))
 # Метрики после last_transition_at — окно по умолчанию шире cooldown'а
 METRICS_LOOKBACK_SECONDS = int(os.environ.get("ENABLE_RECO_METRICS_LOOKBACK_SEC", str(3 * 3600)))
+# Кейс куратора: «показов мало + CTR хороший» → рекомендация hold_until_cpl.
+CURATOR_IMPR_CEILING = int(os.environ.get("ENABLE_RECO_CURATOR_IMPR_CEILING", "500"))
+CURATOR_CTR_FLOOR = os.environ.get("ENABLE_RECO_CURATOR_CTR_FLOOR", "3.0")
 
 DEDUP_KEY_PREFIX = "enable_reco:last:"
 
@@ -115,7 +118,8 @@ _CANDIDATES_SQL = text(
 
 _METRICS_SQL = text(
     """
-    SELECT cycle_ts, spend, cost_per_lead, cost_per_registration, deposits
+    SELECT cycle_ts, spend, cost_per_lead, cost_per_registration, deposits,
+           impressions, ctr
     FROM ad_metrics
     WHERE ad_id = :aid
       AND cycle_ts > :since
@@ -166,6 +170,8 @@ async def fetch_metrics_since(
             cost_per_lead=r[2],
             cost_per_registration=r[3],
             deposits=int(r[4]) if r[4] is not None else None,
+            impressions=int(r[5]) if r[5] is not None else None,
+            ctr=r[6],
         )
         for r in rows
     ]
@@ -363,7 +369,10 @@ async def run_once(
     Параметр `now` нужен только для unit-тестируемости (timer freezing).
     """
     now = now or datetime.now(timezone.utc)
-    thresholds = thresholds or AnalyzerThresholds()
+    thresholds = thresholds or AnalyzerThresholds(
+        curator_impr_ceiling=CURATOR_IMPR_CEILING,
+        curator_ctr_floor=Decimal(CURATOR_CTR_FLOOR),
+    )
 
     # Асимметричный стоп: на паузе сканирования рекомендации включения бессмысленны
     # (детекта нет, включать незащищённое объявление не нужно). Пропускаем цикл.

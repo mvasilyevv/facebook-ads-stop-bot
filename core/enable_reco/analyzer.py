@@ -36,6 +36,9 @@ class AnalyzerThresholds:
 
     spend_window_share_of_cpa: Decimal = Decimal("0.5")
     min_metrics_required: int = 1
+    # Кейс куратора: «показов мало + CTR хороший» → включить и держать до цены лида.
+    curator_impr_ceiling: int = 500
+    curator_ctr_floor: Decimal = Decimal("3.0")  # проценты, как ad_metrics.ctr
 
 
 DEFAULT_THRESHOLDS = AnalyzerThresholds()
@@ -57,6 +60,9 @@ class MetricSnapshot:
     cost_per_lead: Decimal | None = None
     cost_per_registration: Decimal | None = None
     deposits: int | None = None
+    # Кейс куратора: показы кумулятивны в cabinet-дне (как spend) — берём latest.
+    impressions: int | None = None
+    ctr: Decimal | None = None  # проценты (3.7 = 3.7%)
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,8 @@ class RecommendationDecision:
     reasons: tuple[str, ...] = field(default_factory=tuple)
     skip_reason: str | None = None
     snapshot: dict[str, object] = field(default_factory=dict)
+    # Кейс куратора: включить и ДЕРЖАТЬ до цены лида (grace-окно после включения).
+    hold_until_cpl: bool = False
 
 
 # Допустимые состояния FSM, из которых имеет смысл рекомендовать включение
@@ -140,6 +148,33 @@ def should_recommend(
 
     total_spend = _latest_spend(metrics)
     latest = _latest(metrics)
+
+    # --- Кейс куратора (отдельная ветка, НЕ смешивается с recovery-сигналами) ---
+    # Показов мало при хорошем CTR: данных для вердикта недостаточно, ранний стоп
+    # мог убить потенциального виннера. Рекомендуем включить и держать до ~1×CPA
+    # спенда — судить по реальной цене лида (правило байера/куратора).
+    if (
+        latest is not None
+        and latest.impressions is not None
+        and latest.impressions < thresholds.curator_impr_ceiling
+        and latest.ctr is not None
+        and latest.ctr >= thresholds.curator_ctr_floor
+    ):
+        snapshot = _snapshot_summary(metrics, total_spend, latest)
+        snapshot["hold_until_cpl"] = True
+        if cpa is not None and cpa > 0:
+            snapshot["grace_spend_cap"] = str(cpa)
+        return RecommendationDecision(
+            recommend=True,
+            level="warning",
+            hold_until_cpl=True,
+            reasons=(
+                f"показов мало ({latest.impressions} < {thresholds.curator_impr_ceiling}) "
+                f"при хорошем CTR ({latest.ctr}% ≥ {thresholds.curator_ctr_floor}%) — "
+                f"дать открутить до ~1×CPA и судить по цене лида",
+            ),
+            snapshot=snapshot,
+        )
 
     # Правило 1: текущий (последний кумулятивный) spend < (порог * share)
     if cpa is not None and cpa > 0:

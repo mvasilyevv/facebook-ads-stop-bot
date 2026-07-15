@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.adset_pro.queries import load_external_deposits_batch
 from core.cabinet_day import is_cabinet_day_reset_scan
+from core.observer.enable_grace import EnableGrace, grace_is_active
 from core.observer.queries import (
     OfferRules,
     campaign_matches_owner,
@@ -63,6 +64,8 @@ class CycleResult:
     ads_in_warning_state: int = 0
     ads_in_stop_state: int = 0
     disable_tasks_created: int = 0
+    # Кейс куратора: строки, где срабатывания правил подавлены активным enable-grace.
+    rows_grace_suppressed: int = 0
     transitions: list[str] = field(default_factory=list)
     # fb_ad_ids, для которых выполнен тихий sync инцидента → disabled (ад уже OFF в Meta)
     synced_offline_disabled: list[str] = field(default_factory=list)
@@ -185,6 +188,7 @@ async def process_scan_rows(
     cycle_ts: datetime | None = None,
     owner_tag: str | None = None,
     ad_account_id: str | None = None,
+    enable_grace_map: dict[str, EnableGrace] | None = None,
 ) -> CycleResult:
     """Один scan-цикл. Идемпотентен по (ad_id, cycle_ts) и (idempotency_key).
 
@@ -200,6 +204,10 @@ async def process_scan_rows(
         ad_account_id: кабинет, из которого пришли строки (мульти-кабинет);
                    пишется в fb_campaigns.ad_account_id. None — fallback-скан без
                    привязки (существующие значения в каталоге не затираются).
+        enable_grace_map: карта fb_ad_id → EnableGrace (кейс куратора «держать до
+                   цены лида»): под активным grace срабатывания правил подавляются
+                   целиком (без алерта и без авто-стопа) до истечения времени или
+                   спенд-капа. Загружается вызывающим один раз на цикл. None — выкл.
 
     Returns:
         CycleResult с метриками цикла.
@@ -244,6 +252,7 @@ async def process_scan_rows(
                 owner_tag=owner_tag,
                 ad_account_id=ad_account_id,
                 is_cabinet_reset=is_cabinet_reset,
+                enable_grace_map=enable_grace_map,
             )
         except Exception:
             logger.exception(
@@ -268,6 +277,7 @@ async def _process_one_row(
     owner_tag: str | None = None,
     ad_account_id: str | None = None,
     is_cabinet_reset: bool = False,
+    enable_grace_map: dict[str, EnableGrace] | None = None,
 ) -> None:
     """Обработка одной строки. Вынесено отдельно ради читаемости + try/except в caller'е."""
 
@@ -357,6 +367,30 @@ async def _process_one_row(
     evaluation = evaluate_stop_rules(row, ctx)
     stop_codes = tuple(evaluation.stop_rule_codes)
     warning_codes = tuple(evaluation.warning_rule_codes)
+
+    # --- Grace «держать до цены лида» (кейс куратора) ---
+    # Под активным grace правила «не видят» нарушений: подавляем И алерт, И авто-стоп
+    # (в отличие от снуза, который по MID-2 глушит только алерты). Подавляем именно
+    # коды ДО decide(): иначе FSM ушёл бы в stop_sent без задачи и после окна grace
+    # повторный STOP уже не сработал бы (FSM однонаправленная). Выход из grace —
+    # по времени ИЛИ по спенд-капу (~1×CPA) — дальше обычные правила.
+    grace = (enable_grace_map or {}).get(row.fb_ad_id)
+    if (
+        grace is not None
+        and (stop_codes or warning_codes)
+        and grace_is_active(grace, now=cycle_ts, spend=row.spend)
+    ):
+        logger.info(
+            "observer: enable-grace активен fb_ad_id=%s (до %s, cap=%s, spend=%s) — "
+            "срабатывания правил подавлены: %s",
+            row.fb_ad_id,
+            grace.until.isoformat(),
+            grace.spend_cap,
+            row.spend,
+            list(stop_codes + warning_codes),
+        )
+        stop_codes, warning_codes = (), ()
+        result.rows_grace_suppressed += 1
 
     # --- FSM ---
     current = states.get(row.fb_ad_id)

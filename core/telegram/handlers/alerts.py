@@ -8,6 +8,7 @@ action ∈ {'dis', 'ereco'}. Access control — recipient'ы только.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -187,6 +188,35 @@ async def _promote_recommendation(engine: AsyncEngine, *, fb_ad_id: str, task_id
         )
 
 
+async def _fetch_live_reco_snapshot(engine: AsyncEngine, *, fb_ad_id: str) -> dict | None:
+    """snapshot_metrics живой (не промоутнутой) рекомендации. None — рекомендации нет.
+
+    Нужен кейсу куратора: из snapshot читаются hold_until_cpl / grace_spend_cap.
+    """
+    from sqlalchemy import text
+
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT er.snapshot_metrics
+                    FROM enable_recommendations er
+                    JOIN fb_ads fa ON fa.id = er.ad_id
+                    WHERE fa.fb_ad_id = :fb_ad_id
+                      AND er.promoted_to_task_id IS NULL
+                    ORDER BY er.created_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"fb_ad_id": fb_ad_id},
+            )
+        ).first()
+    if row is None:
+        return None
+    return dict(row[0] or {})
+
+
 async def handle_enable_reco_callback(
     *,
     engine: AsyncEngine,
@@ -194,12 +224,18 @@ async def handle_enable_reco_callback(
     cq_id: str,
     fb_ad_id: str,
     username: str,
+    redis_client: Any | None = None,
 ) -> None:
-    """ereco: создаёт задачу на включение через Marketing API (activate_ad)."""
+    """ereco: создаёт задачу на включение через Marketing API (activate_ad).
+
+    Для hold-рекомендации (кейс куратора) дополнительно ставит Redis grace-маркер:
+    observer придержит стоп-правила до ~1×CPA спенда / истечения окна.
+    """
     requested_by = f"tg:{username}"
     try:
         # M-14: отклоняем устаревшую кнопку (рекомендация уже промоутнута/снята).
-        if not await _has_live_enable_reco(engine, fb_ad_id=fb_ad_id):
+        snapshot = await _fetch_live_reco_snapshot(engine, fb_ad_id=fb_ad_id)
+        if snapshot is None:
             await _answer(client, cq_id, "Рекомендация устарела")
             return
         task_id = await _create_toggle_mutation(
@@ -212,6 +248,24 @@ async def handle_enable_reco_callback(
         if task_id:
             # Кнопка израсходована: повторный клик получит «Рекомендация устарела».
             await _promote_recommendation(engine, fb_ad_id=fb_ad_id, task_id=task_id)
+            if snapshot.get("hold_until_cpl"):
+                # Grace ставим В МОМЕНТ клика (задача исполнится в течение минуты) —
+                # потеря Redis = fail-safe: правила снова действуют сразу.
+                from core.config import get_settings
+                from core.observer.enable_grace import set_enable_grace
+
+                ok = await set_enable_grace(
+                    redis_client,
+                    fb_ad_id=fb_ad_id,
+                    grace_seconds=get_settings().enable_reco_hold_grace_seconds,
+                    spend_cap=snapshot.get("grace_spend_cap"),
+                )
+                if not ok:
+                    logger.warning(
+                        "ereco hold: grace-маркер для %s НЕ поставлен (Redis?) — "
+                        "объявление включится под обычными стоп-правилами",
+                        fb_ad_id,
+                    )
         ack = "Задача на включение принята" if task_id else "Уже в очереди"
     except Exception:
         logger.exception("create enable task (ereco) failed")

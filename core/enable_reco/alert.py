@@ -60,15 +60,26 @@ def render_enable_reco_alert(inp: EnableRecoRenderInput) -> tuple[str, dict | No
     """
     level = inp.decision.level or "warning"
     emoji, head = _LEVEL_HEAD.get(level, ("ℹ️", "Рекомендация"))
+    # Кейс куратора: свой заголовок + пояснение механики grace-окна.
+    if inp.decision.hold_until_cpl:
+        emoji, head = "▶️", "Включить и держать до цены лида"
     title = inp.offer_code or inp.ad_name or "без названия"
 
     lines = [f"{emoji} {fmt.b(head)} · {fmt.b(title)}", ""]
 
-    lines.append(fmt.b("Что выправилось"))
+    lines.append(fmt.b("Причина" if inp.decision.hold_until_cpl else "Что выправилось"))
     if inp.decision.reasons:
         lines.extend(fmt.bullets(list(inp.decision.reasons)))
     else:
         lines.append("• (нет деталей)")
+    if inp.decision.hold_until_cpl:
+        cap = (inp.decision.snapshot or {}).get("grace_spend_cap")
+        cap_part = f" (~{fmt.money(cap)})" if cap else ""
+        lines.append("")
+        lines.append(
+            f"{fmt.i('После включения стоп-правила придержим до ~1×CPA спенда' + cap_part)}"
+            f"{fmt.i(' — дальше решает цена лида.')}"
+        )
 
     grid = _snapshot_grid(inp.decision.snapshot or {})
     if grid:

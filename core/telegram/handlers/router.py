@@ -78,6 +78,7 @@ async def _dispatch_callback_query(
     engine: AsyncEngine,
     client: TelegramBotClient,
     cq: dict[str, Any],
+    redis_client: Any | None = None,
 ) -> None:
     """Обработка нажатия inline-кнопки (под алертами или draft-превью /pause).
 
@@ -172,6 +173,7 @@ async def _dispatch_callback_query(
             cq_id=cq_id,
             fb_ad_id=fb_ad_id,
             username=str(username),
+            redis_client=redis_client,
         )
         return
 
@@ -193,7 +195,9 @@ async def handle_update(
     """Обработка одного update от Telegram."""
     # Inline-кнопки под алертами
     if "callback_query" in update:
-        await _dispatch_callback_query(engine=engine, client=client, cq=update["callback_query"])
+        await _dispatch_callback_query(
+            engine=engine, client=client, cq=update["callback_query"], redis_client=redis_client
+        )
         return
 
     msg = update.get("message") or update.get("edited_message")

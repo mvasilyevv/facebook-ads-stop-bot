@@ -146,6 +146,9 @@ class Settings(BaseSettings):
     # «Пульс кабинета»: выключен по умолчанию — включаем после обкатки комментариев к алертам.
     ai_pulse_enabled: bool = False
     ai_pulse_slots_utc: str = "12:00,16:00,20:00"
+    # Кейс куратора: сколько держим стоп-правила после «включить и держать до цены
+    # лида» (grace-окно; спенд-кап ~1×CPA живёт в самой рекомендации).
+    enable_reco_hold_grace_seconds: int = 3600
 
     # --- AdSet.pro (внешний MCP-сервер post-click статистики, см. META_INTEGRATION_PLAN §4.4 / Этап 6) ---
     # Live verify (2026-05-27): AdSet.pro работает как MCP-сервер `platform-stats-mcp`
