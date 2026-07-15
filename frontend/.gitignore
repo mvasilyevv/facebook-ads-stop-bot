@@ -25,5 +25,4 @@ coverage/
 .env.local
 .env.*.local
 
-# Auto-generated route tree
-src/routeTree.gen.ts
+# Auto-generated route tree is committed so clean CI checkouts can typecheck.
