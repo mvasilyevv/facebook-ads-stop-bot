@@ -14,12 +14,18 @@
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Папка с .md файлами промптов. Файл prompts.py лежит в core/ai_assistant/,
 # а промпты — в core/ai_assistant/prompts/.
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+
+# Скилы — узкие доменные добавки к системному промпту (по одной на сценарий).
+_SKILLS_DIR = _PROMPTS_DIR / "skills"
 
 # Legacy путь к INSTRUCTIONS.md — поддержка старого формата (для миграционного периода).
 _INSTRUCTIONS_PATH_LEGACY = Path(__file__).resolve().parent / "INSTRUCTIONS.md"
@@ -55,6 +61,24 @@ def load_prompt(role: str) -> str:
         raise PromptNotFoundError(f"prompt {role!r} не найден ({path})") from exc
 
 
+@lru_cache(maxsize=32)
+def load_skill(name: str) -> str:
+    """Прочитать скил из `core/ai_assistant/prompts/skills/{name}.md`.
+
+    Скил — доменная добавка к системному промпту (кейс куратора, пульс-отчёт,
+    правила TG-чата). Тот же контракт, что у `load_prompt`: кеш на процесс,
+    path-guard против выхода из каталога.
+    """
+    if not name or "/" in name or "\\" in name or ".." in name:
+        raise PromptNotFoundError(f"некорректное имя скила: {name!r}")
+
+    path = _SKILLS_DIR / f"{name}.md"
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise PromptNotFoundError(f"skill {name!r} не найден ({path})") from exc
+
+
 def load_instructions() -> str:
     """Legacy-функция. Возвращает текущий operator-промпт.
 
@@ -88,12 +112,24 @@ SYSTEM_PROMPT_DIAGNOSTICS = """Ты — диагностический асси�
 Не повторяй текст исходного алерта."""
 
 
-def build_chat_system_prompt() -> str:
-    """Системный промпт для интерактивного чата (operator-роль)."""
+def build_chat_system_prompt(skills: tuple[str, ...] | list[str] | None = None) -> str:
+    """Системный промпт для интерактивного чата (operator-роль + опциональные скилы).
+
+    skills — имена файлов из `prompts/skills/` (без .md); отсутствующий скил
+    не роняет чат — warning в лог и пропуск.
+    """
     try:
-        return load_prompt("operator")
+        base = load_prompt("operator")
     except PromptNotFoundError:
-        return (
+        base = (
             "Ты — AI-помощник FB Stop Bot. Помогаешь диагностировать и управлять системой "
             "через whitelisted tools. Отвечай коротко, по делу, на русском."
         )
+
+    parts = [base]
+    for name in skills or ():
+        try:
+            parts.append(load_skill(name))
+        except PromptNotFoundError:
+            logger.warning("Скил %r не найден — пропускаю (промпт без него)", name)
+    return "\n\n---\n\n".join(parts)

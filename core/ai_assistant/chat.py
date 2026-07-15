@@ -113,11 +113,14 @@ class ChatSession:
         engine: AsyncEngine | None = None,
         redis_client: Any | None = None,
         meta_api_client: MetaApiClient | None = None,
+        skills: tuple[str, ...] | list[str] | None = None,
     ) -> None:
         self._allow_tools = allow_tools
         self._engine = engine
         self._redis = redis_client
         self._meta_api = meta_api_client
+        # Имена скилов из prompts/skills/*.md — подмешиваются в системный промпт.
+        self._skills = tuple(skills or ())
 
     async def ask(
         self,
@@ -158,7 +161,7 @@ class ChatSession:
         except ToolError as exc:
             raise ChatRateLimitedError(str(exc)) from exc
 
-        system = build_chat_system_prompt()
+        system = build_chat_system_prompt(skills=self._skills)
         tools = GLOBAL_REGISTRY.schemas() if self._allow_tools else None
 
         messages: list[dict[str, Any]] = [

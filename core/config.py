@@ -120,8 +120,12 @@ class Settings(BaseSettings):
     anthropic_base_url: str = "https://api.claudehub.fun/v1"
     anthropic_model: str = "claude-sonnet-4.6"
     openai_api_key: SecretStr = SecretStr("")
+    # OpenAI-совместимый endpoint. Это же — разъём под локальную модель:
+    # OPENAI_BASE_URL=http://host:11434/v1 (Ollama/llama.cpp server) подключает
+    # self-hosted LLM без правок кода (OpenAIProvider не завязан на домен OpenAI).
     openai_base_url: str = "https://gateway.nekocode.app/andromeda/v1"
-    openai_model: str = "openai/gpt-5.4-mini"
+    # Имя модели БЕЗ префикса провайдера — гейтвей ждёт голый id (см. GET /models).
+    openai_model: str = "gpt-5.6-sol"
     ai_diagnostics_cooldown_seconds: int = 1800
     ai_timeout_seconds: int = 20
     ai_max_log_lines: int = 200
@@ -132,6 +136,16 @@ class Settings(BaseSettings):
     # 8s было мало для сторонних gateway: 💡-объяснение всегда падало по timeout.
     # 20s — компромисс между UX и блокировкой алерта.
     ai_explain_timeout_seconds: float = 20.0
+    # --- AI-ассистент в Telegram (чат /ai + DM, owner-only) ---
+    ai_tg_chat_enabled: bool = True
+    # История диалога в Redis: сколько последних сообщений держим и как долго.
+    ai_chat_history_ttl_seconds: int = 1800
+    ai_chat_history_max_messages: int = 12
+    # --- Проактивные AI-статусы ---
+    ai_digest_summary_enabled: bool = True
+    # «Пульс кабинета»: выключен по умолчанию — включаем после обкатки комментариев к алертам.
+    ai_pulse_enabled: bool = False
+    ai_pulse_slots_utc: str = "12:00,16:00,20:00"
 
     # --- AdSet.pro (внешний MCP-сервер post-click статистики, см. META_INTEGRATION_PLAN §4.4 / Этап 6) ---
     # Live verify (2026-05-27): AdSet.pro работает как MCP-сервер `platform-stats-mcp`
