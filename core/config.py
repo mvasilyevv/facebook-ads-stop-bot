@@ -125,7 +125,10 @@ class Settings(BaseSettings):
     # self-hosted LLM без правок кода (OpenAIProvider не завязан на домен OpenAI).
     openai_base_url: str = "https://gateway.nekocode.app/andromeda/v1"
     # Имя модели БЕЗ префикса провайдера — гейтвей ждёт голый id (см. GET /models).
-    openai_model: str = "gpt-5.6-sol"
+    # luna — лёгкий тир 5.6 ($1/$6 за 1M против $5/$30 у sol): tool-calling проверен
+    # бенчем 15.07, агентный индекс 75 vs 80 у sol, money защищён draft-first.
+    # Если ассистент где-то тупит — переключение на gpt-5.6-sol одной строкой в .env.
+    openai_model: str = "gpt-5.6-luna"
     ai_diagnostics_cooldown_seconds: int = 1800
     ai_timeout_seconds: int = 20
     ai_max_log_lines: int = 200
