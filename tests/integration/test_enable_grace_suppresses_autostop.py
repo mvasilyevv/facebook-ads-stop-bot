@@ -31,10 +31,12 @@ async def clean_grace_tables(pg_engine):
 
     async def _truncate():
         async with pg_engine.begin() as conn:
+            # Список таблиц — только те, что существуют в ЗАКОММИЧЕННОЙ схеме:
+            # tracker_click_state здесь нет (живёт в незакоммиченной tracker-миграции
+            # параллельной работы; в CI-базе её нет — DELETE падал UndefinedTableError).
             for t in (
                 "task_queue",
                 "alert_events",
-                "tracker_click_state",
                 "ad_metrics",
                 "ad_alert_state",
                 "fb_ads",
