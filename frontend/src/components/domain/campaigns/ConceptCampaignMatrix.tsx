@@ -116,23 +116,23 @@ export const ConceptCampaignMatrix: FC<ConceptCampaignMatrixProps> = ({
       {concepts.length > 0 && campaigns.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="flex items-center gap-2 text-[12px] text-bg-9">
-            <span className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7">
+            <span className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8">
               Загружено
             </span>
             <span className="text-bg-11 font-medium">{concepts.length}</span>
-            <span className="text-bg-7">·</span>
+            <span className="text-bg-8">·</span>
             <span>{poolImg} фото</span>
-            <span className="text-bg-7">·</span>
+            <span className="text-bg-8">·</span>
             <span>{poolVid} видео</span>
           </div>
           <div className="flex items-center gap-2 ml-auto">
-            <span className="text-[11px] text-bg-7">Распределить:</span>
+            <span className="text-[11px] text-bg-8">Распределить:</span>
             <DistributeButton onClick={distributeEven}>Поровну</DistributeButton>
             <DistributeButton onClick={distributeAll}>В каждую</DistributeButton>
             <button
               type="button"
               onClick={clearAll}
-              className="text-[12px] text-bg-7 hover:text-bg-10 transition-colors px-1"
+              className="text-[12px] text-bg-8 hover:text-bg-10 transition-colors px-1"
             >
               Очистить
             </button>
@@ -148,7 +148,7 @@ export const ConceptCampaignMatrix: FC<ConceptCampaignMatrixProps> = ({
             <span className="font-display text-[11px] uppercase tracking-wider text-bg-8">
               Не распределены ({unassigned.length})
             </span>
-            <span className="text-[11px] text-bg-7">— нажмите кампанию, чтобы добавить</span>
+            <span className="text-[11px] text-bg-8">— нажмите кампанию, чтобы добавить</span>
           </div>
           <div className="flex flex-wrap gap-2">
             {unassigned.map((c) => (
@@ -271,7 +271,7 @@ const PoolCard: FC<PoolCardProps> = ({ concept, campaigns, colorByKey, onAssign,
         aria-label={`Удалить ${concept.original_name}`}
         title="Удалить из загрузки"
         onClick={onDelete}
-        className="shrink-0 size-5 flex items-center justify-center text-bg-7 hover:text-danger transition-colors"
+        className="shrink-0 size-5 flex items-center justify-center text-bg-8 hover:text-danger transition-colors"
       >
         <Trash2 size={12} />
       </button>
@@ -311,7 +311,7 @@ const CampaignColumn: FC<CampaignColumnProps> = ({
         <div className="flex items-center gap-2">
           <span className={cn("size-2.5 rounded-full shrink-0", color.dot)} aria-hidden="true" />
           <span className="font-display text-[13px] text-bg-11 truncate">{campaign.key}</span>
-          <span className="text-[11px] text-bg-7 shrink-0">· {campaign.adset_count} adset</span>
+          <span className="text-[11px] text-bg-8 shrink-0">· {campaign.adset_count} adset</span>
         </div>
       </div>
 
@@ -353,7 +353,7 @@ const CampaignColumn: FC<CampaignColumnProps> = ({
 
             {picking && (
               <div className="mt-1.5 space-y-1 rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 p-1.5">
-                <div className="text-[10px] uppercase tracking-wider text-bg-7 px-1 pb-0.5">
+                <div className="text-[10px] uppercase tracking-wider text-bg-8 px-1 pb-0.5">
                   Доступно ({pool.length})
                 </div>
                 {pool.map((c) => {
@@ -378,7 +378,7 @@ const CampaignColumn: FC<CampaignColumnProps> = ({
                       <span className="text-[11px] text-bg-10 truncate flex-1">
                         {c.original_name}
                       </span>
-                      <Plus size={12} className="text-bg-7 shrink-0" />
+                      <Plus size={12} className="text-bg-8 shrink-0" />
                     </button>
                   );
                 })}
@@ -398,7 +398,7 @@ const CampaignColumn: FC<CampaignColumnProps> = ({
             </b>
           </div>
         ) : (
-          <div className="text-[11px] text-bg-7">0 объявлений</div>
+          <div className="text-[11px] text-bg-8">0 объявлений</div>
         )}
       </div>
     </div>
@@ -430,14 +430,14 @@ const ConceptCard: FC<ConceptCardProps> = ({ concept, onRemove, removeLabel }) =
         <div className="text-[12px] text-bg-11 truncate" title={concept.original_name}>
           {concept.original_name}
         </div>
-        <div className="text-[10px] text-bg-7">{formatBytes(concept.size_bytes)}</div>
+        <div className="text-[10px] text-bg-8">{formatBytes(concept.size_bytes)}</div>
       </div>
       <button
         type="button"
         aria-label={removeLabel}
         title={removeLabel}
         onClick={onRemove}
-        className="shrink-0 size-5 flex items-center justify-center text-bg-7 hover:text-danger transition-colors"
+        className="shrink-0 size-5 flex items-center justify-center text-bg-8 hover:text-danger transition-colors"
       >
         <X size={12} />
       </button>
@@ -464,13 +464,13 @@ const PoolRow: FC<{ concept: UploadedConcept; onRemove: () => void }> = ({ conce
         <div className="text-[12px] text-bg-11 truncate" title={concept.original_name}>
           {concept.original_name}
         </div>
-        <div className="text-[11px] text-bg-7">{formatBytes(concept.size_bytes)}</div>
+        <div className="text-[11px] text-bg-8">{formatBytes(concept.size_bytes)}</div>
       </div>
       <button
         type="button"
         aria-label={`Удалить ${concept.original_name}`}
         onClick={onRemove}
-        className="shrink-0 size-6 flex items-center justify-center text-bg-7 hover:text-danger transition-colors"
+        className="shrink-0 size-6 flex items-center justify-center text-bg-8 hover:text-danger transition-colors"
       >
         <X size={12} />
       </button>

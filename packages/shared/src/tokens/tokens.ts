@@ -18,8 +18,8 @@ export const colors = {
   bg5: "#2c2c33",
   bg6: "#38383f",
   bg7: "#4a4a52",
-  bg8: "#5c5c66",
-  bg9: "#7c7c86",
+  bg8: "#7a7a84",
+  bg9: "#92929c",
   bg10: "#a8a8b0",
   bg11: "#e4e4e7",
 

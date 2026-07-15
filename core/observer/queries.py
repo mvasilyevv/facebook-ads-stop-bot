@@ -175,8 +175,8 @@ async def load_scanning_enabled(engine: AsyncEngine) -> bool:
     autostart-activate, enable, enable-рекомендации, активирующие mutations; но
     РАЗРЕШАЕТ выключающие — auto-stop/ручной pause, они снижают риск открута).
 
-    Нет строки observer_config → True (дефолт системы: автоматика включена до
-    явного выключения; реальная строка появляется при первом обращении к настройкам).
+    Нет строки observer_config → False (fail-safe: чистая установка и гонка первого
+    старта никогда не включают сканирование до явного действия оператора).
     Ошибку соединения НЕ глушит — пробрасывает наверх. Все caller'ы крутятся в цикле
     с try/except, который трактует исключение как «пропустить тик» — то есть при
     недоступной БД money-критичные воркеры (cabinet_scheduler) ничего не включают.
@@ -191,7 +191,7 @@ async def load_scanning_enabled(engine: AsyncEngine) -> bool:
             )
         ).first()
     if row is None:
-        return True
+        return False
     return bool(row[0])
 
 

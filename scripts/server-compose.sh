@@ -22,7 +22,15 @@ case "$command" in
   ready)
     curl --silent --show-error --fail --max-time 10 http://127.0.0.1:8100/healthz >/dev/null
     curl --silent --show-error --fail --max-time 10 http://127.0.0.1:8100/readyz >/dev/null
-    printf 'Application health and readiness: OK\n'
+    response="$(curl --silent --show-error --max-time 10 http://127.0.0.1:8100/system-readyz)"
+    python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+expected = int(d.get("workers_expected") or 0)
+online = int(d.get("workers_online") or 0)
+raise SystemExit(0 if d.get("infrastructure_ready") and expected > 0 and online == expected else 1)
+' "$response"
+    printf 'Application infrastructure and worker readiness: OK\n'
     ;;
   compose) exec "${compose[@]}" "$@" ;;
   *) printf 'ERROR: unsupported command: %s\n' "$command" >&2; exit 2 ;;

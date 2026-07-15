@@ -17,7 +17,7 @@ interface StatsTodayParams {
   breakdown?: "offer" | "campaign";
 }
 
-export function useStatsToday(breakdown?: "offer" | "campaign") {
+export function useStatsToday(breakdown?: "offer" | "campaign", enabled = true) {
   const params: StatsTodayParams | undefined = breakdown ? { breakdown } : undefined;
   return useQuery<StatsToday>({
     queryKey: ["stats", "today", params],
@@ -28,6 +28,7 @@ export function useStatsToday(breakdown?: "offer" | "campaign") {
         signal,
       ),
     staleTime: 30_000,
+    enabled,
   });
 }
 
@@ -38,7 +39,7 @@ interface StatsPeriodParams {
   to_iso?: string;
 }
 
-export function useStatsPeriod(params: Required<StatsPeriodParams>) {
+export function useStatsPeriod(params: Required<StatsPeriodParams>, enabled = true) {
   return useQuery<StatsPeriod>({
     queryKey: ["stats", "period", params],
     queryFn: ({ signal }) =>
@@ -48,6 +49,7 @@ export function useStatsPeriod(params: Required<StatsPeriodParams>) {
         signal,
       ),
     staleTime: 30_000,
+    enabled,
     // Смена периода держит прежние данные видимыми (без моргания скелетоном).
     placeholderData: keepPreviousData,
   });

@@ -71,8 +71,8 @@ describe("OfferCard", () => {
     expect(screen.getByText("CR2")).toBeInTheDocument();
   });
 
-  // Статус active
-  it("показывает badge active для активного оффера", () => {
+  // Статус активен
+  it("показывает badge активен для активного оффера", () => {
     render(
       <OfferCard
         offer={makeOffer({ is_active: true })}
@@ -81,11 +81,11 @@ describe("OfferCard", () => {
         onDelete={noop}
       />,
     );
-    expect(screen.getByText("active")).toBeInTheDocument();
+    expect(screen.getByText("активен")).toBeInTheDocument();
   });
 
-  // Статус inactive
-  it("показывает badge inactive для неактивного оффера", () => {
+  // Статус неактивен
+  it("показывает badge неактивен для неактивного оффера", () => {
     render(
       <OfferCard
         offer={makeOffer({ is_active: false })}
@@ -94,7 +94,7 @@ describe("OfferCard", () => {
         onDelete={noop}
       />,
     );
-    expect(screen.getByText("inactive")).toBeInTheDocument();
+    expect(screen.getByText("неактивен")).toBeInTheDocument();
   });
 
   // Метрики отображаются

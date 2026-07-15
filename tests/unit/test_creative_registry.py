@@ -3,6 +3,11 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+
+import pytest
+
 from core.creatives.registry import (
     Creative,
     Geo,
@@ -11,7 +16,50 @@ from core.creatives.registry import (
     Slot,
     load_registry,
 )
-from scripts.creative_report import _build_report, _norm
+from scripts.creative_report import _build_report, _load_deposits, _norm
+
+
+class _DepositRow:
+    _mapping = {"sub3": "CR-1", "sub6": "angle", "deposits": 1, "revenue": 10}
+
+
+class _DepositResult:
+    def __iter__(self):
+        return iter([_DepositRow()])
+
+
+class _DepositConnection:
+    def __init__(self) -> None:
+        self.sql = ""
+        self.params = {}
+
+    async def execute(self, statement, params):
+        self.sql = str(statement)
+        self.params = params
+        return _DepositResult()
+
+
+class _DepositEngine:
+    def __init__(self) -> None:
+        self.conn = _DepositConnection()
+
+    @asynccontextmanager
+    async def begin(self):
+        yield self.conn
+
+
+@pytest.mark.asyncio
+async def test_load_deposits_uses_confirmed_click_projection() -> None:
+    engine = _DepositEngine()
+    now = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
+
+    rows = await _load_deposits(30, engine=engine, now=now)
+
+    assert rows == [{"sub3": "CR-1", "sub6": "angle", "deposits": 1, "revenue": 10}]
+    assert "FROM tracker_click_state" in engine.conn.sql
+    assert "s.confirmed_deposit = true" in engine.conn.sql
+    assert "event_type = ANY" not in engine.conn.sql
+    assert engine.conn.params["event_floor"] < engine.conn.params["since"]
 
 
 # Реальный реестр (docs/creatives/*.yaml) грузится и СТРУКТУРНО валиден без ошибок.

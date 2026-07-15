@@ -106,7 +106,7 @@ export function OfferCard({
             size="sm"
             withDot
           >
-            {isActive ? "active" : "inactive"}
+            {isActive ? "активен" : "неактивен"}
           </Badge>
         </div>
 
@@ -128,11 +128,11 @@ export function OfferCard({
       >
         {(
           [
-            ["Spend", fmtSpend(metrics?.spend), false],
-            ["Leads", metrics?.leads != null ? String(metrics.leads) : "—", false],
+            ["Траты", fmtSpend(metrics?.spend), false],
+            ["Лиды", metrics?.leads != null ? String(metrics.leads) : "—", false],
             ["CPL", fmtCpl(metrics?.cost_per_lead), false],
             [
-              "Alerts",
+              "Стоп-алерты",
               metrics?.stop_alerts_count != null ? String(metrics.stop_alerts_count) : "—",
               metrics?.stop_alerts_count != null && metrics.stop_alerts_count > 0,
             ],
@@ -190,4 +190,3 @@ export function OfferCard({
     </article>
   );
 }
-

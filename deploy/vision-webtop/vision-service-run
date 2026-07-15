@@ -1,0 +1,25 @@
+#!/usr/bin/with-contenv bash
+set -Eeuo pipefail
+
+export DISPLAY="${DISPLAY:-:1}"
+export HOME=/config
+export XDG_CONFIG_HOME=/config/.config
+export XDG_CACHE_HOME=/config/.cache
+
+install -d -o abc -g abc -m 0700 "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
+for _ in $(seq 1 120); do
+  if s6-setuidgid abc xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+    # Даём XFCE создать пользовательскую D-Bus-сессию и восстановить persistent config.
+    sleep 5
+    # На macOS короткий Caps Lock переключает input source. Webtop параллельно
+    # отправляет Caps_Lock в X11, из-за чего Linux ещё и включает верхний регистр.
+    # Убираем только server-side modifier: язык/долгое нажатие остаются на Mac.
+    s6-setuidgid abc xmodmap -e 'clear Lock'
+    s6-setuidgid abc xmodmap -e 'keycode 66 = NoSymbol'
+    exec s6-setuidgid abc /usr/bin/Vision
+  fi
+  sleep 1
+done
+
+printf 'Vision startup failed: X display %s was not ready\n' "$DISPLAY" >&2
+exit 1

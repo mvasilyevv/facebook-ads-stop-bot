@@ -37,6 +37,13 @@ async def ad_with_state(pg_engine: AsyncEngine):
 
     async with pg_engine.begin() as conn:
         await conn.execute(
+            text(
+                "INSERT INTO observer_config (singleton_key, is_scanning_enabled) "
+                "VALUES ('default', TRUE) "
+                "ON CONFLICT (singleton_key) DO UPDATE SET is_scanning_enabled = TRUE"
+            )
+        )
+        await conn.execute(
             text("INSERT INTO offers (id, code, name) VALUES (:i, :c, :n)"),
             {"i": offer_id, "c": f"FSY_{suffix}", "n": f"FSM-sync offer {suffix}"},
         )
@@ -64,6 +71,16 @@ async def ad_with_state(pg_engine: AsyncEngine):
             await conn.execute(
                 text(
                     """
+                    INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend)
+                    VALUES (gen_random_uuid(), :ad_id, now(), 10)
+                    ON CONFLICT (ad_id, cycle_ts) DO NOTHING
+                    """
+                ),
+                {"ad_id": ad_id},
+            )
+            await conn.execute(
+                text(
+                    """
                     INSERT INTO ad_alert_state
                         (id, ad_id, alert_state, current_stage, open_state_token,
                          warning_rule_codes, stop_rule_codes, last_transition_at)
@@ -88,6 +105,7 @@ async def ad_with_state(pg_engine: AsyncEngine):
             text("DELETE FROM task_queue WHERE idempotency_key LIKE :p"), {"p": f"%{fb_ad_id}%"}
         )
         await conn.execute(text("DELETE FROM offers WHERE id = :i"), {"i": offer_id})
+        await conn.execute(text("DELETE FROM observer_config WHERE singleton_key = 'default'"))
 
 
 async def _read_alert_state(pg_engine: AsyncEngine, fb_ad_id: str) -> str:

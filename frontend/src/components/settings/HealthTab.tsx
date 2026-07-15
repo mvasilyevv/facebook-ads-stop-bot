@@ -217,7 +217,7 @@ export const HealthTab: FC = () => {
                   <div className="font-display text-[13px] text-bg-11">
                     {workerLabel(w.name)}
                   </div>
-                  <div className="font-display text-[10px] text-bg-7 mt-0.5 tabular-nums">
+                  <div className="font-display text-[10px] text-bg-8 mt-0.5 tabular-nums">
                     {w.name}
                   </div>
                   {w.last_heartbeat_at && (
@@ -242,7 +242,7 @@ export const HealthTab: FC = () => {
       </Card>
 
       {/* Автообновление */}
-      <div className="text-[11px] text-bg-7 font-display">
+      <div className="text-[11px] text-bg-8 font-display">
         Обновляется автоматически каждые 30 секунд.
       </div>
     </div>

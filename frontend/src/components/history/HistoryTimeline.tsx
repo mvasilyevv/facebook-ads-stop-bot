@@ -1,27 +1,12 @@
-/**
- * HistoryTimeline — таймлайн событий за период.
- *
- * Эталон templates.jsx HistoryTemplate:
- *   - Day-separator: eyebrow "СЕГОДНЯ · 28 МАЯ" с нижней 1px границей
- *   - EventRow: grid `auto auto 1fr auto auto` (time | dot | ad | rulepill | chevron)
- *   - Кнопка "Загрузить ещё" внизу
- *
- * Тест HistoryTimeline ожидает:
- *   - "STOP · Test Ad" в DOM
- *   - "2026-06-06" в DOM (day-separator)
- *   - кнопку "подробнее" (alert only)
- *   - "Событий нет" при пустом списке
- */
+import { useMemo, useState, type FC } from "react";
+import { Calendar, ChevronRight, Search } from "lucide-react";
 
-import { useMemo, type FC } from "react";
-import { Calendar, ChevronRight } from "lucide-react";
-import { Skeleton } from "@/components/ui/Skeleton";
-import { ErrorState } from "@/components/ui/ErrorState";
-import { EmptyState } from "@/components/ui/EmptyState";
 import { RulePill } from "@/components/domain/ads/RulePill";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { cn } from "@/lib/utils/cn";
 import type { HistoryTimelineItem } from "@fb/shared";
-
-// ─── Цвета stage ─────────────────────────────────────────────────────────────
 
 const STAGE_DOT_COLOR: Record<string, string> = {
   warning: "var(--fsm-warning)",
@@ -30,51 +15,117 @@ const STAGE_DOT_COLOR: Record<string, string> = {
   disabled: "var(--fsm-disabled)",
 };
 
-function stageDotColor(stage: string | null | undefined): string {
-  return (stage && STAGE_DOT_COLOR[stage]) ?? "var(--bg-7)";
+const SUCCESS_STATUSES = new Set(["SUCCEEDED", "SUCCESS", "DONE", "COMPLETED"]);
+const FAILURE_STATUSES = new Set(["FAILED", "ERROR", "DEAD"]);
+
+type HistoryFilter = "all" | "alerts" | "actions" | "errors";
+
+interface DisplayEvent {
+  primary: HistoryTimelineItem;
+  result?: HistoryTimelineItem;
+  key: string;
 }
 
-// ─── Заголовок события ────────────────────────────────────────────────────────
-
-function toTitle(item: HistoryTimelineItem): string {
-  if (item.event_type === "alert") {
-    const stage = item.stage === "stop" ? "STOP" : item.stage === "warning" ? "WARNING" : "ALERT";
-    return `${stage} · ${item.ad_name ?? item.fb_ad_id ?? "—"}`;
+function stageDotColor(item: DisplayEvent): string {
+  if (item.result && FAILURE_STATUSES.has(item.result.task_status?.toUpperCase() ?? "")) {
+    return "var(--danger)";
   }
-  if (item.event_type === "task") {
-    const type = item.task_type?.replace("_", " ").toUpperCase() ?? "TASK";
-    const status = item.task_status ? ` · ${item.task_status}` : "";
-    const name = item.ad_name ?? item.fb_ad_id;
-    return `${type}${status}${name ? ` · ${name}` : ""}`;
-  }
-  return item.event_type;
+  return (item.primary.stage && STAGE_DOT_COLOR[item.primary.stage]) ?? "var(--bg-9)";
 }
 
-// ─── Форматирование даты day-separator ────────────────────────────────────────
+function isSuccess(status: string | null | undefined): boolean {
+  return SUCCESS_STATUSES.has(status?.toUpperCase() ?? "");
+}
+
+function isFailure(status: string | null | undefined): boolean {
+  return FAILURE_STATUSES.has(status?.toUpperCase() ?? "");
+}
+
+function taskAction(item: HistoryTimelineItem): string {
+  const type = item.task_type?.toLowerCase() ?? "";
+  if (type.includes("enable") || type.includes("activate")) return "включение в Meta";
+  if (type.includes("disable") || type.includes("pause")) return "отключение в Meta";
+  if (type.includes("meta_api")) return "изменение в Meta";
+  return "операция";
+}
+
+function displayTitle(item: DisplayEvent): string {
+  const { primary, result } = item;
+  const name = primary.ad_name ?? primary.fb_ad_id ?? "Объявление";
+
+  if (primary.event_type === "alert") {
+    const stage = primary.stage === "stop" ? "стоп" : primary.stage === "warning" ? "предупреждение" : "алерт";
+    if (!result) return `${name}: ${stage} по правилу`;
+
+    const seconds = Math.max(
+      0,
+      Math.round((new Date(result.ts).getTime() - new Date(primary.ts).getTime()) / 1000),
+    );
+    if (isFailure(result.task_status)) return `${name}: ${stage} → не удалось отключить`;
+    if (isSuccess(result.task_status)) {
+      return `${name}: ${stage} → отключено в Meta${seconds > 0 ? ` за ${seconds} с` : ""}`;
+    }
+    return `${name}: ${stage} → отключение выполняется`;
+  }
+
+  const action = taskAction(primary);
+  if (isFailure(primary.task_status)) return `${name}: ${action} не выполнено`;
+  if (isSuccess(primary.task_status)) return `${name}: ${action} выполнено`;
+  return `${name}: ${action}`;
+}
+
+function relatedEvents(items: HistoryTimelineItem[]): DisplayEvent[] {
+  const tasks = items.filter((item) => item.event_type === "task");
+  const usedTasks = new Set<HistoryTimelineItem>();
+  const display: DisplayEvent[] = [];
+
+  for (const alert of items.filter((item) => item.event_type === "alert")) {
+    const alertTs = new Date(alert.ts).getTime();
+    const result = tasks
+      .filter((task) => {
+        if (usedTasks.has(task) || task.fb_ad_id !== alert.fb_ad_id) return false;
+        const delta = new Date(task.ts).getTime() - alertTs;
+        return delta >= -30_000 && delta <= 10 * 60_000;
+      })
+      .sort(
+        (a, b) =>
+          Math.abs(new Date(a.ts).getTime() - alertTs) -
+          Math.abs(new Date(b.ts).getTime() - alertTs),
+      )[0];
+    if (result) usedTasks.add(result);
+    display.push({ primary: alert, result, key: `alert-${alert.ts}-${alert.fb_ad_id ?? ""}` });
+  }
+
+  for (const task of tasks) {
+    if (!usedTasks.has(task)) {
+      display.push({ primary: task, key: `task-${task.ts}-${task.fb_ad_id ?? task.task_type ?? ""}` });
+    }
+  }
+
+  return display.sort(
+    (a, b) => new Date(b.primary.ts).getTime() - new Date(a.primary.ts).getTime(),
+  );
+}
 
 function formatDayLabel(day: string): string {
-  // day = "YYYY-MM-DD"
   try {
     const date = new Date(`${day}T12:00:00Z`);
     const today = new Date();
     const todayStr = today.toISOString().slice(0, 10);
-    const yesterdayStr = new Date(today.getTime() - 86400_000).toISOString().slice(0, 10);
-
-    const monthDay = date.toLocaleDateString("ru-RU", {
+    const yesterdayStr = new Date(today.getTime() - 86_400_000).toISOString().slice(0, 10);
+    const formatted = date.toLocaleDateString("ru-RU", {
       day: "numeric",
       month: "long",
+      year: date.getUTCFullYear() === today.getUTCFullYear() ? undefined : "numeric",
       timeZone: "UTC",
     });
-
-    if (day === todayStr) return `СЕГОДНЯ · ${monthDay.toUpperCase()}`;
-    if (day === yesterdayStr) return `ВЧЕРА · ${monthDay.toUpperCase()}`;
-    return day; // Для тестов — возвращаем как есть
+    if (day === todayStr) return `СЕГОДНЯ · ${formatted.toUpperCase()}`;
+    if (day === yesterdayStr) return `ВЧЕРА · ${formatted.toUpperCase()}`;
+    return formatted.toUpperCase();
   } catch {
     return day;
   }
 }
-
-// ─── Время события ────────────────────────────────────────────────────────────
 
 function formatEventTime(ts: string): string {
   try {
@@ -88,99 +139,55 @@ function formatEventTime(ts: string): string {
   }
 }
 
-// ─── Сгруппировать события по дате UTC ───────────────────────────────────────
-
-function groupByDate(items: HistoryTimelineItem[]): Map<string, HistoryTimelineItem[]> {
-  const map = new Map<string, HistoryTimelineItem[]>();
-  for (const item of items) {
-    const day = item.ts.slice(0, 10);
-    const arr = map.get(day) ?? [];
-    arr.push(item);
-    map.set(day, arr);
-  }
-  return map;
+function matchesFilter(item: DisplayEvent, filter: HistoryFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "alerts") return item.primary.event_type === "alert";
+  if (filter === "actions") return item.primary.event_type === "task" || !!item.result;
+  return isFailure(item.primary.task_status) || isFailure(item.result?.task_status);
 }
 
-// ─── EventRow ────────────────────────────────────────────────────────────────
-
-interface EventRowProps {
-  item: HistoryTimelineItem;
+function EventRow({
+  item,
+  onAlertClick,
+}: {
+  item: DisplayEvent;
   onAlertClick?: (item: HistoryTimelineItem) => void;
-}
-
-function EventRow({ item, onAlertClick }: EventRowProps) {
-  const isAlert = item.event_type === "alert";
-  const ruleCodes = item.rule_codes ?? [];
+}) {
+  const alert = item.primary.event_type === "alert" ? item.primary : null;
+  const ruleCodes = alert?.rule_codes ?? [];
+  const title = displayTitle(item);
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "auto auto 1fr auto auto",
-        gap: "var(--s-3)",
-        alignItems: "center",
-        height: 44,
-        padding: "0 var(--s-5)",
-        borderBottom: "1px solid var(--hairline)",
-      }}
-    >
-      {/* Время */}
-      <span
-        className="font-display tabular-nums"
-        style={{ fontSize: 13, color: "var(--bg-9)", minWidth: 44 }}
-      >
-        {formatEventTime(item.ts)}
+    <div className="grid min-h-[52px] grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-3 border-b border-[var(--hairline)] px-4 py-2 sm:px-5">
+      <span className="min-w-11 font-display text-[12px] tabular-nums text-bg-9">
+        {formatEventTime(item.primary.ts)}
       </span>
-
-      {/* Dot */}
       <span
         aria-hidden="true"
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: 999,
-          background: stageDotColor(item.stage),
-          flexShrink: 0,
-        }}
+        className="size-[7px] shrink-0 rounded-full"
+        style={{ background: stageDotColor(item) }}
       />
-
-      {/* Название объявления */}
-      <span
-        className="font-display truncate"
-        style={{ fontSize: 13, color: "var(--bg-11)" }}
-      >
-        {toTitle(item)}
-      </span>
-
-      {/* Rule pill (первое правило если есть) */}
-      {ruleCodes.length > 0 ? (
-        <RulePill code={ruleCodes[0]!} />
-      ) : (
-        <span />
-      )}
-
-      {/* Chevron / кнопка подробнее */}
-      {isAlert && onAlertClick ? (
+      <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+        <span className="truncate font-display text-[12px] text-bg-11" title={title}>
+          {title}
+        </span>
+        {ruleCodes.length > 0 ? <RulePill code={ruleCodes[0]!} /> : null}
+      </div>
+      {alert && onAlertClick ? (
         <button
           type="button"
-          onClick={() => onAlertClick(item)}
-          className="font-display text-[10.5px] text-accent hover:underline underline-offset-2"
-          aria-label={`Подробнее о событии ${toTitle(item)}`}
+          onClick={() => onAlertClick(alert)}
+          className="inline-flex min-h-7 items-center rounded-[var(--radius-1)] px-2 font-display text-[11px] text-accent transition-colors hover:bg-bg-3 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+          aria-label={`Подробнее о событии ${title}`}
         >
-          подробнее
+          Подробнее
         </button>
       ) : (
-        <ChevronRight
-          size={14}
-          className="text-bg-7 shrink-0"
-          aria-hidden="true"
-        />
+        <ChevronRight size={14} className="shrink-0 text-bg-9" aria-hidden="true" />
       )}
     </div>
   );
 }
-
-// ─── Основной компонент ───────────────────────────────────────────────────────
 
 interface HistoryTimelineProps {
   items: HistoryTimelineItem[] | undefined;
@@ -200,31 +207,24 @@ export const HistoryTimeline: FC<HistoryTimelineProps> = ({
   if (isLoading) {
     return (
       <div className="space-y-2">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="h-11 w-full" />
+        {Array.from({ length: 6 }).map((_, index) => (
+          <Skeleton key={index} className="h-11 w-full" />
         ))}
       </div>
     );
   }
-
-  if (error) {
-    return <ErrorState error={error} onRetry={onRetry} />;
-  }
-
+  if (error) return <ErrorState error={error} onRetry={onRetry} />;
   if (!items || items.length === 0) {
     return (
       <EmptyState
         icon={<Calendar size={28} />}
         title="Событий нет"
-        description="За выбранный период алертов и задач не найдено."
+        description="За выбранный период алертов и действий не найдено."
       />
     );
   }
-
   return <GroupedTimeline items={items} onAlertClick={onAlertClick} />;
 };
-
-// ─── GroupedTimeline ──────────────────────────────────────────────────────────
 
 function GroupedTimeline({
   items,
@@ -233,59 +233,95 @@ function GroupedTimeline({
   items: HistoryTimelineItem[];
   onAlertClick?: (item: HistoryTimelineItem) => void;
 }) {
-  const grouped = useMemo(() => {
-    const sorted = [...items].sort(
-      (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime(),
-    );
-    return groupByDate(sorted);
-  }, [items]);
+  const [filter, setFilter] = useState<HistoryFilter>("all");
+  const [search, setSearch] = useState("");
 
-  const days = useMemo(
-    () => [...grouped.keys()].sort((a, b) => b.localeCompare(a)),
-    [grouped],
-  );
+  const filtered = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase("ru");
+    return relatedEvents(items).filter((item) => {
+      if (!matchesFilter(item, filter)) return false;
+      if (!query) return true;
+      const haystack = [
+        displayTitle(item),
+        item.primary.campaign_name,
+        ...(item.primary.rule_codes ?? []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase("ru");
+      return haystack.includes(query);
+    });
+  }, [filter, items, search]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, DisplayEvent[]>();
+    for (const item of filtered) {
+      const day = item.primary.ts.slice(0, 10);
+      map.set(day, [...(map.get(day) ?? []), item]);
+    }
+    return map;
+  }, [filtered]);
+
+  const days = [...grouped.keys()].sort((a, b) => b.localeCompare(a));
 
   return (
-    <div className="bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden">
-      {days.map((day) => {
-        const dayItems = grouped.get(day) ?? [];
-        return (
-          <div key={day}>
-            {/* Day separator */}
-            <div
-              style={{
-                padding: "12px var(--s-5) 8px",
-                borderBottom: "1px solid var(--hairline)",
-              }}
+    <div className="overflow-hidden rounded-[var(--radius-3)] border border-[var(--hairline)] bg-bg-1">
+      <div className="flex flex-col gap-3 border-b border-[var(--hairline)] p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Фильтр истории">
+          {(
+            [
+              ["all", "Все"],
+              ["alerts", "Алерты"],
+              ["actions", "Действия"],
+              ["errors", "Ошибки"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={filter === value}
+              onClick={() => setFilter(value)}
+              className={cn(
+                "min-h-7 rounded-[var(--radius-1)] px-2.5 text-[11px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
+                filter === value ? "bg-accent text-bg-0" : "text-bg-10 hover:bg-bg-3 hover:text-bg-11",
+              )}
             >
-              <span
-                className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8"
-              >
+              {label}
+            </button>
+          ))}
+        </div>
+        <label className="relative min-w-0 sm:w-56">
+          <span className="sr-only">Поиск по истории</span>
+          <Search
+            size={14}
+            aria-hidden="true"
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-bg-9"
+          />
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Объявление или правило"
+            className="h-8 w-full rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 pl-8 pr-3 text-[12px] text-bg-11 placeholder:text-bg-9 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+          />
+        </label>
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState title="Ничего не найдено" description="Измените фильтр или поисковый запрос." />
+      ) : (
+        days.map((day) => (
+          <section key={day} aria-label={formatDayLabel(day)}>
+            <div className="border-b border-[var(--hairline)] px-5 pb-2 pt-3">
+              <span className="font-display text-[10px] uppercase tracking-[0.12em] text-bg-9">
                 {formatDayLabel(day)}
               </span>
             </div>
-
-            {/* События дня */}
-            {dayItems.map((item, i) => (
-              <EventRow
-                key={`${item.ts}_${item.fb_ad_id ?? item.event_type}_${i}`}
-                item={item}
-                onAlertClick={onAlertClick}
-              />
+            {(grouped.get(day) ?? []).map((item) => (
+              <EventRow key={item.key} item={item} onAlertClick={onAlertClick} />
             ))}
-          </div>
-        );
-      })}
-
-      {/* Загрузить ещё */}
-      <div style={{ padding: "var(--s-4)", textAlign: "center" }}>
-        <button
-          type="button"
-          className="font-display text-[12px] text-bg-9 hover:text-bg-11 transition-colors"
-        >
-          Загрузить ещё
-        </button>
-      </div>
+          </section>
+        ))
+      )}
     </div>
   );
 }

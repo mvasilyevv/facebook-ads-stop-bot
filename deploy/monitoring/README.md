@@ -15,7 +15,7 @@
 ## Запуск
 
 ```bash
-cd /opt/fb_agent/deploy/monitoring
+cd /opt/fb-agent/current/deploy/monitoring
 cp .env.monitoring.example .env.monitoring
 # отредактируй GF_SECURITY_ADMIN_PASSWORD (openssl rand -base64 24)
 docker compose -f docker-compose.monitoring.yml up -d

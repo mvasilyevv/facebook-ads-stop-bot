@@ -34,7 +34,7 @@ const METRIC_TABS: RangeTabItem[] = [
 ];
 
 const METRIC_LABEL: Record<Metric, string> = {
-  spend: "Spend",
+  spend: "Траты",
   leads: "Лиды",
   deposits: "Депозиты",
 };

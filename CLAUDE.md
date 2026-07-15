@@ -39,7 +39,7 @@ python run_cabinet_scheduler.py                                          # Cabin
 python run_tracker_aggregator_worker.py                                  # Tracker aggregator (adsetpro_postback_events → tracker_aggregate per ad×country×day)
 python run_creator_worker.py                                             # Creator worker (Vision fallback для plan_run)
 python run_creator_recorder.py                                           # Creator recorder (запись планов через CDP)
-python run_api.py                                                        # FastAPI на 8000 (health + AdSet.pro postback)
+python run_api.py                                                        # FastAPI на 8100 (health + AdSet.pro postback)
 python run_meta_api_worker.py                                            # Marketing API mutations worker (skeleton до Этапа 5)
 python run_health_watchdog.py                                            # Health watchdog (мониторинг worker:heartbeat:*)
 
@@ -130,7 +130,7 @@ python scripts/restore_secrets.py          # вернуть токены
 - **`apps/api/utils/partition.py`** — `default_window(hours=168)` для partitioned-queries.
 - `RequestIdMiddleware` echo'ит `X-Request-Id`. `BodySizeLimitMiddleware` — 64 KB hard cap по `Content-Length` → 413 (GET/HEAD/OPTIONS пропускаются). CORS — только если `frontend_origin` задан; при `"*"` в origin'е (включая комбинации типа `"https://app.com,*"`) `create_app()` падает `RuntimeError` на старте. Exception handlers маппят `AdsetProError`/`MetaApiError` подтипы на 401/403/404/429/503/502.
 - **Subscriber'ы в worker'ах:** observer подписан (через `core/control/pubsub_listener.py`) на `fb_agent:observer:trigger` (scan-now — будит sleep через `_wait_interruptible`, скан немедленно, а не через интервал), `cabinet_day` (форс-рескан нового дня тем же механизмом, что scan-now: единственный публишер — `POST /observer/start-new-cabinet-day`, он шлёт только cabinet_day, не trigger → без реакции ручной старт нового дня не пересканировал; архив пишет сам эндпоинт-публишер, observer его НЕ дублирует; observer stateless между циклами — in-memory сбрасывать нечего) и `fb_agent:worker:restart:observer`; disable/enable слушают restart.
-- Точка входа: `run_api.py` или `make api` (uvicorn на 8000).
+- Точка входа: `run_api.py` или `make api` (uvicorn на 8100).
 
 **Node.js gRPC сервис (`services/browser-agent/`):**
 

@@ -190,8 +190,9 @@ def test_tools_path_exempt_from_body_limit() -> None:
     assert resp.status_code != 413, "tools-path должен быть исключён из 64KB-лимита"
 
 
-# Пустой body → 422 от Pydantic (валидация, ранее существовавшее поведение).
-def test_postback_empty_body_returns_422() -> None:
+# Нет поддерживаемого event_type → технически unknown и безопасно 200 ignored,
+# чтобы AdSet.pro не ретраил бессмысленный postback бесконечно.
+def test_postback_empty_body_returns_200_ignored() -> None:
     app = _make_app_with_secret("real-secret")
     client = TestClient(app)
     resp = client.post(
@@ -199,4 +200,5 @@ def test_postback_empty_body_returns_422() -> None:
         json={},
         headers={"X-Postback-Secret": "real-secret"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ignored"

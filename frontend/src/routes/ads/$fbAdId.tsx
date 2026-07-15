@@ -10,6 +10,7 @@ import { useMemo } from "react";
 
 import { AdDrawer } from "@/components/domain/ads/AdDrawer";
 import { useAds, useAdTimeline } from "@/lib/api/ads";
+import { useStatsToday } from "@/lib/api/stats";
 import type { AdSnapshot } from "@fb/shared";
 
 export const Route = createFileRoute("/ads/$fbAdId")({
@@ -19,6 +20,7 @@ export const Route = createFileRoute("/ads/$fbAdId")({
 function AdDetailRoute() {
   const router = useRouter();
   const { fbAdId } = useParams({ from: "/ads/$fbAdId" });
+  const trackerQ = useStatsToday();
 
   function close() {
     void router.navigate({ to: "/ads" });
@@ -77,6 +79,8 @@ function AdDetailRoute() {
       isLoading={isLoading}
       fbAdId={fbAdId}
       stateUnknown={stateUnknown}
+      trackerData={trackerQ.data?.tracker}
+      trackerDataLoading={trackerQ.isLoading}
     />
   );
 }

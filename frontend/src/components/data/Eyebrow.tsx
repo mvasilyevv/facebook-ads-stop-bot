@@ -32,7 +32,7 @@ export function Eyebrow({ num, children, className, style }: EyebrowProps) {
       {num ? (
         <>
           <span className="text-accent-muted">{num}</span>
-          <span className="text-bg-7">/</span>
+          <span className="text-bg-8">/</span>
         </>
       ) : null}
       {children}

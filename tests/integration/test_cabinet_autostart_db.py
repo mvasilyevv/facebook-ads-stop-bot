@@ -272,6 +272,7 @@ async def test_run_one_tick_dedup_same_day(
 # Фича выключена → ничего не делаем (disabled), задач нет, ключ не ставится
 @pytest.mark.asyncio
 async def test_run_one_tick_disabled(pg_engine, fake_redis_client, clean_autostart_tables) -> None:
+    await _set_owner_tag(pg_engine, "MV", campaign_ids=[])
     await write_autostart_config(
         pg_engine,
         {"enabled": False, "hour_utc": 6, "minute_utc": 0},
@@ -287,6 +288,7 @@ async def test_run_one_tick_disabled(pg_engine, fake_redis_client, clean_autosta
 async def test_run_one_tick_not_in_window(
     pg_engine, fake_redis_client, clean_autostart_tables
 ) -> None:
+    await _set_owner_tag(pg_engine, "MV", campaign_ids=[])
     await write_autostart_config(
         pg_engine,
         {"enabled": True, "hour_utc": 6, "minute_utc": 0},
@@ -302,6 +304,7 @@ async def test_run_one_tick_not_in_window(
 async def test_run_one_tick_no_campaigns(
     pg_engine, fake_redis_client, clean_autostart_tables
 ) -> None:
+    await _set_owner_tag(pg_engine, "MV", campaign_ids=[])
     await write_autostart_config(
         pg_engine,
         {"enabled": True, "hour_utc": 6, "minute_utc": 0},

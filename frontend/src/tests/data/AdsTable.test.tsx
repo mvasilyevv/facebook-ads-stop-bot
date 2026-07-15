@@ -132,6 +132,17 @@ describe("AdsTable", () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
+  it("Enter на строке открывает детали с клавиатуры", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    render(<AdsTable {...baseProps} rows={[makeAd("1")]} onOpen={onOpen} />);
+
+    screen.getByRole("row", { name: /Открыть подробности/ }).focus();
+    await user.keyboard("{Enter}");
+
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
   // Клик по чекбоксу → onToggleSelect, не всплывает к onOpen.
   it("клик по чекбоксу вызывает onToggleSelect (не onOpen)", async () => {
     const user = userEvent.setup();
@@ -145,16 +156,36 @@ describe("AdsTable", () => {
         onToggleSelect={onToggleSelect}
       />,
     );
-    await user.click(screen.getByRole("checkbox", { name: /Выбрать CR2/ }));
+    await user.click(screen.getByRole("button", { name: /Выбрать CR2/ }));
     expect(onToggleSelect).toHaveBeenCalledWith("1");
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  // Выбранная строка: checkbox aria-checked=true.
-  it("выбранная строка имеет aria-checked=true", () => {
+  it("Enter на кнопке выбора не открывает drawer", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const onToggleSelect = vi.fn();
+    render(
+      <AdsTable
+        {...baseProps}
+        rows={[makeAd("1")]}
+        onOpen={onOpen}
+        onToggleSelect={onToggleSelect}
+      />,
+    );
+
+    screen.getByRole("button", { name: /Выбрать CR2/ }).focus();
+    await user.keyboard("{Enter}");
+
+    expect(onToggleSelect).toHaveBeenCalledWith("1");
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  // Выбранная строка: toggle-кнопка aria-pressed=true.
+  it("выбранная строка имеет aria-pressed=true", () => {
     render(<AdsTable {...baseProps} rows={[makeAd("1")]} selected={new Set(["1"])} />);
-    expect(screen.getByRole("checkbox", { name: /Выбрать CR2/ })).toHaveAttribute(
-      "aria-checked",
+    expect(screen.getByRole("button", { name: /Выбрать CR2/ })).toHaveAttribute(
+      "aria-pressed",
       "true",
     );
   });

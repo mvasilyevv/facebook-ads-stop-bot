@@ -3,13 +3,13 @@
  *
  * Слева: mono-breadcrumb «FB Stop Bot / <раздел>».
  * Справа: search-кнопка с ⌘K → командная палитра, worker-chip (N/M, жёлтый при
- * down), разделитель, bell, MV avatar.
+ * down) и MV avatar.
  *
  * Brand-блок и collapse-toggle переехали в Sidebar (не дублируем здесь).
  */
 
 import { useRouterState } from "@tanstack/react-router";
-import { Search, Bell } from "lucide-react";
+import { Search, Menu } from "lucide-react";
 import { WorkerPulse } from "./WorkerPulse";
 import { useCommandPalette } from "@/stores/commandPalette";
 
@@ -20,6 +20,8 @@ const ROUTE_CRUMB: Record<string, string> = {
   "/campaigns": "Кампании",
   "/offers": "Офферы",
   "/history": "История",
+  "/stats": "Статистика",
+  "/remote-desktop": "Рабочий стол",
   "/settings": "Настройки",
 };
 
@@ -31,38 +33,50 @@ function getCrumb(pathname: string): string {
   return "—";
 }
 
-export function TopBar() {
+interface TopBarProps {
+  onOpenNavigation?: () => void;
+}
+
+export function TopBar({ onOpenNavigation }: TopBarProps) {
   const { location } = useRouterState();
   const crumb = getCrumb(location.pathname);
   const openPalette = useCommandPalette((s) => s.toggle);
 
   return (
-    <header className="col-start-2 col-end-3 row-start-1 row-end-2 z-[20] flex h-14 items-center justify-between border-b border-[var(--hairline)] bg-bg-0 px-8">
+    <header className="col-start-1 row-start-1 z-[20] flex h-14 min-w-0 items-center justify-between gap-3 border-b border-[var(--hairline)] bg-bg-0 px-3 sm:px-5 md:col-start-2 md:col-end-3 md:px-8">
       {/* Breadcrumb */}
-      <nav
-        aria-label="Текущий раздел"
-        className="flex items-center gap-2 whitespace-nowrap font-display text-[13px] text-bg-9"
-      >
-        <span aria-hidden="true">FB Stop Bot</span>
-        <span aria-hidden="true" className="text-bg-7">
-          /
-        </span>
-        <span className="text-bg-11">{crumb}</span>
-      </nav>
+      <div className="flex min-w-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={onOpenNavigation}
+          className="inline-flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-2)] border border-[var(--hairline-strong)] text-bg-10 hover:bg-bg-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent md:hidden"
+          aria-label="Открыть навигацию"
+        >
+          <Menu size={17} aria-hidden="true" />
+        </button>
+        <nav
+          aria-label="Текущий раздел"
+          className="flex min-w-0 items-center gap-2 whitespace-nowrap font-display text-[13px] text-bg-9"
+        >
+          <span aria-hidden="true" className="hidden sm:inline">FB Stop Bot</span>
+          <span aria-hidden="true" className="hidden text-bg-8 sm:inline">/</span>
+          <span className="truncate text-bg-11">{crumb}</span>
+        </nav>
+      </div>
 
       {/* Right cluster */}
-      <div className="flex items-center gap-4">
+      <div className="flex shrink-0 items-center gap-2 sm:gap-4">
         {/* Search → командная палитра (⌘K) */}
         <button
           type="button"
           onClick={openPalette}
-          className="flex items-center gap-2 rounded-[var(--radius-2)] border border-[var(--hairline-strong)] bg-bg-2 px-3 py-1.5 font-body text-[13px] text-bg-9 transition-colors hover:border-bg-7 hover:text-bg-10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          className="flex size-9 items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--hairline-strong)] bg-bg-2 font-body text-[13px] text-bg-9 transition-colors hover:border-bg-7 hover:text-bg-10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent lg:h-auto lg:w-auto lg:px-3 lg:py-1.5"
           aria-label="Открыть поиск (⌘K)"
           title="Поиск объявлений, офферов, разделов (⌘K)"
         >
           <Search size={14} aria-hidden="true" />
-          <span>Поиск</span>
-          <kbd className="ml-1.5 rounded-[var(--radius-1)] border border-[var(--hairline-strong)] px-1 font-display text-[11px] text-bg-8">
+          <span className="hidden lg:inline">Поиск</span>
+          <kbd className="ml-1.5 hidden rounded-[var(--radius-1)] border border-[var(--hairline-strong)] px-1 font-display text-[11px] text-bg-8 lg:inline">
             ⌘K
           </kbd>
         </button>
@@ -70,21 +84,10 @@ export function TopBar() {
         {/* Worker health chip */}
         <WorkerPulse />
 
-        <div className="h-[22px] w-px bg-[var(--hairline)]" aria-hidden="true" />
-
-        {/* Bell */}
-        <button
-          type="button"
-          aria-label="Уведомления"
-          className="inline-flex size-8 items-center justify-center rounded-[var(--radius-2)] text-bg-10 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-        >
-          <Bell size={17} aria-hidden="true" />
-        </button>
-
         {/* MV avatar */}
         <div
           aria-hidden="true"
-          className="flex size-[30px] items-center justify-center rounded-full border border-[var(--hairline-strong)] bg-bg-2 font-display text-[12px] text-bg-11"
+          className="hidden size-[30px] items-center justify-center rounded-full border border-[var(--hairline-strong)] bg-bg-2 font-display text-[12px] text-bg-11 sm:flex"
           title="Профиль"
         >
           MV

@@ -182,7 +182,7 @@ export function CountryMultiSelect({
                   {opt.flag}
                 </span>
                 <span className="flex-1 min-w-0 truncate">{opt.name}</span>
-                <span className="font-display text-[11px] text-bg-7 tabular-nums">{opt.code}</span>
+                <span className="font-display text-[11px] text-bg-8 tabular-nums">{opt.code}</span>
               </li>
             ))}
           </ul>

@@ -117,6 +117,7 @@ def _build_url_params(*, sub2: str, ad_name: str, cabinet_id: str) -> str:
         f"&sub5={{{{campaign.name}}}}"
         f"&sub6={{{{adset.name}}}}"
         f"&sub7={{{{ad.name}}}}"
+        f"&sub8={{{{ad.id}}}}"
     )
 
 

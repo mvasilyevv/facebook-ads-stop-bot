@@ -44,6 +44,7 @@ async def clean_e2e_tables(pg_engine):
             for t in (
                 "task_queue",
                 "alert_events",
+                "tracker_click_state",
                 "ad_metrics",
                 "ad_alert_state",
                 "fb_ads",
@@ -290,16 +291,21 @@ async def test_recovery_after_stop_resets_fsm_no_new_alert(
     # Сначала STOP
     await process_scan_rows(pg_engine, rows=[stop_row], scan_id=20)
 
-    # Депозиты теперь ТОЛЬКО из AdSet.pro → сидируем 2 ftd-события трекера для этого ад'а.
+    # Депозиты теперь ТОЛЬКО из AdSet.pro. Каждый подтверждённый депозит — это
+    # registration + FTD одного click_id; одиночный raw FTD восстановление не даёт.
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
                 """
-                INSERT INTO adsetpro_postback_events
-                    (received_at, click_id, fb_ad_id, event_type, revenue, currency,
-                     raw_json, signature_valid, is_duplicate)
-                VALUES (now(), :c1, :fb, 'ftd', 10, 'USD', '{}'::jsonb, true, false),
-                       (now(), :c2, :fb, 'ftd', 10, 'USD', '{}'::jsonb, true, false)
+                INSERT INTO tracker_click_state
+                    (source, click_id, ad_id, fb_ad_id, attribution_status,
+                     registration, ftd, confirmed_deposit,
+                     registration_at, ftd_at, confirmed_deposit_at, last_event_at)
+                SELECT 'adsetpro', clicks.click_id, a.id, a.fb_ad_id, 'matched_direct',
+                       TRUE, TRUE, TRUE, now(), now(), now(), now()
+                FROM fb_ads a
+                CROSS JOIN (VALUES (:c1), (:c2)) AS clicks(click_id)
+                WHERE a.fb_ad_id = :fb
                 """
             ),
             {"fb": fb_ad_id, "c1": f"{fb_ad_id}-d1", "c2": f"{fb_ad_id}-d2"},

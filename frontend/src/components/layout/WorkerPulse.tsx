@@ -32,7 +32,8 @@ export function WorkerPulse() {
           ? "var(--warning)"
           : "var(--danger)";
 
-  const label = total > 0 ? `${online}/${total} воркеров` : "воркеры";
+  const label = total > 0 ? `${online}/${total} воркеров` : "—/— воркеров";
+  const ariaLabel = total > 0 ? `Воркеры: ${label}` : "Воркеры: статус неизвестен";
   // Текст-цвет чипа: при наличии down — семантический, иначе bg-10.
   const textClass =
     down > 0 && total > 0
@@ -47,26 +48,30 @@ export function WorkerPulse() {
   );
 
   return (
-    <span
+    <div
       className="relative inline-flex"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
     >
-      <span
-        tabIndex={0}
-        role="button"
+      <button
+        type="button"
         aria-expanded={open}
-        aria-label={`Воркеры: ${label}`}
-        onFocus={() => setOpen(true)}
+        aria-controls="worker-status-popover"
+        aria-label={ariaLabel}
+        onClick={() => setOpen((value) => !value)}
         onBlur={() => setOpen(false)}
-        className={`inline-flex cursor-default items-center gap-1.5 border-b border-dotted border-bg-7 pb-px font-display text-[12px] tracking-[0.02em] ${textClass}`}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") setOpen(false);
+        }}
+        className={`inline-flex min-h-7 cursor-pointer items-center gap-1.5 border-b border-dotted border-bg-7 px-1 pb-px font-display text-[12px] tracking-[0.02em] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${textClass}`}
       >
         <PulseDot size={7} color={color} />
         <span className="tabular-nums whitespace-nowrap">{label}</span>
-      </span>
+      </button>
 
       {open && total > 0 && (
         <div
+          id="worker-status-popover"
           role="tooltip"
           className="absolute right-0 top-[calc(100%+8px)] z-[80] w-[248px] rounded-[var(--radius-3)] border border-[var(--hairline-strong)] bg-bg-3 p-3"
         >
@@ -111,6 +116,6 @@ export function WorkerPulse() {
           </div>
         </div>
       )}
-    </span>
+    </div>
   );
 }

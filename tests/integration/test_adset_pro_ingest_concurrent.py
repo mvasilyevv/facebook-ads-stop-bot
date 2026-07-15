@@ -6,16 +6,17 @@ HIGH #8 из backend_test_audit_round_8: core/adset_pro/ingest использу�
 двумя параллельными процессами не была покрыта тестами.
 
 Сценарии:
-1. 5 параллельных ingest_postback с одним click_id+event_type+received_at:
-   ровно один inserted=True, остальные inserted=False, COUNT(*) в БД = 1.
+1. 100 параллельных ingest_postback с одним click_id+event_type:
+   ровно один inserted=True, остальные audit-строки с
+   is_duplicate=TRUE, и ровно одна задача обработки.
 2. Тот же click_id, разные event_type → не является дублем → 2 записи в БД.
-3. Тот же click_id, received_at вне dedup-window (>24h назад) → новая запись.
+3. One-shot дедуп не истекает внутри retention: поздний повтор остаётся дублем.
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -32,6 +33,10 @@ async def clean_concurrent_events(pg_engine):
 
     async def _truncate():
         async with pg_engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM task_queue WHERE task_type='tracker_event_process'")
+            )
+            await conn.execute(text("DELETE FROM tracker_click_state"))
             await conn.execute(text("DELETE FROM adsetpro_postback_events"))
 
     await _truncate()
@@ -57,17 +62,19 @@ def _make_event(
     )
 
 
-# 5 параллельных ingest одного click_id → ровно 1 inserted=True, COUNT(*) == 1
+# 100 параллельных ingest одного click_id → 1 canonical + 99 audit rows.
 @pytest.mark.asyncio
 async def test_concurrent_same_click_id_dedup(pg_engine, clean_concurrent_events) -> None:
-    """5 параллельных ingest с одним click_id → ровно одна запись в БД."""
+    """100 concurrent deliveries create one fact, 99 audit rows and one task."""
     click_id = "concurrent-click-001"
     now = datetime(2026, 5, 28, 12, 0, 0, tzinfo=UTC)
-    event = _make_event(click_id=click_id, received_at=now)
+    events = [
+        _make_event(click_id=click_id, received_at=now + timedelta(microseconds=index))
+        for index in range(100)
+    ]
 
-    # Запускаем 5 ingest параллельно — race condition между SELECT и INSERT
     results = await asyncio.gather(
-        *[ingest_postback(pg_engine, event) for _ in range(5)],
+        *(ingest_postback(pg_engine, event) for event in events),
         return_exceptions=False,
     )
 
@@ -78,22 +85,30 @@ async def test_concurrent_same_click_id_dedup(pg_engine, clean_concurrent_events
     assert inserted_count == 1, (
         f"Ровно один ingest должен вставить запись, вставили: {inserted_count}"
     )
-    assert duplicate_count == 4, (
-        f"Остальные 4 должны быть is_duplicate=True, дублей: {duplicate_count}"
+    assert duplicate_count == 99, (
+        f"Остальные 99 должны быть is_duplicate=True, дублей: {duplicate_count}"
     )
 
-    # В БД ровно одна строка
     async with pg_engine.connect() as conn:
-        count = (
+        counts = (
             await conn.execute(
                 text(
-                    "SELECT COUNT(*) FROM adsetpro_postback_events "
+                    "SELECT COUNT(*), "
+                    "COUNT(*) FILTER (WHERE is_duplicate = FALSE), "
+                    "COUNT(*) FILTER (WHERE is_duplicate = TRUE) "
+                    "FROM adsetpro_postback_events "
                     "WHERE click_id = :cid AND event_type = 'ftd'"
                 ),
                 {"cid": click_id},
             )
-        ).scalar()
-    assert count == 1, f"В БД должна быть ровно 1 запись, нашли: {count}"
+        ).one()
+        task_count = (
+            await conn.execute(
+                text("SELECT COUNT(*) FROM task_queue WHERE task_type='tracker_event_process'")
+            )
+        ).scalar_one()
+    assert tuple(counts) == (100, 1, 99)
+    assert task_count == 1
 
 
 # Тот же click_id, разные event_type → обе записи вставляются
@@ -106,7 +121,7 @@ async def test_concurrent_different_event_types_not_deduped(
     now = datetime(2026, 5, 28, 12, 0, 0, tzinfo=UTC)
 
     ftd_event = _make_event(click_id=click_id, event_type="ftd", received_at=now)
-    redep_event = _make_event(click_id=click_id, event_type="redep", received_at=now)
+    redep_event = _make_event(click_id=click_id, event_type="registration", received_at=now)
 
     r1, r2 = await asyncio.gather(
         ingest_postback(pg_engine, ftd_event),
@@ -126,12 +141,12 @@ async def test_concurrent_different_event_types_not_deduped(
     assert count == 2, f"Два разных event_type должны дать 2 записи, нашли: {count}"
 
 
-# Тот же click_id, received_at за пределами dedup-window (>24h) → новый INSERT
+# One-shot event remains duplicate regardless of delivery delay within retention.
 @pytest.mark.asyncio
 async def test_ingest_outside_dedup_window_inserts_again(
     pg_engine, clean_concurrent_events
 ) -> None:
-    """Тот же click_id, но received_at >24h от первого → за пределами окна → не дубль."""
+    """Поздний повтор FTD — duplicate audit-row, не новая бизнес-конверсия."""
     click_id = "concurrent-click-003"
 
     # Первая запись — вчера
@@ -143,10 +158,8 @@ async def test_ingest_outside_dedup_window_inserts_again(
     today = datetime(2026, 5, 28, 13, 0, 0, tzinfo=UTC)
     r2 = await ingest_postback(pg_engine, _make_event(click_id=click_id, received_at=today))
 
-    # Должен быть вставлен, т.к. вышел за 24h-окно дедупа
-    assert r2.inserted is True, (
-        "За пределами 24h dedup-window тот же click_id должен вставиться заново"
-    )
+    assert r2.inserted is False
+    assert r2.is_duplicate is True
 
     async with pg_engine.connect() as conn:
         count = (
@@ -155,4 +168,4 @@ async def test_ingest_outside_dedup_window_inserts_again(
                 {"cid": click_id},
             )
         ).scalar()
-    assert count == 2, f"Два инсерта вне окна → 2 записи, нашли: {count}"
+    assert count == 2, f"business row + duplicate audit-row expected, got: {count}"

@@ -10,7 +10,16 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Search, LayoutDashboard, Table, Radar, Package, Clock, Settings } from "lucide-react";
+import {
+  Search,
+  LayoutDashboard,
+  Table,
+  Radar,
+  Package,
+  Clock,
+  MonitorUp,
+  Settings,
+} from "lucide-react";
 
 import { useCommandPalette } from "@/stores/commandPalette";
 import { useOffers } from "@/lib/api/offers";
@@ -33,6 +42,12 @@ const PAGES = [
   { to: "/campaigns", label: "Кампании", kw: "campaigns кампании скоуп owner tag отслеживаемые", icon: <Radar size={15} /> },
   { to: "/offers", label: "Офферы", kw: "offers офферы", icon: <Package size={15} /> },
   { to: "/history", label: "История", kw: "history история события", icon: <Clock size={15} /> },
+  {
+    to: "/remote-desktop",
+    label: "Рабочий стол",
+    kw: "remote desktop рабочий стол vision сервер",
+    icon: <MonitorUp size={15} />,
+  },
   { to: "/settings", label: "Настройки", kw: "settings настройки конфиг", icon: <Settings size={15} /> },
 ] as const;
 

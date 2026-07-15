@@ -207,6 +207,10 @@ class CampaignConfig(BaseModel):
     custom_event_type: str = "PURCHASE"
     special_ad_categories: list[str] = Field(default_factory=lambda: ["NONE"])
     destination_link: str
+    # Опциональный готовый query-template для url_tags. Когда не задан, builder
+    # формирует SOP-набор sub2..sub8. Кастомный шаблон остаётся opaque-строкой:
+    # builder лишь гарантирует наличие стабильного Meta ad id в sub8.
+    url_tags_template: str | None = Field(default=None, max_length=1024)
     cta: str = "PLAY_GAME"
     text_optimizations: str = "OPT_OUT"
     start_date: str | None = Field(default_factory=_default_start_date)  # YYYY-MM-DD = today+1

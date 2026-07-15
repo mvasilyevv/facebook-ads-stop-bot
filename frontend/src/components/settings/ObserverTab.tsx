@@ -122,14 +122,14 @@ export const ObserverTab: FC = () => {
   void updateMut;
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "60% 40%", gap: "var(--s-8)" }}>
+    <div className="grid gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(260px,2fr)]">
       {/* ── Левая колонка: параметры ── */}
       <div>
         <div
           className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8"
           style={{ marginBottom: 8, display: "inline-block" }}
         >
-          OBSERVER · ПАРАМЕТРЫ
+          МОНИТОРИНГ · ПАРАМЕТРЫ
         </div>
 
         <Field label="Включить сканирование" hint="Наблюдатель периодически сканирует объявления">
@@ -140,13 +140,16 @@ export const ObserverTab: FC = () => {
           />
         </Field>
 
-        <Field label="Auto-enable reco" hint="рекомендовать восстановление по метрикам">
+        <Field
+          label="Рекомендации на включение"
+          hint="Только предлагает восстановление; запуск всегда подтверждает оператор"
+        >
           <Switch
             checked={form.auto_enable_recommendations ?? false}
             onChange={() =>
               handleToggle("auto_enable_recommendations", !form.auto_enable_recommendations)
             }
-            label="Авто-включение рекомендаций"
+            label="Формировать рекомендации на включение"
           />
         </Field>
       </div>
@@ -172,7 +175,7 @@ export const ObserverTab: FC = () => {
               loading={restartMut.isPending}
               style={{ justifyContent: "flex-start" }}
             >
-              Перезапустить observer
+              Перезапустить мониторинг
             </Button>
 
           </div>

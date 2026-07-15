@@ -68,4 +68,6 @@ frontend-mini/
 
 ## Backend
 
-Proxy `/api` → `http://localhost:8100`. Auth — `X-API-Key` header (из TMA initData).
+Proxy `/api` → `http://localhost:8100`. Auth — подписанный TMA Bearer, полученный
+после серверной проверки Telegram initData. Общие write-endpoint'ы разрешены
+middleware только TMA-пользователю с актуальной ролью `owner`.

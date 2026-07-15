@@ -98,7 +98,7 @@ def test_stats_args_from_request_minimal() -> None:
     assert args == {"from": "2026-05-01", "to": "2026-05-10"}
 
 
-# С ad_id → добавляется filter ext_sub6=eq.
+# С ad_id → добавляется filter ext_sub8=eq.
 def test_stats_args_from_request_with_ad_id() -> None:
     args = AdsetProClient._stats_args_from_request(
         StatsQueryRequest(
@@ -107,7 +107,7 @@ def test_stats_args_from_request_with_ad_id() -> None:
             ad_id="23000000111",
         )
     )
-    assert args["filters"] == [{"field": "ext_sub6", "op": "eq", "value": "23000000111"}]
+    assert args["filters"] == [{"field": "ext_sub8", "op": "eq", "value": "23000000111"}]
 
 
 # extra_filters в форме {field,op,value} пробрасывается как есть; group_by → groups.
@@ -141,6 +141,45 @@ def test_extract_tool_result_structured_dict() -> None:
     rpc = {"result": {"structuredContent": {"data": [1, 2]}}}
     out = AdsetProClient._extract_tool_result(rpc, tool_name="x")
     assert out == {"data": [1, 2]}
+
+
+# get_metadata использует именованный list-ключ (metrics/groups/filters), а не data.
+def test_extract_tool_result_keeps_named_structured_list() -> None:
+    rpc = {
+        "result": {
+            "structuredContent": {"metrics": [{"key": "cpa_hold"}]},
+            "content": [{"type": "text", "text": '[{"key":"wrong-fallback"}]'}],
+        }
+    }
+    out = AdsetProClient._extract_tool_result(rpc, tool_name="get_metadata")
+    assert out == {"metrics": [{"key": "cpa_hold"}]}
+
+
+# Metadata-only structuredContent не должен скрывать реальные rows из content[].text.
+def test_extract_tool_result_prefers_text_rows_over_structured_metadata() -> None:
+    rpc = {
+        "result": {
+            "structuredContent": {"request_id": "req-1", "row_count": 2},
+            "content": [
+                {"type": "text", "text": "query_stats completed"},
+                {"type": "text", "text": '[{"click_id": "1"}, {"click_id": "2"}]'},
+            ],
+        }
+    }
+    out = AdsetProClient._extract_tool_result(rpc, tool_name="query_stats")
+    assert out == {"data": [{"click_id": "1"}, {"click_id": "2"}]}
+
+
+# Без валидного JSON-text старый structuredContent-формат сохраняется.
+def test_extract_tool_result_keeps_structured_fallback_without_json_text() -> None:
+    rpc = {
+        "result": {
+            "structuredContent": {"items": [{"id": "c1"}], "total": 1},
+            "content": [{"type": "text", "text": "done"}],
+        }
+    }
+    out = AdsetProClient._extract_tool_result(rpc, tool_name="list_campaigns")
+    assert out == {"items": [{"id": "c1"}], "total": 1}
 
 
 # Fallback: если structuredContent отсутствует, парсим content[0].text как JSON.

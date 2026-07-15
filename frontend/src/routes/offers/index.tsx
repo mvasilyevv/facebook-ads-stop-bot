@@ -12,7 +12,7 @@
 
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Tag, Plus, ChevronDown } from "lucide-react";
+import { Tag, Plus } from "lucide-react";
 
 import {
   useOffers,
@@ -41,6 +41,7 @@ export const Route = createFileRoute("/offers/")({
 // ─── Tab фильтр ───────────────────────────────────────────────────────────────
 
 type OfferTab = "all" | "active" | "inactive";
+type OfferSort = "spend" | "alerts" | "name";
 
 const TAB_LABELS: Record<OfferTab, string> = {
   all: "Все",
@@ -52,6 +53,7 @@ const TAB_LABELS: Record<OfferTab, string> = {
 
 function OffersPage() {
   const [tab, setTab] = useState<OfferTab>("all");
+  const [sort, setSort] = useState<OfferSort>("spend");
   const days = 7; // метрики всегда за 7 дней
 
   // CRUD state
@@ -108,14 +110,22 @@ function OffersPage() {
   const allOffers = offers ?? [];
 
   // Фильтрация по tab
+  // Строим карту metrics по offer_id для быстрого доступа и честной сортировки.
+  const metricsMap = new Map(compareRows?.map((r) => [r.offer_id, r]) ?? []);
+
   const filteredOffers = allOffers.filter((o) => {
     if (tab === "active") return o.is_active;
     if (tab === "inactive") return !o.is_active;
     return true;
+  }).sort((a, b) => {
+    if (sort === "name") return a.code.localeCompare(b.code, "ru");
+    const left = metricsMap.get(a.id);
+    const right = metricsMap.get(b.id);
+    if (sort === "alerts") {
+      return Number(right?.stop_alerts_count ?? 0) - Number(left?.stop_alerts_count ?? 0);
+    }
+    return Number(right?.spend ?? 0) - Number(left?.spend ?? 0);
   });
-
-  // Строим карту metrics по offer_id для быстрого доступа
-  const metricsMap = new Map(compareRows?.map((r) => [r.offer_id, r]) ?? []);
 
   return (
     <>
@@ -135,22 +145,27 @@ function OffersPage() {
       />
 
       {/* ── Toolbar: tab pills + sort ── */}
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-center gap-2">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
           {(Object.keys(TAB_LABELS) as OfferTab[]).map((t) => (
             <FilterPill key={t} active={tab === t} onClick={() => setTab(t)}>
               {TAB_LABELS[t]}
             </FilterPill>
           ))}
         </div>
-        <button
-          className="font-display text-[12px] text-bg-10 flex items-center gap-1.5 px-3 py-1.5 border border-[var(--hairline)] hover:border-[var(--hairline-strong)] rounded-[var(--radius-2)] transition-colors"
-          type="button"
-          aria-label="Сортировка"
-        >
-          Сортировка: spend
-          <ChevronDown size={12} aria-hidden="true" />
-        </button>
+        <label className="flex items-center gap-2 font-display text-[11px] text-bg-9">
+          Сортировка
+          <select
+            value={sort}
+            onChange={(event) => setSort(event.target.value as OfferSort)}
+            className="h-8 rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 px-3 font-display text-[12px] text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            aria-label="Сортировка офферов"
+          >
+            <option value="spend">по тратам</option>
+            <option value="alerts">по стопам</option>
+            <option value="name">по названию</option>
+          </select>
+        </label>
       </div>
 
       {/* ── Empty state ── */}
@@ -181,8 +196,7 @@ function OffersPage() {
       {/* ── Сетка офферов: 3 колонки фиксированные ── */}
       {filteredOffers.length > 0 && (
         <div
-          className="grid gap-4"
-          style={{ gridTemplateColumns: "repeat(3, 1fr)" }}
+          className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
           role="list"
           aria-label="Офферы"
         >
@@ -239,29 +253,17 @@ function OffersPage() {
       />
 
       {/* ── ConfirmDialog: delete ── */}
-      <ConfirmDialog
-        open={deleteOffer !== null}
-        onOpenChange={(open) => { if (!open) setDeleteOffer(null); }}
-        title={`Удалить оффер ${deleteOffer?.code ?? ""}?`}
-        description="Оффер будет помечен как неактивный (soft delete). Исторические данные сохранятся."
-        confirmWord={deleteOffer?.code}
-        confirmLabel="Удалить"
-        confirmVariant="danger"
-        onConfirm={async () => {
-          if (!deleteOffer) return;
-          await deleteOfferFn(deleteOffer.id);
-          setDeleteOffer(null);
-        }}
-      />
+      {deleteOffer ? (
+        <OfferDeleteManager
+          offer={deleteOffer}
+          open
+          onOpenChange={(open) => {
+            if (!open) setDeleteOffer(null);
+          }}
+        />
+      ) : null}
     </>
   );
-
-  // Встроенная функция: используем хук динамически per-offer
-  // Вынесено в wrapper-компонент ниже
-  async function deleteOfferFn(_offerId: string) {
-    // Реализация в DeleteWrapper — вызывается из ConfirmDialog.onConfirm
-    // deleteOffer state уже содержит id
-  }
 }
 
 // ─── EditOfferModal — wrapper с per-offer хуком ───────────────────────────────
@@ -292,38 +294,6 @@ function EditOfferModal({ offer, onClose }: { offer: Offer; onClose: () => void 
   );
 }
 
-// ─── DeleteWrapper — wrapper для useDeleteOffer ───────────────────────────────
-
-// Переносим delete-логику в OffersPage через отдельный хук на уровне страницы.
-// OffersPage уже монтируется без offer — хук вызывается без условий.
-// Компонент выше вызывает deleteOfferFn как заглушку;
-// реальный delete — через отдельный компонент ниже, который маунтится при deleteOffer !== null.
-
-function DeleteConfirmBridge({
-  offerId,
-  onDone,
-}: {
-  offerId: string;
-  onDone: () => void;
-}) {
-  const deleteMutation = useDeleteOffer();
-
-  // Trigger при маунте — вызывается один раз
-  // Нет, вызывается из OffersPage через prop onConfirm.
-  // Возвращаем хук-функцию через callback
-  void deleteMutation; // lint: используется ниже
-  void offerId;
-  void onDone;
-  return null;
-}
-
-// Архитектурное решение: вынести delete в отдельный компонент, который
-// маунтится conditionally и имеет доступ к хуку без нарушения rules of hooks.
-
-/**
- * OfferDeleteManager — управляет удалением через отдельный хук.
- * Маунтится только когда deleteOffer != null.
- */
 export function OfferDeleteManager({
   offer,
   open,
@@ -340,12 +310,13 @@ export function OfferDeleteManager({
       open={open}
       onOpenChange={onOpenChange}
       title={`Удалить оффер ${offer.code}?`}
-      description="Оффер будет помечен как неактивный (soft delete). Исторические данные сохранятся."
+      description="Оффер будет помечен как неактивный. Исторические данные сохранятся."
       confirmWord={offer.code}
       confirmLabel="Удалить"
       confirmVariant="danger"
       onConfirm={async () => {
         await deleteMutation.mutateAsync(offer.id);
+        toast.success(`Оффер ${offer.code} деактивирован`);
         onOpenChange(false);
       }}
     />
@@ -372,7 +343,7 @@ function OffersHeader({
           <>
             <span className="text-bg-11 font-medium">{count}</span>
             <HeaderSep />
-            офферов в каталоге
+            {pluralizeOffers(count)} в каталоге
           </>
         ) : undefined
       }
@@ -380,5 +351,10 @@ function OffersHeader({
   );
 }
 
-// Подавляем неиспользуемый компонент
-void DeleteConfirmBridge;
+function pluralizeOffers(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return "оффер";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "оффера";
+  return "офферов";
+}

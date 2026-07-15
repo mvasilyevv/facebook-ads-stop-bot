@@ -44,6 +44,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/system-readyz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * System Readyz
+         * @description Готовность бизнес-контура auto-stop.
+         *
+         *     В отличие от ``/readyz`` проверяет не только инфраструктуру API, но и все
+         *     ожидаемые heartbeat, живой runtime observer, Meta API probe и глобальный
+         *     флаг сканирования. Используется оператором и post-deploy проверками; k8s
+         *     liveness/readiness намеренно остаются независимыми от состояния воркеров.
+         */
+        get: operations["system_readyz_system_readyz_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
@@ -71,12 +96,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
-         * Принять postback от AdSet.pro
-         * @description Принять postback, записать в БД с дедупом. 202 ACCEPTED + меткой результата.
+         * Receive AdSet.pro GET postback
+         * @description AdSet.pro-compatible GET endpoint. The raw URL is never logged here.
          */
+        get: operations["receive_adsetpro_get_api_v1_postback_adsetpro_get"];
+        put?: never;
+        /** Receive legacy POST AdSet.pro postback */
         post: operations["receive_adsetpro_postback_api_v1_postback_adsetpro_post"];
         delete?: never;
         options?: never;
@@ -98,7 +124,9 @@ export interface paths {
          * @description Снуз одного объявления: ad_alert_state.snoozed_until = now + minutes.
          *
          *     404 — объявления нет в fb_ads. 409 — у ad нет строки состояния (нечего снузить).
-         *     Зеркало tma_snooze_ad (apps/api/routers/v1/tma.py).
+         *     422 — ад в normal (нет активного инцидента): снуз задуман «не спамить алертами по
+         *     активному инциденту», а не «выключить авто-стоп». Снуз на normal-аде заглушил бы
+         *     будущий STOP до конца окна — money-дыра (MID-2). Зеркало tma_snooze_ad.
          */
         post: operations["snooze_ad_api_dashboard_ads__fb_ad_id__snooze_post"];
         delete?: never;
@@ -199,6 +227,54 @@ export interface paths {
          *     Если AI-провайдеры не настроены → 503.
          */
         post: operations["ai_analyze_api_ai_analyze_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ai/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ai Chat
+         * @description Ответ ассистента на вопрос из веб-виджета (с tool-use, read-only канал).
+         *
+         *     429 — превышен лимит; 503 — AI-провайдеры не настроены.
+         */
+        post: operations["ai_chat_api_ai_chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/ai/pulse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ai Pulse
+         * @description Почасовой пульс кабинета для веб-виджета.
+         *
+         *     Виджет опрашивает раз в час (пока вкладка открыта). Двухступенчатый контракт
+         *     против шума и лишних токенов: детерминированный pre-check сигналов (стопы /
+         *     упавшие задачи / шквал warnings за прошедший час) — если пусто, AI НЕ
+         *     вызывается и возвращается important=false (виджет молчит). Результат
+         *     кэшируется на календарный час — повторные опросы и вторые вкладки бесплатны.
+         */
+        get: operations["ai_pulse_api_ai_pulse_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -724,7 +800,8 @@ export interface paths {
          *
          *     Партиционный фильтр по cycle_ts применяется в WHERE (partition pruning).
          *     Если fb_ad_id не передан — limit 10000 (защита от мегабайтных ответов).
-         *     Если fb_ad_id передан — без limit (нас интересует история одного ad'а).
+         *     Если fb_ad_id передан — cap 50000 (история одного ad'а может быть длинной,
+         *     но не безграничной — LOW аудита 02.07).
          *     ORDER BY cycle_ts ASC.
          */
         get: operations["get_spend_history_api_dashboard_spend_history_get"];
@@ -747,8 +824,16 @@ export interface paths {
          * Get Chart Data
          * @description Бакетированный график для DashboardPage.
          *
-         *     Бакет = `date_trunc(bucket, cycle_ts)`. SUM по spend/impressions/clicks/leads/
-         *     registrations/deposits + COUNT DISTINCT ad_id для active_ads.
+         *     bucket=day: последний snapshot на (день × ad) = суточный итог (кумулятив
+         *     сбрасывается посуточно) → SUM по дню. bucket=hour (аудит 2026-07-12, H-5):
+         *     последний snapshot в часе — это кумулятив С НАЧАЛА СУТОК кабинета, не «за час»;
+         *     поэтому считаем per-ad дельты через hourly_deltas (тот же движок, что /stats/today),
+         *     иначе почасовой график рисовал нарастающий кумулятив.
+         *
+         *     ВАЖНО (ревью #4): bucket=hour осмыслен только с cabinet_day=true — предусловие
+         *     hourly_deltas «окно внутри одних суток кабинета» (prev=0 на 00:00). Оба фронта
+         *     зовут именно так. На скользящем окне (cabinet_day=false) первый час окна даст
+         *     спайк (полный кумулятив), а сброс на границе суток — клэмп в 0.
          *
          *     cabinet_day=true (Волна 2/E): окно от начала текущих суток кабинета (TZ аккаунта),
          *     чтобы график спенда начинался с нуля в полночь кабинета, а не от скользящего 24ч.
@@ -869,7 +954,8 @@ export interface paths {
          *
          *     Переводит status в 'cancelled'.
          *     404 если задача не найдена или не disable.
-         *     409 если задача уже в терминальном статусе (succeeded/cancelled).
+         *     409 если задача в терминальном статусе (succeeded/cancelled) или исполняется
+         *     прямо сейчас (running) — отмена running-задачи ломала FSM-sync (H-7).
          */
         delete: operations["cancel_disable_task_api_dashboard_disable_tasks__task_id__delete"];
         options?: never;
@@ -914,12 +1000,7 @@ export interface paths {
         put?: never;
         /**
          * Confirm Enable Recommendation
-         * @description Создать enable-задачу из рекомендации и привязать её.
-         *
-         *     SELECT FOR UPDATE защищает от двойного подтверждения.
-         *     409 если рекомендация уже promoted (promoted_to_task_id IS NOT NULL).
-         *     404 если рекомендация не найдена.
-         *     Атомарно: INSERT task_queue + UPDATE enable_recommendations.promoted_to_task_id.
+         * @description Revalidate рекомендацию и атомарно создать activate_ad задачу.
          */
         post: operations["confirm_enable_recommendation_api_dashboard_enable_recommendations__rec_id__enable_post"];
         delete?: never;
@@ -1453,6 +1534,9 @@ export interface paths {
          * @description Обновляет все поля ObserverConfig singleton.
          *
          *     Валидация: default_interval_seconds от 30 до 600 (через Pydantic Field).
+         *     Гейт «нечего сканировать» (аудит 2026-07-12, C-1): PUT с is_scanning_enabled=true
+         *     проходит ту же проверку, что PATCH /scanning — иначе full-PUT включал скан
+         *     в обход гейта при пустом allowlist («всё зелёное, авто-стоп не работает»).
          */
         put: operations["put_observer_settings_api_settings_observer_put"];
         post?: never;
@@ -1485,6 +1569,29 @@ export interface paths {
          *     «Включить», а заполнять кампании пользователь идёт на страницу «Кампании».
          */
         patch: operations["patch_observer_scanning_api_settings_observer_scanning_patch"];
+        trace?: never;
+    };
+    "/api/settings/observer/owner-tag": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Observer Owner Tag
+         * @description Меняет только owner_campaign_tag, не трогая остальные поля.
+         *
+         *     Точечный PATCH против лост-апдейта (аудит 2026-07-12, C-1): фронты сохраняли тег
+         *     через full-PUT из закэшированного состояния и молча откатывали is_scanning_enabled.
+         */
+        patch: operations["patch_observer_owner_tag_api_settings_observer_owner_tag_patch"];
         trace?: never;
     };
     "/api/settings/observer/auto-enable": {
@@ -1521,6 +1628,8 @@ export interface paths {
          *     Фильтр по owner_campaign_tag (word-boundary, через campaign_matches_owner).
          *     selected — входит ли кампания в текущий allowlist (cfg.campaign_ids).
          *     Кампании без Meta fb_campaign_id пропускаются — их нельзя заскоупить по campaign.id.
+         *     Свежесть: по умолчанию кампании с датой в имени старше CAMPAIGN_LIST_HORIZON_DAYS
+         *     скрываются (если не выбраны) — see include_stale.
          */
         get: operations["list_observer_campaigns_api_settings_observer_campaigns_get"];
         put?: never;
@@ -1949,6 +2058,8 @@ export interface paths {
          * @description Снуз: ad_alert_state.snoozed_until = now + minutes.
          *
          *     404 — объявления нет. 409 — у ad нет строки состояния (нечего снузить).
+         *     422 — ад в normal (нет активного инцидента): снуз на normal-аде заглушил бы
+         *     будущий STOP до конца окна — money-дыра (MID-2). Зеркало dashboard snooze_ad.
          */
         post: operations["tma_snooze_ad_api_tma_ads__fb_ad_id__snooze_post"];
         delete?: never;
@@ -2151,6 +2262,42 @@ export interface components {
             generated_at: string;
             /** Model */
             model: string;
+        };
+        /**
+         * AIChatRequest
+         * @description Запрос чата: история (последнее сообщение — вопрос пользователя).
+         */
+        AIChatRequest: {
+            /** Messages */
+            messages: components["schemas"]["ChatMessageIn"][];
+        };
+        /**
+         * AIChatResponse
+         * @description Ответ ассистента.
+         */
+        AIChatResponse: {
+            /** Answer */
+            answer: string;
+            /** Tool Calls */
+            tool_calls?: components["schemas"]["ToolCallOut"][];
+            /** Generated At */
+            generated_at: string;
+            /** Model */
+            model: string;
+        };
+        /**
+         * AIPulseResponse
+         * @description Почасовой пульс для веб-виджета.
+         *
+         *     important=False → за окно ничего значимого, виджет молчит (text = null).
+         */
+        AIPulseResponse: {
+            /** Important */
+            important: boolean;
+            /** Text */
+            text?: string | null;
+            /** Generated At */
+            generated_at: string;
         };
         /**
          * Account
@@ -2365,34 +2512,6 @@ export interface components {
             ad_count: number;
         };
         /**
-         * AdsetProPostbackBody
-         * @description Pydantic-обёртка над PostbackEvent для FastAPI body validation.
-         *
-         *     PostbackEvent — frozen dataclass, FastAPI его не валидирует напрямую, поэтому
-         *     держим pydantic-модель отдельно. Все «лишние» поля попадут в raw через
-         *     model_dump(), чтобы ничего не потерять.
-         */
-        AdsetProPostbackBody: {
-            /** Click Id */
-            click_id: string;
-            /** Fb Ad Id */
-            fb_ad_id?: string | null;
-            /** Event Type */
-            event_type: string;
-            /**
-             * Revenue
-             * @default 0
-             */
-            revenue: number | string;
-            /**
-             * Currency
-             * @default USD
-             */
-            currency: string;
-        } & {
-            [key: string]: unknown;
-        };
-        /**
          * AlertEventOut
          * @description Одна запись alert_events с JOIN'ом по fb_ads/offers.
          */
@@ -2520,6 +2639,8 @@ export interface components {
         Body_upload_concepts_api_tools_campaigns_upload_post: {
             /** Files */
             files: string[];
+            /** Upload Id */
+            upload_id?: string | null;
         };
         /**
          * BreakdownRowOut
@@ -2828,6 +2949,8 @@ export interface components {
             special_ad_categories?: string[];
             /** Destination Link */
             destination_link: string;
+            /** Url Tags Template */
+            url_tags_template?: string | null;
             /**
              * Cta
              * @default PLAY_GAME
@@ -3191,6 +3314,19 @@ export interface components {
             deposits?: number | null;
             /** Active Ads */
             active_ads?: number | null;
+        };
+        /**
+         * ChatMessageIn
+         * @description Одно сообщение истории (историю держит клиент и шлёт с каждым запросом).
+         */
+        ChatMessageIn: {
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant";
+            /** Content */
+            content: string;
         };
         /**
          * CleanupOut
@@ -4402,6 +4538,20 @@ export interface components {
             path: string;
         };
         /**
+         * OwnerTagPatchRequest
+         * @description Тело PATCH /settings/observer/owner-tag — точечное обновление тега.
+         *
+         *     Отдельный PATCH против лост-апдейта (аудит 2026-07-12, C-1): full-PUT из
+         *     закэшированного клиентского состояния молча перезаписывал is_scanning_enabled.
+         */
+        OwnerTagPatchRequest: {
+            /**
+             * Owner Campaign Tag
+             * @description Теги владельца кампаний для owner-scoping. Один или несколько через запятую. Пусто/null — фильтр выключен.
+             */
+            owner_campaign_tag?: string | null;
+        };
+        /**
          * PresetIn
          * @description Тело создания/обновления пресета (стабильный конфиг залива).
          */
@@ -4802,6 +4952,36 @@ export interface components {
             breakdown?: components["schemas"]["BreakdownRowOut"][] | null;
         };
         /**
+         * SystemReadinessResponse
+         * @description Строгая готовность money-критичного контура, не k8s probe.
+         */
+        SystemReadinessResponse: {
+            /** Ready */
+            ready: boolean;
+            /** Infrastructure Ready */
+            infrastructure_ready: boolean;
+            /** Overall */
+            overall?: ("HEALTHY" | "DEGRADED" | "CRITICAL") | null;
+            /**
+             * Workers Online
+             * @default 0
+             */
+            workers_online: number;
+            /**
+             * Workers Expected
+             * @default 0
+             */
+            workers_expected: number;
+            /** Observer Runtime Status */
+            observer_runtime_status?: string | null;
+            /** Scanning Enabled */
+            scanning_enabled?: boolean | null;
+            /** Meta Api Channel Status */
+            meta_api_channel_status?: ("ONLINE" | "DEGRADED" | "UNKNOWN") | null;
+            /** Blockers */
+            blockers?: string[];
+        };
+        /**
          * Targeting
          * @description Таргет с авто-добавлением Антарктиды (+AQ) по SOP.
          */
@@ -5141,6 +5321,16 @@ export interface components {
             snoozed_until: string;
         };
         /**
+         * ToolCallOut
+         * @description След вызова инструмента — фронт показывает «что ассистент проверял».
+         */
+        ToolCallOut: {
+            /** Name */
+            name: string;
+            /** Error */
+            error?: string | null;
+        };
+        /**
          * TopCampaignOut
          * @description Строка топа кампаний по spend за окно ?days.
          */
@@ -5185,6 +5375,39 @@ export interface components {
             totals?: components["schemas"]["TrackerTotalsOut"];
             /** Series Daily */
             series_daily?: components["schemas"]["TrackerDailyPointOut"][];
+            /**
+             * Unmatched Events
+             * @default 0
+             */
+            unmatched_events: number;
+            /** Last Event At */
+            last_event_at?: string | null;
+            /** Processing Lag Ms */
+            processing_lag_ms?: number | null;
+            /**
+             * Data Quality
+             * @default unknown
+             */
+            data_quality: string;
+            /**
+             * Backlog
+             * @default 0
+             */
+            backlog: number;
+            /**
+             * Duplicate Events
+             * @default 0
+             */
+            duplicate_events: number;
+            /**
+             * Unsupported Events
+             * @default 0
+             */
+            unsupported_events: number;
+            /** Reconciliation Drift */
+            reconciliation_drift?: number | null;
+            /** Materialization Drift */
+            materialization_drift?: number | null;
         };
         /**
          * TrackerDailyPointOut
@@ -5207,10 +5430,25 @@ export interface components {
              */
             registrations: number;
             /**
+             * Ftds
+             * @default 0
+             */
+            ftds: number;
+            /**
              * Deposits
              * @default 0
              */
             deposits: number;
+            /**
+             * Confirmed Deposits
+             * @default 0
+             */
+            confirmed_deposits: number;
+            /**
+             * Redeposits
+             * @default 0
+             */
+            redeposits: number;
             /** Revenue */
             revenue?: string | null;
         };
@@ -5230,10 +5468,25 @@ export interface components {
              */
             registrations: number;
             /**
+             * Ftds
+             * @default 0
+             */
+            ftds: number;
+            /**
              * Deposits
              * @default 0
              */
             deposits: number;
+            /**
+             * Confirmed Deposits
+             * @default 0
+             */
+            confirmed_deposits: number;
+            /**
+             * Redeposits
+             * @default 0
+             */
+            redeposits: number;
             /** Revenue */
             revenue?: string | null;
             /** Roi Pct */
@@ -5250,6 +5503,8 @@ export interface components {
             upload_dir: string;
             /** Concepts */
             concepts: components["schemas"]["UploadedConceptOut"][];
+            /** Added Refs */
+            added_refs: string[];
             /** Total Bytes */
             total_bytes: number;
         };
@@ -5473,6 +5728,35 @@ export interface operations {
             };
         };
     };
+    system_readyz_system_readyz_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemReadinessResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemReadinessResponse"];
+                };
+            };
+        };
+    };
     metrics_metrics_get: {
         parameters: {
             query?: never;
@@ -5493,6 +5777,37 @@ export interface operations {
             };
         };
     };
+    receive_adsetpro_get_api_v1_postback_adsetpro_get: {
+        parameters: {
+            query?: {
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     receive_adsetpro_postback_api_v1_postback_adsetpro_post: {
         parameters: {
             query?: never;
@@ -5504,19 +5819,19 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AdsetProPostbackBody"];
+                "application/json": {
+                    [key: string]: unknown;
+                };
             };
         };
         responses: {
             /** @description Successful Response */
-            202: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -5702,6 +6017,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ai_chat_api_ai_chat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AIChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AIChatResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ai_pulse_api_ai_pulse_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AIPulseResponse"];
                 };
             };
         };
@@ -7574,6 +7942,39 @@ export interface operations {
             };
         };
     };
+    patch_observer_owner_tag_api_settings_observer_owner_tag_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OwnerTagPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObserverSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     patch_observer_auto_enable_api_settings_observer_auto_enable_patch: {
         parameters: {
             query?: never;
@@ -7609,7 +8010,10 @@ export interface operations {
     };
     list_observer_campaigns_api_settings_observer_campaigns_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Показать и старые кампании (дата в имени старше 14 дней). По умолчанию старьё скрыто, кроме выбранных в allowlist. */
+                include_stale?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7623,6 +8027,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CampaignOption"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -7665,6 +8078,8 @@ export interface operations {
             query?: {
                 /** @description L10: числовой ID кабинета — резолв из вкладки этого кабинета. Пусто → текущая primary-вкладка (legacy). */
                 ad_account_id?: string | null;
+                /** @description Показать и старые кампании (как в GET /campaigns). */
+                include_stale?: boolean;
             };
             header?: never;
             path?: never;

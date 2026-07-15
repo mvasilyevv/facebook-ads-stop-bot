@@ -54,7 +54,8 @@ async def test_totals_no_group(monkeypatch):
     out = await GetTrackerStatsTool().run(_ctx(), {"days": 7})
     assert "итого" in out
     assert "Клики: 100" in out and "Реги: 5" in out
-    assert "Депозиты (FTD): 2" in out and "$30.00" in out
+    assert "Provider FTD: 2" in out and "$30.00" in out
+    assert "локально подтверждённый депозит" in out
     assert fake.captured[0] == "query_stats"
     assert "groups" not in fake.captured[1]  # без group_by не шлём groups
 

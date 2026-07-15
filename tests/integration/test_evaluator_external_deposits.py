@@ -18,6 +18,7 @@ from sqlalchemy import text
 
 from core.adset_pro import PostbackEvent
 from core.adset_pro.ingest import ingest_postback
+from core.adset_pro.processing import claim_event_tasks, process_event_task
 from core.adset_pro.queries import load_external_deposits_batch
 from core.domain import AlertStage
 from core.rules.evaluator import evaluate_stop_rules
@@ -31,6 +32,10 @@ async def clean_adsetpro_events(pg_engine):
 
     async def _truncate():
         async with pg_engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM task_queue WHERE task_type='tracker_event_process'")
+            )
+            await conn.execute(text("DELETE FROM tracker_click_state"))
             await conn.execute(text("DELETE FROM adsetpro_postback_events"))
 
     await _truncate()
@@ -107,11 +112,13 @@ async def test_ad_without_deposits_hits_stop(pg_engine, fb_ad_fixture, clean_ads
     assert "spend_no_dep_range" in evaluation.stop_rule_codes
 
 
-# Сценарий: тот же ад, но AdSet.pro прислал FTD-постбэк → STOP не срабатывает
+# Сценарий: тот же ад, но AdSet.pro прислал registration+FTD одного click_id → STOP не срабатывает
 # (external_deposits >= 1 переводит в deposit_stage, и при spend=100% всё ещё
 # далеко от stop_with_dep диапазона 70-90%).
 @pytest.mark.asyncio
-async def test_external_ftd_protects_from_stop(pg_engine, fb_ad_fixture, clean_adsetpro_events):
+async def test_external_confirmed_pair_protects_from_stop(
+    pg_engine, fb_ad_fixture, clean_adsetpro_events
+):
     fb_ad_id = await _get_fb_ad_id_string(pg_engine, fb_ad_fixture.ad_id)
     # CPA=$50. CPR=$3 — в норме (cpr_stop=$8). spend=$20 = 40% от CPA:
     # - spend_no_dep_range effective = 40-56% от CPA → STOP при 40%.
@@ -134,8 +141,8 @@ async def test_external_ftd_protects_from_stop(pg_engine, fb_ad_fixture, clean_a
     assert ev_no_ext.stage in (AlertStage.WARNING, AlertStage.STOP)
     assert "spend_no_dep_range" in (ev_no_ext.warning_rule_codes + ev_no_ext.stop_rule_codes)
 
-    # Шаг 2: пишем FTD-постбэк в БД и подгружаем external_deposits batch'ом.
-    event = PostbackEvent(
+    # Шаг 2: один FTD без registration не должен защищать от STOP.
+    ftd = PostbackEvent(
         click_id="protect-1",
         fb_ad_id=fb_ad_id,
         event_type="ftd",
@@ -144,9 +151,26 @@ async def test_external_ftd_protects_from_stop(pg_engine, fb_ad_fixture, clean_a
         received_at=datetime.now(UTC),
         raw={},
     )
-    ingest = await ingest_postback(pg_engine, event)
+    ingest = await ingest_postback(pg_engine, ftd)
     assert ingest.inserted is True
+    task_id = (await claim_event_tasks(pg_engine))[0]
+    assert (await process_event_task(pg_engine, task_id=task_id)).processed is True
 
+    counts = await load_external_deposits_batch(pg_engine, fb_ad_ids=[fb_ad_id])
+    assert counts.get(fb_ad_id, 0) == 0
+
+    registration = PostbackEvent(
+        click_id="protect-1",
+        fb_ad_id=fb_ad_id,
+        event_type="registration",
+        revenue=Decimal("0"),
+        currency="USD",
+        received_at=datetime.now(UTC),
+        raw={},
+    )
+    await ingest_postback(pg_engine, registration)
+    task_id = (await claim_event_tasks(pg_engine))[0]
+    assert (await process_event_task(pg_engine, task_id=task_id)).processed is True
     counts = await load_external_deposits_batch(pg_engine, fb_ad_ids=[fb_ad_id])
     assert counts.get(fb_ad_id, 0) >= 1
 

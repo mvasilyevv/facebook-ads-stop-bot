@@ -125,7 +125,7 @@ export function FilterBar({
             ref={searchRef}
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Поиск по названию / ad_id / offer"
+            placeholder="Поиск по названию / ID объявления / офферу"
             aria-label="Поиск объявлений"
             className={cn(
               "w-full h-8 bg-bg-2 border border-[var(--hairline)] rounded-[var(--radius-2)]",
@@ -172,7 +172,7 @@ export function FilterBar({
 
         {/* Offer dropdown */}
         <CheckDropdown
-          label="offer"
+          label="оффер"
           ariaLabel="Фильтр по офферу"
           emptyText="Нет офферов"
           options={offerOptions}
@@ -230,7 +230,7 @@ export function FilterBar({
           ))}
           {[...selectedOffers].map((o) => (
             <FilterChip key={`of-${o}`} onRemove={() => onOfferToggle(o)}>
-              offer = {o}
+              оффер = {o}
             </FilterChip>
           ))}
           {[...selectedAccounts].map((a) => (
@@ -401,7 +401,7 @@ function FilterChip({
         type="button"
         aria-label="Удалить фильтр"
         onClick={onRemove}
-        className="inline-flex items-center justify-center size-[16px] text-bg-9 hover:text-bg-11 transition-colors"
+        className="inline-flex size-6 items-center justify-center rounded-[var(--radius-1)] text-bg-9 transition-colors hover:bg-bg-3 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
       >
         <X size={11} aria-hidden="true" />
       </button>

@@ -664,7 +664,9 @@ async def check_meta_api_channel(
         # и тишина в логах выглядела как зависание воркера.
         logger.info("meta probe: сканирование выключено — канал авто-стопа не проверяется")
         payload = {
-            "healthy": False,
+            # None = probe намеренно не выполнялся. False зарезервирован для
+            # подтверждённого отказа, иначе health_details показывал DEGRADED на паузе.
+            "healthy": None,
             "probe_performed": False,
             "probe_ok": False,
             "probe_status_code": 0,

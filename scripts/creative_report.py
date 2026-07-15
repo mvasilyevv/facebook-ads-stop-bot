@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Creative Report — замыкает петлю «хук → креатив → депозит».
 
-Джойнит Creative Registry (docs/creatives/*.yaml) с трекером
-(adsetpro_postback_events: sub3=creative_code, sub6=угол) и считает:
+Джойнит Creative Registry (docs/creatives/*.yaml) с подтверждённой click-state
+проекцией трекера (event tags: sub3=creative_code, sub6=угол) и считает:
   - leaderboard креативов по депозитам/revenue;
   - ranked хуки (депозиты раскидываются по visual_hooks/text_hook креатива);
   - ranked англы (по sub6).
@@ -27,7 +27,6 @@ from urllib.parse import unquote_plus
 
 from sqlalchemy import text
 
-from core.adset_pro.queries import DEPOSIT_EVENT_TYPES
 from core.creatives.registry import DEFAULT_REGISTRY_DIR, Registry, load_registry
 from core.db import get_engine
 
@@ -37,25 +36,37 @@ def _norm(value: object) -> str:
     return unquote_plus(unquote_plus(str(value or ""))).strip().lower()
 
 
-async def _load_deposits(days: int) -> list[dict]:
-    """Депозиты per (sub3, sub6) из трекера за период. Пустой список, если данных нет."""
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+async def _load_deposits(days: int, *, engine=None, now: datetime | None = None) -> list[dict]:
+    """Confirmed registration+FTD clicks per creative tags for the period."""
+    since = (now or datetime.now(timezone.utc)) - timedelta(days=days)
+    event_floor = since - timedelta(days=2)
     sql = text(
         """
-        SELECT raw_json->>'sub3' AS sub3,
-               raw_json->>'sub6' AS sub6,
-               COUNT(*)          AS deposits,
-               COALESCE(SUM(revenue), 0) AS revenue
-        FROM adsetpro_postback_events
-        WHERE is_duplicate = false
-          AND received_at >= :since
-          AND event_type = ANY(:dep_types)
+        SELECT tags.sub3,
+               tags.sub6,
+               COUNT(*) AS deposits,
+               COALESCE(SUM(s.ftd_revenue), 0) AS revenue
+        FROM tracker_click_state s
+        JOIN LATERAL (
+            SELECT e.raw_json->>'sub3' AS sub3,
+                   e.raw_json->>'sub6' AS sub6
+            FROM adsetpro_postback_events e
+            WHERE e.source = s.source
+              AND e.click_id = s.click_id
+              AND e.is_duplicate = false
+              AND e.attribution_status <> 'ambiguous'
+              AND e.received_at >= :event_floor
+            ORDER BY e.received_at DESC, e.id DESC
+            LIMIT 1
+        ) tags ON true
+        WHERE s.confirmed_deposit = true
+          AND s.confirmed_deposit_at >= :since
         GROUP BY 1, 2
         """
     )
-    engine = get_engine()
-    async with engine.begin() as conn:
-        result = await conn.execute(sql, {"since": since, "dep_types": list(DEPOSIT_EVENT_TYPES)})
+    query_engine = engine or get_engine()
+    async with query_engine.begin() as conn:
+        result = await conn.execute(sql, {"since": since, "event_floor": event_floor})
         return [dict(row._mapping) for row in result]
 
 
@@ -63,9 +74,7 @@ def _build_report(reg: Registry, deposits: list[dict], days: int) -> str:
     """Собирает markdown-отчёт из реестра и строк депозитов."""
     lines: list[str] = []
     lines.append("# Creative Report")
-    lines.append(
-        f"\nПериод: последние **{days} дн.** · депозиты = {', '.join(DEPOSIT_EVENT_TYPES)}\n"
-    )
+    lines.append(f"\nПериод: последние **{days} дн.** · депозит = регистрация + FTD\n")
 
     errors = reg.validate()
     if errors:

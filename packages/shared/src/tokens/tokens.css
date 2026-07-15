@@ -18,8 +18,8 @@
   --color-bg-5: #2c2c33; /* borders subtle */
   --color-bg-6: #38383f; /* borders default */
   --color-bg-7: #4a4a52; /* borders strong */
-  --color-bg-8: #5c5c66; /* disabled text */
-  --color-bg-9: #7c7c86; /* placeholder text */
+  --color-bg-8: #7a7a84; /* muted text, WCAG AA on bg-0 */
+  --color-bg-9: #92929c; /* secondary / placeholder text */
   --color-bg-10: #a8a8b0; /* secondary text */
   --color-bg-11: #e4e4e7; /* primary text */
 
@@ -136,8 +136,8 @@
   --color-bg-5: #2c2c33;
   --color-bg-6: #38383f;
   --color-bg-7: #4a4a52;
-  --color-bg-8: #5c5c66;
-  --color-bg-9: #7c7c86;
+  --color-bg-8: #7a7a84;
+  --color-bg-9: #92929c;
   --color-bg-10: #a8a8b0;
   --color-bg-11: #e4e4e7;
 

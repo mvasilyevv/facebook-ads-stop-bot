@@ -37,9 +37,6 @@ import { KpiPlate, AlertStateBadge, TaskStatusBadge, Skeleton, EmptyState } from
 import { useCountUp } from "@/lib/hooks/useCountUp";
 import { cn } from "@/lib/cn";
 
-// Компонент экспортирован именованно (DashboardPage) — MID-23 аудита 02.07: тесты
-// импортируют его напрямую поверх мокнутого @tanstack/react-router (паттерн StatsPage),
-// без дублирования логики в отдельном test.helper.tsx.
 export const Route = createFileRoute("/")({
   component: DashboardPage,
 });
@@ -104,7 +101,7 @@ function HeroNumber({ value }: { value: number }) {
 
 // ─── Компонент ──────────────────────────────────────────────────────────────
 
-export function DashboardPage() {
+function DashboardPage() {
   const navigate = useNavigate();
   const { data, isLoading, isError, error, refetch } = useDashboardBatch({ refetchInterval: 20_000 });
   const { data: obsSettings } = useObserverSettings();

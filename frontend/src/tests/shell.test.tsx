@@ -1,7 +1,7 @@
 // Тест: Shell и Sidebar рендерятся без краша в роутер-обёртке.
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -12,10 +12,31 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Shell } from "@/components/layout/Shell";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { useObserverSettings } from "@/lib/api/settings";
 
-// Мок useHealthDetails — не нужен реальный fetch в smoke.
+// Моки status-хуков — не нужен реальный fetch в smoke.
 vi.mock("@/lib/api/settings", () => ({
-  useHealthDetails: () => ({ data: null, isError: false }),
+  useHealthDetails: () => ({
+    data: {
+      workers: [{ name: "observer", status: "ONLINE" }],
+      observer_runtime: { status: "running" },
+      meta_api_channel: { status: "ONLINE" },
+      overall: "HEALTHY",
+    },
+    isLoading: false,
+    isError: false,
+  }),
+  useObserverSettings: vi.fn(() => ({
+    data: { is_scanning_enabled: true },
+    isLoading: false,
+    isError: false,
+  })),
+  useObserverStatus: () => ({
+    data: { status: "running", last_scan_at: null },
+    isLoading: false,
+    isError: false,
+  }),
+  useToggleScanning: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 function makeAppRouter(PageContent: () => React.ReactElement) {
@@ -57,6 +78,24 @@ describe("Shell — smoke-рендер", () => {
     await waitFor(() => {
       expect(screen.getByTestId("page-content")).toBeInTheDocument();
     });
+    expect(screen.getByRole("link", { name: "Перейти к содержимому" })).toHaveAttribute(
+      "href",
+      "#main-content",
+    );
+    expect(screen.getByRole("main")).toHaveAttribute("id", "main-content");
+  });
+
+  it("открывает доступную мобильную навигацию", async () => {
+    const router = makeAppRouter(() => <div />);
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    const openButton = await screen.findByRole("button", { name: "Открыть навигацию" });
+    fireEvent.click(openButton);
+    expect(screen.getByRole("dialog", { name: "Навигация" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Закрыть меню" })).toBeInTheDocument();
   });
 
   // Тест: brand-mark присутствует в DOM.
@@ -70,6 +109,24 @@ describe("Shell — smoke-рендер", () => {
     await waitFor(() => {
       expect(screen.getByText("FB")).toBeInTheDocument();
     });
+  });
+
+  it("показывает единый CTA в global status bar при паузе", async () => {
+    vi.mocked(useObserverSettings).mockReturnValue({
+      data: { is_scanning_enabled: false },
+      isLoading: false,
+      isError: false,
+    } as ReturnType<typeof useObserverSettings>);
+    const router = makeAppRouter(() => <div />);
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Мониторинг на паузе")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Включить мониторинг" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Диагностика" })).toBeInTheDocument();
   });
 });
 

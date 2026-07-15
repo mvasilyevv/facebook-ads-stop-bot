@@ -18,8 +18,6 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-import { useAuthStore } from "@/stores/auth";
-
 const DEFAULT_WS_PATH = "/ws/dashboard";
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 const POLLING_THRESHOLD = 3;
@@ -29,7 +27,7 @@ export type SocketStatus = "idle" | "connecting" | "connected" | "reconnecting" 
 export interface DashboardSocketOptions {
   /** Кастомный путь, если /ws/dashboard не подходит. */
   path?: string;
-  /** Включить/отключить hook (например при отсутствии apiKey). */
+  /** Включить/отключить hook. */
   enabled?: boolean;
   /** Обработчик каждого входящего сообщения. */
   onMessage?: (data: unknown) => void;
@@ -101,11 +99,9 @@ export function useDashboardSocket(options: DashboardSocketOptions = {}): Dashbo
     setStatus("connecting");
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    // M2: WS-эндпоинт требует X-API-Key, но браузерный WebSocket не шлёт кастомные
-    // заголовки → передаём ключ query-параметром (бэк сверяет до accept).
-    const apiKey = useAuthStore.getState().apiKey;
-    const qs = apiKey ? `?api_key=${encodeURIComponent(apiKey)}` : "";
-    const url = `${protocol}://${window.location.host}${pathRef.current}${qs}`;
+    // Browser reuses the same-origin BasicAuth protection space for the upgrade;
+    // Caddy injects the server-only key upstream. No credential belongs in the URL.
+    const url = `${protocol}://${window.location.host}${pathRef.current}`;
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);

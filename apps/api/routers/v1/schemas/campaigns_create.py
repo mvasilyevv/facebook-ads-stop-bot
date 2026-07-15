@@ -125,8 +125,8 @@ class CampaignConfigIn(BaseModel):
     creo_root: str | None = None
     launch_state: str = "campaign_paused"
 
-    # принимается, но в доменном CampaignConfig поля нет — игнорируется (extra=ignore
-    # ловит его на верхнем уровне; объявляем явно для документации контракта).
+    # Опциональный legacy/custom template. Domain builder в любом случае
+    # добавит `sub8={{ad.id}}`, если его нет.
     url_tags: str | None = None
     naming_template: str | None = None
 
@@ -197,6 +197,7 @@ class CampaignConfigIn(BaseModel):
             "custom_event_type": self.custom_event_type,
             "special_ad_categories": self.special_ad_categories,
             "destination_link": self.destination_link,
+            "url_tags_template": self.url_tags,
             "cta": self.cta,
             "text_optimizations": self.text_optimizations,
             "budget": Budget(
@@ -322,6 +323,7 @@ class UploadConceptsOut(BaseModel):
     upload_id: str  # uuid временной папки (вход в config.creo_root воркера)
     upload_dir: str  # абсолютный путь к папке на сервере
     concepts: list[UploadedConceptOut]
+    added_refs: list[str]  # refs, добавленные именно этим запросом
     total_bytes: int
 
 

@@ -89,6 +89,21 @@ def test_curator_not_mixed_with_recovery_level() -> None:
     assert decision.level == "warning"
 
 
+# Worker может запретить curator-ветку для небезопасного кандидата,
+# не ломая обычные recovery-правила.
+def test_curator_branch_can_be_disabled_for_unsafe_candidate() -> None:
+    decision = should_recommend(
+        alert_state="disabled",
+        snoozed_until=None,
+        now=_NOW,
+        metrics=[_snap(impressions=108, ctr="3.7", spend="50.00")],
+        offer=OfferThresholds(cpa_threshold=Decimal("3.00")),
+        allow_curator=False,
+    )
+    assert decision.recommend is False
+    assert decision.hold_until_cpl is False
+
+
 # grace_is_active: истёкшее время → False, даже если спенд мал
 def test_grace_expired_by_time() -> None:
     g = EnableGrace(until=_NOW - timedelta(seconds=1), spend_cap=Decimal("3"))
@@ -119,6 +134,19 @@ def test_parse_grace_garbage() -> None:
     assert _parse_grace('{"нет": "until"}') is None
 
 
+# Денежный cap должен быть конечным и строго положительным; иначе marker fail-safe отклоняем.
+def test_parse_grace_rejects_non_finite_and_non_positive_cap() -> None:
+    until = "2026-07-15T13:00:00+00:00"
+    for cap in ("NaN", "Infinity", "-Infinity", "0", "-1"):
+        assert _parse_grace(f'{{"until":"{until}","spend_cap":"{cap}"}}') is None
+
+
+def test_parse_grace_accepts_positive_finite_cap() -> None:
+    grace = _parse_grace('{"until":"2026-07-15T13:00:00+00:00","spend_cap":"3.00"}')
+    assert grace is not None
+    assert grace.spend_cap == Decimal("3.00")
+
+
 # Рендер hold-рекомендации: заголовок про цену лида, кнопка ereco на месте
 def test_render_hold_recommendation() -> None:
     decision = RecommendationDecision(
@@ -130,6 +158,7 @@ def test_render_hold_recommendation() -> None:
     )
     text, markup = render_enable_reco_alert(
         EnableRecoRenderInput(
+            recommendation_id="00000000-0000-0000-0000-000000000003",
             fb_ad_id="2300112233",
             ad_name="CR2_CR002",
             campaign_name="CR2 | DRC | MV",
@@ -141,4 +170,6 @@ def test_render_hold_recommendation() -> None:
     assert "держать до цены лида" in text
     assert "1×CPA" in text
     buttons = [b for row in markup["inline_keyboard"] for b in row]
-    assert any(b.get("callback_data") == "ereco:2300112233" for b in buttons)
+    assert any(
+        b.get("callback_data") == "ereco:00000000-0000-0000-0000-000000000003" for b in buttons
+    )

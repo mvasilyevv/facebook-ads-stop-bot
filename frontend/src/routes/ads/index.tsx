@@ -36,6 +36,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { toast } from "@/components/ui/Toast";
+import { MetaDelayedNote, TrackerLiveStrip } from "@/components/data/SourceStatus";
 
 import { FilterBar } from "@/components/domain/ads/FilterBar";
 import { AdsTable } from "@/components/domain/ads/AdsTable";
@@ -44,6 +45,7 @@ import { AdDrawer } from "@/components/domain/ads/AdDrawer";
 
 import { useAds, useBulkDisable, useDeleteAds } from "@/lib/api/ads";
 import { useDashboardStats } from "@/lib/api/dashboard";
+import { useStatsToday } from "@/lib/api/stats";
 import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
 import { useUiStore, DENSITY_ROW_HEIGHT } from "@/stores/ui";
 import { useAdsFilterState } from "@/lib/hooks/useAdsFilterState";
@@ -128,6 +130,7 @@ function AdsPage() {
   });
 
   const statsQ = useDashboardStats();
+  const trackerQ = useStatsToday();
 
   const allRows = data?.data ?? [];
   const { rows, offerOptions, accountOptions, campaignOptions, adsetOptions } =
@@ -173,7 +176,7 @@ function AdsPage() {
     const skippedNonDup = (res?.skipped ?? []).filter((s) => s.reason !== "duplicate");
     if (failed.length > 0) {
       toast.error(
-        `Не удалось создать ${failed.length} disable-задач`,
+        `Не удалось создать задач на отключение: ${failed.length}`,
         failed.map((f) => `${f.fb_ad_id}: ${f.reason}`).join("; "),
       );
     }
@@ -185,7 +188,7 @@ function AdsPage() {
     }
     const createdCount = res?.created?.length ?? 0;
     if (createdCount > 0 || (failed.length === 0 && skippedNonDup.length === 0)) {
-      toast.success(`Создано ${createdCount} disable-задач`);
+      toast.success(`Создано задач на отключение: ${createdCount}`);
     }
   }
 
@@ -220,7 +223,7 @@ function AdsPage() {
   return (
     <div className="flex flex-col h-full min-h-0" aria-label="Объявления">
       {/* ── Page header ───────────────────────────────────────────────────── */}
-      <div className="flex items-start justify-between mb-5 shrink-0">
+      <div className="mb-5 flex shrink-0 flex-col items-start justify-between gap-3 sm:flex-row">
         <div>
           <Eyebrow num="04">УПРАВЛЕНИЕ · ОБЪЯВЛЕНИЯ</Eyebrow>
           <h1
@@ -230,12 +233,17 @@ function AdsPage() {
             Объявления
           </h1>
         </div>
-        <div className="flex gap-2.5 pt-1">
-          <CountBadge variant="normal" value={stats?.ads_in_normal} />
-          <CountBadge variant="warning" value={stats?.ads_in_warning} />
-          <CountBadge variant="stop" value={stats?.ads_in_stop} />
+        <div className="flex flex-col items-end gap-2 pt-1">
+          <MetaDelayedNote />
+          <div className="flex flex-wrap gap-2" aria-label="Сводка по состояниям">
+            <CountBadge variant="normal" value={stats?.ads_in_normal} />
+            <CountBadge variant="warning" value={stats?.ads_in_warning} />
+            <CountBadge variant="stop" value={stats?.ads_in_stop} />
+          </div>
         </div>
       </div>
+
+      <TrackerLiveStrip data={trackerQ.data} className="mb-3 shrink-0" />
 
       {/* ── Filter bar ────────────────────────────────────────────────────── */}
       <div className="mb-3 shrink-0">
@@ -287,7 +295,7 @@ function AdsPage() {
       <div className="mt-2.5 flex items-center gap-3.5 shrink-0 text-[11px] text-bg-8 font-display">
         <Legend k="J/K" label="навигация" />
         <Legend k="X" label="выбор" />
-        <Legend k="D" label="disable" />
+        <Legend k="D" label="отключить" />
         <Legend k="Enter" label="детали" />
         <Legend k="/" label="поиск" />
         <div className="flex-1" />
@@ -311,7 +319,7 @@ function AdsPage() {
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={`Отключить ${selected.size} объявлений?`}
-        description={`Будет создано ${selected.size} disable-задач в outbox. Действие необратимо без ручного включения.`}
+        description={`Будут созданы задачи на отключение: ${selected.size}. Вернуть объявления в показ можно только ручным включением.`}
         confirmWord="DISABLE"
         confirmLabel={`Отключить ${selected.size}`}
         confirmVariant="danger"
@@ -331,7 +339,14 @@ function AdsPage() {
       />
 
       {/* ── Drawer деталей (поверх таблицы) ────────────────────────────────── */}
-      {drawerAd && <AdDrawer ad={drawerAd} onClose={() => setDrawerAd(null)} />}
+      {drawerAd && (
+        <AdDrawer
+          ad={drawerAd}
+          onClose={() => setDrawerAd(null)}
+          trackerData={trackerQ.data?.tracker}
+          trackerDataLoading={trackerQ.isLoading}
+        />
+      )}
     </div>
   );
 }
@@ -345,9 +360,17 @@ function CountBadge({
   variant: "normal" | "warning" | "stop";
   value: number | undefined;
 }) {
+  const labels = {
+    normal: "Норма",
+    warning: "Внимание",
+    stop: "Стоп",
+  } as const;
   return (
     <Badge variant={variant} size="md">
-      {value != null ? value.toLocaleString("en-US") : "—"}
+      <span>{labels[variant]}</span>
+      <span className="ml-1 font-display tabular-nums">
+        {value != null ? value.toLocaleString("ru-RU") : "—"}
+      </span>
     </Badge>
   );
 }

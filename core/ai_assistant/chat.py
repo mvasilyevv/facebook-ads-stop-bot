@@ -57,6 +57,8 @@ class ChatResponse:
 
     answer: str
     tool_calls: list[ToolCallTrace] = field(default_factory=list)
+    provider: str = ""
+    model: str = ""
 
 
 # --- Простой in-memory rate-limit на ChatSession-уровне ---
@@ -184,6 +186,8 @@ class ChatSession:
         ]
 
         traces: list[ToolCallTrace] = []
+        last_provider = ""
+        last_model = ""
         max_iters = max(1, settings.ai_max_tool_iterations)
 
         for _ in range(max_iters):
@@ -195,8 +199,16 @@ class ChatSession:
             except (TimeoutError, asyncio.TimeoutError) as exc:
                 raise AIUnavailableError("AI: таймаут запроса") from exc
 
+            last_provider = response.provider
+            last_model = response.model
+
             if not response.has_tool_uses:
-                return ChatResponse(answer=response.text or "(пустой ответ)", tool_calls=traces)
+                return ChatResponse(
+                    answer=response.text or "(пустой ответ)",
+                    tool_calls=traces,
+                    provider=last_provider,
+                    model=last_model,
+                )
 
             # MID-19 hard-guard: allow_tools=False запрещает исполнение ЛЮБОГО tool_use,
             # даже если модель его всё-таки вернула (например, провайдер проигнорировал
@@ -309,4 +321,6 @@ class ChatSession:
         return ChatResponse(
             answer="Достигнут лимит шагов с инструментами. Сформулируй вопрос точнее.",
             tool_calls=traces,
+            provider=last_provider,
+            model=last_model,
         )

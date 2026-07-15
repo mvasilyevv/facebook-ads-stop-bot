@@ -128,15 +128,16 @@ async def test_dr_ok_viewer_denied(monkeypatch) -> None:
     client.answer_callback_query.assert_awaited()
 
 
-# dr_cancel: отмена черновика от recipient → РАЗРЕШЕНО (не money, снимает действие)
+# dr_cancel: от recipient → ОТКАЗ; отменять money-draft может только owner.
 @pytest.mark.asyncio
-async def test_dr_cancel_viewer_allowed(monkeypatch) -> None:
+async def test_dr_cancel_viewer_denied(monkeypatch) -> None:
     monkeypatch.setattr(router, "find_recipient", AsyncMock(return_value=_viewer()))
     spy = AsyncMock()
     monkeypatch.setattr(router, "handle_draft_callback", spy)
     client = AsyncMock()
     await router._dispatch_callback_query(engine=object(), client=client, cq=_cq("dr_cancel:55"))
-    spy.assert_awaited_once()
+    spy.assert_not_awaited()
+    client.answer_callback_query.assert_awaited()
 
 
 # ====================== команды ======================

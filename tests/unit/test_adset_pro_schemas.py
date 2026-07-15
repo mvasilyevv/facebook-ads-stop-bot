@@ -25,11 +25,11 @@ def test_stats_query_request_rejects_inverted_range() -> None:
         StatsQueryRequest(since=date(2026, 5, 10), until=date(2026, 5, 1))
 
 
-# ConversionRow.from_api_row парсит ext_sub6 → fb_ad_id и revenue → Decimal.
+# ConversionRow.from_api_row парсит ext_sub8 → fb_ad_id и revenue → Decimal.
 def test_conversion_row_from_api_row_happy_path() -> None:
     raw = {
         "click_id": "abc-123",
-        "ext_sub6": "23000000999",
+        "ext_sub8": "23000000999",
         "event_type": "ftd",
         "revenue": "42.50",
         "currency": "USD",
@@ -47,14 +47,35 @@ def test_conversion_row_from_api_row_happy_path() -> None:
     assert row.raw["extra"] == "ignored"
 
 
+# Live query_stats возвращает event_* имена, а не нормализованные REST-алиасы.
+def test_conversion_row_from_live_mcp_shape() -> None:
+    row = ConversionRow.from_api_row(
+        {
+            "event_click_id": "click-live",
+            "event_type": "CPA_ACCEPT",
+            "event_time": "2026-07-15 16:47:30",
+            "event_revenue": 3,
+            "event_currency": "USD",
+            "ext_sub8": "120248043699080390",
+        }
+    )
+
+    assert row.click_id == "click-live"
+    assert row.event_type == "CPA_ACCEPT"
+    assert row.revenue == Decimal("3")
+    assert row.currency == "USD"
+    assert row.fb_ad_id == "120248043699080390"
+    assert row.occurred_at == datetime(2026, 7, 15, 16, 47, 30)
+
+
 # Пустой/невалидный revenue не должен ронять парсинг — становится Decimal(0).
 def test_conversion_row_handles_bad_revenue() -> None:
-    row = ConversionRow.from_api_row({"click_id": "x", "ext_sub6": "1", "revenue": "not-a-number"})
+    row = ConversionRow.from_api_row({"click_id": "x", "ext_sub8": "1", "revenue": "not-a-number"})
     assert row.revenue == Decimal(0)
 
 
-# Отсутствующий ext_sub6 → fb_ad_id == None (а не "None"-строка).
-def test_conversion_row_missing_ext_sub6_becomes_none() -> None:
+# Отсутствующий ext_sub8 → fb_ad_id == None (а не "None"-строка).
+def test_conversion_row_missing_ext_sub8_becomes_none() -> None:
     row = ConversionRow.from_api_row({"click_id": "x", "revenue": "0"})
     assert row.fb_ad_id is None
 
@@ -70,8 +91,8 @@ def test_conversion_row_bad_timestamp_yields_none() -> None:
 def test_stats_query_response_supports_alternate_keys(rows_key: str) -> None:
     payload = {
         rows_key: [
-            {"click_id": "1", "ext_sub6": "ad-1", "revenue": "10"},
-            {"click_id": "2", "ext_sub6": "ad-2", "revenue": "20"},
+            {"click_id": "1", "ext_sub8": "ad-1", "revenue": "10"},
+            {"click_id": "2", "ext_sub8": "ad-2", "revenue": "20"},
         ]
     }
     resp = StatsQueryResponse.from_api_payload(payload)

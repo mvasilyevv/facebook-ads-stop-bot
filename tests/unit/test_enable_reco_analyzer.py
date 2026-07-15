@@ -31,6 +31,7 @@ def _metric(
     spend: str | None = "1.0",
     cost_per_lead: str | None = None,
     cost_per_registration: str | None = None,
+    registrations: int | None = 0,
     deposits: int | None = 0,
 ) -> MetricSnapshot:
     return MetricSnapshot(
@@ -40,6 +41,7 @@ def _metric(
         cost_per_registration=Decimal(cost_per_registration)
         if cost_per_registration is not None
         else None,
+        registrations=registrations,
         deposits=deposits,
     )
 
@@ -137,23 +139,48 @@ def test_disabled_state_is_recommendable() -> None:
     assert decision.recommend is True
 
 
-# Сценарий: появились deposits в свежей метрике — это весомый сигнал
-def test_fresh_deposits_counted_as_signal() -> None:
+# Deposit без registration не подтверждает воронку и не разрешает enable.
+def test_deposits_without_registration_are_not_signal() -> None:
     decision = should_recommend(
         alert_state="stop_sent",
         snoozed_until=None,
         now=_now(),
-        metrics=[_metric(spend="9999.0", cost_per_lead="9999.0", deposits=3)],
+        metrics=[
+            _metric(
+                spend="9999.0",
+                cost_per_lead="9999.0",
+                registrations=0,
+                deposits=3,
+            )
+        ],
         offer=OfferThresholds(cpa_threshold=Decimal("10")),
     )
-    # spend и cost_per_lead вне нормы, но есть deposits → одно условие → warning
+    assert decision.recommend is False
+
+
+# Registration + deposit — подтверждённая воронка и один recovery-сигнал.
+def test_registration_and_deposit_counted_as_signal() -> None:
+    decision = should_recommend(
+        alert_state="stop_sent",
+        snoozed_until=None,
+        now=_now(),
+        metrics=[
+            _metric(
+                spend="9999.0",
+                cost_per_lead="9999.0",
+                registrations=1,
+                deposits=3,
+            )
+        ],
+        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+    )
     assert decision.recommend is True
     assert decision.level == "warning"
-    assert any("deposits" in r for r in decision.reasons)
+    assert any("registrations=1" in r and "deposits=3" in r for r in decision.reasons)
 
 
-# Сценарий: без cpa_threshold правила spend/cost_per_lead не считаются — только deposits
-def test_no_cpa_threshold_only_deposits_count() -> None:
+# Без CPA recovery возможен только по подтверждённой воронке registration + deposit.
+def test_no_cpa_threshold_requires_registration_and_deposit() -> None:
     decision_no_deposits = should_recommend(
         alert_state="stop_sent",
         snoozed_until=None,
@@ -163,14 +190,23 @@ def test_no_cpa_threshold_only_deposits_count() -> None:
     )
     assert decision_no_deposits.recommend is False
 
-    decision_with_deposits = should_recommend(
+    decision_with_unconfirmed_deposits = should_recommend(
         alert_state="stop_sent",
         snoozed_until=None,
         now=_now(),
-        metrics=[_metric(spend="100.0", deposits=5)],
+        metrics=[_metric(spend="100.0", registrations=0, deposits=5)],
         offer=OfferThresholds(cpa_threshold=None),
     )
-    assert decision_with_deposits.recommend is True
+    assert decision_with_unconfirmed_deposits.recommend is False
+
+    decision_with_funnel = should_recommend(
+        alert_state="stop_sent",
+        snoozed_until=None,
+        now=_now(),
+        metrics=[_metric(spend="100.0", registrations=1, deposits=5)],
+        offer=OfferThresholds(cpa_threshold=None),
+    )
+    assert decision_with_funnel.recommend is True
 
 
 # Сценарий: min_metrics_required=3 в thresholds — две метрики не хватит
@@ -241,7 +277,8 @@ def test_cumulative_spend_uses_latest_not_sum() -> None:
 
 # Сценарий: callback_data строится из префикса + fb_ad_id
 def test_build_enable_reco_callback() -> None:
-    assert build_enable_reco_callback("23000999") == f"{ENABLE_RECO_CALLBACK_PREFIX}:23000999"
+    rec_id = "00000000-0000-0000-0000-000023000999"
+    assert build_enable_reco_callback(rec_id) == f"{ENABLE_RECO_CALLBACK_PREFIX}:{rec_id}"
 
 
 # Сценарий: render возвращает (text, reply_markup) с одной кнопкой и нужным callback_data
@@ -253,6 +290,7 @@ def test_render_includes_inline_button_with_correct_callback() -> None:
         snapshot={"metrics_count": 3, "total_spend": "1.5", "latest_deposits": 2},
     )
     inp = EnableRecoRenderInput(
+        recommendation_id="00000000-0000-0000-0000-000000000555",
         fb_ad_id="2300555",
         ad_name="Test Ad",
         campaign_name="Camp1",
@@ -266,7 +304,7 @@ def test_render_includes_inline_button_with_correct_callback() -> None:
     assert "id 2300555" in text  # ID объявления в подвале карточки
     assert markup is not None
     btn = markup["inline_keyboard"][0][0]
-    assert btn["callback_data"] == "ereco:2300555"
+    assert btn["callback_data"] == "ereco:00000000-0000-0000-0000-000000000555"
     assert "Включить" in btn["text"]
 
 
@@ -276,6 +314,7 @@ def test_render_warning_level_prefix() -> None:
         recommend=True, level="warning", reasons=("единственный сигнал",)
     )
     inp = EnableRecoRenderInput(
+        recommendation_id="00000000-0000-0000-0000-000000000001",
         fb_ad_id="x",
         ad_name="a",
         campaign_name="c",
@@ -293,6 +332,7 @@ def test_render_escapes_html() -> None:
         recommend=True, level="ok", reasons=("<b>boom</b>",), snapshot={}
     )
     inp = EnableRecoRenderInput(
+        recommendation_id="00000000-0000-0000-0000-000000000002",
         fb_ad_id="1",
         ad_name="<script>x</script>",
         campaign_name="Camp<>",

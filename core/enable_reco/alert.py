@@ -16,15 +16,16 @@ from core.telegram import format as fmt
 ENABLE_RECO_CALLBACK_PREFIX = "ereco"
 
 
-def build_enable_reco_callback(fb_ad_id: str) -> str:
+def build_enable_reco_callback(recommendation_id: str) -> str:
     """Формат callback_data для inline-кнопки «Включить»."""
-    return f"{ENABLE_RECO_CALLBACK_PREFIX}:{fb_ad_id}"
+    return f"{ENABLE_RECO_CALLBACK_PREFIX}:{recommendation_id}"
 
 
 @dataclass(frozen=True)
 class EnableRecoRenderInput:
     """Данные для рендеринга алерта."""
 
+    recommendation_id: str
     fb_ad_id: str
     ad_name: str
     campaign_name: str
@@ -110,7 +111,7 @@ def render_enable_reco_alert(inp: EnableRecoRenderInput) -> tuple[str, dict | No
         [
             {
                 "text": "▶️ Включить",
-                "callback_data": build_enable_reco_callback(inp.fb_ad_id),
+                "callback_data": build_enable_reco_callback(inp.recommendation_id),
             }
         ]
     )

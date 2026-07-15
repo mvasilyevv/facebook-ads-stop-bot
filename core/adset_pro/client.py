@@ -41,6 +41,7 @@ from core.adset_pro.errors import (
     classify_http_error,
 )
 from core.adset_pro.schemas import (
+    EXT_SUB_FIELD_FOR_AD_ID,
     ConversionRow,
     StatsQueryRequest,
     StatsQueryResponse,
@@ -54,6 +55,27 @@ _DEFAULT_TIMEOUT_SECONDS = 15.0
 _MCP_PATH = "/mcp"
 # MCP protocol version из live verify (initialize → "2025-06-18").
 _MCP_PROTOCOL_VERSION = "2025-06-18"
+
+# ``query_stats`` без явных groups возвращает одну агрегированную строку. Для
+# repair-loop нужны именно факты конверсий, поэтому list_conversions использует
+# проверенный live-контракт ClickHouse/MCP и ограничивает запрос положительными
+# событиями. event_time в группировке не даёт схлопнуть разные события одного
+# click_id, а ext_sub4..8 сохраняют прямую и legacy-атрибуцию.
+_CONVERSION_GROUPS = (
+    "event_click_id",
+    "event_type",
+    "event_time",
+    "event_revenue",
+    "event_currency",
+    "ext_sub4",
+    "ext_sub5",
+    "ext_sub6",
+    "ext_sub7",
+    "ext_sub8",
+)
+_CONVERSION_METRICS = ("cpa_hold", "cpa_accept", "cpa_redep")
+_CONVERSION_EVENT_FILTER = "CPA_HOLD,CPA_ACCEPT,CPA_REDEP"
+_CONVERSION_QUERY_LIMIT = 1000
 
 
 def _build_headers(api_key: str) -> dict[str, str]:
@@ -166,7 +188,7 @@ class AdsetProClient:
         """MCP tool `query_stats` — выборка статистики/конверсий за интервал.
 
         Контракт StatsQueryRequest конвертируется в MCP args: since/until → from/to,
-        ad_id (наш ext_sub6 ↔ fb_ad_id) → filter в массиве. group_by/extra_filters
+        ad_id (наш ext_sub8 ↔ fb_ad_id) → filter в массиве. group_by/extra_filters
         пробрасываем как есть для совместимости.
         """
         args = self._stats_args_from_request(query)
@@ -180,9 +202,37 @@ class AdsetProClient:
         until: date,
         ad_id: str | None = None,
     ) -> list[ConversionRow]:
-        """Сахар над query_stats для удобства потребителей."""
+        """Вернуть положительные conversion-факты, а не агрегат периода.
+
+        Live MCP ``query_stats`` по умолчанию агрегирует весь диапазон в одну
+        строку без click_id/event_type. Repair-loop не может сверять такой ответ.
+        Явная группировка ниже возвращает по строке на событие и сохраняет
+        ext_sub4..8 для атрибуции старых и новых кампаний.
+
+        MCP пока не предоставляет pagination для query_stats. Если безопасный
+        максимум достигнут, лучше честно считать сверку недоступной, чем тихо
+        объявить усечённый день согласованным.
+        """
         request = StatsQueryRequest(since=since, until=until, ad_id=ad_id)
-        response = await self.query_stats(request)
+        args = self._stats_args_from_request(request)
+        args["groups"] = list(_CONVERSION_GROUPS)
+        args["metrics"] = list(_CONVERSION_METRICS)
+        args["limit"] = _CONVERSION_QUERY_LIMIT
+        args.setdefault("filters", []).append(
+            {
+                "field": "event_type",
+                "op": "in",
+                "value": _CONVERSION_EVENT_FILTER,
+            }
+        )
+        payload = await self.call_mcp_tool("query_stats", args)
+        response = StatsQueryResponse.from_api_payload(payload)
+        if len(response.rows) >= _CONVERSION_QUERY_LIMIT:
+            raise TemporaryError(
+                "AdSet.pro conversion query достиг лимита 1000 строк; "
+                "нельзя подтвердить полноту сверки",
+                endpoint=_MCP_PATH,
+            )
         return list(response.rows)
 
     async def call_mcp_tool(
@@ -336,16 +386,20 @@ class AdsetProClient:
     ) -> dict[str, Any]:
         """Из JSON-RPC ответа вынуть полезную часть.
 
-        MCP-схема: result.structuredContent — типизированный объект (предпочтительно).
-        Fallback — result.content[0].text как JSON-строка (когда structuredContent
-        пуст у конкретного сервера). Если оба пусты — возвращаем {}.
+        AdSet.pro может положить в ``structuredContent`` только metadata,
+        а реальные строки — JSON-ом в ``content[].text``. Поэтому непустой
+        structured row-list имеет приоритет; иначе ищем первый валидный
+        JSON object/array во всех text-items. Если его нет, возвращаем
+        structured object для обратной совместимости.
         """
         result = rpc_response.get("result")
         if not isinstance(result, dict):
             return {}
 
         structured = result.get("structuredContent")
-        if isinstance(structured, dict):
+        if isinstance(structured, dict) and any(
+            isinstance(value, list) and bool(value) for value in structured.values()
+        ):
             return structured
 
         content = result.get("content")
@@ -362,15 +416,17 @@ class AdsetProClient:
                     parsed = _json.loads(text)
                 except ValueError:
                     logger.debug(
-                        "AdsetProClient: content[].text для tool=%s — не JSON, fallback пропущен",
+                        "AdsetProClient: content[].text для tool=%s — не JSON, "
+                        "проверяем следующий item",
                         tool_name,
                     )
-                    return {}
+                    continue
                 if isinstance(parsed, dict):
                     return parsed
-                return {"data": parsed}
+                if isinstance(parsed, list):
+                    return {"data": parsed}
 
-        return {}
+        return structured if isinstance(structured, dict) else {}
 
     @staticmethod
     def _stats_args_from_request(query: StatsQueryRequest) -> dict[str, Any]:
@@ -378,7 +434,7 @@ class AdsetProClient:
 
         Маппинг:
         - since/until → from/to (ISO date)
-        - ad_id → filter {field:'ext_sub6', op:'eq', value:<ad_id>}
+        - ad_id → filter {field:'ext_sub8', op:'eq', value:<ad_id>}
         - group_by → groups
         - extra_filters → дополнительные фильтры (формат extra_filters совпадает
           по форме с MCP filters: {field,op,value} либо {key:value} как простой
@@ -390,7 +446,7 @@ class AdsetProClient:
         }
         filters: list[dict[str, Any]] = []
         if query.ad_id:
-            filters.append({"field": "ext_sub6", "op": "eq", "value": query.ad_id})
+            filters.append({"field": EXT_SUB_FIELD_FOR_AD_ID, "op": "eq", "value": query.ad_id})
         for key, value in (query.extra_filters or {}).items():
             if isinstance(value, dict) and {"field", "op", "value"} <= value.keys():
                 filters.append({k: value[k] for k in ("field", "op", "value")})

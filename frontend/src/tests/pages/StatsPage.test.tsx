@@ -4,6 +4,7 @@
  */
 
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -47,7 +48,21 @@ const mockStatsToday = {
     available: true,
     day_utc: "2026-07-02",
     attribution_note: "Атрибуция по click_id",
-    totals: { installs: 500, registrations: 40, deposits: 10, revenue: "1000.00", roi_pct: "10.0" },
+    unmatched_events: 2,
+    last_event_at: "2026-07-02T11:59:59Z",
+    processing_lag_ms: 250,
+    data_quality: "live",
+    backlog: 0,
+    totals: {
+      installs: 500,
+      registrations: 40,
+      deposits: 10,
+      ftds: 10,
+      confirmed_deposits: 9,
+      redeposits: 1,
+      revenue: "1000.00",
+      roi_pct: "10.0",
+    },
   },
   breakdown: [
     { key: "off_1", label: "GH_CR2", spend: "500.00", clicks: 1000, leads: 80, registrations: 40, deposits: 10, cpl: "6.25" },
@@ -123,8 +138,23 @@ describe("StatsPage", () => {
     expect(screen.getByRole("list", { name: "Воронка залива" })).toBeInTheDocument();
     // $500.00 встречается и в KPI-строке, и в строке breakdown-таблицы (тот же тотал).
     expect(screen.getAllByText("$500.00").length).toBeGreaterThan(0);
+    expect(screen.getByText("Подтверждены").parentElement).toHaveTextContent("9");
+    expect(screen.getAllByText("Meta · возможна задержка").length).toBeGreaterThan(0);
     // Breakdown-таблица с офферным разрезом.
     expect(screen.getByText("GH_CR2")).toBeInTheDocument();
+  });
+
+  it("переключает breakdown на кампании без смены периода", async () => {
+    const user = userEvent.setup();
+    await renderStatsPage();
+
+    await user.click(screen.getByRole("button", { name: "По кампаниям" }));
+
+    expect(useStatsToday).toHaveBeenLastCalledWith("campaign", true);
+    expect(screen.getByRole("button", { name: "По кампаниям" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   // Тумблер периодов присутствует — «Сегодня», 7д/30д/90д, «Период…».

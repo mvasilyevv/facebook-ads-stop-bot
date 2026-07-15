@@ -168,3 +168,28 @@ async def test_pause_ad_success(monkeypatch, _patched) -> None:
     _patched.succeed.assert_awaited_once()
     _patched.fail.assert_not_awaited()
     _patched.alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_curator_grace_is_applied_before_terminal_success(monkeypatch, _patched) -> None:
+    """Crash after Meta activate leaves retryable task until grace is installed."""
+    events: list[str] = []
+
+    async def apply_grace(*args, **kwargs):
+        events.append("grace")
+
+    async def mark_succeeded(*args, **kwargs):
+        events.append("succeeded")
+        return True
+
+    monkeypatch.setattr(
+        meta,
+        "execute_mutation",
+        AsyncMock(return_value={"success": True, "modified_ids": ["100"]}),
+    )
+    monkeypatch.setattr(meta, "_apply_enable_grace_after_success", apply_grace)
+    monkeypatch.setattr(meta, "mark_task_succeeded", mark_succeeded)
+
+    await meta.process_one_task(object(), _task("activate_ad"), client=AsyncMock())
+
+    assert events == ["grace", "succeeded"]

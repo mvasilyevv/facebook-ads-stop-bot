@@ -7,7 +7,7 @@
 активным grace срабатывания стоп-правил подавляются (и алерт, и авто-стоп),
 пока не выполнится ЛЮБОЕ из условий выхода:
 - истёк TTL / время until;
-- кумулятивный дневной spend достиг spend_cap (~1×CPA) — дальше судит CPL.
+- после фактического включения набран ещё spend_allowance (~1×CPA) — дальше судит CPL.
 
 Важно: это НЕ снуз. Снуз сознательно глушит только TG-алерты (MID-2), а grace —
 именно временное «не стопай, даём открутить». Redis-потеря маркера = fail-safe:
@@ -35,6 +35,9 @@ class EnableGrace:
     until: datetime
     # Кумулятивный дневной spend, до которого держим (≈1×CPA). None — только по времени.
     spend_cap: Decimal | None = None
+    # Spend в момент успешного activate. Падение ниже baseline означает reset дня
+    # или рассинхрон метрик — fail-safe завершаем grace.
+    baseline_spend: Decimal | None = None
 
 
 def grace_is_active(grace: EnableGrace, *, now: datetime, spend: Decimal | None) -> bool:
@@ -46,6 +49,8 @@ def grace_is_active(grace: EnableGrace, *, now: datetime, spend: Decimal | None)
     """
     if grace.until <= now:
         return False
+    if grace.baseline_spend is not None and spend is not None and spend < grace.baseline_spend:
+        return False
     if grace.spend_cap is not None and spend is not None and spend >= grace.spend_cap:
         return False
     return True
@@ -56,14 +61,39 @@ async def set_enable_grace(
     *,
     fb_ad_id: str,
     grace_seconds: int,
-    spend_cap: Decimal | str | None,
+    spend_cap: Decimal | str | None = None,
+    baseline_spend: Decimal | str | None = None,
+    spend_allowance: Decimal | str | None = None,
 ) -> bool:
     """Поставить grace-маркер. Best-effort: False при недоступном Redis (не бросает)."""
     if redis_client is None:
         return False
+    try:
+        baseline = (
+            Decimal(str(baseline_spend)) if baseline_spend not in (None, "", "None") else None
+        )
+        allowance = (
+            Decimal(str(spend_allowance)) if spend_allowance not in (None, "", "None") else None
+        )
+        cap = Decimal(str(spend_cap)) if spend_cap not in (None, "", "None") else None
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    if baseline is not None and (not baseline.is_finite() or baseline < 0):
+        return False
+    if allowance is not None:
+        if baseline is None or not allowance.is_finite() or allowance <= 0:
+            return False
+        cap = baseline + allowance
+    if cap is not None and (not cap.is_finite() or cap <= 0):
+        return False
+
     until = datetime.now(timezone.utc) + timedelta(seconds=int(grace_seconds))
     payload = json.dumps(
-        {"until": until.isoformat(), "spend_cap": str(spend_cap) if spend_cap else None}
+        {
+            "until": until.isoformat(),
+            "spend_cap": str(cap) if cap is not None else None,
+            "baseline_spend": str(baseline) if baseline is not None else None,
+        }
     )
     try:
         # TTL с запасом +60с к until: истечение по времени контролирует поле until,
@@ -84,7 +114,13 @@ def _parse_grace(raw: str) -> EnableGrace | None:
             until = until.replace(tzinfo=timezone.utc)
         cap_raw = data.get("spend_cap")
         cap = Decimal(str(cap_raw)) if cap_raw not in (None, "", "None") else None
-        return EnableGrace(until=until, spend_cap=cap)
+        if cap is not None and (not cap.is_finite() or cap <= 0):
+            return None
+        baseline_raw = data.get("baseline_spend")
+        baseline = Decimal(str(baseline_raw)) if baseline_raw not in (None, "", "None") else None
+        if baseline is not None and (not baseline.is_finite() or baseline < 0):
+            return None
+        return EnableGrace(until=until, spend_cap=cap, baseline_spend=baseline)
     except (ValueError, KeyError, TypeError, InvalidOperation):
         return None
 

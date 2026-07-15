@@ -24,7 +24,7 @@ GRPC_NODE_DIR := services/browser-agent
 	frontend frontend-build lint format test test-unit test-telegram test-integration verify \
 	start stop logs proto-compile proto-watch \
 	browser-agent browser-agent-dev browser-agent-build tma-dev tma-build \
-	export-openapi gen-api-types
+	export-openapi gen-api-types deploy-dry-run deploy-server server-preflight
 
 help: ## Показать доступные команды
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -120,8 +120,8 @@ creator-worker: check-env install-backend ## Запустить creator worker (
 creator-recorder: check-env install-backend ## Запустить creator recorder (запись планов через CDP)
 	$(PY) run_creator_recorder.py
 
-api: check-env install-backend ## Запустить FastAPI на порту 8000 (health + AdSet.pro postback)
-	$(VENV_BIN)/uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
+api: check-env install-backend ## Запустить FastAPI на порту 8100 (health + AdSet.pro postback)
+	$(VENV_BIN)/uvicorn apps.api.main:app --host 0.0.0.0 --port 8100 --reload --no-access-log
 
 apply-schema: check-env install-backend ## Drop + apply схемы БД (ОПАСНО, требует --confirm-drop)
 	$(PY) scripts/apply_schema.py --confirm-drop
@@ -155,10 +155,10 @@ verify: lint test-unit test-integration ## Выполнить основной �
 export-openapi: install-backend ## Экспортировать OpenAPI-схему из FastAPI в frontend/openapi.json
 	$(PY) scripts/export_openapi.py
 
-gen-api-types: export-openapi ## Сгенерировать TypeScript-типы из OpenAPI в frontend/src/lib/types/api-generated.ts
-	cd frontend && $(NPM) run gen:api
+gen-api-types: export-openapi ## Сгенерировать shared TypeScript-типы из OpenAPI
+	pnpm run gen:api
 
-start: ## Поднять весь проект через run.sh
+start: ## Поднять локальный dev-контур через run.sh
 	./run.sh
 
 stop: ## Остановить весь проект через run.sh
@@ -199,7 +199,7 @@ browser-agent-build: ## Собрать browser-agent
 browser-agent: ## Запустить собранный browser-agent
 	cd $(GRPC_NODE_DIR) && npm start
 
-tma-dev: ## Запустить Telegram Mini App в dev-режиме (порт 5174)
+tma-dev: ## Запустить Telegram Mini App в dev-режиме (порт 5175)
 	cd frontend-mini && $(NPM) run dev
 
 tma-build: ## Собрать Telegram Mini App
@@ -236,7 +236,24 @@ remotion-studio: ## Открыть Remotion Studio (превью шаблона)
 video-batch: install-backend ## Рендер видео-батча из реестра + uniquify (нужны GEO=, SLOT=, BG=)
 	$(PY) scripts/video_batch.py --geo $(GEO) --slot $(SLOT) --bg $(BG)
 
-# ─── Kubernetes ──────────────────────────────────────────────────────────────
+# ─── Production server ───────────────────────────────────────────────────────
+
+DEPLOY_TARGET ?= root@62.60.150.133
+DEPLOY_ROOT ?= /opt/fb-agent
+PUBLIC_URL ?= https://app.adpulse.su
+
+deploy-dry-run: check-env ## Показать production rsync-план без изменений сервера
+	./scripts/deploy-server.sh --host $(DEPLOY_TARGET) --root $(DEPLOY_ROOT) \
+		--public-url $(PUBLIC_URL) --dry-run
+
+deploy-server: check-env ## Собрать и выкатить новый production release
+	./scripts/deploy-server.sh --host $(DEPLOY_TARGET) --root $(DEPLOY_ROOT) \
+		--public-url $(PUBLIC_URL)
+
+server-preflight: ## Проверить текущий release непосредственно на Linux-сервере
+	./scripts/server-preflight.sh
+
+# ─── Kubernetes (experimental, не production) ───────────────────────────────
 
 DOCKER_REGISTRY ?= localhost
 IMAGE_TAG ?= latest
@@ -253,22 +270,22 @@ docker-build: ## Собрать все Docker-образы
 	docker build -f docker/Dockerfile.frontend -t $(DOCKER_REGISTRY)/fb-stop-bot/frontend:$(IMAGE_TAG) .
 	docker build -f docker/Dockerfile.mini-app -t $(DOCKER_REGISTRY)/fb-stop-bot/mini-app:$(IMAGE_TAG) .
 
-k3s-import: ## Импортировать Docker-образы в k3s (требует sudo)
+k3s-import: ## EXPERIMENTAL: импортировать Docker-образы в k3s
 	@for img in api workers browser-agent frontend mini-app; do \
 		echo "Импортируем $(DOCKER_REGISTRY)/fb-stop-bot/$$img:$(IMAGE_TAG) в k3s..."; \
 		docker save $(DOCKER_REGISTRY)/fb-stop-bot/$$img:$(IMAGE_TAG) | sudo k3s ctr images import -; \
 	done
 	@echo "Все образы импортированы в k3s"
 
-helm-install: ## Установить/обновить Helm chart
+helm-install: ## EXPERIMENTAL: установить/обновить Helm chart
 	helm upgrade --install fb-stop-bot helm/fb-stop-bot \
 		-f helm/fb-stop-bot/values.yaml \
 		-f helm/fb-stop-bot/values-mini-pc.yaml \
 		-f helm/fb-stop-bot/secrets.yaml \
 		--namespace fb-stop-bot --create-namespace
 
-helm-uninstall: ## Удалить Helm release
+helm-uninstall: ## EXPERIMENTAL: удалить Helm release
 	helm uninstall fb-stop-bot -n fb-stop-bot
 
-k8s-logs: ## Показать логи всех подов fb-stop-bot
+k8s-logs: ## EXPERIMENTAL: показать логи pod-ов
 	kubectl logs -n fb-stop-bot -l app.kubernetes.io/name=fb-stop-bot --tail=50 -f

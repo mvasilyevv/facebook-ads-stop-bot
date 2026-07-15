@@ -11,7 +11,10 @@ import { PeriodSelector, type Period } from "@/components/history/PeriodSelector
 import { HistorySummarySection } from "@/components/history/HistorySummarySection";
 import { HistoryTimeline } from "@/components/history/HistoryTimeline";
 import { HistoryEventsDrawer } from "@/components/history/HistoryEventsDrawer";
+import { MetaDelayedNote, TrackerLiveStrip } from "@/components/data/SourceStatus";
 import { useHistorySummary, useHistoryTimeline } from "@/lib/api/history";
+import { useStatsPeriod } from "@/lib/api/stats";
+import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
 import type { HistoryTimelineItem } from "@fb/shared";
 
 export const Route = createFileRoute("/history/")({
@@ -29,6 +32,7 @@ function buildDefault30d(): Period {
 }
 
 function HistoryPage() {
+  useRealtimeInvalidation();
   const [period, setPeriod] = useState<Period>(buildDefault30d);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerItem, setDrawerItem] = useState<HistoryTimelineItem | null>(null);
@@ -36,6 +40,7 @@ function HistoryPage() {
   // Запросы
   const summaryQ = useHistorySummary(period);
   const timelineQ = useHistoryTimeline(period);
+  const trackerQ = useStatsPeriod(period);
 
   const handleAlertClick = useCallback((item: HistoryTimelineItem) => {
     setDrawerItem(item);
@@ -55,16 +60,19 @@ function HistoryPage() {
         eyebrowNum="03"
         eyebrow="HISTORY · АРХИВ"
         title="История"
-        subtitle={`${period.from_iso.slice(0, 10)} — ${period.to_iso.slice(0, 10)}`}
+        subtitle={`${formatHistoryDate(period.from_iso)} — ${formatHistoryDate(period.to_iso)}`}
       />
 
       {/* Toolbar: period selector + фильтры */}
       <div className="flex items-center gap-2 mb-6 flex-wrap">
         <PeriodSelector value={period} onChange={setPeriod} />
+        <MetaDelayedNote className="ml-auto" />
       </div>
 
+      <TrackerLiveStrip data={trackerQ.data} className="mb-6" />
+
       {/* Основная сетка 40% / 60% */}
-      <div className="grid gap-6" style={{ gridTemplateColumns: "40% 60%" }}>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(280px,0.7fr)_minmax(0,1.3fr)]">
         {/* Левая колонка: сводка */}
         <div>
           <HistorySummarySection
@@ -96,4 +104,14 @@ function HistoryPage() {
       />
     </>
   );
+}
+
+function formatHistoryDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10);
+  return date.toLocaleDateString("ru-RU", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }

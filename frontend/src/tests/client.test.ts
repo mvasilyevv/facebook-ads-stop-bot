@@ -3,11 +3,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { buildApiError, buildQuery, ApiError } from "@/lib/api/client";
 
-// Мок auth store — без ключа API (модуль-уровень: hoisted корректно).
-vi.mock("@/stores/auth", () => ({
-  useAuthStore: { getState: () => ({ apiKey: null }) },
-}));
-
 // ─── buildApiError ─────────────────────────────────────────────────────────────
 
 describe("buildApiError — разбор FastAPI detail", () => {

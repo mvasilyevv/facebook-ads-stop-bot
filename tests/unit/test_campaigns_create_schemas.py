@@ -135,6 +135,7 @@ def test_upload_concepts_out_shape() -> None:
             UploadedConceptOut(ref="a.jpg", original_name="a.jpg", size_bytes=10),
             UploadedConceptOut(ref="b.jpg", original_name="b.jpg", size_bytes=20),
         ],
+        added_refs=["a.jpg", "b.jpg"],
         total_bytes=30,
     )
     assert len(out.concepts) == 2
@@ -189,6 +190,7 @@ def test_flat_config_to_domain_mapping() -> None:
     assert block.concept_refs == ["a.jpg", "b.jpg"]
     # creo_root проброшен (upload_id).
     assert dom.creo_root == "abc123"
+    assert dom.url_tags_template == "sub2=MV"
 
 
 # concept_counts извлекается из длины concept_refs каждого блока.

@@ -5,7 +5,8 @@
  *   - Observer ON: индикатор РЕЖИМА (ScanModeBar — лёгкий градиент зелёный→красный, маркер
  *     в позиции CRITICAL/ELEVATED/CALM/IDLE) + ОТДЕЛЬНЫЙ блок обратного отсчёта «СЛЕД. СКАН Nс»
  *     + «ПОСЛЕДНИЙ СКАН Nс назад» + primary «Сканировать» (на время скана — спиннер + «Сканирую»).
- *   - Observer OFF (paused): dashed pause-ring + «СКАН ВЫКЛЮЧЕН» + primary «▶ Включить».
+ *   - Observer OFF (paused): dashed pause-ring + «СКАН ВЫКЛЮЧЕН»; единый CTA находится
+ *     в полноширинном PausedBanner, чтобы не дублировать действие.
  *
  * Режим (scanMode) и обратный отсчёт — РАЗНЫЕ сущности: линия показывает нагрузку, число —
  * сколько секунд до скана. Данные: observer on/off + last_scan_at + next_scan_at + scan_mode
@@ -13,12 +14,14 @@
  */
 
 import { useEffect, useState } from "react";
-import { RefreshCw, Play, Power } from "lucide-react";
+import { CircleHelp, RefreshCw, Power, ServerOff } from "lucide-react";
 import { formatRelativeTime } from "@fb/shared";
 import { PausedRing } from "@/components/data/CountdownRing";
 import { ScanModeBar } from "@/components/data/ScanModeBar";
 import { Button } from "@/components/ui/Button";
 import { useScanCountdown } from "@/lib/hooks/useScanCountdown";
+import { cn } from "@/lib/utils/cn";
+import type { MonitoringState } from "./monitoringState";
 
 /** Мульти-кабинет: прогресс обхода кабинетов в текущем цикле (observer:runtime). */
 export interface ScanProgress {
@@ -33,6 +36,8 @@ export interface ScanProgress {
 interface ScanClusterProps {
   /** Включён ли observer. */
   scanOn: boolean;
+  /** Подтверждённое состояние контура — не показываем live-controls при offline/unknown. */
+  monitoringState: MonitoringState;
   /** ISO последнего скана (stats.last_scan_at). */
   lastScanAt?: string | null;
   /** ISO следующего скана (observer:runtime.next_scan_at) — реальный адаптивный отсчёт. */
@@ -45,21 +50,19 @@ interface ScanClusterProps {
   scanProgress?: ScanProgress | null;
   /** Реальный запуск скана (POST scan-now). */
   onScan: () => void;
-  /** Включить observer (paused → on). */
-  onEnable?: () => void;
   /** Выключить observer (on → paused). */
   onDisable?: () => void;
 }
 
 export function ScanCluster({
   scanOn,
+  monitoringState,
   lastScanAt,
   nextScanAt,
   scanMode,
   intervalSeconds = 30,
   scanProgress,
   onScan,
-  onEnable,
   onDisable,
 }: ScanClusterProps) {
   const { scanning, next, interval, doScan } = useScanCountdown({
@@ -78,45 +81,72 @@ export function ScanCluster({
   }, [scanMode]);
   const mode = scanMode ?? stickyMode;
 
+  if (scanOn && (monitoringState === "offline" || monitoringState === "unknown")) {
+    const unavailable = monitoringState === "offline";
+    const StatusIcon = unavailable ? ServerOff : CircleHelp;
+    return (
+      <div className="flex flex-wrap items-center justify-end gap-3 sm:gap-4">
+        <div className="flex items-center gap-2.5">
+          <span
+            className={cn(
+              "flex size-8 items-center justify-center rounded-[var(--radius-2)]",
+              unavailable ? "bg-danger-bg text-danger" : "bg-accent-bg text-accent",
+            )}
+          >
+            <StatusIcon size={16} strokeWidth={1.7} aria-hidden="true" />
+          </span>
+          <span
+            className={cn(
+              "font-display text-[9px] font-semibold uppercase tracking-[0.12em]",
+              unavailable ? "text-danger" : "text-accent",
+            )}
+          >
+            {unavailable ? "СКАН НЕДОСТУПЕН" : "ОЖИДАЕМ ПЕРВЫЙ СКАН"}
+          </span>
+        </div>
+        <div className="hidden h-7 w-px bg-[var(--hairline-strong)] sm:block" aria-hidden="true" />
+        <div className="leading-[1.3]">
+          <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
+            ПОСЛЕДНИЙ СКАН
+          </div>
+          <div className="whitespace-nowrap font-display text-[13px] tabular-nums text-bg-10">
+            {scanAgo(lastScanAt)}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ── Paused: observer выключен ───────────────────────────────────────────────
   if (!scanOn) {
     return (
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center justify-end gap-3 sm:gap-4">
         <div className="flex items-center gap-2.5">
           <PausedRing />
           <span className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-warning">
             СКАН ВЫКЛЮЧЕН
           </span>
         </div>
-        <div className="h-7 w-px bg-[var(--hairline-strong)]" aria-hidden="true" />
+        <div className="hidden h-7 w-px bg-[var(--hairline-strong)] sm:block" aria-hidden="true" />
         <div className="leading-[1.3]">
           <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
             ПОСЛЕДНИЙ СКАН
           </div>
           <div className="whitespace-nowrap font-display text-[13px] tabular-nums text-bg-10">
-            {scanAgo(lastScanAt)} <span className="text-bg-7">·</span>{" "}
+            {scanAgo(lastScanAt)} <span className="text-bg-8">·</span>{" "}
             <span className="text-warning">стоп</span>
           </div>
         </div>
-        <Button
-          variant="primary"
-          size="md"
-          className="ml-1"
-          leftIcon={<Play size={14} aria-hidden="true" />}
-          onClick={onEnable}
-        >
-          Включить
-        </Button>
       </div>
     );
   }
 
   // ── Active: observer работает ───────────────────────────────────────────────
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex flex-wrap items-center justify-end gap-3 sm:gap-4">
       {/* Индикатор режима — лёгкий градиент + маркер (НЕ отсчёт). */}
       <ScanModeBar mode={mode} />
-      <div className="h-7 w-px bg-[var(--hairline-strong)]" aria-hidden="true" />
+      <div className="hidden h-7 w-px bg-[var(--hairline-strong)] sm:block" aria-hidden="true" />
       {/* Обратный отсчёт — отдельная сущность: сколько секунд до следующего скана. */}
       <div className="leading-[1.3]">
         <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
@@ -135,7 +165,7 @@ export function ScanCluster({
           </div>
         )}
       </div>
-      <div className="h-7 w-px bg-[var(--hairline-strong)]" aria-hidden="true" />
+      <div className="hidden h-7 w-px bg-[var(--hairline-strong)] sm:block" aria-hidden="true" />
       <div className="leading-[1.3]">
         <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
           ПОСЛЕДНИЙ СКАН

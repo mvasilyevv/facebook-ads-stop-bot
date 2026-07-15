@@ -50,6 +50,55 @@ ensure_cdp_ready() {
   return 1
 }
 
+ensure_worker_heartbeats_ready() {
+  local response=""
+  local attempt=0
+
+  for ((attempt = 1; attempt <= 24; attempt++)); do
+    if response="$(curl --silent --show-error --max-time 10 \
+      http://127.0.0.1:8100/system-readyz)" \
+      && python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+expected = int(d.get("workers_expected") or 0)
+online = int(d.get("workers_online") or 0)
+raise SystemExit(0 if d.get("infrastructure_ready") and expected > 0 and online == expected else 1)
+' "$response"; then
+      printf 'Worker heartbeat readiness: OK\n'
+      return 0
+    fi
+    sleep 5
+  done
+
+  printf 'ERROR: not all expected worker heartbeats became ONLINE\n' >&2
+  return 1
+}
+
+clear_worker_heartbeats() {
+  local -a heartbeat_keys=()
+  local heartbeat_output=""
+  local key=""
+
+  # compose up может оставить Redis-ключи предыдущего release живыми ещё до 60с.
+  # Очищаем их после старта новых контейнеров и принимаем release только когда
+  # каждый новый worker заново опубликует heartbeat.
+  if ! heartbeat_output="$(
+    "${compose[@]}" exec -T redis redis-cli --raw --scan --pattern 'worker:heartbeat:*'
+  )"; then
+    printf 'ERROR: failed to scan stale worker heartbeats\n' >&2
+    return 1
+  fi
+
+  while IFS= read -r key; do
+    [[ -n "$key" ]] && heartbeat_keys+=("$key")
+  done <<<"$heartbeat_output"
+
+  if ((${#heartbeat_keys[@]})); then
+    "${compose[@]}" exec -T redis redis-cli DEL "${heartbeat_keys[@]}" >/dev/null
+  fi
+  printf 'Cleared stale worker heartbeats; waiting for current release\n'
+}
+
 if [[ "${1:-}" == "--allow-vision-offline" ]]; then
   ALLOW_VISION_OFFLINE=true
 elif (($#)); then
@@ -136,6 +185,10 @@ if ! ensure_cdp_ready; then
 fi
 curl --silent --show-error --fail --retry 12 --retry-delay 5 --retry-all-errors \
   --max-time 10 http://127.0.0.1:8100/readyz >/dev/null
+# /readyz доказывает только Postgres/Redis. Отдельно ждём все heartbeat,
+# иначе release мог стать green с мёртвым observer/meta money-контуром.
+clear_worker_heartbeats
+ensure_worker_heartbeats_ready
 
 ln -sfn "$RELEASE_DIR" "$ROOT_DIR/current.new"
 mv -Tf "$ROOT_DIR/current.new" "$ROOT_DIR/current"

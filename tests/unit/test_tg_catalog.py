@@ -26,6 +26,12 @@ def test_catalog_covers_all_registry_tools() -> None:
     assert not extra, f"В каталоге лишние tools (нет в реестре): {sorted(extra)}"
 
 
+# create_campaign tool пока несовместим с реальным nested executor contract.
+# Не рекламируем и не даём создать заведомо неисполнимый DRAFT до интеграции с wizard.
+def test_unwired_create_campaign_tool_not_exposed() -> None:
+    assert "request_create_campaign" not in set(GLOBAL_REGISTRY.list_names())
+
+
 # Рендер не падает и содержит все категории + примеры
 def test_build_catalog_text_has_sections() -> None:
     text = build_catalog_text()

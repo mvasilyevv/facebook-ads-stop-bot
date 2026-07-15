@@ -57,9 +57,16 @@ async def clean_reco_tables(pg_engine):
             # иначе чужие recipients от других тестов (shared _test БД) ломают
             # счётчик. Чистим всех, затем сеем своего единственного.
             await conn.execute(text("DELETE FROM telegram_recipients"))
+            await conn.execute(text("DELETE FROM observer_config WHERE singleton_key = 'default'"))
 
     await _truncate()
     async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO observer_config (singleton_key, is_scanning_enabled) "
+                "VALUES ('default', TRUE)"
+            )
+        )
         await conn.execute(
             text(
                 "INSERT INTO telegram_recipients (chat_id, telegram_user_id, role) "
@@ -86,6 +93,7 @@ async def stopped_ad(pg_engine, clean_reco_tables):
     fb_ad_id = f"23001{suffix[:8]}"
 
     last_transition = _utcnow() - timedelta(hours=2)  # отключено 2 часа назад
+    incident_token = uuid.uuid4()
     cycle_recent = _utcnow() - timedelta(minutes=10)
     cycle_older = _utcnow() - timedelta(minutes=30)
 
@@ -116,11 +124,11 @@ async def stopped_ad(pg_engine, clean_reco_tables):
             text(
                 """
                 INSERT INTO ad_alert_state
-                    (ad_id, alert_state, current_stage, last_transition_at)
-                VALUES (:aid, 'stop_sent', 'stop', :ts)
+                    (ad_id, alert_state, current_stage, open_state_token, last_transition_at)
+                VALUES (:aid, 'stop_sent', 'stop', :tok, :ts)
                 """
             ),
-            {"aid": ad_id, "ts": last_transition},
+            {"aid": ad_id, "tok": incident_token, "ts": last_transition},
         )
         # «Выправленные» метрики после отключения: spend низкий, cost_per_lead ок
         for ts, spend, cpl in (
@@ -145,7 +153,63 @@ async def stopped_ad(pg_engine, clean_reco_tables):
         "adset_id": adset_id,
         "offer_id": offer_id,
         "last_transition_at": last_transition,
+        "incident_token": incident_token,
     }
+
+
+async def _make_curator_only_candidate(
+    engine,
+    stopped_ad: dict,
+    *,
+    alert_state: str,
+    delivery_status: str,
+    with_unfinished_pause: bool = False,
+) -> None:
+    """Оставить только curator-сигнал: 108 impressions, CTR 3.7%, recovery нет."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE ad_alert_state SET alert_state = :state, current_stage = 'stop' "
+                "WHERE ad_id = :aid"
+            ),
+            {"state": alert_state, "aid": stopped_ad["ad_id"]},
+        )
+        await conn.execute(
+            text("UPDATE fb_ads SET delivery_status = :status WHERE id = :aid"),
+            {"status": delivery_status, "aid": stopped_ad["ad_id"]},
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE ad_metrics
+                SET spend = 25, cost_per_lead = 40, cost_per_registration = 40,
+                    registrations = 0, deposits = 0, impressions = 108, ctr = 3.7
+                WHERE ad_id = :aid
+                """
+            ),
+            {"aid": stopped_ad["ad_id"]},
+        )
+        if with_unfinished_pause:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO task_queue
+                        (task_type, status, idempotency_key, payload, requested_by)
+                    VALUES
+                        ('meta_api_mutation', 'pending', :ikey,
+                         jsonb_build_object(
+                             'mutation_kind', 'pause_ad',
+                             'target_id', CAST(:fb_ad_id AS TEXT),
+                             'params', jsonb_build_object()
+                         ),
+                         'test_curator_guard')
+                    """
+                ),
+                {
+                    "ikey": f"curator-pause-{uuid.uuid4().hex}",
+                    "fb_ad_id": stopped_ad["fb_ad_id"],
+                },
+            )
 
 
 # Сценарий: stop_sent ад с «выправленными» метриками → создаётся enable_recommendation + TG-алерт
@@ -173,7 +237,7 @@ async def test_creates_recommendation_for_recovered_ad(
         row = (
             await conn.execute(
                 text(
-                    "SELECT ad_id, recommendation_level, idempotency_key "
+                    "SELECT ad_id, recommendation_level, idempotency_key, id "
                     "FROM enable_recommendations LIMIT 1"
                 )
             )
@@ -182,6 +246,7 @@ async def test_creates_recommendation_for_recovered_ad(
         assert row[0] == stopped_ad["ad_id"]
         assert row[1] in ("ok", "warning")
         assert row[2].startswith("enable_reco:")
+        recommendation_id = str(row[3])
 
     # TG-алерт отправлен с inline-кнопкой
     assert len(tg_respx.sent_messages) == 1
@@ -190,11 +255,82 @@ async def test_creates_recommendation_for_recovered_ad(
     keyboard = payload.get("reply_markup", {}).get("inline_keyboard")
     assert keyboard is not None
     btn = keyboard[0][0]
-    assert btn["callback_data"] == f"ereco:{stopped_ad['fb_ad_id']}"
+    assert btn["callback_data"] == f"ereco:{recommendation_id}"
 
     # Redis-дедуп ключ стоит
     assert await fake_redis_client.get(f"enable_reco:last:{stopped_ad['ad_id']}") == "1"
 
+    await tg_client.close()
+
+
+# Curator hold разрешён только для disabled + OFF без незавершённой pause_ad.
+@pytest.mark.asyncio
+async def test_curator_candidate_requires_disabled_off_without_pause(
+    pg_engine, stopped_ad, fake_redis_client, tg_respx
+) -> None:
+    from core.telegram.client import TelegramBotClient
+
+    await _make_curator_only_candidate(
+        pg_engine,
+        stopped_ad,
+        alert_state="disabled",
+        delivery_status="OFF",
+    )
+    tg_client = TelegramBotClient("fake-token")
+    counts = await run_once(
+        pg_engine,
+        redis_client=fake_redis_client,
+        tg_client=tg_client,
+    )
+
+    assert counts["recommendations"] == 1
+    async with pg_engine.connect() as conn:
+        snapshot = (
+            await conn.execute(text("SELECT snapshot_metrics FROM enable_recommendations LIMIT 1"))
+        ).scalar()
+    assert snapshot["hold_until_cpl"] is True
+    assert len(tg_respx.sent_messages) == 1
+    await tg_client.close()
+
+
+@pytest.mark.parametrize(
+    ("alert_state", "delivery_status", "with_unfinished_pause"),
+    [
+        ("stop_sent", "OFF", False),
+        ("disabled", "ACTIVE", False),
+        ("disabled", "OFF", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_curator_candidate_rejected_when_safety_precondition_missing(
+    pg_engine,
+    stopped_ad,
+    fake_redis_client,
+    tg_respx,
+    alert_state,
+    delivery_status,
+    with_unfinished_pause,
+) -> None:
+    from core.telegram.client import TelegramBotClient
+
+    await _make_curator_only_candidate(
+        pg_engine,
+        stopped_ad,
+        alert_state=alert_state,
+        delivery_status=delivery_status,
+        with_unfinished_pause=with_unfinished_pause,
+    )
+    tg_client = TelegramBotClient("fake-token")
+    counts = await run_once(
+        pg_engine,
+        redis_client=fake_redis_client,
+        tg_client=tg_client,
+    )
+
+    assert counts["candidates"] == 1
+    assert counts["recommendations"] == 0
+    assert counts["skipped_decision"] == 1
+    assert len(tg_respx.sent_messages) == 0
     await tg_client.close()
 
 

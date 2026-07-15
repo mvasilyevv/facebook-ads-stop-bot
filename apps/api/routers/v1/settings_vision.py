@@ -260,6 +260,9 @@ async def _reconnect_browser(engine: AsyncEngine, settings: object) -> None:
             vision_x_token=x_token,
             vision_api_url=api_url,
             vision_profile_id=profile_id,
+            # Без folder_id остановленный профиль отсутствует в /list, и reconnect
+            # не может вызвать Vision /start, хотя все идентификаторы есть в .env.
+            vision_folder_id=os.environ.get("VISION_FOLDER_ID") or None,
             # grpc_host/port из env — иначе в Docker api пойдёт на localhost:50051
             # (browser-agent на хосте). Зеркало фикса observer (main.py).
             grpc_host=os.environ.get("BROWSER_AGENT_HOST", "localhost"),

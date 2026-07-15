@@ -44,6 +44,15 @@ async def clean_reco(pg_engine):
             await conn.execute(
                 text("DELETE FROM task_queue WHERE idempotency_key LIKE 'enable:99RECO%'")
             )
+            await conn.execute(
+                text("DELETE FROM task_queue WHERE payload->>'target_id' LIKE '99RECO%'")
+            )
+            await conn.execute(
+                text(
+                    "DELETE FROM ad_alert_state WHERE ad_id IN "
+                    "(SELECT id FROM fb_ads WHERE fb_ad_id LIKE '99RECO%')"
+                )
+            )
             await conn.execute(text("DELETE FROM fb_ads WHERE fb_ad_id LIKE '99RECO%'"))
             await conn.execute(text("DELETE FROM fb_adsets WHERE adset_name LIKE 'RECO_%'"))
             await conn.execute(text("DELETE FROM fb_campaigns WHERE campaign_name LIKE 'RECO_%'"))
@@ -60,6 +69,7 @@ async def _seed_chain(conn, suffix: str) -> tuple[str, uuid.UUID, uuid.UUID]:
     campaign_id = uuid.uuid4()
     adset_id = uuid.uuid4()
     ad_id = uuid.uuid4()
+    incident_token = uuid.uuid4()
     fb_ad_id = f"99RECO{suffix}"
 
     await conn.execute(
@@ -78,6 +88,14 @@ async def _seed_chain(conn, suffix: str) -> tuple[str, uuid.UUID, uuid.UUID]:
         text("INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name) VALUES (:i, :a, :f, :n)"),
         {"i": ad_id, "a": adset_id, "f": fb_ad_id, "n": f"Reco AD {suffix}"},
     )
+    await conn.execute(
+        text(
+            "INSERT INTO ad_alert_state "
+            "(ad_id, alert_state, current_stage, open_state_token, last_transition_at) "
+            "VALUES (:aid, 'stop_sent', 'stop', :tok, NOW())"
+        ),
+        {"aid": ad_id, "tok": incident_token},
+    )
     return fb_ad_id, adset_id, ad_id
 
 
@@ -90,7 +108,19 @@ async def _insert_reco(
     """Вставляет enable_recommendations. Возвращает id рекомендации."""
     rec_id = uuid.uuid4()
     ikey = f"reco_test_{suffix}"
-    metrics = json.dumps({"spend": "100.00", "cost_per_lead": "5.00"})
+    incident_token = (
+        await conn.execute(
+            text("SELECT open_state_token FROM ad_alert_state WHERE ad_id = :aid"),
+            {"aid": ad_id},
+        )
+    ).scalar_one()
+    metrics = json.dumps(
+        {
+            "spend": "100.00",
+            "cost_per_lead": "5.00",
+            "incident_open_state_token": str(incident_token),
+        }
+    )
 
     await conn.execute(
         text(
@@ -295,6 +325,96 @@ async def test_confirm_enable_recommendation_happy(
             )
         ).first()
     assert row.promoted_to_task_id == task_id
+
+
+@pytest.mark.asyncio
+async def test_confirm_recommendation_from_previous_incident_is_rejected(
+    pg_engine, fake_redis_client, clean_reco
+) -> None:
+    """An old button cannot activate the same ad during a new STOP incident."""
+    suffix = uuid.uuid4().hex[:5]
+    async with pg_engine.begin() as conn:
+        _, _, ad_id = await _seed_chain(conn, suffix)
+        rec_id = await _insert_reco(conn, ad_id, f"stale_{suffix}")
+        await conn.execute(
+            text(
+                "UPDATE ad_alert_state SET open_state_token = :tok, "
+                "last_transition_at = NOW() WHERE ad_id = :aid"
+            ),
+            {"tok": uuid.uuid4(), "aid": ad_id},
+        )
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/api/dashboard/enable-recommendations/{rec_id}/enable",
+            json={"requested_by": "tester"},
+        )
+
+    assert resp.status_code == 409
+    assert "инцидент" in resp.json()["detail"].lower()
+    async with pg_engine.connect() as conn:
+        task_count = (
+            await conn.execute(
+                text("SELECT COUNT(*) FROM task_queue WHERE idempotency_key = :ik"),
+                {"ik": f"reco:activate_ad:{rec_id}"},
+            )
+        ).scalar_one()
+    assert task_count == 0
+
+
+@pytest.mark.asyncio
+async def test_confirm_recommendation_rejects_unfinished_bulk_pause(
+    pg_engine, fake_redis_client, clean_reco
+) -> None:
+    """A bulk pause containing the ad is the same conflict as a pause_ad task."""
+    suffix = uuid.uuid4().hex[:5]
+    async with pg_engine.begin() as conn:
+        fb_ad_id, _, ad_id = await _seed_chain(conn, suffix)
+        rec_id = await _insert_reco(conn, ad_id, f"bulk_pause_{suffix}")
+        await conn.execute(
+            text(
+                """
+                INSERT INTO task_queue
+                    (task_type, status, idempotency_key, payload,
+                     attempt_count, max_attempts, requested_by)
+                VALUES
+                    ('meta_api_mutation', 'draft', :ik, CAST(:payload AS JSONB),
+                     0, 5, 'test')
+                """
+            ),
+            {
+                "ik": f"enable:99RECO{suffix}:bulk-pause:{uuid.uuid4().hex}",
+                "payload": json.dumps(
+                    {
+                        "mutation_kind": "bulk_status_change",
+                        "target_id": "bulk:2",
+                        "params": {
+                            "action": "pause",
+                            "ad_ids": ["unrelated", fb_ad_id],
+                        },
+                    }
+                ),
+            },
+        )
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            f"/api/dashboard/enable-recommendations/{rec_id}/enable",
+            json={"requested_by": "tester"},
+        )
+
+    assert resp.status_code == 409
+    assert "отключение" in resp.json()["detail"].lower()
+    async with pg_engine.connect() as conn:
+        activate_count = (
+            await conn.execute(
+                text("SELECT COUNT(*) FROM task_queue WHERE idempotency_key = :ik"),
+                {"ik": f"reco:activate_ad:{rec_id}"},
+            )
+        ).scalar_one()
+    assert activate_count == 0
 
 
 # ─── Тест 6 ──────────────────────────────────────────────────────────────────

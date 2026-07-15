@@ -73,9 +73,10 @@ class Settings(BaseSettings):
     api_key: SecretStr = SecretStr("")
     # Enforce X-API-Key на write-эндпоинтах (POST/PUT/PATCH/DELETE). Secure-by-default:
     # API биндится на 0.0.0.0 + Ingress, поэтому money-управление (выкл авто-стопа,
-    # рестарт observer, подтверждение черновиков) закрыто ключом. run.sh прокидывает
-    # API_KEY → VITE_API_KEY → фронт шлёт X-API-Key. Публичные/иначе-защищённые пути
-    # (health/metrics, /api/v1/postback — свой секрет, /api/tma — Bearer) исключены.
+    # рестарт observer, подтверждение черновиков) закрыто ключом. В production
+    # browser проходит Caddy BasicAuth, а Caddy inject'ит API_KEY только upstream;
+    # TMA использует отдельно проверяемый Bearer. Ключ никогда не попадает в bundle.
+    # Публичные/иначе-защищённые пути (health/metrics, postback, TMA auth) исключены.
     # Тесты выключают флаг через autouse-фикстуру в tests/conftest.py.
     require_api_key: bool = True
     app_timezone: str = "Europe/Kaliningrad"
@@ -160,10 +161,14 @@ class Settings(BaseSettings):
     adsetpro_mcp_key: SecretStr = SecretStr("")
     adsetpro_base_url: str = "https://adset.pro"
     adsetpro_timeout_seconds: float = 15.0
-    # Секрет для аутентификации входящего postback'а от AdSet.pro
-    # (header X-Postback-Secret). Пустая строка → endpoint возвращает 503
+    # Секрет для аутентификации входящего postback'а от AdSet.pro:
+    # GET query token; legacy POST header X-Postback-Secret. Пустая строка → 503
     # «not configured», чтобы случайно не принимать неавторизованные постбэки.
     adsetpro_postback_secret: SecretStr = SecretStr("")
+    # Staged rollout: projection and UI are always live, while cancellation of
+    # not-yet-started bot_auto_stop tasks stays shadow-only until a full-day
+    # reconciliation is accepted by the operator.
+    tracker_auto_cancel_enabled: bool = False
 
     # --- syntx.ai (прямой API генерации креативов, см. core/syntx/) ---
     # JWT из localStorage.auth_token залогиненного syntx (recon_profile), живёт 30 дней.
@@ -227,12 +232,12 @@ class Settings(BaseSettings):
             logger.warning("TELEGRAM_BOT_TOKEN не задан — Telegram-бот не будет работать")
         if not self.api_key.get_secret_value() and self.require_api_key:
             # L6: НЕ генерим эфемерный ключ. Раньше пустой API_KEY → ротирующийся ключ
-            # in-memory (свой на каждый из 12 процессов) → X-API-Key фронта ловил 401, а
+            # in-memory (свой на каждый из 12 процессов) → Caddy/API clients ловили 401, а
             # честная ветка 503 в ApiKeyAuthMiddleware была мёртвой. Теперь оставляем ключ
             # пустым → middleware вернёт диагностируемый 503 «API_KEY не сконфигурирован».
             logger.error(
                 "API_KEY не задан, но REQUIRE_API_KEY=true — write-эндпоинты вернут 503. "
-                "Задай стабильный API_KEY в .env (и проброс в VITE_API_KEY) или "
+                "Задай стабильный API_KEY в .env (production Caddy inject'ит его upstream) или "
                 "REQUIRE_API_KEY=false для локальной разработки."
             )
         return self

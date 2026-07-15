@@ -17,11 +17,18 @@ import type { UploadedConcept } from "@/stores/campaignWizard";
 interface CreativeUploadZoneProps {
   /** Ключи всех текущих кампаний — новые концепты привязываются к ним по умолчанию. */
   allCampaignKeys: string[];
-  onUploaded: (uploadId: string, newConcepts: UploadedConcept[]) => void;
+  /** Текущий серверный набор: повторная загрузка дополняет его, не создаёт новый. */
+  uploadId: string | null;
+  onUploaded: (
+    uploadId: string,
+    serverConcepts: UploadedConcept[],
+    addedRefs: string[],
+  ) => void;
 }
 
 export const CreativeUploadZone: FC<CreativeUploadZoneProps> = ({
   allCampaignKeys,
+  uploadId,
   onUploaded,
 }) => {
   const [uploading, setUploading] = useState(false);
@@ -36,14 +43,14 @@ export const CreativeUploadZone: FC<CreativeUploadZoneProps> = ({
     setUploading(true);
     setUploadError(null);
     try {
-      const result = await uploadConcepts(arr);
+      const result = await uploadConcepts(arr, uploadId);
       // Новые концепты по умолчанию идут во ВСЕ текущие кампании (явные ключи).
       // Если кампаний нет — пустой список (попадут в пул).
       const newConcepts: UploadedConcept[] = result.concepts.map((c) => ({
         ...c,
         campaign_keys: [...allCampaignKeys],
       }));
-      onUploaded(result.upload_id, newConcepts);
+      onUploaded(result.upload_id, newConcepts, result.added_refs);
     } catch (e) {
       setUploadError(e instanceof Error ? e.message : "Ошибка загрузки");
     } finally {
@@ -105,13 +112,13 @@ export const CreativeUploadZone: FC<CreativeUploadZoneProps> = ({
           </div>
         ) : (
           <div className="flex flex-col items-center gap-2">
-            <Upload size={28} className="text-bg-7" />
+            <Upload size={28} className="text-bg-8" />
             <span className="text-[13px] text-bg-9">
               Перетащите файлы или{" "}
               <span className="text-accent underline underline-offset-2">нажмите для выбора</span>
             </span>
-            <span className="text-[11px] text-bg-7">
-              JPG, PNG, MP4, MOV — до 500 МБ суммарно, до 50 файлов
+            <span className="text-[11px] text-bg-8">
+              Можно добавлять несколькими загрузками · JPG, PNG, MP4, MOV · до 500 МБ и 50 файлов
             </span>
           </div>
         )}

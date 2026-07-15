@@ -20,6 +20,7 @@ def _decision() -> RecommendationDecision:
 
 def _inp(**over) -> EnableRecoRenderInput:
     base = dict(
+        recommendation_id="00000000-0000-0000-0000-000000000900",
         fb_ad_id="900",
         ad_name="Ad",
         campaign_name="CR2|KE",

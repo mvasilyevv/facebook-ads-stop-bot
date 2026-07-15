@@ -156,7 +156,10 @@ pnpm gen:api                # → packages/shared/src/api/generated.ts
 
 ## Backend
 
-Этот фронт интегрируется с 61 endpoint бэка (см. `apps/api/routers/v1/`). Префикс `/api`. Auth — `X-API-Key` header.
+Этот фронт интегрируется с 61 endpoint бэка (см. `apps/api/routers/v1/`). Префикс
+`/api`. В production browser использует same-origin Caddy BasicAuth; Caddy
+добавляет server-only `X-API-Key` только в upstream-запрос. Ключ не компилируется
+во frontend и не хранится в browser storage.
 
 Vite proxy уже настроен: запросы к `/api` идут на `http://localhost:8100`.
 

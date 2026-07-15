@@ -48,7 +48,7 @@ export function Slider({
         aria-label={label}
         onChange={(e) => onChange(Number(e.target.value))}
         className={[
-          "w-full accent-[var(--accent)] cursor-pointer",
+          "h-6 min-h-6 w-full accent-[var(--accent)] cursor-pointer",
           "disabled:opacity-40 disabled:cursor-not-allowed",
           "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
         ].join(" ")}

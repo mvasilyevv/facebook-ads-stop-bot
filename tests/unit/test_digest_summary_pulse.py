@@ -130,6 +130,36 @@ async def test_build_pulse_fallback_when_ai_down() -> None:
     assert "CR2_CR002" in result
 
 
+# Веб-пульс обязан возвращать plain text, даже если модель проигнорировала prompt
+# и прислала Telegram HTML (реальный регресс: в виджете были видны буквальные <b>).
+@pytest.mark.asyncio
+async def test_build_pulse_web_strips_model_html() -> None:
+    signals = PulseSignals(
+        window_start_utc=_NOW,
+        window_end_utc=_NOW,
+        stop_count=1,
+        warning_count=0,
+        failed_tasks_count=0,
+        top_stops=[("CR2_CR002", "CR2", ["cpr_stop"])],
+    )
+    model_text = (
+        "Требуется действие: обнаружен 1 STOP за последний час — <b>CR2_CR002 [CR2]</b> (cpr_stop)."
+    )
+    with (
+        patch("core.ai_assistant.pulse.collect_pulse_signals", new=AsyncMock(return_value=signals)),
+        patch("core.ai_assistant.pulse.get_ai_client", return_value=_ai(model_text)) as gac,
+    ):
+        result = await build_pulse(MagicMock(), since=_NOW, now=_NOW, html=False)
+
+    assert result == (
+        "Остановлено 1 объявление за последний час — CR2_CR002 · оффер CR2 — причина: дорогая рега."
+    )
+    assert "STOP" not in result
+    assert "cpr_stop" not in result
+    system = gac.return_value.chat.call_args.kwargs["system"]
+    assert "plain text" in system
+
+
 # has_signal: одиночные warnings не будят, стоп/фейл/шквал warnings — будят
 def test_pulse_has_signal_thresholds() -> None:
     base = dict(window_start_utc=_NOW, window_end_utc=_NOW)

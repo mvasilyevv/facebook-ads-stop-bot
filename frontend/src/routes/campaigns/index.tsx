@@ -17,7 +17,9 @@ import { Switch } from "@/components/ui/Switch";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
+import { useMonitoringSnapshot } from "@/lib/hooks/useMonitoringSnapshot";
 import {
   useObserverSettings,
   useUpdateOwnerTag,
@@ -35,8 +37,13 @@ export const Route = createFileRoute("/campaigns/")({
 function CampaignsPage() {
   return (
     <>
-      <PageHeader eyebrowNum="01" eyebrow="OPERATE · СКОУП" title="Кампании" />
-      <div className="space-y-6" style={{ maxWidth: 720 }}>
+      <PageHeader
+        eyebrowNum="01"
+        eyebrow="OPERATE · КОНТУР МОНИТОРИНГА"
+        title="Контур кампаний"
+        subtitle="Какие кампании бот отслеживает и когда запускает кабинет"
+      />
+      <div className="space-y-6" style={{ maxWidth: 820 }}>
         <ScopeCard />
         <CabinetAutostartCard />
       </div>
@@ -83,7 +90,7 @@ const OwnerTagSection: FC = () => {
   const handleSave = async () => {
     try {
       await updateMut.mutateAsync(tags.length ? tags.join(",") : null);
-      toast.success("Owner Tag сохранён");
+      toast.success("Теги владельца сохранены");
     } catch (e) {
       toast.error("Ошибка сохранения", e instanceof Error ? e.message : String(e));
     }
@@ -92,22 +99,27 @@ const OwnerTagSection: FC = () => {
   return (
     <div>
       <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-2">
-        OWNER CAMPAIGN TAG
+        ТЕГИ ВЛАДЕЛЬЦА
       </div>
       <div className="text-[12px] text-bg-9 mb-3">
-        Тег(и) в названии кампании, помечающие «мои» кампании в общем кабинете. Добавляй по одному
-        (Enter), × — удалить. Пусто — список ниже не фильтруется по тегу.
+        Метки в названии кампании, по которым бот отделяет ваши кампании от остальных. Добавляйте
+        по одной через Enter. Если оставить поле пустым, фильтрации по владельцу не будет.
       </div>
       <TagListInput
         id="owner-tag"
-        aria-label="Owner Campaign Tag"
+        aria-label="Теги владельца кампаний"
         placeholder="MV + Enter"
         values={tags}
         onChange={setTags}
       />
       <div className="flex justify-end mt-3">
-        <Button variant="primary" onClick={() => void handleSave()} loading={updateMut.isPending}>
-          Сохранить
+        <Button
+          variant="primary"
+          onClick={() => void handleSave()}
+          loading={updateMut.isPending}
+          disabled={tags.join(",") === (data?.owner_campaign_tag ?? "")}
+        >
+          Сохранить теги
         </Button>
       </div>
     </div>
@@ -123,6 +135,7 @@ const CabinetAutostartCard: FC = () => {
   const updateMut = useUpdateCabinetAutostart();
   const [enabled, setEnabled] = useState(false);
   const [time, setTime] = useState("06:00");
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (data) {
@@ -151,18 +164,26 @@ const CabinetAutostartCard: FC = () => {
     }
     try {
       await updateMut.mutateAsync({ enabled, hour_utc: hour, minute_utc: minute });
-      toast.success("Автостарт сохранён");
+      toast.success(enabled ? "Автостарт включён" : "Автостарт выключен");
     } catch (e) {
       toast.error("Ошибка сохранения", e instanceof Error ? e.message : String(e));
     }
   };
 
+  const isDirty =
+    enabled !== (data?.enabled ?? false) ||
+    time !== `${pad2(data?.hour_utc ?? 0)}:${pad2(data?.minute_utc ?? 0)}`;
+  const requestSave = () => {
+    if (enabled && !data?.enabled) setConfirmOpen(true);
+    else void handleSave();
+  };
+
   return (
+    <>
     <Card eyebrow="АВТОСТАРТ КАБИНЕТА" padded>
       <div className="text-[12px] text-bg-9 mb-3">
-        В заданное время (UTC) бот включит объявления <b className="text-bg-11">отслеживаемых</b>{" "}
-        кампаний (список ниже) и запустит скан — без подтверждения. Пустой список отслеживаемых —
-        ничего не включается.
+        В заданное время бот автоматически включит объявления выбранных кампаний и запустит
+        мониторинг. Перед первым включением потребуется подтверждение.
       </div>
 
       <Switch
@@ -172,7 +193,7 @@ const CabinetAutostartCard: FC = () => {
         visualLabel="Статус"
       />
 
-      <div className="mt-4 flex items-end justify-between gap-3">
+      <div className="mt-4 flex flex-col items-start gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div style={{ maxWidth: 160 }} className="flex-1">
           <Input
             id="autostart-time"
@@ -181,14 +202,41 @@ const CabinetAutostartCard: FC = () => {
             value={time}
             onChange={(e) => setTime(e.target.value)}
           />
+          <p className="mt-1.5 text-[11px] text-bg-9">
+            Локальное время: {localTimeForUtc(time)} ({Intl.DateTimeFormat().resolvedOptions().timeZone})
+          </p>
         </div>
-        <Button variant="primary" onClick={() => void handleSave()} loading={updateMut.isPending}>
-          Сохранить
+        <Button
+          variant="primary"
+          onClick={requestSave}
+          loading={updateMut.isPending}
+          disabled={!isDirty}
+        >
+          Сохранить расписание
         </Button>
       </div>
     </Card>
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Включить автоматический запуск?"
+        description={`Каждый день в ${time} UTC (${localTimeForUtc(time)} по локальному времени) бот включит объявления выбранных кампаний без дополнительного подтверждения.`}
+        confirmLabel="Включить автостарт"
+        onConfirm={handleSave}
+      />
+    </>
   );
 };
+
+function localTimeForUtc(value: string): string {
+  const parts = value.split(":");
+  const hours = Number(parts[0]);
+  const minutes = Number(parts[1]);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return "—";
+  const date = new Date();
+  date.setUTCHours(hours, minutes, 0, 0);
+  return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
 
 // ─── Отслеживаемые кампании (allowlist) ───────────────────────────────────────
 
@@ -216,7 +264,7 @@ const CampaignName: FC<{ name: string }> = ({ name }) => {
       {parts.map((p, i) => (
         <span key={`${i}-${p}`} className="inline-flex items-baseline">
           {i > 0 && (
-            <span aria-hidden="true" className="text-bg-7 mr-1">
+            <span aria-hidden="true" className="text-bg-8 mr-1">
               /
             </span>
           )}
@@ -228,6 +276,7 @@ const CampaignName: FC<{ name: string }> = ({ name }) => {
 };
 
 const CampaignAllowlistSection: FC = () => {
+  const monitoring = useMonitoringSnapshot();
   // Старые кампании (дата в имени старше 14 дней, не выбранные) по умолчанию скрыты —
   // бэк фильтрует по дате из названия; тумблер ниже списка показывает всё.
   const [showStale, setShowStale] = useState(false);
@@ -285,12 +334,16 @@ const CampaignAllowlistSection: FC = () => {
   };
 
   const hasCampaigns = !!campaigns && campaigns.length > 0;
+  const initialSelected = new Set(campaigns?.filter((campaign) => campaign.selected).map((campaign) => campaign.id) ?? []);
+  const hasSelectionChanges =
+    selected.size !== initialSelected.size || [...selected].some((id) => !initialSelected.has(id));
+  const refreshUnavailable = monitoring.state === "offline" || monitoring.state === "unknown";
 
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
         <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8">
-          ОТСЛЕЖИВАЕМЫЕ КАМПАНИИ
+          КАМПАНИИ ПОД КОНТРОЛЕМ
         </div>
         <Button
           variant="secondary"
@@ -298,15 +351,21 @@ const CampaignAllowlistSection: FC = () => {
           leftIcon={<RefreshCw size={13} />}
           onClick={() => void handleRefresh()}
           loading={refreshMut.isPending}
+          disabled={refreshUnavailable}
+          title={refreshUnavailable ? "Сначала восстановите контур мониторинга" : undefined}
         >
-          Обновить список
+          Обновить из кабинета
         </Button>
       </div>
       <div className="text-[11px] text-bg-8 mb-3">
-        Отмеченные кампании бот <b className="text-bg-10">отслеживает</b> (авто-стоп) и поднимает в
-        автостарте. Пусто (ничего не выбрано) — <b className="text-bg-10">ничего не отслеживается</b>{" "}
-        и не автостартится. «Обновить список» тянет кампании из кабинета через browser-agent.
+        Выбранные кампании участвуют в мониторинге, авто-стопе и расписании запуска. Если ничего
+        не выбрано, бот не будет отслеживать и включать объявления.
       </div>
+      {refreshUnavailable ? (
+        <p className="mb-3 text-[11px] text-warning" role="status">
+          Обновление из кабинета недоступно, пока контур мониторинга не восстановлен.
+        </p>
+      ) : null}
 
       {isLoading ? (
         <Skeleton className="h-24 w-full" />
@@ -315,7 +374,7 @@ const CampaignAllowlistSection: FC = () => {
           className="text-[12px] text-bg-8 border border-[var(--hairline)] rounded-[var(--radius-2)]"
           style={{ padding: "var(--s-4)" }}
         >
-          Кампаний нет. Нажми «Обновить список» — резолвим из кабинета по Owner Tag.
+          Кампаний нет. Проверьте теги владельца и обновите список из кабинета.
         </div>
       ) : (
         <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden">
@@ -335,7 +394,7 @@ const CampaignAllowlistSection: FC = () => {
             <span className="font-display text-[10.5px] tracking-wider uppercase text-bg-9">
               {allSelected ? "Снять все" : "Выбрать все"}
             </span>
-            <span className="ml-auto font-display tabular-nums text-[11px] text-bg-7">
+            <span className="ml-auto font-display tabular-nums text-[11px] text-bg-8">
               {selected.size} / {allIds.length}
             </span>
           </button>
@@ -378,7 +437,7 @@ const CampaignAllowlistSection: FC = () => {
           variant="primary"
           onClick={() => void handleSaveAllowlist()}
           loading={saveMut.isPending}
-          disabled={!hasCampaigns}
+          disabled={!hasCampaigns || !hasSelectionChanges}
         >
           Сохранить выбор ({selected.size})
         </Button>

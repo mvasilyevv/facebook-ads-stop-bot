@@ -34,7 +34,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from apps.telegram_poller.main import _get_database_url
+from core.dashboard.cabinet_spend import cabinet_day_start_utc
 from core.db import WORKER_ENGINE_KWARGS
+from core.meta_api.account_tz import DEFAULT_OFFSET_HOURS, load_offset
 from core.observer.accounts import (
     allowlist_blocks_scan,
     list_offers_without_accounts,
@@ -254,6 +256,24 @@ async def _publish_runtime_status(
     if redis_client is None:
         return
 
+    # Это накопительный маркер, а не состояние текущей фазы. Переходы
+    # idle → scanning → parse не должны стирать подтверждение предыдущего
+    # успешного цикла. Новый timestamp передаётся только после success;
+    # в остальных публикациях сохраняем уже записанное значение.
+    if last_successful_scan_at is None:
+        try:
+            previous_raw = await redis_client.get("observer:runtime")
+            if previous_raw:
+                previous = json.loads(previous_raw)
+                previous_last_ok = previous.get("last_successful_scan_at")
+                if isinstance(previous_last_ok, str) and previous_last_ok:
+                    last_successful_scan_at = datetime.fromisoformat(previous_last_ok)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            # Битый/legacy payload будет целиком заменён свежим контрактом ниже.
+            pass
+        except Exception:
+            logger.exception("redis GET observer:runtime failed while preserving last success")
+
     # Нормализованный статус для читателей (scanning/idle/dispatch/preparing → running)
     _RUNNING_DETAIL = {"scanning", "idle", "dispatch", "preparing"}
     normalized_status = "running" if status in _RUNNING_DETAIL else status
@@ -434,13 +454,21 @@ async def _run_account_scan(
             # Grace-маркеры «держать до цены лида» (кейс куратора) — один SCAN
             # на цикл; ошибка Redis → пустая карта (fail-safe к обычным правилам).
             grace_map = await load_enable_grace_map(redis_client)
+            cycle_ts = datetime.now(timezone.utc)
+            account_offset = await load_offset(
+                redis_client,
+                ad_account_id or "",
+                default=DEFAULT_OFFSET_HOURS,
+            )
             cycle_result = await process_scan_rows(
                 engine,
                 rows=scan_out.rows,
                 scan_id=scan_id,
+                cycle_ts=cycle_ts,
                 owner_tag=config.get("owner_campaign_tag"),
                 ad_account_id=ad_account_id,
                 enable_grace_map=grace_map,
+                tracker_day_start=cabinet_day_start_utc(account_offset, cycle_ts),
             )
 
             # Нотификация owner'а при тихом sync OFF→disabled

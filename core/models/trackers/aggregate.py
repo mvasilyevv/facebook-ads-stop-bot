@@ -47,7 +47,10 @@ class TrackerAggregate(UUIDPrimaryKey, Timestamp, Base):
     day: Mapped[date] = mapped_column(Date, nullable=False)
     installs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     registrations: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    ftds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     deposits: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    confirmed_deposits: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    redeposits: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     # Numeric(12,4) — согласовано с точностью источника (adsetpro_postback_events
     # revenue приходит с 4 знаками после запятой); было (12,2) и округляло агрегат
     # до копеек, теряя 2 младших разряда постбэка (MID-15, migration 0032).

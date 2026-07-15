@@ -83,7 +83,10 @@ class TrackerTotalsOut(BaseModel):
 
     installs: int = 0
     registrations: int = 0
+    ftds: int = 0
     deposits: int = 0
+    confirmed_deposits: int = 0
+    redeposits: int = 0
     revenue: str | None = None
     # ROI% = (revenue − spend Meta)/spend×100 — кросс-источник, см. attribution_note.
     roi_pct: str | None = None
@@ -95,7 +98,10 @@ class TrackerDailyPointOut(BaseModel):
     day: date
     installs: int = 0
     registrations: int = 0
+    ftds: int = 0
     deposits: int = 0
+    confirmed_deposits: int = 0
+    redeposits: int = 0
     revenue: str | None = None
 
 
@@ -107,6 +113,15 @@ class TrackerBlockOut(BaseModel):
     attribution_note: str = ""
     totals: TrackerTotalsOut = Field(default_factory=TrackerTotalsOut)
     series_daily: list[TrackerDailyPointOut] = Field(default_factory=list)
+    unmatched_events: int = 0
+    last_event_at: datetime | None = None
+    processing_lag_ms: int | None = None
+    data_quality: str = "unknown"
+    backlog: int = 0
+    duplicate_events: int = 0
+    unsupported_events: int = 0
+    reconciliation_drift: int | None = None
+    materialization_drift: int | None = None
 
 
 class BreakdownRowOut(BaseModel):

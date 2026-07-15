@@ -98,6 +98,7 @@ def _derived_out(totals_raw: dict[str, Any]) -> FunnelDerivedOut:
 
 async def _tracker_block(
     engine: Any,
+    redis: Any,
     *,
     day_from: Any,
     day_to: Any,
@@ -107,6 +108,7 @@ async def _tracker_block(
     """Блок трекера. Сбой запроса → available=false, основной ответ не роняем."""
     try:
         totals = await sq.fetch_tracker_totals(engine, day_from=day_from, day_to=day_to)
+        live = await sq.fetch_tracker_live_telemetry(engine, day_from=day_from, day_to=day_to)
         series = (
             await sq.fetch_tracker_daily(engine, day_from=day_from, day_to=day_to)
             if with_series
@@ -115,15 +117,56 @@ async def _tracker_block(
     except Exception:
         logger.exception("stats: блок трекера недоступен (day %s..%s)", day_from, day_to)
         return TrackerBlockOut(available=False, attribution_note=_ATTRIBUTION_NOTE)
-    has_data = any(v for k, v in totals.items() if k != "revenue") or bool(totals.get("revenue"))
+    try:
+        duplicate_events = int(await redis.get("fb_agent:tracker:duplicate_events") or 0)
+        unsupported_events = int(await redis.get("fb_agent:tracker:unsupported_events") or 0)
+    except Exception:
+        duplicate_events = 0
+        unsupported_events = 0
+    has_live = live.get("last_event_at") is not None
+    registrations = (
+        int(live.get("registrations") or 0) if has_live else int(totals.get("registrations") or 0)
+    )
+    confirmed = (
+        int(live.get("confirmed_deposits") or 0)
+        if has_live
+        else int(totals.get("confirmed_deposits") or 0)
+    )
+    ftds = int(live.get("ftds") or 0) if has_live else int(totals.get("ftds") or 0)
+    redeposits = (
+        int(live.get("redeposits") or 0) if has_live else int(totals.get("redeposits") or 0)
+    )
+    has_data = (
+        has_live
+        or any(v for k, v in totals.items() if k != "revenue")
+        or bool(totals.get("revenue"))
+    )
+    unmatched = int(live.get("unmatched_events") or 0)
+    backlog = int(live.get("backlog") or 0)
+    drift = int(live.get("reconciliation_drift") or 0)
+    materialization_drift = int(live.get("materialization_drift") or 0)
+    if not has_data:
+        data_quality = "unknown"
+    else:
+        data_quality = (
+            "good"
+            if unmatched == 0 and backlog == 0 and drift == 0 and materialization_drift == 0
+            else "degraded"
+        )
     return TrackerBlockOut(
-        available=has_data,
+        # Availability is the health of the query/source, not whether a
+        # conversion happened in the selected period. Only the exception branch
+        # above returns available=False.
+        available=True,
         day_utc=day_to,
         attribution_note=_ATTRIBUTION_NOTE,
         totals=TrackerTotalsOut(
             installs=int(totals.get("installs") or 0),
-            registrations=int(totals.get("registrations") or 0),
-            deposits=int(totals.get("deposits") or 0),
+            registrations=registrations,
+            ftds=ftds,
+            deposits=confirmed,
+            confirmed_deposits=confirmed,
+            redeposits=redeposits,
             revenue=decimal_str(totals.get("revenue")),
             roi_pct=decimal_str(compute_roi_pct(totals.get("revenue"), meta_spend)),
         ),
@@ -132,11 +175,25 @@ async def _tracker_block(
                 day=r["day"],
                 installs=int(r.get("installs") or 0),
                 registrations=int(r.get("registrations") or 0),
-                deposits=int(r.get("deposits") or 0),
+                ftds=int(r.get("ftds") or 0),
+                deposits=int(r.get("confirmed_deposits") or 0),
+                confirmed_deposits=int(r.get("confirmed_deposits") or 0),
+                redeposits=int(r.get("redeposits") or 0),
                 revenue=decimal_str(r.get("revenue")),
             )
             for r in series
         ],
+        unmatched_events=unmatched,
+        last_event_at=live.get("last_event_at"),
+        processing_lag_ms=(
+            int(live["processing_lag_ms"]) if live.get("processing_lag_ms") is not None else None
+        ),
+        data_quality=data_quality,
+        backlog=backlog,
+        duplicate_events=duplicate_events,
+        unsupported_events=unsupported_events,
+        reconciliation_drift=drift,
+        materialization_drift=materialization_drift,
     )
 
 
@@ -167,6 +224,7 @@ async def get_stats_today(
     )
     tracker = await _tracker_block(
         engine,
+        redis,
         day_from=now.date(),
         day_to=now.date(),
         meta_spend=totals_raw.get("spend"),
@@ -221,6 +279,7 @@ async def get_stats_today(
 @router.get("/stats/period", response_model=StatsPeriodOut)
 async def get_stats_period(
     engine: DepEngine,
+    redis: DepRedis,
     from_iso: str | None = Query(default=None, description="ISO-8601 начало периода"),
     to_iso: str | None = Query(default=None, description="ISO-8601 конец периода"),
 ) -> StatsPeriodOut:
@@ -233,6 +292,7 @@ async def get_stats_period(
     )
     tracker = await _tracker_block(
         engine,
+        redis,
         day_from=from_dt.date(),
         day_to=to_dt.date(),
         meta_spend=totals_raw.get("spend"),

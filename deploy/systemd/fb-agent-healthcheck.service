@@ -1,0 +1,8 @@
+[Unit]
+Description=FB Agent host-level readiness check
+After=fb-agent.service
+
+[Service]
+Type=oneshot
+Environment=FB_AGENT_ROOT=/opt/fb-agent
+ExecStart=/opt/fb-agent/current/scripts/server-compose.sh ready

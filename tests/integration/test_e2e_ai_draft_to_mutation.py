@@ -273,3 +273,52 @@ async def test_double_approve_callback_is_noop(
         ).scalar()
     # После первого approve остался pending; повторный approve его не сбил
     assert status == "pending"
+
+
+# Поздняя кнопка cancel после approve не должна скрывать уже запущенную мутацию.
+@pytest.mark.asyncio
+async def test_cancel_after_approve_keeps_task_pending(
+    pg_engine: AsyncEngine,
+    clean_meta_pipeline,
+) -> None:
+    tool = RequestBulkPauseTool()
+    await tool.run(_ctx(pg_engine, chat_id=7), {"ad_ids": ["99901"]})
+
+    async with pg_engine.connect() as conn:
+        task_id = (
+            await conn.execute(
+                text(
+                    "SELECT id FROM task_queue WHERE task_type = 'meta_api_mutation' "
+                    "ORDER BY id DESC LIMIT 1"
+                )
+            )
+        ).scalar_one()
+
+    fake_tg = _FakeTGClient()
+    await handle_draft_callback(
+        engine=pg_engine,
+        client=fake_tg,
+        cq_id="cb-approve",
+        action="dr_ok",
+        task_id_raw=str(task_id),
+        username="op",
+        chat_id=7,
+        message_id=11,
+    )
+    await handle_draft_callback(
+        engine=pg_engine,
+        client=fake_tg,
+        cq_id="cb-late-cancel",
+        action="dr_cancel",
+        task_id_raw=str(task_id),
+        username="op",
+        chat_id=7,
+        message_id=11,
+    )
+
+    async with pg_engine.connect() as conn:
+        status = (
+            await conn.execute(text("SELECT status FROM task_queue WHERE id = :i"), {"i": task_id})
+        ).scalar_one()
+    assert status == "pending"
+    assert any("Уже не draft" in text for _, text in fake_tg.acks)

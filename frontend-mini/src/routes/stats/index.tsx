@@ -3,8 +3,7 @@
  * MiniHeader → период-pills → FunnelKpiPlate(full) → StatsHourlyChart
  * (today: по часам из series_hourly; период: по дням из series_daily) →
  * FunnelBarMini → TrackerBlockMini.
- * Компонент экспортирован именованно (StatsPage) — тест импортирует его
- * напрямую поверх мокнутого @tanstack/react-router, без дублирования логики.
+ * Route-файл экспортирует только Route, чтобы TanStack мог code-split страницу.
  */
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
@@ -91,7 +90,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 // ─── Главный компонент ────────────────────────────────────────────────────────
 
-export function StatsPage() {
+function StatsPage() {
   const [period, setPeriod] = useState<PeriodId>("today");
 
   const today = useStatsToday();

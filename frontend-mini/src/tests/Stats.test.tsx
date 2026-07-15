@@ -5,6 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import type { ComponentType } from "react";
 import type { StatsToday, StatsPeriod } from "@fb/shared";
 
 // Мок роутера. createFileRoute(path) должен вернуть ФУНКЦИЮ (не объект) —
@@ -56,7 +57,21 @@ const STATS_TODAY: StatsToday = {
     available: true,
     day_utc: "2026-07-02",
     attribution_note: "Attribution gap — нормально.",
-    totals: { installs: 50, registrations: 40, deposits: 10, revenue: "800.00", roi_pct: "166.7" },
+    unmatched_events: 0,
+    data_quality: "good",
+    backlog: 0,
+    duplicate_events: 0,
+    unsupported_events: 0,
+    totals: {
+      installs: 50,
+      registrations: 40,
+      deposits: 8,
+      ftds: 10,
+      confirmed_deposits: 8,
+      redeposits: 2,
+      revenue: "800.00",
+      roi_pct: "166.7",
+    },
     series_daily: [],
   },
   breakdown: null,
@@ -93,7 +108,21 @@ const STATS_PERIOD: StatsPeriod = {
     available: false,
     day_utc: null,
     attribution_note: "",
-    totals: { installs: 0, registrations: 0, deposits: 0, revenue: null, roi_pct: null },
+    unmatched_events: 0,
+    data_quality: "unknown",
+    backlog: 0,
+    duplicate_events: 0,
+    unsupported_events: 0,
+    totals: {
+      installs: 0,
+      registrations: 0,
+      deposits: 0,
+      ftds: 0,
+      confirmed_deposits: 0,
+      redeposits: 0,
+      revenue: null,
+      roi_pct: null,
+    },
     series_daily: [],
   },
 };
@@ -106,7 +135,9 @@ vi.mock("@/lib/api", () => ({
   useStatsPeriod: (days: number) => mockUseStatsPeriod(days),
 }));
 
-import { StatsPage } from "@/routes/stats/index";
+import { Route } from "@/routes/stats/index";
+
+const StatsPage = (Route as unknown as { component: ComponentType }).component;
 
 function renderPage() {
   return render(<StatsPage />);

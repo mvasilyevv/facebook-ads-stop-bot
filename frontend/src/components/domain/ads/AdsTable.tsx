@@ -205,9 +205,14 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
   return (
     <div
       role="row"
+      tabIndex={0}
+      aria-label={`${ad.ad_name}, ${display.label}. Открыть подробности`}
       onClick={() => onOpen(ad)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && event.target === event.currentTarget) onOpen(ad);
+      }}
       className={cn(
-        "grid items-center cursor-pointer border-b border-[var(--hairline)]",
+        "grid cursor-pointer items-center border-b border-[var(--hairline)] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent",
         "absolute left-0 right-0",
         selected ? "bg-accent-bg" : cursor ? "bg-bg-2" : "hover:bg-bg-1",
       )}
@@ -219,17 +224,18 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
       }}
     >
       {/* Checkbox */}
-      <span
-        className="flex items-center justify-center h-full"
+      <button
+        type="button"
+        aria-pressed={selected}
+        aria-label={`Выбрать ${ad.ad_name}`}
+        className="flex h-full min-h-6 min-w-6 items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent"
         onClick={(e) => {
           e.stopPropagation();
           onToggleSelect(ad.fb_ad_id);
         }}
       >
         <span
-          role="checkbox"
-          aria-checked={selected}
-          aria-label={`Выбрать ${ad.ad_name}`}
+          aria-hidden="true"
           className={cn(
             "size-[15px] inline-flex items-center justify-center border rounded-[var(--radius-1)]",
             selected ? "border-accent bg-accent" : "border-bg-7",
@@ -237,7 +243,7 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
         >
           {selected ? <Check size={11} strokeWidth={3} className="text-bg-0" /> : null}
         </span>
-      </span>
+      </button>
 
       {/* AD: thumb + (name + первый rule-pill) / родитель (кампания · адсет).
           overflow-hidden — клип по границе колонки: rule-pill и хвост адсета не
@@ -273,7 +279,7 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
             ) : null}
             {parent.adset ? (
               <>
-                <span aria-hidden="true" className="shrink-0 text-bg-7">
+                <span aria-hidden="true" className="shrink-0 text-bg-8">
                   ›
                 </span>
                 <span className="shrink-0 text-bg-10">{parent.adset}</span>
@@ -300,7 +306,17 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
 
       {/* STATE badge */}
       <span className="self-center pl-0.5">
-        <Badge variant={alertStateToBadgeVariant(display.state)} size="sm">
+        <Badge
+          variant={alertStateToBadgeVariant(display.state)}
+          size="sm"
+          title={
+            display.label === "Отключено"
+              ? "Отключено автоматикой Stop Bot"
+              : display.label === "Выключено"
+                ? "Доставка выключена в Meta"
+                : undefined
+          }
+        >
           {display.label}
         </Badge>
       </span>

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily FB Agent PostgreSQL backup
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 Europe/Kaliningrad
+Persistent=true
+RandomizedDelaySec=10m
+Unit=fb-agent-backup.service
+
+[Install]
+WantedBy=timers.target

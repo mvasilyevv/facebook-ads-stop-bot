@@ -11,6 +11,12 @@ readonly VISION_CONTAINER="${VISION_CONTAINER:-vision-webtop}"
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 
+vision_container_running() {
+  [[ "$(
+    docker inspect --format '{{.State.Running}}' "$VISION_CONTAINER" 2>/dev/null
+  )" == "true" ]]
+}
+
 vision_api_ready() {
   # В production Vision API слушает loopback собственного network namespace.
   # Published host-port может принимать TCP и сразу reset'ить HTTP, хотя API жив
@@ -53,9 +59,16 @@ memory_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo)"
 swap_kb="$(awk '/SwapTotal:/ {print $2}' /proc/meminfo)"
 ((swap_kb > 0)) || warn "swap is disabled"
 
+if ! vision_container_running; then
+  # browser-agent shares this exact container's network namespace.  Unlike API
+  # readiness, an absent/stopped namespace cannot be degraded safely because
+  # Docker cannot create browser-agent at all.
+  die "Vision namespace container is not running: $VISION_CONTAINER (--allow-vision-offline cannot bypass this)"
+fi
+
 if ! vision_api_ready; then
   if [[ "$ALLOW_VISION_OFFLINE" == true ]]; then
-    warn "Vision API at 127.0.0.1:3030 is offline; application will deploy in safe not-ready state"
+    warn "Vision namespace is running but API at 127.0.0.1:3030 is offline; application will deploy in safe not-ready state"
   else
     die "Vision API at 127.0.0.1:3030 is offline"
   fi

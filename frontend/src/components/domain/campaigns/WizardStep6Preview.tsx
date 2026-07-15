@@ -86,7 +86,7 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
     <div className="space-y-6">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-1">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 6 · ПРЕВЬЮ
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
@@ -157,7 +157,7 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
 
       {/* launch_state */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-3">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
           СТАТУС ПРИ СОЗДАНИИ (launch_state)
         </div>
         <div className="space-y-2">
@@ -179,7 +179,7 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
               >
                 <Icon
                   size={18}
-                  className={cn("shrink-0 mt-0.5", isActive ? "text-accent" : "text-bg-7")}
+                  className={cn("shrink-0 mt-0.5", isActive ? "text-accent" : "text-bg-8")}
                 />
                 <div>
                   <div
@@ -219,7 +219,7 @@ function PlanView({ plan }: { plan: ValidatePlanOut }) {
             className="border border-[var(--hairline)] rounded-[var(--radius-2)] p-3 bg-bg-1 text-center"
           >
             <div className="font-display text-[20px] font-medium text-bg-11">{value}</div>
-            <div className="text-[10px] text-bg-7 font-display uppercase tracking-wider mt-0.5">
+            <div className="text-[10px] text-bg-8 font-display uppercase tracking-wider mt-0.5">
               {label}
             </div>
           </div>
@@ -228,7 +228,7 @@ function PlanView({ plan }: { plan: ValidatePlanOut }) {
 
       {/* Нейминг по кампаниям */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-2">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-2">
           НЕЙМИНГ
         </div>
         <div className="space-y-2">
@@ -242,7 +242,7 @@ function PlanView({ plan }: { plan: ValidatePlanOut }) {
       <div className="flex items-center gap-2 text-[12px] text-bg-8">
         <CheckCircle size={13} className="text-success" />
         Оффер: <span className="text-bg-11 font-medium">{plan.offer_code}</span>
-        <span className="text-bg-7">·</span>
+        <span className="text-bg-8">·</span>
         launch_state: <span className="text-bg-11 font-mono">{plan.launch_state}</span>
       </div>
     </div>
@@ -262,15 +262,15 @@ function CampaignPlanRow({ campaign }: { campaign: CampaignPlanOut }) {
         className="w-full flex items-center gap-2 px-3 py-2.5 bg-bg-2 hover:bg-bg-3 transition-colors text-left"
       >
         {expanded ? (
-          <ChevronDown size={13} className="text-bg-7 shrink-0" />
+          <ChevronDown size={13} className="text-bg-8 shrink-0" />
         ) : (
-          <ChevronRight size={13} className="text-bg-7 shrink-0" />
+          <ChevronRight size={13} className="text-bg-8 shrink-0" />
         )}
-        <Layers size={13} className="text-bg-7 shrink-0" />
+        <Layers size={13} className="text-bg-8 shrink-0" />
         <span className="font-mono text-[12px] text-bg-11 flex-1 truncate" title={campaign.name}>
           {campaign.name}
         </span>
-        <span className="text-[10px] text-bg-7 font-display uppercase tracking-wider shrink-0">
+        <span className="text-[10px] text-bg-8 font-display uppercase tracking-wider shrink-0">
           {campaign.adsets.length} adset
           {campaign.adsets.length !== 1 ? "s" : ""}
         </span>
@@ -282,13 +282,13 @@ function CampaignPlanRow({ campaign }: { campaign: CampaignPlanOut }) {
               <span className="font-mono text-[11px] text-bg-9 flex-1 truncate" title={adset.name}>
                 {adset.name}
               </span>
-              <span className="text-[10px] text-bg-7">{adset.ad_count} ads</span>
+              <span className="text-[10px] text-bg-8">{adset.ad_count} ads</span>
               <span
                 className={cn(
                   "text-[10px] font-display uppercase tracking-wider px-1.5 py-0.5 rounded",
                   adset.status === "ACTIVE"
                     ? "bg-success/10 text-success"
-                    : "bg-bg-3 text-bg-7",
+                    : "bg-bg-3 text-bg-8",
                 )}
               >
                 {adset.status}

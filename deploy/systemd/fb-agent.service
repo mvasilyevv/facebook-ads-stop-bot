@@ -1,0 +1,19 @@
+[Unit]
+Description=FB Agent production stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=FB_AGENT_ROOT=/opt/fb-agent
+ExecStartPre=/opt/fb-agent/current/scripts/wait-for-vision-container.sh
+ExecStart=/opt/fb-agent/current/scripts/server-compose.sh up
+ExecReload=/opt/fb-agent/current/scripts/server-compose.sh restart
+ExecStop=/opt/fb-agent/current/scripts/server-compose.sh stop
+TimeoutStartSec=15min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=multi-user.target

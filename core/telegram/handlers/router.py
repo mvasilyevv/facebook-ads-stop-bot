@@ -64,8 +64,9 @@ _LEGACY_COMMANDS: frozenset[str] = frozenset(
 # dr_ok (подтверждение money-черновика /pause /resume) — тоже owner-only (H-2):
 # не-owner может СОЗДАТЬ черновик, но ИСПОЛНИТЬ его (approve → pending →
 # meta_api_worker тратит деньги) вправе только владелец кабинета.
-# dr_cancel НЕ здесь — отмена черновика безопасна (снимает pending-действие).
-_OWNER_ONLY_CALLBACKS: frozenset[str] = frozenset({"dis", "ereco", "plan", "dr_ok"})
+# dr_cancel тоже owner-only: отмена creator-scoped и разрешена только пока запись
+# остаётся draft. Поздняя кнопка не может скрыть уже запущенную money-мутацию.
+_OWNER_ONLY_CALLBACKS: frozenset[str] = frozenset({"dis", "ereco", "plan", "dr_ok", "dr_cancel"})
 # Команды (autostart с аргументами проверяется отдельно — write-путь).
 # /ai — owner-only: ассистент умеет создавать money-черновики (request_*).
 _OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
@@ -113,8 +114,7 @@ async def _dispatch_callback_query(
         return
 
     # Owner-ACL: money-кнопки (отключение/включение/запуск плана, подтверждение
-    # money-черновика dr_ok) доступны только role='owner'. dr_cancel
-    # (отмена черновика) — не money, доступна любому активному recipient.
+    # money-черновика dr_ok/dr_cancel) доступны только role='owner'.
     if action in _OWNER_ONLY_CALLBACKS and not recipient.is_owner():
         logger.warning(
             "ACL отказ (callback): action=%s chat_id=%s role=%s", action, chat_id, recipient.role
@@ -149,7 +149,7 @@ async def _dispatch_callback_query(
         )
         return
 
-    fb_ad_id = parts[1]
+    target_id = parts[1]
     token = parts[2] if len(parts) >= 3 else ""
 
     if action == "dis":
@@ -157,7 +157,7 @@ async def _dispatch_callback_query(
             engine=engine,
             client=client,
             cq_id=cq_id,
-            fb_ad_id=fb_ad_id,
+            fb_ad_id=target_id,
             token=token,
             username=str(username),
         )
@@ -171,8 +171,9 @@ async def _dispatch_callback_query(
             engine=engine,
             client=client,
             cq_id=cq_id,
-            fb_ad_id=fb_ad_id,
+            recommendation_id=target_id,
             username=str(username),
+            chat_id=chat_id,
             redis_client=redis_client,
         )
         return

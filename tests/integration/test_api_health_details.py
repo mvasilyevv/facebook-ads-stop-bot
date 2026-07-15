@@ -205,6 +205,38 @@ async def test_health_details_meta_channel_down_degrades(fake_redis_client, monk
     assert payload["overall"] == "DEGRADED"
 
 
+# Probe намеренно пропущен на паузе → UNKNOWN, а не ложный DEGRADED
+@pytest.mark.asyncio
+async def test_health_details_skipped_meta_probe_is_unknown(fake_redis_client, monkeypatch) -> None:
+    """Выключенное сканирование не должно выглядеть как отказ Meta-канала."""
+    monkeypatch.setenv("EXPECTED_WORKERS", "observer")
+    await _set_heartbeat(fake_redis_client, "observer")
+    await fake_redis_client.set(
+        _META_KEY,
+        json.dumps(
+            {
+                "healthy": None,
+                "probe_performed": False,
+                "probe_ok": False,
+                "probe_detail": "scanning_disabled",
+                "detail": "сканирование выключено — канал не проверяется",
+                "reason": "сканирование выключено",
+                "checked_at": datetime.now(UTC).isoformat(),
+            }
+        ),
+        ex=600,
+    )
+
+    app = _make_app(redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/health/details")
+
+    payload = resp.json()
+    assert payload["meta_api_channel"]["status"] == "UNKNOWN"
+    assert payload["meta_api_channel"]["healthy"] is None
+    assert payload["overall"] == "HEALTHY"
+
+
 # Нет ключа (прободер не писал/протух) → UNKNOWN, overall НЕ понижается
 @pytest.mark.asyncio
 async def test_health_details_meta_channel_unknown(fake_redis_client, monkeypatch) -> None:

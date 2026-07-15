@@ -10,10 +10,18 @@ const TRACKER_AVAILABLE: TrackerBlock = {
   available: true,
   day_utc: "2026-07-02",
   attribution_note: "Трекер считает по UTC-дню — расхождение с Meta нормально.",
+  unmatched_events: 1,
+  data_quality: "good",
+  backlog: 0,
+  duplicate_events: 0,
+  unsupported_events: 0,
   totals: {
     installs: 100,
     registrations: 30,
     deposits: 8,
+    ftds: 8,
+    confirmed_deposits: 6,
+    redeposits: 2,
     revenue: "640.00",
     roi_pct: "12.5",
   },
@@ -24,16 +32,33 @@ const TRACKER_UNAVAILABLE: TrackerBlock = {
   available: false,
   day_utc: null,
   attribution_note: "",
-  totals: { installs: 0, registrations: 0, deposits: 0, revenue: null, roi_pct: null },
+  unmatched_events: 0,
+  data_quality: "unknown",
+  backlog: 0,
+  duplicate_events: 0,
+  unsupported_events: 0,
+  totals: {
+    installs: 0,
+    registrations: 0,
+    deposits: 0,
+    ftds: 0,
+    confirmed_deposits: 0,
+    redeposits: 0,
+    revenue: null,
+    roi_pct: null,
+  },
   series_daily: [],
 };
 
 describe("TrackerBlockMini", () => {
-  // available=true — показывает реги/депы/revenue/ROI + attribution_note
+  // available=true — раздельно показывает реги/FTD/confirmed/redeposit + деньги.
   it("рендерит метрики трекера при available=true", () => {
     render(<TrackerBlockMini tracker={TRACKER_AVAILABLE} />);
     expect(screen.getByText("30")).toBeInTheDocument();
+    expect(screen.getByText("FTD")).toBeInTheDocument();
     expect(screen.getByText("8")).toBeInTheDocument();
+    expect(screen.getByText("ПОДТВЕРЖДЕНЫ").parentElement).toHaveTextContent("6");
+    expect(screen.getByText("РЕДЕПОЗИТЫ").parentElement).toHaveTextContent("2");
     expect(screen.getByText("$640.00")).toBeInTheDocument();
     expect(screen.getByText("12.5%")).toBeInTheDocument();
     expect(screen.getByText(/расхождение с Meta нормально/)).toBeInTheDocument();

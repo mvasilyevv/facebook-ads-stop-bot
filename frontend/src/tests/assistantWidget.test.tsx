@@ -5,11 +5,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-// Мок auth store — без apiKey (модуль-уровень, hoisted корректно), как в tests/client.test.ts.
-vi.mock("@/stores/auth", () => ({
-  useAuthStore: { getState: () => ({ apiKey: null }) },
-}));
-
 import { AssistantWidget } from "@/components/domain/assistant/AssistantWidget";
 import { useChatWidget } from "@/stores/chatWidget";
 

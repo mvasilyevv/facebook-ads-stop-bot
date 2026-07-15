@@ -107,10 +107,10 @@ async function renderAdsPage() {
   );
 }
 
-/** Выбирает все мок-строки кликом по их per-row checkbox. */
+/** Выбирает все мок-строки кликом по их toggle-кнопке. */
 async function selectAllRows(user: ReturnType<typeof userEvent.setup>) {
   for (const ad of MOCK_ADS) {
-    const cb = screen.getByRole("checkbox", { name: `Выбрать ${ad.ad_name}` });
+    const cb = screen.getByRole("button", { name: `Выбрать ${ad.ad_name}` });
     await user.click(cb);
   }
 }
@@ -262,12 +262,14 @@ describe("AdsPage — bulk disable partial failure (H-8)", () => {
 
     await waitFor(() => {
       expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("1 disable-задач"),
+        expect.stringContaining("задач на отключение: 1"),
         expect.stringContaining("222"),
       );
     });
     // Успешная часть тоже отражена (создана 1 задача).
-    expect(successSpy).toHaveBeenCalledWith(expect.stringContaining("Создано 1"));
+    expect(successSpy).toHaveBeenCalledWith(
+      expect.stringContaining("задач на отключение: 1"),
+    );
   });
 
   // Все провалились → только error-toast, success не показываем.

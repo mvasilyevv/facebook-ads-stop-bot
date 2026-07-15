@@ -1,6 +1,7 @@
 # Универсальный образ для всех Python-воркеров
 # Воркер выбирается через переменную окружения WORKER_TYPE
-FROM fb-stop-bot/python-base:latest AS runtime
+ARG BASE_IMAGE=fb-stop-bot/python-base:latest
+FROM ${BASE_IMAGE} AS runtime
 
 # Копируем entrypoint-скрипт
 COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh

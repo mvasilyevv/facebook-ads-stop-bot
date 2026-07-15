@@ -37,6 +37,7 @@ def _redis_mock(busy_acquired: bool = True) -> MagicMock:
     r.rpush = AsyncMock()
     r.ltrim = AsyncMock()
     r.expire = AsyncMock()
+    r.eval = AsyncMock(return_value=1)
     return r
 
 
@@ -150,6 +151,24 @@ async def test_busy_guard_blocks_parallel_question() -> None:
     session.ask.assert_not_awaited()
     sent = client.send_message.call_args.kwargs["text"]
     assert "думаю" in sent.lower()
+
+
+# Старый долгий запрос не удаляет lease нового запроса после истечения TTL.
+@pytest.mark.asyncio
+async def test_busy_release_is_token_scoped() -> None:
+    from core.telegram.handlers.ai_chat import _BUSY_RELEASE_SCRIPT, _release_busy_lock
+
+    redis_client = _redis_mock()
+    redis_client.eval.return_value = 0  # Redis хранит уже другой token.
+    await _release_busy_lock(redis_client, key="ai:chat:busy:123", token="old-token")
+
+    redis_client.eval.assert_awaited_once_with(
+        _BUSY_RELEASE_SCRIPT,
+        1,
+        "ai:chat:busy:123",
+        "old-token",
+    )
+    redis_client.delete.assert_not_awaited()
 
 
 # Draft-инструмент в трейсе → превью черновика с кнопками dr_ok/dr_cancel
@@ -266,6 +285,7 @@ async def test_invalid_html_falls_back_to_plain() -> None:
         )
     assert client.send_message.call_count == 2
     assert client.send_message.call_args_list[1].kwargs["parse_mode"] is None
+    assert client.send_message.call_args_list[1].kwargs["text"] == "кривой html"
 
 
 # История: обмен user/assistant дописывается в Redis c LTRIM и TTL
@@ -291,3 +311,25 @@ async def test_history_appended_after_answer() -> None:
     assert r.rpush.await_count == 2  # user + assistant
     r.ltrim.assert_awaited()
     r.expire.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_drain_cancels_chat_tail_after_timeout() -> None:
+    import asyncio
+
+    import core.telegram.handlers.ai_chat as ai_mod
+
+    started = asyncio.Event()
+
+    async def _slow_chat() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(_slow_chat())
+    ai_mod._chat_tasks.add(task)
+    task.add_done_callback(ai_mod._chat_tasks.discard)
+    await started.wait()
+
+    await ai_mod.drain_ai_chat_tasks(timeout_seconds=0)
+
+    assert task.cancelled()

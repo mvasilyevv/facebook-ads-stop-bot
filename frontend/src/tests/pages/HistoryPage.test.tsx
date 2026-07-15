@@ -42,7 +42,7 @@ const mockSummary = {
 const mockTimeline = [
   {
     event_type: "alert",
-    // Дата не сегодня и не вчера — day-separator покажет ISO "2026-06-06"
+    // Дата не сегодня и не вчера — day-separator покажет локализованную дату.
     ts: "2026-05-15T14:32:00Z",
     fb_ad_id: "ad_123",
     ad_name: "Test Ad",
@@ -84,6 +84,22 @@ vi.mock("@/lib/api/history", () => ({
   }),
   useHistoryEvents: (_params: unknown) => ({
     data: [],
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+}));
+
+vi.mock("@/lib/api/stats", () => ({
+  useStatsPeriod: () => ({
+    data: {
+      tracker: {
+        available: true,
+        totals: { registrations: 4, ftds: 2, confirmed_deposits: 1, redeposits: 0 },
+        unmatched_events: 0,
+        data_quality: "good",
+      },
+    },
     isLoading: false,
     error: null,
     refetch: vi.fn(),
@@ -196,8 +212,8 @@ describe("HistorySummarySection", () => {
     // warning_count=8 уникален в DOM
     expect(screen.getByText("8")).toBeInTheDocument();
     // stop_count=3 может дублироваться (disable_completed тоже 3),
-    // проверяем что секция "Алерты" содержит метку Stop
-    expect(screen.getByText("Stop")).toBeInTheDocument();
+    // проверяем что секция "Алерты" содержит метку "Стоп".
+    expect(screen.getByText("Стоп")).toBeInTheDocument();
   });
 
   // Показывает скелетон при загрузке
@@ -236,7 +252,7 @@ describe("HistorySummarySection", () => {
 
 describe("HistoryTimeline", () => {
   // Рендерит события с именами объявлений
-  it("рендерит STOP событие из таймлайна", () => {
+  it("объединяет stop-алерт и успешное отключение в одну цепочку", () => {
     render(
       wrap(
         <HistoryTimeline
@@ -246,7 +262,7 @@ describe("HistoryTimeline", () => {
         />,
       ),
     );
-    expect(screen.getByText(/STOP.*Test Ad/)).toBeInTheDocument();
+    expect(screen.getByText(/Test Ad: стоп → отключено в Meta/)).toBeInTheDocument();
   });
 
   // Показывает EmptyState при пустом списке
@@ -292,8 +308,8 @@ describe("HistoryTimeline", () => {
         />,
       ),
     );
-    // Дата 2026-05-15 — не сегодня и не вчера, day-separator показывает ISO-дату
-    expect(screen.getByText("2026-05-15")).toBeInTheDocument();
+    // Дата не сегодня и не вчера — показываем её в локали интерфейса.
+    expect(screen.getByText(/15 мая/i)).toBeInTheDocument();
   });
 });
 

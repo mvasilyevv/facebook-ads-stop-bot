@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic FB Agent host-level readiness check
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=5m
+AccuracySec=30s
+Unit=fb-agent-healthcheck.service
+
+[Install]
+WantedBy=timers.target

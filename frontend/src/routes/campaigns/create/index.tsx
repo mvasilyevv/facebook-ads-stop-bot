@@ -11,10 +11,11 @@
 
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Plus, Clock } from "lucide-react";
+import { Plus, Clock, Save } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useWizardStore } from "@/stores/campaignWizard";
 import { usePresets } from "@/lib/api/campaigns";
@@ -57,6 +58,7 @@ const STEP_LABELS = [
 
 function CampaignCreatePage() {
   const [activeTab, setActiveTab] = useState<PageTab>("wizard");
+  const [resetOpen, setResetOpen] = useState(false);
 
   // При «клон» из истории — переключаем на визард с clone_run_id
   const handleCloneFromHistory = (runId: string) => {
@@ -67,6 +69,7 @@ function CampaignCreatePage() {
   };
 
   const store = useWizardStore();
+  const hasDraft = store.updatedAt !== null;
 
   return (
     <>
@@ -78,10 +81,8 @@ function CampaignCreatePage() {
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => {
-              store.reset();
-              setActiveTab("wizard");
-            }}
+            onClick={() => setResetOpen(true)}
+            disabled={!hasDraft}
           >
             Сбросить
           </Button>
@@ -89,7 +90,7 @@ function CampaignCreatePage() {
       />
 
       {/* Вкладки */}
-      <div className="flex items-center gap-0.5 mb-6 border-b border-[var(--hairline)]">
+      <div className="mb-4 flex items-center gap-0.5 border-b border-[var(--hairline)]">
         {(Object.entries(TAB_LABELS) as [PageTab, (typeof TAB_LABELS)[PageTab]][]).map(
           ([tab, { label, icon: Icon }]) => (
             <button
@@ -110,13 +111,41 @@ function CampaignCreatePage() {
         )}
       </div>
 
+      {activeTab === "wizard" ? (
+        <div className="mb-6 flex items-center gap-2 font-display text-[11px] text-bg-9" role="status">
+          <Save size={13} aria-hidden="true" />
+          {store.updatedAt
+            ? `Черновик сохранён ${formatDraftTime(store.updatedAt)}`
+            : "Черновик сохраняется автоматически"}
+        </div>
+      ) : null}
+
       {activeTab === "history" ? (
         <CampaignRunsHistory onClone={handleCloneFromHistory} />
       ) : (
         <WizardLayout />
       )}
+
+      <ConfirmDialog
+        open={resetOpen}
+        onOpenChange={setResetOpen}
+        title="Сбросить черновик кампании?"
+        description="Все заполненные шаги и загруженные привязки будут удалены. Отменить действие нельзя."
+        confirmLabel="Сбросить черновик"
+        confirmVariant="danger"
+        onConfirm={() => {
+          store.reset();
+          setActiveTab("wizard");
+        }}
+      />
     </>
   );
+}
+
+function formatDraftTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "автоматически";
+  return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 }
 
 // ─── WizardLayout ─────────────────────────────────────────────────────────────
@@ -184,10 +213,10 @@ function WizardLayout() {
   const config = currentStep >= 6 ? store.buildConfig() : null;
 
   return (
-    <div className="flex gap-6">
+    <div className="flex flex-col gap-6 lg:flex-row">
       {/* Stepper — левая колонка */}
-      <aside className="shrink-0 w-40">
-        <div className="sticky top-6 space-y-0.5">
+      <aside className="w-full shrink-0 lg:w-40" aria-label="Шаги создания кампании">
+        <div className="flex gap-1 overflow-x-auto pb-2 lg:sticky lg:top-6 lg:block lg:space-y-0.5 lg:overflow-visible lg:pb-0">
           {STEP_LABELS.map((label, i) => {
             const step = (i + 1) as (typeof currentStep);
             const done = currentStep > step;
@@ -202,13 +231,13 @@ function WizardLayout() {
                 }}
                 disabled={step > currentStep}
                 className={cn(
-                  "w-full flex items-center gap-2.5 px-3 py-2 rounded-[var(--radius-2)] text-left transition-colors",
+                  "flex min-w-max items-center gap-2.5 rounded-[var(--radius-2)] px-3 py-2 text-left transition-colors lg:w-full",
                   "disabled:cursor-not-allowed disabled:opacity-40",
                   active
                     ? "bg-accent-bg text-accent"
                     : done
                       ? "text-bg-10 hover:bg-bg-2 hover:text-bg-11"
-                      : "text-bg-7",
+                      : "text-bg-8",
                 )}
               >
                 <span
@@ -218,7 +247,7 @@ function WizardLayout() {
                       ? "bg-accent border-accent text-bg-0"
                       : done
                         ? "bg-success/20 border-success/40 text-success"
-                        : "bg-bg-2 border-[var(--hairline)] text-bg-7",
+                        : "bg-bg-2 border-[var(--hairline)] text-bg-8",
                   )}
                 >
                   {done ? "✓" : step}
@@ -231,7 +260,7 @@ function WizardLayout() {
       </aside>
 
       {/* Основной контент */}
-      <main className="flex-1 min-w-0">
+      <section className="min-w-0 flex-1" aria-label="Текущий шаг создания кампании">
         <div className="max-w-2xl">
           {/* Шаги */}
           {currentStep === 1 && (
@@ -315,7 +344,7 @@ function WizardLayout() {
             )}
           </div>
         </div>
-      </main>
+      </section>
     </div>
   );
 }

@@ -130,9 +130,10 @@ Advantage+ audience + `[GEO, AQ]` + home/recent + age 18-65. Сверяться 
 ⚠️ Uniquify кладёт копии в `<OFFER>_<CRxxx>_..._3copies/{1,2,3}/` — перед заливом разложить в канон.
 
 ## Трекинг (url_tags объявления)
-`sub2=MV&sub3={format_code}&sub4={cabinet_id}&sub5={{campaign.name}}&sub6={{adset.name}}&sub7={{ad.name}}`.
+`sub2=MV&sub3={format_code}&sub4={cabinet_id}&sub5={{campaign.name}}&sub6={{adset.name}}&sub7={{ad.name}}&sub8={{ad.id}}`.
 sub3 = код креатива (`GH_AVI_CR001`), **sub4 = ЧИСЛОВОЙ id кабинета БЕЗ префикса `act_`**
-(`ACT.removeprefix("act_")`), sub6 = имя адсета. `{{...}}` — FB-макросы, оставлять как есть.
+(`ACT.removeprefix("act_")`), sub6 = имя адсета, sub8 = стабильный Meta Ad ID для live-атрибуции.
+`{{...}}` — FB-макросы, оставлять как есть.
 ⚠️ `url_tags` у созданного креатива **immutable** (`POST /{creative_id} url_tags` → `Invalid parameter`) —
 поправить можно только пересозданием креатива (проще — перезалить кампанию исправленным скриптом).
 Проверять по факту: `verify_campaign.py` печатает `url_tags` каждого объявления.

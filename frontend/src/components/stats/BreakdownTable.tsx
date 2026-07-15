@@ -45,12 +45,12 @@ export function BreakdownTable({ rows, breakdownKind, loading, className }: Brea
 
   return (
     <Card eyebrow={title} padded={false} className={className}>
-      <div className="p-6">
-        <table className="w-full text-[12.5px]">
+      <div className="overflow-x-auto p-4 sm:p-6">
+        <table className="min-w-[720px] w-full text-[12.5px]">
           <thead>
             <tr className="text-bg-8 font-display text-[10px] tracking-wider uppercase">
               <th className="text-left font-normal pb-1.5">{breakdownKind === "offer" ? "Оффер" : "Кампания"}</th>
-              <th className="text-right font-normal pb-1.5">Spend</th>
+              <th className="text-right font-normal pb-1.5">Траты</th>
               <th className="text-right font-normal pb-1.5">Клики</th>
               <th className="text-right font-normal pb-1.5">Лиды</th>
               <th className="text-right font-normal pb-1.5">Реги</th>

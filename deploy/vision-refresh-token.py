@@ -2,9 +2,9 @@
 """Авто-рефреш Vision X-Token через облачный логин (v1.empr.cloud).
 
 Логинится username+password (2FA на аккаунте отключён) → свежий JWT
-(`data.token`; API-логин выдаёт ~годовой токен, UI-токен был 30-дневным) → пишет
-VISION_X_TOKEN в /opt/fb_agent/.env (с бэкапом) → перезапускает browser-agent +
-поднимает профиль + ensure-cdp + проверяет канал probe'ом.
+(`data.token`; API-логин выдаёт долгоживущий токен) → при необходимости получает
+team-token → пишет VISION_X_TOKEN в production .env (с бэкапом) → пересоздаёт
+контейнеры, поднимает профиль через ensure-cdp и проверяет канал probe'ом.
 
 Зачем: у облака Vision нет refresh-ручки — обновить токен можно только повторным
 логином. Раньше протухание токена роняло канал (заливы + авто-стоп) на дни, молча.
@@ -28,14 +28,15 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-ENV_PATH = os.environ.get("FB_AGENT_ENV", "/opt/fb_agent/.env")
+ENV_PATH = os.environ.get("FB_AGENT_ENV", "/opt/fb-agent/shared/.env")
+FB_AGENT_ROOT = os.environ.get("FB_AGENT_ROOT", "/opt/fb-agent")
 CLOUD_AUTH = "https://v1.empr.cloud/api/v1/users/auth"
-LOCAL_API = "http://127.0.0.1:3030"
 
 
 def log(msg: str) -> None:
@@ -90,8 +91,10 @@ def login(username: str, password: str) -> str:
 
 
 def update_env_token(path: str, new_token: str) -> None:
-    shutil.copy2(path, f"{path}.bak.token-{int(time.time())}")
-    lines = open(path).read().splitlines()
+    backup_path = f"{path}.bak.token-{int(time.time())}"
+    shutil.copy2(path, backup_path)
+    with open(path, encoding="utf-8") as env_file:
+        lines = env_file.read().splitlines()
     out: list[str] = []
     found = False
     for line in lines:
@@ -102,19 +105,68 @@ def update_env_token(path: str, new_token: str) -> None:
             out.append(line)
     if not found:
         out.append("VISION_X_TOKEN=" + new_token)
-    open(path, "w").write("\n".join(out) + "\n")
 
-
-def start_profile(token: str, folder: str, profile: str) -> str:
-    url = f"{LOCAL_API}/start/{folder}/{profile}"
-    req = urllib.request.Request(url, headers={"X-Token": token})
+    # Never truncate the live secrets file.  A killed process or full disk must
+    # leave either the complete old file or the complete new one.  The backup is
+    # intentionally created first and remains available for an operator rollback.
+    env_path = os.path.abspath(path)
+    env_dir = os.path.dirname(env_path)
+    temp_fd, temp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(env_path)}.token-",
+        dir=env_dir,
+    )
     try:
-        with urllib.request.urlopen(req, timeout=35) as r:
-            return r.read().decode()[:200]
-    except urllib.error.HTTPError as e:
-        return f"HTTP {e.code}: {e.read().decode()[:200]}"
-    except Exception as e:  # noqa: BLE001
-        return f"err: {e}"
+        os.fchmod(temp_fd, 0o600)
+        with os.fdopen(temp_fd, "w", encoding="utf-8", newline="\n") as temp_file:
+            temp_fd = -1
+            temp_file.write("\n".join(out) + "\n")
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_path, env_path)
+        temp_path = ""
+        directory_fd = os.open(
+            env_dir,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temp_fd >= 0:
+            os.close(temp_fd)
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+
+
+def recreate_runtime() -> None:
+    """Перечитывает новый token/env без остановки vision-webtop."""
+    compose_script = os.path.join(FB_AGENT_ROOT, "current", "scripts", "server-compose.sh")
+    services = [
+        "browser-agent",
+        "api",
+        "observer",
+        "meta_api",
+        "health_watchdog",
+        "campaign_creator",
+        "creator_worker",
+        "creator_recorder",
+    ]
+    cmd = [
+        compose_script,
+        "compose",
+        "up",
+        "-d",
+        "--no-deps",
+        "--force-recreate",
+        *services,
+    ]
+    env = os.environ.copy()
+    env["FB_AGENT_ROOT"] = FB_AGENT_ROOT
+    subprocess.run(cmd, check=True, timeout=180, env=env)
 
 
 def ensure_cdp() -> str:
@@ -171,8 +223,6 @@ def main() -> int:
     cur = env.get("VISION_X_TOKEN", "")
     user = env.get("VISION_USERNAME")
     pw = env.get("VISION_PASSWORD")
-    folder = env.get("VISION_FOLDER_ID", "")
-    profile = env.get("VISION_PROFILE_ID", "")
     if not user or not pw:
         log("нет VISION_USERNAME/VISION_PASSWORD в .env — логиниться нечем")
         return 2
@@ -203,10 +253,8 @@ def main() -> int:
         log("--no-restart: канал не трогаю")
         return 0
 
-    subprocess.run(["systemctl", "restart", "fb-browser-agent"], timeout=60)
-    time.sleep(8)
-    log("старт профиля: " + start_profile(new, folder, profile))
-    time.sleep(8)
+    recreate_runtime()
+    time.sleep(5)
     log("ensure-cdp: " + ensure_cdp())
     time.sleep(5)
     h = probe()

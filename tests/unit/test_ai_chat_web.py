@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -31,6 +32,7 @@ def _settings_mock() -> MagicMock:
     s.trusted_proxy_count = 1
     s.anthropic_api_key = None
     s.openai_model = "gpt-5.6-luna"
+    s.ai_timeout_seconds = 20
     return s
 
 
@@ -113,7 +115,16 @@ async def test_endpoint_happy_path() -> None:
     ai = MagicMock()
     ai.is_available = True
     session = MagicMock()
-    session.ask = AsyncMock(return_value=ChatResponse(answer="Кабинет спокоен."))
+    session.ask = AsyncMock(
+        return_value=ChatResponse(
+            answer="Кабинет спокоен.",
+            provider="openai",
+            model="gpt-5.6-luna",
+        )
+    )
+    settings = _settings_mock()
+    settings.anthropic_api_key = object()
+    settings.anthropic_model = "primary-model"
     with (
         patch("apps.api.routers.v1.ai_chat_web.check_and_increment", new=AsyncMock()),
         patch("apps.api.routers.v1.ai_chat_web.get_ai_client", return_value=ai),
@@ -130,7 +141,7 @@ async def test_endpoint_happy_path() -> None:
             ),
             engine=MagicMock(),
             redis=MagicMock(),
-            settings=_settings_mock(),
+            settings=settings,
         )
     assert resp.status_code == 200
     data = json.loads(resp.body)
@@ -147,7 +158,7 @@ async def test_endpoint_happy_path() -> None:
 def _pulse_redis(cached: str | None = None) -> MagicMock:
     r = MagicMock()
     r.get = AsyncMock(return_value=cached)
-    r.set = AsyncMock()
+    r.set = AsyncMock(return_value=True)
     return r
 
 
@@ -203,3 +214,62 @@ async def test_pulse_cache_hit_skips_rebuild() -> None:
         )
     bp.assert_not_awaited()
     assert json.loads(resp.body)["important"] is False
+
+
+class _StoredPulseRedis:
+    """Минимальный Redis-double с SET NX для конкурентного теста."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int) -> bool:
+        _ = ex
+        if nx and key in self.values:
+            return False
+        self.values[key] = value
+        return True
+
+
+# Две вкладки, пришедшие одновременно на пустой час, должны разделить один build.
+@pytest.mark.asyncio
+async def test_pulse_concurrent_requests_build_once() -> None:
+    from apps.api.routers.v1.ai_chat_web import ai_pulse
+
+    redis = _StoredPulseRedis()
+
+    async def _slow_build(*args, **kwargs) -> str:
+        _ = args, kwargs
+        await asyncio.sleep(0)
+        return "1 STOP за час: CR2_CR002 (cpr_stop)."
+
+    with patch(
+        "apps.api.routers.v1.ai_chat_web.build_pulse",
+        new=AsyncMock(side_effect=_slow_build),
+    ) as bp:
+        first, second = await asyncio.gather(
+            ai_pulse(_request_mock(), engine=MagicMock(), redis=redis, settings=_settings_mock()),
+            ai_pulse(_request_mock(), engine=MagicMock(), redis=redis, settings=_settings_mock()),
+        )
+
+    assert bp.await_count == 1
+    assert json.loads(first.body) == json.loads(second.body)
+
+
+# Без Redis нельзя доказать глобальный hourly cap между API-репликами: fail-closed
+# безопаснее повторного платного AI-вызова для некритичного фонового пульса.
+@pytest.mark.asyncio
+async def test_pulse_redis_lock_failure_does_not_call_ai() -> None:
+    from apps.api.routers.v1.ai_chat_web import ai_pulse
+
+    redis = _pulse_redis()
+    redis.set = AsyncMock(side_effect=ConnectionError("redis down"))
+    with patch("apps.api.routers.v1.ai_chat_web.build_pulse", new=AsyncMock()) as bp:
+        response = await ai_pulse(
+            _request_mock(), engine=MagicMock(), redis=redis, settings=_settings_mock()
+        )
+
+    assert response.status_code == 503
+    bp.assert_not_awaited()

@@ -151,6 +151,28 @@ async def test_contract_extra_fields_preserved(fake_redis_client) -> None:
     assert result["last_successful_scan_at"] == now.isoformat()
 
 
+@pytest.mark.asyncio
+async def test_runtime_phase_transition_preserves_last_successful_scan(fake_redis_client) -> None:
+    """Новая фаза скана не стирает подтверждение предыдущего успешного цикла."""
+    last_ok = datetime.now(timezone.utc)
+    await _publish_runtime_status(
+        fake_redis_client,
+        status="idle",
+        last_successful_scan_at=last_ok,
+    )
+
+    await _publish_runtime_status(
+        fake_redis_client,
+        status="scanning",
+        active_phase="scan",
+    )
+
+    result = await read_observer_runtime(fake_redis_client)
+    assert result["status"] == "running"
+    assert result["active_phase"] == "scan"
+    assert result["last_successful_scan_at"] == last_ok.isoformat()
+
+
 # writer пишет и worker_status (детальный) и status (нормализованный)
 @pytest.mark.asyncio
 async def test_contract_writer_writes_both_fields(fake_redis_client) -> None:

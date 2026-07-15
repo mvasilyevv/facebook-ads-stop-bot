@@ -85,6 +85,9 @@ class CandidateRow:
     snoozed_until: datetime | None
     offer_code: str | None
     cpa_threshold: Decimal | None
+    open_state_token: uuid.UUID | None = None
+    delivery_status: str | None = None
+    has_unfinished_pause: bool = False
 
 
 # ====================== SQL: кандидаты и метрики ======================
@@ -100,7 +103,17 @@ _CANDIDATES_SQL = text(
         st.last_transition_at,
         st.snoozed_until,
         o.code AS offer_code,
-        r.cpa_threshold
+        r.cpa_threshold,
+        st.open_state_token,
+        a.delivery_status,
+        EXISTS (
+            SELECT 1
+            FROM task_queue tq
+            WHERE tq.task_type = 'meta_api_mutation'
+              AND tq.payload->>'mutation_kind' = 'pause_ad'
+              AND tq.payload->>'target_id' = a.fb_ad_id
+              AND tq.status IN ('draft', 'pending', 'running', 'retrying')
+        ) AS has_unfinished_pause
     FROM ad_alert_state st
     JOIN fb_ads a ON a.id = st.ad_id
     JOIN fb_adsets s ON s.id = a.adset_id
@@ -120,7 +133,7 @@ _CANDIDATES_SQL = text(
 
 _METRICS_SQL = text(
     """
-    SELECT cycle_ts, spend, cost_per_lead, cost_per_registration, deposits,
+    SELECT cycle_ts, spend, cost_per_lead, cost_per_registration, registrations, deposits,
            impressions, ctr
     FROM ad_metrics
     WHERE ad_id = :aid
@@ -151,6 +164,9 @@ async def fetch_candidates(engine: AsyncEngine, *, limit: int) -> list[Candidate
             snoozed_until=r[7],
             offer_code=str(r[8]) if r[8] else None,
             cpa_threshold=r[9],
+            open_state_token=r[10],
+            delivery_status=str(r[11]) if r[11] else None,
+            has_unfinished_pause=bool(r[12]),
         )
         for r in rows
     ]
@@ -171,9 +187,10 @@ async def fetch_metrics_since(
             spend=r[1],
             cost_per_lead=r[2],
             cost_per_registration=r[3],
-            deposits=int(r[4]) if r[4] is not None else None,
-            impressions=int(r[5]) if r[5] is not None else None,
-            ctr=r[6],
+            registrations=int(r[4]) if r[4] is not None else None,
+            deposits=int(r[5]) if r[5] is not None else None,
+            impressions=int(r[6]) if r[6] is not None else None,
+            ctr=r[7],
         )
         for r in rows
     ]
@@ -300,6 +317,7 @@ async def send_alert(
     *,
     candidate: CandidateRow,
     decision: RecommendationDecision,
+    recommendation_id: uuid.UUID,
     engine: Any,
 ) -> bool:
     """Шлёт TG-алерт с inline-кнопкой «Включить» всем активным recipients.
@@ -310,6 +328,7 @@ async def send_alert(
     web_app_base = normalize_web_app_base(await load_web_app_url(engine))
     text_body, reply_markup = render_enable_reco_alert(
         EnableRecoRenderInput(
+            recommendation_id=str(recommendation_id),
             fb_ad_id=candidate.fb_ad_id,
             ad_name=candidate.ad_name,
             campaign_name=candidate.campaign_name,
@@ -413,6 +432,13 @@ async def run_once(
         )
         metrics = await fetch_metrics_since(engine, ad_id=cand.ad_id, since=since)
 
+        # Curator hold разрешён только для уже подтверждённо выключенного ad.
+        # Незавершённая pause_ad может выиграть гонку у activate_ad и выключить ad позже.
+        curator_allowed = (
+            cand.alert_state == "disabled"
+            and (cand.delivery_status or "").strip().upper() == "OFF"
+            and not cand.has_unfinished_pause
+        )
         decision = should_recommend(
             alert_state=cand.alert_state,
             snoozed_until=cand.snoozed_until,
@@ -420,6 +446,7 @@ async def run_once(
             metrics=metrics,
             offer=OfferThresholds(cpa_threshold=cand.cpa_threshold),
             thresholds=thresholds,
+            allow_curator=curator_allowed,
         )
         if not decision.recommend:
             counts["skipped_decision"] += 1
@@ -432,11 +459,27 @@ async def run_once(
             continue
 
         idem_key = f"enable_reco:{cand.ad_id}:{int(cand.last_transition_at.timestamp())}"
+        if cand.open_state_token is None:
+            # Без incident token рекомендацию нельзя безопасно подтвердить:
+            # старая кнопка могла бы включить ad уже в новом STOP-инциденте.
+            counts["skipped_decision"] += 1
+            logger.warning(
+                "skip ad_id=%s fb_ad_id=%s: active incident has no open_state_token",
+                cand.ad_id,
+                cand.fb_ad_id,
+            )
+            continue
+
+        recommendation_snapshot = {
+            **decision.snapshot,
+            "incident_open_state_token": str(cand.open_state_token),
+            "incident_last_transition_at": cand.last_transition_at.isoformat(),
+        }
         new_id = await insert_recommendation(
             engine,
             ad_id=cand.ad_id,
             level=decision.level or "warning",
-            snapshot=decision.snapshot,
+            snapshot=recommendation_snapshot,
             live_batch_started_at=batch_started_at,
             idempotency_key=idem_key,
         )
@@ -455,6 +498,7 @@ async def run_once(
             tg_client,
             candidate=cand,
             decision=decision,
+            recommendation_id=new_id,
             engine=engine,
         )
         if not sent:

@@ -38,7 +38,7 @@ compose exec`). Полная архитектура и список воркер
 curl -sf "$VISION_API_URL/api/sessions/$VISION_PROFILE_ID"
 
 # CDP порт виден?
-curl -sf "http://localhost:8000/api/vision/ensure-cdp" -X POST   # или порт 8100 если без supervisord
+curl -sf "http://localhost:8100/api/vision/ensure-cdp" -X POST
 
 # gRPC браузер-агент слышит?
 nc -z localhost 50051
@@ -283,7 +283,8 @@ ORDER BY 3 DESC;
    asyncio.run(rotate_encryption_key(old_key="<старый>", new_key="<новый>"))
    ```
 5. Проверить, что Vision/TG продолжают работать:
-   - `curl http://localhost:8000/readyz`
+   - `curl http://localhost:8100/readyz`
+   - `curl http://localhost:8100/system-readyz`
    - В TG: `/start` должен ответить
    - `supervisorctl restart all`
 6. После проверки убрать `ENCRYPTION_KEY_VERIFY` из `.env`.
@@ -347,21 +348,21 @@ supervisorctl -c supervisord.conf restart all
 ## Postback от AdSet.pro возвращает 401/503
 
 **Симптомы:**
-- `.logs/api.log` показывает `POST /api/v1/postback/adsetpro 401/503`.
+- AdSet.pro показывает ответ `401/503` для `GET /api/v1/postback/adsetpro`.
 - AdSet.pro в своей админке видит ошибки доставки.
 
 **Действия:**
 
 1. **503 "not configured"** — `ADSETPRO_POSTBACK_SECRET` пуст в `.env`.
-   Задать секрет, прописать тот же в AdSet.pro, `supervisorctl restart api`.
+   Задать случайный секрет длиной не менее 32 символов, прописать его query-параметром
+   `token` в GET-шаблоне AdSet.pro и перезапустить API.
 2. **401 "invalid secret"** — секрет в `.env` и в AdSet.pro расходятся.
    Сверить, обновить, рестартовать.
-3. Если AdSet.pro шлёт по HTTP, а FastAPI ждёт HTTPS — поставить
-   reverse-proxy (nginx / cloudflared) и зарегистрировать новый URL в
-   админке AdSet.pro.
-4. Сейчас postback'и только логируются (`logger.info`). Запись в БД с
-   дедупом по `click_id` — не реализована (Волна 3 миграций, см.
-   `CLAUDE.md`).
+3. Использовать публичный HTTPS URL через Caddy. Маршрут postback исключён из access-логов;
+   не добавлять полный URL с token в прикладные логи или тикеты.
+4. Поддерживаются только `registration`, `ftd` и `redeposit` со стабильным transaction ID.
+   Отрицательные и неизвестные статусы отвечают `200 ignored` и не меняют бизнес-данные.
+5. Проверить backlog/unmatched/processing lag в блоке `AdSet.pro · Live`.
 
 ---
 
@@ -395,7 +396,7 @@ tail -50 .logs/meta_api_worker.log
 ./run.sh --logs                              # tail -20 каждого *.log
 
 # Метрики FastAPI (Prometheus)
-curl -s http://localhost:8000/metrics | grep app_requests_total
+curl -s http://localhost:8100/metrics | grep app_requests_total
 
 # Очередь задач
 docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot -c "

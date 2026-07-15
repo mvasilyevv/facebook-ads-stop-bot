@@ -32,6 +32,8 @@ class AIResponse:
     text: str = ""
     tool_uses: list[ToolUse] = field(default_factory=list)
     stop_reason: str = ""
+    provider: str = ""
+    model: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -41,6 +43,17 @@ class AIResponse:
 
 class ProviderError(Exception):
     """Ошибка при обращении к провайдеру (сеть, 5xx, невалидный ответ)."""
+
+
+def _decode_response_json(resp: httpx.Response, *, provider: str) -> dict[str, Any]:
+    """Разобрать 2xx JSON так, чтобы битый gateway-ответ включал fallback."""
+    try:
+        data = resp.json()
+    except (ValueError, TypeError) as exc:
+        raise ProviderError(f"{provider}: невалидный JSON в успешном ответе") from exc
+    if not isinstance(data, dict):
+        raise ProviderError(f"{provider}: ожидался JSON-object, получен {type(data).__name__}")
+    return data
 
 
 class AnthropicProvider:
@@ -100,19 +113,30 @@ class AnthropicProvider:
         if resp.status_code >= 400:
             raise ProviderError(f"anthropic: HTTP {resp.status_code}: {resp.text[:200]}")
 
-        data = resp.json()
+        data = _decode_response_json(resp, provider=self.name)
+        content = data.get("content")
+        if not isinstance(content, list):
+            raise ProviderError("anthropic: поле content отсутствует или не является списком")
         text_parts: list[str] = []
         tool_uses: list[ToolUse] = []
-        for block in data.get("content", []) or []:
+        for block in content:
+            if not isinstance(block, dict):
+                raise ProviderError("anthropic: элемент content имеет неверный формат")
             block_type = block.get("type")
             if block_type == "text":
-                text_parts.append(block.get("text", ""))
+                block_text = block.get("text", "")
+                if not isinstance(block_text, str):
+                    raise ProviderError("anthropic: text block содержит не строку")
+                text_parts.append(block_text)
             elif block_type == "tool_use":
+                tool_input = block.get("input") or {}
+                if not isinstance(tool_input, dict):
+                    raise ProviderError("anthropic: tool_use.input имеет неверный формат")
                 tool_uses.append(
                     ToolUse(
                         id=block.get("id", ""),
                         name=block.get("name", ""),
-                        input=dict(block.get("input") or {}),
+                        input=dict(tool_input),
                     )
                 )
 
@@ -120,6 +144,8 @@ class AnthropicProvider:
             text="\n".join(t for t in text_parts if t),
             tool_uses=tool_uses,
             stop_reason=data.get("stop_reason", ""),
+            provider=self.name,
+            model=self._model,
             raw=data,
         )
 
@@ -196,15 +222,29 @@ class OpenAIProvider:
         if resp.status_code >= 400:
             raise ProviderError(f"openai: HTTP {resp.status_code}: {resp.text[:200]}")
 
-        data = resp.json()
+        data = _decode_response_json(resp, provider=self.name)
         choices = data.get("choices") or []
-        if not choices:
+        if not isinstance(choices, list) or not choices:
             raise ProviderError("openai: пустой choices в ответе")
-        msg = choices[0].get("message", {}) or {}
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            raise ProviderError("openai: неверный формат choices[0]")
+        msg = first_choice.get("message", {}) or {}
+        if not isinstance(msg, dict):
+            raise ProviderError("openai: неверный формат message")
         text = msg.get("content") or ""
+        if not isinstance(text, str):
+            raise ProviderError("openai: message.content имеет неверный формат")
         tool_uses: list[ToolUse] = []
-        for tc in msg.get("tool_calls") or []:
+        raw_tool_calls = msg.get("tool_calls") or []
+        if not isinstance(raw_tool_calls, list):
+            raise ProviderError("openai: message.tool_calls имеет неверный формат")
+        for tc in raw_tool_calls:
+            if not isinstance(tc, dict):
+                raise ProviderError("openai: элемент tool_calls имеет неверный формат")
             fn = tc.get("function") or {}
+            if not isinstance(fn, dict):
+                raise ProviderError("openai: tool_call.function имеет неверный формат")
             args_raw = fn.get("arguments") or "{}"
             try:
                 import json as _json
@@ -222,7 +262,9 @@ class OpenAIProvider:
         return AIResponse(
             text=text,
             tool_uses=tool_uses,
-            stop_reason=choices[0].get("finish_reason", ""),
+            stop_reason=first_choice.get("finish_reason", ""),
+            provider=self.name,
+            model=self._model,
             raw=data,
         )
 

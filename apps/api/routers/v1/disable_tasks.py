@@ -319,6 +319,7 @@ async def retry_disable_task(
                 UPDATE task_queue
                 SET status = 'retrying',
                     next_retry_at = NOW(),
+                    external_started_at = NULL,
                     updated_at = NOW()
                 WHERE id = :tid AND status = ANY(:allowed)
                 """

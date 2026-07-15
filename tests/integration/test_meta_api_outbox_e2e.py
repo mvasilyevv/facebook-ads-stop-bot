@@ -176,7 +176,9 @@ async def test_token_invalid_marks_failed_without_retry(
     clean_meta_tables,
     monkeypatch,
 ):
-    payload = _unique_payload("activate_ad")
+    # Use a deactivating mutation so this test reaches dispatch regardless of
+    # the global scanning pause; the assertion is about permanent auth errors.
+    payload = _unique_payload("pause_ad")
     task_id = await create_mutation_task(
         pg_engine,
         payload=payload,

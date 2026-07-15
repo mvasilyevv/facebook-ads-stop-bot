@@ -13,7 +13,7 @@ export const AITab: FC = () => {
     <div className="space-y-5 max-w-xl">
       <Card eyebrow="AI-провайдеры" padded>
         <div className="flex items-start gap-4">
-          <div className="text-bg-7 mt-0.5 shrink-0" aria-hidden="true">
+          <div className="text-bg-8 mt-0.5 shrink-0" aria-hidden="true">
             <Bot size={24} />
           </div>
           <div>

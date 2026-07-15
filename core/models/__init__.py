@@ -71,6 +71,7 @@ from core.models.telegram import (
 from core.models.trackers import (
     AdsetProPostbackEvent,
     TrackerAggregate,
+    TrackerClickState,
     TrackerPostback,
 )
 
@@ -132,5 +133,6 @@ __all__ = [
     # trackers
     "AdsetProPostbackEvent",
     "TrackerAggregate",
+    "TrackerClickState",
     "TrackerPostback",
 ]

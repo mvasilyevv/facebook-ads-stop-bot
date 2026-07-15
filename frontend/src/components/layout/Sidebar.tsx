@@ -22,8 +22,10 @@ import {
   Clock,
   BarChart3,
   Settings,
+  MonitorUp,
   PanelLeft,
   Rocket,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { useUiStore } from "@/stores/ui";
@@ -77,12 +79,21 @@ const NAV_GROUPS: NavGroup[] = [
   {
     eyebrowNum: "04",
     eyebrow: "SYSTEM",
-    items: [{ to: "/settings", label: "Настройки", icon: Settings }],
+    items: [
+      { to: "/remote-desktop", label: "Рабочий стол", icon: MonitorUp },
+      { to: "/settings", label: "Настройки", icon: Settings },
+    ],
   },
 ];
 
-export function Sidebar() {
-  const collapsed = useUiStore((s) => s.sidebarCollapsed);
+interface SidebarProps {
+  mobile?: boolean;
+  onNavigate?: () => void;
+}
+
+export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
+  const storedCollapsed = useUiStore((s) => s.sidebarCollapsed);
+  const collapsed = mobile ? false : storedCollapsed;
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const { location } = useRouterState();
 
@@ -114,6 +125,7 @@ export function Sidebar() {
         // exact: иначе TanStack помечает родителя активным на дочернем маршруте
         // (на /campaigns/create горели бы и «Кампании», и «Создание»).
         activeOptions={{ exact: true }}
+        onClick={onNavigate}
         aria-label={item.label}
         aria-current={opts.active ? "page" : undefined}
         title={collapsed ? item.label : undefined}
@@ -155,8 +167,10 @@ export function Sidebar() {
     <aside
       data-collapsed={collapsed || undefined}
       className={cn(
-        "col-start-1 col-end-2 row-start-1 row-end-3",
         "flex flex-col overflow-hidden border-r border-[var(--hairline)] bg-bg-0",
+        mobile
+          ? "h-full w-[min(82vw,280px)]"
+          : "col-start-1 col-end-2 row-start-1 row-end-3 hidden md:flex",
       )}
     >
       {/* Brand-хедер (56px, совпадает с высотой TopBar) */}
@@ -226,21 +240,32 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* Footer — только collapse-toggle */}
+      {/* Footer — mobile close / desktop collapse-toggle */}
       <div
         className={cn(
           "flex items-center border-t border-[var(--hairline)] py-3",
-          collapsed ? "justify-center px-0" : "justify-end px-4",
+          mobile ? "justify-stretch px-4" : collapsed ? "justify-center px-0" : "justify-end px-4",
         )}
       >
-        <button
-          type="button"
-          onClick={toggleSidebar}
-          aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
-          className="inline-flex size-7 items-center justify-center rounded-[var(--radius-2)] text-bg-9 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-        >
-          <PanelLeft size={16} aria-hidden="true" />
-        </button>
+        {mobile ? (
+          <button
+            type="button"
+            onClick={onNavigate}
+            className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--hairline-strong)] text-[13px] text-bg-10 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            <X size={15} aria-hidden="true" />
+            Закрыть меню
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
+            className="inline-flex size-7 items-center justify-center rounded-[var(--radius-2)] text-bg-9 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            <PanelLeft size={16} aria-hidden="true" />
+          </button>
+        )}
       </div>
     </aside>
   );

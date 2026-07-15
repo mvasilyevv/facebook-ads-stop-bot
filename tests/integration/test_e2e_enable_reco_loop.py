@@ -5,7 +5,7 @@
 1. Фикстура создаёт ad в alert_state='stop_sent' + метрики «выправились»
    (повторяет паттерн tests/integration/test_enable_reco_worker.py).
 2. `apps/enable_recommendation_worker.run_once` находит кандидата, шлёт TG-алерт
-   с inline-кнопкой `ereco:<fb_ad_id>`.
+   с inline-кнопкой `ereco:<recommendation_uuid>`.
 3. `core/telegram/handlers/alerts.handle_enable_reco_callback` принимает клик
    пользователя и создаёт task_queue запись task_type='meta_api_mutation' (activate_ad).
 4. `apps/meta_api_worker.process_one_task` подхватывает её через claim_pending_task
@@ -28,6 +28,7 @@ import apps.meta_api_worker.main as worker_main
 from apps.enable_recommendation_worker.main import run_once
 from apps.meta_api_worker.main import process_one_task
 from core.meta_api.queue import claim_pending_task
+from core.observer.enable_grace import grace_is_active, load_enable_grace_map
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers.alerts import handle_enable_reco_callback
 
@@ -67,9 +68,16 @@ async def clean_enable_reco_pipeline(pg_engine):
                 text("DELETE FROM telegram_recipients WHERE chat_id = :c"),
                 {"c": _E2E_RECIPIENT_CHAT_ID},
             )
+            await conn.execute(text("DELETE FROM observer_config WHERE singleton_key = 'default'"))
 
     await _truncate()
     async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO observer_config (singleton_key, is_scanning_enabled) "
+                "VALUES ('default', TRUE)"
+            )
+        )
         await conn.execute(
             text(
                 "INSERT INTO telegram_recipients (chat_id, telegram_user_id, role) "
@@ -96,6 +104,7 @@ async def stopped_ad_e2e(pg_engine, clean_enable_reco_pipeline) -> dict[str, Any
     fb_ad_id = f"230099{suffix[:6]}"
 
     last_transition = _utcnow() - timedelta(hours=2)
+    incident_token = uuid.uuid4()
     cycle_recent = _utcnow() - timedelta(minutes=10)
     cycle_older = _utcnow() - timedelta(minutes=30)
 
@@ -126,11 +135,11 @@ async def stopped_ad_e2e(pg_engine, clean_enable_reco_pipeline) -> dict[str, Any
             text(
                 """
                 INSERT INTO ad_alert_state
-                    (ad_id, alert_state, current_stage, last_transition_at)
-                VALUES (:aid, 'stop_sent', 'stop', :ts)
+                    (ad_id, alert_state, current_stage, open_state_token, last_transition_at)
+                VALUES (:aid, 'stop_sent', 'stop', :tok, :ts)
                 """
             ),
-            {"aid": ad_id, "ts": last_transition},
+            {"aid": ad_id, "tok": incident_token, "ts": last_transition},
         )
         # 2 «выправленные» метрики после disable: spend низкий, cost_per_lead в норме
         for ts, spend, cpl in (
@@ -151,6 +160,7 @@ async def stopped_ad_e2e(pg_engine, clean_enable_reco_pipeline) -> dict[str, Any
     return {
         "ad_id": ad_id,
         "fb_ad_id": fb_ad_id,
+        "incident_token": incident_token,
     }
 
 
@@ -185,14 +195,16 @@ async def test_full_cycle_reco_to_enable_task(
     assert counts["recommendations"] == 1
     assert counts["alerts_sent"] == 1
 
-    # Шаг 2: проверяем что в TG ушла кнопка ereco:<fb_ad_id>
+    # Шаг 2: кнопка привязана к UUID конкретной рекомендации, не только к ad.
     assert len(tg_respx.sent_messages) == 1
     payload = tg_respx.sent_messages[0]
     keyboard = payload.get("reply_markup", {}).get("inline_keyboard")
     assert keyboard is not None
     btn = keyboard[0][0]
-    expected_cb = f"ereco:{stopped_ad_e2e['fb_ad_id']}"
-    assert btn["callback_data"] == expected_cb
+    callback_data = btn["callback_data"]
+    assert callback_data.startswith("ereco:")
+    recommendation_id = callback_data.split(":", 1)[1]
+    uuid.UUID(recommendation_id)
 
     # Шаг 3: пользователь жмёт inline-кнопку → handle_enable_reco_callback
     cb_tg = _FakeTGClient()
@@ -200,8 +212,9 @@ async def test_full_cycle_reco_to_enable_task(
         engine=pg_engine,
         client=cb_tg,
         cq_id="ereco-cb-1",
-        fb_ad_id=stopped_ad_e2e["fb_ad_id"],
+        recommendation_id=recommendation_id,
         username="reviewer",
+        chat_id=_E2E_RECIPIENT_CHAT_ID,
     )
     assert any("принята" in t for _, t in cb_tg.acks)
 
@@ -260,6 +273,93 @@ async def test_full_cycle_reco_to_enable_task(
     await tg_client.close()
 
 
+# Curator hold: marker появляется только после успешной activation и даёт
+# ДОПОЛНИТЕЛЬНЫЙ allowance поверх свежего baseline spend.
+@pytest.mark.asyncio
+async def test_curator_grace_starts_after_activation_with_incremental_cap(
+    pg_engine,
+    stopped_ad_e2e,
+    fake_redis_client,
+    monkeypatch,
+) -> None:
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE fb_ads SET delivery_status = 'OFF' WHERE id = :aid"),
+            {"aid": stopped_ad_e2e["ad_id"]},
+        )
+        await conn.execute(
+            text("UPDATE ad_alert_state SET alert_state = 'disabled' WHERE ad_id = :aid"),
+            {"aid": stopped_ad_e2e["ad_id"]},
+        )
+        rec_id = (
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO enable_recommendations
+                        (ad_id, snapshot_metrics, recommendation_level,
+                         live_batch_started_at, idempotency_key)
+                    VALUES
+                        (:aid,
+                         jsonb_build_object(
+                             'hold_until_cpl', true,
+                             'grace_spend_cap', '10.00',
+                             'incident_open_state_token', CAST(:tok AS text)
+                         ),
+                         'warning', NOW(), :ik)
+                    RETURNING id
+                    """
+                ),
+                {
+                    "aid": stopped_ad_e2e["ad_id"],
+                    "tok": str(stopped_ad_e2e["incident_token"]),
+                    "ik": f"hold-{uuid.uuid4().hex}",
+                },
+            )
+        ).scalar_one()
+
+    callback_tg = _FakeTGClient()
+    await handle_enable_reco_callback(
+        engine=pg_engine,
+        client=callback_tg,
+        cq_id="hold-cb",
+        recommendation_id=str(rec_id),
+        username="reviewer",
+        redis_client=fake_redis_client,
+    )
+    assert any("принята" in text for _, text in callback_tg.acks)
+    assert await fake_redis_client.get(f"enable_grace:{stopped_ad_e2e['fb_ad_id']}") is None
+
+    claim = await claim_pending_task(pg_engine)
+    assert claim.task is not None
+    assert claim.task.payload["params"]["enable_grace"] == {"spend_allowance": "10.00"}
+
+    async def _fake_dispatch(_client, payload):
+        return {
+            "success": True,
+            "graph_response": {"ok": True},
+            "modified_ids": [payload.target_id],
+        }
+
+    monkeypatch.setattr(worker_main, "dispatch_mutation", _fake_dispatch)
+    await process_one_task(
+        pg_engine,
+        claim.task,
+        client=AsyncMock(),
+        redis_client=fake_redis_client,
+    )
+
+    grace_map = await load_enable_grace_map(fake_redis_client)
+    grace = grace_map[stopped_ad_e2e["fb_ad_id"]]
+    # Последняя метрика фикстуры: baseline=0.50; allowance=10 → absolute cap=10.50.
+    assert grace.baseline_spend == Decimal("0.5")
+    assert grace.spend_cap == Decimal("10.50")
+    now = _utcnow()
+    assert grace_is_active(grace, now=now, spend=Decimal("10.49")) is True
+    assert grace_is_active(grace, now=now, spend=Decimal("10.50")) is False
+    # Cabinet-day reset / рассинхрон ниже baseline завершает hold fail-safe.
+    assert grace_is_active(grace, now=now, spend=Decimal("0.10")) is False
+
+
 # E2E: повторный клик ereco (двойной тап) → idempotency_key совпал → no-op в БД.
 @pytest.mark.asyncio
 async def test_double_ereco_callback_does_not_duplicate(
@@ -268,17 +368,28 @@ async def test_double_ereco_callback_does_not_duplicate(
 ) -> None:
     # M-14: ereco-кнопка требует живую (не промоутнутую) рекомендацию — создаём её.
     async with pg_engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
+        rec_id = (
+            await conn.execute(
+                text(
+                    """
                 INSERT INTO enable_recommendations
                     (ad_id, snapshot_metrics, recommendation_level,
                      live_batch_started_at, idempotency_key)
-                VALUES (:aid, CAST('{}' AS JSONB), 'ok', NOW(), :ik)
+                VALUES (
+                    :aid,
+                    jsonb_build_object('incident_open_state_token', CAST(:tok AS text)),
+                    'ok', NOW(), :ik
+                )
+                RETURNING id
                 """
-            ),
-            {"aid": stopped_ad_e2e["ad_id"], "ik": f"ereco-{uuid.uuid4().hex[:10]}"},
-        )
+                ),
+                {
+                    "aid": stopped_ad_e2e["ad_id"],
+                    "tok": str(stopped_ad_e2e["incident_token"]),
+                    "ik": f"ereco-{uuid.uuid4().hex[:10]}",
+                },
+            )
+        ).scalar_one()
 
     cb_tg = _FakeTGClient()
     # Первый клик создаёт activate_ad task и «расходует» рекомендацию (M-14 follow-up:
@@ -287,7 +398,7 @@ async def test_double_ereco_callback_does_not_duplicate(
         engine=pg_engine,
         client=cb_tg,
         cq_id="cb-1",
-        fb_ad_id=stopped_ad_e2e["fb_ad_id"],
+        recommendation_id=str(rec_id),
         username="reviewer",
     )
     # Второй клик — рекомендация уже промоутнута → «устарела», без второй задачи.
@@ -295,7 +406,7 @@ async def test_double_ereco_callback_does_not_duplicate(
         engine=pg_engine,
         client=cb_tg,
         cq_id="cb-2",
-        fb_ad_id=stopped_ad_e2e["fb_ad_id"],
+        recommendation_id=str(rec_id),
         username="reviewer",
     )
 
@@ -338,7 +449,7 @@ async def test_ereco_stale_button_rejected(pg_engine, stopped_ad_e2e) -> None:
         engine=pg_engine,
         client=cb_tg,
         cq_id="cb-stale",
-        fb_ad_id=stopped_ad_e2e["fb_ad_id"],
+        recommendation_id=str(uuid.uuid4()),
         username="reviewer",
     )
     acks = [t for _, t in cb_tg.acks]
@@ -377,28 +488,36 @@ async def test_ereco_promoted_recommendation_rejected(pg_engine, stopped_ad_e2e)
                 {"ik": f"promo-{uuid.uuid4().hex[:10]}"},
             )
         ).scalar()
-        await conn.execute(
-            text(
-                """
+        rec_id = (
+            await conn.execute(
+                text(
+                    """
                 INSERT INTO enable_recommendations
                     (ad_id, snapshot_metrics, recommendation_level,
                      live_batch_started_at, idempotency_key, promoted_to_task_id)
-                VALUES (:aid, CAST('{}' AS JSONB), 'ok', NOW(), :ik, :tid)
+                VALUES (
+                    :aid,
+                    jsonb_build_object('incident_open_state_token', CAST(:tok AS text)),
+                    'ok', NOW(), :ik, :tid
+                )
+                RETURNING id
                 """
-            ),
-            {
-                "aid": stopped_ad_e2e["ad_id"],
-                "ik": f"ereco-{uuid.uuid4().hex[:10]}",
-                "tid": task_id,
-            },
-        )
+                ),
+                {
+                    "aid": stopped_ad_e2e["ad_id"],
+                    "tok": str(stopped_ad_e2e["incident_token"]),
+                    "ik": f"ereco-{uuid.uuid4().hex[:10]}",
+                    "tid": task_id,
+                },
+            )
+        ).scalar_one()
 
     cb_tg = _FakeTGClient()
     await handle_enable_reco_callback(
         engine=pg_engine,
         client=cb_tg,
         cq_id="cb-promoted",
-        fb_ad_id=stopped_ad_e2e["fb_ad_id"],
+        recommendation_id=str(rec_id),
         username="reviewer",
     )
     acks = [t for _, t in cb_tg.acks]

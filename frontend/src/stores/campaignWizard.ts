@@ -12,6 +12,7 @@
  */
 
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type {
   CampaignConfig,
   CampaignStructure,
@@ -115,6 +116,8 @@ export interface WizardState {
   runId: string | null;
   /** Загруженный пресет (если mode=preset). */
   loadedPreset: PresetOut | null;
+  /** Когда черновик последний раз менялся; null означает чистое начальное состояние. */
+  updatedAt: string | null;
 }
 
 /** Экшены. */
@@ -187,42 +190,59 @@ const DEFAULT_STATE: WizardState = {
   preview: { launch_state: "campaign_paused", plan: null },
   runId: null,
   loadedPreset: null,
+  updatedAt: null,
 };
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
-export const useWizardStore = create<WizardState & WizardActions>((set, get) => ({
+export const useWizardStore = create<WizardState & WizardActions>()(persist((set, get) => ({
   ...DEFAULT_STATE,
 
-  goTo: (step) => set({ currentStep: step }),
+  goTo: (step) => set({ currentStep: step, updatedAt: new Date().toISOString() }),
 
   goNext: () =>
     set((s) => ({
       currentStep: Math.min(s.currentStep + 1, 7) as WizardStep,
+      updatedAt: new Date().toISOString(),
     })),
 
   goPrev: () =>
     set((s) => ({
       currentStep: Math.max(s.currentStep - 1, 1) as WizardStep,
+      updatedAt: new Date().toISOString(),
     })),
 
-  setStart: (v) => set((s) => ({ start: { ...s.start, ...v } })),
+  setStart: (v) =>
+    set((s) => {
+      const start = { ...s.start, ...v };
+      const selectedPresetId = start.mode === "preset" ? start.preset_id : null;
+      return {
+        start,
+        // Смена preset → new/clone (или очистка preset_id) должна разорвать
+        // связь с пресетом. Иначе buildConfig продолжал молча добавлять его
+        // url_tags_template в уже новый залив.
+        loadedPreset:
+          selectedPresetId && s.loadedPreset?.id === selectedPresetId ? s.loadedPreset : null,
+        updatedAt: new Date().toISOString(),
+      };
+    }),
 
-  setIdentity: (v) => set((s) => ({ identity: { ...s.identity, ...v } })),
+  setIdentity: (v) => set((s) => ({ identity: { ...s.identity, ...v }, updatedAt: new Date().toISOString() })),
 
-  setGoal: (v) => set((s) => ({ goal: { ...s.goal, ...v } })),
+  setGoal: (v) => set((s) => ({ goal: { ...s.goal, ...v }, updatedAt: new Date().toISOString() })),
 
-  setStructure: (v) => set((s) => ({ structure: { ...s.structure, ...v } })),
+  setStructure: (v) => set((s) => ({ structure: { ...s.structure, ...v }, updatedAt: new Date().toISOString() })),
 
-  setCreatives: (v) => set((s) => ({ creatives: { ...s.creatives, ...v } })),
+  setCreatives: (v) => set((s) => ({ creatives: { ...s.creatives, ...v }, updatedAt: new Date().toISOString() })),
 
-  setPreview: (v) => set((s) => ({ preview: { ...s.preview, ...v } })),
+  setPreview: (v) => set((s) => ({ preview: { ...s.preview, ...v }, updatedAt: new Date().toISOString() })),
 
-  setRunId: (id) => set({ runId: id }),
+  setRunId: (id) => set({ runId: id, updatedAt: new Date().toISOString() }),
 
   applyPreset: (preset) =>
     set({
       loadedPreset: preset,
+      updatedAt: new Date().toISOString(),
       identity: {
         act_id: preset.act_id,
         page_id: preset.page_id,
@@ -249,7 +269,7 @@ export const useWizardStore = create<WizardState & WizardActions>((set, get) => 
   reset: () => set({ ...DEFAULT_STATE, goal: { ...DEFAULT_GOAL, start_date: tomorrow() } }),
 
   buildConfig: () => {
-    const { identity, goal, structure, creatives, preview } = get();
+    const { identity, goal, structure, creatives, preview, loadedPreset } = get();
 
     // Для каждой кампании собираем concept_refs из концептов, ЯВНО привязанных к ней
     // (campaign_keys содержит ключ кампании). Пустой campaign_keys = концепт не
@@ -291,7 +311,8 @@ export const useWizardStore = create<WizardState & WizardActions>((set, get) => 
       advantage_audience: goal.advantage_audience,
       click_through_days: goal.click_through_days,
       view_through_days: goal.view_through_days,
-      // url_tags вычисляется бэком по SOP (builder.url_tags_of), кастомный ввод убран
+      // Пресет может нести legacy/custom template; backend гарантирует sub8.
+      url_tags: loadedPreset?.url_tags_template ?? undefined,
       campaigns: campaignsWithRefs,
       copies_per_concept: creatives.copies_per_concept ?? undefined,
       creo_root: creatives.upload_id,
@@ -300,4 +321,19 @@ export const useWizardStore = create<WizardState & WizardActions>((set, get) => 
 
     return config;
   },
+}), {
+  name: "fb-agent-campaign-draft",
+  version: 1,
+  storage: createJSONStorage(() => window.localStorage),
+  partialize: (state) => ({
+    currentStep: state.currentStep,
+    start: state.start,
+    identity: state.identity,
+    goal: state.goal,
+    structure: state.structure,
+    creatives: state.creatives,
+    preview: { launch_state: state.preview.launch_state, plan: null },
+    loadedPreset: state.loadedPreset,
+    updatedAt: state.updatedAt,
+  }),
 }));

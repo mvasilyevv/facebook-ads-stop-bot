@@ -29,8 +29,11 @@ import { BlueprintBg } from "@/components/dashboard/BlueprintBg";
 import { Hero } from "@/components/dashboard/Hero";
 import { SpendChart } from "@/components/dashboard/SpendChart";
 import { ScanCluster, type ScanProgress } from "@/components/dashboard/ScanCluster";
-import { PausedBanner } from "@/components/dashboard/PausedBanner";
 import { ScanBlockedBanner } from "@/components/dashboard/ScanBlockedBanner";
+import {
+  MONITORING_STATE_LABEL,
+  type MonitoringState,
+} from "@/components/dashboard/monitoringState";
 import {
   KPI_CELL_STATE,
   SparklineKpiRow,
@@ -39,18 +42,15 @@ import {
 import { LiveTail } from "@/components/dashboard/LiveTail";
 import { TaskQueues } from "@/components/dashboard/TaskQueues";
 import { FunnelKpiRow } from "@/components/stats/FunnelKpiRow";
+import { MetaDelayedNote, TrackerLiveStrip } from "@/components/data/SourceStatus";
 
 import { useDashboardBatch, useChartData } from "@/lib/api/dashboard";
 import { useStatsToday } from "@/lib/api/stats";
 import { useDisableTasks, useEnableTasks } from "@/lib/api/ads";
-import {
-  useObserverSettings,
-  useObserverStatus,
-  useToggleScanning,
-} from "@/lib/api/settings";
+import { useToggleScanning } from "@/lib/api/settings";
+import { useMonitoringSnapshot } from "@/lib/hooks/useMonitoringSnapshot";
 import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
-import { apiSend, ApiError } from "@/lib/api/client";
-import { toast } from "@/components/ui/Toast";
+import { apiSend } from "@/lib/api/client";
 
 import type { AlertEvent } from "@fb/shared";
 import { formatSpend } from "@fb/shared";
@@ -76,8 +76,7 @@ function DashboardPage() {
   const chartQ = useChartData({ bucket: "hour", cabinet_day: true });
   const disableTasksQ = useDisableTasks({ status: "PENDING,RUNNING,RETRYING", limit: 20 });
   const enableTasksQ = useEnableTasks({ status: "PENDING,RUNNING,RETRYING", limit: 20 });
-  const observerQ = useObserverSettings();
-  const observerStatusQ = useObserverStatus();
+  const monitoring = useMonitoringSnapshot();
   const toggleScanning = useToggleScanning();
   // Воронка залива (spend/лиды/реги/депы за сутки кабинета) — compact-строка между hero и KPI.
   const statsTodayQ = useStatsToday();
@@ -86,7 +85,7 @@ function DashboardPage() {
 
   // Мульти-кабинет: прогресс цикла из observer:runtime (поля проброшены через extra).
   const scanProgress = useMemo<ScanProgress | null>(() => {
-    const extra = (observerStatusQ.data?.extra ?? {}) as Record<string, unknown>;
+    const extra = (monitoring.observerStatus?.extra ?? {}) as Record<string, unknown>;
     const total = typeof extra.accounts_total === "number" ? extra.accounts_total : null;
     if (!total || total < 1) return null;
     return {
@@ -95,25 +94,24 @@ function DashboardPage() {
       current:
         typeof extra.current_account_id === "string" ? extra.current_account_id : null,
     };
-  }, [observerStatusQ.data]);
+  }, [monitoring.observerStatus]);
 
   // observer вкл/выкл: настройка is_scanning_enabled — основной источник;
   // фолбэк на observer_status из stats. По умолчанию (загрузка) считаем ВКЛ,
   // чтобы не моргать paused-баннером.
-  const scanOn =
-    observerQ.data?.is_scanning_enabled ??
-    (stats ? stats.observer_status === "running" : true);
-  const intervalSeconds = observerQ.data?.default_interval_seconds ?? 30;
+  const scanOn = monitoring.scanOn;
+  const intervalSeconds = monitoring.observer?.default_interval_seconds ?? 30;
+  const monitoringState = monitoring.state;
   // Реальное время следующего скана (адаптивный интервал + jitter) из observer:runtime.
   const nextScanAt = useMemo<string | null>(() => {
-    const v = (observerStatusQ.data?.extra ?? {})["next_scan_at"];
+    const v = (monitoring.observerStatus?.extra ?? {})["next_scan_at"];
     return typeof v === "string" ? v : null;
-  }, [observerStatusQ.data]);
+  }, [monitoring.observerStatus]);
   // Режим адаптивного скана (CRITICAL/ELEVATED/CALM/IDLE) из observer:runtime — для ScanModeBar.
   const scanMode = useMemo<string | null>(() => {
-    const v = (observerStatusQ.data?.extra ?? {})["scan_mode"];
+    const v = (monitoring.observerStatus?.extra ?? {})["scan_mode"];
     return typeof v === "string" ? v : null;
-  }, [observerStatusQ.data]);
+  }, [monitoring.observerStatus]);
 
   // Hero-число = ВСЕ объявления под контролем бота, включая отключённые (он их и
   // выключил — они под контролем, просто не крутятся). Берём total_ads_monitored
@@ -124,8 +122,9 @@ function DashboardPage() {
   const stop = stats?.ads_in_stop ?? 0;
   const claimed = stats?.ads_in_claimed ?? 0;
   const disabled = stats?.ads_in_disabled ?? 0;
-  const totalControlled =
-    stats?.total_ads_monitored ?? normal + warning + stop + claimed + disabled;
+  const totalControlled = stats
+    ? (stats.total_ads_monitored ?? normal + warning + stop + claimed + disabled)
+    : null;
 
   // Spend-ряд по часам (реальные данные) для графика spend (SpendChart).
   const spendSeries = useMemo<number[]>(
@@ -152,22 +151,6 @@ function DashboardPage() {
     });
   }
 
-  // включить observer (paused → on). Бэкенд может отказать (409), если мониторить нечего
-  // (пустой allowlist) — показываем причину тостом, тумблер остаётся off (читается из server-state).
-  function handleEnable() {
-    toggleScanning.mutate(true, {
-      onError: (err) => {
-        const reason =
-          err instanceof ApiError && typeof err.detail === "string"
-            ? err.detail
-            : err instanceof Error
-              ? err.message
-              : "Не удалось включить скан";
-        toast.error("Скан не включён", reason);
-      },
-    });
-  }
-
   // выключить observer (on → paused).
   function handleDisable() {
     toggleScanning.mutate(false);
@@ -179,10 +162,10 @@ function DashboardPage() {
       <div className="relative" aria-label="Dashboard">
         <PageHeaderBlock
           scanOn={scanOn}
+          monitoringState={monitoringState}
           lastScanAt={null}
           intervalSeconds={intervalSeconds}
           onScan={handleScanNow}
-          onEnable={handleEnable}
           onDisable={handleDisable}
         />
         <ErrorState
@@ -203,22 +186,15 @@ function DashboardPage() {
         {/* ── page header ─────────────────────────────────────────────────── */}
         <PageHeaderBlock
           scanOn={scanOn}
+          monitoringState={monitoringState}
           lastScanAt={stats?.last_scan_at ?? null}
           nextScanAt={nextScanAt}
           scanMode={scanMode}
           intervalSeconds={intervalSeconds}
           scanProgress={scanProgress}
           onScan={handleScanNow}
-          onEnable={handleEnable}
           onDisable={handleDisable}
         />
-
-        {/* ── paused banner ───────────────────────────────────────────────── */}
-        {!scanOn && (
-          <div className="mb-6">
-            <PausedBanner since={null} onEnable={handleEnable} />
-          </div>
-        )}
 
         {/* ── scan-blocked banner (скан вкл, но allowlist пуст → ничего не мониторим) ── */}
         {scanOn && stats?.scan_blocked_reason && (
@@ -231,20 +207,24 @@ function DashboardPage() {
         )}
 
         {/* ── hero + chart ────────────────────────────────────────────────── */}
-        <div className="mb-6 grid grid-cols-[1fr_1.1fr] items-center gap-8 border-b border-bg-5 pb-6">
+        <div className="mb-6 grid grid-cols-1 items-center gap-8 border-b border-bg-5 pb-6 xl:grid-cols-[1fr_1.1fr]">
           <Hero
             total={totalControlled}
             normal={normal}
             warning={warning}
             stop={stop}
             disabled={disabled}
+            monitoringState={monitoringState}
           />
           <Card padded className="p-5">
             <div className="mb-3 flex items-baseline justify-between">
               <Eyebrow>SPEND × ЧАС · СУТКИ КАБИНЕТА</Eyebrow>
-              <span className="font-display text-[18px] tabular-nums text-bg-11">
-                {formatSpend(spendTotal)}
-              </span>
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <MetaDelayedNote />
+                <span className="font-display text-[18px] tabular-nums text-bg-11">
+                  {formatSpend(spendTotal)}
+                </span>
+              </div>
             </div>
             <SpendChart data={spendSeries} height={170} live={scanOn} animate />
           </Card>
@@ -252,7 +232,13 @@ function DashboardPage() {
 
         {/* ── воронка залива (compact) ────────────────────────────────────── */}
         <div className="mb-6">
-          <FunnelKpiRow data={statsTodayQ.data?.meta} loading={statsTodayQ.isLoading} compact />
+          <TrackerLiveStrip data={statsTodayQ.data} className="mb-4" />
+          <FunnelKpiRow
+            data={statsTodayQ.data?.meta}
+            trackerData={statsTodayQ.data?.tracker}
+            loading={statsTodayQ.isLoading}
+            compact
+          />
         </div>
 
         {/* ── sparkline KPI row ───────────────────────────────────────────── */}
@@ -281,8 +267,10 @@ function DashboardPage() {
               <PulseDot
                 size={6}
                 color={
-                  !scanOn
-                    ? "var(--warning)"
+                  monitoringState === "offline"
+                    ? "var(--danger)"
+                    : monitoringState !== "healthy"
+                      ? "var(--warning)"
                     : pollingFallback
                       ? "var(--warning)"
                       : events.length > 0
@@ -290,20 +278,27 @@ function DashboardPage() {
                         : "var(--bg-7)"
                 }
               />
-              {!scanOn
-                ? "на паузе"
-                : pollingFallback
-                  ? "polling-режим (WS недоступен)"
-                  : events.length > 0
-                    ? "поток активен"
-                    : "тихо"}
+              {monitoringState === "offline"
+                ? "monitoring offline"
+                : monitoringState === "degraded"
+                  ? "контур ограничен"
+                  : monitoringState === "unknown"
+                    ? "статус неизвестен"
+                    : monitoringState === "paused"
+                      ? "на паузе"
+                      : pollingFallback
+                        ? "polling-режим (WS недоступен)"
+                        : events.length > 0
+                          ? "поток активен"
+                          : "тихо"}
             </span>
           </div>
           <Card padded={false}>
             <LiveTail
               events={events}
               max={8}
-              frozen={!scanOn}
+              frozen={monitoringState !== "healthy"}
+              monitoringState={monitoringState}
               onRow={(e) =>
                 e.fb_ad_id
                   ? void router.navigate({
@@ -336,31 +331,31 @@ function DashboardPage() {
 
 interface PageHeaderBlockProps {
   scanOn: boolean;
+  monitoringState: MonitoringState;
   lastScanAt: string | null;
   nextScanAt?: string | null;
   scanMode?: string | null;
   intervalSeconds: number;
   scanProgress?: ScanProgress | null;
   onScan: () => void;
-  onEnable: () => void;
   onDisable: () => void;
 }
 
 function PageHeaderBlock({
   scanOn,
+  monitoringState,
   lastScanAt,
   nextScanAt,
   scanMode,
   intervalSeconds,
   scanProgress,
   onScan,
-  onEnable,
   onDisable,
 }: PageHeaderBlockProps) {
   return (
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-6">
+    <div className="mb-6 flex flex-col items-start justify-between gap-6 lg:flex-row">
       <div>
-        <Eyebrow num="01">ОБЗОР · ПО ОБЪЯВЛЕНИЯМ · {scanOn ? "LIVE" : "ПАУЗА"}</Eyebrow>
+        <Eyebrow num="01">ОБЗОР · ПО ОБЪЯВЛЕНИЯМ · {MONITORING_STATE_LABEL[monitoringState]}</Eyebrow>
         <h1
           className="m-0 mt-2 font-display font-medium text-bg-11"
           style={{ fontSize: 30, letterSpacing: "-0.02em" }}
@@ -370,13 +365,13 @@ function PageHeaderBlock({
       </div>
       <ScanCluster
         scanOn={scanOn}
+        monitoringState={monitoringState}
         lastScanAt={lastScanAt}
         nextScanAt={nextScanAt}
         scanMode={scanMode}
         intervalSeconds={intervalSeconds}
         scanProgress={scanProgress}
         onScan={onScan}
-        onEnable={onEnable}
         onDisable={onDisable}
       />
     </div>

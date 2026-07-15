@@ -14,7 +14,7 @@ core/dashboard/stats_derived.py.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -179,7 +179,10 @@ async def fetch_tracker_totals(
         SELECT
             COALESCE(SUM(installs), 0)::int      AS installs,
             COALESCE(SUM(registrations), 0)::int AS registrations,
+            COALESCE(SUM(ftds), 0)::int          AS ftds,
             COALESCE(SUM(deposits), 0)::int      AS deposits,
+            COALESCE(SUM(confirmed_deposits), 0)::int AS confirmed_deposits,
+            COALESCE(SUM(redeposits), 0)::int    AS redeposits,
             COALESCE(SUM(revenue), 0)            AS revenue
         FROM tracker_aggregate
         WHERE day BETWEEN :day_from AND :day_to
@@ -198,7 +201,10 @@ async def fetch_tracker_daily(
             day,
             COALESCE(SUM(installs), 0)::int      AS installs,
             COALESCE(SUM(registrations), 0)::int AS registrations,
+            COALESCE(SUM(ftds), 0)::int          AS ftds,
             COALESCE(SUM(deposits), 0)::int      AS deposits,
+            COALESCE(SUM(confirmed_deposits), 0)::int AS confirmed_deposits,
+            COALESCE(SUM(redeposits), 0)::int    AS redeposits,
             COALESCE(SUM(revenue), 0)            AS revenue
         FROM tracker_aggregate
         WHERE day BETWEEN :day_from AND :day_to
@@ -208,6 +214,101 @@ async def fetch_tracker_daily(
     async with engine.connect() as conn:
         rows = (await conn.execute(text(sql), {"day_from": day_from, "day_to": day_to})).fetchall()
     return [dict(r._mapping) for r in rows]
+
+
+async def fetch_tracker_live_telemetry(
+    engine: AsyncEngine, *, day_from: date, day_to: date
+) -> dict[str, Any]:
+    """Live click-projection totals and durable-queue quality signals."""
+    from datetime import datetime, time, timezone
+
+    from_ts = datetime.combine(day_from, time.min, tzinfo=timezone.utc)
+    to_ts = datetime.combine(day_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    sql = """
+        WITH live AS (
+            SELECT
+                COUNT(*) FILTER (WHERE registration_at >= :from_ts AND registration_at < :to_ts)
+                    ::int AS registrations,
+                COUNT(*) FILTER (WHERE ftd_at >= :from_ts AND ftd_at < :to_ts)::int AS ftds,
+                COUNT(*) FILTER (
+                    WHERE confirmed_deposit_at >= :from_ts AND confirmed_deposit_at < :to_ts
+                )::int AS confirmed_deposits,
+                COALESCE(SUM(ftd_revenue) FILTER (
+                    WHERE confirmed_deposit = TRUE
+                      AND ftd_at >= :from_ts AND ftd_at < :to_ts
+                ), 0) AS ftd_revenue
+            FROM tracker_click_state
+        ),
+        event_diag AS (
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE event_type = 'redeposit' AND is_duplicate = FALSE
+                )::int AS redeposits,
+                percentile_cont(0.95) WITHIN GROUP (
+                    ORDER BY EXTRACT(EPOCH FROM (processed_at - received_at)) * 1000
+                ) FILTER (
+                    WHERE processed_at IS NOT NULL AND is_duplicate = FALSE
+                ) AS processing_lag_ms
+            FROM adsetpro_postback_events
+            WHERE received_at >= :from_ts AND received_at < :to_ts
+        ),
+        global_diag AS (
+            SELECT
+                (SELECT COUNT(*)::int
+                 FROM adsetpro_postback_events
+                 WHERE fb_ad_fk IS NULL
+                   AND processed_at IS NULL
+                   AND is_duplicate = FALSE) AS unmatched_events,
+                (SELECT received_at
+                 FROM adsetpro_postback_events
+                 ORDER BY received_at DESC
+                 LIMIT 1) AS last_event_at
+        ),
+        queue_diag AS (
+            SELECT COUNT(*)::int AS backlog
+            FROM task_queue
+            WHERE task_type = 'tracker_event_process'
+              AND status IN ('pending', 'retrying', 'running')
+        ),
+        materialized AS (
+            SELECT
+                COALESCE(SUM(registrations), 0)::int AS registrations,
+                COALESCE(SUM(confirmed_deposits), 0)::int AS confirmed_deposits
+            FROM tracker_aggregate
+            WHERE day BETWEEN :day_from AND :day_to
+        ),
+        provider_audit AS (
+            SELECT COALESCE((
+                SELECT (value->>'drift_after')::int
+                FROM system_config
+                WHERE key = 'tracker_provider_reconciliation'
+            ), 0)::int AS reconciliation_drift
+        )
+        SELECT live.*, event_diag.*, global_diag.*, queue_diag.backlog,
+               provider_audit.reconciliation_drift,
+               ABS(live.registrations - materialized.registrations)
+                 + ABS(live.confirmed_deposits - materialized.confirmed_deposits)
+                 AS materialization_drift
+        FROM live
+        CROSS JOIN event_diag
+        CROSS JOIN global_diag
+        CROSS JOIN queue_diag
+        CROSS JOIN materialized
+        CROSS JOIN provider_audit
+    """
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(sql),
+                {
+                    "from_ts": from_ts,
+                    "to_ts": to_ts,
+                    "day_from": day_from,
+                    "day_to": day_to,
+                },
+            )
+        ).one()
+    return dict(row._mapping)
 
 
 async def fetch_breakdown(
@@ -262,6 +363,7 @@ __all__ = [
     "fetch_hourly_snapshot_rows",
     "fetch_period_totals",
     "fetch_tracker_daily",
+    "fetch_tracker_live_telemetry",
     "fetch_tracker_totals",
     "fetch_window_totals",
 ]

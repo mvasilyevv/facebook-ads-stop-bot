@@ -1,30 +1,32 @@
 # Полный стек FB Stop Bot для 24/7 Linux-хоста.
 #
-# Сетевая топология (Фаза 0 переезда):
-#   - Vision anti-detect браузер работает НА ХОСТЕ (под Xvfb), CDP слушает loopback.
-#   - Node.js browser-agent (gRPC :50051) тоже на хосте через network_mode: host,
-#     чтобы достучаться до Vision CDP по 127.0.0.1.
+# Сетевая топология production-сервера:
+#   - Vision anti-detect браузер работает в отдельном webtop-контейнере в общей
+#     fb_agent_default сети.
+#   - Node.js browser-agent разделяет network namespace контейнера vision-webtop,
+#     поэтому Vision API и динамический CDP доступны ему по 127.0.0.1.
 #   - Postgres/Redis — в Docker, bind 127.0.0.1 (наружу не торчат).
-#   - Python-воркеры/API — в Docker, ходят до browser-agent на хосте через
-#     host.docker.internal (extra_hosts: host-gateway). Воркеры резолвят адрес
-#     browser-agent из env BROWSER_AGENT_HOST.
-#
-# ВНИМАНИЕ (money-критично, известное ограничение observer):
-#   apps/observer_worker/main.py::_default_gate_factory строит BrowserAgentConfig
-#   БЕЗ чтения BROWSER_AGENT_HOST/PORT — использует дефолт localhost:50051 из
-#   dataclass. Поэтому observer в контейнере на host.docker.internal НЕ попадёт на
-#   browser-agent (пойдёт на localhost внутри контейнера). До правки Python-фабрики
-#   observer запускайте через network_mode: host (см. закомментированный override
-#   в сервисе observer) ЛИБО оставьте observer на хосте под supervisord. meta_api/
-#   creator корректно читают BROWSER_AGENT_HOST и работают через host.docker.internal.
+#   - Python-воркеры/API ходят до gRPC browser-agent по DNS-имени vision-webtop
+#     внутри общей Docker-сети. Host-loopback здесь не используется: опубликованный
+#     127.0.0.1:50051 намеренно недоступен из соседних контейнеров.
+
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
 
 # Общие настройки всех Python-воркеров (образ из Dockerfile.workers).
 x-worker-common: &worker-common
   build:
     context: .
     dockerfile: docker/Dockerfile.workers
-  image: fb-stop-bot/workers:latest
+    args:
+      BASE_IMAGE: ${IMAGE_REPOSITORY:-fb-stop-bot}/python-base:${IMAGE_TAG:-latest}
+  image: ${IMAGE_REPOSITORY:-fb-stop-bot}/workers:${IMAGE_TAG:-latest}
   restart: unless-stopped
+  init: true
+  logging: *default-logging
   # Потолок памяти против утечки одного воркера (idle ~60MB, запас 6×).
   mem_limit: 384m
   # OOM-приоритет: не-money воркеры (cleanup/digest/creator/…) под нож раньше Vision/БД.
@@ -40,8 +42,8 @@ x-worker-common: &worker-common
     REDIS_URL: redis://redis:6379/0
     REDIS_HOST: redis
     REDIS_PORT: "6379"
-    BROWSER_AGENT_HOST: host.docker.internal
-    BROWSER_AGENT_GRPC_HOST: host.docker.internal
+    BROWSER_AGENT_HOST: vision-webtop
+    BROWSER_AGENT_GRPC_HOST: vision-webtop
     BROWSER_AGENT_GRPC_PORT: "50051"
   extra_hosts:
     - "host.docker.internal:host-gateway"
@@ -58,6 +60,7 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    logging: *default-logging
     # БД — самый защищённый от OOM-killer (money-конфиг + история).
     mem_limit: 1g
     oom_score_adj: -700
@@ -78,6 +81,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 256m
     oom_score_adj: -500
     command: redis-server --appendonly yes
@@ -98,7 +102,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.workers
-    image: fb-stop-bot/workers:latest
+      args:
+        BASE_IMAGE: ${IMAGE_REPOSITORY:-fb-stop-bot}/python-base:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REPOSITORY:-fb-stop-bot}/workers:${IMAGE_TAG:-latest}
+    logging: *default-logging
     env_file: .env
     environment:
       WORKER_TYPE: migrate
@@ -117,8 +124,12 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.api
-    image: fb-stop-bot/api:latest
+      args:
+        BASE_IMAGE: ${IMAGE_REPOSITORY:-fb-stop-bot}/python-base:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REPOSITORY:-fb-stop-bot}/api:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    init: true
+    logging: *default-logging
     mem_limit: 512m
     oom_score_adj: -200
     env_file: .env
@@ -128,8 +139,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-      BROWSER_AGENT_HOST: host.docker.internal
-      BROWSER_AGENT_GRPC_HOST: host.docker.internal
+      BROWSER_AGENT_HOST: vision-webtop
+      BROWSER_AGENT_GRPC_HOST: vision-webtop
       BROWSER_AGENT_GRPC_PORT: "50051"
       # Корень загрузки концептов кампаний. ОБЩИЙ named-volume с campaign_creator:
       # api пишет файлы сюда (POST /tools/campaigns/upload), воркер читает их по тому же
@@ -149,22 +160,41 @@ services:
       migrate:
         condition: service_completed_successfully
 
-  # ====================== browser-agent (на хосте) ======================
-  # network_mode: host — чтобы gRPC-сервер мог достучаться до Vision CDP на 127.0.0.1
-  # хоста. Слушает :50051 прямо на хост-интерфейсе; воркеры/api ходят сюда через
-  # host.docker.internal:50051.
+  # ====================== browser-agent (рядом с Vision) ======================
+  # Разделяет network namespace внешнего vision-webtop: Vision API и выданный им
+  # динамический CDP-порт остаются на loopback этого namespace. gRPC слушает на всех
+  # интерфейсах namespace и доступен другим сервисам как vision-webtop:50051; host bind
+  # 127.0.0.1:50051 остаётся только для безопасной локальной диагностики.
   browser-agent:
     build:
       context: .
       dockerfile: docker/Dockerfile.browser-agent
-    image: fb-stop-bot/browser-agent:latest
+    image: ${IMAGE_REPOSITORY:-fb-stop-bot}/browser-agent:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    init: true
+    logging: *default-logging
     env_file: .env
-    network_mode: host
-    # profile "agent": на боевом Linux-сервере browser-agent запускается НАТИВНО на
-    # хосте (co-located с Vision, CDP 127.0.0.1) — не в Docker. Поэтому исключён из
-    # дефолтного `docker compose up`. Поднять в Docker: `docker compose --profile agent up`.
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    network_mode: "container:vision-webtop"
     profiles: ["agent"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const n=require('net').connect(50051,'127.0.0.1');n.on('connect',()=>{n.end();process.exit(0)});n.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),3000)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # ====================== фронтенды ======================
   # profile "web": фронтенды (веб-панель + Telegram Mini App). Не нужны для работы
@@ -173,25 +203,45 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.frontend
-    image: fb-stop-bot/frontend:latest
+      args:
+        VITE_API_BASE: /api
+        VITE_REMOTE_DESKTOP_URL: ${VITE_REMOTE_DESKTOP_URL:-}
+    image: ${IMAGE_REPOSITORY:-fb-stop-bot}/frontend:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    logging: *default-logging
     profiles: ["web"]
     ports:
       - "127.0.0.1:8080:80"
     depends_on:
       - api
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   mini-app:
     build:
       context: .
       dockerfile: docker/Dockerfile.mini-app
-    image: fb-stop-bot/mini-app:latest
+      args:
+        VITE_API_BASE: /api
+        VITE_REMOTE_DESKTOP_URL: ${VITE_REMOTE_DESKTOP_URL:-}
+    image: ${IMAGE_REPOSITORY:-fb-stop-bot}/mini-app:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    logging: *default-logging
     profiles: ["web"]
     ports:
       - "127.0.0.1:8081:80"
     depends_on:
       - api
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/tma/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ====================== 13 Python-воркеров ======================
   observer:
@@ -203,10 +253,6 @@ services:
     environment:
       <<: *worker-env
       WORKER_TYPE: observer
-    # Money-критично: до правки observer-gate-фабрики (не читает BROWSER_AGENT_HOST)
-    # раскомментируйте host-режим, иначе observer не достучится до browser-agent.
-    # При host-режиме уберите extra_hosts/ports конфликтов и используйте localhost:50051.
-    # network_mode: host
 
   telegram_poller:
     <<: *worker-common
@@ -310,3 +356,8 @@ volumes:
   pgdata:
   redisdata:
   campaign_uploads:
+
+networks:
+  default:
+    name: fb_agent_default
+    external: true

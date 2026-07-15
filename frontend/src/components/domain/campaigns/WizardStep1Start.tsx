@@ -58,7 +58,7 @@ export const WizardStep1Start: FC<WizardStep1StartProps> = ({
     <div className="space-y-6">
       {/* Заголовок шага */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-1">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 1 · СТАРТ
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">

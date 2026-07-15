@@ -16,8 +16,33 @@ import { VisionClient } from './vision-client.js';
 // Проверяем, что helper корректно распознаёт URL Ads Manager.
 test('isAdsManagerUrl detects ads manager pages', () => {
   assert.equal(isAdsManagerUrl('https://www.facebook.com/adsmanager/manage/campaigns'), true);
-  assert.equal(isAdsManagerUrl('https://www.facebook.com/ads/library/'), true);
+  assert.equal(isAdsManagerUrl('https://adsmanager.facebook.com/adsmanager/manage/ads?act=123'), true);
+  assert.equal(isAdsManagerUrl('https://business.facebook.com/adsmanager/manage/campaigns'), true);
+  assert.equal(isAdsManagerUrl('https://www.facebook.com/ads/library/'), false);
   assert.equal(isAdsManagerUrl('https://www.facebook.com/messages/'), false);
+  assert.equal(
+    isAdsManagerUrl(
+      'https://business.facebook.com/business/loginpage/?next=https%3A%2F%2Fadsmanager.facebook.com%2Fadsmanager%2Fmanage%2Fads',
+    ),
+    false,
+  );
+});
+
+test('findPreferredPrimaryPage ignores login redirect containing adsmanager in query', () => {
+  const loginPage = {
+    isClosed: () => false,
+    url: () =>
+      'https://business.facebook.com/business/loginpage/?next=https%3A%2F%2Fadsmanager.facebook.com%2Fadsmanager',
+  };
+  const adsPage = {
+    isClosed: () => false,
+    url: () => 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=123',
+  };
+  const browser = {
+    contexts: () => [{ pages: () => [loginPage, adsPage] }],
+  };
+
+  assert.equal(findPreferredPrimaryPage(browser as any), adsPage);
 });
 
 // Проверяем, что primary page выбирается по вкладке Ads Manager, а не по первой вкладке профиля.

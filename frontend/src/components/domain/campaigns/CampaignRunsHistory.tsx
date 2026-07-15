@@ -36,7 +36,7 @@ function statusColor(status: RunStatus): string {
     case "failed":
       return "text-danger";
     case "cancelled":
-      return "text-bg-7";
+      return "text-bg-8";
     case "creating":
     case "uploading":
     case "uniquifying":
@@ -104,7 +104,7 @@ export const CampaignRunsHistory: FC<CampaignRunsHistoryProps> = ({ onClone }) =
               onChange={(e) => setStatusFilter(e.target.value)}
             />
           </div>
-          <span className="text-[12px] text-bg-7">
+          <span className="text-[12px] text-bg-8">
             {total > 0 ? `${total} запусков` : "нет запусков"}
           </span>
         </div>
@@ -133,7 +133,7 @@ export const CampaignRunsHistory: FC<CampaignRunsHistoryProps> = ({ onClone }) =
             {["Оффер / ID", "Статус", "Создан", "Действия"].map((h) => (
               <div
                 key={h}
-                className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-7"
+                className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8"
               >
                 {h}
               </div>
@@ -221,7 +221,7 @@ const RunRow: FC<RunRowProps> = ({ run, onClone, onRefresh }) => {
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
-              className="text-bg-7 hover:text-bg-11 transition-colors"
+              className="text-bg-8 hover:text-bg-11 transition-colors"
               aria-expanded={expanded}
               aria-label="Развернуть детали"
             >
@@ -231,7 +231,7 @@ const RunRow: FC<RunRowProps> = ({ run, onClone, onRefresh }) => {
               {run.offer_code ?? "—"}
             </span>
           </div>
-          <div className="text-[10px] font-mono text-bg-7 ml-5 truncate" title={run.id}>
+          <div className="text-[10px] font-mono text-bg-8 ml-5 truncate" title={run.id}>
             {run.id}
           </div>
           {run.error && (
@@ -262,7 +262,7 @@ const RunRow: FC<RunRowProps> = ({ run, onClone, onRefresh }) => {
             onClick={() => void handleClone()}
             disabled={cloneMut.isPending}
             title="Клонировать"
-            className="size-7 flex items-center justify-center rounded-[var(--radius-1)] text-bg-7 hover:text-bg-11 hover:bg-bg-3 transition-colors disabled:opacity-40"
+            className="size-7 flex items-center justify-center rounded-[var(--radius-1)] text-bg-8 hover:text-bg-11 hover:bg-bg-3 transition-colors disabled:opacity-40"
           >
             <Copy size={13} />
           </button>
@@ -272,7 +272,7 @@ const RunRow: FC<RunRowProps> = ({ run, onClone, onRefresh }) => {
               onClick={() => void handleCancel()}
               disabled={cancelMut.isPending}
               title="Отменить"
-              className="size-7 flex items-center justify-center rounded-[var(--radius-1)] text-bg-7 hover:text-danger hover:bg-danger/10 transition-colors disabled:opacity-40"
+              className="size-7 flex items-center justify-center rounded-[var(--radius-1)] text-bg-8 hover:text-danger hover:bg-danger/10 transition-colors disabled:opacity-40"
             >
               <Trash2 size={13} />
             </button>
@@ -283,7 +283,7 @@ const RunRow: FC<RunRowProps> = ({ run, onClone, onRefresh }) => {
               onClick={() => void handleCleanup()}
               disabled={cleanupMut.isPending}
               title="Cleanup Meta-объектов"
-              className="size-7 flex items-center justify-center rounded-[var(--radius-1)] text-bg-7 hover:text-warning hover:bg-warning/10 transition-colors disabled:opacity-40"
+              className="size-7 flex items-center justify-center rounded-[var(--radius-1)] text-bg-8 hover:text-warning hover:bg-warning/10 transition-colors disabled:opacity-40"
             >
               <RefreshCw size={13} />
             </button>
@@ -312,12 +312,12 @@ function RunExpandedDetails({ runId }: { runId: string }) {
       {/* Прогресс */}
       {run.progress && Object.keys(run.progress).length > 0 && (
         <div>
-          <span className="font-display text-[9px] uppercase tracking-wider text-bg-7 block mb-1">
+          <span className="font-display text-[9px] uppercase tracking-wider text-bg-8 block mb-1">
             Прогресс
           </span>
           {Object.entries(run.progress).map(([k, v]) => (
             <div key={k} className="font-mono text-[11px] flex gap-2">
-              <span className="text-bg-7">{k}:</span>
+              <span className="text-bg-8">{k}:</span>
               <span className="text-bg-10">{String(v)}</span>
             </div>
           ))}
@@ -326,12 +326,12 @@ function RunExpandedDetails({ runId }: { runId: string }) {
       {/* Meta IDs */}
       {hasMetaIds && (
         <div>
-          <span className="font-display text-[9px] uppercase tracking-wider text-bg-7 block mb-1">
+          <span className="font-display text-[9px] uppercase tracking-wider text-bg-8 block mb-1">
             Meta IDs
           </span>
           {Object.entries(run.created_meta_ids).map(([k, v]) => (
             <div key={k} className="font-mono text-[11px] flex gap-2">
-              <span className="text-bg-7">{k}:</span>
+              <span className="text-bg-8">{k}:</span>
               <span className="text-bg-10">{String(v)}</span>
             </div>
           ))}

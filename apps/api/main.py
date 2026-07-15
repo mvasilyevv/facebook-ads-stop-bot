@@ -11,7 +11,7 @@
 - Routers: health (/healthz, /readyz, /metrics) + postback (/api/v1/postback/adsetpro).
 
 Использование:
-    uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
+    uvicorn apps.api.main:app --host 0.0.0.0 --port 8100
 
 Тесты создают app через `create_app()`, чтобы каждый тест-модуль получил свежий
 экземпляр (и мог подменить `app.state.redis` под fakeredis).

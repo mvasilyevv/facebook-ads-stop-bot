@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, ClassVar
 
@@ -35,6 +36,13 @@ class RequestBudgetChangeTool:
                 "ad_account_id": {"type": "string", "description": "act_X (для аудита)"},
                 "daily_budget_usd": {"type": "number", "minimum": 0.5, "maximum": 100000},
                 "lifetime_budget_usd": {"type": "number", "minimum": 1, "maximum": 1000000},
+                "end_time": {
+                    "type": "string",
+                    "description": (
+                        "Обязательно для lifetime_budget_usd: ISO8601 с timezone offset, "
+                        "например 2026-12-31T23:59:59-08:00"
+                    ),
+                },
                 "reason": {
                     "type": "string",
                     "description": "Краткое обоснование для логов и TG (1-200 символов)",
@@ -69,7 +77,19 @@ class RequestBudgetChangeTool:
                 lifetime = Decimal(str(lifetime_raw))
                 if lifetime <= 0:
                     raise ToolError("lifetime_budget_usd должен быть > 0")
+                end_time = str(args.get("end_time") or "").strip()
+                if not end_time:
+                    raise ToolError(
+                        "Для lifetime_budget_usd обязательно передай end_time в ISO8601 с timezone"
+                    )
+                try:
+                    parsed_end = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise ToolError("end_time должен быть валидным ISO8601") from exc
+                if parsed_end.tzinfo is None:
+                    raise ToolError("end_time должен содержать timezone offset")
                 params["lifetime_budget"] = int(lifetime * 100)
+                params["end_time"] = end_time
                 budget_summary = f"lifetime=${lifetime:.2f}"
         except (InvalidOperation, ValueError) as exc:
             raise ToolError(f"Неверный формат бюджета: {exc}") from exc

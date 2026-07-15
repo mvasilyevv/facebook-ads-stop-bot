@@ -42,11 +42,11 @@ interface KpiCellData {
 
 function KpiCell({
   d,
-  last,
+  index,
   onClick,
 }: {
   d: KpiCellData;
-  last: boolean;
+  index: number;
   /** Клик по ячейке → переход в Ads с фильтром по состоянию (если задан). */
   onClick?: () => void;
 }) {
@@ -71,7 +71,9 @@ function KpiCell({
       }
       className={cn(
         "flex flex-col gap-3 p-5",
-        !last && "border-r border-[var(--hairline)]",
+        index < 2 && "border-b border-[var(--hairline)] lg:border-b-0",
+        index % 2 === 0 && "border-r border-[var(--hairline)]",
+        index === 1 && "lg:border-r lg:border-[var(--hairline)]",
         onClick &&
           "cursor-pointer transition-colors duration-[120ms] hover:bg-bg-1 " +
             "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
@@ -150,7 +152,7 @@ export function SparklineKpiRow({
 
   return (
     <div
-      className="grid grid-cols-4 border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden"
+      className="grid grid-cols-2 overflow-hidden rounded-[var(--radius-3)] border border-[var(--hairline)] lg:grid-cols-4"
       role="list"
       aria-label="Ключевые показатели"
     >
@@ -158,7 +160,7 @@ export function SparklineKpiRow({
         <KpiCell
           key={d.key}
           d={d}
-          last={i === cells.length - 1}
+          index={i}
           onClick={onCellClick ? () => onCellClick(d.key) : undefined}
         />
       ))}
@@ -171,12 +173,20 @@ export function SparklineKpiRow({
 export function SparklineKpiRowSkeleton() {
   return (
     <div
-      className="grid grid-cols-4 border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden"
+      className="grid grid-cols-2 overflow-hidden rounded-[var(--radius-3)] border border-[var(--hairline)] lg:grid-cols-4"
       role="status"
       aria-label="Загрузка KPI"
     >
       {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className={cn("flex flex-col gap-3 p-5", i < 3 && "border-r border-[var(--hairline)]")}>
+        <div
+          key={i}
+          className={cn(
+            "flex flex-col gap-3 p-5",
+            i < 2 && "border-b border-[var(--hairline)] lg:border-b-0",
+            i % 2 === 0 && "border-r border-[var(--hairline)]",
+            i === 1 && "lg:border-r lg:border-[var(--hairline)]",
+          )}
+        >
           <Skeleton height={10} width="55%" />
           <div className="flex items-end justify-between gap-2">
             <Skeleton height={34} width="40%" />

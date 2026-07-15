@@ -8,7 +8,9 @@ import type { components } from "@fb/shared/api/generated";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Sparkline } from "@/components/data/charts/Sparkline";
 import { Eyebrow } from "@/components/data/Eyebrow";
+import { MetaDelayedNote } from "@/components/data/SourceStatus";
 import { cn } from "@/lib/utils/cn";
+import { formatTrackerCount, readTrackerRealtime } from "@/lib/types/trackerRealtime";
 import { num, type AdMetricsView } from "./adHelpers";
 import { money1, isCplBad, isFreqBad, isRoasBad } from "./adHelpers";
 
@@ -27,9 +29,19 @@ interface AdMetricsPanelProps {
   /** Сырые точки timeline для CPL-спарклайна (8 последних). */
   metricsRows: MetricRow[];
   metricsRowsLoading: boolean;
+  /** Кабинетный event-driven tracker block из GET /stats/today. */
+  trackerData?: unknown;
+  trackerDataLoading?: boolean;
 }
 
-export function AdMetricsPanel({ metrics: m, age, metricsRows, metricsRowsLoading }: AdMetricsPanelProps) {
+export function AdMetricsPanel({
+  metrics: m,
+  age,
+  metricsRows,
+  metricsRowsLoading,
+  trackerData,
+  trackerDataLoading = false,
+}: AdMetricsPanelProps) {
   // CPL sparkline (8 точек): CPL = spend/leads по точкам timeline.
   const cplSpark = useMemo<number[]>(() => {
     const pts: number[] = [];
@@ -40,6 +52,7 @@ export function AdMetricsPanel({ metrics: m, age, metricsRows, metricsRowsLoadin
     }
     return pts.slice(-8);
   }, [metricsRows]);
+  const tracker = readTrackerRealtime(trackerData);
 
   const metricCells: MetricCell[] = [
     { k: "spend", v: money1(m.spend) },
@@ -56,7 +69,10 @@ export function AdMetricsPanel({ metrics: m, age, metricsRows, metricsRowsLoadin
     <>
       {/* Метрики-снимок */}
       <section>
-        <Eyebrow className="mb-3">МЕТРИКИ · СНИМОК</Eyebrow>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <Eyebrow>МЕТРИКИ META · СНИМОК</Eyebrow>
+          <MetaDelayedNote />
+        </div>
         <div className="grid grid-cols-4 border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden">
           {metricCells.map((c, i) => (
             <div
@@ -89,9 +105,46 @@ export function AdMetricsPanel({ metrics: m, age, metricsRows, metricsRowsLoadin
         </div>
       </section>
 
+      {trackerDataLoading ? (
+        <section aria-label="Загрузка конверсий AdSet.pro">
+          <Eyebrow className="mb-3 text-success">
+            КОНВЕРСИИ КАБИНЕТА СЕГОДНЯ · ADSET.PRO · LIVE
+          </Eyebrow>
+          <Skeleton height={58} className="w-full" />
+        </section>
+      ) : tracker ? (
+        <section>
+          <Eyebrow className="mb-3 text-success">
+            КОНВЕРСИИ КАБИНЕТА СЕГОДНЯ · ADSET.PRO · LIVE
+          </Eyebrow>
+          <div className="grid grid-cols-2 overflow-hidden rounded-[var(--radius-2)] border border-[rgba(56,211,159,0.22)] sm:grid-cols-4">
+            {[
+              ["Регистрации", tracker.registrations],
+              ["FTD", tracker.ftds],
+              ["Подтверждены", tracker.confirmedDeposits],
+              ["Редепозиты", tracker.redeposits],
+            ].map(([label, value], index) => (
+              <div
+                key={String(label)}
+                className={cn(
+                  "bg-success-bg px-3 py-2.5",
+                  index > 0 && "border-l border-[rgba(56,211,159,0.16)]",
+                  index > 1 && "max-sm:border-t",
+                )}
+              >
+                <div className="text-[10px] text-bg-9">{label}</div>
+                <div className="mt-1 font-display text-[15px] tabular-nums text-bg-11">
+                  {formatTrackerCount(value as number | null)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {/* CPL sparkline */}
       <section>
-        <Eyebrow className="mb-3">CPL · 8 ТОЧЕК</Eyebrow>
+        <Eyebrow className="mb-3">CPL META · 8 ТОЧЕК</Eyebrow>
         <div className="bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-2)] p-4">
           {metricsRowsLoading ? (
             <Skeleton height={70} className="w-full" />

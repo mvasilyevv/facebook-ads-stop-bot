@@ -1,0 +1,37 @@
+services:
+  webtop:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: fb-agent/vision-webtop:3.6.8
+    container_name: vision-webtop
+    restart: unless-stopped
+    shm_size: 2gb
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Europe/Kaliningrad}
+      TITLE: Vision Desktop
+      CUSTOM_USER: ${CUSTOM_USER:-abc}
+      DISPLAY_WIDTH: ${DISPLAY_WIDTH:-1920}
+      DISPLAY_HEIGHT: ${DISPLAY_HEIGHT:-1080}
+      DISPLAY_DPI: ${DISPLAY_DPI:-96}
+    ports:
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:3030:3030"
+      - "127.0.0.1:50051:50051"
+    volumes:
+      - ./config:/config
+    networks:
+      - fb-agent
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+networks:
+  fb-agent:
+    name: fb_agent_default
+    external: true

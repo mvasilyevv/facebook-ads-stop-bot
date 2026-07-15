@@ -117,7 +117,12 @@ async def _read_meta_api_channel(redis: DepRedis) -> MetaApiChannelStatus:
     except (json.JSONDecodeError, TypeError):
         return MetaApiChannelStatus(status="UNKNOWN")
 
-    healthy = bool(data.get("healthy", False))
+    # Намеренно пропущенный probe (например, monitoring на паузе) — это отсутствие
+    # проверки, а не подтверждённый отказ канала. Иначе 14/14 живых воркеров
+    # превращались в overall=DEGRADED только из-за выключенного сканирования.
+    probe_performed = data.get("probe_performed")
+    healthy_raw = data.get("healthy")
+    healthy = bool(healthy_raw) if healthy_raw is not None else None
     checked_at: datetime | None = None
     checked_raw = data.get("checked_at")
     if isinstance(checked_raw, str) and checked_raw:
@@ -127,7 +132,7 @@ async def _read_meta_api_channel(redis: DepRedis) -> MetaApiChannelStatus:
             pass
 
     return MetaApiChannelStatus(
-        status="ONLINE" if healthy else "DEGRADED",
+        status=("UNKNOWN" if probe_performed is False else ("ONLINE" if healthy else "DEGRADED")),
         healthy=healthy,
         probe_ok=bool(data.get("probe_ok", False)),
         detail=str(data.get("detail")) if data.get("detail") is not None else None,

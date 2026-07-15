@@ -17,7 +17,6 @@ UPDATE promoted_to_task_id в одной транзакции.
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 
@@ -32,6 +31,12 @@ from apps.api.routers.v1.schemas.tasks import (
 )
 from apps.api.utils.status_mapper import to_frontend_task_status
 from apps.api.utils.task_serializer import task_row_to_out
+from core.enable_reco.confirmation import (
+    RecommendationAlreadyPromotedError,
+    RecommendationNotFoundError,
+    RecommendationUnsafeStateError,
+    promote_enable_recommendation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,112 +147,23 @@ async def confirm_enable_recommendation(
     engine: DepEngine,
     body: EnableRecommendationConfirmIn | None = None,
 ) -> dict:
-    """Создать enable-задачу из рекомендации и привязать её.
-
-    SELECT FOR UPDATE защищает от двойного подтверждения.
-    409 если рекомендация уже promoted (promoted_to_task_id IS NOT NULL).
-    404 если рекомендация не найдена.
-    Атомарно: INSERT task_queue + UPDATE enable_recommendations.promoted_to_task_id.
-    """
+    """Revalidate рекомендацию и атомарно создать activate_ad задачу."""
     if body is None:
         body = EnableRecommendationConfirmIn()
 
-    async with engine.begin() as conn:
-        # Блокируем строку рекомендации для защиты от race
-        rec_row = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT er.id, er.ad_id, er.promoted_to_task_id,
-                           fa.fb_ad_id, fa.ad_name
-                    FROM enable_recommendations er
-                    JOIN fb_ads fa ON fa.id = er.ad_id
-                    WHERE er.id = :rid
-                    FOR UPDATE
-                    """
-                ),
-                {"rid": rec_id},
-            )
-        ).first()
-
-        if rec_row is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Рекомендация id={rec_id} не найдена",
-            )
-
-        if rec_row.promoted_to_task_id is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Рекомендация id={rec_id} уже подтверждена (task_id={rec_row.promoted_to_task_id})",
-            )
-
-        fb_ad_id = rec_row.fb_ad_id
-        ad_id = str(rec_row.ad_id)
-        ad_name = rec_row.ad_name
-
-        # Включение — через Marketing API (activate_ad), как кнопка ereco: в TG.
-        # Форма payload = MetaMutationPayload (mutation_kind/target_id/params/ad_account_id).
-        # from_dict берёт только эти поля; метаданные рекомендации кладём в params
-        # для трейсинга (activate_ad-хендлеру нужен лишь target_id). Канал disable/enable
-        # воркеров удалён — задачу исполняет meta_api_worker.
-        # Мульти-кабинет: кабинет объявления из каталога (None → legacy primary-вкладка).
-        from core.observer.accounts import load_ad_account_id_for_fb_ad
-
-        ad_account_id = await load_ad_account_id_for_fb_ad(engine, fb_ad_id)
-        payload = {
-            "mutation_kind": "activate_ad",
-            "target_id": fb_ad_id,
-            "params": {
-                "source": "recommendation",
-                "recommendation_id": str(rec_id),
-                "ad_id": ad_id,
-            },
-            "ad_account_id": ad_account_id,
-        }
-
-        ikey = f"reco:activate_ad:{fb_ad_id}:{rec_id}:{uuid.uuid4().hex}"
-
-        # INSERT напрямую внутри транзакции (не через create_task чтобы держать один conn)
-        insert_result = await conn.execute(
-            text(
-                """
-                INSERT INTO task_queue
-                    (task_type, status, idempotency_key, payload,
-                     attempt_count, max_attempts, requested_by, created_by_chat_id)
-                VALUES
-                    ('meta_api_mutation', 'pending', :ik, CAST(:pl AS JSONB), 0, 5, :rb, :ccid)
-                ON CONFLICT (idempotency_key) DO NOTHING
-                RETURNING id
-                """
-            ),
-            {
-                "ik": ikey,
-                "pl": json.dumps(payload),
-                "rb": body.requested_by,
-                "ccid": body.requested_by_chat_id,
-            },
+    try:
+        promotion = await promote_enable_recommendation(
+            engine,
+            recommendation_id=rec_id,
+            requested_by=body.requested_by,
+            created_by_chat_id=body.requested_by_chat_id,
         )
-        task_row = insert_result.first()
+    except RecommendationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (RecommendationAlreadyPromotedError, RecommendationUnsafeStateError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-        if task_row is None:
-            raise HTTPException(
-                status_code=409, detail="Коллизия idempotency_key при создании задачи"
-            )
-
-        task_id = task_row[0]
-
-        # Привязываем задачу к рекомендации
-        await conn.execute(
-            text(
-                """
-                UPDATE enable_recommendations
-                SET promoted_to_task_id = :tid
-                WHERE id = :rid
-                """
-            ),
-            {"tid": task_id, "rid": rec_id},
-        )
+    task_id = promotion.task_id
 
     # Читаем созданную задачу для ответа
     async with engine.connect() as conn:
@@ -272,5 +188,5 @@ async def confirm_enable_recommendation(
         raise HTTPException(status_code=500, detail="Задача создана, но не найдена при чтении")
 
     result = task_row_to_out(row)
-    result["ad_name"] = ad_name  # ad_name из рекомендации (в SELECT он NULL)
+    result["ad_name"] = promotion.ad_name  # ad_name из рекомендации (в SELECT он NULL)
     return result

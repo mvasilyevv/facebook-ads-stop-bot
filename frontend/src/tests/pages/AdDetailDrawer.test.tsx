@@ -15,12 +15,33 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { AdSnapshot } from "@fb/shared";
+import type { AdSnapshot, StatsToday } from "@fb/shared";
 
 // ─── Моки ─────────────────────────────────────────────────────────────────────
 
 const mockNavigate = vi.fn();
 const FB_AD_ID = "120211984573_8761";
+const TRACKER_TODAY: StatsToday["tracker"] = {
+  available: true,
+  day_utc: "2026-07-15",
+  attribution_note: "Атрибуция AdSet.pro за текущие сутки кабинета",
+  unmatched_events: 0,
+  data_quality: "good",
+  backlog: 0,
+  duplicate_events: 0,
+  unsupported_events: 0,
+  totals: {
+    installs: 0,
+    registrations: 7,
+    ftds: 5,
+    deposits: 4,
+    confirmed_deposits: 4,
+    redeposits: 2,
+    revenue: null,
+    roi_pct: null,
+  },
+  series_daily: [],
+};
 
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: (_path: string) => (opts: { component: unknown }) => opts,
@@ -34,6 +55,10 @@ vi.mock("@/lib/api/ads", () => ({
   useBulkDisable: vi.fn(() => ({ mutateAsync: vi.fn().mockResolvedValue({}), isPending: false })),
 }));
 
+vi.mock("@/lib/api/stats", () => ({
+  useStatsToday: vi.fn(),
+}));
+
 vi.mock("@/lib/websocket/useRealtimeInvalidation", () => ({
   useRealtimeInvalidation: vi.fn(() => ({ status: "connected" })),
 }));
@@ -41,6 +66,7 @@ vi.mock("@/lib/websocket/useRealtimeInvalidation", () => ({
 // ─── Импорты после моков ──────────────────────────────────────────────────────
 
 import { useAds, useAdTimeline } from "@/lib/api/ads";
+import { useStatsToday } from "@/lib/api/stats";
 
 // ─── Фабрика snapshot ──────────────────────────────────────────────────────────
 
@@ -107,6 +133,12 @@ describe("AdDrawer (deep-link /ads/$fbAdId)", () => {
       isLoading: false,
       isError: false,
     } as unknown as ReturnType<typeof useAdTimeline>);
+    vi.mocked(useStatsToday).mockReturnValue({
+      data: { tracker: TRACKER_TODAY },
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as unknown as ReturnType<typeof useStatsToday>);
   });
 
   // Header: eyebrow ОБЪЯВЛЕНИЕ + ad_name + offer-chip + ad_id.
@@ -133,6 +165,18 @@ describe("AdDrawer (deep-link /ads/$fbAdId)", () => {
     expect(screen.getByText("CPL")).toBeInTheDocument();
     expect(screen.getByText("leads")).toBeInTheDocument();
     expect(screen.getByText("$891.2")).toBeInTheDocument();
+  });
+
+  it("берёт live-конверсии из stats API, а не из AdSnapshot", async () => {
+    await renderDrawer();
+
+    expect(useStatsToday).toHaveBeenCalled();
+    expect(
+      screen.getByText("КОНВЕРСИИ КАБИНЕТА СЕГОДНЯ · ADSET.PRO · LIVE"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("FTD").parentElement).toHaveTextContent("5");
+    expect(screen.getByText("Подтверждены").parentElement).toHaveTextContent("4");
+    expect(screen.getByText("Редепозиты").parentElement).toHaveTextContent("2");
   });
 
   // Triggered-rule banner.

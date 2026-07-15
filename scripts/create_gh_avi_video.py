@@ -100,6 +100,7 @@ def url_tags(v: int) -> str:
         "&sub5={{campaign.name}}"
         "&sub6={{adset.name}}"
         "&sub7={{ad.name}}"
+        "&sub8={{ad.id}}"
     )
 
 

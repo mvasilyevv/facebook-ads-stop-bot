@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import type { ComponentType } from "react";
 import type { DashboardBatch } from "@fb/shared";
 
 vi.mock("@tanstack/react-router", () => ({
@@ -75,7 +76,9 @@ vi.mock("@/lib/api", () => ({
   useStatsToday: () => ({ data: undefined, isLoading: false }),
 }));
 
-import { DashboardPage } from "@/routes/index";
+import { Route } from "@/routes/index";
+
+const DashboardPage = (Route as unknown as { component: ComponentType }).component;
 
 describe("DashboardPage", () => {
   beforeEachSetup();

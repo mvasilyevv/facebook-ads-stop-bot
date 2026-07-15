@@ -1,12 +1,11 @@
 /**
  * Settings-страница.
- * Tabs: Observer / Telegram / Vision / Health.
- * Health объединяет бывший Workers (Observer Runtime + список воркеров) с вердиктом.
+ * Разделы: Мониторинг / Telegram / Vision / Диагностика.
+ * Диагностика объединяет runtime Observer, список воркеров и общий вердикт.
  * Каждый таб — отдельный компонент в components/settings/.
  */
 
-import { useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Tabs, TabsList, TabsContent, type TabItem } from "@/components/ui/Tabs";
 import { ObserverTab } from "@/components/settings/ObserverTab";
@@ -16,17 +15,25 @@ import { HealthTab } from "@/components/settings/HealthTab";
 
 export const Route = createFileRoute("/settings/")({
   component: SettingsPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    tab:
+      typeof search.tab === "string" && TAB_VALUES.has(search.tab)
+        ? search.tab
+        : "observer",
+  }),
 });
 
 const TAB_ITEMS: TabItem[] = [
-  { value: "observer", label: "Observer" },
+  { value: "observer", label: "Мониторинг" },
   { value: "telegram", label: "Telegram" },
   { value: "vision", label: "Vision" },
-  { value: "health", label: "Health" },
+  { value: "health", label: "Диагностика" },
 ];
+const TAB_VALUES = new Set(TAB_ITEMS.map((item) => item.value));
 
 function SettingsPage() {
-  const [tab, setTab] = useState("observer");
+  const { tab } = Route.useSearch();
+  const navigate = useNavigate({ from: "/settings/" });
 
   return (
     <>
@@ -36,7 +43,10 @@ function SettingsPage() {
         title="Настройки"
       />
 
-      <Tabs value={tab} onValueChange={setTab}>
+      <Tabs
+        value={tab}
+        onValueChange={(nextTab) => void navigate({ search: { tab: nextTab }, replace: true })}
+      >
         <TabsList items={TAB_ITEMS} className="mb-8" />
 
         <TabsContent value="observer">

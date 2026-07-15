@@ -17,6 +17,10 @@ import {
   ExternalLink,
   Trash2,
   RefreshCw,
+  ChevronDown,
+  Copy,
+  Check,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { Button } from "@/components/ui/Button";
@@ -97,7 +101,7 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
     <div className="space-y-6">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-1">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 7 · ЗАПУСК
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
@@ -154,6 +158,13 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
           cleanupResult={cleanupMut.data}
           onRetry={handleRetry}
           retrying={launchMut.isPending}
+          retryError={
+            launchMut.isError
+              ? launchMut.error instanceof Error
+                ? launchMut.error.message
+                : "Не удалось повторить залив"
+              : null
+          }
           onFinish={onFinish}
         />
       )}
@@ -170,6 +181,7 @@ interface RunProgressProps {
   cleanupResult?: { meta_ids: Record<string, unknown>; detail: string };
   onRetry: () => void;
   retrying: boolean;
+  retryError: string | null;
   onFinish: () => void;
 }
 
@@ -180,6 +192,7 @@ function RunProgress({
   cleanupResult,
   onRetry,
   retrying,
+  retryError,
   onFinish,
 }: RunProgressProps) {
   // Поллинг каждые 3 сек пока статус не терминальный
@@ -216,74 +229,60 @@ function RunProgress({
   const cancelled = status === "cancelled";
 
   return (
-    <div className="space-y-5">
-      {/* run_id badge */}
-      <div className="text-[11px] text-bg-7">
-        run_id:{" "}
-        <span className="font-mono text-bg-9">{runId}</span>
-      </div>
-
+    <div className="space-y-5 min-w-0">
       {/* Статус-шкала */}
       <ProgressBar status={status} stepIdx={stepIdx} />
 
-      {/* Статус текущий */}
-      <div
-        className={cn(
-          "flex items-center gap-2 px-4 py-3 rounded-[var(--radius-2)] border text-[13px] font-medium",
-          succeeded
-            ? "bg-success/10 border-success/30 text-success"
-            : failed
+      {succeeded && (
+        <SuccessSummary ids={run.created_meta_ids ?? {}} onFinish={onFinish} />
+      )}
+
+      {!succeeded && (
+        <div
+          className={cn(
+            "flex items-start gap-3 px-4 py-3.5 rounded-[var(--radius-2)] border text-[13px]",
+            failed
               ? "bg-danger/10 border-danger/30 text-danger"
               : cancelled
-                ? "bg-bg-3 border-[var(--hairline)] text-bg-8"
+                ? "bg-bg-3 border-[var(--hairline)] text-bg-9"
                 : "bg-accent-bg border-accent/30 text-accent",
-        )}
-        role={failed || cancelled ? "alert" : undefined}
-      >
-        {succeeded ? (
-          <CheckCircle size={16} />
-        ) : failed ? (
-          <XCircle size={16} />
-        ) : (
-          <Loader2 size={16} className="animate-spin" />
-        )}
-        {RUN_STATUS_LABELS[status]}
-        {run.error && <span className="ml-2 text-[12px] font-normal opacity-80">— {run.error}</span>}
-      </div>
+          )}
+          role={failed || cancelled ? "alert" : "status"}
+        >
+          {failed || cancelled ? (
+            <XCircle size={16} className="mt-0.5 shrink-0" />
+          ) : (
+            <Loader2 size={16} className="mt-0.5 shrink-0 animate-spin" />
+          )}
+          <div className="min-w-0">
+            <div className="font-medium">{RUN_STATUS_LABELS[status]}</div>
+            {run.error && (
+              <div className="mt-0.5 text-[12px] font-normal opacity-80 break-words">
+                {run.error}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Повтор после ошибки — тот же конфиг, без пересоздания (концепты переиспользуются) */}
       {failed && (
-        <Button
-          variant="primary"
-          size="md"
-          leftIcon={<RefreshCw size={14} />}
-          onClick={onRetry}
-          loading={retrying}
-        >
-          Повторить залив
-        </Button>
-      )}
-
-      {/* Готово — завершить визард после успеха (сброс к шагу 1, можно начать новый залив) */}
-      {succeeded && (
-        <Button
-          variant="primary"
-          size="md"
-          leftIcon={<CheckCircle size={14} />}
-          onClick={onFinish}
-        >
-          Готово — начать новый залив
-        </Button>
-      )}
-
-      {/* Прогресс-детали (jsonb) */}
-      {run.progress && Object.keys(run.progress).length > 0 && (
-        <ProgressDetails progress={run.progress} />
-      )}
-
-      {/* Созданные Meta-ID при успехе */}
-      {succeeded && run.created_meta_ids && Object.keys(run.created_meta_ids).length > 0 && (
-        <MetaIdsBlock ids={run.created_meta_ids} />
+        <div className="space-y-2">
+          <Button
+            variant="primary"
+            size="md"
+            leftIcon={<RefreshCw size={14} />}
+            onClick={onRetry}
+            loading={retrying}
+          >
+            Повторить залив
+          </Button>
+          {retryError && (
+            <div role="alert" className="text-[12px] text-danger break-words">
+              {retryError}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Cleanup при ошибке с частичным созданием */}
@@ -318,6 +317,12 @@ function RunProgress({
           )}
         </div>
       )}
+
+      <TechnicalDetails
+        runId={runId}
+        progress={succeeded ? null : run.progress}
+        ids={run.created_meta_ids ?? {}}
+      />
     </div>
   );
 }
@@ -326,16 +331,21 @@ function RunProgress({
 
 function ProgressBar({ status, stepIdx }: { status: RunStatus; stepIdx: number }) {
   const failed = status === "failed";
+  const succeeded = status === "succeeded";
 
   return (
-    <div className="flex items-center gap-1">
+    <div
+      className="grid grid-cols-5 gap-1.5"
+      aria-label={`Прогресс залива: ${RUN_STATUS_LABELS[status]}`}
+    >
       {PROGRESS_STEPS.map((s, i) => {
-        const done = !failed && i < stepIdx;
-        const current = !failed && i === stepIdx;
+        const done = !failed && (i < stepIdx || (succeeded && i === stepIdx));
+        const current = !failed && !succeeded && i === stepIdx;
         const future = !failed && i > stepIdx;
+        const state = done ? "done" : current ? "current" : failed ? "failed" : "future";
 
         return (
-          <div key={s} className="flex-1 flex flex-col items-center gap-1">
+          <div key={s} className="min-w-0 flex flex-col items-center gap-1.5" data-state={state}>
             <div
               className={cn(
                 "h-1 w-full rounded-full transition-colors duration-300",
@@ -352,8 +362,8 @@ function ProgressBar({ status, stepIdx }: { status: RunStatus; stepIdx: number }
             />
             <span
               className={cn(
-                "font-display text-[9px] tracking-wider uppercase text-center",
-                done ? "text-success" : current ? "text-accent" : "text-bg-7",
+                "font-display text-[8px] sm:text-[9px] tracking-[0.08em] sm:tracking-wider uppercase text-center truncate w-full",
+                done ? "text-success" : current ? "text-accent" : "text-bg-8",
               )}
             >
               {RUN_STATUS_LABELS[s]}
@@ -365,46 +375,190 @@ function ProgressBar({ status, stepIdx }: { status: RunStatus; stepIdx: number }
   );
 }
 
-// ─── ProgressDetails ──────────────────────────────────────────────────────────
+// ─── Success summary ──────────────────────────────────────────────────────────
 
-function ProgressDetails({ progress }: { progress: Record<string, unknown> }) {
+const META_GROUPS = [
+  { key: "campaigns", label: "Кампании" },
+  { key: "adsets", label: "Адсеты" },
+  { key: "ads", label: "Объявления" },
+  { key: "creatives", label: "Креативы" },
+] as const;
+
+function normalizeMetaIds(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(normalizeMetaIds);
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+  }
+  if (typeof value === "number" || typeof value === "bigint") return [String(value)];
+  if (value && typeof value === "object") return Object.values(value).flatMap(normalizeMetaIds);
+  return [];
+}
+
+function SuccessSummary({ ids, onFinish }: { ids: Record<string, unknown>; onFinish: () => void }) {
+  const groups = META_GROUPS.map((group) => ({
+    ...group,
+    ids: normalizeMetaIds(ids[group.key]),
+  }));
+  const campaignIds = groups.find((group) => group.key === "campaigns")?.ids ?? [];
+  const adsManagerHref = `https://www.facebook.com/adsmanager/manage/campaigns?ids=${encodeURIComponent(campaignIds.join(","))}`;
+
   return (
-    <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] divide-y divide-[var(--hairline)]">
-      {Object.entries(progress).map(([k, v]) => (
-        <div key={k} className="flex items-center px-3 py-1.5 gap-2 text-[12px]">
-          <span className="text-bg-7 font-mono">{k}</span>
-          <span className="text-bg-10 ml-auto font-mono">{String(v)}</span>
+    <section className="relative overflow-hidden border border-success/35 bg-[linear-gradient(135deg,rgba(44,194,139,0.13),rgba(44,194,139,0.035)_62%,transparent)] rounded-[var(--radius-3)]">
+      <div className="absolute -right-16 -top-20 size-52 rounded-full bg-success/10 blur-3xl pointer-events-none" />
+      <div className="relative p-5 sm:p-6">
+        <div className="flex items-start gap-3.5">
+          <div className="size-10 shrink-0 rounded-full border border-success/35 bg-success/10 flex items-center justify-center text-success">
+            <CheckCircle size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-display text-[17px] font-medium text-bg-11 m-0">
+                Залив завершён
+              </h3>
+              <span className="inline-flex items-center gap-1 rounded-full border border-success/25 bg-success/10 px-2 py-0.5 font-display text-[9px] tracking-wider uppercase text-success">
+                <ShieldCheck size={10} />
+                PAUSED · без спенда
+              </span>
+            </div>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-bg-9">
+              Объекты созданы в Meta. Проверьте кампанию в Ads Manager перед включением.
+            </p>
+          </div>
         </div>
-      ))}
-    </div>
+
+        <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 border-y border-success/15 divide-x divide-y sm:divide-y-0 divide-success/15">
+          {groups.map((group) => (
+            <div key={group.key} className="px-3 py-3 first:pl-0 sm:first:pl-0 last:pr-0">
+              <div className="font-mono text-[19px] leading-none tabular-nums text-bg-11">
+                {group.ids.length}
+              </div>
+              <div className="mt-1 font-display text-[9px] tracking-wider uppercase text-bg-8">
+                {group.label}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 flex flex-col-reverse sm:flex-row sm:items-center gap-2.5">
+          <Button
+            variant="primary"
+            size="lg"
+            leftIcon={<CheckCircle size={15} />}
+            onClick={onFinish}
+            className="w-full sm:w-auto"
+          >
+            Создать новый залив
+          </Button>
+          {campaignIds.length > 0 && (
+            <a
+              href={adsManagerHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="h-10 w-full sm:w-auto px-4 inline-flex items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--hairline-strong)] bg-bg-2 text-[13.5px] font-medium text-bg-11 hover:bg-bg-3 hover:border-bg-7 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <ExternalLink size={14} />
+              Открыть в Ads Manager
+            </a>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
-// ─── MetaIdsBlock ─────────────────────────────────────────────────────────────
+// ─── Technical details ────────────────────────────────────────────────────────
 
-function MetaIdsBlock({ ids }: { ids: Record<string, unknown> }) {
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    if (!navigator.clipboard) return;
+    await navigator.clipboard.writeText(value);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+
   return (
-    <div className="border border-success/30 bg-success/5 rounded-[var(--radius-2)] p-4">
-      <div className="font-display text-[10px] tracking-wider uppercase text-success mb-2">
-        СОЗДАННЫЕ META-ОБЪЕКТЫ
-      </div>
-      <div className="space-y-1">
-        {Object.entries(ids).map(([k, v]) => (
-          <div key={k} className="flex items-center gap-2 text-[12px]">
-            <span className="text-bg-7 font-display uppercase text-[10px]">{k}</span>
-            <span className="font-mono text-bg-10">{String(v)}</span>
-            <a
-              href={`https://www.facebook.com/adsmanager/manage/campaigns?ids=${String(v)}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="ml-auto text-accent hover:underline flex items-center gap-1 text-[11px]"
-            >
-              <ExternalLink size={10} />
-              Открыть
-            </a>
+    <button
+      type="button"
+      onClick={() => void handleCopy()}
+      aria-label={`Скопировать ${label}`}
+      className="size-7 shrink-0 rounded-[var(--radius-1)] inline-flex items-center justify-center text-bg-8 hover:text-bg-11 hover:bg-bg-3 transition-colors focus-visible:outline-2 focus-visible:outline-accent"
+    >
+      {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+    </button>
+  );
+}
+
+function TechnicalDetails({
+  runId,
+  progress,
+  ids,
+}: {
+  runId: string;
+  progress: Record<string, unknown> | null;
+  ids: Record<string, unknown>;
+}) {
+  const groups = META_GROUPS.map((group) => ({
+    ...group,
+    ids: normalizeMetaIds(ids[group.key]),
+  })).filter((group) => group.ids.length > 0);
+  const hasProgress = progress && Object.keys(progress).length > 0;
+
+  return (
+    <details className="group border-t border-[var(--hairline)] pt-1">
+      <summary className="list-none cursor-pointer py-2.5 flex items-center gap-2 text-[11px] text-bg-8 hover:text-bg-10 transition-colors focus-visible:outline-2 focus-visible:outline-accent rounded-[var(--radius-1)]">
+        <ChevronDown
+          size={13}
+          className="transition-transform duration-150 group-open:rotate-180"
+        />
+        Технические детали
+        <span className="ml-auto font-mono text-[10px] text-bg-8">run {runId.slice(0, 8)}</span>
+      </summary>
+
+      <div className="pb-2 pt-1 space-y-3">
+        <div className="flex items-center gap-2 rounded-[var(--radius-2)] bg-bg-1 px-3 py-2">
+          <span className="font-display text-[9px] tracking-wider uppercase text-bg-8">Run ID</span>
+          <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-bg-10" title={runId}>
+            {runId}
+          </code>
+          <CopyButton value={runId} label="Run ID" />
+        </div>
+
+        {groups.map((group) => {
+          const value = group.ids.join(", ");
+          return (
+            <div key={group.key} className="rounded-[var(--radius-2)] bg-bg-1 px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <span className="font-display text-[9px] tracking-wider uppercase text-bg-8">
+                  {group.label}
+                </span>
+                <span className="text-[10px] text-bg-8">{group.ids.length}</span>
+                <CopyButton value={value} label={`ID: ${group.label}`} />
+              </div>
+              <code className="mt-1.5 block font-mono text-[10.5px] leading-relaxed text-bg-9 break-all">
+                {value}
+              </code>
+            </div>
+          );
+        })}
+
+        {hasProgress && (
+          <div className="rounded-[var(--radius-2)] bg-bg-1 divide-y divide-[var(--hairline)]">
+            {Object.entries(progress).map(([key, value]) => (
+              <div key={key} className="grid grid-cols-[auto,minmax(0,1fr)] gap-3 px-3 py-2">
+                <span className="font-mono text-[10.5px] text-bg-8">{key}</span>
+                <span className="min-w-0 text-right font-mono text-[10.5px] text-bg-9 break-all">
+                  {String(value)}
+                </span>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
-    </div>
+    </details>
   );
 }

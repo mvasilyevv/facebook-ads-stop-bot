@@ -26,7 +26,7 @@ const STAGE_COLOR: Record<string, string> = {
 
 /** Метка stage для отображения (первая буква заглавная). */
 function stageLabel(stage: string): string {
-  return stage.charAt(0).toUpperCase() + stage.slice(1);
+  return stage === "warning" ? "Предупреждение" : stage === "stop" ? "Стоп" : stage;
 }
 
 // ─── Компонент ────────────────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ export const HistorySummarySection: FC<HistorySummarySectionProps> = ({
           Метрики
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <span className="text-[12px] text-bg-9">Spend</span>
+          <span className="text-[12px] text-bg-9">Траты</span>
           <span className="font-display text-[14px] tabular-nums text-bg-11">
             {formatSpend(totals.spend)}
           </span>
@@ -100,7 +100,7 @@ export const HistorySummarySection: FC<HistorySummarySectionProps> = ({
           className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8"
           style={{ marginBottom: 14 }}
         >
-          ВСЕГО СОБЫТИЙ
+          ВСЕГО АЛЕРТОВ
         </div>
         <div
           className="font-display tabular-nums"
@@ -116,7 +116,7 @@ export const HistorySummarySection: FC<HistorySummarySectionProps> = ({
           className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8"
           style={{ marginBottom: 14 }}
         >
-          ПО STAGE
+          ПО УРОВНЮ
         </div>
         {stageRows.map(([stage, count]) => (
           <div

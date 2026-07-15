@@ -4,9 +4,11 @@ __pycache__/
 *.egg-info/
 .ruff_cache/
 .pytest_cache/
+.hypothesis/
 
 # Виртуальное окружение и конфигурация
 .venv/
+.venv-*/
 .env
 .env.local
 **/.env.local
@@ -45,6 +47,7 @@ logs/
 recordings/
 supervisord.pid
 supervisord.log
+*.pid
 playwright-report/
 test-results/
 npm-debug.log*
@@ -60,6 +63,7 @@ packages/*/dist/
 services/browser-agent/dist/
 **/.tanstack/
 frontend/storybook-static/
+remotion/out/
 services/browser-agent/node_modules/
 
 # Локальные базы данных
@@ -71,33 +75,16 @@ services/browser-agent/node_modules/
 helm/fb-stop-bot/secrets.yaml
 data/secrets_backup_*.json
 
-# Локальные данные (медиа Ad Library, бэкапы)
-data/ad_library_media/
-data/cleanup_audit/
-
-
-# Куки/сессия разведочного браузера (расходный FB-аккаунт) — не коммитить
-data/recon_profile/
-data/recon_adlib_profile/
-data/recon_out/
-
-# Медиа конкурентов из Ad Library (референсы, не в репо)
-data/competitor_refs/
+# Локальные runtime-данные: браузерные профили и cookies, медиа Ad Library,
+# креативные генераты, MCP-конфиги и бэкапы. Каталог может быть большим и
+# содержать секреты, поэтому целиком исключён из Git и production-rsync.
+/data/
 .am_capture/
 
 # Скриншоты-черновики сессий (syntx/recon/veo) — только корень репо
 /*.png
 /*.jpg
 /*.jpeg
-
-# Локальные MCP-конфиги браузера (recon/syntx tooling)
-data/*mcp*.json
-
-# Creative/video/KB стек — СЫРЫЕ генераты/билд-выводы (курируемые отчёты в репо)
-data/kb_build/
-data/syntx_out/
-data/_kb_manifest.json
-data/_syntx_snap*.md
 
 # Билд-кэш TypeScript
 *.tsbuildinfo

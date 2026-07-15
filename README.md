@@ -61,6 +61,13 @@ make bootstrap                    # Docker + venv + установка зави�
 [DEPLOYMENT.md](DEPLOYMENT.md). Подробности по архитектуре, воркерам,
 конвенциям кода — [CLAUDE.md](CLAUDE.md).
 
+Production-сервер выкатывается отдельным воспроизводимым Compose-релизом:
+
+```bash
+make deploy-dry-run
+make deploy-server
+```
+
 ---
 
 ## Тесты и линтинг
@@ -80,13 +87,14 @@ cd services/browser-agent && npm test
 
 ```bash
 make help                         # список всех целей
-make api                          # uvicorn apps.api.main:app --reload (порт 8000)
+make api                          # uvicorn apps.api.main:app --reload (порт 8100)
 make observer | disable-worker | enable-worker | meta-api-worker
 make telegram | health-watchdog | digest-scheduler | enable-reco-worker
 make cleanup-worker | reconciler-worker | creator-worker | creator-recorder
 make backup-secrets | restore-secrets | apply-schema
 make proto-compile                # перегенерация gRPC stubs
-make docker-build | helm-install  # k8s deployment
+make deploy-dry-run | deploy-server  # production Compose release
+make docker-build | helm-install     # experimental k8s flow
 ```
 
 Полный workflow — в [CLAUDE.md](CLAUDE.md) § Commands.

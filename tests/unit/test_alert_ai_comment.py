@@ -8,6 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import core.ai_assistant.explain as explain_module
+import core.telegram.alert_dispatcher as dispatcher_module
+from core.ai_assistant.providers import AIResponse
+from core.ai_assistant.tools._ratelimit import RateLimitExceeded
 from core.telegram.alert_dispatcher import (
     _post_ai_comment,
     _spawn_ai_comment,
@@ -149,6 +153,94 @@ async def test_spawn_creates_background_task() -> None:
             offer_code=None,
         )
         await asyncio.wait_for(done.wait(), timeout=1)
+
+
+# Всплеск алертов не создаёт неограниченную очередь фоновых задач.
+@pytest.mark.asyncio
+async def test_spawn_drops_comment_when_queue_is_full(monkeypatch) -> None:
+    settings = MagicMock(ai_explain_alerts_enabled=True)
+    post = AsyncMock()
+    monkeypatch.setattr(dispatcher_module, "_AI_COMMENT_MAX_PENDING", 0)
+    with (
+        patch("core.telegram.alert_dispatcher.get_settings", return_value=settings),
+        patch("core.telegram.alert_dispatcher._post_ai_comment", new=post),
+    ):
+        _spawn_ai_comment(
+            client=MagicMock(),
+            chat_id=1,
+            message_id=1,
+            thread_id=None,
+            stage="stop",
+            matched_codes=["cpl_stop"],
+            metrics_json={},
+            offer_code=None,
+        )
+        await asyncio.sleep(0)
+    post.assert_not_awaited()
+
+
+# Один и тот же алерт нескольким recipients делит один платный provider-call.
+@pytest.mark.asyncio
+async def test_explain_same_alert_is_single_flight() -> None:
+    explain_module._explain_cache.clear()
+    explain_module._explain_inflight.clear()
+    settings = MagicMock(
+        ai_explain_alerts_enabled=True,
+        ai_explain_timeout_seconds=2.0,
+        ai_rate_limit_per_hour=30,
+    )
+    client = MagicMock(is_available=True)
+    client.chat = AsyncMock(return_value=AIResponse(text="CPL выше порога."))
+    kwargs = {
+        "rule_name": "cpl_stop",
+        "stage": "STOP",
+        "metrics": {"spend": "913.17", "cost_per_lead": "4.2"},
+        "thresholds": {"cpl_stop_threshold": "3.0"},
+    }
+    with (
+        patch("core.ai_assistant.explain.get_settings", return_value=settings),
+        patch("core.ai_assistant.explain.get_ai_client", return_value=client),
+        patch("core.ai_assistant.explain.check_and_increment", new=AsyncMock()) as budget,
+    ):
+        first, second = await asyncio.gather(
+            explain_module.explain_alert(**kwargs),
+            explain_module.explain_alert(**kwargs),
+        )
+
+    assert first == second == "CPL выше порога."
+    client.chat.assert_awaited_once()
+    budget.assert_awaited_once()
+
+
+# Исчерпанный глобальный budget даёт тихий skip до обращения к провайдеру.
+@pytest.mark.asyncio
+async def test_explain_global_budget_stops_provider_call() -> None:
+    explain_module._explain_cache.clear()
+    explain_module._explain_inflight.clear()
+    settings = MagicMock(
+        ai_explain_alerts_enabled=True,
+        ai_explain_timeout_seconds=2.0,
+        ai_rate_limit_per_hour=30,
+    )
+    client = MagicMock(is_available=True)
+    client.chat = AsyncMock()
+    with (
+        patch("core.ai_assistant.explain.get_settings", return_value=settings),
+        patch("core.ai_assistant.explain.get_ai_client", return_value=client),
+        patch(
+            "core.ai_assistant.explain.check_and_increment",
+            new=AsyncMock(side_effect=RateLimitExceeded("full")),
+        ),
+    ):
+        result = await explain_module.explain_alert(
+            rule_name="cpr_stop",
+            stage="STOP",
+            metrics={"spend": "812.39"},
+            thresholds={"cpr_stop_threshold": "7"},
+        )
+
+    assert result is None
+    client.chat.assert_not_awaited()
 
 
 # Watchdog: диагноз получен → отдельное сообщение 🩺 через notify_recipients

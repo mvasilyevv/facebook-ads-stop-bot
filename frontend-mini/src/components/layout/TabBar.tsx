@@ -29,7 +29,12 @@ const MAIN_TABS: TabConfig[] = [
   { to: "/ads", label: "Объявления", Icon: Megaphone },
   { to: "/campaigns", label: "Кампании", Icon: Rocket },
   { to: "/history", label: "История", Icon: HistoryIcon },
-  { to: "/settings", label: "Ещё", Icon: MoreHorizontal, extra: ["/offers", "/health", "/scripts"] },
+  {
+    to: "/settings",
+    label: "Ещё",
+    Icon: MoreHorizontal,
+    extra: ["/offers", "/health", "/scripts", "/desktop"],
+  },
 ];
 
 /** Пути, на которых tab-bar СКРЫВАЕМ (detail/вложенные экраны). */

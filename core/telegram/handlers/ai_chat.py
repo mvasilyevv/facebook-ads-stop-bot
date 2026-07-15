@@ -14,9 +14,11 @@ DRAFT_REQUIRED (request_*) создают черновик в task_queue — п�
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
+import uuid
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -27,6 +29,7 @@ from core.ai_assistant.chat import (
     ChatSession,
 )
 from core.ai_assistant.client import AIUnavailableError
+from core.ai_assistant.text import html_to_plain_text
 from core.ai_assistant.tools import GLOBAL_REGISTRY
 from core.ai_assistant.tools.base import RiskLevel
 from core.config import get_settings
@@ -41,6 +44,19 @@ _HISTORY_KEY_PREFIX = "ai:chat:hist:"
 _BUSY_KEY_PREFIX = "ai:chat:busy:"
 # Ответ с tool-циклом может занять пару минут (до 5 раундов × таймаут гейтвея).
 _BUSY_TTL_SECONDS = 180
+_BUSY_RENEW_INTERVAL_SECONDS = 60
+_BUSY_RENEW_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('expire', KEYS[1], ARGV[2])
+end
+return 0
+"""
+_BUSY_RELEASE_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+end
+return 0
+"""
 
 # task_id из текста результата draft-инструмента: "DRAFT создан: task_id=123 (...)"
 _TASK_ID_RE = re.compile(r"task_id=(\d+)")
@@ -55,6 +71,35 @@ def _draft_tool_names() -> frozenset[str]:
 
 def _history_key(chat_id: int) -> str:
     return f"{_HISTORY_KEY_PREFIX}{chat_id}"
+
+
+async def _renew_busy_lock(redis_client: Any, *, key: str, token: str) -> None:
+    """Продлевать lease, только пока Redis всё ещё хранит наш token."""
+    while True:
+        await asyncio.sleep(_BUSY_RENEW_INTERVAL_SECONDS)
+        try:
+            renewed = await redis_client.eval(
+                _BUSY_RENEW_SCRIPT,
+                1,
+                key,
+                token,
+                _BUSY_TTL_SECONDS,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — потеря Redis не должна ронять ответ
+            logger.warning("ai_chat: не смог продлить busy-lock", exc_info=True)
+            return
+        if not renewed:
+            return
+
+
+async def _release_busy_lock(redis_client: Any, *, key: str, token: str) -> None:
+    """Удалить busy-lock атомарно, только если он по-прежнему наш."""
+    try:
+        await redis_client.eval(_BUSY_RELEASE_SCRIPT, 1, key, token)
+    except Exception:  # noqa: BLE001
+        logger.warning("ai_chat: не смог освободить busy-lock", exc_info=True)
 
 
 async def _load_history(redis_client: Any | None, chat_id: int) -> list[ChatMessage]:
@@ -118,7 +163,7 @@ async def _send_answer(
         try:
             await client.send_message(
                 chat_id=str(chat_id),
-                text=text,
+                text=html_to_plain_text(text),
                 message_thread_id=thread_id,
                 parse_mode=None,
             )
@@ -218,11 +263,21 @@ async def handle_ai_chat(
 
     # Busy-guard: один вопрос за раз на чат (tool-цикл может думать минуту+).
     busy_key = f"{_BUSY_KEY_PREFIX}{chat_id}"
+    busy_token = uuid.uuid4().hex
+    busy_lock_owned = False
+    renew_task: asyncio.Task[None] | None = None
     if redis_client is not None:
         try:
-            acquired = await redis_client.set(busy_key, "1", nx=True, ex=_BUSY_TTL_SECONDS)
+            acquired = await redis_client.set(
+                busy_key,
+                busy_token,
+                nx=True,
+                ex=_BUSY_TTL_SECONDS,
+            )
         except Exception:  # noqa: BLE001
             acquired = True  # Redis лёг — работаем без guard'а
+        else:
+            busy_lock_owned = bool(acquired)
         if not acquired:
             await send_text(
                 client,
@@ -231,6 +286,10 @@ async def handle_ai_chat(
                 message_thread_id=thread_id,
             )
             return
+        if busy_lock_owned:
+            renew_task = asyncio.create_task(
+                _renew_busy_lock(redis_client, key=busy_key, token=busy_token)
+            )
 
     try:
         # Индикатор «печатает…» — чисто UX, ошибки не важны.
@@ -292,11 +351,12 @@ async def handle_ai_chat(
             message_thread_id=thread_id,
         )
     finally:
-        if redis_client is not None:
-            try:
-                await redis_client.delete(busy_key)
-            except Exception:  # noqa: BLE001
-                pass
+        if renew_task is not None:
+            renew_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await renew_task
+        if redis_client is not None and busy_lock_owned:
+            await _release_busy_lock(redis_client, key=busy_key, token=busy_token)
 
 
 # Живые фоновые таски чата: держим ссылки от GC, чистим по done.
@@ -317,4 +377,16 @@ def spawn_ai_chat(**kwargs: Any) -> None:
     task.add_done_callback(_chat_tasks.discard)
 
 
-__all__ = ["handle_ai_chat", "spawn_ai_chat"]
+async def drain_ai_chat_tasks(*, timeout_seconds: float = 10.0) -> None:
+    """Дождаться фоновых чатов перед закрытием Redis/DB, затем отменить хвост."""
+    tasks = set(_chat_tasks)
+    if not tasks:
+        return
+    _done, pending = await asyncio.wait(tasks, timeout=max(0.0, timeout_seconds))
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
+__all__ = ["drain_ai_chat_tasks", "handle_ai_chat", "spawn_ai_chat"]

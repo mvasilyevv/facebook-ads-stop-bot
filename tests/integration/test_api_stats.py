@@ -208,8 +208,10 @@ async def test_stats_today_tracker_block(pg_engine, fake_redis_client, clean_sta
         await conn.execute(
             text(
                 "INSERT INTO tracker_aggregate "
-                "(id, ad_id, country, day, installs, registrations, deposits, revenue, last_postback_at) "
-                "VALUES (gen_random_uuid(), :a, 'BD', CURRENT_DATE, 3, 2, 1, 25.00, NOW())"
+                "(id, ad_id, country, day, installs, registrations, ftds, deposits, "
+                "confirmed_deposits, revenue, last_postback_at) "
+                "VALUES (gen_random_uuid(), :a, 'BD', CURRENT_DATE, 3, 2, 1, 1, 1, "
+                "25.00, NOW())"
             ),
             {"a": ids["ad1_id"]},
         )

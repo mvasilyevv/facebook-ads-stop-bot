@@ -137,3 +137,151 @@ def test_postback_accepts_extra_fields() -> None:
         headers={"X-Postback-Secret": "real-secret"},
     )
     assert resp.status_code == 202
+
+
+def test_get_postback_accepts_query_token_contract() -> None:
+    app = _make_app_with_secret("real-secret")
+    client = TestClient(app)
+    resp = client.get(
+        "/api/v1/postback/adsetpro",
+        params={
+            "token": "real-secret",
+            "click_id": "get-click-1",
+            "event_type": "registration",
+            "sub8": "238000000001",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "accepted"
+    assert resp.json()["click_id"] == "get-click-1"
+
+
+@pytest.mark.parametrize(
+    ("provider_status", "canonical"),
+    [
+        ("hold", "registration"),
+        ("CPA_HOLD", "registration"),
+        ("accept", "ftd"),
+        ("CPA_ACCEPT", "ftd"),
+        ("redep", "redeposit"),
+        ("CPA_REDEP", "redeposit"),
+    ],
+)
+def test_get_postback_accepts_provider_status_aliases(
+    monkeypatch, provider_status: str, canonical: str
+) -> None:
+    captured = {}
+
+    async def _capture(_engine, event, *, signature_valid=True):
+        captured["event_type"] = event.event_type
+        return IngestResult(inserted=True, is_duplicate=False, event_id=1, fb_ad_fk=None)
+
+    monkeypatch.setattr("apps.api.routers.postback.ingest_postback", _capture)
+    params = {
+        "token": "real-secret",
+        "click_id": f"alias-{provider_status}",
+        "status": provider_status,
+    }
+    if canonical == "redeposit":
+        params["provider_event_id"] = f"tx-{provider_status}"
+    response = TestClient(_make_app_with_secret("real-secret")).get(
+        "/api/v1/postback/adsetpro", params=params
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "accepted"
+    assert captured["event_type"] == canonical
+
+
+def test_get_secret_is_removed_before_persistence(monkeypatch) -> None:
+    captured = {}
+
+    async def _capture(_engine, event, *, signature_valid=True):
+        captured["raw"] = event.raw
+        return IngestResult(
+            inserted=True,
+            is_duplicate=False,
+            event_id=1,
+            fb_ad_fk=None,
+        )
+
+    monkeypatch.setattr("apps.api.routers.postback.ingest_postback", _capture)
+    app = _make_app_with_secret("real-secret")
+    response = TestClient(app).get(
+        "/api/v1/postback/adsetpro",
+        params={
+            "token": "real-secret",
+            "click_id": "click-secret-redaction",
+            "event_type": "registration",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "token" not in captured["raw"]
+    assert "real-secret" not in repr(captured["raw"])
+
+
+def test_get_postback_survives_redis_outage() -> None:
+    class BrokenRedis:
+        async def incr(self, *_args, **_kwargs):
+            raise ConnectionError("redis down")
+
+        async def publish(self, *_args, **_kwargs):
+            raise ConnectionError("redis down")
+
+    app = _make_app_with_secret("real-secret")
+    app.state.redis = BrokenRedis()
+    response = TestClient(app).get(
+        "/api/v1/postback/adsetpro",
+        params={
+            "token": "real-secret",
+            "click_id": "click-no-redis",
+            "event_type": "registration",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "accepted"
+
+
+def test_get_postback_rejects_wrong_query_token() -> None:
+    app = _make_app_with_secret("real-secret")
+    client = TestClient(app)
+    resp = client.get(
+        "/api/v1/postback/adsetpro",
+        params={"token": "wrong", "click_id": "x", "event_type": "ftd"},
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.parametrize("event_type", ["decline", "rejected", "trash", "baddep", "unknown"])
+def test_unsupported_or_negative_status_is_200_ignored(monkeypatch, event_type: str) -> None:
+    async def _must_not_ingest(*_args, **_kwargs):
+        raise AssertionError("ignored status must not be stored")
+
+    monkeypatch.setattr("apps.api.routers.postback.ingest_postback", _must_not_ingest)
+    app = _make_app_with_secret("real-secret")
+    client = TestClient(app)
+    resp = client.post(
+        "/api/v1/postback/adsetpro",
+        json={"event_type": event_type},
+        headers={"X-Postback-Secret": "real-secret"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ignored"
+
+
+def test_redeposit_without_provider_event_id_is_200_ignored(monkeypatch) -> None:
+    async def _must_not_ingest(*_args, **_kwargs):
+        raise AssertionError("unidentified redeposit must not be stored")
+
+    monkeypatch.setattr("apps.api.routers.postback.ingest_postback", _must_not_ingest)
+    app = _make_app_with_secret("real-secret")
+    client = TestClient(app)
+    resp = client.post(
+        "/api/v1/postback/adsetpro",
+        json={"click_id": "r-1", "event_type": "redeposit"},
+        headers={"X-Postback-Secret": "real-secret"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reason"] == "redeposit_without_provider_event_id"

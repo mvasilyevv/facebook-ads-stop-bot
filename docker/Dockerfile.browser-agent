@@ -26,6 +26,9 @@ WORKDIR /app
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY services/browser-agent/package.json ./
+# dist/index.js резолвит ../../../proto/v1 относительно /app/dist → /proto/v1.
+# Эти runtime-схемы нужны proto-loader при старте gRPC-сервера.
+COPY proto/v1 /proto/v1
 
 EXPOSE 50051
 

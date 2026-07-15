@@ -15,12 +15,17 @@ import time
 from typing import Any
 
 from core.ai_assistant.client import AIUnavailableError, get_ai_client
+from core.ai_assistant.tools._ratelimit import RateLimitExceeded, check_and_increment
 from core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 # In-memory кэш: ключ → (текст ответа, время истечения)
 _explain_cache: dict[str, tuple[str, float]] = {}
+# Одинаковые алерты нескольким recipients разделяют один provider-call.
+_explain_inflight: dict[str, asyncio.Task[str | None]] = {}
+# Даже разные алерты не открывают десятки одновременных HTTP-соединений.
+_provider_semaphore = asyncio.Semaphore(3)
 
 # TTL кэша — 1 час
 _CACHE_TTL_SECONDS = 3600
@@ -171,6 +176,7 @@ async def explain_alert(
     thresholds: dict[str, Any],
     offer_context: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
+    redis_client: Any | None = None,
 ) -> str | None:
     """Генерирует короткое (1-2 предложения) объяснение почему сработало правило.
 
@@ -205,18 +211,65 @@ async def explain_alert(
 
     prompt = _build_prompt(rule_name, stage, metrics, thresholds, offer_context)
 
-    try:
-        response = await asyncio.wait_for(
-            client.chat(
-                messages=[{"role": "user", "content": prompt}],
-                system=(
-                    "Ты ассистент байера в арбитраже трафика. "
-                    "Отвечай только фактом и выводом, без приветствий и вводных слов."
-                ),
-                max_tokens=100,
-            ),
-            timeout=timeout_seconds,
+    inflight = _explain_inflight.get(cache_key)
+    if inflight is None:
+        inflight = asyncio.create_task(
+            _generate_explanation(
+                client=client,
+                prompt=prompt,
+                timeout_seconds=timeout_seconds,
+                cache_key=cache_key,
+                rule_name=rule_name,
+                stage=stage,
+                redis_client=redis_client,
+                max_per_hour=int(settings.ai_rate_limit_per_hour),
+            )
         )
+        _explain_inflight[cache_key] = inflight
+
+    try:
+        return await asyncio.shield(inflight)
+    finally:
+        if inflight.done() and _explain_inflight.get(cache_key) is inflight:
+            _explain_inflight.pop(cache_key, None)
+
+
+async def _generate_explanation(
+    *,
+    client: Any,
+    prompt: str,
+    timeout_seconds: float,
+    cache_key: str,
+    rule_name: str,
+    stage: str,
+    redis_client: Any | None,
+    max_per_hour: int,
+) -> str | None:
+    """Один budgeted provider-call; вызывается через per-key single-flight."""
+    try:
+        await check_and_increment(
+            redis_client,
+            client_key="global",
+            max_per_hour=max(1, max_per_hour),
+            namespace="alert-explain",
+        )
+    except RateLimitExceeded:
+        logger.warning("explain_alert: глобальный часовой лимит исчерпан")
+        return None
+
+    try:
+        async with _provider_semaphore:
+            response = await asyncio.wait_for(
+                client.chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    system=(
+                        "Ты ассистент байера в арбитраже трафика. "
+                        "Отвечай только фактом и выводом, без приветствий и вводных слов."
+                    ),
+                    max_tokens=100,
+                ),
+                timeout=timeout_seconds,
+            )
     except asyncio.TimeoutError:
         logger.warning("explain_alert: timeout (%ss) для %s/%s", timeout_seconds, rule_name, stage)
         return None

@@ -38,14 +38,14 @@ export function PageHeader({
       <Eyebrow num={eyebrowNum}>{eyebrow}</Eyebrow>
 
       {/* Title row — канон: 30px mono, weight 500, без точки */}
-      <div className="flex items-end justify-between gap-8 mb-1.5 mt-2">
+      <div className="mb-1.5 mt-2 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-end sm:gap-8">
         <h1
           className="font-display font-medium leading-[1.05] text-bg-11 m-0"
           style={{ fontSize: 30, letterSpacing: "-0.02em" }}
         >
           {title}
         </h1>
-        {action ? <div className="relative z-[1] shrink-0">{action}</div> : null}
+        {action ? <div className="relative z-[1] max-w-full shrink-0">{action}</div> : null}
       </div>
 
       {/* Subtitle */}
@@ -59,7 +59,7 @@ export function PageHeader({
 /** Inline-разделитель для subtitle: пробел–точка–пробел. */
 export function HeaderSep() {
   return (
-    <span aria-hidden="true" className="text-bg-7 mx-2.5">
+    <span aria-hidden="true" className="text-bg-8 mx-2.5">
       ·
     </span>
   );

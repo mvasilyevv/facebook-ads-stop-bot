@@ -8,7 +8,7 @@
 #   promtail      — сбор docker-логов всех контейнеров → loki (поиск ошибок в Grafana).
 #   grafana       — дашборды (provisioning datasource + дашборд "Server Overview").
 #
-# Запуск:   cd /opt/fb_agent/deploy/monitoring && docker compose -f docker-compose.monitoring.yml up -d
+# Запуск:   cd /opt/fb-agent/current/deploy/monitoring && docker compose -f docker-compose.monitoring.yml up -d
 # Доступ:   Grafana на 127.0.0.1:3000 (наружу не торчит).
 #           - SSH-туннель:  ssh -L 3000:localhost:3000 root@<server>  → http://localhost:3000
 #           - Либо через Caddy (monitor.adpulse.su) — см. README.md.

@@ -29,13 +29,14 @@ def _get_route_paths(app) -> set[str]:
     return set(app.openapi().get("paths", {}).keys())
 
 
-# После create_app() приложение не падает и содержит /healthz и /readyz.
+# После create_app() приложение не падает и содержит оба уровня readiness.
 def test_create_app_does_not_fail_with_empty_v1() -> None:
     # v1/ папка пустая (или без router-атрибутов) — create_app должен завершиться нормально.
     app = create_app()
     paths = _get_route_paths(app)
     assert "/healthz" in paths
     assert "/readyz" in paths
+    assert "/system-readyz" in paths
 
 
 # health и postback роутеры подключены без префикса /api.

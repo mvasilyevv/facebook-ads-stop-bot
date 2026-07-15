@@ -8,14 +8,17 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from core.adset_pro.queries import load_external_deposits_batch
+from core.adset_pro.queries import (
+    load_external_deposits_batch,
+    load_external_registrations_batch,
+)
 from core.cabinet_day import is_cabinet_day_reset_scan
 from core.observer.enable_grace import EnableGrace, grace_is_active
 from core.observer.queries import (
@@ -44,6 +47,15 @@ from core.rules.types import RuleContext, RuleEvaluation
 from core.scanner.models import ScannedAdRow
 
 logger = logging.getLogger(__name__)
+
+
+def with_effective_tracker_registrations(
+    row: ScannedAdRow,
+    tracker_registrations: int,
+) -> ScannedAdRow:
+    """Use the larger confirmed source value without mutating or double-counting."""
+    effective = max(int(row.registrations or 0), int(tracker_registrations or 0))
+    return row if effective == row.registrations else replace(row, registrations=effective)
 
 
 @dataclass
@@ -189,6 +201,7 @@ async def process_scan_rows(
     owner_tag: str | None = None,
     ad_account_id: str | None = None,
     enable_grace_map: dict[str, EnableGrace] | None = None,
+    tracker_day_start: datetime | None = None,
 ) -> CycleResult:
     """Один scan-цикл. Идемпотентен по (ad_id, cycle_ts) и (idempotency_key).
 
@@ -208,12 +221,19 @@ async def process_scan_rows(
                    цены лида»): под активным grace срабатывания правил подавляются
                    целиком (без алерта и без авто-стопа) до истечения времени или
                    спенд-капа. Загружается вызывающим один раз на цикл. None — выкл.
+        tracker_day_start: начало текущих суток кабинета в UTC. Tracker registration/
+                   deposit merge использует интервал [tracker_day_start, cycle_ts),
+                   а не скользящие 24 часа. None — UTC-полночь для legacy callers.
 
     Returns:
         CycleResult с метриками цикла.
     """
     if cycle_ts is None:
         cycle_ts = datetime.now(timezone.utc)
+    if tracker_day_start is None:
+        tracker_day_start = cycle_ts.replace(hour=0, minute=0, second=0, microsecond=0)
+    if tracker_day_start > cycle_ts:
+        raise ValueError("tracker_day_start must not be later than cycle_ts")
 
     result = CycleResult(scan_id=scan_id, rows_total=len(rows))
 
@@ -229,7 +249,18 @@ async def process_scan_rows(
     states = await load_alert_state_by_fb_ad_id(engine, fb_ad_ids=fb_ids)
 
     # 3. Внешние депозиты от AdSet.pro batch'ом (закрывают gap attribution с Meta).
-    external_deposits = await load_external_deposits_batch(engine, fb_ad_ids=fb_ids)
+    external_deposits = await load_external_deposits_batch(
+        engine,
+        fb_ad_ids=fb_ids,
+        window_start=tracker_day_start,
+        window_end=cycle_ts,
+    )
+    external_registrations = await load_external_registrations_batch(
+        engine,
+        fb_ad_ids=fb_ids,
+        window_start=tracker_day_start,
+        window_end=cycle_ts,
+    )
 
     # MID-1: zero-scan начала кабинетных суток — ВСЕ строки без ненулевых метрик
     # (Meta обнулила счётчики на границе дня). Флаг вычисляем один раз на весь цикл
@@ -246,6 +277,7 @@ async def process_scan_rows(
                 offers=offers,
                 states=states,
                 external_deposits=external_deposits,
+                external_registrations=external_registrations,
                 scan_id=scan_id,
                 cycle_ts=cycle_ts,
                 result=result,
@@ -277,9 +309,17 @@ async def _process_one_row(
     owner_tag: str | None = None,
     ad_account_id: str | None = None,
     is_cabinet_reset: bool = False,
+    external_registrations: dict[str, int] | None = None,
     enable_grace_map: dict[str, EnableGrace] | None = None,
 ) -> None:
     """Обработка одной строки. Вынесено отдельно ради читаемости + try/except в caller'е."""
+
+    # Meta and AdSet.pro may report the same registration with different delay.
+    # Keep the immutable scanner DTO and use the confirmed maximum, never a sum.
+    tracker_registrations = (
+        (external_registrations or {}).get(row.fb_ad_id, 0) if row.fb_ad_id else 0
+    )
+    row = with_effective_tracker_registrations(row, tracker_registrations)
 
     # --- Owner-scoping: чужие кампании (без owner-тега) полностью игнорируем ---
     # Не пишем метрики, не оцениваем правила, не создаём disable — бот их "не видит".

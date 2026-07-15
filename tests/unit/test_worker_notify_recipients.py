@@ -169,6 +169,7 @@ async def test_enable_reco_send_alert_engine_sends_to_recipients() -> None:
             tg_client,
             candidate=_fake_candidate(),
             decision=_fake_decision(),
+            recommendation_id=uuid.uuid4(),
             engine=engine,
         )
 

@@ -8,12 +8,17 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from apps.api.deps import get_engine, get_redis
 from apps.api.main import create_app
+from apps.api.routers import health as health_router
 from apps.api.routers.health import reset_readyz_cache
 
 
@@ -83,6 +88,107 @@ async def test_readyz_uses_ttl_cache(pg_engine, fake_redis_client) -> None:
     # Второй ответ — из кэша (5-секундный TTL).
     assert second.json()["cached"] is True
     assert second.json()["ready"] is True
+
+
+async def _set_business_health_online(redis, worker_names: list[str]) -> None:
+    now = datetime.now(UTC).isoformat()
+    for worker_name in worker_names:
+        await redis.set(
+            f"worker:heartbeat:{worker_name}",
+            json.dumps({"worker": worker_name, "ts": now}),
+            ex=60,
+        )
+    await redis.set(
+        "observer:runtime",
+        json.dumps({"status": "running", "updated_at": now}),
+        ex=60,
+    )
+    await redis.set(
+        "meta_api:channel:health",
+        json.dumps({"healthy": True, "probe_ok": True, "checked_at": now}),
+        ex=60,
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_readyz_returns_200_only_for_live_business_contour(
+    pg_engine,
+    fake_redis_client,
+    monkeypatch,
+) -> None:
+    expected_workers = ["observer", "browser-agent"]
+    monkeypatch.setenv("EXPECTED_WORKERS", ",".join(expected_workers))
+    monkeypatch.setattr(
+        health_router,
+        "load_scanning_enabled",
+        AsyncMock(return_value=True),
+    )
+    await _set_business_health_online(fake_redis_client, expected_workers)
+
+    app = _make_app_with_overrides(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/system-readyz")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "ready": True,
+        "infrastructure_ready": True,
+        "overall": "HEALTHY",
+        "workers_online": 2,
+        "workers_expected": 2,
+        "observer_runtime_status": "running",
+        "scanning_enabled": True,
+        "meta_api_channel_status": "ONLINE",
+        "blockers": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_system_readyz_reports_offline_business_contour(
+    pg_engine,
+    fake_redis_client,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EXPECTED_WORKERS", "observer,browser-agent")
+    monkeypatch.setattr(
+        health_router,
+        "load_scanning_enabled",
+        AsyncMock(return_value=True),
+    )
+
+    app = _make_app_with_overrides(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/system-readyz")
+
+    payload = resp.json()
+    assert resp.status_code == 503
+    assert payload["infrastructure_ready"] is True
+    assert payload["overall"] == "CRITICAL"
+    assert "offline_workers:observer,browser-agent" in payload["blockers"]
+    assert "observer_runtime_missing" in payload["blockers"]
+    assert "meta_api_channel_unknown" in payload["blockers"]
+
+
+@pytest.mark.asyncio
+async def test_system_readyz_treats_operator_pause_as_not_business_ready(
+    pg_engine,
+    fake_redis_client,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EXPECTED_WORKERS", "observer")
+    monkeypatch.setattr(
+        health_router,
+        "load_scanning_enabled",
+        AsyncMock(return_value=False),
+    )
+    await _set_business_health_online(fake_redis_client, ["observer"])
+
+    app = _make_app_with_overrides(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/system-readyz")
+
+    assert resp.status_code == 503
+    assert resp.json()["blockers"] == ["scanning_paused"]
 
 
 # X-Request-Id из запроса проксируется обратно в ответ — для трассировки.

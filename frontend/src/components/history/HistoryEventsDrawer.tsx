@@ -137,7 +137,7 @@ export const HistoryEventsDrawer: FC<HistoryEventsDrawerProps> = ({
                 <div className="font-display text-[11px] text-bg-9 mb-2">
                   {ev.campaign_name}
                   {ev.offer_code && (
-                    <span className="ml-2 text-bg-7">· {ev.offer_code}</span>
+                    <span className="ml-2 text-bg-8">· {ev.offer_code}</span>
                   )}
                 </div>
               )}

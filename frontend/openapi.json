@@ -56,6 +56,38 @@
         }
       }
     },
+    "/system-readyz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "System Readyz",
+        "description": "Готовность бизнес-контура auto-stop.\n\nВ отличие от ``/readyz`` проверяет не только инфраструктуру API, но и все\nожидаемые heartbeat, живой runtime observer, Meta API probe и глобальный\nфлаг сканирования. Используется оператором и post-deploy проверками; k8s\nliveness/readiness намеренно остаются независимыми от состояния воркеров.",
+        "operationId": "system_readyz_system_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemReadinessResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemReadinessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "tags": [
@@ -77,12 +109,57 @@
       }
     },
     "/api/v1/postback/adsetpro": {
+      "get": {
+        "tags": [
+          "postback"
+        ],
+        "summary": "Receive AdSet.pro GET postback",
+        "description": "AdSet.pro-compatible GET endpoint. The raw URL is never logged here.",
+        "operationId": "receive_adsetpro_get_api_v1_postback_adsetpro_get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "postback"
         ],
-        "summary": "Принять postback от AdSet.pro",
-        "description": "Принять postback, записать в БД с дедупом. 202 ACCEPTED + меткой результата.",
+        "summary": "Receive legacy POST AdSet.pro postback",
         "operationId": "receive_adsetpro_postback_api_v1_postback_adsetpro_post",
         "parameters": [
           {
@@ -107,21 +184,19 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AdsetProPostbackBody"
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Body"
               }
             }
           }
         },
         "responses": {
-          "202": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Receive Adsetpro Postback Api V1 Postback Adsetpro Post"
-                }
+                "schema": {}
               }
             }
           },
@@ -144,7 +219,7 @@
           "dashboard"
         ],
         "summary": "Snooze Ad",
-        "description": "Снуз одного объявления: ad_alert_state.snoozed_until = now + minutes.\n\n404 — объявления нет в fb_ads. 409 — у ad нет строки состояния (нечего снузить).\nЗеркало tma_snooze_ad (apps/api/routers/v1/tma.py).",
+        "description": "Снуз одного объявления: ad_alert_state.snoozed_until = now + minutes.\n\n404 — объявления нет в fb_ads. 409 — у ad нет строки состояния (нечего снузить).\n422 — ад в normal (нет активного инцидента): снуз задуман «не спамить алертами по\nактивному инциденту», а не «выключить авто-стоп». Снуз на normal-аде заглушил бы\nбудущий STOP до конца окна — money-дыра (MID-2). Зеркало tma_snooze_ad.",
         "operationId": "snooze_ad_api_dashboard_ads__fb_ad_id__snooze_post",
         "parameters": [
           {
@@ -425,6 +500,70 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ai/chat": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Ai Chat",
+        "description": "Ответ ассистента на вопрос из веб-виджета (с tool-use, read-only канал).\n\n429 — превышен лимит; 503 — AI-провайдеры не настроены.",
+        "operationId": "ai_chat_api_ai_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIChatResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ai/pulse": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Ai Pulse",
+        "description": "Почасовой пульс кабинета для веб-виджета.\n\nВиджет опрашивает раз в час (пока вкладка открыта). Двухступенчатый контракт\nпротив шума и лишних токенов: детерминированный pre-check сигналов (стопы /\nупавшие задачи / шквал warnings за прошедший час) — если пусто, AI НЕ\nвызывается и возвращается important=false (виджет молчит). Результат\nкэшируется на календарный час — повторные опросы и вторые вкладки бесплатны.",
+        "operationId": "ai_pulse_api_ai_pulse_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIPulseResponse"
                 }
               }
             }
@@ -1675,7 +1814,7 @@
           "dashboard"
         ],
         "summary": "Get Spend History",
-        "description": "Сырые точки ad_metrics за окно hours.\n\nПартиционный фильтр по cycle_ts применяется в WHERE (partition pruning).\nЕсли fb_ad_id не передан — limit 10000 (защита от мегабайтных ответов).\nЕсли fb_ad_id передан — без limit (нас интересует история одного ad'а).\nORDER BY cycle_ts ASC.",
+        "description": "Сырые точки ad_metrics за окно hours.\n\nПартиционный фильтр по cycle_ts применяется в WHERE (partition pruning).\nЕсли fb_ad_id не передан — limit 10000 (защита от мегабайтных ответов).\nЕсли fb_ad_id передан — cap 50000 (история одного ad'а может быть длинной,\nно не безграничной — LOW аудита 02.07).\nORDER BY cycle_ts ASC.",
         "operationId": "get_spend_history_api_dashboard_spend_history_get",
         "parameters": [
           {
@@ -1745,7 +1884,7 @@
           "dashboard"
         ],
         "summary": "Get Chart Data",
-        "description": "Бакетированный график для DashboardPage.\n\nБакет = `date_trunc(bucket, cycle_ts)`. SUM по spend/impressions/clicks/leads/\nregistrations/deposits + COUNT DISTINCT ad_id для active_ads.\n\ncabinet_day=true (Волна 2/E): окно от начала текущих суток кабинета (TZ аккаунта),\nчтобы график спенда начинался с нуля в полночь кабинета, а не от скользящего 24ч.\n\nБакеты без метрик в окне не появляются (gap). Recharts сам обработает разрывы.\nPartition pruning через WHERE cycle_ts >= floor (константа).",
+        "description": "Бакетированный график для DashboardPage.\n\nbucket=day: последний snapshot на (день × ad) = суточный итог (кумулятив\nсбрасывается посуточно) → SUM по дню. bucket=hour (аудит 2026-07-12, H-5):\nпоследний snapshot в часе — это кумулятив С НАЧАЛА СУТОК кабинета, не «за час»;\nпоэтому считаем per-ad дельты через hourly_deltas (тот же движок, что /stats/today),\nиначе почасовой график рисовал нарастающий кумулятив.\n\nВАЖНО (ревью #4): bucket=hour осмыслен только с cabinet_day=true — предусловие\nhourly_deltas «окно внутри одних суток кабинета» (prev=0 на 00:00). Оба фронта\nзовут именно так. На скользящем окне (cabinet_day=false) первый час окна даст\nспайк (полный кумулятив), а сброс на границе суток — клэмп в 0.\n\ncabinet_day=true (Волна 2/E): окно от начала текущих суток кабинета (TZ аккаунта),\nчтобы график спенда начинался с нуля в полночь кабинета, а не от скользящего 24ч.\n\nБакеты без метрик в окне не появляются (gap). Recharts сам обработает разрывы.\nPartition pruning через WHERE cycle_ts >= floor (константа).",
         "operationId": "get_chart_data_api_dashboard_chart_data_get",
         "parameters": [
           {
@@ -2043,7 +2182,7 @@
           "dashboard"
         ],
         "summary": "Cancel Disable Task",
-        "description": "Отменить disable-задачу (soft cancel).\n\nПереводит status в 'cancelled'.\n404 если задача не найдена или не disable.\n409 если задача уже в терминальном статусе (succeeded/cancelled).",
+        "description": "Отменить disable-задачу (soft cancel).\n\nПереводит status в 'cancelled'.\n404 если задача не найдена или не disable.\n409 если задача в терминальном статусе (succeeded/cancelled) или исполняется\nпрямо сейчас (running) — отмена running-задачи ломала FSM-sync (H-7).",
         "operationId": "cancel_disable_task_api_dashboard_disable_tasks__task_id__delete",
         "parameters": [
           {
@@ -2159,7 +2298,7 @@
           "dashboard"
         ],
         "summary": "Confirm Enable Recommendation",
-        "description": "Создать enable-задачу из рекомендации и привязать её.\n\nSELECT FOR UPDATE защищает от двойного подтверждения.\n409 если рекомендация уже promoted (promoted_to_task_id IS NOT NULL).\n404 если рекомендация не найдена.\nАтомарно: INSERT task_queue + UPDATE enable_recommendations.promoted_to_task_id.",
+        "description": "Revalidate рекомендацию и атомарно создать activate_ad задачу.",
         "operationId": "confirm_enable_recommendation_api_dashboard_enable_recommendations__rec_id__enable_post",
         "parameters": [
           {
@@ -3683,7 +3822,7 @@
           "settings"
         ],
         "summary": "Put Observer Settings",
-        "description": "Обновляет все поля ObserverConfig singleton.\n\nВалидация: default_interval_seconds от 30 до 600 (через Pydantic Field).",
+        "description": "Обновляет все поля ObserverConfig singleton.\n\nВалидация: default_interval_seconds от 30 до 600 (через Pydantic Field).\nГейт «нечего сканировать» (аудит 2026-07-12, C-1): PUT с is_scanning_enabled=true\nпроходит ту же проверку, что PATCH /scanning — иначе full-PUT включал скан\nв обход гейта при пустом allowlist («всё зелёное, авто-стоп не работает»).",
         "operationId": "put_observer_settings_api_settings_observer_put",
         "requestBody": {
           "content": {
@@ -3761,6 +3900,48 @@
         }
       }
     },
+    "/api/settings/observer/owner-tag": {
+      "patch": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Patch Observer Owner Tag",
+        "description": "Меняет только owner_campaign_tag, не трогая остальные поля.\n\nТочечный PATCH против лост-апдейта (аудит 2026-07-12, C-1): фронты сохраняли тег\nчерез full-PUT из закэшированного состояния и молча откатывали is_scanning_enabled.",
+        "operationId": "patch_observer_owner_tag_api_settings_observer_owner_tag_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerTagPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverSettingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/settings/observer/auto-enable": {
       "patch": {
         "tags": [
@@ -3804,30 +3985,6 @@
       }
     },
     "/api/settings/observer/campaigns": {
-      "get": {
-        "tags": [
-          "settings"
-        ],
-        "summary": "List Observer Campaigns",
-        "description": "Список кампаний (накопленных observer'ом) для выбора allowlist (#3).\n\nФильтр по owner_campaign_tag (word-boundary, через campaign_matches_owner).\nselected — входит ли кампания в текущий allowlist (cfg.campaign_ids).\nКампании без Meta fb_campaign_id пропускаются — их нельзя заскоупить по campaign.id.",
-        "operationId": "list_observer_campaigns_api_settings_observer_campaigns_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/CampaignOption"
-                  },
-                  "type": "array",
-                  "title": "Response List Observer Campaigns Api Settings Observer Campaigns Get"
-                }
-              }
-            }
-          }
-        }
-      },
       "patch": {
         "tags": [
           "settings"
@@ -3836,14 +3993,14 @@
         "description": "Задаёт allowlist кампаний для am-режима (#3).\n\nФильтрует am_tabular по campaign.id IN [...]: в общем кабинете не тянем чужие ад'ы.\nПустой список — без фильтра по кампаниям (owner_campaign_tag всё равно отсекает чужое).",
         "operationId": "patch_observer_campaigns_api_settings_observer_campaigns_patch",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CampaignAllowlistRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -3852,6 +4009,54 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ObserverSettingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "List Observer Campaigns",
+        "description": "Список кампаний (накопленных observer'ом) для выбора allowlist (#3).\n\nФильтр по owner_campaign_tag (word-boundary, через campaign_matches_owner).\nselected — входит ли кампания в текущий allowlist (cfg.campaign_ids).\nКампании без Meta fb_campaign_id пропускаются — их нельзя заскоупить по campaign.id.\nСвежесть: по умолчанию кампании с датой в имени старше CAMPAIGN_LIST_HORIZON_DAYS\nскрываются (если не выбраны) — see include_stale.",
+        "operationId": "list_observer_campaigns_api_settings_observer_campaigns_get",
+        "parameters": [
+          {
+            "name": "include_stale",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Показать и старые кампании (дата в имени старше 14 дней). По умолчанию старьё скрыто, кроме выбранных в allowlist.",
+              "default": false,
+              "title": "Include Stale"
+            },
+            "description": "Показать и старые кампании (дата в имени старше 14 дней). По умолчанию старьё скрыто, кроме выбранных в allowlist."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CampaignOption"
+                  },
+                  "title": "Response List Observer Campaigns Api Settings Observer Campaigns Get"
                 }
               }
             }
@@ -3895,6 +4100,18 @@
               "title": "Ad Account Id"
             },
             "description": "L10: числовой ID кабинета — резолв из вкладки этого кабинета. Пусто → текущая primary-вкладка (legacy)."
+          },
+          {
+            "name": "include_stale",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Показать и старые кампании (как в GET /campaigns).",
+              "default": false,
+              "title": "Include Stale"
+            },
+            "description": "Показать и старые кампании (как в GET /campaigns)."
           }
         ],
         "responses": {
@@ -4558,7 +4775,7 @@
           "tma"
         ],
         "summary": "Tma Snooze Ad",
-        "description": "Снуз: ad_alert_state.snoozed_until = now + minutes.\n\n404 — объявления нет. 409 — у ad нет строки состояния (нечего снузить).",
+        "description": "Снуз: ad_alert_state.snoozed_until = now + minutes.\n\n404 — объявления нет. 409 — у ad нет строки состояния (нечего снузить).\n422 — ад в normal (нет активного инцидента): снуз на normal-аде заглушил бы\nбудущий STOP до конца окна — money-дыра (MID-2). Зеркало dashboard snooze_ad.",
         "operationId": "tma_snooze_ad_api_tma_ads__fb_ad_id__snooze_post",
         "parameters": [
           {
@@ -4881,6 +5098,7 @@
           },
           "scope_key": {
             "type": "string",
+            "maxLength": 128,
             "title": "Scope Key",
             "description": "'global' или конкретный ID",
             "default": "global"
@@ -4950,6 +5168,86 @@
         ],
         "title": "AIAnalyzeResponse",
         "description": "Ответ AI-анализа."
+      },
+      "AIChatRequest": {
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageIn"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Messages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "messages"
+        ],
+        "title": "AIChatRequest",
+        "description": "Запрос чата: история (последнее сообщение — вопрос пользователя)."
+      },
+      "AIChatResponse": {
+        "properties": {
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "tool_calls": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCallOut"
+            },
+            "type": "array",
+            "title": "Tool Calls"
+          },
+          "generated_at": {
+            "type": "string",
+            "title": "Generated At"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "answer",
+          "generated_at",
+          "model"
+        ],
+        "title": "AIChatResponse",
+        "description": "Ответ ассистента."
+      },
+      "AIPulseResponse": {
+        "properties": {
+          "important": {
+            "type": "boolean",
+            "title": "Important"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "generated_at": {
+            "type": "string",
+            "title": "Generated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "important",
+          "generated_at"
+        ],
+        "title": "AIPulseResponse",
+        "description": "Почасовой пульс для веб-виджета.\n\nimportant=False → за окно ничего значимого, виджет молчит (text = null)."
       },
       "Account": {
         "properties": {
@@ -5493,57 +5791,6 @@
         "title": "AdsetPlanOut",
         "description": "Сводка по одному adset в плане."
       },
-      "AdsetProPostbackBody": {
-        "properties": {
-          "click_id": {
-            "type": "string",
-            "minLength": 1,
-            "title": "Click Id"
-          },
-          "fb_ad_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fb Ad Id"
-          },
-          "event_type": {
-            "type": "string",
-            "minLength": 1,
-            "title": "Event Type"
-          },
-          "revenue": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "string",
-                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
-              }
-            ],
-            "title": "Revenue",
-            "default": "0"
-          },
-          "currency": {
-            "type": "string",
-            "title": "Currency",
-            "default": "USD"
-          }
-        },
-        "additionalProperties": true,
-        "type": "object",
-        "required": [
-          "click_id",
-          "event_type"
-        ],
-        "title": "AdsetProPostbackBody",
-        "description": "Pydantic-обёртка над PostbackEvent для FastAPI body validation.\n\nPostbackEvent — frozen dataclass, FastAPI его не валидирует напрямую, поэтому\nдержим pydantic-модель отдельно. Все «лишние» поля попадут в raw через\nmodel_dump(), чтобы ничего не потерять."
-      },
       "AlertEventOut": {
         "properties": {
           "id": {
@@ -5834,6 +6081,17 @@
             },
             "type": "array",
             "title": "Files"
+          },
+          "upload_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Id"
           }
         },
         "type": "object",
@@ -6405,6 +6663,18 @@
           "destination_link": {
             "type": "string",
             "title": "Destination Link"
+          },
+          "url_tags_template": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1024
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url Tags Template"
           },
           "cta": {
             "type": "string",
@@ -7180,6 +7450,31 @@
         ],
         "title": "ChartBucketOut",
         "description": "Один бакет /api/dashboard/chart-data (по часам или дням).\n\nactive_ads — COUNT DISTINCT ad_id в бакете."
+      },
+      "ChatMessageIn": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role"
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "ChatMessageIn",
+        "description": "Одно сообщение истории (историю держит клиент и шлёт с каждым запросом)."
       },
       "CleanupOut": {
         "properties": {
@@ -10087,7 +10382,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "exclusiveMinimum": 0.0
               },
               {
                 "type": "string",
@@ -10288,6 +10583,26 @@
         ],
         "title": "OpenFolderRequest",
         "description": "Запрос открытия папки результата."
+      },
+      "OwnerTagPatchRequest": {
+        "properties": {
+          "owner_campaign_tag": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Campaign Tag",
+            "description": "Теги владельца кампаний для owner-scoping. Один или несколько через запятую. Пусто/null — фильтр выключен."
+          }
+        },
+        "type": "object",
+        "title": "OwnerTagPatchRequest",
+        "description": "Тело PATCH /settings/observer/owner-tag — точечное обновление тега.\n\nОтдельный PATCH против лост-апдейта (аудит 2026-07-12, C-1): full-PUT из\nзакэшированного клиентского состояния молча перезаписывал is_scanning_enabled."
       },
       "PresetIn": {
         "properties": {
@@ -11285,6 +11600,96 @@
         "title": "StatsTodayOut",
         "description": "Ответ GET /api/stats/today."
       },
+      "SystemReadinessResponse": {
+        "properties": {
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "infrastructure_ready": {
+            "type": "boolean",
+            "title": "Infrastructure Ready"
+          },
+          "overall": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "HEALTHY",
+                  "DEGRADED",
+                  "CRITICAL"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall"
+          },
+          "workers_online": {
+            "type": "integer",
+            "title": "Workers Online",
+            "default": 0
+          },
+          "workers_expected": {
+            "type": "integer",
+            "title": "Workers Expected",
+            "default": 0
+          },
+          "observer_runtime_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observer Runtime Status"
+          },
+          "scanning_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scanning Enabled"
+          },
+          "meta_api_channel_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ONLINE",
+                  "DEGRADED",
+                  "UNKNOWN"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta Api Channel Status"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blockers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ready",
+          "infrastructure_ready"
+        ],
+        "title": "SystemReadinessResponse",
+        "description": "Строгая готовность money-критичного контура, не k8s probe."
+      },
       "Targeting": {
         "properties": {
           "countries": {
@@ -12093,6 +12498,31 @@
         "title": "TmaSnoozeResponse",
         "description": "Результат снуза."
       },
+      "ToolCallOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ToolCallOut",
+        "description": "След вызова инструмента — фронт показывает «что ассистент проверял»."
+      },
       "TopCampaignOut": {
         "properties": {
           "campaign_id": {
@@ -12205,6 +12635,76 @@
             },
             "type": "array",
             "title": "Series Daily"
+          },
+          "unmatched_events": {
+            "type": "integer",
+            "title": "Unmatched Events",
+            "default": 0
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event At"
+          },
+          "processing_lag_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing Lag Ms"
+          },
+          "data_quality": {
+            "type": "string",
+            "title": "Data Quality",
+            "default": "unknown"
+          },
+          "backlog": {
+            "type": "integer",
+            "title": "Backlog",
+            "default": 0
+          },
+          "duplicate_events": {
+            "type": "integer",
+            "title": "Duplicate Events",
+            "default": 0
+          },
+          "unsupported_events": {
+            "type": "integer",
+            "title": "Unsupported Events",
+            "default": 0
+          },
+          "reconciliation_drift": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Drift"
+          },
+          "materialization_drift": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Materialization Drift"
           }
         },
         "type": "object",
@@ -12228,9 +12728,24 @@
             "title": "Registrations",
             "default": 0
           },
+          "ftds": {
+            "type": "integer",
+            "title": "Ftds",
+            "default": 0
+          },
           "deposits": {
             "type": "integer",
             "title": "Deposits",
+            "default": 0
+          },
+          "confirmed_deposits": {
+            "type": "integer",
+            "title": "Confirmed Deposits",
+            "default": 0
+          },
+          "redeposits": {
+            "type": "integer",
+            "title": "Redeposits",
             "default": 0
           },
           "revenue": {
@@ -12264,9 +12779,24 @@
             "title": "Registrations",
             "default": 0
           },
+          "ftds": {
+            "type": "integer",
+            "title": "Ftds",
+            "default": 0
+          },
           "deposits": {
             "type": "integer",
             "title": "Deposits",
+            "default": 0
+          },
+          "confirmed_deposits": {
+            "type": "integer",
+            "title": "Confirmed Deposits",
+            "default": 0
+          },
+          "redeposits": {
+            "type": "integer",
+            "title": "Redeposits",
             "default": 0
           },
           "revenue": {
@@ -12313,6 +12843,13 @@
             "type": "array",
             "title": "Concepts"
           },
+          "added_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Added Refs"
+          },
           "total_bytes": {
             "type": "integer",
             "title": "Total Bytes"
@@ -12323,6 +12860,7 @@
           "upload_id",
           "upload_dir",
           "concepts",
+          "added_refs",
           "total_bytes"
         ],
         "title": "UploadConceptsOut",

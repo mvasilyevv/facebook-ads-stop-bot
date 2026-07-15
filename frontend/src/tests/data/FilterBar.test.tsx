@@ -178,7 +178,7 @@ describe("FilterBar", () => {
       />,
     );
     expect(screen.getByText(/state = Предупреждение/)).toBeInTheDocument();
-    expect(screen.getByText(/offer = DRC/)).toBeInTheDocument();
+    expect(screen.getByText(/оффер = DRC/)).toBeInTheDocument();
   });
 
   // «Сбросить всё» вызывает onClearAll.
@@ -194,7 +194,7 @@ describe("FilterBar", () => {
   it("chips не показываются без активных фильтров", () => {
     render(<Wrapper />);
     expect(screen.queryByText(/state =/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/offer =/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/оффер =/)).not.toBeInTheDocument();
   });
 
   // Мульти-кабинет: dropdown скрыт при ≤1 кабинете (нечего фильтровать).

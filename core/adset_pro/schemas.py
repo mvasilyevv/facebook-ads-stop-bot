@@ -5,9 +5,9 @@
 - PostbackEvent     — один inbound postback от AdSet.pro (приходит на наш
   FastAPI endpoint, см. apps/api/routers/postback.py).
 - StatsQueryRequest — высокоуровневая обёртка над MCP tool `query_stats`.
-  Внутри client.py since/until → from/to, ad_id → filter ext_sub6=eq.
+  Внутри client.py since/until → from/to, ad_id → filter ext_sub8=eq.
 - StatsQueryResponse — рассыпает MCP `structuredContent.data[]` в ConversionRow.
-- ConversionRow     — нормализованная строка конверсии (ext_sub6 = fb_ad_id).
+- ConversionRow     — нормализованная строка конверсии (ext_sub8 = fb_ad_id).
 
 Все dataclass frozen — DTO, не мутируются. См. META_INTEGRATION_PLAN.md §4.4
 + live verify-комментарий в client.py.
@@ -20,9 +20,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-# В AdSet.pro поле ext_sub6 хранит fb_ad_id — это контракт нашей наливки в трекер.
+# В AdSet.pro поле ext_sub8 хранит fb_ad_id — это контракт новой наливки в трекер.
 # Меняется только при общей перенастройке трекера.
-EXT_SUB_FIELD_FOR_AD_ID: str = "ext_sub6"
+EXT_SUB_FIELD_FOR_AD_ID: str = "ext_sub8"
 
 
 @dataclass(slots=True, frozen=True)
@@ -30,7 +30,7 @@ class StatsQueryRequest:
     """Параметры запроса статистики (внутри клиента → MCP tool `query_stats`).
 
     Поля since/until — обязательные границы выборки. ad_id — опциональный фильтр
-    по конкретному объявлению (мэтчится по ext_sub6 в AdSet.pro). Конвертация
+    по конкретному объявлению (мэтчится по ext_sub8 в AdSet.pro). Конвертация
     в MCP arguments делается в AdsetProClient._stats_args_from_request.
     """
 
@@ -49,7 +49,7 @@ class StatsQueryRequest:
 class ConversionRow:
     """Одна строка конверсии из AdSet.pro.
 
-    Поле fb_ad_id извлекается из ext_sub6 (контракт нашей наливки).
+    Поле fb_ad_id извлекается из ext_sub8 (контракт новой наливки).
     revenue хранится как Decimal — для дальнейшего попадания в RuleContext без
     потери точности.
     """
@@ -68,21 +68,32 @@ class ConversionRow:
 
         Маппинг полей — best-effort с учётом того, что схема ответа может меняться:
         - click_id берётся из click_id/clickid/id (что нашли первым).
-        - fb_ad_id берётся из ext_sub6 (контракт).
+        - fb_ad_id берётся из ext_sub8 (контракт).
         - revenue парсится из строки в Decimal; пусто/None → 0.
         - occurred_at пытаемся распарсить из ISO-формата; неудача → None.
         """
-        click_id = str(row.get("click_id") or row.get("clickid") or row.get("id") or "")
+        click_id = str(
+            row.get("click_id")
+            or row.get("event_click_id")
+            or row.get("clickid")
+            or row.get("id")
+            or ""
+        )
         ad_id_raw = row.get(EXT_SUB_FIELD_FOR_AD_ID)
         fb_ad_id = str(ad_id_raw) if ad_id_raw not in (None, "") else None
 
-        revenue_raw = row.get("revenue", 0)
+        revenue_raw = row.get("revenue", row.get("event_revenue", 0))
         try:
             revenue = Decimal(str(revenue_raw)) if revenue_raw not in (None, "") else Decimal(0)
         except (ValueError, ArithmeticError):
             revenue = Decimal(0)
 
-        occurred_at_raw = row.get("occurred_at") or row.get("created_at") or row.get("time")
+        occurred_at_raw = (
+            row.get("occurred_at")
+            or row.get("event_time")
+            or row.get("created_at")
+            or row.get("time")
+        )
         occurred_at: datetime | None = None
         if isinstance(occurred_at_raw, str) and occurred_at_raw:
             try:
@@ -97,7 +108,7 @@ class ConversionRow:
             fb_ad_id=fb_ad_id,
             event_type=str(row.get("event_type") or row.get("status") or ""),
             revenue=revenue,
-            currency=str(row.get("currency") or "USD"),
+            currency=str(row.get("currency") or row.get("event_currency") or "USD"),
             occurred_at=occurred_at,
             raw=dict(row),
         )
@@ -124,11 +135,7 @@ class StatsQueryResponse:
 
 @dataclass(slots=True, frozen=True)
 class PostbackEvent:
-    """Inbound postback от AdSet.pro (полезен на Этапе 6 для FastAPI endpoint'а).
-
-    Сейчас не принимается endpoint'ом (apps/api/ удалён), но контракт зафиксирован,
-    чтобы при восстановлении API роутеров можно было сразу подключить parser.
-    """
+    """Validated positive event accepted by the AdSet.pro postback endpoint."""
 
     click_id: str
     fb_ad_id: str | None
@@ -137,3 +144,6 @@ class PostbackEvent:
     currency: str
     received_at: datetime
     raw: dict[str, Any] = field(default_factory=dict)
+    source: str = "adsetpro"
+    provider_event_id: str | None = None
+    occurred_at: datetime | None = None

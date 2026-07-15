@@ -12,7 +12,7 @@
    - spend за окно < 50% от cpa_threshold (запас бюджета восстановился);
    - cost_per_lead снова в норме (≤ cpa_threshold);
    - cost_per_registration ≤ cpa_threshold;
-   - есть свежие deposits (deposits > 0 в последней метрике).
+   - есть подтверждённая воронка (registrations >= 1 и deposits >= 1).
 
 `level`:
 - "ok"      — выполнились ≥ 2 положительных условий.
@@ -62,6 +62,7 @@ class MetricSnapshot:
     spend: Decimal | None = None
     cost_per_lead: Decimal | None = None
     cost_per_registration: Decimal | None = None
+    registrations: int | None = None
     deposits: int | None = None
     # Кейс куратора: показы кумулятивны в cabinet-дне (как spend) — берём latest.
     impressions: int | None = None
@@ -113,6 +114,7 @@ def should_recommend(
     metrics: list[MetricSnapshot],
     offer: OfferThresholds | None,
     thresholds: AnalyzerThresholds = DEFAULT_THRESHOLDS,
+    allow_curator: bool = True,
 ) -> RecommendationDecision:
     """Главная функция анализатора.
 
@@ -124,6 +126,7 @@ def should_recommend(
             или новые — порядок не важен, мы сами агрегируем).
         offer: пороги оффера (cpa_threshold обязателен для большинства правил).
         thresholds: глобальные настройки анализатора.
+        allow_curator: разрешена ли curator-ветка для этого кандидата.
 
     Returns:
         RecommendationDecision. Если recommend=False — в skip_reason причина.
@@ -157,7 +160,8 @@ def should_recommend(
     # мог убить потенциального виннера. Рекомендуем включить и держать до ~1×CPA
     # спенда — судить по реальной цене лида (правило байера/куратора).
     if (
-        latest is not None
+        allow_curator
+        and latest is not None
         and latest.impressions is not None
         and latest.impressions < thresholds.curator_impr_ceiling
         and latest.ctr is not None
@@ -198,9 +202,12 @@ def should_recommend(
         if latest.cost_per_registration <= cpa:
             reasons.append(f"cost_per_registration={latest.cost_per_registration} ≤ CPA={cpa}")
 
-    # Правило 4: появились deposits в последней метрике
-    if latest is not None and (latest.deposits or 0) > 0:
-        reasons.append(f"свежие deposits={latest.deposits}")
+    # Правило 4: deposit считаем подтверждённым сигналом только при наличии
+    # регистрации. Deposit без registration не подтверждает воронку.
+    if latest is not None and (latest.registrations or 0) >= 1 and (latest.deposits or 0) >= 1:
+        reasons.append(
+            f"свежая воронка: registrations={latest.registrations}, deposits={latest.deposits}"
+        )
 
     if not reasons:
         return RecommendationDecision(
@@ -234,6 +241,8 @@ def _snapshot_summary(
             summary["latest_cost_per_lead"] = str(latest.cost_per_lead)
         if latest.cost_per_registration is not None:
             summary["latest_cost_per_registration"] = str(latest.cost_per_registration)
+        if latest.registrations is not None:
+            summary["latest_registrations"] = int(latest.registrations)
         if latest.deposits is not None:
             summary["latest_deposits"] = int(latest.deposits)
     return summary

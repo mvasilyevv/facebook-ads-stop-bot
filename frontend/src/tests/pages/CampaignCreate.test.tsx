@@ -11,7 +11,7 @@
  * - API: uploadConcepts структура, статусы RunStatus
  */
 
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -153,6 +153,7 @@ vi.mock("@/lib/api/campaigns", () => ({
     concepts: [
       { ref: "test.jpg", original_name: "test.jpg", size_bytes: 1024, content_type: "image/jpeg" },
     ],
+    added_refs: ["test.jpg"],
     total_bytes: 1024,
   }),
   useAdAccountTimezone: () => ({
@@ -227,11 +228,6 @@ vi.mock("@/components/ui/Toast", () => ({
   },
 }));
 
-// Мок stores/auth
-vi.mock("@/stores/auth", () => ({
-  useAuthStore: { getState: () => ({ apiKey: null }) },
-}));
-
 // ─── Импорты после моков ───────────────────────────────────────────────────────
 
 import { WizardStep1Start } from "@/components/domain/campaigns/WizardStep1Start";
@@ -242,7 +238,7 @@ import { WizardStep5Creatives, validateCreatives } from "@/components/domain/cam
 import { CampaignRunsHistory } from "@/components/domain/campaigns/CampaignRunsHistory";
 import { useWizardStore } from "@/stores/campaignWizard";
 import type { WizardIdentity, WizardGoal, WizardCreatives } from "@/stores/campaignWizard";
-import type { PresetOut } from "@/lib/api/campaigns";
+import { uploadConcepts, type PresetOut } from "@/lib/api/campaigns";
 
 // ─── Хелперы ──────────────────────────────────────────────────────────────────
 
@@ -639,6 +635,81 @@ describe("WizardStep5Creatives", () => {
     expect(screen.getByText("200.0 KB")).toBeInTheDocument();
   });
 
+  it("дозагрузка добавляет файл в текущий серверный набор", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    vi.mocked(uploadConcepts).mockClear();
+    vi.mocked(uploadConcepts).mockResolvedValueOnce({
+      upload_id: "abc123",
+      upload_dir: "/tmp/abc123",
+      concepts: [
+        {
+          ref: "old.jpg",
+          original_name: "old.jpg",
+          size_bytes: 100,
+          content_type: "image/jpeg",
+        },
+        {
+          ref: "new.jpg",
+          original_name: "new.jpg",
+          size_bytes: 3,
+          content_type: "image/jpeg",
+        },
+        {
+          ref: "removed.jpg",
+          original_name: "removed.jpg",
+          size_bytes: 20,
+          content_type: "image/jpeg",
+        },
+      ],
+      added_refs: ["new.jpg"],
+      total_bytes: 103,
+    });
+    const existing: WizardCreatives = {
+      upload_id: "abc123",
+      concepts: [
+        {
+          ref: "old.jpg",
+          original_name: "old.jpg",
+          size_bytes: 100,
+          content_type: "image/jpeg",
+          campaign_keys: ["c1"],
+        },
+        {
+          ref: "stale.jpg",
+          original_name: "stale.jpg",
+          size_bytes: 50,
+          content_type: "image/jpeg",
+          campaign_keys: ["c1"],
+        },
+      ],
+      copies_per_concept: null,
+    };
+    const { container } = render(
+      wrap(
+        <WizardStep5Creatives
+          values={existing}
+          campaigns={[{ key: "c1", adset_count: 1, concept_refs: [] }]}
+          onChange={onChange}
+        />,
+      ),
+    );
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(input).not.toBeNull();
+    const file = new File(["new"], "new.jpg", { type: "image/jpeg" });
+    await user.upload(input!, file);
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(uploadConcepts).toHaveBeenCalledWith([file], "abc123");
+    expect(onChange).toHaveBeenCalledWith({
+      upload_id: "abc123",
+      concepts: [
+        existing.concepts[0],
+        expect.objectContaining({ ref: "new.jpg", campaign_keys: ["c1"] }),
+      ],
+    });
+  });
+
   // Кнопка удалить концепт вызывает onChange без него
   it("удаление концепта вызывает onChange с пустым списком", async () => {
     const user = userEvent.setup();
@@ -809,6 +880,30 @@ describe("CampaignRunsHistory", () => {
 
 // ─── Wizard Store ─────────────────────────────────────────────────────────────
 
+const PRESET_WITH_URL_TAGS: PresetOut = {
+  id: "p1",
+  name: "Test",
+  act_id: "act_999",
+  page_id: "pg1",
+  pixel_id: "px1",
+  tz_offset: 2,
+  offer_code: "TEST_OFF",
+  byer_tag: "AB",
+  objective: "OUTCOME_SALES",
+  optimization_goal: "OFFSITE_CONVERSIONS",
+  custom_event_type: "PURCHASE",
+  special_ad_categories: ["NONE"],
+  cta: "PLAY_GAME",
+  text_optimizations: "OPT_OUT",
+  click_through_days: 1,
+  view_through_days: 1,
+  url_tags_template: "sub2={{ad.id}}",
+  naming_template: null,
+  extra: {},
+  created_at: "2026-06-01T00:00:00Z",
+  updated_at: "2026-06-01T00:00:00Z",
+};
+
 describe("useWizardStore", () => {
   beforeEach(() => {
     // Сброс store перед каждым тестом
@@ -846,37 +941,44 @@ describe("useWizardStore", () => {
     expect(useWizardStore.getState().identity.offer_code).toBe("DRC_CR");
   });
 
+  it("автосохраняет черновик и время изменения", () => {
+    act(() => useWizardStore.getState().setIdentity({ offer_code: "DRC_CR" }));
+
+    expect(useWizardStore.getState().updatedAt).not.toBeNull();
+    const persisted = JSON.parse(window.localStorage.getItem("fb-agent-campaign-draft") ?? "{}") as {
+      state?: { identity?: { offer_code?: string }; updatedAt?: string | null };
+    };
+    expect(persisted.state?.identity?.offer_code).toBe("DRC_CR");
+    expect(persisted.state?.updatedAt).toBeTruthy();
+  });
+
   // applyPreset заполняет identity из пресета
   it("applyPreset заполняет identity из пресета", () => {
-    const preset: PresetOut = {
-      id: "p1",
-      name: "Test",
-      act_id: "act_999",
-      page_id: "pg1",
-      pixel_id: "px1",
-      tz_offset: 2,
-      offer_code: "TEST_OFF",
-      byer_tag: "AB",
-      objective: "OUTCOME_SALES",
-      optimization_goal: "OFFSITE_CONVERSIONS",
-      custom_event_type: "PURCHASE",
-      special_ad_categories: ["NONE"],
-      cta: "PLAY_GAME",
-      text_optimizations: "OPT_OUT",
-      click_through_days: 1,
-      view_through_days: 1,
-      url_tags_template: "sub2={{ad.id}}",
-      naming_template: null,
-      extra: {},
-      created_at: "2026-06-01T00:00:00Z",
-      updated_at: "2026-06-01T00:00:00Z",
-    };
-    act(() => useWizardStore.getState().applyPreset(preset));
+    act(() => useWizardStore.getState().applyPreset(PRESET_WITH_URL_TAGS));
     const { identity } = useWizardStore.getState();
     expect(identity.act_id).toBe("act_999");
     expect(identity.offer_code).toBe("TEST_OFF");
-    // url_tags убран из WizardGoal (вычисляется бэком по SOP, не редактируется пользователем)
+    expect(useWizardStore.getState().buildConfig().url_tags).toBe("sub2={{ad.id}}");
   });
+
+  it.each(["new", "clone"] as const)(
+    "не переносит url_tags пресета после переключения в режим %s",
+    (mode) => {
+      act(() => useWizardStore.getState().applyPreset(PRESET_WITH_URL_TAGS));
+      expect(useWizardStore.getState().buildConfig().url_tags).toBe("sub2={{ad.id}}");
+
+      act(() =>
+        useWizardStore.getState().setStart({
+          mode,
+          preset_id: null,
+          clone_run_id: mode === "clone" ? "run-1" : null,
+        }),
+      );
+
+      expect(useWizardStore.getState().loadedPreset).toBeNull();
+      expect(useWizardStore.getState().buildConfig().url_tags).toBeUndefined();
+    },
+  );
 
   // reset сбрасывает store в initial state
   it("reset сбрасывает store", () => {

@@ -126,9 +126,7 @@ async def _insert_bulk_task(conn, ad_ids: list[str], status: str, suffix: str):
 
 
 async def _task_status(conn, task_id: int) -> str:
-    row = await conn.execute(
-        text("SELECT status FROM task_queue WHERE id = :id"), {"id": task_id}
-    )
+    row = await conn.execute(text("SELECT status FROM task_queue WHERE id = :id"), {"id": task_id})
     return row.first()[0]
 
 
@@ -215,9 +213,7 @@ async def test_bulk_delete_cancels_bulk_status_change(
 # ─── Тест 4 ──────────────────────────────────────────────────────────────────
 # Задачи по НЕ удаляемым ad_id остаются нетронутыми (нет over-cancel).
 @pytest.mark.asyncio
-async def test_bulk_delete_leaves_unrelated_tasks(
-    pg_engine, fake_redis_client, clean_bd
-) -> None:
+async def test_bulk_delete_leaves_unrelated_tasks(pg_engine, fake_redis_client, clean_bd) -> None:
     """Удаление одного ада не отменяет задачи по другому аду."""
     suffix = uuid.uuid4().hex[:6]
     async with pg_engine.begin() as conn:

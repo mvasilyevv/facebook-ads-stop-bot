@@ -46,7 +46,7 @@ export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
     <div className="space-y-6">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-1">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 4 · СТРУКТУРА
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
@@ -202,7 +202,7 @@ const CampaignRow: FC<CampaignRowProps> = ({ campaign, index, onUpdate, onRemove
         type="button"
         aria-label="Удалить кампанию"
         onClick={onRemove}
-        className="shrink-0 size-8 flex items-center justify-center rounded-[var(--radius-2)] text-bg-7 hover:text-danger hover:bg-danger/10 transition-colors mt-1"
+        className="shrink-0 size-8 flex items-center justify-center rounded-[var(--radius-2)] text-bg-8 hover:text-danger hover:bg-danger/10 transition-colors mt-1"
       >
         <Trash2 size={14} />
       </button>

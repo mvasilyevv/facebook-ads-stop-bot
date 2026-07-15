@@ -1,5 +1,6 @@
 /**
- * TrackerBlockMini — карточка «Трекер (AdSet.pro)»: реги/депы/revenue/ROI
+ * TrackerBlockMini — карточка «Трекер (AdSet.pro)»: реги/FTD/подтверждённые
+ * депозиты/редепозиты/revenue/ROI
  * + attribution_note. available=false → «Нет данных трекера» (пустое состояние,
  * не ошибка — сбой источника уже обработан бэком, ответ не роняется).
  */
@@ -33,7 +34,7 @@ export function TrackerBlockMini({ tracker, loading }: TrackerBlockMiniProps) {
       <div className="border border-[var(--hairline)] bg-bg-1 rounded-[var(--radius-3)] p-4">
         {loading ? (
           <div className="grid grid-cols-2 gap-4">
-            {Array.from({ length: 4 }, (_, i) => (
+            {Array.from({ length: 6 }, (_, i) => (
               <div key={i} className="space-y-1.5">
                 <Skeleton className="h-3 w-14" />
                 <Skeleton className="h-5 w-16" />
@@ -44,9 +45,14 @@ export function TrackerBlockMini({ tracker, loading }: TrackerBlockMiniProps) {
           <EmptyState title="Нет данных трекера" description="AdSet.pro не вернул данные за этот период" />
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
               <Metric eyebrow="РЕГИСТРАЦИИ" value={formatInt(tracker.totals?.registrations ?? null)} />
-              <Metric eyebrow="ДЕПОЗИТЫ" value={formatInt(tracker.totals?.deposits ?? null)} />
+              <Metric eyebrow="FTD" value={formatInt(tracker.totals?.ftds ?? null)} />
+              <Metric
+                eyebrow="ПОДТВЕРЖДЕНЫ"
+                value={formatInt(tracker.totals?.confirmed_deposits ?? null)}
+              />
+              <Metric eyebrow="РЕДЕПОЗИТЫ" value={formatInt(tracker.totals?.redeposits ?? null)} />
               <Metric eyebrow="REVENUE" value={formatSpend(tracker.totals?.revenue ?? null)} />
               <Metric eyebrow="ROI" value={formatPercentValue(tracker.totals?.roi_pct ?? null)} />
             </div>

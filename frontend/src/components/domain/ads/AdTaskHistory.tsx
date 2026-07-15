@@ -109,7 +109,7 @@ function HistoryRow({ entry }: { entry: HistoryEntry }) {
 
 /** Заголовок задачи по типу. */
 function taskTitle(taskType: string): string {
-  if (taskType === "disable") return "Disable-задача";
+  if (taskType === "disable") return "Задача на отключение";
   if (taskType === "enable") return "Enable-задача";
   if (taskType === "meta_api_mutation") return "Действие через API";
   return `Задача: ${taskType}`;

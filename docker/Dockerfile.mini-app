@@ -4,6 +4,7 @@ FROM node:22-slim AS builder
 
 # VITE_API_BASE передаётся при сборке образа
 ARG VITE_API_BASE=/api
+ARG VITE_REMOTE_DESKTOP_URL=
 
 # Установка pnpm через corepack — pin на 11.6.0 (как в packageManager).
 # pnpm@latest (11.8) НЕ читает onlyBuiltDependencies из pnpm-workspace.yaml →
@@ -32,7 +33,9 @@ COPY packages/shared/ ./packages/shared/
 COPY frontend-mini/ ./frontend-mini/
 
 # Сборка только пакета fb-agent-mini (shared резолвится из workspace напрямую через src)
-RUN VITE_API_BASE=${VITE_API_BASE} pnpm --filter fb-agent-mini build
+RUN VITE_API_BASE=${VITE_API_BASE} \
+    VITE_REMOTE_DESKTOP_URL=${VITE_REMOTE_DESKTOP_URL} \
+    pnpm --filter fb-agent-mini build
 
 # Финальный образ: nginx со статикой
 FROM nginx:alpine AS runtime

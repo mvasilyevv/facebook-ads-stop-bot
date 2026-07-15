@@ -5,6 +5,7 @@
 - create_mutation_task: статус 'pending' (executed сразу worker'ом)
 - create_draft_task: статус 'draft' (ждёт подтверждения в TG/TMA)
 - approve_draft: 'draft' → 'pending'
+- cancel_draft_task: 'draft' → 'cancelled' с creator/owner ACL
 - cancel_task: любой не-финальный → 'cancelled'
 - claim_pending → core.tasks.queue.claim_next_task с фильтром по task_type
 - mark_*  → проксируем в core.tasks.queue
@@ -89,6 +90,13 @@ async def create_mutation_task(
     if status not in ("draft", "pending"):
         raise ValueError(f"create_mutation_task: status='{status}' не поддерживается")
     key = idempotency_key or default_idempotency_key(payload, requested_by=requested_by)
+    bulk_target_lock_keys: tuple[str, ...] = ()
+    if payload.mutation_kind == "bulk_status_change":
+        raw_ad_ids = payload.params.get("ad_ids") or []
+        if isinstance(raw_ad_ids, list):
+            bulk_target_lock_keys = tuple(
+                sorted({str(ad_id).strip() for ad_id in raw_ad_ids if str(ad_id).strip()})
+            )
     return await create_task(
         engine,
         task_type=_TASK_TYPE,
@@ -98,6 +106,10 @@ async def create_mutation_task(
         status=status,
         max_attempts=max_attempts,
         created_by_chat_id=created_by_chat_id,
+        target_lock_key=(
+            str(payload.target_id) if payload.mutation_kind in {"pause_ad", "activate_ad"} else None
+        ),
+        target_lock_keys=bulk_target_lock_keys,
     )
 
 
@@ -302,6 +314,74 @@ async def cancel_task(
             },
         )
     return (result.rowcount or 0) > 0
+
+
+async def cancel_draft_task(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    reason: str,
+    canceller_chat_id: int | None = None,
+    admin_override: bool = False,
+) -> bool:
+    """Атомарно отменить только DRAFT с creator/owner ACL.
+
+    В отличие от :func:`cancel_task`, этот переход никогда не трогает
+    ``pending``/``running``. Поздний ``dr_cancel`` после ``dr_ok`` не должен
+    маскировать уже отправленную в Meta мутацию.
+    """
+    if canceller_chat_id is None and not admin_override:
+        logger.warning(
+            "cancel_draft_task: попытка cancel task_id=%s без chat_id и admin_override",
+            task_id,
+        )
+        return False
+
+    if admin_override and canceller_chat_id is not None:
+        if not await is_admin_recipient(engine, chat_id=canceller_chat_id):
+            raise PermissionError(
+                "cancel_draft_task: admin_override требует role='owner', "
+                f"но canceller_chat_id={canceller_chat_id} не является активным owner"
+            )
+
+    where_acl = ""
+    params: dict[str, Any] = {
+        "id": int(task_id),
+        "err": (reason or "cancelled")[:8000],
+        "tt": _TASK_TYPE,
+    }
+    if not admin_override:
+        where_acl = "AND created_by_chat_id = :ccid"
+        params["ccid"] = int(canceller_chat_id)
+
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                f"""
+                UPDATE task_queue
+                SET status = 'cancelled',
+                    completed_at = NOW(),
+                    last_error = :err,
+                    updated_at = NOW()
+                WHERE id = :id
+                  AND task_type = :tt
+                  AND status = 'draft'
+                  {where_acl}
+                """
+            ),
+            params,
+        )
+
+    changed = (result.rowcount or 0) > 0
+    if not changed:
+        logger.warning(
+            "cancel_draft_task: отказ — task_id=%s, canceller_chat_id=%s, "
+            "admin_override=%s (чужой draft или уже не draft)",
+            task_id,
+            canceller_chat_id,
+            admin_override,
+        )
+    return changed
 
 
 # ====================== claim/finalize ======================

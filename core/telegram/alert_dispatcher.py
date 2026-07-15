@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 # Живые фоновые таски AI-комментариев: держим ссылки от GC, чистим по done.
 _ai_comment_tasks: set[asyncio.Task] = set()
+_AI_COMMENT_MAX_PENDING = 64
 
 # hit.code → ключ порога, который понимает explain_alert._build_prompt.
 _THRESHOLD_KEY_BY_PREFIX = {
@@ -65,6 +66,7 @@ async def _post_ai_comment(
     matched_codes: list,
     metrics_json: dict,
     offer_code: str | None,
+    redis_client: Any | None = None,
 ) -> None:
     """💡-комментарий AI реплаем под алертом. Best-effort: любая ошибка — тихий skip.
 
@@ -82,6 +84,7 @@ async def _post_ai_comment(
             metrics=metrics,
             thresholds=_thresholds_from_hits(metrics_json or {}, rule_code),
             offer_context={"offer_code": offer_code} if offer_code else None,
+            redis_client=redis_client,
         )
         if not comment:
             return
@@ -100,6 +103,12 @@ def _spawn_ai_comment(**kwargs: Any) -> None:
     """Запустить фоновый таск AI-комментария (если фича включена)."""
     try:
         if not get_settings().ai_explain_alerts_enabled:
+            return
+        if len(_ai_comment_tasks) >= _AI_COMMENT_MAX_PENDING:
+            logger.warning(
+                "AI-комментарий отброшен: очередь достигла лимита %s",
+                _AI_COMMENT_MAX_PENDING,
+            )
             return
         task = asyncio.create_task(_post_ai_comment(**kwargs))
         _ai_comment_tasks.add(task)
@@ -366,6 +375,7 @@ async def _deliver_one_alert(
         matched_codes=list(matched_codes or []),
         metrics_json=dict(metrics_json or {}),
         offer_code=str(offer_code) if offer_code else None,
+        redis_client=redis_client,
     )
 
 

@@ -32,8 +32,24 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
 }) => {
   const allKeys = campaigns.map((c) => c.key);
 
-  const handleUploaded = (uploadId: string, newConcepts: UploadedConcept[]) => {
-    onChange({ upload_id: uploadId, concepts: [...values.concepts, ...newConcepts] });
+  const handleUploaded = (
+    uploadId: string,
+    serverConcepts: UploadedConcept[],
+    addedRefs: string[],
+  ) => {
+    const currentByRef = new Map(values.concepts.map((concept) => [concept.ref, concept]));
+    const added = new Set(addedRefs);
+    const reconciled = serverConcepts.flatMap((concept) => {
+      const current = currentByRef.get(concept.ref);
+      if (current) return [{ ...concept, campaign_keys: current.campaign_keys }];
+      if (added.has(concept.ref)) return [concept];
+      // Файл физически остался в upload-папке, но пользователь ранее убрал его
+      // из UI. Не возвращаем логически удалённый концепт при следующей дозагрузке.
+      return [];
+    });
+    // Ответ upload содержит весь фактический серверный набор. Это одновременно
+    // добавляет новые файлы и вычищает stale refs из сохранённого браузерного черновика.
+    onChange({ upload_id: uploadId, concepts: reconciled });
   };
 
   const handleConceptsChange = (concepts: UploadedConcept[]) => onChange({ concepts });
@@ -45,7 +61,7 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
     <div className="space-y-6">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-1">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 5 · КОНЦЕПТЫ
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
@@ -58,7 +74,11 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
         </p>
       </div>
 
-      <CreativeUploadZone allCampaignKeys={allKeys} onUploaded={handleUploaded} />
+      <CreativeUploadZone
+        allCampaignKeys={allKeys}
+        uploadId={values.upload_id}
+        onUploaded={handleUploaded}
+      />
 
       <ConceptCampaignMatrix
         concepts={values.concepts}
@@ -69,7 +89,7 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
 
       {/* upload_id badge */}
       {values.upload_id && (
-        <div className="text-[11px] text-bg-7">
+        <div className="text-[11px] text-bg-8">
           upload_id: <span className="font-mono text-bg-9">{values.upload_id}</span>
         </div>
       )}

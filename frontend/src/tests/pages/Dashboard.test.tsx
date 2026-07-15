@@ -40,6 +40,16 @@ vi.mock("@/lib/api/settings", () => ({
   })),
   useToggleScanning: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
   useObserverStatus: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
+  useHealthDetails: vi.fn(() => ({
+    data: {
+      workers: [{ name: "observer", status: "ONLINE" }],
+      observer_runtime: { status: "running" },
+      meta_api_channel: { status: "ONLINE" },
+      overall: "HEALTHY",
+    },
+    isLoading: false,
+    isError: false,
+  })),
 }));
 
 vi.mock("@/lib/websocket/useRealtimeInvalidation", () => ({
@@ -58,7 +68,7 @@ vi.mock("@/lib/api/client", () => ({
 // ─── Импорты после моков ──────────────────────────────────────────────────────
 
 import { useDashboardBatch } from "@/lib/api/dashboard";
-import { useObserverSettings } from "@/lib/api/settings";
+import { useHealthDetails, useObserverSettings } from "@/lib/api/settings";
 import type { DashboardBatch } from "@fb/shared";
 
 // ─── Фабрика мок-данных ───────────────────────────────────────────────────────
@@ -118,6 +128,21 @@ async function renderDashboard() {
 describe("DashboardPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(useObserverSettings).mockReturnValue({
+      data: { is_scanning_enabled: true, default_interval_seconds: 30 },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useObserverSettings>);
+    vi.mocked(useHealthDetails).mockReturnValue({
+      data: {
+        workers: [{ name: "observer", status: "ONLINE" }],
+        observer_runtime: { status: "running" },
+        meta_api_channel: { status: "ONLINE" },
+        overall: "HEALTHY",
+      },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useHealthDetails>);
   });
 
   // Заголовок страницы — «Панель» (русский, без точки), а не «Dashboard».
@@ -171,6 +196,7 @@ describe("DashboardPage", () => {
     expect(screen.getByText("DISABLED")).toBeInTheDocument();
     // hero-подпись
     expect(screen.getByText(/объявлений под контролем/i)).toBeInTheDocument();
+    expect(screen.getByText("ТРЕБУЕТ ВНИМАНИЯ")).toBeInTheDocument();
     // HealthBar теперь несёт сегмент «Отключено» — disabled (12) не выпадает из портфеля.
     expect(
       screen.getByRole("img", { name: /Отключено 12/i }),
@@ -191,7 +217,7 @@ describe("DashboardPage", () => {
     expect(screen.getByText(/Алертов за 24ч нет/i)).toBeInTheDocument();
   });
 
-  // Paused: observer выключен → eyebrow «ПАУЗА» + warning-баннер.
+  // Paused: observer выключен → дашборд показывает паузу, а CTA живёт в едином global status bar.
   it("показывает paused-состояние когда observer выключен", async () => {
     vi.mocked(useDashboardBatch).mockReturnValue({
       data: makeBatch(),
@@ -208,7 +234,39 @@ describe("DashboardPage", () => {
 
     await renderDashboard();
     expect(screen.getByText(/ПАУЗА/)).toBeInTheDocument();
-    expect(screen.getByText(/Observer выключен/i)).toBeInTheDocument();
+    expect(screen.getByText("Мониторинг на паузе")).toBeInTheDocument();
+    expect(screen.getByText("СКАН ВЫКЛЮЧЕН")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Включить" })).not.toBeInTheDocument();
+  });
+
+  it("не выдаёт offline-контур за здоровую систему и спокойный live-tail", async () => {
+    vi.mocked(useDashboardBatch).mockReturnValue({
+      data: makeBatch({ recent_alerts: [] }),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDashboardBatch>);
+    vi.mocked(useHealthDetails).mockReturnValue({
+      data: {
+        workers: [
+          { name: "observer", status: "OFFLINE" },
+          { name: "browser-agent", status: "OFFLINE" },
+        ],
+        observer_runtime: null,
+        meta_api_channel: { status: "UNKNOWN" },
+        overall: "CRITICAL",
+      },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useHealthDetails>);
+
+    await renderDashboard();
+
+    expect(screen.getByText("СИСТЕМА НЕДОСТУПНА")).toBeInTheDocument();
+    expect(screen.getByText("Мониторинг недоступен")).toBeInTheDocument();
+    expect(screen.queryByText("СИСТЕМА В НОРМЕ")).not.toBeInTheDocument();
+    expect(screen.queryByText("Алертов за 24ч нет")).not.toBeInTheDocument();
   });
 
   // Ошибка загрузки batch → ErrorState.

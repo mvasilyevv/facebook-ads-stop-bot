@@ -157,7 +157,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
     <div className="space-y-6">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-1">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 2 · ИДЕНТИЧНОСТЬ
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
@@ -171,7 +171,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
 
       {/* Оффер — первым: выбор оффера дерайвит кабинет/пиксель/гео/CPA */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-3">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
           ОФФЕР И БАЙЕР
         </div>
         {/* Комбобокс-подсказки из активных офферов (вне grid — datalist не занимает место). */}
@@ -211,7 +211,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
 
       {/* Кабинет */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-3">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
           РЕКЛАМНЫЙ КАБИНЕТ
         </div>
         {/* Оффер с несколькими кабинетами — выбор кабинета залива (без фан-аута). */}
@@ -284,7 +284,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
 
       {/* Страница и пиксель */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-3">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
           СТРАНИЦА И ПИКСЕЛЬ
         </div>
         <div className="grid grid-cols-2 gap-4">

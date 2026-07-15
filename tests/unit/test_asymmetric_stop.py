@@ -20,6 +20,7 @@ import apps.enable_recommendation_worker.main as ereco
 import apps.meta_api_worker.main as meta
 from core.meta_api.schemas import MetaMutationPayload
 from core.observer.queries import load_scanning_enabled
+from core.tasks.queue import Task
 
 # ====================== Фейк engine для load_scanning_enabled ======================
 
@@ -71,10 +72,10 @@ async def test_load_scanning_enabled_false() -> None:
     assert await load_scanning_enabled(_FakeEngine((False,))) is False
 
 
-# Нет строки observer_config → дефолт True (автоматика включена до явного выключения)
+# Нет строки observer_config → fail-safe False (чистая установка не сканирует сама)
 @pytest.mark.asyncio
-async def test_load_scanning_enabled_no_row_defaults_true() -> None:
-    assert await load_scanning_enabled(_FakeEngine(None)) is True
+async def test_load_scanning_enabled_no_row_defaults_false() -> None:
+    assert await load_scanning_enabled(_FakeEngine(None)) is False
 
 
 # ====================== _is_activating_mutation (классификатор) ======================
@@ -258,6 +259,40 @@ async def test_meta_pause_paused_executes(monkeypatch) -> None:
 
     spy_exec.assert_awaited_once()
     spy_requeue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_meta_pause_cancelled_before_external_call_never_executes(monkeypatch) -> None:
+    """Tracker выигрывает гонку до external_started_at — Meta вызова нет."""
+    monkeypatch.setattr(meta, "load_owner_tag", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        meta,
+        "load_meta_snapshot_freshness",
+        AsyncMock(return_value=SimpleNamespace(fresh=True)),
+    )
+    monkeypatch.setattr(meta, "mark_external_call_started", AsyncMock(return_value=False))
+    spy_exec = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(meta, "execute_mutation", spy_exec)
+
+    task = Task(
+        id=120,
+        task_type="meta_api_mutation",
+        status="running",
+        idempotency_key="auto:pause_ad:123:token",
+        payload={"mutation_kind": "pause_ad", "target_id": "123"},
+        attempt_count=0,
+        max_attempts=5,
+        requested_by="bot_auto_stop",
+    )
+    engine = object()
+    await meta.process_one_task(engine, task, client=AsyncMock())
+
+    meta.mark_external_call_started.assert_awaited_once_with(
+        engine,
+        task_id=120,
+        target_lock_key="123",
+    )
+    spy_exec.assert_not_awaited()
 
 
 # ====================== enable_recommendation_worker (run_once) ======================

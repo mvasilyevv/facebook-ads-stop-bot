@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import type { ComponentType } from "react";
 import userEvent from "@testing-library/user-event";
 
 // ─── Моки роутера ────────────────────────────────────────────────────────────
@@ -144,8 +145,10 @@ vi.mock("@/lib/api", () => ({
 
 // ─── Компонент под тестом (реальный) ──────────────────────────────────────────
 
-import { AdDetailPage } from "@/routes/ads/$fbAdId";
+import { Route } from "@/routes/ads/$fbAdId";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+const AdDetailPage = (Route as unknown as { component: ComponentType }).component;
 
 const makeQC = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
 

@@ -51,7 +51,6 @@ FSM алертов: `normal → warning_sent → stop_sent → claimed → disab
 | `request_budget_change` | set_adset_budget | Менять дневной/lifetime бюджет конкретного adset (передавай ровно одно из daily_budget_usd / lifetime_budget_usd). |
 | `request_clone_campaign` | duplicate_campaign | Клонировать кампанию; deep_copy=true — с adsets и ads, после клона по умолчанию PAUSED. |
 | `request_bulk_pause` | bulk_status_change | Массово ставить ads на PAUSE. Можно передать ad_ids напрямую либо offer_code (резолвится из БД). Max 50. |
-| `request_create_campaign` | create_campaign | Создание новой кампании. Будет исполнено на Этапе 5 — пока tool лишь сохраняет spec в DRAFT для дальнейшей реализации. |
 
 После создания DRAFT возвращай пользователю task_id и кратко объясни, что нужно подтверждение.
 

@@ -152,7 +152,12 @@ async def _create_test_partitions(eng: AsyncEngine) -> None:
 
 
 async def _ensure_test_db_and_schema(url: str) -> None:
-    """Создаёт тестовую БД на том же кластере (если нет) + разворачивает схему с партициями."""
+    """Создаёт отдельную test DB и пересобирает её схему для текущей ORM-модели.
+
+    Тестовая БД намеренно disposable. Полная пересборка на старте сессии не даёт
+    старым таблицам пережить изменение ORM-моделей и маскировать schema drift.
+    """
+    _assert_not_prod(url)
     db_name = _db_name_from_url(url)
     # maintenance-подключение к служебной БД 'postgres' для CREATE DATABASE.
     maint_url = url.rsplit("/", 1)[0] + "/postgres"
@@ -167,20 +172,21 @@ async def _ensure_test_db_and_schema(url: str) -> None:
     finally:
         await maint.dispose()
 
-    # Схема: create_all + партиции на диапазон + seed (переиспользуем scripts/apply_schema).
+    # Схема: всегда с нуля. Условие `if offers exists: skip` оставляло test DB на
+    # старой ревизии после добавления новых таблиц/колонок.
     eng = create_async_engine(url)
     try:
-        async with eng.connect() as conn:
-            has_schema = await conn.scalar(text("SELECT to_regclass('public.offers')"))
-        if not has_schema:
-            from scripts.apply_schema import _create_all_tables, _seed_retention_policy
+        from scripts.apply_schema import (
+            _create_all_tables,
+            _drop_and_recreate_schema,
+            _seed_retention_policy,
+        )
 
-            async with eng.begin() as conn:
-                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
-            await _create_all_tables(eng)
-            await _create_test_partitions(eng)
-            await _ensure_migration_indices(eng)
-            await _seed_retention_policy(eng)
+        await _drop_and_recreate_schema(eng)
+        await _create_all_tables(eng)
+        await _create_test_partitions(eng)
+        await _ensure_migration_indices(eng)
+        await _seed_retention_policy(eng)
     finally:
         await eng.dispose()
 

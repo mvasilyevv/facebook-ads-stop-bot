@@ -377,6 +377,7 @@ async def test_check_meta_api_channel_skips_when_scanning_off(monkeypatch) -> No
     assert probe_called["v"] is False  # check_health даже не звался (сканирование off)
     payload = json.loads(redis.store[hw.META_CHANNEL_HEALTH_KEY])
     assert payload["probe_detail"] == "scanning_disabled"
+    assert payload["healthy"] is None  # skipped probe != подтверждённый отказ
     assert hw.META_CHANNEL_DEDUP_KEY in redis.deleted  # дедуп снят (re-arm на будущее)
 
 

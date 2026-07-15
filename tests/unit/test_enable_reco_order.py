@@ -37,6 +37,7 @@ def _fake_candidate() -> er.CandidateRow:
         snoozed_until=None,
         offer_code="CR2",
         cpa_threshold=None,
+        open_state_token=uuid.uuid4(),
     )
 
 
@@ -68,6 +69,7 @@ async def test_send_alert_returns_bool():
             client,
             candidate=_fake_candidate(),
             decision=_fake_decision(),
+            recommendation_id=uuid.uuid4(),
             engine=engine,
         )
     assert res is True
@@ -89,6 +91,7 @@ async def test_send_alert_failure_false():
             client,
             candidate=_fake_candidate(),
             decision=_fake_decision(),
+            recommendation_id=uuid.uuid4(),
             engine=engine,
         )
     assert res is False
@@ -107,6 +110,7 @@ async def test_send_alert_no_recipients_false():
             client,
             candidate=_fake_candidate(),
             decision=_fake_decision(),
+            recommendation_id=uuid.uuid4(),
             engine=engine,
         )
     assert res is False
@@ -120,6 +124,7 @@ async def test_send_alert_none_client_false():
         None,
         candidate=_fake_candidate(),
         decision=_fake_decision(),
+        recommendation_id=uuid.uuid4(),
         engine=engine,
     )
     assert res is False

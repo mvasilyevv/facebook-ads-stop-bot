@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -23,7 +24,15 @@ logger = logging.getLogger(__name__)
 
 # Допустимые значения task_type — должны совпадать с CHECK constraint в БД
 TASK_TYPES = frozenset(
-    {"disable", "enable", "plan_run", "meta_api_mutation", "ad_library_scan", "campaign_create"}
+    {
+        "disable",
+        "enable",
+        "plan_run",
+        "meta_api_mutation",
+        "ad_library_scan",
+        "campaign_create",
+        "tracker_event_process",
+    }
 )
 
 # Допустимые статусы — должны совпадать с CHECK constraint
@@ -55,6 +64,9 @@ class Task:
     last_error: str | None = None
     next_retry_at: datetime | None = None
     created_at: datetime | None = None
+    # NULL, пока текущая попытка ещё не пересекла границу внешнего вызова.
+    # Поле добавлено в конец для совместимости с тестовыми/legacy конструкторами.
+    external_started_at: datetime | None = None
 
 
 @dataclass
@@ -88,6 +100,7 @@ def _row_to_task(row: Any) -> Task:
         last_error=row[8],
         next_retry_at=row[9],
         created_at=row[10] if len(row) > 10 else None,
+        external_started_at=row[11] if len(row) > 11 else None,
     )
 
 
@@ -104,6 +117,8 @@ async def create_task(
     status: str = "pending",
     max_attempts: int = 5,
     created_by_chat_id: int | None = None,
+    target_lock_key: str | None = None,
+    target_lock_keys: Sequence[str] | None = None,
 ) -> int | None:
     """INSERT new task. Idempotent: если idempotency_key уже есть — None.
 
@@ -117,6 +132,21 @@ async def create_task(
         raise ValueError(f"Unknown status: {status}")
 
     async with engine.begin() as conn:
+        lock_keys = [target_lock_key] if target_lock_key is not None else []
+        lock_keys.extend(target_lock_keys or ())
+        if any(not key for key in lock_keys):
+            raise ValueError("target lock keys must not be empty")
+        # Deterministic order prevents deadlocks when overlapping bulk tasks lock
+        # more than one ad in concurrent transactions.
+        for lock_key in sorted(set(lock_keys)):
+            # Один и тот же per-target mutex используют pause/activate writers,
+            # recommendation confirmation и external-call boundary. Так проверка
+            # отсутствия pause_ad и INSERT activate_ad остаются атомарными
+            # относительно конкурентного создания новой pause_ad.
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+                {"lock_key": lock_key},
+            )
         result = await conn.execute(
             text(
                 """
@@ -161,7 +191,7 @@ _CLAIM_SQL = text(
     )
     RETURNING id, task_type, status, idempotency_key, payload,
               attempt_count, max_attempts, requested_by, last_error,
-              next_retry_at, created_at
+              next_retry_at, created_at, external_started_at
     """
 )
 
@@ -270,6 +300,47 @@ async def touch_task_running(engine: AsyncEngine, *, task_id: int) -> bool:
                 UPDATE task_queue
                 SET updated_at = NOW()
                 WHERE id = :id AND status = 'running'
+                """
+            ),
+            {"id": int(task_id)},
+        )
+    return (result.rowcount or 0) > 0
+
+
+async def mark_external_call_started(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    target_lock_key: str,
+) -> bool:
+    """Зафиксировать необратимую границу непосредственно перед внешним вызовом.
+
+    Tracker-worker берёт тот же advisory lock перед отменой автоматического
+    ``pause_ad``. Пока ``external_started_at`` равен NULL, положительный postback
+    ещё может безопасно отменить задачу. После первого входа во внешний вызов
+    значение сохраняется на всех retry: запрос мог уйти, даже если локальный
+    ответ потерян. Повторная попытка только освежает ``updated_at``.
+
+    Returns:
+        True, если задача всё ещё ``running`` и граница зафиксирована. False,
+        если tracker или другой исполнитель уже закрыл/отменил задачу.
+    """
+    if not target_lock_key:
+        raise ValueError("target_lock_key must not be empty")
+
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+            {"lock_key": target_lock_key},
+        )
+        result = await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET external_started_at = COALESCE(external_started_at, NOW()),
+                    updated_at = NOW()
+                WHERE id = :id
+                  AND status = 'running'
                 """
             ),
             {"id": int(task_id)},

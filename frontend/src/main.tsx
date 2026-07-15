@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider, MutationCache } from "@tanstack/react-query";
 
-import { useAuthStore } from "@/stores/auth";
 import { toast } from "@/components/ui/Toast";
 
 import "@fontsource/jetbrains-mono/400.css";
@@ -22,14 +21,6 @@ declare module "@tanstack/react-router" {
   interface Register {
     router: typeof router;
   }
-}
-
-// H5: bootstrap X-API-Key из VITE_API_KEY (проброс из API_KEY бэка). Без этого apiKey=null
-// → 401 на ВСЕХ write-мутациях при REQUIRE_API_KEY=true (весь money-контроль из UI мёртв).
-// Не затираем ключ, введённый вручную в Settings (persist в localStorage) — только дефолт.
-const envApiKey = import.meta.env.VITE_API_KEY;
-if (envApiKey && !useAuthStore.getState().apiKey) {
-  useAuthStore.getState().setApiKey(envApiKey);
 }
 
 // Расширяем meta-тип мутаций: suppressGlobalError отключает глобальный toast там,

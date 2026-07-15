@@ -15,11 +15,14 @@
 import { Eyebrow } from "@/components/data/Eyebrow";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils/cn";
+import { formatTrackerCount, readTrackerRealtime } from "@/lib/types/trackerRealtime";
 import { formatInt, formatSpend } from "@fb/shared";
 import type { FunnelDerived, FunnelTotals } from "@fb/shared";
 
 interface FunnelKpiRowProps {
   data?: { totals: FunnelTotals; derived: FunnelDerived };
+  /** Event-driven AdSet.pro блок. Если передан, реги/депы не берём из Meta. */
+  trackerData?: unknown;
   loading?: boolean;
   /** compact — 4 ячейки воронки без spend (для Dashboard). Default false (5 ячеек). */
   compact?: boolean;
@@ -33,12 +36,27 @@ interface Cell {
   note: string;
 }
 
-export function FunnelKpiRow({ data, loading, compact = false, className }: FunnelKpiRowProps) {
+export function FunnelKpiRow({
+  data,
+  trackerData,
+  loading,
+  compact = false,
+  className,
+}: FunnelKpiRowProps) {
   if (loading || !data) {
     return <FunnelKpiRowSkeleton cellCount={compact ? 4 : 5} className={className} />;
   }
 
   const { totals, derived } = data;
+  const tracker = trackerData !== undefined ? readTrackerRealtime(trackerData) : null;
+  const useTracker = trackerData !== undefined;
+  const trackerAvailable = tracker?.available !== false;
+  const registrations = useTracker
+    ? formatTrackerCount(trackerAvailable ? (tracker?.registrations ?? null) : null)
+    : formatInt(totals.registrations);
+  const confirmedDeposits = useTracker
+    ? formatTrackerCount(trackerAvailable ? (tracker?.confirmedDeposits ?? null) : null)
+    : formatInt(totals.deposits);
 
   // compact (Dashboard): БЕЗ spend — он уже в шапке hero-графика «SPEND × ЧАС»
   // (жалоба владельца на дубль); вместо него клики — полная воронка одним взглядом.
@@ -54,14 +72,14 @@ export function FunnelKpiRow({ data, loading, compact = false, className }: Funn
         {
           key: "registrations",
           eyebrow: "РЕГИ",
-          value: formatInt(totals.registrations),
-          note: "регистраций",
+          value: registrations,
+          note: useTracker ? "AdSet.pro · Live" : "регистраций",
         },
         {
           key: "deposits",
-          eyebrow: "ДЕПЫ",
-          value: formatInt(totals.deposits),
-          note: "депозитов",
+          eyebrow: "ПОДТВ. ДЕПЫ",
+          value: confirmedDeposits,
+          note: useTracker ? "регистрация + FTD" : "депозитов",
         },
       ]
     : [
@@ -76,31 +94,31 @@ export function FunnelKpiRow({ data, loading, compact = false, className }: Funn
         {
           key: "registrations",
           eyebrow: "РЕГИ",
-          value: formatInt(totals.registrations),
-          note: "регистраций",
+          value: registrations,
+          note: useTracker ? "AdSet.pro · Live" : "регистраций",
         },
         {
           key: "deposits",
-          eyebrow: "ДЕПЫ",
-          value: formatInt(totals.deposits),
-          note: `CPA ${formatSpend(derived.cpa)}`,
+          eyebrow: "ПОДТВ. ДЕПЫ",
+          value: confirmedDeposits,
+          note: useTracker ? "регистрация + FTD" : `CPA ${formatSpend(derived.cpa)}`,
         },
       ];
 
   return (
     <div
       className={cn(
-        "grid border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden",
+        "grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-3)] border border-[var(--hairline)] bg-[var(--hairline)]",
+        compact ? "lg:grid-cols-4" : "md:grid-cols-3 xl:grid-cols-5",
         className,
       )}
-      style={{ gridTemplateColumns: `repeat(${cells.length}, 1fr)` }}
       role="list"
       aria-label="Воронка залива"
     >
-      {cells.map((c, i) => (
+      {cells.map((c) => (
         <div
           key={c.key}
-          className={cn("flex flex-col gap-2 p-5", i < cells.length - 1 && "border-r border-[var(--hairline)]")}
+          className="flex flex-col gap-2 bg-bg-0 p-5"
         >
           <Eyebrow>{c.eyebrow}</Eyebrow>
           <span
@@ -128,17 +146,17 @@ function FunnelKpiRowSkeleton({
   return (
     <div
       className={cn(
-        "grid border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden",
+        "grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-3)] border border-[var(--hairline)] bg-[var(--hairline)]",
+        cellCount === 4 ? "lg:grid-cols-4" : "md:grid-cols-3 xl:grid-cols-5",
         className,
       )}
-      style={{ gridTemplateColumns: `repeat(${cellCount}, 1fr)` }}
       role="status"
       aria-label="Загрузка воронки"
     >
       {Array.from({ length: cellCount }).map((_, i) => (
         <div
           key={i}
-          className={cn("flex flex-col gap-2 p-5", i < cellCount - 1 && "border-r border-[var(--hairline)]")}
+          className="flex flex-col gap-2 bg-bg-0 p-5"
         >
           <Skeleton height={10} width="55%" />
           <Skeleton height={28} width="60%" />

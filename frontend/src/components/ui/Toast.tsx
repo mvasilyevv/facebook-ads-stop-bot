@@ -78,7 +78,7 @@ export function ToastViewport() {
       {toasts.slice(-4).map((t) => (
         <ToastItemView key={t.id} item={t} onClose={() => remove(t.id)} />
       ))}
-      <RadixToast.Viewport className="fixed bottom-4 right-4 z-[70] flex flex-col gap-3 w-[380px] m-0 list-none outline-none" />
+      <RadixToast.Viewport className="fixed bottom-4 right-4 z-[70] m-0 flex w-[calc(100vw-2rem)] flex-col gap-3 list-none outline-none sm:w-[380px]" />
     </RadixToast.Provider>
   );
 }

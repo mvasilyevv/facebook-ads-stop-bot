@@ -24,6 +24,7 @@ def _autostop_task(**over) -> SimpleNamespace:
         attempt_count=5,
         max_attempts=72,
         requested_by="bot_auto_stop",
+        external_started_at=None,
     )
     base.update(over)
     return SimpleNamespace(**base)
@@ -43,6 +44,12 @@ def _alert_ctx(tg=None):  # noqa: ARG001 — tg больше не использ
 async def test_autostop_channel_down_triggers_alert(monkeypatch) -> None:
     monkeypatch.setattr(meta, "load_owner_tag", AsyncMock(return_value=None))
     monkeypatch.setattr(meta, "load_scanning_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        meta,
+        "load_meta_snapshot_freshness",
+        AsyncMock(return_value=SimpleNamespace(fresh=True)),
+    )
+    monkeypatch.setattr(meta, "mark_external_call_started", AsyncMock(return_value=True))
     err = TemporaryError("Failed to fetch", code=-2)
     monkeypatch.setattr(meta, "execute_mutation", AsyncMock(side_effect=err))
     monkeypatch.setattr(meta, "requeue_task", AsyncMock(return_value=True))
@@ -66,6 +73,12 @@ async def test_autostop_channel_down_triggers_alert(monkeypatch) -> None:
 async def test_autostop_success_resets_counter(monkeypatch) -> None:
     monkeypatch.setattr(meta, "load_owner_tag", AsyncMock(return_value=None))
     monkeypatch.setattr(meta, "load_scanning_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        meta,
+        "load_meta_snapshot_freshness",
+        AsyncMock(return_value=SimpleNamespace(fresh=True)),
+    )
+    monkeypatch.setattr(meta, "mark_external_call_started", AsyncMock(return_value=True))
     monkeypatch.setattr(meta, "execute_mutation", AsyncMock(return_value={"success": True}))
     monkeypatch.setattr(meta, "mark_task_succeeded", AsyncMock(return_value=True))
     monkeypatch.setattr(meta, "sync_fsm_after_mutation", AsyncMock())
@@ -102,3 +115,40 @@ async def test_non_autostop_failure_does_not_alert(monkeypatch) -> None:
     )
 
     spy_alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stale_autostop_defers_without_external_call_and_triggers_scan(monkeypatch) -> None:
+    monkeypatch.setattr(meta, "load_owner_tag", AsyncMock(return_value=None))
+    monkeypatch.setattr(meta, "load_scanning_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        meta,
+        "load_meta_snapshot_freshness",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                fresh=False,
+                latest_cycle_at=None,
+                interval_seconds=90,
+            )
+        ),
+    )
+    defer = AsyncMock(return_value=True)
+    monkeypatch.setattr(meta, "defer_auto_stop_for_fresh_snapshot", defer)
+    execute = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(meta, "execute_mutation", execute)
+    redis = AsyncMock()
+    engine = object()
+
+    await meta.process_one_task(
+        engine,
+        _autostop_task(),
+        client=AsyncMock(),
+        redis_client=redis,
+    )
+
+    defer.assert_awaited_once_with(engine, task_id=42)
+    execute.assert_not_awaited()
+    assert any(
+        call.args and call.args[0] == meta.CHANNEL_OBSERVER_TRIGGER
+        for call in redis.publish.await_args_list
+    )

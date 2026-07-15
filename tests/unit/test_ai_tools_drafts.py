@@ -116,10 +116,49 @@ async def test_budget_change_lifetime_ok(monkeypatch) -> None:
     tool = RequestBudgetChangeTool()
     await tool.run(
         _make_ctx(),
-        {"adset_id": "999", "lifetime_budget_usd": 200},
+        {
+            "adset_id": "999",
+            "lifetime_budget_usd": 200,
+            "end_time": "2026-12-31T23:59:59-08:00",
+        },
     )
     payload = captured["payload"]
-    assert payload.params == {"lifetime_budget": 20000}
+    assert payload.params == {
+        "lifetime_budget": 20000,
+        "end_time": "2026-12-31T23:59:59-08:00",
+    }
+
+
+# Lifetime draft без end_time гарантированно упал бы только после подтверждения.
+# Отсекаем его до записи в task_queue.
+@pytest.mark.asyncio
+async def test_budget_change_lifetime_requires_end_time(monkeypatch) -> None:
+    captured = _capture_create_draft_task(
+        monkeypatch, "core.ai_assistant.tools.drafts.request_budget_change"
+    )
+    with pytest.raises(ToolError, match="end_time"):
+        await RequestBudgetChangeTool().run(
+            _make_ctx(),
+            {"adset_id": "999", "lifetime_budget_usd": 200},
+        )
+    assert "payload" not in captured
+
+
+@pytest.mark.asyncio
+async def test_budget_change_lifetime_rejects_naive_end_time(monkeypatch) -> None:
+    captured = _capture_create_draft_task(
+        monkeypatch, "core.ai_assistant.tools.drafts.request_budget_change"
+    )
+    with pytest.raises(ToolError, match="timezone"):
+        await RequestBudgetChangeTool().run(
+            _make_ctx(),
+            {
+                "adset_id": "999",
+                "lifetime_budget_usd": 200,
+                "end_time": "2026-12-31T23:59:59",
+            },
+        )
+    assert "payload" not in captured
 
 
 # Одновременно daily и lifetime → ToolError, create_draft_task не вызывается.

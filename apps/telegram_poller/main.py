@@ -416,6 +416,11 @@ async def main_loop(db_url: str) -> None:
                 await hb_task
             except asyncio.CancelledError:
                 pass
+        # AI-чаты работают фоново, чтобы не блокировать money-callbacks. Перед
+        # закрытием их Redis/Meta/DB-зависимостей даём короткое окно завершиться.
+        from core.telegram.handlers.ai_chat import drain_ai_chat_tasks
+
+        await drain_ai_chat_tasks(timeout_seconds=10.0)
         if hb_redis is not None:
             try:
                 await hb_redis.aclose()

@@ -40,8 +40,14 @@ def _make_app(*, engine=None, redis=None):
 
 
 @pytest_asyncio.fixture
-async def clean_campaigns(pg_engine):
-    """Чистит campaign_run/task_queue до и после теста."""
+async def clean_campaigns(pg_engine, tmp_path, monkeypatch):
+    """Чистит БД и поднимает реальный upload-набор плоского frontend-конфига."""
+
+    upload_dir = tmp_path / "abc123"
+    upload_dir.mkdir()
+    (upload_dir / "a.jpg").write_bytes(b"a")
+    (upload_dir / "b.jpg").write_bytes(b"b")
+    monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(tmp_path))
 
     async def _truncate():
         async with pg_engine.begin() as conn:
@@ -121,6 +127,34 @@ async def test_validate_flat_budget_over_cap_422(pg_engine, fake_redis_client, c
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/tools/campaigns/validate", json={"config": cfg})
     assert resp.status_code == 422
+
+
+# Старый браузерный черновик может смешать новый upload_id со ссылкой на файл из
+# предыдущего набора. validate и launch обязаны синхронно отклонить его до run/task.
+@pytest.mark.asyncio
+async def test_stale_concept_ref_rejected_before_enqueue(
+    pg_engine, fake_redis_client, clean_campaigns
+):
+    cfg = _flat_config()
+    cfg["campaigns"][0]["concept_refs"] = ["from-another-upload.jpg"]
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        preview = await ac.post("/api/tools/campaigns/validate", json={"config": cfg})
+        launch = await ac.post("/api/tools/campaigns/launch", json={"config": cfg})
+
+    assert preview.status_code == 422
+    assert launch.status_code == 422
+    assert "шаг 5" in preview.json()["detail"]
+    assert "шаг 5" in launch.json()["detail"]
+    async with pg_engine.connect() as conn:
+        runs = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
+        tasks = (
+            await conn.execute(
+                text("SELECT COUNT(*) FROM task_queue WHERE task_type = 'campaign_create'")
+            )
+        ).scalar()
+    assert runs == 0
+    assert tasks == 0
 
 
 # ─────────────────────────── launch (плоская форма) ───────────────────────────

@@ -18,7 +18,13 @@ import pytest
 
 import apps.meta_api_worker.main as meta
 from core.meta_api.schemas import MetaMutationPayload
-from core.tasks.queue import touch_task_running
+from core.tasks.queue import (
+    create_task,
+    mark_external_call_started,
+    reconcile_stuck_running,
+    requeue_for_retry,
+    touch_task_running,
+)
 
 
 class _FakeConn:
@@ -30,7 +36,7 @@ class _FakeConn:
 
     async def execute(self, stmt, params):
         self._sink.append((str(stmt), params))
-        return SimpleNamespace(rowcount=self._rowcount)
+        return SimpleNamespace(rowcount=self._rowcount, first=lambda: (123,))
 
 
 class _FakeEngine:
@@ -79,6 +85,104 @@ async def test_touch_returns_false_when_not_running() -> None:
     engine = _FakeEngine(rowcount=0)
     ok = await touch_task_running(engine, task_id=7)
     assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_mark_external_started_locks_target_and_sets_boundary() -> None:
+    engine = _FakeEngine(rowcount=1)
+
+    ok = await mark_external_call_started(
+        engine,
+        task_id=81,
+        target_lock_key="120248043699080390",
+    )
+
+    assert ok is True
+    assert len(engine.calls) == 2
+    lock_sql, lock_params = engine.calls[0]
+    update_sql, update_params = engine.calls[1]
+    assert "pg_advisory_xact_lock" in lock_sql
+    assert lock_params["lock_key"] == "120248043699080390"
+    assert "external_started_at = COALESCE(external_started_at, NOW())" in update_sql
+    assert "status = 'running'" in update_sql
+    assert "external_started_at IS NULL" not in update_sql
+    assert update_params["id"] == 81
+
+
+@pytest.mark.asyncio
+async def test_retry_preserves_external_started_boundary() -> None:
+    """Unknown external outcome must remain non-cancellable across retries."""
+    engine = _FakeEngine(rowcount=1)
+
+    retried = await requeue_for_retry(
+        engine,
+        task_id=81,
+        error="temporary transport error",
+        attempt_count=0,
+        max_attempts=5,
+    )
+
+    assert retried is True
+    update_sql, _ = engine.calls[0]
+    assert "status = 'retrying'" in update_sql
+    assert "external_started_at = NULL" not in update_sql
+
+
+@pytest.mark.asyncio
+async def test_stuck_reconcile_preserves_external_started_boundary() -> None:
+    """Crash recovery must not make an already-started call cancellable again."""
+    engine = _FakeEngine(rowcount=1)
+
+    reconciled = await reconcile_stuck_running(engine, stuck_after_seconds=60)
+
+    assert reconciled == 1
+    update_sql, _ = engine.calls[0]
+    assert "status = 'retrying'" in update_sql
+    assert "external_started_at = NULL" not in update_sql
+
+
+@pytest.mark.asyncio
+async def test_create_task_takes_target_lock_before_insert() -> None:
+    engine = _FakeEngine(rowcount=1)
+
+    task_id = await create_task(
+        engine,
+        task_type="meta_api_mutation",
+        idempotency_key="lock-order-test",
+        payload={"mutation_kind": "pause_ad", "target_id": "120248043699080390"},
+        requested_by="test",
+        target_lock_key="120248043699080390",
+    )
+
+    assert task_id == 123
+    assert len(engine.calls) == 2
+    lock_sql, lock_params = engine.calls[0]
+    insert_sql, _ = engine.calls[1]
+    assert "pg_advisory_xact_lock" in lock_sql
+    assert lock_params["lock_key"] == "120248043699080390"
+    assert "INSERT INTO task_queue" in insert_sql
+
+
+@pytest.mark.asyncio
+async def test_create_task_takes_bulk_locks_in_sorted_unique_order() -> None:
+    engine = _FakeEngine(rowcount=1)
+
+    task_id = await create_task(
+        engine,
+        task_type="meta_api_mutation",
+        idempotency_key="bulk-lock-order-test",
+        payload={"mutation_kind": "bulk_status_change", "target_id": "bulk:3"},
+        requested_by="test",
+        target_lock_keys=["ad-3", "ad-1", "ad-3", "ad-2"],
+    )
+
+    assert task_id == 123
+    assert [params["lock_key"] for _, params in engine.calls[:-1]] == [
+        "ad-1",
+        "ad-2",
+        "ad-3",
+    ]
+    assert "INSERT INTO task_queue" in engine.calls[-1][0]
 
 
 # _execute_with_touch: во время долгой mutation фоновый touch освежает updated_at,

@@ -19,6 +19,7 @@ import {
   alertStateToBadgeVariant,
   displayAdState,
   type AdSnapshot,
+  type StatsToday,
 } from "@fb/shared";
 import type { components } from "@fb/shared/api/generated";
 
@@ -54,6 +55,9 @@ interface AdDrawerProps {
    * ложную «Норму» — показываем нейтральный статус «Статус неизвестен».
    */
   stateUnknown?: boolean;
+  /** Кабинетный live-срез AdSet.pro из GET /stats/today. */
+  trackerData?: StatsToday["tracker"] | null;
+  trackerDataLoading?: boolean;
 }
 
 export function AdDrawer({
@@ -62,6 +66,8 @@ export function AdDrawer({
   isLoading = false,
   fbAdId,
   stateUnknown = false,
+  trackerData,
+  trackerDataLoading = false,
 }: AdDrawerProps) {
   // id резолвится из snapshot или из явного пропа (для холодного deep-link).
   const resolvedId = ad?.fb_ad_id ?? fbAdId ?? "";
@@ -189,6 +195,8 @@ export function AdDrawer({
           age={age}
           metricsRows={(timeline?.metrics ?? []) as MetricRow[]}
           metricsRowsLoading={timelineLoading}
+          trackerData={trackerData}
+          trackerDataLoading={trackerDataLoading}
         />
 
         <AdTaskHistory
@@ -234,7 +242,7 @@ function DrawerEyebrow({ geo }: { geo: string }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span className="text-accent-muted">{geo}</span>
-      <span className="text-bg-7">/</span>
+      <span className="text-bg-8">/</span>
       {/* Отдельный span чтобы getByText("ОБЪЯВЛЕНИЕ") работал в тестах */}
       <span>ОБЪЯВЛЕНИЕ</span>
     </span>

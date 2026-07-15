@@ -22,6 +22,7 @@ import {
   formatDateTime,
 } from "@fb/shared";
 import type { AlertEvent } from "@fb/shared";
+import type { MonitoringState } from "./monitoringState";
 
 // Цвет state-dot по стадии алерта (канон fsm-*).
 const STAGE_DOT: Record<string, string> = {
@@ -38,6 +39,8 @@ interface LiveTailProps {
   max?: number;
   /** Заморожен ли поток (observer выключен) — отключает подсветку новых. */
   frozen?: boolean;
+  /** Подтверждённое runtime-состояние — определяет честный empty-copy. */
+  monitoringState?: MonitoringState;
   /** Клик по строке (открыть детали объявления). */
   onRow?: (event: AlertEvent) => void;
 }
@@ -102,7 +105,36 @@ function FeedRow({
   );
 }
 
-export function LiveTail({ events, max = 8, frozen = false, onRow }: LiveTailProps) {
+const EMPTY_COPY: Record<MonitoringState, { title: string; description: string }> = {
+  healthy: {
+    title: "Алертов за 24ч нет",
+    description: "Мониторинг активен, пороги не были пересечены.",
+  },
+  paused: {
+    title: "Мониторинг на паузе",
+    description: "Новые события не поступают, пока Observer выключен.",
+  },
+  degraded: {
+    title: "Поток событий неполный",
+    description: "Часть контура недоступна — отсутствие алертов нельзя считать нормой.",
+  },
+  offline: {
+    title: "Мониторинг недоступен",
+    description: "Критические воркеры offline. Авто-disable сейчас не подтверждён.",
+  },
+  unknown: {
+    title: "Нет подтверждения мониторинга",
+    description: "Health/runtime ещё не получены. Нулевой поток не означает отсутствие проблем.",
+  },
+};
+
+export function LiveTail({
+  events,
+  max = 8,
+  frozen = false,
+  monitoringState = "unknown",
+  onRow,
+}: LiveTailProps) {
   // Множество id из прошлого рендера — чтобы подсветить только реально новые строки.
   const seenRef = useRef<Set<string>>(new Set());
   const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
@@ -142,10 +174,11 @@ export function LiveTail({ events, max = 8, frozen = false, onRow }: LiveTailPro
   }, [rowIdsKey, frozen]);
 
   if (rows.length === 0) {
+    const copy = EMPTY_COPY[monitoringState];
     return (
       <EmptyState
-        title="Алертов за 24ч нет"
-        description="Что приятно — значит правила работают, а трафик льётся ровно"
+        title={copy.title}
+        description={copy.description}
       />
     );
   }

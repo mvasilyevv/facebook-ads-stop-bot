@@ -27,12 +27,16 @@ CHANNEL_SCAN_FINISHED = "fb_agent:scan:finished"
 CHANNEL_ALERT_CREATED = "fb_agent:alert:created"
 CHANNEL_TASK_CHANGED = "fb_agent:task:changed"
 CHANNEL_HEALTH_UPDATED = "fb_agent:health:updated"
+CHANNEL_TRACKER_CHANGED = "fb_agent:tracker:changed"
+CHANNEL_TRACKER_WAKEUP = "fb_agent:tracker:wakeup"
+CHANNEL_OBSERVER_TRIGGER = "fb_agent:observer:trigger"
 
 ALL_DASHBOARD_CHANNELS = [
     CHANNEL_SCAN_FINISHED,
     CHANNEL_ALERT_CREATED,
     CHANNEL_TASK_CHANGED,
     CHANNEL_HEALTH_UPDATED,
+    CHANNEL_TRACKER_CHANGED,
 ]
 
 

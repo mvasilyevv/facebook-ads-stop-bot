@@ -328,6 +328,36 @@ async def test_upload_streams_and_returns_refs(pg_engine, fake_redis_client, tmp
     assert (tmp_path / data["upload_id"] / "a.jpg").read_bytes() == _JPEG
 
 
+# Повторная загрузка с upload_id дополняет тот же набор: refs из первой загрузки
+# остаются физически рядом с новыми и config.creo_root не меняется.
+@pytest.mark.asyncio
+async def test_upload_appends_to_existing_batch(
+    pg_engine, fake_redis_client, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(tmp_path))
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        first = await ac.post(
+            "/api/tools/campaigns/upload",
+            files=[("files", ("a.jpg", _JPEG, "image/jpeg"))],
+        )
+        upload_id = first.json()["upload_id"]
+        second = await ac.post(
+            "/api/tools/campaigns/upload",
+            data={"upload_id": upload_id},
+            files=[("files", ("b.mp4", _MP4, "video/mp4"))],
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["upload_id"] == upload_id
+    assert second.json()["total_bytes"] == len(_JPEG) + len(_MP4)
+    assert second.json()["added_refs"] == ["b.mp4"]
+    assert {concept["ref"] for concept in second.json()["concepts"]} == {"a.jpg", "b.mp4"}
+    assert (tmp_path / upload_id / "a.jpg").read_bytes() == _JPEG
+    assert (tmp_path / upload_id / "b.mp4").read_bytes() == _MP4
+
+
 # Переименованный файл (PNG с расширением .mp4) → 422 по magic-сниффу, temp-папка снесена.
 @pytest.mark.asyncio
 async def test_upload_rejects_renamed_file_magic_mismatch(
@@ -453,14 +483,20 @@ async def test_cancel_run_creating_conflict(pg_engine, fake_redis_client, clean_
 # Два launch одного оффера с разными датами → code_start второго продолжает первый (нет коллизии CRxxx).
 @pytest.mark.asyncio
 async def test_launch_allocates_continuing_code_start(
-    pg_engine, fake_redis_client, clean_campaigns
+    pg_engine, fake_redis_client, clean_campaigns, tmp_path, monkeypatch
 ):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    upload_dir = tmp_path / "seq-upload"
+    upload_dir.mkdir()
+    (upload_dir / "a.jpg").write_bytes(b"a")
+    (upload_dir / "b.jpg").write_bytes(b"b")
+    monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(tmp_path))
 
     # Конфиг с concept_refs чтобы span > 0 (без концептов block_code_span = 0).
     def _cfg_with_refs(start_date: str) -> dict:
         cfg = _valid_config()
         cfg["start_date"] = start_date
+        cfg["creo_root"] = "seq-upload"
         cfg["campaigns"][0]["concept_refs"] = ["a.jpg", "b.jpg"]
         return cfg
 

@@ -146,7 +146,7 @@ export function TaskQueues({
       <Eyebrow num="03" className="mb-4 flex">
         ОЧЕРЕДЬ ЗАДАЧ
       </Eyebrow>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <QueueCol
           title="DISABLE QUEUE"
           tasks={disableTasks}

@@ -4,6 +4,8 @@ IFS=$'\n\t'
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+readonly ROOT_DIR="${FB_AGENT_ROOT:-/opt/fb-agent}"
+readonly SHARED_ENV_FILE="$ROOT_DIR/shared/.env"
 readonly CADDY_ENV_FILE="/etc/fb-agent/caddy.env"
 readonly CADDY_FILE="/etc/caddy/Caddyfile"
 readonly CADDY_SITE="/etc/caddy/sites-enabled/app.adpulse.su.caddy"
@@ -14,7 +16,7 @@ cleanup() { [[ -n "$TEMP_DIR" ]] && rm -rf -- "$TEMP_DIR"; }
 trap cleanup EXIT
 
 [[ "${EUID:-$(id -u)}" -eq 0 ]] || { printf 'ERROR: run as root\n' >&2; exit 1; }
-for command in install systemctl caddy; do
+for command in install systemctl caddy python3; do
   command -v "$command" >/dev/null 2>&1 || die "$command is not installed"
 done
 [[ -s "$CADDY_ENV_FILE" ]] || {
@@ -25,7 +27,18 @@ done
   printf 'ERROR: %s must have mode 600\n' "$CADDY_ENV_FILE" >&2
   exit 1
 }
+[[ -s "$SHARED_ENV_FILE" ]] || die "$SHARED_ENV_FILE is missing or empty"
+[[ "$(stat -c '%a' "$SHARED_ENV_FILE")" == "600" ]] || {
+  die "$SHARED_ENV_FILE must have mode 600"
+}
 [[ -f "$CADDY_FILE" ]] || die "$CADDY_FILE is missing"
+
+# Caddy receives only the server-side API key required for upstream injection.
+# The helper parses dotenv as data (never shell source/eval) and replaces the
+# root-only target atomically, preserving the operator-managed BasicAuth values.
+python3 "$PROJECT_DIR/scripts/sync-caddy-env.py" \
+  --source "$SHARED_ENV_FILE" \
+  --target "$CADDY_ENV_FILE"
 
 TEMP_DIR="$(mktemp -d)"
 install -d -m 0755 /etc/caddy/sites-enabled /etc/systemd/system/caddy.service.d

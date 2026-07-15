@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """Tool get_tracker_stats — post-click статистика из AdSet.pro (MCP query_stats).
 
-Независимый от Vision/кабинета канал: клики, регистрации, депозиты (FTD), доход,
-профит, ROI за период. Опциональный разрез по дименшену трекера.
+Независимый от Vision/кабинета канал: клики, регистрации, сырой provider FTD,
+доход, профит, ROI за период. Provider FTD не равен локально подтверждённому
+депозиту STOP-контура (там обязательна связка registration + FTD одного click_id).
 
 Схема AdSet.pro (live verify 2026-05-30):
 - метрики: clicks, registrations, ftds (= депозиты/FTD), revenue, cost, profit, roi, epc;
 - валидные группы: event_type (воронка SOURCE_CLICK/CPA_HOLD/CPA_ACCEPT/...),
-  ext_sub1..ext_sub6 (макросы трекера: ext_sub3≈offer-код, ext_sub5≈кампания,
-  ext_sub6≈угол креатива — зависит от настройки макросов в кабинете);
+  ext_sub1..ext_sub8 (макросы трекера; ext_sub8 — стабильный Meta ad id в новых кампаниях);
 - country отдельным разрезом трекер НЕ отдаёт (гео закодировано в offer-коде/кампании).
 """
 
@@ -34,7 +34,17 @@ _METRICS: tuple[str, ...] = (
 )
 # Разрешённые дименшены группировки (остальные AdSet.pro молча игнорит → пустой агрегат).
 _ALLOWED_GROUPS: frozenset[str] = frozenset(
-    {"event_type", "ext_sub1", "ext_sub2", "ext_sub3", "ext_sub4", "ext_sub5", "ext_sub6"}
+    {
+        "event_type",
+        "ext_sub1",
+        "ext_sub2",
+        "ext_sub3",
+        "ext_sub4",
+        "ext_sub5",
+        "ext_sub6",
+        "ext_sub7",
+        "ext_sub8",
+    }
 )
 _MAX_WINDOW_DAYS = 365
 
@@ -54,7 +64,7 @@ def _money(value: Any) -> str:
 
 
 class GetTrackerStatsTool:
-    """AdSet.pro post-click статистика: клики/реги/депозиты/доход/профит/ROI."""
+    """AdSet.pro post-click статистика: клики/реги/provider FTD/доход/профит/ROI."""
 
     name: ClassVar[str] = "get_tracker_stats"
     risk_level: ClassVar[RiskLevel] = RiskLevel.READ_ONLY
@@ -62,9 +72,11 @@ class GetTrackerStatsTool:
         "name": "get_tracker_stats",
         "description": (
             "Post-click статистика из трекера AdSet.pro (НЕ зависит от Vision/кабинета): "
-            "клики, регистрации, депозиты (FTD), доход, профит, ROI за период. "
-            "Опциональный разрез group_by: event_type (воронка) либо ext_sub1..ext_sub6 "
-            "(макросы трекера — обычно ext_sub3=offer-код, ext_sub5=кампания, ext_sub6=угол "
+            "клики, регистрации, сырой provider FTD, доход, профит, ROI за период. "
+            "Не называй FTD подтверждённым депозитом STOP-контура: там требуется "
+            "локальная связка registration + FTD одного click_id. "
+            "Опциональный разрез group_by: event_type (воронка) либо ext_sub1..ext_sub8 "
+            "(макросы трекера; в новых кампаниях ext_sub8=Meta ad id "
             "креатива). Отдельного разреза по стране трекер не отдаёт — гео закодировано в "
             "offer-коде/кампании."
         ),
@@ -157,7 +169,10 @@ class GetTrackerStatsTool:
     ) -> str:
         if not group_by:
             head = rows[0] if isinstance(rows[0], dict) else {}
-            return f"AdSet.pro {since}…{until} · итого\n{self._metrics_line(head)}"
+            return (
+                f"AdSet.pro {since}…{until} · итого\n{self._metrics_line(head)}\n"
+                "Примечание: provider FTD ≠ локально подтверждённый депозит STOP-контура."
+            )
 
         valid = [r for r in rows if isinstance(r, dict)]
         valid.sort(key=lambda r: (_num(r.get("ftds")), _num(r.get("revenue"))), reverse=True)
@@ -176,8 +191,9 @@ class GetTrackerStatsTool:
         tot_profit = sum(_num(r.get("profit")) for r in valid)
         lines.append(
             f"ИТОГО ({len(valid)}): клики {int(tot_clicks)}, реги {int(tot_regs)}, "
-            f"FTD {int(tot_ftds)}, доход {_money(tot_rev)}, профит {_money(tot_profit)}"
+            f"provider FTD {int(tot_ftds)}, доход {_money(tot_rev)}, профит {_money(tot_profit)}"
         )
+        lines.append("Примечание: provider FTD ≠ локально подтверждённый депозит STOP-контура.")
         return "\n".join(lines)
 
     @staticmethod
@@ -187,12 +203,12 @@ class GetTrackerStatsTool:
         ftds = int(_num(r.get("ftds")))
         rev = r.get("revenue")
         if compact:
-            return f"клики {clicks}, реги {regs}, FTD {ftds}, доход {_money(rev)}"
+            return f"клики {clicks}, реги {regs}, provider FTD {ftds}, доход {_money(rev)}"
 
         parts = [
             f"Клики: {clicks}",
             f"Реги: {regs}",
-            f"Депозиты (FTD): {ftds}",
+            f"Provider FTD: {ftds}",
             f"Доход: {_money(rev)}",
             f"Расход: {_money(r.get('cost'))}",
             f"Профит: {_money(r.get('profit'))}",

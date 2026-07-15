@@ -85,7 +85,7 @@ export function TaskRow({ task }: TaskRowProps) {
         className="font-display text-[11px] text-bg-9 tracking-wider tabular-nums shrink-0"
         title={`Попытка ${task.attempt_count} из ${task.max_attempts}`}
       >
-        <span className="text-bg-7">×</span>
+        <span className="text-bg-8">×</span>
         {task.attempt_count}/{task.max_attempts}
       </span>
     </div>

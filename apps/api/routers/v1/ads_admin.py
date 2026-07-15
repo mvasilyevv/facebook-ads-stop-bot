@@ -85,6 +85,4 @@ async def bulk_delete_ads(body: BulkDeleteAdsRequest, engine: DepEngine) -> Bulk
         deleted,
         cancelled,
     )
-    return BulkDeleteAdsResponse(
-        deleted=deleted, count=len(deleted), cancelled_task_ids=cancelled
-    )
+    return BulkDeleteAdsResponse(deleted=deleted, count=len(deleted), cancelled_task_ids=cancelled)

@@ -34,7 +34,7 @@ export function AdDisableButton({ fbAdId, alreadyDisabled, onDisabled }: AdDisab
       idempotency_token: crypto.randomUUID(),
       reason: "manual disable via drawer",
     });
-    toast.success("Создана disable-задача");
+    toast.success("Задача на отключение создана");
     onDisabled();
   }
 
@@ -71,7 +71,7 @@ export function AdDisableButton({ fbAdId, alreadyDisabled, onDisabled }: AdDisab
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Отключить объявление?"
-        description={`Будет создана disable-задача для ${fbAdId}. Действие необратимо без ручного включения.`}
+        description={`Будет создана задача на отключение ${fbAdId}. Вернуть объявление в показ можно только ручным включением.`}
         confirmWord="DISABLE"
         confirmLabel="Отключить"
         confirmVariant="danger"

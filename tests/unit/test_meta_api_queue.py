@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.meta_api.queue import create_draft_task, default_idempotency_key
+from core.meta_api.queue import create_draft_task, create_mutation_task, default_idempotency_key
 from core.meta_api.schemas import MetaMutationPayload
 
 
@@ -74,6 +74,45 @@ def test_idempotency_key_params_matter() -> None:
     key_a = default_idempotency_key(a, requested_by="ai")
     key_b = default_idempotency_key(b, requested_by="ai")
     assert key_a != key_b
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["pause_ad", "activate_ad"])
+async def test_single_ad_mutations_use_shared_target_lock(kind: str) -> None:
+    """Pause/activate writers serialize on the same fb_ad_id advisory key."""
+    captured: dict = {}
+
+    async def fake_create_task(engine, **kwargs):
+        captured.update(kwargs)
+        return 1
+
+    payload = MetaMutationPayload(mutation_kind=kind, target_id="1200123456789")
+    with patch("core.meta_api.queue.create_task", fake_create_task):
+        await create_mutation_task(object(), payload=payload, requested_by="test")
+
+    assert captured["target_lock_key"] == "1200123456789"
+    assert captured["target_lock_keys"] == ()
+
+
+@pytest.mark.asyncio
+async def test_bulk_mutation_locks_every_ad_in_deterministic_order() -> None:
+    """Bulk pause/activate cannot bypass per-ad recommendation serialization."""
+    captured: dict = {}
+
+    async def fake_create_task(engine, **kwargs):
+        captured.update(kwargs)
+        return 1
+
+    payload = MetaMutationPayload(
+        mutation_kind="bulk_status_change",
+        target_id="bulk:3",
+        params={"ad_ids": ["3", "1", "3", "2"], "action": "pause"},
+    )
+    with patch("core.meta_api.queue.create_task", fake_create_task):
+        await create_mutation_task(object(), payload=payload, requested_by="test")
+
+    assert captured["target_lock_key"] is None
+    assert captured["target_lock_keys"] == ("1", "2", "3")
 
 
 # ====================== MID-5: draft salt = timestamp + uuid4 (без коллизий) ======================

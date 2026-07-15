@@ -388,7 +388,7 @@ def test_spec_adset_age_max_preserved_without_advantage():
     assert body["targeting"]["targeting_automation"]["advantage_audience"] == 0
 
 
-# url_tags ad-слота несёт sub2..sub7 по SOP.
+# url_tags ad-слота сохраняет sub2..sub7 по SOP и добавляет stable ad id.
 def test_spec_url_tags():
     cfg = _config()
     spec = build_campaign_spec(cfg)
@@ -397,6 +397,26 @@ def test_spec_url_tags():
     assert "sub3=GH_CR_CR001" in ad.url_tags
     assert "sub4=123456789" in ad.url_tags
     assert "sub5={{campaign.name}}" in ad.url_tags
+    assert "sub6={{adset.name}}" in ad.url_tags
+    assert "sub7={{ad.name}}" in ad.url_tags
+    assert "sub8={{ad.id}}" in ad.url_tags
+
+
+# В кастомный template sub8 добавляется ровно один раз, остальная строка не переписывается.
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        ("utm_source=custom", "utm_source=custom&sub8={{ad.id}}"),
+        ("utm_source=custom&sub8={{ad.id}}", "utm_source=custom&sub8={{ad.id}}"),
+        ("utm_source=sub8=value", "utm_source=sub8=value&sub8={{ad.id}}"),
+    ],
+)
+def test_spec_custom_url_tags_ensures_sub8_once(template: str, expected: str):
+    cfg = _config(url_tags_template=template)
+    ad = build_campaign_spec(cfg).campaigns[0].adsets[0].ads[0]
+    assert ad.url_tags == expected
+    query_keys = [part.split("=", 1)[0] for part in ad.url_tags.split("&")]
+    assert query_keys.count("sub8") == 1
 
 
 # Смешанный блок (2 концепта разного типа × 2 adset) строится без поля kind.

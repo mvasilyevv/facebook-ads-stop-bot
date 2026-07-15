@@ -136,7 +136,11 @@ async def test_cancel_draft_transitions_to_cancelled(
     tool = RequestBudgetChangeTool()
     await tool.run(
         _ctx(pg_engine),
-        {"adset_id": "23000222", "lifetime_budget_usd": 100},
+        {
+            "adset_id": "23000222",
+            "lifetime_budget_usd": 100,
+            "end_time": "2030-01-31T23:59:00+00:00",
+        },
     )
 
     async with pg_engine.connect() as conn:

@@ -14,7 +14,6 @@ const START_PROFILE_PORT_WAIT_SECONDS = 20;
 const CDP_READY_WAIT_SECONDS = 20;
 const RECOVERY_STOP_TIMEOUT_SECONDS = 20;
 const RECOVERY_SETTLE_DELAY_MS = 1_000;
-const ADS_MANAGER_URL_MARKERS = ['adsmanager', 'facebook.com/ads'];
 const DISABLED_FLAG_VALUES = new Set(['0', 'false', 'no', 'off']);
 
 function isAutoRestartOnMissingCdpEnabled(): boolean {
@@ -30,8 +29,24 @@ function isAutoRestartOnMissingCdpEnabled(): boolean {
 }
 
 export function isAdsManagerUrl(url: string | null | undefined): boolean {
-  const normalized = String(url || '').toLowerCase();
-  return ADS_MANAGER_URL_MARKERS.some((marker) => normalized.includes(marker));
+  try {
+    const parsed = new URL(String(url || ''));
+    const hostname = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname.toLowerCase();
+
+    // Проверяем только фактический origin/path вкладки. Поиск подстроки во всём URL
+    // ошибочно принимал business/loginpage за Ads Manager, когда его query-параметр
+    // next= содержал закодированный adsmanager.facebook.com. В результате Meta API
+    // читал DOM страницы входа и ложно сообщал token_not_found при живом кабинете.
+    if (hostname === 'adsmanager.facebook.com') {
+      return true;
+    }
+
+    const isFacebookHost = hostname === 'facebook.com' || hostname.endsWith('.facebook.com');
+    return isFacebookHost && pathname.split('/').includes('adsmanager');
+  } catch {
+    return false;
+  }
 }
 
 /** Достаёт numeric ad-account id из URL Ads Manager (?act=<num>). null, если не читается. */

@@ -38,7 +38,6 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "request_budget_change": "изменить бюджет адсета",
     "request_bulk_pause": "массовая пауза объявлений по офферу",
     "request_clone_campaign": "клонировать кампанию",
-    "request_create_campaign": "создать кампанию",
     # CREATIVE
     "analyze_creative": "разобрать креатив",
     "generate_ad_copy": "сгенерировать рекламный текст",
@@ -79,5 +78,5 @@ def build_catalog_text() -> str:
 
     lines.append("*Примеры:*")
     lines.extend(f"  `/ask {ex}`" for ex in EXAMPLES)
-    lines.append("\nДействия (пауза/бюджет/создание) приходят черновиком — подтверждаешь ✅ / ❌.")
+    lines.append("\nДействия (пауза/бюджет/клон) приходят черновиком — подтверждаешь ✅ / ❌.")
     return "\n".join(lines)

@@ -803,7 +803,7 @@ else
 fi
 # shellcheck disable=SC2086
 .venv/bin/uvicorn apps.api.main:app \
-    --host "$API_HOST" --port "$API_PORT" $UVICORN_EXTRA_ARGS \
+    --host "$API_HOST" --port "$API_PORT" --no-access-log $UVICORN_EXTRA_ARGS \
     > "$LOG_DIR/api.log" 2>&1 &
 API_PID=$!
 append_pid "$API_PID" "api"
@@ -1032,7 +1032,7 @@ if [ -d frontend ]; then
         echo -e "${BLUE}  Frontend: dev-режим (HMR)${NC}"
         (
             cd "$SCRIPT_DIR"
-            VITE_API_KEY="${API_KEY:-}" pnpm --filter fb-stop-bot-frontend dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
+            pnpm --filter fb-stop-bot-frontend dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
         ) > "$LOG_DIR/frontend.log" 2>&1 &
         FRONTEND_PID=$!
     else
@@ -1040,7 +1040,7 @@ if [ -d frontend ]; then
         # dev (нет ESM-водопада, React production, без double-render). Для правок фронта
         # с HMR — ./run.sh --dev. Сборку делаем синхронно, чтобы поймать ошибки до preview.
         echo -e "${BLUE}  Frontend: собираю prod build...${NC}"
-        if ! (cd "$SCRIPT_DIR" && VITE_API_KEY="${API_KEY:-}" pnpm --filter fb-stop-bot-frontend build) \
+        if ! (cd "$SCRIPT_DIR" && pnpm --filter fb-stop-bot-frontend build) \
             > "$LOG_DIR/frontend_build.log" 2>&1; then
             echo -e "${RED}❌ Сборка фронта упала${NC}"
             tail -20 "$LOG_DIR/frontend_build.log" || true
@@ -1049,7 +1049,7 @@ if [ -d frontend ]; then
         echo -e "${BLUE}  Frontend: prod build готов, запускаю vite preview${NC}"
         (
             cd "$SCRIPT_DIR"
-            VITE_API_KEY="${API_KEY:-}" pnpm --filter fb-stop-bot-frontend preview -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
+            pnpm --filter fb-stop-bot-frontend preview -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
         ) > "$LOG_DIR/frontend.log" 2>&1 &
         FRONTEND_PID=$!
     fi
@@ -1090,7 +1090,7 @@ if [ -d frontend-mini ]; then
 
     (
         cd "$SCRIPT_DIR"
-        VITE_API_KEY="${API_KEY:-}" pnpm --filter fb-agent-mini dev -- --host "$FRONTEND_HOST" --port "$MINI_PORT" --strictPort
+        pnpm --filter fb-agent-mini dev -- --host "$FRONTEND_HOST" --port "$MINI_PORT" --strictPort
     ) > "$LOG_DIR/frontend_mini.log" 2>&1 &
     MINI_PID=$!
     append_pid "$MINI_PID" "frontend_mini"

@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -214,9 +215,26 @@ def ad_body(name: str, adset_id: str, creative_id: str, status: str) -> dict:
     }
 
 
+_SUB8_QUERY_KEY_RE = re.compile(r"(?:^|[?&])sub8(?:=|&|#|$)", re.IGNORECASE)
+_AD_ID_URL_TAG = "sub8={{ad.id}}"
+
+
+def _ensure_ad_id_url_tag(template: str) -> str:
+    """Append ``sub8={{ad.id}}`` without rewriting an opaque custom template."""
+    normalized = template.strip()
+    if _SUB8_QUERY_KEY_RE.search(normalized):
+        return normalized
+
+    # Preserve a legacy fragment and insert the tracking key before it instead
+    # of accidentally turning it into part of the fragment value.
+    base, fragment_marker, fragment = normalized.partition("#")
+    separator = "" if not base or base.endswith(("?", "&")) else "&"
+    return f"{base}{separator}{_AD_ID_URL_TAG}{fragment_marker}{fragment}"
+
+
 def url_tags_of(cfg: CampaignConfig, code: str) -> str:
-    """url_tags по SOP (sub2..sub7), sub3 = код креатива."""
-    return (
+    """Build url_tags; sub3 is the creative code and sub8 is the stable ad id."""
+    default_template = (
         f"sub2={cfg.byer_tag}"
         f"&sub3={code}"
         f"&sub4={cfg.account.act_num}"
@@ -224,6 +242,12 @@ def url_tags_of(cfg: CampaignConfig, code: str) -> str:
         "&sub6={{adset.name}}"
         "&sub7={{ad.name}}"
     )
+    template = (
+        cfg.url_tags_template
+        if cfg.url_tags_template and cfg.url_tags_template.strip()
+        else default_template
+    )
+    return _ensure_ad_id_url_tag(template)
 
 
 # ---------------------- сборка спеки ----------------------

@@ -30,6 +30,7 @@ async def clean_observer_tables(pg_engine):
                 "alert_events",
                 "ad_metrics",
                 "ad_alert_state",
+                "tracker_click_state",
                 "fb_ads",
                 "fb_adsets",
                 "fb_campaigns",
@@ -110,8 +111,8 @@ def _make_row(
 # Сценарий: новое объявление с нормой → upsert в каталог + INSERT метрик + ad_alert_state='normal'
 @pytest.mark.asyncio
 async def test_new_ad_with_normal_metrics(pg_engine, offer_kr2) -> None:
-    # Полная воронка; депозиты теперь ТОЛЬКО из AdSet.pro → сидируем 2 ftd-события трекера,
-    # иначе regs_no_dep_stop сработает (5 регистраций без депа).
+    # Полная воронка; депозиты теперь только из проекции
+    # AdSet.pro: каждый click должен иметь registration + FTD.
     row = _make_row(
         spend=Decimal("3.0"),
         leads=10,
@@ -123,11 +124,18 @@ async def test_new_ad_with_normal_metrics(pg_engine, offer_kr2) -> None:
         await conn.execute(
             text(
                 """
-                INSERT INTO adsetpro_postback_events
-                    (received_at, click_id, fb_ad_id, event_type, revenue, currency,
-                     raw_json, signature_valid, is_duplicate)
-                VALUES (now(), :c1, :fb, 'ftd', 10, 'USD', '{}'::jsonb, true, false),
-                       (now(), :c2, :fb, 'ftd', 10, 'USD', '{}'::jsonb, true, false)
+                INSERT INTO tracker_click_state
+                    (id, source, click_id, ad_id, fb_ad_id, attribution_status,
+                     registration, ftd, confirmed_deposit, registration_at, ftd_at,
+                     confirmed_deposit_at, ftd_revenue, redeposits, redeposit_revenue,
+                     last_event_at, version, created_at, updated_at)
+                VALUES
+                    (gen_random_uuid(), 'adsetpro', :c1, NULL, :fb, 'matched_direct',
+                     true, true, true, now(), now(), now(), 10, 0, 0,
+                     now(), 1, now(), now()),
+                    (gen_random_uuid(), 'adsetpro', :c2, NULL, :fb, 'matched_direct',
+                     true, true, true, now(), now(), now(), 10, 0, 0,
+                     now(), 1, now(), now())
                 """
             ),
             {"fb": row.fb_ad_id, "c1": f"{row.fb_ad_id}-d1", "c2": f"{row.fb_ad_id}-d2"},

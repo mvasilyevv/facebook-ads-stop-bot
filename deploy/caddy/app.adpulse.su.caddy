@@ -1,0 +1,97 @@
+(panel_auth) {
+	basic_auth {
+		{$PANEL_BASIC_AUTH_USER} {$PANEL_BASIC_AUTH_HASH}
+	}
+}
+
+app.adpulse.su {
+	log {
+		output file /var/log/caddy/fb-agent-access.log {
+			roll_size 20MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		format json
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# `route` preserves this security order literally: public narrow carve-outs,
+	# validated TMA Bearer transport, then BasicAuth-protected desktop surfaces.
+	route {
+		handle /healthz {
+			reverse_proxy 127.0.0.1:8100
+		}
+
+		handle /readyz {
+			reverse_proxy 127.0.0.1:8100
+		}
+
+		# AdSet.pro передаёт секрет в query string и не умеет custom headers.
+		# Никогда не пишем этот request target в access log: иначе токен окажется
+		# в /var/log/caddy/fb-agent-access.log и его ротационных копиях.
+		handle /api/v1/postback/* {
+			log_skip
+			header Cache-Control "no-store"
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -X-API-Key
+			}
+		}
+
+		# Telegram Mini App bootstrap/actions have their own HMAC/Bearer guard.
+		# Never expose or inject the desktop master key on this public route.
+		handle /api/tma/* {
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -X-API-Key
+			}
+		}
+
+		# Mini App also consumes shared read/write endpoints. Caddy only identifies
+		# the Bearer transport here; ApiKeyAuthMiddleware validates the signed token,
+		# current recipient and owner role before any protected operation.
+		@tma_bearer_api {
+			path /api/*
+			header Authorization "Bearer *"
+		}
+		handle @tma_bearer_api {
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -X-API-Key
+			}
+		}
+
+		# Desktop browser proves operator access with same-origin BasicAuth. The
+		# master API key exists only in Caddy's root-owned environment and is
+		# overwritten server-side, so a client-supplied X-API-Key cannot win.
+		handle /api/* {
+			import panel_auth
+			reverse_proxy 127.0.0.1:8100 {
+				header_up X-API-Key {$API_KEY}
+			}
+		}
+
+		handle /ws/* {
+			import panel_auth
+			# BasicAuth protects the upgrade; the server-only master key is injected
+			# into the upstream handshake and never appears in the browser URL/bundle.
+			log_skip
+			reverse_proxy 127.0.0.1:8100 {
+				header_up X-API-Key {$API_KEY}
+			}
+		}
+
+		handle /tma* {
+			reverse_proxy 127.0.0.1:8081
+		}
+
+		handle {
+			import panel_auth
+			reverse_proxy 127.0.0.1:8080
+		}
+	}
+}

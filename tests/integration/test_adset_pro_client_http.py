@@ -108,7 +108,7 @@ async def test_query_stats_sends_bearer_token_and_payload() -> None:
                     "data": [
                         {
                             "click_id": "c1",
-                            "ext_sub6": "ad-1",
+                            "ext_sub8": "ad-1",
                             "event_type": "ftd",
                             "revenue": "10.50",
                             "currency": "EUR",
@@ -141,8 +141,8 @@ async def test_query_stats_sends_bearer_token_and_payload() -> None:
     args = body["params"]["arguments"]
     assert args["from"] == "2026-05-01"
     assert args["to"] == "2026-05-15"
-    # ad_id мэтчится по ext_sub6 в фильтре MCP.
-    assert {"field": "ext_sub6", "op": "eq", "value": "ad-1"} in args["filters"]
+    # ad_id мэтчится по стабильному ext_sub8 в фильтре MCP.
+    assert {"field": "ext_sub8", "op": "eq", "value": "ad-1"} in args["filters"]
 
     # Ответ распарсился корректно.
     assert len(resp.rows) == 1
@@ -218,20 +218,38 @@ async def test_query_stats_retries_5xx_then_succeeds() -> None:
 # list_conversions — сахар поверх query_stats; парсит structuredContent.data.
 @pytest.mark.asyncio
 async def test_list_conversions_returns_parsed_rows() -> None:
-    with respx.mock(assert_all_called=True) as mock:
-        mock.post(_MCP_URL).mock(
-            return_value=Response(
-                200,
-                json=_mcp_tool_response(
-                    {
-                        "data": [
-                            {"click_id": "1", "ext_sub6": "ad-1", "revenue": "5"},
-                            {"click_id": "2", "ext_sub6": "ad-1", "revenue": "7.5"},
-                        ]
-                    }
-                ),
-            )
+    captured: dict = {}
+
+    def _handler(request):
+        captured["body"] = json.loads(request.content)
+        return Response(
+            200,
+            json=_mcp_tool_response(
+                {
+                    "data": [
+                        {
+                            "event_click_id": "1",
+                            "event_type": "CPA_HOLD",
+                            "event_time": "2026-05-02 10:00:00",
+                            "event_revenue": 0,
+                            "event_currency": "USD",
+                            "ext_sub8": "ad-1",
+                        },
+                        {
+                            "event_click_id": "2",
+                            "event_type": "CPA_ACCEPT",
+                            "event_time": "2026-05-03 11:00:00",
+                            "event_revenue": "7.5",
+                            "event_currency": "USD",
+                            "ext_sub8": "ad-1",
+                        },
+                    ]
+                }
+            ),
         )
+
+    with respx.mock(assert_all_called=True) as mock:
+        mock.post(_MCP_URL).mock(side_effect=_handler)
         async with _make_client() as client:
             rows = await client.list_conversions(
                 since=date(2026, 5, 1),
@@ -242,6 +260,27 @@ async def test_list_conversions_returns_parsed_rows() -> None:
     assert len(rows) == 2
     assert {r.click_id for r in rows} == {"1", "2"}
     assert all(r.fb_ad_id == "ad-1" for r in rows)
+    args = captured["body"]["params"]["arguments"]
+    assert args["groups"] == [
+        "event_click_id",
+        "event_type",
+        "event_time",
+        "event_revenue",
+        "event_currency",
+        "ext_sub4",
+        "ext_sub5",
+        "ext_sub6",
+        "ext_sub7",
+        "ext_sub8",
+    ]
+    assert args["metrics"] == ["cpa_hold", "cpa_accept", "cpa_redep"]
+    assert args["limit"] == 1000
+    assert {
+        "field": "event_type",
+        "op": "in",
+        "value": "CPA_HOLD,CPA_ACCEPT,CPA_REDEP",
+    } in args["filters"]
+    assert {"field": "ext_sub8", "op": "eq", "value": "ad-1"} in args["filters"]
 
 
 # 200 с битым JSON → TemporaryError после max_retries.

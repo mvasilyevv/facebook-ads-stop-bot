@@ -82,6 +82,18 @@ describe("useRealtimeInvalidation", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["stats"] });
   });
 
+  it("tracker_changed сразу обновляет dashboard, stats, ads и history", () => {
+    renderWithClient();
+    const onMessage = mockUseDashboardSocket.mock.calls[0]![0].onMessage as (d: unknown) => void;
+
+    onMessage({ type: "tracker_changed", fb_ad_id: "1201" });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["dashboard"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["stats"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["ads"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["history"] });
+  });
+
   // Неизвестный/пустой type не должен ничего инвалидировать и не должен падать.
   it("неизвестный type не вызывает инвалидацию", () => {
     renderWithClient();

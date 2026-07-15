@@ -14,7 +14,6 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useAuthStore } from "@/stores/auth";
 import { apiGet, apiGetWithCount, apiSend } from "./client";
 
 // ─── Типы (сматчены с schemas/campaigns_create.py) ───────────────────────────
@@ -75,6 +74,7 @@ export interface UploadConceptsOut {
   upload_id: string;
   upload_dir: string;
   concepts: UploadedConceptOut[];
+  added_refs: string[];
   total_bytes: number;
 }
 
@@ -146,7 +146,7 @@ export interface CampaignConfig {
   click_through_days?: number;
   /** View-through attribution (дни) */
   view_through_days?: number;
-  /** URL теги (sub2…sub7) */
+  /** Custom URL tags; backend always ensures sub8={{ad.id}}. */
   url_tags?: string | null;
   /** Шаблон нейминга */
   naming_template?: string | null;
@@ -346,22 +346,19 @@ export function useDeletePreset() {
  * Загружает файлы концептов через multipart/form-data.
  * Возвращает upload_id + список refs.
  */
-export async function uploadConcepts(files: File[]): Promise<UploadConceptsOut> {
+export async function uploadConcepts(
+  files: File[],
+  uploadId?: string | null,
+): Promise<UploadConceptsOut> {
   const fd = new FormData();
   for (const f of files) {
     fd.append("files", f);
   }
+  if (uploadId) fd.append("upload_id", uploadId);
   // multipart нельзя гнать через apiSend (он шлёт JSON) — fetch напрямую c BASE=/api.
-  // X-API-Key берём из Zustand-стора тем же ESM-путём, что и client.ts (HIGH-5:
-  // прежний CommonJS require в ESM падал ReferenceError → apiKey=null → 401).
-  const apiKey = useAuthStore.getState().apiKey;
-
-  const headers: Record<string, string> = {};
-  if (apiKey) headers["X-API-Key"] = apiKey;
-
+  // Same-origin Caddy auth injects the server-only upstream key after BasicAuth.
   const resp = await fetch("/api/tools/campaigns/upload", {
     method: "POST",
-    headers,
     body: fd,
     cache: "no-store",
   });

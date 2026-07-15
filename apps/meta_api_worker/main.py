@@ -36,6 +36,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as redis_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from core.db import WORKER_ENGINE_KWARGS
@@ -58,6 +59,10 @@ from core.meta_api.errors import (
 from core.meta_api.errors import (
     PermissionError as MetaPermissionError,
 )
+from core.meta_api.freshness import (
+    defer_auto_stop_for_fresh_snapshot,
+    load_meta_snapshot_freshness,
+)
 from core.meta_api.fsm_sync import is_deactivating_bulk, sync_fsm_after_mutation
 from core.meta_api.mutations import dispatch_mutation
 from core.meta_api.mutations.create_campaign import CreateCampaignPartialError
@@ -71,8 +76,8 @@ from core.meta_api.queue import (
 )
 from core.meta_api.schemas import IRREVERSIBLE_MUTATION_KINDS, MetaMutationPayload
 from core.observer.queries import load_scanning_enabled
-from core.pubsub import CHANNEL_TASK_CHANGED
-from core.tasks.queue import Task, touch_task_running
+from core.pubsub import CHANNEL_OBSERVER_TRIGGER, CHANNEL_TASK_CHANGED
+from core.tasks.queue import Task, mark_external_call_started, touch_task_running
 from core.telegram.worker_notify import notify_owners
 
 logger = logging.getLogger("meta_api_worker")
@@ -142,6 +147,62 @@ async def _publish_task_changed(
         await redis_client.publish(CHANNEL_TASK_CHANGED, payload)
     except Exception:
         logger.warning("meta_api_worker: не удалось publish task:changed task_id=%s", task_id)
+
+
+async def _apply_enable_grace_after_success(
+    engine: AsyncEngine,
+    redis_client: redis_asyncio.Redis | None,
+    *,
+    payload: MetaMutationPayload,
+) -> None:
+    """Поставить curator grace только после успешного внешнего activate_ad."""
+    if payload.mutation_kind != "activate_ad":
+        return
+    intent = payload.params.get("enable_grace")
+    if not isinstance(intent, dict) or not intent.get("spend_allowance"):
+        return
+
+    try:
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT am.spend
+                        FROM ad_metrics am
+                        JOIN fb_ads fa ON fa.id = am.ad_id
+                        WHERE fa.fb_ad_id = :fbid
+                        ORDER BY am.cycle_ts DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"fbid": str(payload.target_id)},
+                )
+            ).first()
+        baseline_spend = row[0] if row and row[0] is not None else "0"
+
+        from core.config import get_settings
+        from core.observer.enable_grace import set_enable_grace
+
+        ok = await set_enable_grace(
+            redis_client,
+            fb_ad_id=str(payload.target_id),
+            grace_seconds=get_settings().enable_reco_hold_grace_seconds,
+            baseline_spend=baseline_spend,
+            spend_allowance=intent.get("spend_allowance"),
+        )
+        if not ok:
+            logger.warning(
+                "enable_grace для %s не поставлен после activation — "
+                "действуют обычные stop-правила",
+                payload.target_id,
+            )
+    except Exception:  # noqa: BLE001 — succeeded mutation не откатываем из-за grace
+        logger.warning(
+            "enable_grace для %s не удалось применить после activation — fail-safe stop",
+            payload.target_id,
+            exc_info=True,
+        )
 
 
 def _get_database_url() -> str:
@@ -519,6 +580,50 @@ async def process_one_task(
             )
         return
 
+    # Auto-stop is a money decision. A task may sit or retry for a long time, so
+    # re-check freshness immediately before the external boundary. Manual and
+    # bulk operations are intentionally outside this automatic-decision gate.
+    if (
+        hasattr(task, "external_started_at")
+        and payload.mutation_kind == "pause_ad"
+        and getattr(task, "requested_by", "") == _AUTO_STOP_REQUESTED_BY
+    ):
+        freshness = await load_meta_snapshot_freshness(
+            engine,
+            fb_ad_id=str(payload.target_id),
+        )
+        if not freshness.fresh:
+            deferred = await defer_auto_stop_for_fresh_snapshot(engine, task_id=task.id)
+            if deferred:
+                logger.info(
+                    "meta_api: auto-stop task id=%s deferred for fresh Meta snapshot "
+                    "latest=%s interval=%ss",
+                    task.id,
+                    freshness.latest_cycle_at,
+                    freshness.interval_seconds,
+                )
+                await _publish_task_changed(
+                    redis_client,
+                    task_id=task.id,
+                    task_type=task.task_type,
+                    status="retrying",
+                )
+                if redis_client is not None:
+                    try:
+                        await redis_client.publish(
+                            CHANNEL_OBSERVER_TRIGGER,
+                            json.dumps(
+                                {
+                                    "reason": "auto_stop_requires_fresh_meta",
+                                    "task_id": task.id,
+                                    "fb_ad_id": str(payload.target_id),
+                                }
+                            ),
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.debug("observer freshness trigger publish failed", exc_info=True)
+            return
+
     logger.info(
         "meta_api: исполняю task id=%s kind=%s target=%s",
         task.id,
@@ -527,6 +632,26 @@ async def process_one_task(
     )
 
     try:
+        # Последняя атомарная граница перед сетевым вызовом. Tracker-worker может
+        # отменить только bot_auto_stop до этого момента и берёт тот же lock по ad.
+        # Если отмена уже победила гонку, внешний вызов не выполняем.
+        # Legacy/test Task-снимки без нового поля поддерживаем до полного rollout
+        # миграции. Production claim_next_task всегда возвращает поле и проходит гейт.
+        if hasattr(task, "external_started_at"):
+            external_started = await mark_external_call_started(
+                engine,
+                task_id=task.id,
+                target_lock_key=str(payload.target_id),
+            )
+            if not external_started:
+                logger.info(
+                    "meta_api: task id=%s отменена/закрыта до внешнего вызова kind=%s target=%s",
+                    task.id,
+                    payload.mutation_kind,
+                    payload.target_id,
+                )
+                return
+
         # MID-10: heartbeat-touch долгой mutation. Пока идёт исполнение, фоновый таск
         # освежает updated_at задачи — иначе reconciler украл бы running >30 мин → дубль.
         result = await _execute_with_touch(engine, task.id, payload, client=client)
@@ -560,6 +685,15 @@ async def process_one_task(
                 kind_label=payload.mutation_kind,
             )
             return
+        # Curator hold должен появиться ДО terminal status, pubsub и FSM=normal.
+        # Если процесс упадёт сразу после внешнего activate, task останется running:
+        # reconciler повторит идемпотентный activate и восстановит marker. Обратный
+        # порядок оставлял терминальную задачу и активный ad без grace навсегда.
+        await _apply_enable_grace_after_success(
+            engine,
+            redis_client,
+            payload=payload,
+        )
         applied = await mark_task_succeeded(engine, task_id=task.id, result=result)
         if not applied:
             # Race: другой воркер уже закрыл задачу после reconciler-таймаута.

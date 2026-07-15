@@ -24,13 +24,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
 from sqlalchemy import text
 
 from apps.api.deps import DepEngine
@@ -120,6 +121,45 @@ def _campaign_upload_root() -> Path:
     if raw:
         return Path(raw)
     return Path.home() / "Documents" / "FB_Agent_Campaign_Uploads"
+
+
+def _config_upload_dir(config: CampaignConfig) -> Path:
+    """Безопасно резолвит config.creo_root внутри campaign upload store."""
+    upload_id = (config.creo_root or "").strip()
+    if not upload_id:
+        raise ValueError("не указан набор загруженных креативов (creo_root)")
+    if Path(upload_id).name != upload_id or upload_id in {".", ".."}:
+        raise ValueError("некорректный идентификатор набора креативов")
+    return _campaign_upload_root() / upload_id
+
+
+def _validate_uploaded_concepts(config: CampaignConfig) -> None:
+    """Проверяет назначенные refs до создания run и любых объектов в Meta.
+
+    UI хранит один ``creo_root`` на весь набор. Если старый черновик смешал refs
+    из разных upload-папок, эта проверка отдаёт синхронный 422 на preview/launch,
+    вместо обречённой async-задачи в campaign_creator_worker.
+    """
+    assigned = [(block.key, ref) for block in config.campaigns for ref in block.concept_refs]
+    # Вложенный legacy-контракт без concept_refs всё ещё поддерживается. Плоский UI
+    # отдельно запрещает пустые кампании в launch через concept_counts_map().
+    if not assigned:
+        return
+
+    upload_dir = _config_upload_dir(config)
+    if not upload_dir.is_dir():
+        raise ValueError(
+            "набор загруженных креативов не найден; вернитесь на шаг 5 и загрузите файлы заново"
+        )
+
+    for campaign_key, ref in assigned:
+        if not ref or Path(ref).name != ref:
+            raise ValueError(f"кампания {campaign_key!r}: некорректная ссылка на концепт {ref!r}")
+        if not (upload_dir / ref).is_file():
+            raise ValueError(
+                f"кампания {campaign_key!r}: концепт {ref!r} отсутствует в текущем наборе "
+                "креативов; вернитесь на шаг 5 и загрузите файлы заново"
+            )
 
 
 def _safe_filename(name: str, index: int) -> str:
@@ -287,7 +327,10 @@ async def delete_preset(preset_id: str, engine: DepEngine) -> None:
 
 
 @router.post("/tools/campaigns/upload", response_model=UploadConceptsOut)
-async def upload_concepts(files: list[UploadFile] = File(...)) -> UploadConceptsOut:
+async def upload_concepts(
+    files: list[UploadFile] = File(...),
+    upload_id: str | None = Form(default=None),
+) -> UploadConceptsOut:
     """Загрузка концептов креативов в per-run временную папку на сервере.
 
     Возвращает upload_id (входит в config.creo_root для воркера) + список refs
@@ -301,28 +344,83 @@ async def upload_concepts(files: list[UploadFile] = File(...)) -> UploadConcepts
             detail=f"Слишком много файлов: {len(files)} > {_MAX_UPLOAD_FILES}",
         )
 
-    upload_id = uuid.uuid4().hex
-    upload_dir = _campaign_upload_root() / upload_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    root = _campaign_upload_root()
+    root.mkdir(parents=True, exist_ok=True)
+    requested_id = (upload_id or "").strip()
+    if requested_id:
+        if re.fullmatch(r"[0-9a-f]{32}", requested_id) is None:
+            raise HTTPException(status_code=422, detail="Некорректный upload_id")
+        resolved_id = requested_id
+        upload_dir = root / resolved_id
+        if not upload_dir.is_dir():
+            raise HTTPException(
+                status_code=422,
+                detail="Набор креативов не найден; обновите страницу и загрузите файлы заново",
+            )
+    else:
+        resolved_id = uuid.uuid4().hex
+        upload_dir = root / resolved_id
 
-    # Любая ошибка валидации/размера → сносим всю temp-папку (нет утечки частичных файлов).
+    existing_files = [p for p in upload_dir.iterdir() if p.is_file()] if upload_dir.exists() else []
+    if len(existing_files) + len(files) > _MAX_UPLOAD_FILES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"В наборе будет слишком много файлов: "
+                f"{len(existing_files) + len(files)} > {_MAX_UPLOAD_FILES}"
+            ),
+        )
+    existing_bytes = sum(p.stat().st_size for p in existing_files)
+
+    # Новые файлы сначала проходят полную проверку во staging-папке. Ошибка дозагрузки
+    # не удаляет и не повреждает уже загруженный набор.
+    staging_dir = root / f".{resolved_id}.{uuid.uuid4().hex}.uploading"
+    staging_dir.mkdir(parents=True)
     try:
-        concepts = await _stream_uploads_to_dir(files, upload_dir)
-    except HTTPException:
-        shutil.rmtree(upload_dir, ignore_errors=True)
-        raise
+        concepts = await _stream_uploads_to_dir(
+            files,
+            staging_dir,
+            reserved_names={p.name for p in existing_files},
+            initial_total_bytes=existing_bytes,
+        )
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        for concept in concepts:
+            (staging_dir / concept.ref).replace(upload_dir / concept.ref)
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
-    total_bytes = sum(c.size_bytes for c in concepts)
+    new_metadata = {concept.ref: concept for concept in concepts}
+    all_concepts: list[UploadedConceptOut] = []
+    for path in sorted((p for p in upload_dir.iterdir() if p.is_file()), key=lambda p: p.name):
+        uploaded = new_metadata.get(path.name)
+        all_concepts.append(
+            UploadedConceptOut(
+                ref=path.name,
+                original_name=uploaded.original_name if uploaded else path.name,
+                size_bytes=path.stat().st_size,
+                content_type=(
+                    uploaded.content_type if uploaded else mimetypes.guess_type(path.name)[0]
+                ),
+            )
+        )
+    total_bytes = sum(concept.size_bytes for concept in all_concepts)
     return UploadConceptsOut(
-        upload_id=upload_id,
+        upload_id=resolved_id,
         upload_dir=str(upload_dir),
-        concepts=concepts,
+        # Возвращаем серверную истину по ВСЕМУ набору. Фронт по ней удаляет stale refs
+        # из persisted draft и сохраняет назначения уже существующих файлов.
+        concepts=all_concepts,
+        added_refs=[concept.ref for concept in concepts],
         total_bytes=total_bytes,
     )
 
 
 async def _stream_uploads_to_dir(
-    files: list[UploadFile], upload_dir: Path
+    files: list[UploadFile],
+    upload_dir: Path,
+    *,
+    reserved_names: set[str] | None = None,
+    initial_total_bytes: int = 0,
 ) -> list[UploadedConceptOut]:
     """Стримит каждый файл по чанкам на диск с cap-check и magic-валидацией типа.
 
@@ -332,13 +430,16 @@ async def _stream_uploads_to_dir(
       создания объектов в Meta, иначе орфаны после падения уникализатора).
     """
     concepts: list[UploadedConceptOut] = []
-    total_bytes = 0
-    seen: set[str] = set()
+    total_bytes = initial_total_bytes
+    seen: set[str] = set(reserved_names or ())
     for index, upload in enumerate(files):
         fname = _safe_filename(upload.filename or "", index)
-        # Гарантируем уникальность имени внутри папки (коллизии после санитизации).
-        if fname in seen:
-            fname = f"{Path(fname).stem}_{index}{Path(fname).suffix}"
+        # Гарантируем уникальность имени и при дозагрузке, и после санитизации.
+        stem, suffix = Path(fname).stem, Path(fname).suffix
+        serial = 2
+        while fname in seen:
+            fname = f"{stem}_{serial}{suffix}"
+            serial += 1
         seen.add(fname)
 
         dest = upload_dir / fname
@@ -397,6 +498,7 @@ async def validate_config(body: ValidateIn, engine: DepEngine) -> ValidatePlanOu
     """
     try:
         config = body.domain_config()
+        _validate_uploaded_concepts(config)
         # Превью показывает реалистичные коды: продолжаем нумерацию оффера.
         # peek_next_seq — read-only, счётчик не двигает.
         async with engine.connect() as conn:
@@ -452,6 +554,7 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
     counts = body.concept_counts_map()
     try:
         build_campaign_spec(config, concept_counts=counts)
+        _validate_uploaded_concepts(config)
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=f"Невалидный конфиг: {exc}") from exc
 

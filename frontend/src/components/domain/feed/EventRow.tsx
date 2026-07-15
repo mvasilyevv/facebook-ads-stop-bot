@@ -87,7 +87,7 @@ export function EventRow({ event, onClick }: EventRowProps) {
       <ChevronRight
         size={14}
         aria-hidden="true"
-        className="text-bg-7 group-hover:text-accent transition-colors duration-[120ms]"
+        className="text-bg-8 group-hover:text-accent transition-colors duration-[120ms]"
       />
     </button>
   );

@@ -37,6 +37,7 @@ from core.pubsub import (
     CHANNEL_ALERT_CREATED,
     CHANNEL_SCAN_FINISHED,
     CHANNEL_TASK_CHANGED,
+    CHANNEL_TRACKER_CHANGED,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,9 +53,20 @@ _CHANNEL_TO_TYPE: dict[str, str] = {
     CHANNEL_ALERT_CREATED: "alert_created",
     CHANNEL_TASK_CHANGED: "task_changed",
     "fb_agent:health:updated": "health_updated",
+    CHANNEL_TRACKER_CHANGED: "tracker_changed",
 }
 
 router = APIRouter(tags=["websocket"])
+
+
+def _websocket_api_key(websocket: WebSocket) -> str:
+    """Read the server-injected handshake header, with direct-client fallback."""
+    return (
+        websocket.headers.get("x-api-key")
+        or websocket.query_params.get("api_key")
+        or websocket.query_params.get("token")
+        or ""
+    )
 
 
 def _now_iso() -> str:
@@ -85,17 +97,16 @@ async def ws_dashboard(websocket: WebSocket) -> None:  # noqa: C901
     """
     # M2: auth ДО accept(). BaseHTTPMiddleware (ApiKeyAuthMiddleware) не покрывает
     # WS scope, поэтому канал утекал real-time money-данные (fb_ad_id, STOP-события,
-    # rule_codes) без ключа. Токен в query-param (?api_key=), т.к. браузерный WebSocket
-    # не умеет слать кастомные заголовки. Тот же X-API-Key, timing-safe сравнение.
+    # rule_codes) без ключа. В production браузер проходит same-origin BasicAuth,
+    # а Caddy добавляет X-API-Key только в upstream upgrade-handshake. Query fallback
+    # остаётся для прямых/local клиентов, но desktop bundle больше его не использует.
     from core.config import get_settings as _get_settings
     from core.config import reveal_secret
 
     settings = _get_settings()
     if settings.require_api_key:
         expected = reveal_secret(settings.api_key) if settings.api_key else ""
-        provided = (
-            websocket.query_params.get("api_key") or websocket.query_params.get("token") or ""
-        )
+        provided = _websocket_api_key(websocket)
         if not expected or not provided or not secrets.compare_digest(provided, expected):
             logger.warning("WS /ws/dashboard: отклонён до accept (нет/неверный api_key)")
             await websocket.close(code=1008)  # policy violation

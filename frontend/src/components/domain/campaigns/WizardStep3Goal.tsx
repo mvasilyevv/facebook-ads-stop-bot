@@ -50,7 +50,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
     <div className="space-y-7">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-1">
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 3 · ЦЕЛЬ И БЮДЖЕТ
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
@@ -74,7 +74,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
             </span>
           ))}
         </div>
-        <p className="mt-2 text-[11px] text-bg-7">
+        <p className="mt-2 text-[11px] text-bg-8">
           Эти параметры одинаковы для всех кампаний кабинета и не редактируются.
         </p>
       </section>
@@ -117,7 +117,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
         <div className="space-y-4">
           <div>
             <div className="text-[11px] font-display tracking-wider uppercase text-bg-9 mb-1.5">
-              Страны <span className="text-bg-7">(AQ добавляется автоматически)</span>
+              Страны <span className="text-bg-8">(AQ добавляется автоматически)</span>
             </div>
             <CountryMultiSelect
               id="countries"
@@ -212,7 +212,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
             <div className="text-[11px] font-display tracking-wider uppercase text-bg-9">
               URL Tags
             </div>
-            <div className="text-[12px] text-bg-7 italic">Трекинг по SOP — бэк вычисляет автоматически</div>
+            <div className="text-[12px] text-bg-8 italic">Трекинг по SOP — бэк вычисляет автоматически</div>
           </div>
         </div>
         {/* Ad text */}
@@ -302,7 +302,7 @@ function DollarInput({
 
 function SectionLabel({ children }: { children: string }) {
   return (
-    <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-3">
+    <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
       {children}
     </div>
   );

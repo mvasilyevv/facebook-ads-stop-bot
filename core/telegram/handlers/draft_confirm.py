@@ -4,7 +4,7 @@
 Общий плумбинг подтверждения черновиков `task_queue` (meta_api_mutation).
 Используется ручными операторскими командами `/pause` `/resume` (см. bulk.py):
 оператор получает превью с кнопками ✅ / ❌, на dr_ok DRAFT → PENDING (исполняет
-meta_api_worker), на dr_cancel → CANCELLED. Owner-ACL на dr_ok — в router.py.
+meta_api_worker), на dr_cancel → CANCELLED. Owner-ACL на обе кнопки — в router.py.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from core.meta_api.queue import approve_draft_task, cancel_task, is_admin_recipient
+from core.meta_api.queue import approve_draft_task, cancel_draft_task, is_admin_recipient
 from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 
@@ -102,13 +102,41 @@ async def handle_draft_callback(
                 ack = "Подтверждено, попадает в очередь"
                 footer = "✅ Подтверждено"
         else:  # dr_cancel
-            ok = await cancel_task(
+            ok = await cancel_draft_task(
                 engine,
                 task_id=task_id,
                 reason=f"cancelled via TG by {approver}",
+                canceller_chat_id=chat_id,
             )
-            ack = "Отменено" if ok else "Уже в финальном статусе"
-            footer = "❌ Отменено" if ok else "ℹ️ Уже обработано"
+            if not ok:
+                row = await _fetch_task_acl_state(engine, task_id=task_id)
+                if row is None:
+                    ack = "Черновик не найден"
+                    footer = "ℹ️ Уже удалён"
+                elif row["status"] != "draft":
+                    ack = "Уже не draft"
+                    footer = "ℹ️ Уже обработано"
+                elif await is_admin_recipient(engine, chat_id=chat_id):
+                    ok = await cancel_draft_task(
+                        engine,
+                        task_id=task_id,
+                        reason=f"cancelled via TG by {approver}",
+                        canceller_chat_id=chat_id,
+                        admin_override=True,
+                    )
+                    ack = "Отменено админом" if ok else "Уже не draft"
+                    footer = "❌ Отменено (admin)" if ok else "ℹ️ Уже обработано"
+                else:
+                    logger.warning(
+                        "draft cancel отказан: task_id=%s, chat_id=%s — чужой draft",
+                        task_id,
+                        chat_id,
+                    )
+                    ack = "Этот черновик принадлежит другому пользователю"
+                    footer = "🔒 Чужой черновик"
+            else:
+                ack = "Отменено"
+                footer = "❌ Отменено"
     except Exception:
         logger.exception("draft callback %s task_id=%s упал", action, task_id)
         try:

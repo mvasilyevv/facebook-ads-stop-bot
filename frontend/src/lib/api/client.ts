@@ -2,7 +2,7 @@
  * Базовый HTTP-клиент над fetch.
  *
  * - Префикс /api для всех путей.
- * - X-API-Key из Zustand auth store (если задан).
+ * - Same-origin auth завершается в Caddy; master API key в браузер не попадает.
  * - JSON по умолчанию; FormData передаётся как есть.
  * - Унифицированный error message с разбором FastAPI detail (string / array / object).
  *
@@ -10,7 +10,6 @@
  * или через домен-специфичные модули (dashboard.ts, ads.ts и т.д.).
  */
 
-import { useAuthStore } from "@/stores/auth";
 import type { QueryParams } from "@/lib/types/api";
 
 const BASE = "/api";
@@ -43,11 +42,6 @@ async function rawFetch(path: string, options: RequestOptions = {}): Promise<Res
   const headers: Record<string, string> = { ...extraHeaders };
   if (!isFormData && body != null && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
-  }
-
-  const apiKey = useAuthStore.getState().apiKey;
-  if (apiKey) {
-    headers["X-API-Key"] = apiKey;
   }
 
   const resp = await fetch(`${BASE}${path}`, {

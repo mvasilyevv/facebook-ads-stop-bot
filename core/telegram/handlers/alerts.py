@@ -12,6 +12,12 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.enable_reco.confirmation import (
+    RecommendationAlreadyPromotedError,
+    RecommendationNotFoundError,
+    RecommendationUnsafeStateError,
+    promote_enable_recommendation,
+)
 from core.telegram.client import TelegramBotClient
 
 logger = logging.getLogger(__name__)
@@ -136,137 +142,32 @@ async def handle_dis_callback(
         pass
 
 
-async def _has_live_enable_reco(engine: AsyncEngine, *, fb_ad_id: str) -> bool:
-    """True если для fb_ad_id есть НЕ промоутнутая enable-рекомендация (свежая кнопка).
-
-    M-14 (аудит 2026-07-12): защита от устаревшей ereco-кнопки из истории чата.
-    Без неё старая кнопка безусловно включала объявление, которое сейчас может
-    корректно стоять убыточным. Зеркалит replay-guard кнопки dis (по open_token).
-    """
-    from sqlalchemy import text
-
-    async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT 1 FROM enable_recommendations er
-                    JOIN fb_ads fa ON fa.id = er.ad_id
-                    WHERE fa.fb_ad_id = :fb_ad_id
-                      AND er.promoted_to_task_id IS NULL
-                    LIMIT 1
-                    """
-                ),
-                {"fb_ad_id": fb_ad_id},
-            )
-        ).first()
-    return row is not None
-
-
-async def _promote_recommendation(engine: AsyncEngine, *, fb_ad_id: str, task_id: int) -> None:
-    """Проставить promoted_to_task_id — рекомендация «израсходована» кнопкой.
-
-    M-14 follow-up (ревью перед push): без этого _has_live_enable_reco продолжал
-    считать рекомендацию живой после создания задачи — повторные клики проходили
-    гейт. Симметрия с web POST /dashboard/enable-recommendations/{id}/enable.
-    """
-    from sqlalchemy import text
-
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                UPDATE enable_recommendations er
-                SET promoted_to_task_id = :tid
-                FROM fb_ads fa
-                WHERE fa.id = er.ad_id
-                  AND fa.fb_ad_id = :fb_ad_id
-                  AND er.promoted_to_task_id IS NULL
-                """
-            ),
-            {"tid": task_id, "fb_ad_id": fb_ad_id},
-        )
-
-
-async def _fetch_live_reco_snapshot(engine: AsyncEngine, *, fb_ad_id: str) -> dict | None:
-    """snapshot_metrics живой (не промоутнутой) рекомендации. None — рекомендации нет.
-
-    Нужен кейсу куратора: из snapshot читаются hold_until_cpl / grace_spend_cap.
-    """
-    from sqlalchemy import text
-
-    async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT er.snapshot_metrics
-                    FROM enable_recommendations er
-                    JOIN fb_ads fa ON fa.id = er.ad_id
-                    WHERE fa.fb_ad_id = :fb_ad_id
-                      AND er.promoted_to_task_id IS NULL
-                    ORDER BY er.created_at DESC
-                    LIMIT 1
-                    """
-                ),
-                {"fb_ad_id": fb_ad_id},
-            )
-        ).first()
-    if row is None:
-        return None
-    return dict(row[0] or {})
-
-
 async def handle_enable_reco_callback(
     *,
     engine: AsyncEngine,
     client: TelegramBotClient,
     cq_id: str,
-    fb_ad_id: str,
+    recommendation_id: str,
     username: str,
+    chat_id: int | None = None,
     redis_client: Any | None = None,
 ) -> None:
-    """ereco: создаёт задачу на включение через Marketing API (activate_ad).
-
-    Для hold-рекомендации (кейс куратора) дополнительно ставит Redis grace-маркер:
-    observer придержит стоп-правила до ~1×CPA спенда / истечения окна.
-    """
+    """ereco:<recommendation_uuid>: revalidate и создать activate_ad атомарно."""
+    _ = redis_client  # legacy dependency; grace ставит worker после успеха activation.
     requested_by = f"tg:{username}"
     try:
-        # M-14: отклоняем устаревшую кнопку (рекомендация уже промоутнута/снята).
-        snapshot = await _fetch_live_reco_snapshot(engine, fb_ad_id=fb_ad_id)
-        if snapshot is None:
-            await _answer(client, cq_id, "Рекомендация устарела")
-            return
-        task_id = await _create_toggle_mutation(
+        promotion = await promote_enable_recommendation(
             engine,
-            mutation_kind="activate_ad",
-            fb_ad_id=fb_ad_id,
-            idempotency_key=f"manual:activate_ad:{fb_ad_id}:tg:{username}",
+            recommendation_id=recommendation_id,
             requested_by=requested_by,
+            created_by_chat_id=chat_id,
         )
-        if task_id:
-            # Кнопка израсходована: повторный клик получит «Рекомендация устарела».
-            await _promote_recommendation(engine, fb_ad_id=fb_ad_id, task_id=task_id)
-            if snapshot.get("hold_until_cpl"):
-                # Grace ставим В МОМЕНТ клика (задача исполнится в течение минуты) —
-                # потеря Redis = fail-safe: правила снова действуют сразу.
-                from core.config import get_settings
-                from core.observer.enable_grace import set_enable_grace
-
-                ok = await set_enable_grace(
-                    redis_client,
-                    fb_ad_id=fb_ad_id,
-                    grace_seconds=get_settings().enable_reco_hold_grace_seconds,
-                    spend_cap=snapshot.get("grace_spend_cap"),
-                )
-                if not ok:
-                    logger.warning(
-                        "ereco hold: grace-маркер для %s НЕ поставлен (Redis?) — "
-                        "объявление включится под обычными стоп-правилами",
-                        fb_ad_id,
-                    )
-        ack = "Задача на включение принята" if task_id else "Уже в очереди"
+        ack = f"Задача на включение принята (#{promotion.task_id})"
+    except (RecommendationNotFoundError, RecommendationAlreadyPromotedError):
+        ack = "Рекомендация устарела"
+    except RecommendationUnsafeStateError as exc:
+        logger.warning("ereco отклонена: %s", exc)
+        ack = str(exc)
     except Exception:
         logger.exception("create enable task (ereco) failed")
         ack = "Ошибка"

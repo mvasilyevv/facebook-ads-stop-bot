@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -21,7 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.ai_assistant.client import AIUnavailableError, get_ai_client
 from core.ai_assistant.prompts import PromptNotFoundError, load_skill
+from core.ai_assistant.text import html_to_plain_text
 from core.config import get_settings
+from core.rules.labels import RULE_LABELS, rule_label
 
 logger = logging.getLogger(__name__)
 
@@ -130,14 +133,53 @@ def _facts_text(signals: PulseSignals) -> str:
     """Факты окна для промпта / детерминированного фолбэка."""
     lines = [
         f"Окно: {signals.window_start_utc:%H:%M}–{signals.window_end_utc:%H:%M} UTC",
-        f"Стопов: {signals.stop_count}, предупреждений: {signals.warning_count}, "
+        f"Остановлено объявлений: {signals.stop_count}, предупреждений: {signals.warning_count}, "
         f"упавших задач: {signals.failed_tasks_count}",
     ]
     for ad_name, offer, rules in signals.top_stops:
-        offer_part = f" [{offer}]" if offer else ""
-        rules_part = f" ({', '.join(rules)})" if rules else ""
-        lines.append(f"STOP: {ad_name}{offer_part}{rules_part}")
+        offer_part = f" · оффер {offer}" if offer else ""
+        reasons = ", ".join(rule_label(code).lower() for code in rules)
+        reason_part = f" · причина: {reasons}" if reasons else ""
+        lines.append(f"Остановлено объявление {ad_name}{offer_part}{reason_part}")
     return "\n".join(lines)
+
+
+def _normalize_pulse_text(value: str) -> str:
+    """Убрать из AI-ответа внутренние коды и машинную лексику.
+
+    Модель иногда буквально повторяет ``1 STOP`` и ``(cpr_stop)`` из старого
+    prompt/input. Пульс — операторский текст, поэтому технические коды здесь не
+    несут пользы и должны быть нормализованы детерминированно.
+    """
+    text_value = re.sub(r"^\s*Требуется действие:\s*", "", value, flags=re.IGNORECASE)
+    text_value = re.sub(
+        r"\bобнаружен(?:о)?\s+1\s+STOP\b",
+        "остановлено 1 объявление",
+        text_value,
+        flags=re.IGNORECASE,
+    )
+    text_value = re.sub(
+        r"\b([\w.-]+)\s+\[([^\]]+)\]",
+        r"\1 · оффер \2",
+        text_value,
+    )
+    for code, label in RULE_LABELS.items():
+        text_value = re.sub(
+            rf"\(\s*{re.escape(code)}\s*\)",
+            f"— причина: {label.lower()}",
+            text_value,
+            flags=re.IGNORECASE,
+        )
+        text_value = re.sub(
+            rf"\b{re.escape(code)}\b",
+            label.lower(),
+            text_value,
+            flags=re.IGNORECASE,
+        )
+    text_value = re.sub(r"\bSTOP\b", "остановка", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"\bWARNING\b", "предупреждение", text_value, flags=re.IGNORECASE)
+    text_value = text_value.strip()
+    return text_value[:1].upper() + text_value[1:] if text_value else ""
 
 
 def _fallback_text(signals: PulseSignals, *, html: bool = True) -> str:
@@ -172,6 +214,11 @@ async def build_pulse(
         system = load_skill("pulse_report")
     except PromptNotFoundError:
         system = "Напиши короткий отчёт о состоянии рекламного кабинета по фактам."
+    if not html:
+        system += (
+            "\n\nКанал этого ответа — веб-интерфейс. Верни только plain text: "
+            "без HTML-тегов и без Markdown-разметки."
+        )
 
     try:
         response = await asyncio.wait_for(
@@ -190,6 +237,12 @@ async def build_pulse(
         logger.warning("pulse: ошибка провайдера — детерминированный фолбэк", exc_info=True)
         return _fallback_text(signals, html=html)
 
+    if not html:
+        # Модель может проигнорировать формат канала и вернуть Telegram HTML.
+        # React намеренно рендерит ответ как текст, поэтому без очистки оператор
+        # видел буквальные <b>...</b> в почасовом пульсе.
+        ai_text = html_to_plain_text(ai_text)
+    ai_text = _normalize_pulse_text(ai_text)
     if not ai_text:
         return _fallback_text(signals, html=html)
     return f"📟 <b>Пульс кабинета</b>\n{ai_text}" if html else ai_text

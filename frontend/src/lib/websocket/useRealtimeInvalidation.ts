@@ -3,7 +3,8 @@
  * и инвалидирует TanStack Query при изменениях. Делает UI динамическим — после скана
  * данные (статусы объявлений, метрики, счётчики) обновляются сразу, без ручного рефреша.
  *
- * События (ws.py форвардит): scan_finished, alert_created, task_changed, health_updated.
+ * События (ws.py форвардит): scan_finished, alert_created, task_changed,
+ * tracker_changed, health_updated.
  * Возвращает тот же DashboardSocketState, что и useDashboardSocket (для индикатора связи).
  */
 
@@ -46,6 +47,14 @@ export function useRealtimeInvalidation(): DashboardSocketState {
           // заливов (CampaignRunsHistory) не обновлялась live при смене статуса.
           qc.invalidateQueries({ queryKey: ["campaigns", "runs"] });
           break;
+        case "tracker_changed":
+          // Postback уже зафиксирован и tracker-проекция закоммичена. Обновляем
+          // все операторские представления сразу, не ждём 5-минутной сверки.
+          qc.invalidateQueries({ queryKey: ["dashboard"] });
+          qc.invalidateQueries({ queryKey: ["stats"] });
+          qc.invalidateQueries({ queryKey: ["ads"] });
+          qc.invalidateQueries({ queryKey: ["history"] });
+          break;
         case "health_updated":
           qc.invalidateQueries({ queryKey: ["health"] });
           break;
@@ -71,6 +80,7 @@ export function useRealtimeInvalidation(): DashboardSocketState {
       qc.invalidateQueries({ queryKey: ["health"] });
       qc.invalidateQueries({ queryKey: ["campaigns", "runs"] });
       qc.invalidateQueries({ queryKey: ["stats"] });
+      qc.invalidateQueries({ queryKey: ["history"] });
     }, POLLING_INVALIDATE_MS);
     return () => window.clearInterval(id);
   }, [state.pollingFallback, qc]);

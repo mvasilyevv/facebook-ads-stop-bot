@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+set -eu
+
+# XFCE autostart runs after its keyboard settings, so this is the persistent
+# fallback for the current image as well as future webtop updates.
+sleep 3
+xmodmap -e 'clear Lock'
+xmodmap -e 'keycode 66 = NoSymbol'

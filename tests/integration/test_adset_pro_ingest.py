@@ -25,6 +25,10 @@ async def clean_adsetpro_events(pg_engine):
 
     async def _truncate():
         async with pg_engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM task_queue WHERE task_type='tracker_event_process'")
+            )
+            await conn.execute(text("DELETE FROM tracker_click_state"))
             await conn.execute(text("DELETE FROM adsetpro_postback_events"))
 
     await _truncate()
@@ -55,7 +59,7 @@ async def test_ingest_inserts_and_resolves_fb_ad_fk(
         revenue=Decimal("25.00"),
         currency="USD",
         received_at=datetime.now(UTC),
-        raw={"sub6": fb_ad_id, "goal": "ftd"},
+        raw={"sub8": fb_ad_id, "goal": "ftd"},
     )
 
     result = await ingest_postback(pg_engine, event)
@@ -82,7 +86,7 @@ async def test_ingest_inserts_and_resolves_fb_ad_fk(
     assert row.signature_valid is True
 
 
-# Дубль (тот же click_id + event_type в окне 24h) → is_duplicate=True, без второго INSERT'а.
+# Дубль сохраняется отдельной audit-строкой is_duplicate=true, но без processing task.
 @pytest.mark.asyncio
 async def test_ingest_marks_duplicate_within_window(
     pg_engine, fb_ad_fixture, clean_adsetpro_events
@@ -108,19 +112,20 @@ async def test_ingest_marks_duplicate_within_window(
     r2 = await ingest_postback(pg_engine, second)
     assert r2.inserted is False
     assert r2.is_duplicate is True
-    assert r2.event_id is None
+    assert r2.event_id is not None
 
-    # В БД только одна запись для (click_id='click-dup-1', event_type='ftd').
+    # Одна бизнес-строка + одна duplicate audit-row.
     async with pg_engine.connect() as conn:
         count = (
             await conn.execute(
                 text(
-                    "SELECT COUNT(*) FROM adsetpro_postback_events "
+                    "SELECT COUNT(*), COUNT(*) FILTER (WHERE is_duplicate) "
+                    "FROM adsetpro_postback_events "
                     "WHERE click_id = 'click-dup-1' AND event_type = 'ftd'"
                 )
             )
-        ).scalar()
-    assert count == 1
+        ).one()
+    assert count == (2, 1)
 
 
 # Без fb_ad_id в payload → fb_ad_fk остаётся NULL, запись всё равно вставлена.
@@ -171,11 +176,12 @@ async def test_ingest_distinct_event_types_not_deduped(
     redep = PostbackEvent(
         click_id="click-multi-1",
         fb_ad_id=fb_ad_id,
-        event_type="redep",
+        event_type="redeposit",
         revenue=Decimal("5"),
         currency="USD",
         received_at=now + timedelta(seconds=1),
-        raw={},
+        provider_event_id="multi-redeposit-1",
+        raw={"transaction_id": "multi-redeposit-1"},
     )
 
     r1 = await ingest_postback(pg_engine, ftd)
@@ -212,14 +218,80 @@ async def test_ingest_unknown_fb_ad_id_no_match(pg_engine, clean_adsetpro_events
     assert result.fb_ad_fk is None
 
 
-# ─── Аудит 2026-07-12 (H-4): повторные redep — легитимные депозиты, не дубли ──
+@pytest.mark.asyncio
+async def test_legacy_exact_attribution_normalizes_act_account_prefix(
+    pg_engine, fb_ad_fixture, clean_adsetpro_events
+) -> None:
+    account = str(uuid.uuid4().int % 10**12)
+    async with pg_engine.begin() as conn:
+        hierarchy = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT c.id, c.campaign_name, s.adset_name, a.ad_name
+                    FROM fb_ads a
+                    JOIN fb_adsets s ON s.id = a.adset_id
+                    JOIN fb_campaigns c ON c.id = s.campaign_id
+                    WHERE a.id = :ad_id
+                    """
+                ),
+                {"ad_id": fb_ad_fixture.ad_id},
+            )
+        ).one()
+        await conn.execute(
+            text("UPDATE fb_campaigns SET ad_account_id = :account WHERE id = :id"),
+            {"account": f"act_{account}", "id": hierarchy[0]},
+        )
+
+    event = PostbackEvent(
+        click_id=f"legacy-prefix-{uuid.uuid4().hex}",
+        fb_ad_id=None,
+        event_type="registration",
+        revenue=Decimal("0"),
+        currency="USD",
+        received_at=datetime.now(UTC),
+        raw={
+            "sub4": account,
+            "sub5": hierarchy[1],
+            "sub6": hierarchy[2],
+            "sub7": hierarchy[3],
+        },
+    )
+
+    result = await ingest_postback(pg_engine, event)
+    assert result.fb_ad_fk == fb_ad_fixture.ad_id
+    assert result.attribution_status == "matched_legacy"
+
+
+@pytest.mark.asyncio
+async def test_ext_sub6_is_never_interpreted_as_fb_ad_id(
+    pg_engine, fb_ad_fixture, clean_adsetpro_events
+) -> None:
+    fb_ad_id = await _get_fb_ad_id_string(pg_engine, fb_ad_fixture.ad_id)
+    result = await ingest_postback(
+        pg_engine,
+        PostbackEvent(
+            click_id=f"ext-sub6-{uuid.uuid4().hex}",
+            fb_ad_id=None,
+            event_type="registration",
+            revenue=Decimal("0"),
+            currency="USD",
+            received_at=datetime.now(UTC),
+            raw={"ext_sub6": fb_ad_id},
+        ),
+    )
+    assert result.fb_ad_fk is None
+    assert result.attribution_status == "unmatched"
+
+
+# ─── Redeposit is analytics-only and requires a stable provider id ───────────
 
 
 def _redep_event(click_id: str, received_at: datetime, raw: dict | None = None) -> PostbackEvent:
     return PostbackEvent(
         click_id=click_id,
         fb_ad_id=None,
-        event_type="redep",
+        event_type="redeposit",
         revenue=Decimal("25"),
         currency="USD",
         received_at=received_at,
@@ -227,38 +299,33 @@ def _redep_event(click_id: str, received_at: datetime, raw: dict | None = None) 
     )
 
 
-# Повторный РЕАЛЬНЫЙ redep (11 минут спустя, без txn-id) вставляется — раньше
-# 24ч-окно глотало его → недосчёт депозитов → ложный STOP прибыльного ада.
+# Без provider transaction id redeposit игнорируется до записи.
 @pytest.mark.asyncio
 async def test_ingest_redep_repeat_after_retry_window_inserted(
     pg_engine, clean_adsetpro_events
 ) -> None:
     now = datetime.now(UTC)
-    r1 = await ingest_postback(pg_engine, _redep_event("rdp-repeat", now - timedelta(minutes=11)))
-    r2 = await ingest_postback(pg_engine, _redep_event("rdp-repeat", now))
-    assert r1.inserted is True
-    assert r2.inserted is True, "повторный redep через 11 минут — реальный депозит, не дубль"
+    with pytest.raises(ValueError, match="requires provider_event_id"):
+        await ingest_postback(pg_engine, _redep_event("rdp-repeat", now))
 
     async with pg_engine.connect() as conn:
         cnt = (
             await conn.execute(
                 text(
                     "SELECT COUNT(*) FROM adsetpro_postback_events "
-                    "WHERE click_id = 'rdp-repeat' AND event_type = 'redep'"
+                    "WHERE click_id = 'rdp-repeat' AND event_type = 'redeposit'"
                 )
             )
         ).scalar_one()
-    assert cnt == 2
+    assert cnt == 0
 
 
-# Доставочный ретрай redep внутри 10 минут (без txn-id) — по-прежнему дубль.
+# Без provider id redeposit не использует эвристическое временное окно.
 @pytest.mark.asyncio
 async def test_ingest_redep_retry_within_window_deduped(pg_engine, clean_adsetpro_events) -> None:
     now = datetime.now(UTC)
-    r1 = await ingest_postback(pg_engine, _redep_event("rdp-retry", now - timedelta(minutes=3)))
-    r2 = await ingest_postback(pg_engine, _redep_event("rdp-retry", now))
-    assert r1.inserted is True
-    assert r2.inserted is False and r2.is_duplicate is True
+    with pytest.raises(ValueError, match="requires provider_event_id"):
+        await ingest_postback(pg_engine, _redep_event("rdp-retry", now - timedelta(minutes=3)))
 
 
 # Два redep с РАЗНЫМИ txn-id в пределах минут — оба реальные депозиты, оба вставляются.
@@ -293,9 +360,10 @@ async def test_ingest_redep_same_txn_id_deduped_across_hours(
     )
     assert r1.inserted is True
     assert r2.inserted is False and r2.is_duplicate is True
+    assert r2.event_id is not None
 
 
-# ftd-семантика не изменилась: повтор в пределах суток — дубль.
+# FTD is one-shot for the full retained source+click lifetime.
 @pytest.mark.asyncio
 async def test_ingest_ftd_still_deduped_within_24h(pg_engine, clean_adsetpro_events) -> None:
     now = datetime.now(UTC)
