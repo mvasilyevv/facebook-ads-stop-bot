@@ -63,7 +63,7 @@ async def test_failed_update_does_not_advance_offset(monkeypatch) -> None:
 # Батч: первый ok, второй падает → offset двигается только до первого, хвост переобработается.
 @pytest.mark.asyncio
 async def test_batch_stops_at_first_failure(monkeypatch) -> None:
-    async def handler(*, engine, client, update, redis):
+    async def handler(*, engine, client, update, redis, **_deps):
         if update["update_id"] == 11:
             raise RuntimeError("boom on 11")
 
@@ -117,7 +117,7 @@ async def test_poison_update_skipped_after_max_attempts(monkeypatch) -> None:
 async def test_success_clears_failure_counter(monkeypatch) -> None:
     calls = {"n": 0}
 
-    async def flaky(*, engine, client, update, redis):
+    async def flaky(*, engine, client, update, redis, **_deps):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("transient")

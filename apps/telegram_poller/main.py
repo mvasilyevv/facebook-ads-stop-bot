@@ -100,6 +100,7 @@ async def _process_updates_batch(
     redis_pubsub,
     fail_redis,
     offset: int,
+    meta_api_client=None,
 ) -> int:
     """Обработать батч updates. Возвращает новый offset (ack Telegram'у).
 
@@ -121,6 +122,10 @@ async def _process_updates_batch(
                 client=client,
                 update=update,
                 redis=redis_pubsub,
+                # data-Redis для AI-чата (история/busy-guard/rate-limit) — тот же
+                # клиент, что и heartbeat; meta_api_client — Marketing API tools.
+                redis_client=fail_redis,
+                meta_api_client=meta_api_client,
             )
         except Exception:
             attempts = await _bump_update_failure(fail_redis, upd_id)
@@ -169,6 +174,31 @@ async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
             pass
+
+
+async def _build_meta_api_client():
+    """Lazy MetaApiClient для AI-чата — паттерн apps/mcp_server/context.py.
+
+    При недоступности browser-agent (gRPC) возвращает None: meta-tools в чате
+    поднимут ToolError с понятным текстом, остальные инструменты работают.
+    """
+    grpc_host = os.environ.get("BROWSER_AGENT_GRPC_HOST", "localhost")
+    try:
+        grpc_port = int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051"))
+    except ValueError:
+        grpc_port = 50051
+    try:
+        from core.meta_api.client import MetaApiClient
+
+        mc = MetaApiClient(host=grpc_host, port=grpc_port)
+        await mc.start()
+        logger.info(
+            "MetaApiClient поднят (%s:%d) — meta-tools в AI-чате активны", grpc_host, grpc_port
+        )
+        return mc
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("MetaApiClient не запустился (%s) — AI-чат без meta-tools", exc)
+        return None
 
 
 def _get_database_url() -> str:
@@ -253,6 +283,10 @@ async def main_loop(db_url: str) -> None:
         hb_task = asyncio.create_task(heartbeat_loop(hb_redis, shutdown_event))
     except Exception:
         logger.warning("telegram_poller: не удалось запустить heartbeat")
+
+    # MetaApiClient для AI-чата (Marketing API READ tools). Best-effort: без
+    # browser-agent чат работает на БД/Redis/creative/draft-инструментах.
+    meta_api_client = await _build_meta_api_client()
 
     # offset инициализируется из БД один раз — при первом появлении токена.
     offset: int = 0
@@ -364,6 +398,7 @@ async def main_loop(db_url: str) -> None:
                 redis_pubsub=redis_pubsub,
                 fail_redis=hb_redis,
                 offset=offset,
+                meta_api_client=meta_api_client,
             )
 
             # Сохраняем offset чтобы при рестарте не обрабатывать заново
@@ -390,6 +425,11 @@ async def main_loop(db_url: str) -> None:
             await redis_pubsub.close()
         except Exception:
             pass
+        if meta_api_client is not None:
+            try:
+                await meta_api_client.close()
+            except Exception:
+                pass
         try:
             await http_client.aclose()
         except Exception:

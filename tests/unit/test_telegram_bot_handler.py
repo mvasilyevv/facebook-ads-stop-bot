@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-# Сценарий: не /-команда — handler должен молча выйти
+# Сценарий: не /-команда от НЕзарегистрированного — молчаливый игнор
+# (свободный текст в личке теперь идёт в AI-чат, но только для owner'а).
 @pytest.mark.asyncio
 async def test_non_command_ignored() -> None:
     from core.telegram.bot_handler import handle_update
@@ -25,7 +26,8 @@ async def test_non_command_ignored() -> None:
             "text": "просто привет",
         }
     }
-    await handle_update(engine=engine, client=client, update=update)
+    with patch("core.telegram.handlers.router.find_recipient", new=AsyncMock(return_value=None)):
+        await handle_update(engine=engine, client=client, update=update)
     client.send_message.assert_not_called()
 
 

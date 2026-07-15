@@ -279,6 +279,10 @@ class TelegramBotClient:
             payload["reply_markup"] = reply_markup
         await self._post_json("editMessageText", payload=payload)
 
+    async def send_chat_action(self, *, chat_id: str, action: str = "typing") -> None:
+        """sendChatAction — индикатор «печатает…» на ~5 секунд. Best-effort UX."""
+        await self._post_json("sendChatAction", payload={"chat_id": chat_id, "action": action})
+
     async def answer_callback_query(self, callback_query_id: str, text: str = "") -> None:
         """Отвечает на callback query (убирает часики)."""
         payload: dict = {"callback_query_id": callback_query_id}

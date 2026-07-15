@@ -4,8 +4,9 @@
 Принимает `update` от long-polling, парсит команду / callback_query, делегирует
 обработку модулям `onboarding.py`, `spy.py`, `bulk.py`, `alerts.py`, `creator.py`.
 `redis` опционален: пробрасывается в creator-команды для pubsub publish.
-AI-ассистент (/ask) убран; draft-кнопки dr_ok/dr_cancel обслуживают ручные
-операторские команды /pause /resume (см. draft_confirm.py).
+`redis_client` (data-Redis) + `meta_api_client` — зависимости AI-ассистента
+(/ai + свободный текст в личке owner'а, см. ai_chat.py). Draft-кнопки
+dr_ok/dr_cancel обслуживают и ручные /pause /resume, и черновики ассистента.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers._send import send_text
+from core.telegram.handlers.ai_chat import handle_ai_chat
 from core.telegram.handlers.alerts import (
     handle_dis_callback,
     handle_enable_reco_callback,
@@ -65,7 +67,10 @@ _LEGACY_COMMANDS: frozenset[str] = frozenset(
 # dr_cancel НЕ здесь — отмена черновика безопасна (снимает pending-действие).
 _OWNER_ONLY_CALLBACKS: frozenset[str] = frozenset({"dis", "ereco", "plan", "dr_ok"})
 # Команды (autostart с аргументами проверяется отдельно — write-путь).
-_OWNER_ONLY_COMMANDS: frozenset[str] = frozenset({"pause", "resume", "record_plan", "stop_record"})
+# /ai — owner-only: ассистент умеет создавать money-черновики (request_*).
+_OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
+    {"pause", "resume", "record_plan", "stop_record", "ai"}
+)
 
 
 async def _dispatch_callback_query(
@@ -182,6 +187,8 @@ async def handle_update(
     client: TelegramBotClient,
     update: dict[str, Any],
     redis: RedisPubSub | None = None,
+    redis_client: Any | None = None,
+    meta_api_client: Any | None = None,
 ) -> None:
     """Обработка одного update от Telegram."""
     # Inline-кнопки под алертами
@@ -207,7 +214,33 @@ async def handle_update(
     display_name = f"{first_name} {last_name}".strip() or None
 
     text_raw = msg.get("text") or ""
-    if not text_raw or not text_raw.startswith("/"):
+    if not text_raw:
+        return
+
+    # Свободный текст (не /-команда): в личке owner'а — вопрос AI-ассистенту,
+    # везде остальное — молчаливый игнор (как раньше). Ошибка проверки доступа
+    # тоже молчание: свободный текст не должен ронять поллер/спамить отказами.
+    if not text_raw.startswith("/"):
+        if chat_type != "private":
+            return
+        try:
+            recipient = await find_recipient(engine, chat_id=chat_id, telegram_user_id=user_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("free-text DM: find_recipient упал — игнорирую сообщение")
+            return
+        if not recipient or not recipient.is_owner():
+            return
+        await handle_ai_chat(
+            engine=engine,
+            client=client,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+            username=username,
+            args_text=text_raw,
+            redis_client=redis_client,
+            meta_api_client=meta_api_client,
+        )
         return
 
     # Парсим команду + аргументы
@@ -266,6 +299,20 @@ async def handle_update(
             text="⛔ Только владелец кабинета может выполнить это действие.",
             reply_to_message_id=message_id,
             message_thread_id=thread_id,
+        )
+        return
+
+    if cmd == "ai":
+        await handle_ai_chat(
+            engine=engine,
+            client=client,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+            username=username,
+            args_text=args_text,
+            redis_client=redis_client,
+            meta_api_client=meta_api_client,
         )
         return
 
