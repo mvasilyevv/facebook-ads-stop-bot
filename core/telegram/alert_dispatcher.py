@@ -115,8 +115,14 @@ async def _publish_alert_created(
     stage: str,
     matched_rule_codes: list,
     alert_event_id: Any,
+    ad_name: str | None = None,
+    offer_code: str | None = None,
 ) -> None:
-    """Best-effort publish в fb_agent:alert:created после успешной отправки алерта."""
+    """Best-effort publish в fb_agent:alert:created после успешной отправки алерта.
+
+    ad_name/offer_code — для человекочитаемых нотификаций в веб-виджете ассистента
+    (иначе фронт показывает голый fb_ad_id). Поля аддитивные, читатели defensively.
+    """
     if redis_client is None:
         return
     try:
@@ -129,6 +135,8 @@ async def _publish_alert_created(
                 "stage": stage,
                 "matched_rule_codes": list(matched_rule_codes or []),
                 "alert_event_id": str(alert_event_id),
+                "ad_name": ad_name,
+                "offer_code": offer_code,
                 "timestamp": datetime.now(UTC).isoformat(),
             },
             ensure_ascii=False,
@@ -310,6 +318,8 @@ async def _deliver_one_alert(
             stage=str(stage),
             matched_rule_codes=list(matched_codes or []),
             alert_event_id=event_id,
+            ad_name=str(ad_name or "") or None,
+            offer_code=str(offer_code) if offer_code else None,
         )
         return
 
@@ -339,6 +349,8 @@ async def _deliver_one_alert(
         stage=str(stage),
         matched_rule_codes=list(matched_codes or []),
         alert_event_id=event_id,
+        ad_name=str(ad_name or "") or None,
+        offer_code=str(offer_code) if offer_code else None,
     )
 
     counters["sent"] += 1

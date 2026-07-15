@@ -15,6 +15,7 @@ import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { CommandPalette } from "./CommandPalette";
 import { ToastViewport } from "@/components/ui/Toast";
+import { AssistantWidget } from "@/components/domain/assistant/AssistantWidget";
 import { useUiStore } from "@/stores/ui";
 import { cn } from "@/lib/utils/cn";
 
@@ -44,6 +45,8 @@ export function Shell({ children }: ShellProps) {
       <CommandPalette />
       {/* Toast-фидбек: единственный viewport на всё приложение (toast.success/error) */}
       <ToastViewport />
+      {/* Плавающий AI-ассистент — всегда смонтирован (unread-бейдж живёт даже закрытым) */}
+      <AssistantWidget />
     </div>
   );
 }
