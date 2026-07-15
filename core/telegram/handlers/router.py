@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers._send import send_text
-from core.telegram.handlers.ai_chat import handle_ai_chat
+from core.telegram.handlers.ai_chat import spawn_ai_chat
 from core.telegram.handlers.alerts import (
     handle_dis_callback,
     handle_enable_reco_callback,
@@ -234,7 +234,9 @@ async def handle_update(
             return
         if not recipient or not recipient.is_owner():
             return
-        await handle_ai_chat(
+        # Фоновым таском (H-1): AI-цикл длится до минут, поллер не должен ставить
+        # money-кнопки следующих updates в очередь за ответом ассистента.
+        spawn_ai_chat(
             engine=engine,
             client=client,
             chat_id=chat_id,
@@ -307,7 +309,8 @@ async def handle_update(
         return
 
     if cmd == "ai":
-        await handle_ai_chat(
+        # Фоновым таском (H-1) — см. комментарий у free-text ветки выше.
+        spawn_ai_chat(
             engine=engine,
             client=client,
             chat_id=chat_id,

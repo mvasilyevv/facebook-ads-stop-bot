@@ -13,6 +13,7 @@ DRAFT_REQUIRED (request_*) создают черновик в task_queue — п�
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -298,4 +299,22 @@ async def handle_ai_chat(
                 pass
 
 
-__all__ = ["handle_ai_chat"]
+# Живые фоновые таски чата: держим ссылки от GC, чистим по done.
+_chat_tasks: set[asyncio.Task] = set()
+
+
+def spawn_ai_chat(**kwargs: Any) -> None:
+    """Запустить handle_ai_chat фоновым таском (ревью H-1).
+
+    Поллер обрабатывает updates строго последовательно: inline-await AI-чата
+    (tool-цикл до минут) ставил бы ручные money-кнопки (dis:/ereco:/dr_ok) в
+    очередь ЗА ответом ассистента. Фоновый таск возвращает управление сразу;
+    параллельные вопросы одного чата отсекает busy-guard внутри handle_ai_chat,
+    ошибки хендлер глотает сам (ретрай вопроса поллером не нужен).
+    """
+    task = asyncio.create_task(handle_ai_chat(**kwargs))
+    _chat_tasks.add(task)
+    task.add_done_callback(_chat_tasks.discard)
+
+
+__all__ = ["handle_ai_chat", "spawn_ai_chat"]

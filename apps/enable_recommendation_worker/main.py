@@ -62,6 +62,8 @@ METRICS_LOOKBACK_SECONDS = int(os.environ.get("ENABLE_RECO_METRICS_LOOKBACK_SEC"
 # Кейс куратора: «показов мало + CTR хороший» → рекомендация hold_until_cpl.
 CURATOR_IMPR_CEILING = int(os.environ.get("ENABLE_RECO_CURATOR_IMPR_CEILING", "500"))
 CURATOR_CTR_FLOOR = os.environ.get("ENABLE_RECO_CURATOR_CTR_FLOOR", "3.0")
+# Денежный фолбэк-кап grace для офферов без cpa_threshold (ревью M-1).
+CURATOR_FALLBACK_SPEND_CAP = os.environ.get("ENABLE_RECO_CURATOR_FALLBACK_CAP", "10.00")
 
 DEDUP_KEY_PREFIX = "enable_reco:last:"
 
@@ -372,6 +374,7 @@ async def run_once(
     thresholds = thresholds or AnalyzerThresholds(
         curator_impr_ceiling=CURATOR_IMPR_CEILING,
         curator_ctr_floor=Decimal(CURATOR_CTR_FLOOR),
+        curator_fallback_spend_cap=Decimal(CURATOR_FALLBACK_SPEND_CAP),
     )
 
     # Асимметричный стоп: на паузе сканирования рекомендации включения бессмысленны

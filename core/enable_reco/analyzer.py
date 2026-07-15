@@ -39,6 +39,9 @@ class AnalyzerThresholds:
     # Кейс куратора: «показов мало + CTR хороший» → включить и держать до цены лида.
     curator_impr_ceiling: int = 500
     curator_ctr_floor: Decimal = Decimal("3.0")  # проценты, как ad_metrics.ctr
+    # Ревью M-1: grace ОБЯЗАН иметь денежную границу. Если у оффера нет
+    # cpa_threshold — кап берётся отсюда, а не остаётся безлимитным на всё окно.
+    curator_fallback_spend_cap: Decimal = Decimal("10.00")
 
 
 DEFAULT_THRESHOLDS = AnalyzerThresholds()
@@ -162,8 +165,9 @@ def should_recommend(
     ):
         snapshot = _snapshot_summary(metrics, total_spend, latest)
         snapshot["hold_until_cpl"] = True
-        if cpa is not None and cpa > 0:
-            snapshot["grace_spend_cap"] = str(cpa)
+        # Денежная граница grace всегда есть: 1×CPA оффера, а без CPA — фолбэк (M-1).
+        cap = cpa if (cpa is not None and cpa > 0) else thresholds.curator_fallback_spend_cap
+        snapshot["grace_spend_cap"] = str(cap)
         return RecommendationDecision(
             recommend=True,
             level="warning",

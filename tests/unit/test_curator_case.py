@@ -55,6 +55,20 @@ def test_curator_low_impressions_good_ctr_holds() -> None:
     assert "показов мало" in decision.reasons[0]
 
 
+# Ревью M-1: у оффера нет cpa_threshold → денежный кап grace берётся из фолбэка,
+# безлимитного «держать час на любые деньги» не существует
+def test_curator_fallback_spend_cap_without_cpa() -> None:
+    decision = should_recommend(
+        alert_state="disabled",
+        snoozed_until=None,
+        now=_NOW,
+        metrics=[_snap(impressions=108, ctr="3.7")],
+        offer=OfferThresholds(cpa_threshold=None),
+    )
+    assert decision.hold_until_cpl is True
+    assert decision.snapshot["grace_spend_cap"] == "10.00"
+
+
 # Мало показов, но CTR плохой — кейс куратора НЕ срабатывает
 def test_curator_low_ctr_not_recommended() -> None:
     decision = _decide([_snap(impressions=108, ctr="0.5")])

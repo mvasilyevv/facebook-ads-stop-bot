@@ -56,9 +56,10 @@ async def test_ai_command_denied_for_non_owner() -> None:
     assert "владелец" in sent.lower()
 
 
-# /ai от owner'а — вопрос уходит в ChatSession, ответ отправляется в чат
+# /ai от owner'а — вопрос уходит в ChatSession (фоновым таском, H-1), ответ в чат
 @pytest.mark.asyncio
 async def test_ai_command_owner_gets_answer() -> None:
+    import core.telegram.handlers.ai_chat as ai_mod
     from core.telegram.bot_handler import handle_update
 
     client = _tg_client()
@@ -74,6 +75,10 @@ async def test_ai_command_owner_gets_answer() -> None:
             update=_update("/ai что с кабинетом?"),
             redis_client=_redis_mock(),
         )
+        # H-1: чат работает фоновым таском — роутер вернулся сразу, дожидаемся таск
+        import asyncio
+
+        await asyncio.gather(*list(ai_mod._chat_tasks))
     # ChatSession создан с tools и скилом чат-оператора
     assert cs.call_args.kwargs["allow_tools"] is True
     assert "chat_operator" in cs.call_args.kwargs["skills"]
@@ -92,10 +97,10 @@ async def test_free_text_dm_owner_routes_to_ai() -> None:
 
     with (
         patch("core.telegram.handlers.router.find_recipient", new=AsyncMock(return_value=OWNER)),
-        patch("core.telegram.handlers.router.handle_ai_chat", new=AsyncMock()) as ai,
+        patch("core.telegram.handlers.router.spawn_ai_chat") as ai,
     ):
         await handle_update(engine=MagicMock(), client=_tg_client(), update=_update("как дела?"))
-    assert ai.await_args.kwargs["args_text"] == "как дела?"
+    assert ai.call_args.kwargs["args_text"] == "как дела?"
 
 
 # Свободный текст от не-owner'а (даже recipient'а) — молчаливый игнор, как раньше
