@@ -30,6 +30,13 @@ const mockUpdateObserver = vi.fn().mockResolvedValue(mockObserverData);
 const mockScanNow = vi.fn().mockResolvedValue({ ok: true });
 const mockToggleScanning = vi.fn().mockResolvedValue(mockObserverData);
 const mockToggleAutoEnable = vi.fn().mockResolvedValue(mockObserverData);
+const mockCreateOwnerInvite = vi.fn().mockResolvedValue({
+  code: "OWNER123",
+  expires_at: "2026-07-17T08:00:00Z",
+  role: "owner",
+  auth_deep_link: "https://t.me/test_bot?start=OWNER123",
+  activation_command: "/start OWNER123",
+});
 
 vi.mock("@/lib/api/settings", () => ({
   useObserverSettings: () => ({
@@ -72,14 +79,19 @@ vi.mock("@/lib/api/settings", () => ({
       is_authorized: true,
       poller_status: "ONLINE",
       bot_username: "test_bot",
-      auth_deep_link: "https://t.me/test_bot?start=auth",
-      activation_command: "/start auth",
+      auth_deep_link: "https://t.me/test_bot?start=OWNER123",
+      activation_command: "/start OWNER123",
+      auth_invite_expires_at: "2026-07-17T08:00:00Z",
       chat_id: "12345",
       web_app_url: null,
     },
     isLoading: false,
     error: null,
     refetch: vi.fn(),
+  }),
+  useCreateTelegramOwnerInvite: () => ({
+    mutateAsync: mockCreateOwnerInvite,
+    isPending: false,
   }),
   useUpdateTelegramToken: () => ({
     mutateAsync: vi.fn().mockResolvedValue({}),
@@ -150,9 +162,7 @@ function makeQueryClient() {
 }
 
 function wrap(ui: React.ReactElement) {
-  return (
-    <QueryClientProvider client={makeQueryClient()}>{ui}</QueryClientProvider>
-  );
+  return <QueryClientProvider client={makeQueryClient()}>{ui}</QueryClientProvider>;
 }
 
 const TABS: TabItem[] = [
@@ -186,10 +196,7 @@ describe("Settings — переключение табов", () => {
   // По умолчанию открыт таб Observer
   it("первый таб Observer активен по умолчанию", () => {
     render(wrap(<TestSettingsPage />));
-    expect(screen.getByRole("tab", { name: "Observer" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(screen.getByRole("tab", { name: "Observer" })).toHaveAttribute("aria-selected", "true");
   });
 
   // Клик на Telegram — переходим на таб Telegram
@@ -225,9 +232,10 @@ describe("ObserverTab", () => {
   // Switch в положении ON когда is_scanning_enabled=true
   it("switch ON когда is_scanning_enabled=true", () => {
     render(wrap(<ObserverTab />));
-    expect(
-      screen.getByRole("switch", { name: "Включить сканирование" }),
-    ).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "Включить сканирование" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 
   // Клик на switch вызывает точечный PATCH useToggleScanning (не partial PUT — фикс бага 422)
@@ -288,6 +296,15 @@ describe("TelegramTab", () => {
   it("отображает username бота", () => {
     render(wrap(<TelegramTab />));
     expect(screen.getByText("@test_bot")).toBeInTheDocument();
+  });
+
+  it("показывает owner-код в ссылке и команде", () => {
+    render(wrap(<TelegramTab />));
+    expect(screen.getByText("/start OWNER123")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Открыть в Telegram" })).toHaveAttribute(
+      "href",
+      "https://t.me/test_bot?start=OWNER123",
+    );
   });
 
   // Поле токена присутствует

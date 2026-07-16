@@ -124,8 +124,7 @@ export function useRestartObserver() {
   return useMutation({
     // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
     meta: { suppressGlobalError: true },
-    mutationFn: () =>
-      apiSend<{ status: string; channel: string }>("POST", "/observer/restart"),
+    mutationFn: () => apiSend<{ status: string; channel: string }>("POST", "/observer/restart"),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["observer"] });
     },
@@ -252,6 +251,36 @@ export function useTelegramSettings() {
   });
 }
 
+export interface TelegramOwnerInvite {
+  code: string;
+  expires_at: string;
+  role: "owner";
+  auth_deep_link: string | null;
+  activation_command: string;
+}
+
+export function useCreateTelegramOwnerInvite() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: () => apiSend<TelegramOwnerInvite>("POST", "/settings/telegram/owner-invite"),
+    onSuccess: (invite) => {
+      // Показываем готовую ссылку сразу, не ожидая повторного GET.
+      qc.setQueryData<TelegramSettings>(["settings", "telegram"], (current) =>
+        current
+          ? {
+              ...current,
+              auth_deep_link: invite.auth_deep_link,
+              activation_command: invite.activation_command,
+              auth_invite_expires_at: invite.expires_at,
+            }
+          : current,
+      );
+      qc.invalidateQueries({ queryKey: ["settings", "telegram"] });
+    },
+  });
+}
+
 export function useUpdateTelegramToken() {
   const qc = useQueryClient();
   return useMutation({
@@ -284,8 +313,7 @@ export function useDeleteTelegramToken() {
 export function useVisionSettings() {
   return useQuery<VisionSettingsResponse>({
     queryKey: ["settings", "vision"],
-    queryFn: ({ signal }) =>
-      apiGet<VisionSettingsResponse>("/settings/vision", undefined, signal),
+    queryFn: ({ signal }) => apiGet<VisionSettingsResponse>("/settings/vision", undefined, signal),
     staleTime: 20_000,
   });
 }

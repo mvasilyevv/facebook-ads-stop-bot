@@ -112,22 +112,31 @@ async def compute_bot_username(config: object | None, redis: object) -> str | No
         return None
 
 
-def compute_auth_deep_link(bot_username: str | None) -> str | None:
-    """Возвращает deep-link для авторизации через Telegram-бота.
+def compute_auth_deep_link(
+    bot_username: str | None,
+    invite_code: str | None,
+) -> str | None:
+    """Возвращает deep-link с реальным одноразовым invite-кодом.
 
-    Формат: https://t.me/{username}?start=auth
+    Формат: https://t.me/{username}?start={invite_code}
 
     Args:
         bot_username: username бота без @, или None.
+        invite_code: активный неиспользованный invite-код, или None.
     """
-    if not bot_username:
+    username = (bot_username or "").strip().removeprefix("@")
+    code = (invite_code or "").strip()
+    if not username or not code:
         return None
-    return f"https://t.me/{bot_username}?start=auth"
+    return f"https://t.me/{username}?start={code}"
 
 
-def compute_activation_command() -> str:
-    """Возвращает статическую команду активации бота.
+def compute_activation_command(invite_code: str | None) -> str | None:
+    """Возвращает команду активации с тем же invite-кодом, что и deep-link.
 
     Команда, которую нужно отправить боту для регистрации получателя.
     """
-    return "/start auth"
+    code = (invite_code or "").strip()
+    if not code:
+        return None
+    return f"/start {code}"

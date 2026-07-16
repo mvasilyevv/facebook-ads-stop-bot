@@ -202,29 +202,41 @@ async def test_compute_bot_username_httpx_error_returns_none() -> None:
 def test_compute_auth_deep_link_none_username() -> None:
     from core.telegram.settings_compute import compute_auth_deep_link
 
-    assert compute_auth_deep_link(None) is None
+    assert compute_auth_deep_link(None, "OWNER123") is None
 
 
 # Если username задан — правильный deep-link
 def test_compute_auth_deep_link_with_username() -> None:
     from core.telegram.settings_compute import compute_auth_deep_link
 
-    result = compute_auth_deep_link("mybot")
-    assert result == "https://t.me/mybot?start=auth"
+    result = compute_auth_deep_link("@mybot", "OWNER123")
+    assert result == "https://t.me/mybot?start=OWNER123"
 
 
 # Пустая строка как username — возвращает None
 def test_compute_auth_deep_link_empty_username() -> None:
     from core.telegram.settings_compute import compute_auth_deep_link
 
-    assert compute_auth_deep_link("") is None
+    assert compute_auth_deep_link("", "OWNER123") is None
+
+
+def test_compute_auth_deep_link_without_invite() -> None:
+    from core.telegram.settings_compute import compute_auth_deep_link
+
+    assert compute_auth_deep_link("mybot", None) is None
 
 
 # --- compute_activation_command ---
 
 
-# Всегда возвращает статическую строку /start auth
-def test_compute_activation_command_static() -> None:
+# Команда содержит тот же invite-код, что и deep-link
+def test_compute_activation_command_with_invite() -> None:
     from core.telegram.settings_compute import compute_activation_command
 
-    assert compute_activation_command() == "/start auth"
+    assert compute_activation_command("OWNER123") == "/start OWNER123"
+
+
+def test_compute_activation_command_without_invite() -> None:
+    from core.telegram.settings_compute import compute_activation_command
+
+    assert compute_activation_command(None) is None

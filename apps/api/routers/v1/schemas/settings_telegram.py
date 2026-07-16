@@ -17,7 +17,8 @@ class TelegramSettingsResponse(BaseModel):
     poller_status: str = "OFFLINE"
     bot_username: str | None = None
     auth_deep_link: str | None = None
-    activation_command: str = "/start auth"
+    activation_command: str | None = None
+    auth_invite_expires_at: datetime | None = None
     chat_id: str | None = None
     # Web App URL (Telegram Mini App). Хранится в system_config, фолбэк на .env.
     web_app_url: str | None = None
@@ -57,7 +58,10 @@ class TelegramRecipientsListResponse(BaseModel):
 
 
 class TelegramInviteResponse(BaseModel):
-    """Ответ на POST /settings/telegram/recipients/invite."""
+    """Готовый invite-код, команда и опциональная Telegram deep-link."""
 
     code: str
     expires_at: datetime
+    role: str = "recipient"
+    auth_deep_link: str | None = None
+    activation_command: str

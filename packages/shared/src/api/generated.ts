@@ -1162,7 +1162,7 @@ export interface paths {
          *     overall:
          *         HEALTHY  — все expected ONLINE
          *         DEGRADED — >0 OFFLINE
-         *         CRITICAL — observer OFFLINE
+         *         CRITICAL — observer OFFLINE или активный money-critical watchdog
          */
         get: operations["get_health_details_api_health_details_get"];
         put?: never;
@@ -1894,6 +1894,30 @@ export interface paths {
          *     Возвращает { code, expires_at }.
          */
         post: operations["post_telegram_invite_api_settings_telegram_recipients_invite_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/telegram/owner-invite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Telegram Owner Invite
+         * @description Вернуть действующую owner-ссылку или создать её атомарно.
+         *
+         *     Повторный клик и сетевой retry возвращают тот же код до его использования или
+         *     истечения. GET настроек никогда не создаёт секреты сам — он только показывает
+         *     уже существующую ссылку.
+         */
+        post: operations["post_telegram_owner_invite_api_settings_telegram_owner_invite_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5345,7 +5369,7 @@ export interface components {
         };
         /**
          * TelegramInviteResponse
-         * @description Ответ на POST /settings/telegram/recipients/invite.
+         * @description Готовый invite-код, команда и опциональная Telegram deep-link.
          */
         TelegramInviteResponse: {
             /** Code */
@@ -5355,6 +5379,15 @@ export interface components {
              * Format: date-time
              */
             expires_at: string;
+            /**
+             * Role
+             * @default recipient
+             */
+            role: string;
+            /** Auth Deep Link */
+            auth_deep_link?: string | null;
+            /** Activation Command */
+            activation_command: string;
         };
         /**
          * TelegramRecipientResponse
@@ -5404,11 +5437,10 @@ export interface components {
             bot_username?: string | null;
             /** Auth Deep Link */
             auth_deep_link?: string | null;
-            /**
-             * Activation Command
-             * @default /start auth
-             */
-            activation_command: string;
+            /** Activation Command */
+            activation_command?: string | null;
+            /** Auth Invite Expires At */
+            auth_invite_expires_at?: string | null;
             /** Chat Id */
             chat_id?: string | null;
             /** Web App Url */
@@ -8650,6 +8682,26 @@ export interface operations {
         };
     };
     post_telegram_invite_api_settings_telegram_recipients_invite_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramInviteResponse"];
+                };
+            };
+        };
+    };
+    post_telegram_owner_invite_api_settings_telegram_owner_invite_post: {
         parameters: {
             query?: never;
             header?: never;

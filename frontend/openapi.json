@@ -2697,7 +2697,7 @@
           "health"
         ],
         "summary": "Get Health Details",
-        "description": "Агрегирует статусы воркеров по Redis worker:heartbeat:* ключам.\n\nИспользует SCAN MATCH (не KEYS) для безопасного обхода Redis.\nСтатус воркера: ONLINE если heartbeat-ключ существует (TTL > 0),\nOFFLINE если ключ протух или не найден.\n\noverall:\n    HEALTHY  — все expected ONLINE\n    DEGRADED — >0 OFFLINE\n    CRITICAL — observer OFFLINE",
+        "description": "Агрегирует статусы воркеров по Redis worker:heartbeat:* ключам.\n\nИспользует SCAN MATCH (не KEYS) для безопасного обхода Redis.\nСтатус воркера: ONLINE если heartbeat-ключ существует (TTL > 0),\nOFFLINE если ключ протух или не найден.\n\noverall:\n    HEALTHY  — все expected ONLINE\n    DEGRADED — >0 OFFLINE\n    CRITICAL — observer OFFLINE или активный money-critical watchdog",
         "operationId": "get_health_details_api_health_details_get",
         "responses": {
           "200": {
@@ -4491,6 +4491,28 @@
         "summary": "Post Telegram Invite",
         "description": "Генерирует invite-код (TTL 24h) и сохраняет в telegram_invites.\n\nВозвращает { code, expires_at }.",
         "operationId": "post_telegram_invite_api_settings_telegram_recipients_invite_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramInviteResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/telegram/owner-invite": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Post Telegram Owner Invite",
+        "description": "Вернуть действующую owner-ссылку или создать её атомарно.\n\nПовторный клик и сетевой retry возвращают тот же код до его использования или\nистечения. GET настроек никогда не создаёт секреты сам — он только показывает\nуже существующую ссылку.",
+        "operationId": "post_telegram_owner_invite_api_settings_telegram_owner_invite_post",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -12654,15 +12676,36 @@
             "type": "string",
             "format": "date-time",
             "title": "Expires At"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "default": "recipient"
+          },
+          "auth_deep_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Deep Link"
+          },
+          "activation_command": {
+            "type": "string",
+            "title": "Activation Command"
           }
         },
         "type": "object",
         "required": [
           "code",
-          "expires_at"
+          "expires_at",
+          "activation_command"
         ],
         "title": "TelegramInviteResponse",
-        "description": "Ответ на POST /settings/telegram/recipients/invite."
+        "description": "Готовый invite-код, команда и опциональная Telegram deep-link."
       },
       "TelegramRecipientResponse": {
         "properties": {
@@ -12762,9 +12805,27 @@
             "title": "Auth Deep Link"
           },
           "activation_command": {
-            "type": "string",
-            "title": "Activation Command",
-            "default": "/start auth"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activation Command"
+          },
+          "auth_invite_expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Invite Expires At"
           },
           "chat_id": {
             "anyOf": [

@@ -10,7 +10,9 @@ import type { TelegramSettings } from "@fb/shared";
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => ({ component: (c: unknown) => c }),
   useNavigate: () => vi.fn(),
-  Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
+  Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
+    <a href={to}>{children}</a>
+  ),
 }));
 
 // Мок TG
@@ -36,7 +38,8 @@ const MOCK_TELEGRAM: TelegramSettings = {
   poller_status: "ONLINE",
   bot_username: "fb_stop_bot",
   auth_deep_link: null,
-  activation_command: "/start auth",
+  activation_command: null,
+  auth_invite_expires_at: null,
   chat_id: null,
   web_app_url: "https://t.me/fb_stop_bot/app",
 };
@@ -69,7 +72,10 @@ describe("SettingsPage", () => {
       refetch: vi.fn(),
     });
     mockUseToggleScanning.mockReturnValue({ mutateAsync, isPending: false });
-    mockUseTriggerScan.mockReturnValue({ mutateAsync: vi.fn().mockResolvedValue({}), isPending: false });
+    mockUseTriggerScan.mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue({}),
+      isPending: false,
+    });
     mockUseTelegramSettings.mockReturnValue({
       data: MOCK_TELEGRAM,
       isLoading: false,
@@ -77,7 +83,15 @@ describe("SettingsPage", () => {
       refetch: vi.fn(),
     });
     mockUseVisionSettings.mockReturnValue({
-      data: { has_token: true, profile_id: "profile-123", cdp_ready: true, cdp_port: 9222, auto_restart_on_missing_cdp: true, runtime_status: "ready", runtime_status_message: null },
+      data: {
+        has_token: true,
+        profile_id: "profile-123",
+        cdp_ready: true,
+        cdp_port: 9222,
+        auto_restart_on_missing_cdp: true,
+        runtime_status: "ready",
+        runtime_status_message: null,
+      },
       isLoading: false,
       isError: false,
       refetch: vi.fn(),

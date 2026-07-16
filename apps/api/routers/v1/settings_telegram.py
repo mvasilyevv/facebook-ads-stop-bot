@@ -8,6 +8,7 @@ Endpoints под /api (благодаря auto-discovery с prefix="/api"):
 - GET  /settings/telegram/recipients          — список не-revoked получателей
 - DELETE /settings/telegram/recipients/{id}  — soft-delete получателя
 - POST /settings/telegram/recipients/invite   — создать invite-код (TTL 24h)
+- POST /settings/telegram/owner-invite        — получить/создать owner deep-link
 
 БЕЗОПАСНОСТЬ: bot_token_encrypted НИКОГДА не возвращается в ответах.
 """
@@ -21,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -69,6 +70,15 @@ class _ConfigSnapshot:
     poller_heartbeat_at: datetime | None
 
 
+@dataclass(frozen=True)
+class _InviteSnapshot:
+    """Публичные поля активного invite без привязки к ORM-session."""
+
+    code: str
+    role: str
+    expires_at: datetime
+
+
 def _snapshot(config: TelegramConfig | None) -> _ConfigSnapshot | None:
     """Считывает нужные поля из ORM-объекта ВНУТРИ session и возвращает скаляры."""
     if config is None:
@@ -87,9 +97,62 @@ async def _load_config(session: AsyncSession) -> TelegramConfig | None:
     )
 
 
+async def _load_active_owner_invite(session: AsyncSession) -> _InviteSnapshot | None:
+    """Вернуть последний действующий owner-инвайт, не создавая новый на GET."""
+    invite = await session.scalar(
+        select(TelegramInvite)
+        .where(
+            TelegramInvite.role == "owner",
+            TelegramInvite.used_at.is_(None),
+            TelegramInvite.revoked_at.is_(None),
+            TelegramInvite.expires_at > datetime.now(UTC),
+        )
+        .order_by(TelegramInvite.expires_at.desc())
+        .limit(1)
+    )
+    if invite is None:
+        return None
+    return _InviteSnapshot(
+        code=invite.code,
+        role=invite.role,
+        expires_at=invite.expires_at,
+    )
+
+
+async def _ensure_active_owner_invite(engine: AsyncEngine) -> _InviteSnapshot:
+    """Переиспользовать действующий owner-код или атомарно создать один новый.
+
+    Транзакционный advisory-lock схлопывает параллельные клики и React retry: в БД
+    остаётся один актуальный owner-инвайт вместо пачки равноценных секретов.
+    """
+    async with AsyncSession(engine) as session, session.begin():
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+            {"lock_key": "telegram:active_owner_invite"},
+        )
+        current = await _load_active_owner_invite(session)
+        if current is not None:
+            return current
+
+        invite = TelegramInvite(
+            code=secrets.token_urlsafe(16),
+            created_by="settings_ui",
+            role="owner",
+            expires_at=datetime.now(UTC) + timedelta(hours=_INVITE_TTL_HOURS),
+        )
+        session.add(invite)
+        await session.flush()
+        return _InviteSnapshot(
+            code=invite.code,
+            role=invite.role,
+            expires_at=invite.expires_at,
+        )
+
+
 async def _build_response(
     snap: _ConfigSnapshot | None,
     redis: object,
+    owner_invite: _InviteSnapshot | None,
     web_app_url: str | None = None,
 ) -> TelegramSettingsResponse:
     """Строит TelegramSettingsResponse из snapshot и Redis-клиента.
@@ -100,8 +163,9 @@ async def _build_response(
     is_authorized = compute_is_authorized(snap)
     poller_status = await compute_poller_status(snap)
     bot_username = await compute_bot_username(snap, redis)
-    auth_deep_link = compute_auth_deep_link(bot_username)
-    activation_command = compute_activation_command()
+    invite_code = owner_invite.code if owner_invite is not None else None
+    auth_deep_link = compute_auth_deep_link(bot_username, invite_code)
+    activation_command = compute_activation_command(invite_code)
 
     # chat_id возвращаем как строку (фронт ожидает строку, BigInteger в Postgres).
     chat_id_str: str | None = None
@@ -114,6 +178,7 @@ async def _build_response(
         bot_username=bot_username,
         auth_deep_link=auth_deep_link,
         activation_command=activation_command,
+        auth_invite_expires_at=(owner_invite.expires_at if owner_invite else None),
         chat_id=chat_id_str,
         web_app_url=web_app_url,
     )
@@ -179,8 +244,9 @@ async def get_telegram_settings(
     async with AsyncSession(engine) as session:
         config = await _load_config(session)
         snap = _snapshot(config)
+        owner_invite = await _load_active_owner_invite(session)
     web_app_url = await _resolve_web_app_url(engine, settings)
-    return await _build_response(snap, redis, web_app_url)
+    return await _build_response(snap, redis, owner_invite, web_app_url)
 
 
 @router.put("/web-app-url", response_model=TelegramSettingsResponse)
@@ -210,8 +276,9 @@ async def put_telegram_web_app_url(
     async with AsyncSession(engine) as session:
         config = await _load_config(session)
         snap = _snapshot(config)
+        owner_invite = await _load_active_owner_invite(session)
     web_app_url = await _resolve_web_app_url(engine, settings)
-    return await _build_response(snap, redis, web_app_url)
+    return await _build_response(snap, redis, owner_invite, web_app_url)
 
 
 @router.put("/token", response_model=TelegramSettingsResponse)
@@ -247,6 +314,7 @@ async def put_telegram_token(
             )
         ).one()
         snap = _snapshot(config)
+        owner_invite = await _load_active_owner_invite(session)
         await session.commit()
 
     # Инвалидируем кэш username при смене токена.
@@ -255,7 +323,7 @@ async def put_telegram_token(
     except Exception as exc:
         logger.warning("Не удалось инвалидировать кэш tg:bot_username: %s", exc)
 
-    return await _build_response(snap, redis)
+    return await _build_response(snap, redis, owner_invite)
 
 
 @router.delete("", response_model=TelegramSettingsResponse)
@@ -286,6 +354,7 @@ async def delete_telegram_settings(engine: DepEngine, redis: DepRedis) -> Telegr
             )
         ).one()
         snap = _snapshot(config)
+        owner_invite = await _load_active_owner_invite(session)
         await session.commit()
 
     # Инвалидируем кэш username.
@@ -294,7 +363,7 @@ async def delete_telegram_settings(engine: DepEngine, redis: DepRedis) -> Telegr
     except Exception as exc:
         logger.warning("Не удалось инвалидировать кэш tg:bot_username: %s", exc)
 
-    return await _build_response(snap, redis)
+    return await _build_response(snap, redis, owner_invite)
 
 
 @router.get("/recipients", response_model=TelegramRecipientsListResponse)
@@ -372,7 +441,40 @@ async def post_telegram_invite(engine: DepEngine) -> TelegramInviteResponse:
         session.add(invite)
         await session.flush()
         await session.refresh(invite)
-        result = TelegramInviteResponse(code=code, expires_at=expires_at)
+        result = TelegramInviteResponse(
+            code=code,
+            expires_at=expires_at,
+            role=invite.role,
+            activation_command=compute_activation_command(code) or "",
+        )
         await session.commit()
 
     return result
+
+
+@router.post("/owner-invite", response_model=TelegramInviteResponse)
+async def post_telegram_owner_invite(
+    engine: DepEngine,
+    redis: DepRedis,
+) -> TelegramInviteResponse:
+    """Вернуть действующую owner-ссылку или создать её атомарно.
+
+    Повторный клик и сетевой retry возвращают тот же код до его использования или
+    истечения. GET настроек никогда не создаёт секреты сам — он только показывает
+    уже существующую ссылку.
+    """
+    invite = await _ensure_active_owner_invite(engine)
+    async with AsyncSession(engine) as session:
+        config = await _load_config(session)
+        snap = _snapshot(config)
+    bot_username = await compute_bot_username(snap, redis)
+    activation_command = compute_activation_command(invite.code)
+    if activation_command is None:  # pragma: no cover - generated code is non-empty
+        raise HTTPException(status_code=500, detail="Не удалось создать команду подключения")
+    return TelegramInviteResponse(
+        code=invite.code,
+        expires_at=invite.expires_at,
+        role=invite.role,
+        auth_deep_link=compute_auth_deep_link(bot_username, invite.code),
+        activation_command=activation_command,
+    )

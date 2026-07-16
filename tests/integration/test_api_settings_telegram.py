@@ -76,7 +76,8 @@ async def test_get_telegram_no_config_returns_defaults(app_client) -> None:
     assert data["poller_status"] == "OFFLINE"
     assert data["bot_username"] is None
     assert data["auth_deep_link"] is None
-    assert data["activation_command"] == "/start auth"
+    assert data["activation_command"] is None
+    assert data["auth_invite_expires_at"] is None
     assert data["chat_id"] is None
 
 
@@ -415,3 +416,39 @@ async def test_post_invite_codes_are_unique(app_client) -> None:
     assert resp2.status_code == 200
     # Коды должны отличаться
     assert resp1.json()["code"] != resp2.json()["code"]
+
+
+# Owner-ссылка содержит реальный код и повторно использует его до consume/expiry.
+@pytest.mark.asyncio
+async def test_owner_invite_is_idempotent_and_visible_in_settings(app_client, pg_engine) -> None:
+    with patch(
+        "apps.api.routers.v1.settings_telegram.compute_bot_username",
+        new=AsyncMock(return_value="test_bot"),
+    ):
+        first = await app_client.post("/api/settings/telegram/owner-invite")
+        second = await app_client.post("/api/settings/telegram/owner-invite")
+        settings = await app_client.get("/api/settings/telegram")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert settings.status_code == 200
+    invite = first.json()
+    assert invite["role"] == "owner"
+    assert invite["code"] == second.json()["code"]
+    assert invite["activation_command"] == f"/start {invite['code']}"
+    assert invite["auth_deep_link"] == f"https://t.me/test_bot?start={invite['code']}"
+    assert settings.json()["activation_command"] == invite["activation_command"]
+    assert settings.json()["auth_deep_link"] == invite["auth_deep_link"]
+    assert settings.json()["auth_invite_expires_at"] == invite["expires_at"]
+
+    async with pg_engine.connect() as conn:
+        count = await conn.scalar(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM telegram_invites
+                WHERE role = 'owner' AND used_at IS NULL AND revoked_at IS NULL
+                """
+            )
+        )
+    assert count == 1
