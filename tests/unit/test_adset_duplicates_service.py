@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from apps.api.routers.v1.schemas.adset_duplicates import (
-    AdsetDuplicateDraftIn,
+    AdsetDuplicateLaunchIn,
     AdsetDuplicatePreviewIn,
 )
 from core.adset_duplicates.service import (
@@ -329,7 +329,9 @@ def test_request_schema_caps_and_draft_body_are_strict() -> None:
     with pytest.raises(ValidationError):
         AdsetDuplicatePreviewIn.model_validate(base)
     with pytest.raises(ValidationError):
-        AdsetDuplicateDraftIn.model_validate({"preview_token": "x" * 32, "requested_by": "spoofed"})
+        AdsetDuplicateLaunchIn.model_validate(
+            {"preview_token": "x" * 32, "requested_by": "spoofed"}
+        )
 
 
 def test_status_serialization_keeps_lowercase_and_created_ids() -> None:

@@ -2,14 +2,12 @@
 """Изолированный backend-контур быстрого дублирования adset.
 
 Preview читает локальный каталог, точные metadata кабинета через read-only Meta GET
-и Redis. Meta-записи появляются лишь после создания DRAFT и явного подтверждения
-владельцем в Telegram.
+и Redis. Meta-записи появляются лишь после явного запуска из защищённой веб-панели.
 """
 
 from __future__ import annotations
 
 import hashlib
-import html
 import json
 import math
 import secrets
@@ -36,7 +34,6 @@ _PREVIEW_KEY_PREFIX = "adset_duplicate:preview:"
 _TASK_KIND = "duplicate_adset_structure"
 _TASK_TYPE = "meta_api_mutation"
 _REQUESTED_BY = "api:adset_duplicate"
-_DRAFT_NOTIFICATION_MARKER = "draft_notification_delivered"
 
 
 class AdsetDuplicateError(ValueError):
@@ -477,7 +474,7 @@ def build_duplicate_preview(
         currency=account.currency,
     )
     warnings = [
-        "Все новые объекты создаются через DRAFT и требуют подтверждения владельцем в Telegram.",
+        "Создание начнётся только после явного подтверждения в web-preview.",
     ]
     if owner_tag_added:
         warnings.append(
@@ -724,37 +721,6 @@ async def get_duplicate_task(engine: AsyncEngine, task_id: int) -> DuplicateTask
     )
 
 
-def duplicate_draft_notification_delivered(task: DuplicateTask) -> bool:
-    """Durable task-level marker успешной доставки Telegram-кнопок."""
-    return bool((task.result or {}).get(_DRAFT_NOTIFICATION_MARKER) is True)
-
-
-async def mark_duplicate_draft_notification_delivered(
-    engine: AsyncEngine,
-    *,
-    task_id: int,
-) -> bool:
-    """Атомарно записать delivery marker в task_queue.result без потери checkpoint."""
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text(
-                """
-                UPDATE task_queue
-                SET result = COALESCE(result, '{}'::JSONB) || jsonb_build_object(
-                        'draft_notification_delivered', TRUE,
-                        'draft_notification_delivered_at', NOW()
-                    ),
-                    updated_at = NOW()
-                WHERE id = :task_id
-                  AND task_type = 'meta_api_mutation'
-                  AND payload->>'mutation_kind' = 'duplicate_adset_structure'
-                """
-            ),
-            {"task_id": int(task_id)},
-        )
-    return (result.rowcount or 0) > 0
-
-
 def serialize_duplicate_task(task: DuplicateTask) -> dict[str, Any]:
     """Канонический lowercase status + прогресс/созданные Meta IDs."""
     params = task.payload.get("params") or {}
@@ -786,7 +752,7 @@ def serialize_duplicate_task(task: DuplicateTask) -> dict[str, Any]:
             "phase": "awaiting_confirmation",
             "completed": 0,
             "total": total,
-            "message": "Ожидает подтверждения в Telegram",
+            "message": "Безопасный черновик ожидает повторного запуска из веб-панели",
         }
     elif task.status in {"pending", "retrying"}:
         if recovery_requested:
@@ -851,49 +817,6 @@ def serialize_duplicate_task(task: DuplicateTask) -> dict[str, Any]:
     }
 
 
-def render_draft_notification(task_id: int, stored: StoredDuplicatePreview) -> str:
-    """Короткое HTML-превью для owner DM; все DB/user strings экранируются."""
-    preview = stored.preview
-    source = preview["source"]
-    budget = preview["budget"]
-    schedule = preview["schedule"]
-    selected_ids = set(stored.task_params["selected_ad_ids"])
-    selected_ads = [ad for ad in source["ads"] if ad["fb_ad_id"] in selected_ids]
-
-    def _short(value: Any, limit: int) -> str:
-        clean = str(value or "")
-        return clean if len(clean) <= limit else clean[: limit - 1] + "…"
-
-    selected_lines = "\n".join(
-        f"• <code>{html.escape(ad['fb_ad_id'])}</code> {html.escape(_short(ad['name'], 100))}"
-        for ad in selected_ads
-    )
-    campaign_lines = "\n".join(
-        f"• {html.escape(_short(name, 120))}" for name in preview["generated_names"]["campaigns"]
-    )
-    adset_names = preview["generated_names"]["adsets"]
-    adset_sample = "\n".join(f"• {html.escape(_short(name, 120))}" for name in adset_names[:2])
-    if len(adset_names) > 2:
-        adset_sample += f"\n• … ещё {len(adset_names) - 2}"
-    unit_amount = budget["unit_daily_budget_cents"] / 100
-    total_amount = budget["total_daily_budget_cents"] / 100
-    return (
-        f"📝 <b>Черновик #{task_id}: дубль adset {html.escape(preview['format_code'])}</b>\n"
-        f"Кампания: <code>{html.escape(source['campaign']['name'])}</code>\n"
-        f"Adset: <code>{html.escape(source['adset']['name'])}</code>\n"
-        f"Итог: <b>{preview['counts']['campaigns']} камп. / "
-        f"{preview['counts']['adsets']} adset / {preview['counts']['ads']} ads</b>\n\n"
-        f"<b>Выбранные объявления ({len(selected_ads)}):</b>\n{selected_lines}\n\n"
-        f"<b>Новые кампании:</b>\n{campaign_lines}\n"
-        f"<b>Новые adset ({len(adset_names)}):</b>\n{adset_sample}\n\n"
-        f"Бюджет {budget['level']}: <b>{unit_amount:.2f} {budget['currency']}</b> на единицу; "
-        f"итого/день <b>{total_amount:.2f} {budget['currency']}</b>\n"
-        f"Старт local: <code>{html.escape(schedule['start_time_local'])}</code>\n"
-        f"Старт UTC: <code>{html.escape(schedule['start_time_utc'])}</code>\n\n"
-        "Подтверди ✅ / ❌."
-    )
-
-
 __all__ = [
     "MAX_ADSETS_PER_CAMPAIGN",
     "MAX_CAMPAIGN_COUNT",
@@ -908,16 +831,13 @@ __all__ = [
     "build_schedule",
     "calculate_budget",
     "create_duplicate_draft",
-    "duplicate_draft_notification_delivered",
     "fetch_account_metadata",
     "generate_names",
     "get_duplicate_task",
     "load_duplicate_source",
     "load_stored_preview",
     "mark_preview_consumed",
-    "mark_duplicate_draft_notification_delivered",
     "resolve_duplicate_source_hierarchy",
-    "render_draft_notification",
     "save_stored_preview",
     "serialize_duplicate_task",
     "validate_structure_caps",

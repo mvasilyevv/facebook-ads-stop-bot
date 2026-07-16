@@ -1,6 +1,6 @@
 /**
- * Draft-first форма быстрого дублирования структуры из AdDrawer.
- * Preview — read-only; POST /draft отправляет подтверждение владельцу в Telegram.
+ * Форма быстрого дублирования структуры из AdDrawer.
+ * Preview — read-only; запуск требует отдельного явного клика в web-preview.
  */
 
 import type { AdSnapshot } from "@fb/shared";
@@ -15,7 +15,7 @@ import {
   Send,
   TriangleAlert,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -29,7 +29,7 @@ import {
   type DuplicateBudgetLevel,
   type DuplicateSourceAd,
   useAdsetDuplicateStatus,
-  useCreateAdsetDuplicateDraft,
+  useStartAdsetDuplicate,
   usePreviewAdsetDuplicate,
 } from "@/lib/api/adsetDuplicates";
 import { cn } from "@/lib/utils/cn";
@@ -54,6 +54,7 @@ type AdSnapshotWithBudget = AdSnapshot & { adset_daily_budget?: string | null };
 
 const MAX_DAILY_BUDGET_CENTS = 10_000_000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
+const QUICK_BUDGET_AMOUNTS = [50, 100, 200, 500] as const;
 
 export function AdsetDuplicateAction({ ad }: AdsetDuplicateActionProps) {
   const [open, setOpen] = useState(false);
@@ -66,14 +67,14 @@ export function AdsetDuplicateAction({ ad }: AdsetDuplicateActionProps) {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const previewMutation = usePreviewAdsetDuplicate();
-  const draftMutation = useCreateAdsetDuplicateDraft();
+  const launchMutation = useStartAdsetDuplicate();
   const statusQuery = useAdsetDuplicateStatus(open ? taskId : null);
 
   const sourceAds = preview?.source.ads ?? [];
   const selectedCount = selectedAdIds.length;
   const localFormat = `${form.campaignCount}-${form.adsetsPerCampaign}-${selectedCount}`;
   const validationError = validateForm(form, selectedCount);
-  const status = statusQuery.data?.status ?? draftMutation.data?.status ?? "pending_confirmation";
+  const status = statusQuery.data?.status ?? launchMutation.data?.status ?? "pending_confirmation";
   const isTerminal = TERMINAL_ADSET_DUPLICATE_STATUSES.has(status);
   const requiresFreshDraft = status === "failed" || status === "cancelled" || status === "expired";
   const previewExpiresAt = preview ? Date.parse(preview.expires_at) : Number.NaN;
@@ -102,7 +103,7 @@ export function AdsetDuplicateAction({ ad }: AdsetDuplicateActionProps) {
     setIdempotencyToken(nextToken);
     setNowMs(Date.now());
     previewMutation.reset();
-    draftMutation.reset();
+    launchMutation.reset();
     setOpen(true);
 
     try {
@@ -143,11 +144,11 @@ export function AdsetDuplicateAction({ ad }: AdsetDuplicateActionProps) {
     }
   }
 
-  async function handleCreateDraft() {
+  async function handleLaunch() {
     if (!preview || previewExpired) return;
     try {
-      const draft = await draftMutation.mutateAsync({ preview_token: preview.preview_token });
-      setTaskId(draft.task_id);
+      const task = await launchMutation.mutateAsync({ preview_token: preview.preview_token });
+      setTaskId(task.task_id);
       setStep("status");
     } catch {
       // Ошибка мутации отрисуется в preview.
@@ -184,20 +185,20 @@ export function AdsetDuplicateAction({ ad }: AdsetDuplicateActionProps) {
         contentClassName="p-0"
         title={null}
         ariaTitle="Дублировать структуру"
-        ariaDescription="Настройка безопасного draft-first дублирования адсета"
+        ariaDescription="Настройка и безопасный запуск дублирования адсета"
       >
         <div className="px-6 pt-6 pb-4 border-b border-[var(--hairline)] bg-bg-1">
           <div className="flex items-start justify-between gap-5 pr-8">
             <div>
               <div className="font-display text-[10px] tracking-[0.16em] uppercase text-accent-muted">
-                Structure duplicator / draft-first
+                Structure duplicator / guarded launch
               </div>
               <h2 className="mt-1 font-display text-[21px] leading-tight text-bg-11">
                 Дублировать структуру
               </h2>
               <p className="mt-1.5 text-[12.5px] text-bg-9 max-w-[540px]">
-                Выберите только нужные объявления. В Meta ничего не уйдёт, пока вы не подтвердите
-                черновик в Telegram.
+                Выберите нужные объявления и проверьте итог. Создание начнётся только после
+                отдельной кнопки запуска на следующем шаге.
               </p>
             </div>
             <div className="shrink-0 rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 px-3 py-2 text-right">
@@ -232,7 +233,7 @@ export function AdsetDuplicateAction({ ad }: AdsetDuplicateActionProps) {
             <PreviewStep
               preview={preview}
               selectedNames={selectedNames}
-              error={draftMutation.error}
+              error={launchMutation.error}
             />
           ) : null}
 
@@ -286,11 +287,11 @@ export function AdsetDuplicateAction({ ad }: AdsetDuplicateActionProps) {
               ) : (
                 <Button
                   variant="primary"
-                  onClick={handleCreateDraft}
-                  loading={draftMutation.isPending}
+                  onClick={handleLaunch}
+                  loading={launchMutation.isPending}
                   leftIcon={<Send size={14} aria-hidden="true" />}
                 >
-                  Создать черновик
+                  Запустить дублирование
                 </Button>
               )}
             </>
@@ -315,7 +316,7 @@ function StepRail({ step }: { step: FlowStep }) {
   const current = step === "setup" ? 0 : step === "preview" ? 1 : 2;
   return (
     <ol className="mt-5 grid grid-cols-3 gap-2" aria-label="Этапы дублирования">
-      {["Источник и формат", "Проверка", "Telegram и статус"].map((label, index) => (
+      {["Источник и формат", "Проверка", "Запуск и статус"].map((label, index) => (
         <li key={label} className="min-w-0">
           <div
             className={cn(
@@ -513,24 +514,16 @@ function SetupStep({
             </div>
           </div>
 
-          <Input
-            label={`Дневной бюджет · ${form.budgetLevel}${preview?.budget.currency ? ` · ${preview.budget.currency}` : ""}`}
-            type="number"
-            min={1}
-            max={MAX_DAILY_BUDGET_CENTS / 100}
-            step="0.01"
-            value={(form.dailyBudgetCents / 100).toFixed(2)}
-            onChange={(event) =>
-              setForm((current) => ({
-                ...current,
-                dailyBudgetCents: Math.round(Number(event.target.value || 0) * 100),
-              }))
-            }
-            helpText={
+          <BudgetAmountField
+            cents={form.dailyBudgetCents}
+            currency={preview?.budget.currency || "USD"}
+            budgetLevel={form.budgetLevel}
+            unitCount={
               form.budgetLevel === "ABO"
-                ? "Применяется к каждому создаваемому адсету"
-                : "Применяется к каждой создаваемой кампании"
+                ? form.campaignCount * form.adsetsPerCampaign
+                : form.campaignCount
             }
+            onCents={(dailyBudgetCents) => setForm((current) => ({ ...current, dailyBudgetCents }))}
           />
 
           <Input
@@ -704,7 +697,7 @@ function StatusStep({
   const createdIdSample = listCreatedMetaIds(createdMetaIds).slice(0, 6);
   const success = status === "succeeded";
   const failed = status === "failed" || status === "expired" || status === "cancelled";
-  const progressMessage = progress?.message || progress?.phase || "Ожидаем подтверждение владельца";
+  const progressMessage = progress?.message || progress?.phase || "Задача поставлена в очередь";
   const statusAnnouncement = success
     ? "Задача завершена: структура создана и активирована с будущим временем старта."
     : failed
@@ -726,12 +719,9 @@ function StatusStep({
               <Send size={15} aria-hidden="true" />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="font-display text-[13px] text-bg-11">
-                Подтверждение отправлено в Telegram
-              </div>
+              <div className="font-display text-[13px] text-bg-11">Дублирование запущено</div>
               <p className="mt-1 text-[11.5px] leading-relaxed text-bg-9">
-                Проверьте структуру и нажмите ✅ в сообщении. Без подтверждения создание в Meta не
-                начнётся.
+                Задача поставлена в безопасную очередь. Статус создания обновляется прямо здесь.
               </p>
             </div>
             <Badge variant={success ? "success" : failed ? "failed" : "neutral"} size="sm">
@@ -817,8 +807,8 @@ function StatusStep({
 
           {failed ? (
             <p className="text-[11.5px] leading-relaxed text-bg-9">
-              Чтобы создать новый draft, закройте окно и снова нажмите «Дублировать структуру».
-              Новый запуск получит отдельный idempotency token.
+              Чтобы повторить операцию, закройте окно и снова нажмите «Дублировать структуру». Новый
+              запуск получит отдельный idempotency token.
             </p>
           ) : null}
 
@@ -904,6 +894,119 @@ function PreviewMetric({
         )}
       >
         {value}
+      </div>
+    </div>
+  );
+}
+
+export function BudgetAmountField({
+  cents,
+  currency,
+  budgetLevel,
+  unitCount,
+  onCents,
+}: {
+  cents: number;
+  currency: string;
+  budgetLevel: DuplicateBudgetLevel;
+  unitCount: number;
+  onCents: (cents: number) => void;
+}) {
+  const inputId = useId();
+  const summaryId = `${inputId}-summary`;
+  const [text, setText] = useState(() => budgetCentsToText(cents));
+
+  useEffect(() => {
+    if (budgetTextToCents(text) !== cents) setText(budgetCentsToText(cents));
+  }, [cents, text]);
+
+  const safeUnitCount = Math.max(0, unitCount);
+  const totalCents = cents * safeUnitCount;
+  const unitLabel = budgetLevel === "ABO" ? "на каждый адсет" : "на каждую кампанию";
+
+  function handleChange(rawValue: string) {
+    const nextText = normalizeBudgetText(rawValue);
+    setText(nextText);
+    onCents(budgetTextToCents(nextText));
+  }
+
+  return (
+    <div className="overflow-hidden rounded-[var(--radius-2)] border border-[var(--hairline-strong)] bg-bg-2">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--hairline)] px-3.5 py-2.5">
+        <label
+          htmlFor={inputId}
+          className="font-display text-[11px] uppercase tracking-wider text-bg-9"
+        >
+          Дневной бюджет
+        </label>
+        <span className="rounded-full border border-[var(--hairline)] bg-bg-1 px-2 py-1 font-mono text-[9.5px] text-bg-9">
+          {budgetLevel} · {currency}
+        </span>
+      </div>
+
+      <div className="space-y-3 p-3.5">
+        <div className="flex min-w-0 items-center rounded-[var(--radius-2)] border border-bg-6 bg-bg-1 transition-colors focus-within:border-accent focus-within:bg-bg-3 focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">
+          <span
+            aria-hidden="true"
+            className="shrink-0 border-r border-[var(--hairline)] px-3.5 font-mono text-[22px] text-accent-muted"
+          >
+            {currencySymbol(currency)}
+          </span>
+          <input
+            id={inputId}
+            type="text"
+            inputMode="decimal"
+            autoComplete="off"
+            value={text}
+            aria-label={`Дневной бюджет · ${budgetLevel} · ${currency}`}
+            aria-describedby={summaryId}
+            placeholder="100"
+            onChange={(event) => handleChange(event.target.value)}
+            onBlur={() => setText(budgetCentsToText(cents))}
+            className="h-14 min-w-0 flex-1 bg-transparent px-3.5 font-mono text-[25px] tabular-nums text-bg-11 outline-none placeholder:text-bg-7"
+          />
+          <span className="shrink-0 pr-3.5 text-right">
+            <span className="block font-mono text-[10px] text-bg-10">{currency}</span>
+            <span className="block text-[9.5px] text-bg-8">в день</span>
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5" aria-label="Быстрый выбор бюджета">
+          <span className="mr-1 text-[10px] text-bg-8">Быстро:</span>
+          {QUICK_BUDGET_AMOUNTS.map((amount) => {
+            const selected = cents === amount * 100;
+            return (
+              <button
+                key={amount}
+                type="button"
+                aria-label={`Установить дневной бюджет ${amount} ${currency}`}
+                aria-pressed={selected}
+                onClick={() => onCents(amount * 100)}
+                className={cn(
+                  "rounded-full border px-2.5 py-1 font-mono text-[10.5px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+                  selected
+                    ? "border-accent bg-bg-3 text-accent-muted"
+                    : "border-[var(--hairline)] bg-bg-1 text-bg-9 hover:border-bg-7 hover:text-bg-11",
+                )}
+              >
+                {currencySymbol(currency)}
+                {amount}
+              </button>
+            );
+          })}
+        </div>
+
+        <div
+          id={summaryId}
+          className="flex flex-col gap-1 border-t border-[var(--hairline)] pt-3 text-[11px] sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+        >
+          <span className="text-bg-8">
+            {unitLabel} · {formatMoney(cents, currency)} × {safeUnitCount}
+          </span>
+          <span className="font-medium text-bg-11">
+            Итого: {formatMoney(totalCents, currency)} / день
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -1062,6 +1165,43 @@ function formatMoney(cents: number, currency: string): string {
   }).format(cents / 100);
 }
 
+function currencySymbol(currency: string): string {
+  try {
+    const parts = new Intl.NumberFormat("en", {
+      style: "currency",
+      currency: currency || "USD",
+      currencyDisplay: "narrowSymbol",
+    }).formatToParts(0);
+    return parts.find((part) => part.type === "currency")?.value || currency;
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    return currency || "$";
+  }
+}
+
+function normalizeBudgetText(rawValue: string): string {
+  const cleaned = rawValue.replace(",", ".").replace(/[^\d.]/g, "");
+  const decimalIndex = cleaned.indexOf(".");
+  if (decimalIndex < 0) return cleaned;
+
+  const whole = cleaned.slice(0, decimalIndex).replace(/\D/g, "") || "0";
+  const fraction = cleaned
+    .slice(decimalIndex + 1)
+    .replace(/\D/g, "")
+    .slice(0, 2);
+  return `${whole}.${fraction}`;
+}
+
+function budgetTextToCents(value: string): number {
+  if (!value) return 0;
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) : 0;
+}
+
+function budgetCentsToText(cents: number): string {
+  return cents > 0 ? String(cents / 100) : "";
+}
+
 function formatAccountId(value: string): string {
   return value.startsWith("act_") ? value : `act_${value}`;
 }
@@ -1086,7 +1226,7 @@ function formatAccountLocal(value: string): string {
 
 function duplicateStatusLabel(status: string): string {
   const labels: Record<string, string> = {
-    pending: "Черновик",
+    pending: "В очереди",
     draft: "Черновик",
     pending_confirmation: "Ждёт подтверждения",
     awaiting_confirmation: "Ждёт подтверждения",

@@ -1,4 +1,4 @@
-"""Планирование и draft-first API быстрого дублирования adset-структур."""
+"""Планирование и защищённый запуск быстрого дублирования adset-структур."""
 
 from core.adset_duplicates.service import (
     PREVIEW_TTL_SECONDS,
@@ -12,7 +12,6 @@ from core.adset_duplicates.service import (
     load_duplicate_source,
     load_stored_preview,
     mark_preview_consumed,
-    render_draft_notification,
     resolve_duplicate_source_hierarchy,
     save_stored_preview,
     serialize_duplicate_task,
@@ -31,7 +30,6 @@ __all__ = [
     "load_stored_preview",
     "mark_preview_consumed",
     "resolve_duplicate_source_hierarchy",
-    "render_draft_notification",
     "save_stored_preview",
     "serialize_duplicate_task",
 ]

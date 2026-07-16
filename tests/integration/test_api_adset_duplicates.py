@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Integration: preview → Telegram DRAFT → task status для adset duplication."""
+"""Integration: preview → explicit web launch → task status for adset duplication."""
 
 from __future__ import annotations
 
@@ -309,12 +309,10 @@ async def test_preview_rejects_foreign_owner_before_meta_or_token(
 
 
 @pytest.mark.asyncio
-async def test_draft_is_idempotent_notified_and_status_serialized(
-    adset_duplicate_client, pg_engine, monkeypatch
+async def test_web_launch_is_idempotent_approved_and_status_serialized(
+    adset_duplicate_client, pg_engine
 ) -> None:
     client, redis = adset_duplicate_client
-    notify = AsyncMock(return_value=True)
-    monkeypatch.setattr(router_module, "notify_owners", notify)
     preview_resp = await client.post(
         "/api/tools/adset-duplicates/preview",
         json=_preview_body(token="testdup-draft", selected=[SOURCE_AD_ID, SIBLING_AD_ID]),
@@ -322,21 +320,17 @@ async def test_draft_is_idempotent_notified_and_status_serialized(
     preview = preview_resp.json()
 
     first = await client.post(
-        "/api/tools/adset-duplicates/draft",
+        "/api/tools/adset-duplicates/launch",
         json={"preview_token": preview["preview_token"]},
     )
     second = await client.post(
-        "/api/tools/adset-duplicates/draft",
+        "/api/tools/adset-duplicates/launch",
         json={"preview_token": preview["preview_token"]},
     )
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
     assert first.json()["task_id"] == second.json()["task_id"]
-    assert first.json()["status"] == "draft"
-    notify.assert_awaited_once()
-    assert notify.await_args.kwargs["reply_markup"]["inline_keyboard"][0][0][
-        "callback_data"
-    ].startswith("dr_ok:")
+    assert first.json()["status"] == "pending"
 
     task_id = first.json()["task_id"]
     async with pg_engine.connect() as conn:
@@ -344,35 +338,34 @@ async def test_draft_is_idempotent_notified_and_status_serialized(
             await conn.execute(
                 text(
                     """
-                    SELECT status, max_attempts, payload
+                    SELECT status, max_attempts, payload, requested_by
                     FROM task_queue WHERE id = :id
                     """
                 ),
                 {"id": task_id},
             )
         ).one()
-    assert row[0] == "draft"
+    assert row[0] == "pending"
     assert row[1] == 1
     assert row[2]["mutation_kind"] == "duplicate_adset_structure"
     assert row[2]["ad_account_id"] == ACCOUNT_ID
     assert row[2]["params"]["selected_ad_ids"] == [SOURCE_AD_ID, SIBLING_AD_ID]
     assert row[2]["params"]["start_time"].endswith("Z")
+    assert row[3] == "web:adset_duplicate"
 
     status = await client.get(f"/api/tools/adset-duplicates/{task_id}")
     assert status.status_code == 200
-    assert status.json()["status"] == "draft"
-    assert status.json()["progress"]["phase"] == "awaiting_confirmation"
+    assert status.json()["status"] == "pending"
+    assert status.json()["progress"]["phase"] == "queued"
     stored = await redis.get(f"adset_duplicate:preview:{preview['preview_token']}")
     assert f'"consumed_task_id":{task_id}' in stored.decode()
 
 
 @pytest.mark.asyncio
-async def test_second_preview_uses_task_delivery_marker_without_renotify(
-    adset_duplicate_client, pg_engine, monkeypatch
+async def test_second_preview_reuses_the_same_pending_task(
+    adset_duplicate_client, pg_engine
 ) -> None:
     client, _redis = adset_duplicate_client
-    notify = AsyncMock(return_value=True)
-    monkeypatch.setattr(router_module, "notify_owners", notify)
     body = _preview_body(token="testdup-task-marker")
     first_preview = await client.post("/api/tools/adset-duplicates/preview", json=body)
     second_preview = await client.post("/api/tools/adset-duplicates/preview", json=body)
@@ -381,33 +374,26 @@ async def test_second_preview_uses_task_delivery_marker_without_renotify(
     assert first_token != second_token
 
     first = await client.post(
-        "/api/tools/adset-duplicates/draft",
+        "/api/tools/adset-duplicates/launch",
         json={"preview_token": first_token},
     )
-    notify.return_value = False
     second = await client.post(
-        "/api/tools/adset-duplicates/draft",
+        "/api/tools/adset-duplicates/launch",
         json={"preview_token": second_token},
     )
 
     assert first.status_code == second.status_code == 200
     assert first.json()["task_id"] == second.json()["task_id"]
-    notify.assert_awaited_once()
     async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT status, result FROM task_queue WHERE id = :id"),
-                {"id": first.json()["task_id"]},
-            )
-        ).one()
-    assert row[0] == "draft"
-    assert row[1]["draft_notification_delivered"] is True
+        status = await conn.scalar(
+            text("SELECT status FROM task_queue WHERE id = :id"),
+            {"id": first.json()["task_id"]},
+        )
+    assert status == "pending"
 
 
 @pytest.mark.asyncio
-async def test_existing_undelivered_draft_is_preserved_after_notification_failure(
-    adset_duplicate_client, pg_engine, monkeypatch
-) -> None:
+async def test_existing_safe_draft_is_approved_from_web(adset_duplicate_client, pg_engine) -> None:
     client, redis = adset_duplicate_client
     preview_resp = await client.post(
         "/api/tools/adset-duplicates/preview",
@@ -417,191 +403,39 @@ async def test_existing_undelivered_draft_is_preserved_after_notification_failur
     stored = await load_stored_preview(redis, token)
     task_id, created = await create_duplicate_draft(pg_engine, stored=stored)
     assert created
-    monkeypatch.setattr(router_module, "notify_owners", AsyncMock(return_value=False))
-
     resp = await client.post(
-        "/api/tools/adset-duplicates/draft",
+        "/api/tools/adset-duplicates/launch",
         json={"preview_token": token},
     )
 
-    assert resp.status_code == 503
-    assert "существующего DRAFT" in resp.json()["detail"]
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["task_id"] == task_id
+    assert resp.json()["status"] == "pending"
     async with pg_engine.connect() as conn:
         status = await conn.scalar(
             text("SELECT status FROM task_queue WHERE id = :id"),
             {"id": task_id},
         )
-    assert status == "draft"
+    assert status == "pending"
 
 
 @pytest.mark.asyncio
-async def test_delivery_lease_renews_past_ttl_and_notifies_once(
-    adset_duplicate_client, monkeypatch
-) -> None:
+async def test_concurrent_double_submit_launches_one_task(adset_duplicate_client) -> None:
     client, _redis = adset_duplicate_client
-    delivery_started = asyncio.Event()
-    allow_delivery = asyncio.Event()
-
-    async def _slow_notify(*_args, **_kwargs) -> bool:
-        delivery_started.set()
-        await allow_delivery.wait()
-        return True
-
-    notify = AsyncMock(side_effect=_slow_notify)
-    monkeypatch.setattr(router_module, "notify_owners", notify)
-    monkeypatch.setattr(router_module, "_DELIVERY_LOCK_TTL_SECONDS", 1)
-    monkeypatch.setattr(router_module, "_DELIVERY_LOCK_RENEW_SECONDS", 0.1)
-    monkeypatch.setattr(router_module, "_DELIVERY_WAIT_ATTEMPTS", 40)
-    monkeypatch.setattr(router_module, "_DELIVERY_WAIT_SECONDS", 0.1)
-    preview_resp = await client.post(
-        "/api/tools/adset-duplicates/preview",
-        json=_preview_body(token="testdup-renew-lease"),
-    )
-    token = preview_resp.json()["preview_token"]
-
-    first_request = asyncio.create_task(
-        client.post("/api/tools/adset-duplicates/draft", json={"preview_token": token})
-    )
-    await asyncio.wait_for(delivery_started.wait(), timeout=2)
-    await asyncio.sleep(1.2)
-    second_request = asyncio.create_task(
-        client.post("/api/tools/adset-duplicates/draft", json={"preview_token": token})
-    )
-    await asyncio.sleep(0.2)
-    assert not second_request.done()
-    notify.assert_awaited_once()
-    allow_delivery.set()
-
-    first, second = await asyncio.gather(first_request, second_request)
-
-    assert first.status_code == second.status_code == 200
-    assert first.json()["task_id"] == second.json()["task_id"]
-    notify.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_failed_owner_notification_cancels_draft(
-    adset_duplicate_client, pg_engine, monkeypatch
-) -> None:
-    client, redis = adset_duplicate_client
-    monkeypatch.setattr(router_module, "notify_owners", AsyncMock(return_value=False))
-    preview_resp = await client.post(
-        "/api/tools/adset-duplicates/preview",
-        json=_preview_body(token="testdup-notify-fail"),
-    )
-    resp = await client.post(
-        "/api/tools/adset-duplicates/draft",
-        json={"preview_token": preview_resp.json()["preview_token"]},
-    )
-    assert resp.status_code == 503
-    async with pg_engine.connect() as conn:
-        status = await conn.scalar(
-            text(
-                """
-                SELECT status FROM task_queue
-                WHERE idempotency_key = 'meta:duplicate-adset:testdup-notify-fail'
-                """
-            )
-        )
-    assert status == "cancelled"
-    stored = await redis.get(f"adset_duplicate:preview:{preview_resp.json()['preview_token']}")
-    assert b'"consumed_task_id":null' in stored
-
-
-@pytest.mark.asyncio
-async def test_notification_exception_cancels_draft_without_consuming_preview(
-    adset_duplicate_client, pg_engine, monkeypatch
-) -> None:
-    client, redis = adset_duplicate_client
-    monkeypatch.setattr(
-        router_module,
-        "notify_owners",
-        AsyncMock(side_effect=RuntimeError("telegram transport down")),
-    )
-    preview_resp = await client.post(
-        "/api/tools/adset-duplicates/preview",
-        json=_preview_body(token="testdup-notify-exception"),
-    )
-    token = preview_resp.json()["preview_token"]
-
-    resp = await client.post(
-        "/api/tools/adset-duplicates/draft",
-        json={"preview_token": token},
-    )
-
-    assert resp.status_code == 503
-    async with pg_engine.connect() as conn:
-        status = await conn.scalar(
-            text(
-                """
-                SELECT status FROM task_queue
-                WHERE idempotency_key = 'meta:duplicate-adset:testdup-notify-exception'
-                """
-            )
-        )
-    assert status == "cancelled"
-    stored = await redis.get(f"adset_duplicate:preview:{token}")
-    assert b'"consumed_task_id":null' in stored
-
-
-@pytest.mark.asyncio
-async def test_failed_notification_never_claims_cancel_when_cancel_loses_race(
-    adset_duplicate_client, monkeypatch
-) -> None:
-    client, _redis = adset_duplicate_client
-    monkeypatch.setattr(router_module, "notify_owners", AsyncMock(return_value=False))
-    monkeypatch.setattr(router_module, "cancel_draft_task", AsyncMock(return_value=False))
-    preview_resp = await client.post(
-        "/api/tools/adset-duplicates/preview",
-        json=_preview_body(token="testdup-cancel-race"),
-    )
-
-    resp = await client.post(
-        "/api/tools/adset-duplicates/draft",
-        json={"preview_token": preview_resp.json()["preview_token"]},
-    )
-
-    assert resp.status_code == 500
-    assert "не удалось безопасно отменить" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_concurrent_double_submit_notifies_once_and_waits_for_delivery(
-    adset_duplicate_client, monkeypatch
-) -> None:
-    client, _redis = adset_duplicate_client
-    delivery_started = asyncio.Event()
-    allow_delivery = asyncio.Event()
-
-    async def _slow_notify(*_args, **_kwargs) -> bool:
-        delivery_started.set()
-        await allow_delivery.wait()
-        return True
-
-    notify = AsyncMock(side_effect=_slow_notify)
-    monkeypatch.setattr(router_module, "notify_owners", notify)
     preview_resp = await client.post(
         "/api/tools/adset-duplicates/preview",
         json=_preview_body(token="testdup-concurrent"),
     )
     token = preview_resp.json()["preview_token"]
 
-    first_request = asyncio.create_task(
-        client.post("/api/tools/adset-duplicates/draft", json={"preview_token": token})
+    first, second = await asyncio.gather(
+        client.post("/api/tools/adset-duplicates/launch", json={"preview_token": token}),
+        client.post("/api/tools/adset-duplicates/launch", json={"preview_token": token}),
     )
-    await asyncio.wait_for(delivery_started.wait(), timeout=2)
-    second_request = asyncio.create_task(
-        client.post("/api/tools/adset-duplicates/draft", json={"preview_token": token})
-    )
-    await asyncio.sleep(0.2)
-    assert not second_request.done()
-    allow_delivery.set()
-
-    first, second = await asyncio.gather(first_request, second_request)
 
     assert first.status_code == second.status_code == 200
     assert first.json()["task_id"] == second.json()["task_id"]
-    notify.assert_awaited_once()
+    assert first.json()["status"] == second.json()["status"] == "pending"
 
 
 @pytest.mark.asyncio
@@ -622,7 +456,7 @@ async def test_foreign_selected_ad_and_expired_preview_are_rejected(
     token = preview_resp.json()["preview_token"]
     await redis.delete(f"adset_duplicate:preview:{token}")
     expired = await client.post(
-        "/api/tools/adset-duplicates/draft",
+        "/api/tools/adset-duplicates/launch",
         json={"preview_token": token},
     )
     assert expired.status_code == 410

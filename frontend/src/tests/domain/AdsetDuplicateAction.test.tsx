@@ -26,7 +26,7 @@ vi.mock("@/lib/api/adsetDuplicates", async () => {
       isPending: false,
       error: null,
     }),
-    useCreateAdsetDuplicateDraft: () => ({
+    useStartAdsetDuplicate: () => ({
       mutateAsync: mocks.draft,
       reset: mocks.draftReset,
       isPending: false,
@@ -115,7 +115,7 @@ describe("AdsetDuplicateAction", () => {
     mocks.draft.mockImplementation(async () => {
       const response = {
         task_id: 77,
-        status: "draft",
+        status: "pending",
         expires_at: "2026-07-15T18:00:00Z",
       };
       mocks.draftData = response;
@@ -123,7 +123,7 @@ describe("AdsetDuplicateAction", () => {
     });
   });
 
-  it("selects only requested ads, previews 3-2-N totals and creates Telegram draft", async () => {
+  it("selects only requested ads, previews 3-2-N totals and launches from web", async () => {
     const user = userEvent.setup();
     render(<AdsetDuplicateAction ad={AD} />);
 
@@ -132,7 +132,11 @@ describe("AdsetDuplicateAction", () => {
     expect(screen.getByText("3-2-1")).toBeInTheDocument();
     expect(screen.getByLabelText("Кампаний")).toHaveAttribute("max", "5");
     expect(screen.getByLabelText("Адсетов / кампания")).toHaveAttribute("max", "10");
-    expect(screen.getByLabelText(/Дневной бюджет · ABO/)).toHaveValue(100);
+    const initialBudget = screen.getByLabelText(/Дневной бюджет · ABO/);
+    expect(initialBudget).toHaveValue("100");
+    expect(initialBudget).toHaveAttribute("type", "text");
+    expect(initialBudget).toHaveAttribute("inputmode", "decimal");
+    expect(screen.getByText(/Итого:/)).toHaveTextContent("600");
     expect(screen.getByLabelText("Дата старта · 00:00 кабинета")).toHaveAttribute("type", "date");
     expect(screen.getByLabelText("Дата старта · 00:00 кабинета")).not.toHaveValue("");
     expect(screen.getByRole("dialog")).toHaveClass("overflow-auto");
@@ -166,13 +170,13 @@ describe("AdsetDuplicateAction", () => {
     expect(screen.getByText("16.07.2026, 00:00")).toBeInTheDocument();
     expect(screen.getByText(`${TIMEZONE} · UTC+02:00`)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Создать черновик" }));
+    await user.click(screen.getByRole("button", { name: "Запустить дублирование" }));
     await waitFor(() =>
       expect(mocks.draft).toHaveBeenCalledWith({ preview_token: "preview-final" }),
     );
-    expect(await screen.findByText("Подтверждение отправлено в Telegram")).toBeInTheDocument();
-    expect(screen.getByText(/Без подтверждения создание в Meta не начнётся/)).toBeInTheDocument();
-    expect(screen.getByText("Черновик")).toBeInTheDocument();
+    expect(await screen.findByText("Дублирование запущено")).toBeInTheDocument();
+    expect(screen.getByText(/Статус создания обновляется прямо здесь/)).toBeInTheDocument();
+    expect(screen.getByText("В очереди")).toBeInTheDocument();
     expect(screen.getByText("#77")).toBeInTheDocument();
   });
 
@@ -186,7 +190,7 @@ describe("AdsetDuplicateAction", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByLabelText(/Дневной бюджет · CBO/)).toHaveValue(100);
+    expect(screen.getByLabelText(/Дневной бюджет · CBO/)).toHaveValue("100");
 
     const campaigns = screen.getByLabelText("Кампаний");
     const adsets = screen.getByLabelText("Адсетов / кампания");
@@ -215,7 +219,7 @@ describe("AdsetDuplicateAction", () => {
     await screen.findByText("Creative 2");
     await user.click(screen.getByRole("button", { name: "Рассчитать дубль" }));
     await screen.findByText("Всего объектов");
-    await user.click(screen.getByRole("button", { name: "Создать черновик" }));
+    await user.click(screen.getByRole("button", { name: "Запустить дублирование" }));
 
     expect(
       await screen.findByText(
@@ -241,7 +245,7 @@ describe("AdsetDuplicateAction", () => {
     await screen.findByText("Creative 2");
     await user.click(screen.getByRole("button", { name: "Рассчитать дубль" }));
     await screen.findByText("Всего объектов");
-    await user.click(screen.getByRole("button", { name: "Создать черновик" }));
+    await user.click(screen.getByRole("button", { name: "Запустить дублирование" }));
 
     expect(screen.getByRole("status")).toHaveTextContent("Создаём объявления");
     const progressbar = screen.getByRole("progressbar", {
@@ -270,7 +274,7 @@ describe("AdsetDuplicateAction", () => {
       .idempotency_token;
     await user.click(screen.getByRole("button", { name: "Рассчитать дубль" }));
     await screen.findByText("Всего объектов");
-    await user.click(screen.getByRole("button", { name: "Создать черновик" }));
+    await user.click(screen.getByRole("button", { name: "Запустить дублирование" }));
 
     expect(await screen.findByText("Частичная структура в Meta")).toBeInTheDocument();
     expect(screen.getByText(/Создано объектов: 2/)).toBeInTheDocument();
@@ -325,7 +329,9 @@ describe("AdsetDuplicateAction", () => {
     await user.click(screen.getByRole("button", { name: "Рассчитать дубль" }));
 
     expect(await screen.findByRole("button", { name: "Обновить preview" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "Создать черновик" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Запустить дублирование" }),
+    ).not.toBeInTheDocument();
     expect(mocks.draft).not.toHaveBeenCalled();
   });
 
@@ -353,5 +359,22 @@ describe("AdsetDuplicateAction", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Максимальный дневной бюджет — 100 000.00");
     expect(screen.getByRole("button", { name: "Рассчитать дубль" })).toBeDisabled();
+  });
+
+  it("offers quick budget presets and recalculates the total before preview", async () => {
+    const user = userEvent.setup();
+    render(<AdsetDuplicateAction ad={AD} />);
+
+    await user.click(screen.getByRole("button", { name: "Дублировать структуру объявления" }));
+    await screen.findByText("Creative 2");
+
+    const preset = screen.getByRole("button", {
+      name: "Установить дневной бюджет 200 USD",
+    });
+    await user.click(preset);
+
+    expect(screen.getByLabelText(/Дневной бюджет · ABO/)).toHaveValue("200");
+    expect(preset).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/Итого:/)).toHaveTextContent("1 200");
   });
 });

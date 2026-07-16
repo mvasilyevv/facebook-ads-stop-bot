@@ -17,7 +17,7 @@ import {
   adsetDuplicatePollInterval,
   type AdsetDuplicatePreviewIn,
   useAdsetDuplicateStatus,
-  useCreateAdsetDuplicateDraft,
+  useStartAdsetDuplicate,
   usePreviewAdsetDuplicate,
 } from "@/lib/api/adsetDuplicates";
 
@@ -64,11 +64,11 @@ describe("adset duplicate API", () => {
       previewBody,
     );
 
-    const draftHook = renderHook(() => useCreateAdsetDuplicateDraft(), {
+    const draftHook = renderHook(() => useStartAdsetDuplicate(), {
       wrapper: wrapper(queryClient),
     });
     await act(() => draftHook.result.current.mutateAsync({ preview_token: "pv-1" }));
-    expect(mockApiSend).toHaveBeenNthCalledWith(2, "POST", "/tools/adset-duplicates/draft", {
+    expect(mockApiSend).toHaveBeenNthCalledWith(2, "POST", "/tools/adset-duplicates/launch", {
       preview_token: "pv-1",
     });
   });

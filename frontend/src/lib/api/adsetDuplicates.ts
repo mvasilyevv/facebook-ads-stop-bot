@@ -1,8 +1,8 @@
 /**
  * Быстрое дублирование структуры adset через draft-first контур.
  *
- * Preview ничего не пишет в Meta. POST /draft создаёт только Telegram-черновик;
- * фактическое создание начинается после подтверждения владельцем в Telegram.
+ * Preview ничего не пишет в Meta. POST /launch запускается только явной кнопкой
+ * в web-preview; Telegram для этого сценария не требуется.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -82,11 +82,11 @@ export interface AdsetDuplicatePreviewOut {
   expires_at: string;
 }
 
-export interface AdsetDuplicateDraftIn {
+export interface AdsetDuplicateLaunchIn {
   preview_token: string;
 }
 
-export interface AdsetDuplicateDraftOut {
+export interface AdsetDuplicateLaunchOut {
   task_id: number;
   status: string;
   expires_at: string;
@@ -128,11 +128,11 @@ export function usePreviewAdsetDuplicate() {
   });
 }
 
-export function useCreateAdsetDuplicateDraft() {
+export function useStartAdsetDuplicate() {
   const queryClient = useQueryClient();
-  return useMutation<AdsetDuplicateDraftOut, Error, AdsetDuplicateDraftIn>({
+  return useMutation<AdsetDuplicateLaunchOut, Error, AdsetDuplicateLaunchIn>({
     mutationFn: (body) =>
-      apiSend<AdsetDuplicateDraftOut>("POST", "/tools/adset-duplicates/draft", body),
+      apiSend<AdsetDuplicateLaunchOut>("POST", "/tools/adset-duplicates/launch", body),
     onSuccess: (draft) => {
       queryClient.setQueryData(["adset-duplicates", draft.task_id], {
         ...draft,

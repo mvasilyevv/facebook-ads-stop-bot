@@ -229,7 +229,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tools/adset-duplicates/draft": {
+    "/api/tools/adset-duplicates/launch": {
         parameters: {
             query?: never;
             header?: never;
@@ -239,10 +239,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Create Adset Duplicate Draft
-         * @description Создаёт только DRAFT; без успешной owner-нотификации сразу отменяет его.
+         * Launch Adset Duplicate
+         * @description Creates an idempotent task and launches it after explicit web confirmation.
          */
-        post: operations["create_adset_duplicate_draft_api_tools_adset_duplicates_draft_post"];
+        post: operations["launch_adset_duplicate_api_tools_adset_duplicates_launch_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2585,13 +2585,20 @@ export interface components {
             /** Total Objects */
             total_objects: number;
         };
-        /** AdsetDuplicateDraftIn */
-        AdsetDuplicateDraftIn: {
+        /** AdsetDuplicateGeneratedNames */
+        AdsetDuplicateGeneratedNames: {
+            /** Campaigns */
+            campaigns: string[];
+            /** Adsets */
+            adsets: string[];
+        };
+        /** AdsetDuplicateLaunchIn */
+        AdsetDuplicateLaunchIn: {
             /** Preview Token */
             preview_token: string;
         };
-        /** AdsetDuplicateDraftOut */
-        AdsetDuplicateDraftOut: {
+        /** AdsetDuplicateLaunchOut */
+        AdsetDuplicateLaunchOut: {
             /** Task Id */
             task_id: number;
             /** Status */
@@ -2601,13 +2608,6 @@ export interface components {
              * Format: date-time
              */
             expires_at: string;
-        };
-        /** AdsetDuplicateGeneratedNames */
-        AdsetDuplicateGeneratedNames: {
-            /** Campaigns */
-            campaigns: string[];
-            /** Adsets */
-            adsets: string[];
         };
         /** AdsetDuplicatePreviewIn */
         AdsetDuplicatePreviewIn: {
@@ -6253,7 +6253,7 @@ export interface operations {
             };
         };
     };
-    create_adset_duplicate_draft_api_tools_adset_duplicates_draft_post: {
+    launch_adset_duplicate_api_tools_adset_duplicates_launch_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -6262,7 +6262,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AdsetDuplicateDraftIn"];
+                "application/json": components["schemas"]["AdsetDuplicateLaunchIn"];
             };
         };
         responses: {
@@ -6272,7 +6272,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AdsetDuplicateDraftOut"];
+                    "application/json": components["schemas"]["AdsetDuplicateLaunchOut"];
                 };
             };
             /** @description Validation Error */

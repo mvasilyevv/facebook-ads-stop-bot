@@ -507,19 +507,19 @@
         }
       }
     },
-    "/api/tools/adset-duplicates/draft": {
+    "/api/tools/adset-duplicates/launch": {
       "post": {
         "tags": [
           "tools"
         ],
-        "summary": "Create Adset Duplicate Draft",
-        "description": "Создаёт только DRAFT; без успешной owner-нотификации сразу отменяет его.",
-        "operationId": "create_adset_duplicate_draft_api_tools_adset_duplicates_draft_post",
+        "summary": "Launch Adset Duplicate",
+        "description": "Creates an idempotent task and launches it after explicit web confirmation.",
+        "operationId": "launch_adset_duplicate_api_tools_adset_duplicates_launch_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AdsetDuplicateDraftIn"
+                "$ref": "#/components/schemas/AdsetDuplicateLaunchIn"
               }
             }
           },
@@ -531,7 +531,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AdsetDuplicateDraftOut"
+                  "$ref": "#/components/schemas/AdsetDuplicateLaunchOut"
                 }
               }
             }
@@ -5955,46 +5955,6 @@
         ],
         "title": "AdsetDuplicateCounts"
       },
-      "AdsetDuplicateDraftIn": {
-        "properties": {
-          "preview_token": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 20,
-            "title": "Preview Token"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "preview_token"
-        ],
-        "title": "AdsetDuplicateDraftIn"
-      },
-      "AdsetDuplicateDraftOut": {
-        "properties": {
-          "task_id": {
-            "type": "integer",
-            "title": "Task Id"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "expires_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Expires At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "task_id",
-          "status",
-          "expires_at"
-        ],
-        "title": "AdsetDuplicateDraftOut"
-      },
       "AdsetDuplicateGeneratedNames": {
         "properties": {
           "campaigns": {
@@ -6018,6 +5978,46 @@
           "adsets"
         ],
         "title": "AdsetDuplicateGeneratedNames"
+      },
+      "AdsetDuplicateLaunchIn": {
+        "properties": {
+          "preview_token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 20,
+            "title": "Preview Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preview_token"
+        ],
+        "title": "AdsetDuplicateLaunchIn"
+      },
+      "AdsetDuplicateLaunchOut": {
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "title": "Task Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "status",
+          "expires_at"
+        ],
+        "title": "AdsetDuplicateLaunchOut"
       },
       "AdsetDuplicatePreviewIn": {
         "properties": {

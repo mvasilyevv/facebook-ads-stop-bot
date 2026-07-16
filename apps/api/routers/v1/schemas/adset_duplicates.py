@@ -114,13 +114,13 @@ class AdsetDuplicatePreviewOut(BaseModel):
     expires_at: datetime
 
 
-class AdsetDuplicateDraftIn(BaseModel):
+class AdsetDuplicateLaunchIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     preview_token: str = Field(min_length=20, max_length=128)
 
 
-class AdsetDuplicateDraftOut(BaseModel):
+class AdsetDuplicateLaunchOut(BaseModel):
     task_id: int
     status: str
     expires_at: datetime
@@ -145,8 +145,8 @@ class AdsetDuplicateStatusOut(BaseModel):
 
 
 __all__ = [
-    "AdsetDuplicateDraftIn",
-    "AdsetDuplicateDraftOut",
+    "AdsetDuplicateLaunchIn",
+    "AdsetDuplicateLaunchOut",
     "AdsetDuplicatePreviewIn",
     "AdsetDuplicatePreviewOut",
     "AdsetDuplicateStatusOut",
