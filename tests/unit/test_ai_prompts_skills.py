@@ -52,3 +52,11 @@ def test_build_prompt_skips_missing_skill() -> None:
     combined = build_chat_system_prompt(skills=["no_such_skill_xyz", "pulse_report"])
     assert "пульс" in combined.lower() or "отчёт" in combined.lower()
     assert combined.startswith(build_chat_system_prompt())
+
+
+def test_web_chat_skill_requires_spend_and_status_tools() -> None:
+    combined = build_chat_system_prompt(skills=["web_chat"])
+
+    assert "get_insights" in combined
+    assert "find_ads" in combined
+    assert "Не заканчивай ответ после одного `get_account_health`" in combined

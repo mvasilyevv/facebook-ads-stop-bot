@@ -102,7 +102,7 @@ class InsightsFetcher:
             "ad_account_id": ad_account_id,
             "level": "ad",
             "date_preset": date_preset,
-            "filtering": ({"field": "ad.id", "operator": "IN", "value": json.dumps(ad_ids)},),
+            "filtering": ({"field": "ad.id", "operator": "IN", "value": list(ad_ids)},),
             "limit": min(max(len(ad_ids), 25), 500),
         }
         if fields is not None:
@@ -123,9 +123,7 @@ class InsightsFetcher:
             ad_account_id=ad_account_id,
             level=level,
             date_preset=date_preset,
-            filtering=(
-                {"field": "campaign.id", "operator": "IN", "value": json.dumps(campaign_ids)},
-            ),
+            filtering=({"field": "campaign.id", "operator": "IN", "value": list(campaign_ids)},),
             limit=min(max(len(campaign_ids) * 5, 25), 500),
         )
         return await self.fetch_for_request(req)

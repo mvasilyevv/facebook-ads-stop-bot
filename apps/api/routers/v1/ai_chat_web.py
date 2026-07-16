@@ -8,8 +8,7 @@
   нечем (кнопки dr_ok живут в Telegram), поэтому draft-инструменты канал
   не видит и не исполняет (guard в ChatSession по risk-уровню).
 - Rate-limit 30/час per IP (Redis, паттерн /ai/analyze) + встроенный лимитер
-  ChatSession. MetaApiClient в API-процессе нет — meta-инструменты мягко
-  деградируют (ToolError), БД/Redis/трекер/creative работают.
+  ChatSession. READ-инструменты Meta используют общий MetaApiClient из API lifespan.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from apps.api.deps import DepEngine, DepRedis, DepSettings
+from apps.api.deps import DepEngine, DepMetaApiClient, DepRedis, DepSettings
 from apps.api.routers.v1.ai_analyze import _extract_client_key
 from apps.api.routers.v1.schemas.ai_chat import (
     AIChatRequest,
@@ -102,6 +101,7 @@ async def ai_chat(
     engine: DepEngine,
     redis: DepRedis,
     settings: DepSettings,
+    meta_api_client: DepMetaApiClient,
 ) -> JSONResponse:
     """Ответ ассистента на вопрос из веб-виджета (с tool-use, read-only канал).
 
@@ -141,7 +141,7 @@ async def ai_chat(
         allow_tools=True,
         engine=engine,
         redis_client=redis,
-        meta_api_client=None,
+        meta_api_client=meta_api_client,
         skills=("web_chat",),
         allowed_risk_levels=_WEB_RISK_LEVELS,
     )

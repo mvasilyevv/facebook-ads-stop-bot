@@ -86,6 +86,7 @@ async def test_endpoint_rate_limited_429() -> None:
             engine=MagicMock(),
             redis=MagicMock(),
             settings=_settings_mock(),
+            meta_api_client=None,
         )
     assert resp.status_code == 429
 
@@ -105,6 +106,7 @@ async def test_endpoint_ai_unavailable_503() -> None:
             engine=MagicMock(),
             redis=MagicMock(),
             settings=_settings_mock(),
+            meta_api_client=None,
         )
     assert resp.status_code == 503
 
@@ -125,6 +127,7 @@ async def test_endpoint_happy_path() -> None:
     settings = _settings_mock()
     settings.anthropic_api_key = object()
     settings.anthropic_model = "primary-model"
+    meta_api_client = MagicMock(name="meta_api_client")
     with (
         patch("apps.api.routers.v1.ai_chat_web.check_and_increment", new=AsyncMock()),
         patch("apps.api.routers.v1.ai_chat_web.get_ai_client", return_value=ai),
@@ -142,6 +145,7 @@ async def test_endpoint_happy_path() -> None:
             engine=MagicMock(),
             redis=MagicMock(),
             settings=settings,
+            meta_api_client=meta_api_client,
         )
     assert resp.status_code == 200
     data = json.loads(resp.body)
@@ -151,6 +155,7 @@ async def test_endpoint_happy_path() -> None:
     kwargs = cs.call_args.kwargs
     assert kwargs["allowed_risk_levels"] == _WEB_RISKS
     assert "web_chat" in kwargs["skills"]
+    assert kwargs["meta_api_client"] is meta_api_client
     # История дошла целиком (3 сообщения)
     assert len(session.ask.call_args.args[0]) == 3
 

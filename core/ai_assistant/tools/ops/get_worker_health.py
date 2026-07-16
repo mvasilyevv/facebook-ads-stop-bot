@@ -12,6 +12,8 @@ import logging
 from typing import Any, ClassVar
 
 from core.ai_assistant.tools.base import RiskLevel, ToolContext
+from core.observer.queries import load_scanning_enabled
+from core.observer.runtime import read_observer_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +54,10 @@ class GetWorkerHealthTool:
     schema: ClassVar[dict[str, Any]] = {
         "name": "get_worker_health",
         "description": (
-            "Статус всех 11 воркеров системы: читает worker:heartbeat:* из Redis (TTL 60s). "
+            "Статус ожидаемых воркеров: читает worker:heartbeat:* из Redis (TTL 60s), "
+            "а для observer отдельно проверяет runtime и глобальный флаг сканирования. "
             "Воркер без ключа = не пишет heartbeat (упал или не запущен). "
+            "Живой heartbeat observer НЕ означает, что сканирование включено. "
             "Money-критичные: observer (скан и авто-стоп), meta_api (исполнение pause/enable), "
             "cabinet_scheduler (автостарт кабинета по расписанию). Если они мертвы — "
             "сообщи пользователю это В ПЕРВУЮ очередь."
@@ -97,4 +101,28 @@ class GetWorkerHealthTool:
         lines = ["Состояние воркеров (heartbeat в Redis):"]
         for name_, status in results:
             lines.append(f"- {name_}: {status}")
+
+        runtime = await read_observer_runtime(redis_client)
+        scanning_enabled: bool | None = None
+        if ctx.engine is not None:
+            try:
+                scanning_enabled = await load_scanning_enabled(ctx.engine)
+            except Exception as exc:  # noqa: BLE001 — heartbeat-диагностика остаётся полезной
+                logger.warning("load_scanning_enabled failed: %s", exc)
+
+        lines.extend(
+            [
+                "",
+                "Операционный статус observer:",
+                f"- runtime={runtime['status']}",
+                f"- scanning_enabled={scanning_enabled if scanning_enabled is not None else 'unknown'}",
+                f"- last_successful_scan_at={runtime['last_successful_scan_at'] or 'unknown'}",
+                f"- next_scan_at={runtime['next_scan_at'] or 'unknown'}",
+            ]
+        )
+        if runtime["status"] == "paused" or scanning_enabled is False:
+            lines.append(
+                "- ВАЖНО: процесс observer жив, но сканирование остановлено; "
+                "это нельзя описывать как «всё работает штатно»."
+            )
         return "\n".join(lines)

@@ -74,7 +74,7 @@ class MetaInsightsRequest:
         "frequency",
         "actions",
     )
-    filtering: tuple[dict[str, str], ...] = ()
+    filtering: tuple[dict[str, Any], ...] = ()
     breakdowns: tuple[str, ...] = ()
     limit: int = 25
     action_attribution_windows: tuple[str, ...] = (

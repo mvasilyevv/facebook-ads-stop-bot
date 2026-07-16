@@ -2,7 +2,7 @@
 """FastAPI app для FB Stop Bot (минимальная версия после миграции).
 
 Что внутри:
-- lifespan: создаёт Redis-клиент и кладёт в app.state.redis (закрывает на shutdown).
+- lifespan: создаёт общие Redis/MetaApi клиенты и закрывает их на shutdown.
   Engine не создаём — берётся через `core.db.get_engine` (ленивый синглтон).
 - Middleware: X-Request-Id + сбор Prometheus-метрик.
 - CORS: подключается только если задан `settings.frontend_origin`.
@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -53,6 +54,7 @@ from core.adset_pro import (
     TemporaryError as AdsetProTemporaryError,
 )
 from core.config import get_settings, safe_url_for_log
+from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import (
     MetaApiError,
 )
@@ -75,9 +77,39 @@ from core.meta_api.errors import (
 logger = logging.getLogger(__name__)
 
 
+async def _build_meta_api_client() -> MetaApiClient | None:
+    """Создаёт общий MetaApiClient для READ-инструментов веб-чата.
+
+    gRPC-канал сам восстанавливает соединение с browser-agent, поэтому держим
+    один клиент на весь lifespan API вместо нового канала на каждый вопрос.
+    """
+    grpc_host = (
+        os.environ.get("BROWSER_AGENT_GRPC_HOST")
+        or os.environ.get("BROWSER_AGENT_HOST")
+        or "localhost"
+    )
+    try:
+        grpc_port = int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051"))
+    except ValueError:
+        grpc_port = 50051
+
+    try:
+        client = MetaApiClient(host=grpc_host, port=grpc_port)
+        await client.start()
+        logger.info(
+            "MetaApiClient создан в API lifespan (%s:%d) — Meta READ tools веб-чата активны",
+            grpc_host,
+            grpc_port,
+        )
+        return client
+    except Exception as exc:  # noqa: BLE001 — API должен подняться даже без browser-agent
+        logger.warning("MetaApiClient не создан в API lifespan: %s", exc)
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Поднимает Redis на старте, закрывает на остановке.
+    """Поднимает Redis и MetaApiClient на старте, закрывает на остановке.
 
     Engine не трогаем — `core.db.get_engine` это ленивый синглгтон, dispose
     делать на каждый рестарт уvicorn worker'а не обязательно (gunicorn/uvicorn
@@ -88,14 +120,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings = get_settings()
     own_redis = False
+    own_meta_api_client = False
     if not getattr(app.state, "redis", None):
         app.state.redis = redis_from_url(settings.redis_url, decode_responses=True)
         own_redis = True
         logger.info("Redis-клиент создан в lifespan: %s", safe_url_for_log(settings.redis_url))
+    if not getattr(app.state, "meta_api_client", None):
+        app.state.meta_api_client = await _build_meta_api_client()
+        own_meta_api_client = app.state.meta_api_client is not None
     app.state.settings = settings
     try:
         yield
     finally:
+        if own_meta_api_client and getattr(app.state, "meta_api_client", None) is not None:
+            try:
+                await app.state.meta_api_client.close()
+            except Exception as exc:
+                logger.warning("Ошибка закрытия MetaApiClient в lifespan: %s", exc)
         if own_redis and getattr(app.state, "redis", None) is not None:
             try:
                 await app.state.redis.aclose()

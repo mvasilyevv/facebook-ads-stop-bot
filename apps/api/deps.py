@@ -28,6 +28,7 @@ from core.adset_pro.credentials import create_adsetpro_client
 from core.config import Settings
 from core.config import get_settings as _core_get_settings
 from core.db import get_engine as _core_get_engine
+from core.meta_api.client import MetaApiClient
 
 
 def get_settings() -> Settings:
@@ -48,11 +49,17 @@ async def get_redis(request: Request) -> Redis:
     return redis
 
 
+def get_meta_api_client(request: Request) -> MetaApiClient | None:
+    """Общий gRPC-клиент browser-agent из API lifespan (может быть недоступен)."""
+    return getattr(request.app.state, "meta_api_client", None)
+
+
 # Annotated-алиасы для удобного использования в роутерах v1:
 #   async def my_handler(engine: DepEngine, redis: DepRedis, s: DepSettings): ...
 DepEngine = Annotated[AsyncEngine, Depends(get_engine)]
 DepRedis = Annotated[Redis, Depends(get_redis)]
 DepSettings = Annotated[Settings, Depends(get_settings)]
+DepMetaApiClient = Annotated[MetaApiClient | None, Depends(get_meta_api_client)]
 
 
 async def get_adset_pro_client(
