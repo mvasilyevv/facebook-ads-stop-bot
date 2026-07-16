@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock
 
@@ -24,6 +25,7 @@ from core.adset_duplicates.service import (
     calculate_budget,
     fetch_account_metadata,
     generate_names,
+    resolve_duplicate_source_hierarchy,
     serialize_duplicate_task,
     validate_structure_caps,
 )
@@ -151,6 +153,76 @@ async def test_account_metadata_requires_exact_graph_fields_and_keeps_float_offs
         query_params={"fields": "id,name,currency,timezone_name,timezone_offset_hours_utc"},
         ad_account_id="act_123",
     )
+
+
+@pytest.mark.asyncio
+async def test_missing_local_adset_id_is_hydrated_from_read_only_source_ad() -> None:
+    source = replace(_source(), adset_id="")
+    client = AsyncMock()
+    client.execute_graph_call.return_value = {
+        "id": source.source_ad_id,
+        "account_id": "100",
+        "campaign_id": "200",
+        "adset_id": "300",
+    }
+
+    resolved = await resolve_duplicate_source_hierarchy(client, source)
+
+    assert resolved == _source()
+    client.execute_graph_call.assert_awaited_once_with(
+        method="GET",
+        endpoint="/401",
+        query_params={"fields": "id,account_id,campaign_id,adset_id"},
+        ad_account_id="100",
+    )
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_hydration_can_recover_all_missing_local_ids() -> None:
+    source = replace(_source(), account_id="", campaign_id="", adset_id="")
+    client = AsyncMock()
+    client.execute_graph_call.return_value = {
+        "id": source.source_ad_id,
+        "account_id": "100",
+        "campaign_id": "200",
+        "adset_id": "300",
+    }
+
+    resolved = await resolve_duplicate_source_hierarchy(client, source)
+
+    assert resolved == _source()
+    assert client.execute_graph_call.await_args.kwargs["ad_account_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_hydration_fails_closed_on_local_meta_conflict() -> None:
+    source = replace(_source(), campaign_id="999", adset_id="")
+    client = AsyncMock()
+    client.execute_graph_call.return_value = {
+        "id": source.source_ad_id,
+        "account_id": "100",
+        "campaign_id": "200",
+        "adset_id": "300",
+    }
+
+    with pytest.raises(AdsetDuplicateError, match="кампании не совпадает") as exc_info:
+        await resolve_duplicate_source_hierarchy(client, source)
+
+    assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_hydration_rejects_incomplete_graph_response() -> None:
+    source = replace(_source(), adset_id="")
+    client = AsyncMock()
+    client.execute_graph_call.return_value = {
+        "id": source.source_ad_id,
+        "account_id": "100",
+        "campaign_id": "200",
+    }
+
+    with pytest.raises(AdsetDuplicateError, match="Meta не вернула полный hierarchy"):
+        await resolve_duplicate_source_hierarchy(client, source)
 
 
 def test_name_generation_is_unique_and_bounded() -> None:

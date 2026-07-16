@@ -13,7 +13,7 @@ import html
 import json
 import math
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -240,7 +240,7 @@ async def load_duplicate_source(
     source_ad_id: str,
     selected_ad_ids: list[str],
 ) -> DuplicateSource:
-    """DB-only hierarchy lookup + строгая принадлежность selected ads одному adset."""
+    """Local source lookup + строгая принадлежность selected ads одному local adset."""
     async with engine.connect() as conn:
         source = (
             await conn.execute(
@@ -280,13 +280,12 @@ async def load_duplicate_source(
             "не подходят: " + ", ".join(missing)
         )
 
+    # Исторические/DOM-scan строки могут не содержать fb_adset_id: scanner видит
+    # название adset, campaign/ad ID и метрики, но не всегда сам Meta adset ID.
+    # Preview восстановит недостающий hierarchy read-only Graph GET по source_ad_id.
     adset_id = str(source[3] or "").strip()
     campaign_id = str(source[6] or "").strip()
     account_id = str(source[8] or "").strip().removeprefix("act_")
-    if not adset_id.isdigit() or not campaign_id.isdigit() or not account_id.isdigit():
-        raise AdsetDuplicateError(
-            "В локальном каталоге нет полного Meta hierarchy (account/campaign/adset IDs)"
-        )
 
     ads = tuple(
         SourceAd(
@@ -308,6 +307,63 @@ async def load_duplicate_source(
         ads=ads,
         selected_ad_ids=tuple(selected_ad_ids),
         source_daily_budget_cents=_optional_cents(source[5]),
+    )
+
+
+async def resolve_duplicate_source_hierarchy(
+    client: Any,
+    source: DuplicateSource,
+) -> DuplicateSource:
+    """Hydrate missing account/campaign/adset IDs through a read-only Ad GET.
+
+    The local catalog remains the source of names and the selectable sibling-ad
+    list. Graph is consulted only when the scanner did not persist the full
+    hierarchy. Conflicts with locally known IDs fail closed.
+    """
+
+    local_account_id = source.account_id.removeprefix("act_").strip()
+    if local_account_id.isdigit() and source.campaign_id.isdigit() and source.adset_id.isdigit():
+        return source
+
+    response = await client.execute_graph_call(
+        method="GET",
+        endpoint=f"/{source.source_ad_id}",
+        query_params={"fields": "id,account_id,campaign_id,adset_id"},
+        ad_account_id=local_account_id if local_account_id.isdigit() else None,
+    )
+    returned_source_id = str(response.get("id") or "").strip()
+    if returned_source_id != source.source_ad_id:
+        raise AdsetDuplicateError(
+            "Meta вернула другое исходное объявление при восстановлении hierarchy",
+            status_code=409,
+        )
+
+    graph_account_id = str(response.get("account_id") or "").strip().removeprefix("act_")
+    graph_campaign_id = str(response.get("campaign_id") or "").strip()
+    graph_adset_id = str(response.get("adset_id") or "").strip()
+    if not all(value.isdigit() for value in (graph_account_id, graph_campaign_id, graph_adset_id)):
+        raise AdsetDuplicateError(
+            "Meta не вернула полный hierarchy исходного объявления (account/campaign/adset IDs)",
+            status_code=422,
+        )
+
+    known_ids = {
+        "кабинета": (local_account_id, graph_account_id),
+        "кампании": (source.campaign_id, graph_campaign_id),
+        "adset": (source.adset_id, graph_adset_id),
+    }
+    for label, (local_id, graph_id) in known_ids.items():
+        if local_id and local_id.isdigit() and local_id != graph_id:
+            raise AdsetDuplicateError(
+                f"Локальный ID {label} не совпадает с Meta; обнови источник",
+                status_code=409,
+            )
+
+    return replace(
+        source,
+        account_id=f"act_{graph_account_id}",
+        campaign_id=graph_campaign_id,
+        adset_id=graph_adset_id,
     )
 
 
@@ -360,6 +416,18 @@ def build_duplicate_preview(
     now: datetime | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Pure composition preview + flat params, совместимые с executor."""
+    if not all(
+        value.isdigit()
+        for value in (
+            source.account_id.removeprefix("act_"),
+            source.campaign_id,
+            source.adset_id,
+        )
+    ):
+        raise AdsetDuplicateError(
+            "Не удалось определить полный Meta hierarchy исходного объявления",
+            status_code=422,
+        )
     total_adsets, total_ads, total_objects = validate_structure_caps(
         campaign_count, adsets_per_campaign, len(source.selected_ad_ids)
     )
@@ -848,6 +916,7 @@ __all__ = [
     "load_stored_preview",
     "mark_preview_consumed",
     "mark_duplicate_draft_notification_delivered",
+    "resolve_duplicate_source_hierarchy",
     "render_draft_notification",
     "save_stored_preview",
     "serialize_duplicate_task",

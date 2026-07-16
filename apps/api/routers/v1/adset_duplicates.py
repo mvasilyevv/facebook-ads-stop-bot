@@ -28,6 +28,7 @@ from core.adset_duplicates.delivery import (
 from core.adset_duplicates.service import (
     AccountMetadata,
     AdsetDuplicateError,
+    DuplicateSource,
     StoredDuplicatePreview,
     build_duplicate_preview,
     create_duplicate_draft,
@@ -39,6 +40,7 @@ from core.adset_duplicates.service import (
     mark_duplicate_draft_notification_delivered,
     mark_preview_consumed,
     render_draft_notification,
+    resolve_duplicate_source_hierarchy,
     save_stored_preview,
     serialize_duplicate_task,
 )
@@ -111,8 +113,11 @@ async def _consume_preview_best_effort(
         logger.exception("adset duplicate: consumed marker не записан для task=%s", task_id)
 
 
-async def _load_account_metadata(engine: object, account_id: str) -> AccountMetadata:
-    """Один read-only Graph GET; недоступный Vision/Meta не заменяем ложными defaults."""
+async def _load_meta_context(
+    engine: object,
+    source: DuplicateSource,
+) -> tuple[DuplicateSource, AccountMetadata]:
+    """Hydrate missing local IDs and load account metadata through read-only Graph GETs."""
     client = AuditedMetaApiClient(
         engine=engine,
         initiated_by="api_adset_duplicate_preview",
@@ -121,13 +126,16 @@ async def _load_account_metadata(engine: object, account_id: str) -> AccountMeta
     )
     try:
         await client.start()
-        return await fetch_account_metadata(client, account_id)
+        resolved_source = await resolve_duplicate_source_hierarchy(client, source)
+        account = await fetch_account_metadata(client, resolved_source.account_id)
+        return resolved_source, account
     except AdsetDuplicateError:
         raise
     except Exception as exc:
-        logger.warning("adset duplicate: account metadata недоступны", exc_info=True)
+        logger.warning("adset duplicate: Meta hierarchy/metadata недоступны", exc_info=True)
         raise AdsetDuplicateError(
-            "Не удалось получить currency/timezone рекламного кабинета", status_code=503
+            "Не удалось получить hierarchy/currency/timezone рекламного кабинета",
+            status_code=503,
         ) from exc
     finally:
         await client.close()
@@ -157,7 +165,7 @@ async def preview_adset_duplicate(
                 f"Исходное объявление вне owner-scope: {ownership.reason}",
                 status_code=403,
             )
-        account = await _load_account_metadata(engine, source.account_id)
+        source, account = await _load_meta_context(engine, source)
         preview, task_params = build_duplicate_preview(
             source=source,
             account=account,

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -135,18 +136,28 @@ async def adset_duplicate_client(pg_engine, duplicate_catalog, monkeypatch):
     app.dependency_overrides[get_redis] = lambda: redis
     app.state.redis = redis
     monkeypatch.setattr(router_module, "load_owner_tag", AsyncMock(return_value=None))
-    monkeypatch.setattr(
-        router_module,
-        "_load_account_metadata",
-        AsyncMock(
-            return_value=AccountMetadata(
+
+    async def fake_meta_context(_engine, source):
+        return (
+            replace(
+                source,
+                account_id=source.account_id or ACCOUNT_ID,
+                campaign_id=source.campaign_id or CAMPAIGN_ID,
+                adset_id=source.adset_id or SOURCE_ADSET_ID,
+            ),
+            AccountMetadata(
                 id=ACCOUNT_ID,
                 name="Test Account",
                 currency="EUR",
                 timezone_name="Europe/Kaliningrad",
                 timezone_offset_hours=2,
-            )
-        ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        router_module,
+        "_load_meta_context",
+        AsyncMock(side_effect=fake_meta_context),
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client, redis
@@ -214,6 +225,40 @@ async def test_preview_returns_canonical_shape_all_source_ads_and_exact_budget(
 
 
 @pytest.mark.asyncio
+async def test_preview_hydrates_missing_local_fb_adset_id(
+    adset_duplicate_client,
+    pg_engine,
+) -> None:
+    client, redis = adset_duplicate_client
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE fb_adsets SET fb_adset_id = NULL WHERE fb_adset_id = :adset_id"),
+            {"adset_id": SOURCE_ADSET_ID},
+        )
+    try:
+        response = await client.post(
+            "/api/tools/adset-duplicates/preview",
+            json=_preview_body(token="testdup-missing-adset"),
+        )
+        assert response.status_code == 200, response.text
+        preview = response.json()
+        assert preview["source"]["adset"]["id"] == SOURCE_ADSET_ID
+        stored = await load_stored_preview(redis, preview["preview_token"])
+        assert stored.task_params["source_adset_id"] == SOURCE_ADSET_ID
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE fb_adsets SET fb_adset_id = :adset_id "
+                    "WHERE campaign_id = ("
+                    "SELECT id FROM fb_campaigns WHERE fb_campaign_id = :campaign_id"
+                    ") AND adset_name = 'Source Adset'"
+                ),
+                {"adset_id": SOURCE_ADSET_ID, "campaign_id": CAMPAIGN_ID},
+            )
+
+
+@pytest.mark.asyncio
 async def test_preview_preserves_owner_tag_in_editable_campaign_base(
     adset_duplicate_client,
     monkeypatch,
@@ -251,7 +296,7 @@ async def test_preview_rejects_foreign_owner_before_meta_or_token(
             )
         ),
     )
-    monkeypatch.setattr(router_module, "_load_account_metadata", meta_lookup)
+    monkeypatch.setattr(router_module, "_load_meta_context", meta_lookup)
 
     resp = await client.post(
         "/api/tools/adset-duplicates/preview",
