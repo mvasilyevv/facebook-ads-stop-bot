@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { useHealthDetails, useObserverStatus } from "@/lib/api/settings";
 import { formatRelativeTime, formatDuration, type HealthDetails } from "@fb/shared";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Siren } from "lucide-react";
 
 /** Цвет вердикта → Badge variant. */
 function verdictVariant(v: string): "success" | "warning" | "stop" {
@@ -25,7 +25,9 @@ function verdictVariant(v: string): "success" | "warning" | "stop" {
 type MetaApiChannelStatus = NonNullable<HealthDetails["meta_api_channel"]>;
 
 /** ONLINE/DEGRADED/UNKNOWN → Badge variant. */
-function metaChannelVariant(status: MetaApiChannelStatus["status"]): "success" | "stop" | "neutral" {
+function metaChannelVariant(
+  status: MetaApiChannelStatus["status"],
+): "success" | "stop" | "neutral" {
   if (status === "ONLINE") return "success";
   if (status === "DEGRADED") return "stop";
   return "neutral";
@@ -34,7 +36,8 @@ function metaChannelVariant(status: MetaApiChannelStatus["status"]): "success" |
 /** Пояснение под статусом канала — по каждому из трёх состояний. */
 function metaChannelDescription(status: MetaApiChannelStatus["status"]): string {
   if (status === "ONLINE") return "Реальный запрос к Marketing API прошёл успешно.";
-  if (status === "DEGRADED") return "Канал недоступен: сеть не отвечает или токен протух. Авто-стоп объявлений может не сработать.";
+  if (status === "DEGRADED")
+    return "Канал недоступен: сеть не отвечает или токен протух. Авто-стоп объявлений может не сработать.";
   return "Нет данных прободера — health_watchdog ещё не проверял канал или ключ протух.";
 }
 
@@ -84,6 +87,7 @@ export const HealthTab: FC = () => {
   const verdict = data?.overall ?? "CRITICAL";
   const workers = data?.workers ?? [];
   const metaChannel = data?.meta_api_channel ?? null;
+  const criticalAlerts = data?.critical_alerts ?? [];
 
   const onlineCount = workers.filter((w) => w.status === "ONLINE").length;
   const offlineCount = workers.filter((w) => w.status === "OFFLINE").length;
@@ -94,11 +98,7 @@ export const HealthTab: FC = () => {
       <Card eyebrow="Состояние системы" padded>
         <div className="flex items-center justify-between">
           <div>
-            <Badge
-              variant={verdictVariant(verdict)}
-              size="md"
-              className="text-[12px]"
-            >
+            <Badge variant={verdictVariant(verdict)} size="md" className="text-[12px]">
               {verdict}
             </Badge>
             <div className="mt-2 text-[11px] text-bg-9 font-display">
@@ -116,14 +116,30 @@ export const HealthTab: FC = () => {
             aria-label="Обновить статус"
             disabled={isFetching}
           >
-            <RefreshCw
-              size={14}
-              aria-hidden="true"
-              className={isFetching ? "animate-spin" : ""}
-            />
+            <RefreshCw size={14} aria-hidden="true" className={isFetching ? "animate-spin" : ""} />
           </Button>
         </div>
       </Card>
+
+      {criticalAlerts.length > 0 ? (
+        <Card eyebrow="Активные CRITICAL" padded>
+          <div className="space-y-3">
+            {criticalAlerts.map((alert) => (
+              <div
+                key={alert.id}
+                role="alert"
+                className="flex items-start gap-3 border-l-2 border-danger bg-danger-bg px-3 py-2.5"
+              >
+                <Siren size={16} className="mt-0.5 shrink-0 text-danger" aria-hidden="true" />
+                <div>
+                  <div className="text-[13px] font-semibold text-danger">{alert.title}</div>
+                  <div className="mt-1 text-[11px] leading-[1.45] text-bg-10">{alert.message}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
       {/* Канал авто-стопа (Marketing API) — проактивный probe health_watchdog.
           Инцидент 01.07: остальной Health был зелёным, а канал авто-стопа молчал. */}
@@ -214,9 +230,7 @@ export const HealthTab: FC = () => {
               >
                 {/* Имя воркера */}
                 <div>
-                  <div className="font-display text-[13px] text-bg-11">
-                    {workerLabel(w.name)}
-                  </div>
+                  <div className="font-display text-[13px] text-bg-11">{workerLabel(w.name)}</div>
                   <div className="font-display text-[10px] text-bg-8 mt-0.5 tabular-nums">
                     {w.name}
                   </div>

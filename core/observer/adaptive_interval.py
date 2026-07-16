@@ -13,6 +13,10 @@ FSM. WARNING в v2 = 80% от стоп-порога, т.е. сам по себе
 
 from __future__ import annotations
 
+# База по умолчанию: активные объявления проверяются каждые 30 секунд. При текущем
+# am_tabular-сканере это один короткий Graph-цикл без DOM/reload после прогрева токена.
+DEFAULT_BASE_INTERVAL_SECONDS: float = 30.0
+
 # Множители интервала относительно базового (CALM) значения.
 # CRITICAL — есть stop-хиты: объявление за порогом, нужен максимально частый скан.
 # ELEVATED — есть warning-хиты: приближение к порогу.
@@ -115,3 +119,14 @@ def compute_adaptive_interval(base_interval_seconds: float, mode: str) -> float:
     """
     multiplier = SCAN_MODE_MULTIPLIERS.get(mode, 1.0)
     return clamp_interval(base_interval_seconds * multiplier)
+
+
+def compute_remaining_sleep(*, target_period_seconds: float, elapsed_seconds: float) -> float:
+    """Вернуть паузу, чтобы период считался между началами циклов, а не после скана.
+
+    Старый scheduler всегда добавлял полный интервал после завершения обхода: при базе
+    90с и scan=8с свежий снимок появлялся примерно раз в 98с. Теперь длительность уже
+    выполненного цикла вычитается из целевого периода. Отрицательной паузы нет; циклы
+    остаются последовательными и никогда не перекрываются.
+    """
+    return max(0.0, float(target_period_seconds) - max(0.0, float(elapsed_seconds)))

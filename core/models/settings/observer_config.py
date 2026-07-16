@@ -23,7 +23,7 @@ class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
     interval_seconds: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
-        server_default="90",
+        server_default="30",
     )
     jitter_seconds: Mapped[int] = mapped_column(
         Integer,

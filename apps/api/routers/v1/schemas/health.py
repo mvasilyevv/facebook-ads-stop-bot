@@ -39,6 +39,21 @@ class MetaApiChannelStatus(BaseModel):
     checked_at: datetime | None = None
 
 
+class CriticalHealthAlert(BaseModel):
+    """Активный money-critical, сохранённый watchdog для веб-интерфейса."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    kind: str
+    severity: Literal["CRITICAL"] = "CRITICAL"
+    title: str
+    message: str
+    account_id: str | None = None
+    detected_at: datetime
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
 class HealthDetailsResponse(BaseModel):
     """Агрегированный статус всех воркеров из Redis heartbeat-ключей."""
 
@@ -52,5 +67,9 @@ class HealthDetailsResponse(BaseModel):
     meta_api_channel: MetaApiChannelStatus | None = Field(
         default=None,
         description="Статус сетевого канала Marketing API (probe из health_watchdog)",
+    )
+    critical_alerts: list[CriticalHealthAlert] = Field(
+        default_factory=list,
+        description="Активные CRITICAL-сигналы watchdog, доступные без Telegram",
     )
     overall: Literal["HEALTHY", "DEGRADED", "CRITICAL"]

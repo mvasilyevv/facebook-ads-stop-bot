@@ -141,6 +141,41 @@ async def test_health_details_no_observer_runtime(fake_redis_client, monkeypatch
     assert payload["observer_runtime"] is None
 
 
+@pytest.mark.asyncio
+async def test_health_details_exposes_web_critical_without_telegram(
+    fake_redis_client, monkeypatch
+) -> None:
+    monkeypatch.setenv("EXPECTED_WORKERS", "observer")
+    await _set_heartbeat(fake_redis_client, "observer")
+    detected_at = datetime.now(UTC).isoformat()
+    await fake_redis_client.set(
+        "health:critical:shadow:111222",
+        json.dumps(
+            {
+                "id": "shadow_spend:111222",
+                "kind": "shadow_spend",
+                "severity": "CRITICAL",
+                "title": "Meta списывает быстрее отчётности",
+                "message": "Биллинг растёт, per-ad отчётность стоит.",
+                "account_id": "111222",
+                "detected_at": detected_at,
+                "details": {"billing_delta_cents": 30},
+            }
+        ),
+        ex=900,
+    )
+
+    app = _make_app(redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/health/details")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["overall"] == "CRITICAL"
+    assert payload["critical_alerts"][0]["kind"] == "shadow_spend"
+    assert payload["critical_alerts"][0]["account_id"] == "111222"
+
+
 # ====================== meta_api_channel (probe канала auto-stop) ======================
 
 _META_KEY = "meta_api:channel:health"

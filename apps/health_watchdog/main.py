@@ -122,7 +122,7 @@ META_CHANNEL_HEALTH_TTL_SECONDS = META_PROBE_INTERVAL_SECONDS * 2
 SHADOW_SPEND_WATCH_ENABLED = os.environ.get(
     "SHADOW_SPEND_WATCH_ENABLED", "true"
 ).strip().lower() not in ("0", "false", "no", "off")
-SHADOW_SPEND_INTERVAL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_SHADOW_SPEND_SEC", "180"))
+SHADOW_SPEND_INTERVAL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_SHADOW_SPEND_SEC", "30"))
 # Окно среза и пороги детектора (в центах). Дефолты из shadow_spend.py, но env их переопределяет.
 SHADOW_WINDOW_SECONDS = int(
     os.environ.get("HEALTH_WATCHDOG_SHADOW_WINDOW_SEC", str(_SHADOW_DEFAULT_WINDOW))
@@ -140,6 +140,15 @@ SHADOW_SAMPLE_TTL_SECONDS = 3600
 SHADOW_DEDUP_PREFIX = f"{ALERT_DEDUP_PREFIX}shadow:"
 # Дедуп алерта: 30 минут (пока проблема жива, не спамим).
 SHADOW_ALERT_DEDUP_TTL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_SHADOW_ALERT_TTL_SEC", "1800"))
+# Активный CRITICAL для веба живёт отдельно от TG-дедупа: отсутствие recipients не
+# должно скрывать money-сигнал из /health/details. На нормализации отчётности ключ
+# удаляется; TTL страхует от вечной плашки при остановленном watchdog.
+SHADOW_CRITICAL_KEY_PREFIX = "health:critical:shadow:"
+SHADOW_CRITICAL_TTL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_SHADOW_CRITICAL_TTL_SEC", "900"))
+# Любое подтверждённое движение billing при стоящей per-ad стороне включает короткий
+# observer burst. Общий billing не используется для auto-pause — только trigger+cadence.
+SHADOW_BURST_KEY = "observer:burst:shadow"
+SHADOW_BURST_TTL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_SHADOW_BURST_TTL_SEC", "120"))
 
 
 class _MetaProbeClient(Protocol):
@@ -359,6 +368,130 @@ def build_shadow_spend_alert(account_id: str, verdict: ShadowVerdict) -> str:
         "Реальный открут не виден скану — свежая пачка под риском перекрута. "
         "Проверь Ads Manager руками."
     )
+
+
+def _has_unreported_billing_movement(
+    previous: ShadowSample | None,
+    current: ShadowSample,
+) -> bool:
+    """True, когда billing уже вырос, а последний per-ad снимок ещё не сдвинулся."""
+    if previous is None or previous.ts >= current.ts:
+        return False
+    return (
+        current.billing_cents > previous.billing_cents
+        and current.reported_cents <= previous.reported_cents
+    )
+
+
+async def _activate_shadow_burst(
+    redis_client: redis_asyncio.Redis,
+    *,
+    account_id: str,
+    sample: ShadowSample,
+) -> None:
+    """Включить CRITICAL-cadence observer и немедленно разбудить текущий sleep."""
+    payload = {
+        "reason": "shadow_spend",
+        "account_id": account_id,
+        "detected_at": sample.ts.isoformat(),
+    }
+    try:
+        await redis_client.set(
+            SHADOW_BURST_KEY,
+            json.dumps(payload, ensure_ascii=False),
+            ex=SHADOW_BURST_TTL_SECONDS,
+        )
+        await redis_client.publish(
+            "fb_agent:observer:trigger",
+            json.dumps({**payload, "burst_seconds": SHADOW_BURST_TTL_SECONDS}),
+        )
+        logger.warning("shadow: включён observer burst для act_%s", account_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("shadow: не удалось включить observer burst", exc_info=True)
+
+
+async def _publish_critical_changed(
+    redis_client: redis_asyncio.Redis,
+    *,
+    account_id: str,
+    active: bool,
+) -> None:
+    try:
+        await redis_client.publish(
+            CHANNEL_HEALTH_UPDATED,
+            json.dumps(
+                {
+                    "kind": "shadow_spend",
+                    "account_id": account_id,
+                    "active": active,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                },
+                ensure_ascii=False,
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("shadow: не удалось publish web-critical", exc_info=True)
+
+
+async def _store_shadow_critical(
+    redis_client: redis_asyncio.Redis,
+    *,
+    account_id: str,
+    verdict: ShadowVerdict,
+) -> None:
+    """Сохранить активный CRITICAL для веба независимо от Telegram recipients."""
+    key = f"{SHADOW_CRITICAL_KEY_PREFIX}{account_id}"
+    payload = {
+        "id": f"shadow_spend:{account_id}",
+        "kind": "shadow_spend",
+        "severity": "CRITICAL",
+        "title": "Meta списывает быстрее отчётности",
+        "message": (
+            f"Биллинг act_{account_id} вырос на "
+            f"${verdict.billing_delta_cents / 100:.2f}, а per-ad отчётность — только на "
+            f"${verdict.reported_delta_cents / 100:.2f}. Observer переведён в быстрый режим."
+        ),
+        "account_id": account_id,
+        "detected_at": verdict.newest_ts.isoformat(),
+        "details": {
+            "billing_delta_cents": verdict.billing_delta_cents,
+            "reported_delta_cents": verdict.reported_delta_cents,
+            "window_seconds": verdict.window_seconds,
+        },
+    }
+    try:
+        was_active = bool(await redis_client.get(key))
+        await redis_client.set(
+            key,
+            json.dumps(payload, ensure_ascii=False),
+            ex=SHADOW_CRITICAL_TTL_SECONDS,
+        )
+        if not was_active:
+            await _publish_critical_changed(
+                redis_client,
+                account_id=account_id,
+                active=True,
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("shadow: не удалось сохранить web-critical %s", key)
+
+
+async def _clear_shadow_critical(
+    redis_client: redis_asyncio.Redis,
+    *,
+    account_id: str,
+) -> None:
+    key = f"{SHADOW_CRITICAL_KEY_PREFIX}{account_id}"
+    try:
+        removed = await redis_client.delete(key)
+        if removed:
+            await _publish_critical_changed(
+                redis_client,
+                account_id=account_id,
+                active=False,
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning("shadow: не удалось снять web-critical %s", key, exc_info=True)
 
 
 # ====================== Telegram алерты ======================
@@ -896,9 +1029,18 @@ async def _check_shadow_for_account(
         logger.warning("shadow: пер-адная отчётность act_%s не посчитана: %s", account_id, exc)
         return False
 
-    # (в) сэмпл в Redis-лист.
+    # (в) сэмпл в Redis-лист. Сравнение с непосредственно предыдущим тиком включает
+    # быстрый observer burst ещё до накопления полного CRITICAL-порога 25¢.
+    previous_samples = await _load_shadow_samples(redis_client, account_id)
+    previous_sample = max(previous_samples, key=lambda item: item.ts, default=None)
     sample = ShadowSample(ts=now, billing_cents=billing_cents, reported_cents=reported_cents)
     await _push_shadow_sample(redis_client, account_id, sample)
+    if _has_unreported_billing_movement(previous_sample, sample):
+        await _activate_shadow_burst(
+            redis_client,
+            account_id=account_id,
+            sample=sample,
+        )
 
     # (г) детект по накопленным.
     samples = await _load_shadow_samples(redis_client, account_id)
@@ -915,6 +1057,10 @@ async def _check_shadow_for_account(
             await redis_client.delete(dedup_key)
         except Exception:  # noqa: BLE001
             logger.warning("shadow: не удалось снять дедуп %s", dedup_key)
+        # На первом сэмпле данных недостаточно — не гасим ещё живой web-critical.
+        # Начиная со второй точки отсутствие вердикта означает нормализацию/малую дельту.
+        if len(samples) >= 2:
+            await _clear_shadow_critical(redis_client, account_id=account_id)
         return False
 
     logger.error(
@@ -923,6 +1069,20 @@ async def _check_shadow_for_account(
         verdict.billing_delta_cents,
         verdict.reported_delta_cents,
         verdict.window_seconds,
+    )
+    # Полный CRITICAL обязан держать быстрый режим даже если reported сдвинулся на
+    # допустимые 1–5¢ и ранний exact-zero trigger на этом тике не сработал.
+    await _activate_shadow_burst(
+        redis_client,
+        account_id=account_id,
+        sample=sample,
+    )
+    # Web-critical сохраняется ДО попытки Telegram-доставки. Если owner ещё не сделал
+    # /start или TG недоступен, Dashboard всё равно покажет money-сигнал.
+    await _store_shadow_critical(
+        redis_client,
+        account_id=account_id,
+        verdict=verdict,
     )
     return await _maybe_alert_with_dedup(
         redis_client,

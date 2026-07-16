@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     app_timezone: str = "Europe/Kaliningrad"
 
     # --- Observer ---
-    default_observer_interval_seconds: int = 90
+    default_observer_interval_seconds: int = 30
 
     # --- Vision Anti-detect браузер ---
     vision_x_token: SecretStr = SecretStr("")

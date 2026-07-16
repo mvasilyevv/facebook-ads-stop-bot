@@ -6,11 +6,13 @@ from __future__ import annotations
 import pytest
 
 from core.observer.adaptive_interval import (
+    DEFAULT_BASE_INTERVAL_SECONDS,
     MAX_INTERVAL_SECONDS,
     MIN_INTERVAL_SECONDS,
     SCAN_MODE_MULTIPLIERS,
     clamp_interval,
     compute_adaptive_interval,
+    compute_remaining_sleep,
     resolve_scan_mode,
     select_scan_mode,
 )
@@ -55,6 +57,19 @@ def test_compute_interval_multipliers(mode, expected):
     assert compute_adaptive_interval(90.0, mode) == expected
 
 
+@pytest.mark.parametrize(
+    "mode,expected",
+    [
+        ("CRITICAL", 10.0),
+        ("ELEVATED", 15.0),
+        ("CALM", 30.0),
+        ("IDLE", 45.0),
+    ],
+)
+def test_default_30s_cadence(mode, expected):
+    assert compute_adaptive_interval(DEFAULT_BASE_INTERVAL_SECONDS, mode) == expected
+
+
 # Базовый слайдер = CALM: ровно значение interval_seconds.
 def test_calm_equals_base():
     assert compute_adaptive_interval(120.0, "CALM") == 120.0
@@ -93,6 +108,14 @@ def test_clamp_above_max():
 # Значение внутри диапазона не меняется.
 def test_clamp_within_range():
     assert clamp_interval(42.0) == 42.0
+
+
+def test_cycle_duration_is_subtracted_from_target_period():
+    assert compute_remaining_sleep(target_period_seconds=30.0, elapsed_seconds=6.5) == 23.5
+
+
+def test_slow_cycle_runs_next_scan_immediately_without_overlap():
+    assert compute_remaining_sleep(target_period_seconds=10.0, elapsed_seconds=12.0) == 0.0
 
 
 # Множители режимов упорядочены: чем выше угроза — тем короче интервал.

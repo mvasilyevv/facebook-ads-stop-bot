@@ -57,4 +57,29 @@ describe("resolveMonitoringState", () => {
       }),
     ).toBe("degraded");
   });
+
+  it("оставляет controls доступными при money-critical живого observer", () => {
+    expect(
+      resolveMonitoringState({
+        health: health({
+          critical_alerts: [
+            {
+              id: "shadow_spend:1",
+              kind: "shadow_spend",
+              severity: "CRITICAL",
+              title: "Meta списывает быстрее отчётности",
+              message: "billing ahead",
+              account_id: "1",
+              detected_at: new Date().toISOString(),
+              details: {},
+            },
+          ],
+          overall: "CRITICAL",
+        }),
+        healthLoading: false,
+        healthError: false,
+        scanOn: true,
+      }),
+    ).toBe("degraded");
+  });
 });

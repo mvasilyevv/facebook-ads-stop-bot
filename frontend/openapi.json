@@ -8128,6 +8128,63 @@
         "title": "CreativeUniquifyResponse",
         "description": "Результат уникализации: куда сохранено и сколько файлов создано."
       },
+      "CriticalHealthAlert": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "severity": {
+            "type": "string",
+            "const": "CRITICAL",
+            "title": "Severity",
+            "default": "CRITICAL"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Detected At"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "message",
+          "detected_at"
+        ],
+        "title": "CriticalHealthAlert",
+        "description": "Активный money-critical, сохранённый watchdog для веб-интерфейса."
+      },
       "DailyPointOut": {
         "properties": {
           "day": {
@@ -9043,6 +9100,14 @@
               }
             ],
             "description": "Статус сетевого канала Marketing API (probe из health_watchdog)"
+          },
+          "critical_alerts": {
+            "items": {
+              "$ref": "#/components/schemas/CriticalHealthAlert"
+            },
+            "type": "array",
+            "title": "Critical Alerts",
+            "description": "Активные CRITICAL-сигналы watchdog, доступные без Telegram"
           },
           "overall": {
             "type": "string",

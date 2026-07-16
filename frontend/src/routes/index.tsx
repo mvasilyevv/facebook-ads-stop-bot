@@ -30,6 +30,7 @@ import { Hero } from "@/components/dashboard/Hero";
 import { SpendChart } from "@/components/dashboard/SpendChart";
 import { ScanCluster, type ScanProgress } from "@/components/dashboard/ScanCluster";
 import { ScanBlockedBanner } from "@/components/dashboard/ScanBlockedBanner";
+import { CriticalHealthBanner } from "@/components/dashboard/CriticalHealthBanner";
 import {
   MONITORING_STATE_LABEL,
   type MonitoringState,
@@ -91,8 +92,7 @@ function DashboardPage() {
     return {
       total,
       done: typeof extra.accounts_done === "number" ? extra.accounts_done : null,
-      current:
-        typeof extra.current_account_id === "string" ? extra.current_account_id : null,
+      current: typeof extra.current_account_id === "string" ? extra.current_account_id : null,
     };
   }, [monitoring.observerStatus]);
 
@@ -102,6 +102,7 @@ function DashboardPage() {
   const scanOn = monitoring.scanOn;
   const intervalSeconds = monitoring.observer?.default_interval_seconds ?? 30;
   const monitoringState = monitoring.state;
+  const criticalAlerts = monitoring.health?.critical_alerts ?? [];
   // Реальное время следующего скана (адаптивный интервал + jitter) из observer:runtime.
   const nextScanAt = useMemo<string | null>(() => {
     const v = (monitoring.observerStatus?.extra ?? {})["next_scan_at"];
@@ -196,6 +197,9 @@ function DashboardPage() {
           onDisable={handleDisable}
         />
 
+        {/* Money-critical приходит из watchdog через Redis/API и не зависит от TG recipients. */}
+        <CriticalHealthBanner alerts={criticalAlerts} />
+
         {/* ── scan-blocked banner (скан вкл, но allowlist пуст → ничего не мониторим) ── */}
         {scanOn && stats?.scan_blocked_reason && (
           <div className="mb-6">
@@ -271,11 +275,11 @@ function DashboardPage() {
                     ? "var(--danger)"
                     : monitoringState !== "healthy"
                       ? "var(--warning)"
-                    : pollingFallback
-                      ? "var(--warning)"
-                      : events.length > 0
-                        ? "var(--success)"
-                        : "var(--bg-7)"
+                      : pollingFallback
+                        ? "var(--warning)"
+                        : events.length > 0
+                          ? "var(--success)"
+                          : "var(--bg-7)"
                 }
               />
               {monitoringState === "offline"
@@ -355,7 +359,9 @@ function PageHeaderBlock({
   return (
     <div className="mb-6 flex flex-col items-start justify-between gap-6 lg:flex-row">
       <div>
-        <Eyebrow num="01">ОБЗОР · ПО ОБЪЯВЛЕНИЯМ · {MONITORING_STATE_LABEL[monitoringState]}</Eyebrow>
+        <Eyebrow num="01">
+          ОБЗОР · ПО ОБЪЯВЛЕНИЯМ · {MONITORING_STATE_LABEL[monitoringState]}
+        </Eyebrow>
         <h1
           className="m-0 mt-2 font-display font-medium text-bg-11"
           style={{ fontSize: 30, letterSpacing: "-0.02em" }}

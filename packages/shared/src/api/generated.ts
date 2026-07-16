@@ -3564,6 +3564,37 @@ export interface components {
             duration_ms: number;
         };
         /**
+         * CriticalHealthAlert
+         * @description Активный money-critical, сохранённый watchdog для веб-интерфейса.
+         */
+        CriticalHealthAlert: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Severity
+             * @default CRITICAL
+             * @constant
+             */
+            severity: "CRITICAL";
+            /** Title */
+            title: string;
+            /** Message */
+            message: string;
+            /** Account Id */
+            account_id?: string | null;
+            /**
+             * Detected At
+             * Format: date-time
+             */
+            detected_at: string;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
          * DailyPointOut
          * @description Точка подневной серии — дневной итог (UTC-день).
          */
@@ -3996,6 +4027,11 @@ export interface components {
             } | null;
             /** @description Статус сетевого канала Marketing API (probe из health_watchdog) */
             meta_api_channel?: components["schemas"]["MetaApiChannelStatus"] | null;
+            /**
+             * Critical Alerts
+             * @description Активные CRITICAL-сигналы watchdog, доступные без Telegram
+             */
+            critical_alerts?: components["schemas"]["CriticalHealthAlert"][];
             /**
              * Overall
              * @enum {string}

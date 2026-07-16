@@ -20,6 +20,14 @@ export function resolveMonitoringState({
   scanOn,
 }: ResolveMonitoringStateInput): MonitoringState {
   if (healthLoading || healthError || !health) return "unknown";
+
+  const observerOffline = health.workers.some(
+    (worker) => worker.name === "observer" && worker.status === "OFFLINE",
+  );
+  if (observerOffline) return "offline";
+  // Money-critical (например, billing растёт при стоящей per-ad отчётности) делает
+  // систему ограниченной, но не выключает живой observer и его ручные controls.
+  if ((health.critical_alerts?.length ?? 0) > 0) return "degraded";
   if (health.overall === "CRITICAL") return "offline";
 
   const runtimeStatus = health.observer_runtime?.status;

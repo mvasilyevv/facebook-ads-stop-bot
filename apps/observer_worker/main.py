@@ -8,9 +8,10 @@
 4. process_scan_rows(...) → метрики/FSM/outbox
 5. UPDATE scan_runs финальным результатом
 6. Redis heartbeat
-7. Sleep на адаптивный интервал (база = interval_seconds = CALM, режим зависит от
-   угрозы цикла: stop→CRITICAL ×0.2, warning→ELEVATED ×0.5, офферные ads→CALM ×1.0,
-   пусто→IDLE ×1.5) + jitter ±10%. См. core/observer/adaptive_interval.py.
+7. Sleep до следующего старта по адаптивному периоду (база = interval_seconds = CALM,
+   дефолт 30с): stop/теневой spend→CRITICAL 10с, warning→ELEVATED 15с,
+   офферные ads→CALM 30с, пусто→IDLE 45с. Длительность цикла вычитается из периода;
+   jitter ±10%. См. core/observer/adaptive_interval.py.
 
 Gate инжектируется (паттерн как у toggle_workers): в проде это BrowserAgentClient,
 в тестах — fake который возвращает заранее подготовленные ScannedAdRow.
@@ -43,9 +44,12 @@ from core.observer.accounts import (
     resolve_scan_account_ids,
 )
 from core.observer.adaptive_interval import (
+    DEFAULT_BASE_INTERVAL_SECONDS,
     JITTER_FRACTION,
+    MIN_INTERVAL_SECONDS,
     clamp_interval,
     compute_adaptive_interval,
+    compute_remaining_sleep,
     resolve_scan_mode,
 )
 from core.observer.enable_grace import load_enable_grace_map
@@ -86,6 +90,11 @@ RUNTIME_REFRESH_SECONDS = 120
 CHANNEL_TRIGGER = "fb_agent:observer:trigger"  # форс-скан вне расписания
 CHANNEL_CABINET_DAY = "fb_agent:observer:cabinet_day"  # сигнал нового кабинетного дня
 CHANNEL_RESTART = "fb_agent:worker:restart:observer"  # graceful restart
+
+# Health watchdog включает этот короткоживущий режим, когда billing amount_spent уже
+# растёт, а per-ad am_tabular ещё стоит. Это только ускоряет наблюдение; по общему
+# счётчику кабинета нельзя безопасно выбрать конкретное объявление для auto-pause.
+SHADOW_BURST_KEY = "observer:burst:shadow"
 
 # Layer 3 — алерт о «тихой» деградации: observer жив (heartbeat/runtime свежие), но сканы
 # стабильно падают и self-heal (Layer 1/2) не помог. Без него мониторинг был слеп ~104 минуты.
@@ -900,6 +909,23 @@ class _ObserverState:
     consecutive_scan_failures: int = 0  # подряд error-циклов (Layer 3 degraded-алерт)
 
 
+async def _shadow_burst_context(redis_client) -> dict | None:
+    """Прочитать активный billing-burst; битый/отсутствующий ключ означает обычный режим."""
+    if redis_client is None:
+        return None
+    try:
+        raw = await redis_client.get(SHADOW_BURST_KEY)
+        if not raw:
+            return None
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else {"reason": "shadow_spend"}
+    except (json.JSONDecodeError, TypeError):
+        return {"reason": "shadow_spend"}
+    except Exception:
+        logger.warning("observer: не удалось прочитать billing-burst", exc_info=True)
+        return None
+
+
 async def _maybe_alert_login_required(
     engine: AsyncEngine,
     redis_client,
@@ -1053,13 +1079,14 @@ async def _sleep_with_runtime_refresh(
     status: str = "idle",
     next_scan_at: datetime | None = None,
     scan_mode: str | None = None,
+    status_message: str | None = None,
     last_successful_scan_at: datetime | None = None,
 ) -> None:
     """Спит до ``seconds`` (прерываясь на любой из ``events``), освежая observer:runtime.
 
     Сразу при входе публикует целевое состояние сна (next_scan_at + scan_mode), чтобы фронт
     получил реальный адаптивный отсчёт и режим немедленно: на интервалах короче
-    RUNTIME_REFRESH_SECONDS публикации в цикле могло не быть вовсе (CALM 90с < 120с), и эти
+    RUNTIME_REFRESH_SECONDS публикации в цикле могло не быть вовсе (CALM 30с < 120с), и эти
     поля не доезжали — UI сидел на mock-отсчёте «всегда база».
 
     Длинный sleep бьётся на чанки ≤ RUNTIME_REFRESH_SECONDS; после каждого чанка, если
@@ -1075,6 +1102,7 @@ async def _sleep_with_runtime_refresh(
         await _publish_runtime_status(
             redis_client,
             status=status,
+            status_message=status_message,
             next_scan_at=next_scan_at,
             scan_mode=scan_mode,
             last_successful_scan_at=last_successful_scan_at,
@@ -1210,6 +1238,7 @@ async def main_loop(
                     await asyncio.sleep(10.0)
                     continue
 
+            cycle_started_monotonic = time.monotonic()
             try:
                 summary = await run_one_cycle(
                     engine,
@@ -1264,17 +1293,37 @@ async def main_loop(
             # Адаптивный интервал: база (UI-слайдер interval_seconds) = CALM-режим,
             # частота скана зависит от угрозы в этом цикле (у порога — чаще).
             config = await load_observer_config(engine)
-            base_interval = float((config or {}).get("interval_seconds", 90))
+            base_interval = float(
+                (config or {}).get("interval_seconds", DEFAULT_BASE_INTERVAL_SECONDS)
+            )
             scan_mode = resolve_scan_mode(summary)
             interval = compute_adaptive_interval(base_interval, scan_mode)
-            # Jitter ±10% от рассчитанного интервала (anti-detect), с тем же clamp по нижней границе.
+            burst_context = await _shadow_burst_context(redis_client)
+            status_message = None
+            if burst_context is not None and summary.get("outcome") != "paused":
+                # Тень открута — системный CRITICAL: до истечения TTL держим самый короткий
+                # период и показываем причину в runtime. Никаких money-мутаций здесь нет.
+                scan_mode = "CRITICAL"
+                interval = MIN_INTERVAL_SECONDS
+                account_id = str(burst_context.get("account_id") or "").removeprefix("act_")
+                status_message = "Тень отчётности Meta: ускоренный скан"
+                if account_id:
+                    status_message += f" · act_{account_id}"
+
+            # Jitter ±10% применяется к ЦЕЛЕВОМУ периоду между началами циклов.
             jitter_offset = interval * JITTER_FRACTION
-            sleep_for = clamp_interval(interval + random.uniform(-jitter_offset, jitter_offset))
+            target_period = clamp_interval(interval + random.uniform(-jitter_offset, jitter_offset))
+            cycle_elapsed = time.monotonic() - cycle_started_monotonic
+            sleep_for = compute_remaining_sleep(
+                target_period_seconds=target_period,
+                elapsed_seconds=cycle_elapsed,
+            )
             logger.info(
-                "observer: режим=%s интервал=%.0fс (база=%.0f, со сдвигом=%.0f)",
+                "observer: режим=%s период=%.0fс (база=%.0f, цикл=%.1f, sleep=%.1f)",
                 scan_mode,
-                interval,
+                target_period,
                 base_interval,
+                cycle_elapsed,
                 sleep_for,
             )
 
@@ -1294,6 +1343,7 @@ async def main_loop(
                 status=runtime_status,
                 next_scan_at=next_scan_at,
                 scan_mode=scan_mode,
+                status_message=status_message,
                 last_successful_scan_at=last_ok_at,
             )
 

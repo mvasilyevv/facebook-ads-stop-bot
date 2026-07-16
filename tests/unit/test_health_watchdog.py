@@ -431,6 +431,7 @@ class _ShadowRedis:
         self.store: dict[str, str] = dict(seed or {})
         self.lists: dict[str, list[str]] = {}
         self.deleted: list[str] = []
+        self.published: list[tuple[str, str]] = []
 
     async def get(self, key):
         return self.store.get(key)
@@ -462,6 +463,10 @@ class _ShadowRedis:
 
     async def expire(self, key, ttl):
         return True
+
+    async def publish(self, channel, payload):
+        self.published.append((channel, payload))
+        return 1
 
 
 class _ShadowMetaClient:
@@ -630,3 +635,46 @@ async def test_check_shadow_spend_rearms_on_undelivered(monkeypatch) -> None:
     assert sent is False  # не доставлено
     # Дедуп-ключ НЕ выставлен → следующий тик повторит попытку (алерт не потерян).
     assert f"{hw.SHADOW_DEDUP_PREFIX}111222" not in redis.store
+    # Web-critical живёт независимо от Telegram recipients.
+    assert f"{hw.SHADOW_CRITICAL_KEY_PREFIX}111222" in redis.store
+
+
+async def test_shadow_billing_tick_triggers_fast_observer_before_critical(monkeypatch) -> None:
+    """Даже +1¢ при стоящей per-ad стороне будит observer; CRITICAL ждёт порога 25¢."""
+    import apps.health_watchdog.main as hw
+    from core.dashboard import cabinet_spend
+    from core.meta_api import account_tz
+    from core.observer import queries as obs_queries
+
+    async def _fake_config(engine):
+        return {"is_scanning_enabled": True}
+
+    async def _fake_accounts(engine):
+        return ["111222"]
+
+    async def _fake_offset_map(redis, account_ids, **kwargs):
+        return {"111222": 0.0}
+
+    async def _fake_reported(engine, *, tz_map, default_offset, now):
+        from decimal import Decimal
+
+        return Decimal("5.00")
+
+    monkeypatch.setattr(obs_queries, "load_observer_config", _fake_config)
+    monkeypatch.setattr(account_tz, "active_account_ids", _fake_accounts)
+    monkeypatch.setattr(account_tz, "load_offset_map", _fake_offset_map)
+    monkeypatch.setattr(cabinet_spend, "current_day_spend", _fake_reported)
+
+    t0 = datetime(2026, 7, 3, 8, 40, tzinfo=timezone.utc)
+    redis = _ShadowRedis(seed={hw.OBSERVER_RUNTIME_KEY: _fresh_runtime(t0)})
+    await hw.check_shadow_spend(_ShadowMetaClient("1000"), redis, engine=None, now=t0)
+
+    t1 = t0 + timedelta(seconds=30)
+    redis.store[hw.OBSERVER_RUNTIME_KEY] = _fresh_runtime(t1)
+    sent = await hw.check_shadow_spend(_ShadowMetaClient("1001"), redis, engine=None, now=t1)
+
+    assert sent is False
+    burst = json.loads(redis.store[hw.SHADOW_BURST_KEY])
+    assert burst["account_id"] == "111222"
+    assert any(channel == "fb_agent:observer:trigger" for channel, _ in redis.published)
+    assert f"{hw.SHADOW_CRITICAL_KEY_PREFIX}111222" not in redis.store

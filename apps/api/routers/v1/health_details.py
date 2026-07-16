@@ -18,6 +18,7 @@ from fastapi import APIRouter
 
 from apps.api.deps import DepRedis
 from apps.api.routers.v1.schemas.health import (
+    CriticalHealthAlert,
     HealthDetailsResponse,
     MetaApiChannelStatus,
     WorkerStatus,
@@ -31,6 +32,7 @@ router = APIRouter(tags=["health"])
 # Redis-ключ probe канала Marketing API — пишет health_watchdog (см. контрактный тест
 # test_meta_channel_key_contract). Здесь только читаем (роутер не зависит от browser-agent).
 META_CHANNEL_HEALTH_KEY = "meta_api:channel:health"
+CRITICAL_ALERT_KEY_PATTERN = "health:critical:*"
 
 # Список воркеров по умолчанию (если EXPECTED_WORKERS не задан в env)
 # Имена ДОЛЖНЫ совпадать с ключами worker:heartbeat:<name>, которые пишут воркеры
@@ -70,10 +72,11 @@ def _determine_overall(
     workers: list[WorkerStatus],
     expected: list[str],
     meta_channel: MetaApiChannelStatus | None = None,
+    critical_alerts: list[CriticalHealthAlert] | None = None,
 ) -> Literal["HEALTHY", "DEGRADED", "CRITICAL"]:
     """Определяет общий статус системы по статусам воркеров и канала Marketing API.
 
-    - observer OFFLINE → CRITICAL
+    - observer OFFLINE ИЛИ активный watchdog money-alert → CRITICAL
     - любой expected OFFLINE ИЛИ meta-канал DEGRADED (network-down/протух токен) → DEGRADED
     - всё ONLINE → HEALTHY
 
@@ -82,7 +85,7 @@ def _determine_overall(
     """
     status_map = {w.name: w.status for w in workers}
 
-    if status_map.get("observer") == "OFFLINE":
+    if status_map.get("observer") == "OFFLINE" or critical_alerts:
         return "CRITICAL"
 
     offline_count = sum(1 for name in expected if status_map.get(name) == "OFFLINE")
@@ -141,6 +144,23 @@ async def _read_meta_api_channel(redis: DepRedis) -> MetaApiChannelStatus:
     )
 
 
+async def _read_critical_alerts(redis: DepRedis) -> list[CriticalHealthAlert]:
+    """Прочитать активные watchdog CRITICAL из Redis; битые записи безопасно пропустить."""
+    alerts: list[CriticalHealthAlert] = []
+    try:
+        async for key in redis.scan_iter(match=CRITICAL_ALERT_KEY_PATTERN):
+            try:
+                raw = await redis.get(key)
+                if not raw:
+                    continue
+                alerts.append(CriticalHealthAlert.model_validate_json(raw))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("не удалось прочитать critical-ключ %s: %s", key, exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ошибка SCAN MATCH %s: %s", CRITICAL_ALERT_KEY_PATTERN, exc)
+    return sorted(alerts, key=lambda alert: alert.detected_at, reverse=True)
+
+
 @router.get("/health/details", response_model=HealthDetailsResponse)
 async def get_health_details(redis: DepRedis) -> HealthDetailsResponse:
     """Агрегирует статусы воркеров по Redis worker:heartbeat:* ключам.
@@ -152,7 +172,7 @@ async def get_health_details(redis: DepRedis) -> HealthDetailsResponse:
     overall:
         HEALTHY  — все expected ONLINE
         DEGRADED — >0 OFFLINE
-        CRITICAL — observer OFFLINE
+        CRITICAL — observer OFFLINE или активный money-critical watchdog
     """
     expected_workers = _get_expected_workers()
 
@@ -235,11 +255,18 @@ async def get_health_details(redis: DepRedis) -> HealthDetailsResponse:
     # Статус сетевого канала Marketing API (probe пишет health_watchdog в Redis)
     meta_api_channel = await _read_meta_api_channel(redis)
 
-    overall = _determine_overall(workers, expected_workers, meta_api_channel)
+    critical_alerts = await _read_critical_alerts(redis)
+    overall = _determine_overall(
+        workers,
+        expected_workers,
+        meta_api_channel,
+        critical_alerts,
+    )
 
     return HealthDetailsResponse(
         workers=workers,
         observer_runtime=observer_runtime,
         meta_api_channel=meta_api_channel,
+        critical_alerts=critical_alerts,
         overall=overall,
     )

@@ -24,7 +24,12 @@ vi.mock("@/lib/api/dashboard", () => ({
 }));
 
 vi.mock("@/lib/api/stats", () => ({
-  useStatsToday: vi.fn(() => ({ data: undefined, isLoading: false, isError: false, refetch: vi.fn() })),
+  useStatsToday: vi.fn(() => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  })),
 }));
 
 vi.mock("@/lib/api/ads", () => ({
@@ -198,9 +203,7 @@ describe("DashboardPage", () => {
     expect(screen.getByText(/объявлений под контролем/i)).toBeInTheDocument();
     expect(screen.getByText("ТРЕБУЕТ ВНИМАНИЯ")).toBeInTheDocument();
     // HealthBar теперь несёт сегмент «Отключено» — disabled (12) не выпадает из портфеля.
-    expect(
-      screen.getByRole("img", { name: /Отключено 12/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /Отключено 12/i })).toBeInTheDocument();
   });
 
   // Калм-empty live-tail: когда алертов нет — редакционная заглушка.
@@ -267,6 +270,48 @@ describe("DashboardPage", () => {
     expect(screen.getByText("Мониторинг недоступен")).toBeInTheDocument();
     expect(screen.queryByText("СИСТЕМА В НОРМЕ")).not.toBeInTheDocument();
     expect(screen.queryByText("Алертов за 24ч нет")).not.toBeInTheDocument();
+  });
+
+  it("показывает billing CRITICAL в вебе без Telegram и не скрывает scan controls", async () => {
+    vi.mocked(useDashboardBatch).mockReturnValue({
+      data: makeBatch({ recent_alerts: [] }),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDashboardBatch>);
+    vi.mocked(useHealthDetails).mockReturnValue({
+      data: {
+        workers: [{ name: "observer", status: "ONLINE" }],
+        observer_runtime: { status: "running" },
+        meta_api_channel: { status: "ONLINE" },
+        critical_alerts: [
+          {
+            id: "shadow_spend:1855748448431929",
+            kind: "shadow_spend",
+            severity: "CRITICAL",
+            title: "Meta списывает быстрее отчётности",
+            message: "Биллинг вырос на $0.34, а per-ad отчётность стоит.",
+            account_id: "1855748448431929",
+            detected_at: new Date().toISOString(),
+            details: { billing_delta_cents: 34 },
+          },
+        ],
+        overall: "CRITICAL",
+      },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useHealthDetails>);
+
+    await renderDashboard();
+
+    expect(screen.getByText("CRITICAL · MONEY")).toBeInTheDocument();
+    expect(screen.getByText("Meta списывает быстрее отчётности")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Открыть Ads Manager/i })).toHaveAttribute(
+      "href",
+      expect.stringContaining("act=1855748448431929"),
+    );
+    expect(screen.queryByText("СКАН НЕДОСТУПЕН")).not.toBeInTheDocument();
   });
 
   // Ошибка загрузки batch → ErrorState.
