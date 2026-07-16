@@ -378,23 +378,32 @@ class TelegramBotClient:
         *,
         web_app_url: str,
         button_text: str = "📱 Открыть",
+        chat_id: int | None = None,
     ) -> None:
-        """Ставит default-scope MenuButtonWebApp для бота.
+        """Ставит MenuButtonWebApp для default scope или конкретного private chat.
+
         web_app_url должен быть HTTPS.
         """
         if not web_app_url.startswith("https://"):
             raise ValueError("web_app_url должен быть HTTPS")
+        payload: dict = {
+            "menu_button": {
+                "type": "web_app",
+                "text": button_text,
+                "web_app": {"url": web_app_url},
+            }
+        }
+        if chat_id is not None:
+            payload["chat_id"] = int(chat_id)
         await self._post_json(
             "setChatMenuButton",
-            payload={
-                "menu_button": {
-                    "type": "web_app",
-                    "text": button_text,
-                    "web_app": {"url": web_app_url},
-                }
-            },
+            payload=payload,
         )
-        logger.info("setChatMenuButton: web_app_url=%s", web_app_url)
+        logger.info(
+            "setChatMenuButton: web_app_url=%s scope=%s",
+            web_app_url,
+            "private_chat" if chat_id is not None else "default",
+        )
 
     async def close(self) -> None:
         """Закрывает внутренний HTTP-клиент, если он был создан внутри."""

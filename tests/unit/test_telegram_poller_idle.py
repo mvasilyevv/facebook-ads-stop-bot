@@ -66,6 +66,7 @@ def _build_patches(state: dict, calls: dict, created: list) -> tuple[ExitStack, 
     es.enter_context(patch(p + "redis_asyncio", fake_redis_mod))
     es.enter_context(patch(p + "touch_poller_heartbeat", touch_hb))
     es.enter_context(patch(p + "save_poller_offset", AsyncMock()))
+    es.enter_context(patch(p + "sync_menu_buttons", AsyncMock(return_value=True)))
     # heartbeat детерминированно каждую итерацию (-1 < любой now-last) + быстрый idle-reload
     es.enter_context(patch(p + "_HEARTBEAT_INTERVAL_SECONDS", -1))
     es.enter_context(patch(p + "_IDLE_RELOAD_INTERVAL_SECONDS", 0.01))

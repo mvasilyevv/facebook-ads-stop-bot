@@ -15,6 +15,7 @@ import pytest
 
 import apps.api.routers.v1.settings_telegram as st
 import core.telegram.client as cli
+import core.telegram.menu_button as menu_button
 import core.telegram.service as svc
 
 
@@ -33,13 +34,20 @@ async def test_sets_menu_button_when_configured(monkeypatch) -> None:
     )
     client = _fake_client()
     monkeypatch.setattr(cli, "TelegramBotClient", lambda **_kw: client)
+    monkeypatch.setattr(
+        menu_button,
+        "load_active_recipients",
+        AsyncMock(return_value=[SimpleNamespace(chat_id=123)]),
+    )
 
     url = "https://fresh.trycloudflare.com/tma/"
     ok = await st._sync_bot_menu_button(object(), url)
 
     assert ok is True
-    client.set_chat_menu_button.assert_awaited_once()
-    assert client.set_chat_menu_button.call_args.kwargs["web_app_url"] == url
+    assert client.set_chat_menu_button.await_count == 2
+    default_call, private_call = client.set_chat_menu_button.await_args_list
+    assert default_call.kwargs == {"web_app_url": url}
+    assert private_call.kwargs == {"web_app_url": url, "chat_id": 123}
     client.close.assert_awaited_once()
 
 

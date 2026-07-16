@@ -39,6 +39,7 @@ from core.config import Settings
 from core.models.settings.telegram_config import TelegramConfig
 from core.models.telegram.invite import TelegramInvite
 from core.models.telegram.recipient import TelegramRecipient
+from core.telegram.menu_button import sync_menu_buttons
 from core.telegram.settings_compute import (
     compute_activation_command,
     compute_auth_deep_link,
@@ -215,7 +216,10 @@ async def _sync_bot_menu_button(engine: AsyncEngine, web_app_url: str) -> bool:
 
     client = TelegramBotClient(bot_token=cfg.bot_token)
     try:
-        await client.set_chat_menu_button(web_app_url=web_app_url)
+        synced = await sync_menu_buttons(engine, client, explicit_url=web_app_url)
+        if not synced:
+            logger.warning("menu button обновлён не для всех scopes (url=%s)", web_app_url)
+            return False
         logger.info("menu button обновлён на %s", web_app_url)
         return True
     except Exception:

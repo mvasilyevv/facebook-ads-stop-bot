@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers._send import send_text
+from core.telegram.menu_button import sync_menu_buttons
 from core.telegram.service import (
     consume_invite_and_create_recipient,
     find_active_invite,
@@ -74,6 +75,14 @@ async def handle_start(
             username=username,
             display_name=display_name,
             role=invite.get("role", "recipient"),
+        )
+        # У нового recipient'а может сохраниться default URL из BotFather.
+        # Сразу задаём chat-specific кнопку на актуальный Mini App.
+        await sync_menu_buttons(
+            engine,
+            client,
+            chat_ids=[chat_id],
+            include_default=False,
         )
         await send_text(
             client,

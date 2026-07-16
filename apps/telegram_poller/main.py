@@ -24,6 +24,7 @@ from core.db import WORKER_ENGINE_KWARGS
 from core.pubsub import RedisPubSub
 from core.telegram.bot_handler import handle_update
 from core.telegram.client import TelegramAPIError, TelegramBotClient
+from core.telegram.menu_button import sync_menu_buttons
 from core.telegram.service import (
     load_telegram_config,
     save_poller_offset,
@@ -314,6 +315,10 @@ async def main_loop(db_url: str) -> None:
                             logger.info("Bot token изменился — пересоздаю client")
                         last_token = cfg.bot_token
                         client = TelegramBotClient(bot_token=last_token, http_client=http_client)
+                        # Telegram хранит Menu Button отдельно от нашего web_app_url.
+                        # На каждом создании клиента восстанавливаем default + private
+                        # scopes, чтобы старый BotFather/test URL не переживал деплой.
+                        await sync_menu_buttons(engine, client)
                         idle_logged = False
                     # offset берём из БД только при самом первом подъёме client.
                     if not offset_loaded:
