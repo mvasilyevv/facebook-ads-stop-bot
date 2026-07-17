@@ -124,6 +124,9 @@ def test_installer_is_change_aware_and_checks_full_desktop_contract() -> None:
     assert "ACTIVE_MANIFEST_FILE" in installer
     assert "MANIFEST_CHANGED=false" in installer
     assert "compose pull" in installer
+    assert 'docker image inspect "$image"' in installer
+    assert "missing_image" in installer
+    assert "STACK_MUTATED=true" in installer
     assert "compose rm -sf guacamole guacd database-bootstrap" in installer
     assert "compose build" not in installer
     assert "--force-recreate" not in installer
