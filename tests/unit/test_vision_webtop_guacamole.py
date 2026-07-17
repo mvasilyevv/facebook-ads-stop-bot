@@ -25,6 +25,8 @@ def test_production_stack_is_digest_pinned_and_has_no_public_selkies() -> None:
     assert "guacamole/guacd@sha256:" in source
     assert "guacamole/guacamole@sha256:" in source
     assert "postgres:16-alpine@sha256:" in source
+    assert "\n  postgres:" not in source
+    assert "\n  guacamole-postgres:" in source
     assert '"127.0.0.1:8090:8080"' in source
     assert '"127.0.0.1:3000:3000"' not in source
     assert '"127.0.0.1:3001:3001"' not in source
@@ -132,7 +134,7 @@ def test_installer_is_change_aware_and_checks_full_desktop_contract() -> None:
     assert "--force-recreate" not in installer
     assert "service_is_healthy webtop" in installer
     assert "service_is_healthy guacd" in installer
-    assert "service_is_healthy postgres" in installer
+    assert "service_is_healthy guacamole-postgres" in installer
     assert "service_is_healthy guacamole" in installer
     assert "bootstrap_completed" in installer
     assert "database_contract_is_ready" in installer
