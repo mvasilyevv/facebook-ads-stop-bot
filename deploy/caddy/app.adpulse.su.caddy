@@ -167,7 +167,11 @@ app.adpulse.su {
 				# desktop-доступа»).
 				stream_timeout 30m
 				stream_close_delay 5m
-				header_up -Remote-User
+				# ВНИМАНИЕ: не снимать клиентский Remote-User отдельной строкой
+				# удаления. Caddy применяет header_up-удаление ПОСЛЕ установки,
+				# поэтому strip стёр бы этот set — Guacamole получал бы запрос без
+				# заголовка и показывал форму логина вместо header-auth. Set ниже
+				# сам перезаписывает любой клиентский заголовок, strip не нужен.
 				header_up Remote-User "adpulse-desktop"
 				header_up -Authorization
 				header_up -Proxy-Authorization

@@ -18,6 +18,12 @@ def test_desktop_is_same_origin_header_authenticated_guacamole_only() -> None:
     assert "reverse_proxy 127.0.0.1:8090" in desktop
     assert "stream_timeout 30m" in desktop
     assert 'header_up Remote-User "adpulse-desktop"' in desktop
+    # Caddy применяет header_up-удаление ПОСЛЕ установки: строка
+    # `header_up -Remote-User` рядом с set стёрла бы только что выставленный
+    # заголовок, и Guacamole получал бы запрос без Remote-User (форма логина
+    # вместо header-auth). Set сам перезаписывает любой клиентский Remote-User,
+    # поэтому отдельный strip не нужен и вреден.
+    assert "header_up -Remote-User" not in desktop
     assert "header_up -Authorization" in desktop
     assert "header_up -X-API-Key" in desktop
     assert "uri /desktop-auth/verify" in auth
