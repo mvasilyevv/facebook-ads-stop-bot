@@ -93,6 +93,7 @@ app.adpulse.su {
 			import panel_auth
 			rewrite * /desktop-auth/launch-url-recovery
 			reverse_proxy 127.0.0.1:8100 {
+				header_up X-API-Key {$API_KEY}
 				header_up X-Panel-Recovery-Key {$API_KEY}
 				header_up -Authorization
 				header_up -Proxy-Authorization

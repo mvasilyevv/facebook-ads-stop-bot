@@ -75,6 +75,7 @@ def test_panel_launch_response_with_ticket_is_not_access_logged() -> None:
     assert "log_skip" in session
     assert "import panel_auth" in session
     assert "rewrite * /desktop-auth/launch-url-recovery" in session
+    assert "header_up X-API-Key {$API_KEY}" in session
     assert "header_up X-Panel-Recovery-Key {$API_KEY}" in session
     assert "header_up -Authorization" in session
     assert "header_up -Proxy-Authorization" in session
