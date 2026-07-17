@@ -79,8 +79,9 @@ class Settings(BaseSettings):
     desktop_guacamole_postgres_password: SecretStr = SecretStr("")
     desktop_guacd_host: str = "vision-webtop"
     desktop_guacd_port: int = 4822
-    desktop_vnc_host: str = "vision-webtop"
-    desktop_vnc_port: int = 5900
+    # Used only for the private guacd->TigerVNC readiness handshake. It is
+    # never returned or logged by the API.
+    desktop_vnc_password: SecretStr = SecretStr("")
     desktop_readiness_timeout_seconds: float = 2.0
 
     # --- Шифрование (для хранения токенов в БД) ---

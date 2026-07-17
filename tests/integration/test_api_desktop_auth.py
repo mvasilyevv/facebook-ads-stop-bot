@@ -249,7 +249,7 @@ async def test_desktop_readyz_is_separate_and_fail_closed(
     owner_id, _ = desktop_users
     app = _app(pg_engine, fake_redis_client, _settings(owner_id))
     app.dependency_overrides[get_desktop_readiness_probe] = lambda: _ReadinessProbe(
-        {"guacamole": True, "jdbc": False, "guacd": True, "vnc": True}
+        {"guacamole": True, "jdbc": False, "guacd_vnc": True}
     )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
@@ -258,12 +258,12 @@ async def test_desktop_readyz_is_separate_and_fail_closed(
     assert failed.status_code == 503
     assert failed.json() == {
         "status": "not_ready",
-        "checks": {"guacamole": True, "jdbc": False, "guacd": True, "vnc": True},
+        "checks": {"guacamole": True, "jdbc": False, "guacd_vnc": True},
     }
     assert "password" not in failed.text.lower()
 
     app.dependency_overrides[get_desktop_readiness_probe] = lambda: _ReadinessProbe(
-        {"guacamole": True, "jdbc": True, "guacd": True, "vnc": True}
+        {"guacamole": True, "jdbc": True, "guacd_vnc": True}
     )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"

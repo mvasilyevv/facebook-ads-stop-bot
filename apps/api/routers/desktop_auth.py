@@ -6,7 +6,7 @@ from __future__ import annotations
 import html
 import logging
 import time
-from asyncio import open_connection, wait_for
+from asyncio import LimitOverrunError, open_connection, wait_for
 from typing import Annotated, Protocol
 from urllib.parse import quote
 
@@ -47,19 +47,46 @@ class DesktopReadinessProbe(Protocol):
     async def check(self, settings: Settings) -> dict[str, bool]: ...
 
 
-async def _tcp_ready(host: str, port: int, timeout_seconds: float) -> bool:
+def _encode_guacamole_instruction(opcode: str, *arguments: str) -> bytes:
+    elements = (opcode, *arguments)
+    return (",".join(f"{len(value)}.{value}" for value in elements) + ";").encode()
+
+
+def _decode_guacamole_instruction(raw: bytes) -> tuple[str, list[str]]:
+    """Decode one length-prefixed Guacamole instruction, rejecting ambiguity."""
     try:
-        reader, writer = await wait_for(open_connection(host, port), timeout=timeout_seconds)
-        del reader
-        writer.close()
-        await writer.wait_closed()
-        return True
-    except (OSError, TimeoutError):
-        return False
+        document = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("invalid Guacamole instruction encoding") from exc
+    if not document.endswith(";"):
+        raise ValueError("unterminated Guacamole instruction")
+    elements: list[str] = []
+    cursor = 0
+    end = len(document) - 1
+    while cursor < end:
+        dot = document.find(".", cursor, end)
+        if dot < 0 or not document[cursor:dot].isdigit():
+            raise ValueError("invalid Guacamole element length")
+        length = int(document[cursor:dot])
+        if length > 16_384:
+            raise ValueError("Guacamole element is too large")
+        value_start = dot + 1
+        value_end = value_start + length
+        if value_end > end:
+            raise ValueError("truncated Guacamole element")
+        elements.append(document[value_start:value_end])
+        cursor = value_end
+        if cursor < end:
+            if document[cursor] != ",":
+                raise ValueError("invalid Guacamole element separator")
+            cursor += 1
+    if not elements or not elements[0] or cursor != end:
+        raise ValueError("empty Guacamole instruction")
+    return elements[0], elements[1:]
 
 
 class NetworkDesktopReadinessProbe:
-    """Fail-closed HTTP, JDBC and TCP checks without returning secret details."""
+    """Fail-closed HTTP, JDBC and real guacd-to-VNC connection checks."""
 
     async def _guacamole_ready(self, settings: Settings) -> bool:
         token = ""
@@ -141,7 +168,7 @@ class NetworkDesktopReadinessProbe:
             )
             parameters = {row["parameter_name"]: row["parameter_value"] for row in parameter_rows}
             return parameters == {
-                "hostname": "vision-webtop",
+                "hostname": "127.0.0.1",
                 "port": "5900",
                 "password": parameters.get("password"),
                 "width": "1366",
@@ -155,24 +182,99 @@ class NetworkDesktopReadinessProbe:
             if connection is not None:
                 await connection.close()
 
+    async def _guacd_vnc_ready(self, settings: Settings) -> bool:
+        """Complete guacd's VNC handshake and require its ``ready`` response.
+
+        A TCP connect to port 5900 from the API cannot work because TigerVNC is
+        intentionally bound to loopback inside webtop's network namespace.
+        guacd shares that namespace, so a successful ``ready`` proves the real
+        guacd -> 127.0.0.1:5900 path, including VNC authentication.
+        """
+        password = reveal_secret(settings.desktop_vnc_password)
+        try:
+            password_bytes = password.encode("ascii")
+        except UnicodeEncodeError:
+            return False
+        if len(password_bytes) != 8 or any(byte < 0x20 or byte > 0x7E for byte in password_bytes):
+            return False
+        timeout = settings.desktop_readiness_timeout_seconds
+        writer = None
+        try:
+            reader, writer = await wait_for(
+                open_connection(settings.desktop_guacd_host, settings.desktop_guacd_port),
+                timeout=timeout,
+            )
+            writer.write(_encode_guacamole_instruction("select", "vnc"))
+            await wait_for(writer.drain(), timeout=timeout)
+
+            opcode = ""
+            arguments: list[str] = []
+            for _ in range(8):
+                raw = await wait_for(reader.readuntil(b";"), timeout=timeout)
+                opcode, arguments = _decode_guacamole_instruction(raw)
+                if opcode == "args":
+                    break
+                if opcode in {"error", "disconnect"}:
+                    return False
+            if opcode != "args" or not arguments:
+                return False
+
+            values = {
+                "hostname": "127.0.0.1",
+                "port": "5900",
+                "password": password,
+                "width": "1366",
+                "height": "768",
+                "disable-display-resize": "true",
+                "read-only": "false",
+            }
+            connect_values = [
+                argument if argument.startswith("VERSION_") else values.get(argument, "")
+                for argument in arguments
+            ]
+            handshake = b"".join(
+                (
+                    _encode_guacamole_instruction("size", "1366", "768", "96"),
+                    _encode_guacamole_instruction("audio"),
+                    _encode_guacamole_instruction("video"),
+                    _encode_guacamole_instruction("image", "image/png", "image/jpeg"),
+                    _encode_guacamole_instruction("timezone", "Europe/Kaliningrad"),
+                    _encode_guacamole_instruction("name", "desktop-readiness"),
+                    _encode_guacamole_instruction("connect", *connect_values),
+                )
+            )
+            writer.write(handshake)
+            await wait_for(writer.drain(), timeout=timeout)
+
+            for _ in range(16):
+                raw = await wait_for(reader.readuntil(b";"), timeout=timeout)
+                opcode, _ = _decode_guacamole_instruction(raw)
+                if opcode == "ready":
+                    writer.write(_encode_guacamole_instruction("disconnect"))
+                    await wait_for(writer.drain(), timeout=timeout)
+                    return True
+                if opcode in {"error", "disconnect"}:
+                    return False
+            return False
+        except (OSError, EOFError, LimitOverrunError, TimeoutError, ValueError):
+            return False
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except OSError:
+                    pass
+
     async def check(self, settings: Settings) -> dict[str, bool]:
         import asyncio
 
-        guacamole, jdbc, guacd, vnc = await asyncio.gather(
+        guacamole, jdbc, guacd_vnc = await asyncio.gather(
             self._guacamole_ready(settings),
             self._jdbc_ready(settings),
-            _tcp_ready(
-                settings.desktop_guacd_host,
-                settings.desktop_guacd_port,
-                settings.desktop_readiness_timeout_seconds,
-            ),
-            _tcp_ready(
-                settings.desktop_vnc_host,
-                settings.desktop_vnc_port,
-                settings.desktop_readiness_timeout_seconds,
-            ),
+            self._guacd_vnc_ready(settings),
         )
-        return {"guacamole": guacamole, "jdbc": jdbc, "guacd": guacd, "vnc": vnc}
+        return {"guacamole": guacamole, "jdbc": jdbc, "guacd_vnc": guacd_vnc}
 
 
 def get_desktop_readiness_probe() -> DesktopReadinessProbe:
