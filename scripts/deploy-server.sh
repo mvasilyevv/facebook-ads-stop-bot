@@ -74,6 +74,11 @@ rsync -a --delete \
 rsync -a "$PROD_ENV" "$TARGET:$ROOT_DIR/shared/.env.new"
 ssh "$TARGET" "set -eu; chmod 600 '$ROOT_DIR/shared/.env.new'; mv '$ROOT_DIR/shared/.env.new' '$ROOT_DIR/shared/.env'; printf '%s\\n' '$RELEASE_ID' > '$remote_release/.release-id'; ln -sfn '$ROOT_DIR/shared/.env' '$remote_release/.env'; chmod +x '$remote_release'/scripts/*.sh"
 
+# The desktop host and API routes are one release contract. Bring the private
+# Vision/Guacamole stack to a healthy state before switching Caddy/app release;
+# the installer rolls back its compose/image if any desktop health gate fails.
+ssh "$TARGET" "'$remote_release/scripts/install-vision-webtop.sh'"
+
 if [[ "$ALLOW_VISION_OFFLINE" == true ]]; then
   ssh "$TARGET" \
     "FB_AGENT_ROOT='$ROOT_DIR' '$remote_release/scripts/server-release.sh' --allow-vision-offline"

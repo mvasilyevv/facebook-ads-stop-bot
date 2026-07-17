@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr = SecretStr("")
     telegram_chat_id: str = ""
 
+    # --- Protected Vision desktop ---
+    desktop_access_base_url: str = "https://desktop.adpulse.su"
+    desktop_access_ticket_ttl_seconds: int = 60
+    desktop_access_session_ttl_seconds: int = 12 * 60 * 60
+    desktop_access_owner_recheck_seconds: int = 60
+    desktop_access_recovery_ttl_seconds: int = 2 * 60 * 60
+    # Guacamole JSON Auth requires a 128-bit hex key. RFB VNCAuth accepts
+    # exactly eight printable ASCII bytes and silently ignores anything longer.
+    desktop_guacamole_json_secret: SecretStr = SecretStr("")
+    desktop_guacamole_token_ttl_seconds: int = 60
+    desktop_vnc_password: SecretStr = SecretStr("")
+
     # --- Шифрование (для хранения токенов в БД) ---
     encryption_key: SecretStr = SecretStr("")
     encryption_key_verify: SecretStr = SecretStr("")

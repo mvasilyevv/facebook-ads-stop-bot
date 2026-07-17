@@ -1,0 +1,40 @@
+#!/usr/bin/with-contenv bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+export DISPLAY="${DISPLAY:-:1}"
+readonly PASSWORD_FILE=/run/vision-vnc/passwd
+password="${DESKTOP_VNC_PASSWORD:-}"
+
+if [[ ${#password} -ne 8 ]] || ! LC_ALL=C grep -Eq '^[ -~]{8}$' <<<"$password"; then
+  printf 'ERROR: DESKTOP_VNC_PASSWORD must contain exactly 8 printable ASCII characters\n' >&2
+  exit 64
+fi
+
+install -d -m 0700 /run/vision-vnc
+printf '%s\n' "$password" | tigervncpasswd -f >"$PASSWORD_FILE"
+chmod 0600 "$PASSWORD_FILE"
+unset password DESKTOP_VNC_PASSWORD
+
+for _ in $(seq 1 120); do
+  if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 || {
+  printf 'ERROR: X11 display %s did not become ready\n' "$DISPLAY" >&2
+  exit 1
+}
+
+exec X0tigervnc \
+  -display "$DISPLAY" \
+  -rfbport 5900 \
+  -localhost=1 \
+  -SecurityTypes=VncAuth \
+  -PasswordFile="$PASSWORD_FILE" \
+  -AlwaysShared=1 \
+  -AcceptKeyEvents=1 \
+  -AcceptPointerEvents=1 \
+  -AcceptCutText=1 \
+  -SendCutText=1

@@ -28,6 +28,8 @@ def _valid_values() -> dict[str, str]:
         "API_KEY": "a" * 32,
         "TMA_SESSION_SECRET": "t" * 48,
         "ADSETPRO_POSTBACK_SECRET": "p" * 48,
+        "DESKTOP_GUACAMOLE_JSON_SECRET": "00112233445566778899aabbccddeeff",
+        "DESKTOP_VNC_PASSWORD": "vnc-pass",
         "TRACKER_AUTO_CANCEL_ENABLED": "false",
         "REQUIRE_API_KEY": "true",
         "TRUST_PROXY_HEADERS": "true",
@@ -78,6 +80,17 @@ def test_validate_accepts_explicit_auto_cancel_rollout_boolean_only() -> None:
 
     values["TRACKER_AUTO_CANCEL_ENABLED"] = "maybe"
     assert "TRACKER_AUTO_CANCEL_ENABLED must be true or false" in ENV.validate(values)
+
+
+def test_validate_rejects_invalid_desktop_secrets() -> None:
+    values = _valid_values()
+    values["DESKTOP_GUACAMOLE_JSON_SECRET"] = "not-hex"
+    values["DESKTOP_VNC_PASSWORD"] = "too-long-password"
+
+    errors = ENV.validate(values)
+
+    assert "DESKTOP_GUACAMOLE_JSON_SECRET must be exactly 32 hex characters" in errors
+    assert "DESKTOP_VNC_PASSWORD must be exactly 8 printable ASCII characters" in errors
 
 
 def test_parse_lines_does_not_include_comments() -> None:

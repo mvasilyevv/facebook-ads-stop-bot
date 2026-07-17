@@ -1,36 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
-import {
-  ExternalLink,
-  KeyRound,
-  LoaderCircle,
-  Maximize2,
-  MonitorUp,
-  PanelTopClose,
-} from "lucide-react";
-import { PageHeader, HeaderSep } from "@/components/layout/PageHeader";
+import { ExternalLink, MonitorUp, ShieldCheck } from "lucide-react";
+import { HeaderSep, PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
 
-const REMOTE_DESKTOP_URL =
-  import.meta.env.VITE_REMOTE_DESKTOP_URL?.trim() || "https://desktop.adpulse.su";
+const REMOTE_DESKTOP_URL = "https://desktop.adpulse.su";
+const DESKTOP_LAUNCH_URL = "/auth/desktop/launch";
 
 export const Route = createFileRoute("/remote-desktop/")({
   component: RemoteDesktopPage,
 });
 
 function RemoteDesktopPage() {
-  const [embedVisible, setEmbedVisible] = useState(false);
-  const [embedResponded, setEmbedResponded] = useState(false);
-
-  const openDesktop = () => {
-    window.open(REMOTE_DESKTOP_URL, "_blank", "noopener,noreferrer");
-  };
-
-  const showEmbed = () => {
-    setEmbedResponded(false);
-    setEmbedVisible(true);
-  };
-
   return (
     <>
       <PageHeader
@@ -41,18 +21,8 @@ function RemoteDesktopPage() {
           <>
             Vision Server
             <HeaderSep />
-            внешний HTTPS-сервис с отдельной авторизацией
+            доступ по текущей авторизации панели
           </>
-        }
-        action={
-          <Button
-            variant="primary"
-            size="md"
-            leftIcon={<ExternalLink size={14} aria-hidden="true" />}
-            onClick={openDesktop}
-          >
-            Открыть отдельно
-          </Button>
         }
       />
 
@@ -67,98 +37,53 @@ function RemoteDesktopPage() {
               <p className="truncate font-mono text-[11px] text-bg-8">{REMOTE_DESKTOP_URL}</p>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-1.5 font-display text-[10px] uppercase tracking-[0.08em] text-warning">
-            <KeyRound size={14} strokeWidth={1.7} aria-hidden="true" />
-            Требуется вход
+          <div className="flex shrink-0 items-center gap-1.5 font-display text-[10px] uppercase tracking-[0.08em] text-success">
+            <ShieldCheck size={14} strokeWidth={1.7} aria-hidden="true" />
+            Защищённый доступ
           </div>
         </div>
 
-        {embedVisible ? (
-          <div>
-            <div className="flex flex-col gap-3 border-b border-[var(--hairline)] bg-bg-2 px-4 py-3 text-[12px] text-bg-9 sm:flex-row sm:items-center sm:justify-between">
-              <p>
-                Встроенный режим не может проверить Basic Auth из-за cross-origin ограничений.
-                При пустом экране используйте отдельное окно.
-              </p>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="self-start sm:self-auto"
-                leftIcon={<PanelTopClose size={14} aria-hidden="true" />}
-                onClick={() => setEmbedVisible(false)}
+        <div className="relative flex min-h-[360px] items-center justify-center overflow-hidden px-5 py-10 sm:min-h-[420px] sm:px-10 sm:py-12">
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 opacity-35"
+            style={{
+              backgroundImage:
+                "linear-gradient(var(--hairline) 1px, transparent 1px), linear-gradient(90deg, var(--hairline) 1px, transparent 1px)",
+              backgroundSize: "32px 32px",
+            }}
+          />
+          <div className="relative max-w-[520px] text-center">
+            <span className="mx-auto flex size-14 items-center justify-center rounded-[var(--radius-3)] border border-[var(--hairline-strong)] bg-bg-2 text-accent">
+              <MonitorUp size={27} strokeWidth={1.45} aria-hidden="true" />
+            </span>
+            <h2 className="mt-5 font-display text-[20px] font-medium text-bg-11 sm:text-[22px]">
+              Vision Desktop
+            </h2>
+            <p className="mx-auto mt-2 max-w-[450px] text-[13px] leading-relaxed text-bg-9">
+              Панель выдаст одноразовый билет и откроет рабочий стол в новой вкладке. Дополнительный
+              логин не потребуется.
+            </p>
+            <div className="mt-6 flex justify-center">
+              <form
+                action={DESKTOP_LAUNCH_URL}
+                method="get"
+                target="_blank"
+                rel="noopener noreferrer"
               >
-                Скрыть
-              </Button>
-            </div>
-            <div
-              className="relative min-h-[480px] bg-bg-0"
-              style={{ height: "max(480px, calc(100vh - 310px))" }}
-            >
-              {!embedResponded ? (
-                <div
-                  className="pointer-events-none absolute inset-0 z-[1] flex items-center justify-center bg-bg-0"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <span className="inline-flex items-center gap-2 font-display text-[12px] text-bg-9">
-                    <LoaderCircle className="animate-spin" size={16} aria-hidden="true" />
-                    Запрашиваю встроенную страницу…
-                  </span>
-                </div>
-              ) : null}
-              <iframe
-                src={REMOTE_DESKTOP_URL}
-                title="Vision Desktop — встроенный режим"
-                allow="clipboard-read; clipboard-write; fullscreen"
-                allowFullScreen
-                onLoad={() => setEmbedResponded(true)}
-                className="size-full border-0"
-              />
-            </div>
-          </div>
-        ) : (
-          <div className="relative flex min-h-[420px] items-center justify-center overflow-hidden px-5 py-12 sm:px-10">
-            <div
-              aria-hidden="true"
-              className="absolute inset-0 opacity-35"
-              style={{
-                backgroundImage:
-                  "linear-gradient(var(--hairline) 1px, transparent 1px), linear-gradient(90deg, var(--hairline) 1px, transparent 1px)",
-                backgroundSize: "32px 32px",
-              }}
-            />
-            <div className="relative max-w-[560px] text-center">
-              <span className="mx-auto flex size-14 items-center justify-center rounded-[var(--radius-3)] border border-[var(--hairline-strong)] bg-bg-2 text-accent">
-                <MonitorUp size={27} strokeWidth={1.45} aria-hidden="true" />
-              </span>
-              <h2 className="mt-5 font-display text-[22px] font-medium text-bg-11">
-                Подключение открывается отдельно
-              </h2>
-              <p className="mx-auto mt-2 max-w-[470px] text-[13px] leading-relaxed text-bg-9">
-                Так браузер корректно покажет окно авторизации и передаст клавиатуру,
-                буфер обмена и полноэкранный режим удалённому рабочему столу.
-              </p>
-              <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
                 <Button
+                  type="submit"
                   variant="primary"
                   size="lg"
+                  className="min-w-44"
                   leftIcon={<ExternalLink size={15} aria-hidden="true" />}
-                  onClick={openDesktop}
                 >
                   Подключиться
                 </Button>
-                <Button
-                  variant="secondary"
-                  size="lg"
-                  leftIcon={<Maximize2 size={15} aria-hidden="true" />}
-                  onClick={showEmbed}
-                >
-                  Попробовать внутри
-                </Button>
-              </div>
+              </form>
             </div>
           </div>
-        )}
+        </div>
       </section>
     </>
   );

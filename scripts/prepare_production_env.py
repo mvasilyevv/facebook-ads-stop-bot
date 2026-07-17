@@ -63,6 +63,8 @@ def validate(values: dict[str, str]) -> list[str]:
         "API_KEY",
         "TMA_SESSION_SECRET",
         "ADSETPRO_POSTBACK_SECRET",
+        "DESKTOP_GUACAMOLE_JSON_SECRET",
+        "DESKTOP_VNC_PASSWORD",
     )
     errors = [f"{key} is empty" for key in required if not values.get(key, "").strip()]
 
@@ -77,6 +79,25 @@ def validate(values: dict[str, str]) -> list[str]:
         errors.append("TMA_SESSION_SECRET must be at least 32 characters")
     if values.get("ADSETPRO_POSTBACK_SECRET") and len(values["ADSETPRO_POSTBACK_SECRET"]) < 32:
         errors.append("ADSETPRO_POSTBACK_SECRET must be at least 32 characters")
+
+    guacamole_secret = values.get("DESKTOP_GUACAMOLE_JSON_SECRET", "")
+    if guacamole_secret:
+        try:
+            if len(guacamole_secret) != 32 or len(bytes.fromhex(guacamole_secret)) != 16:
+                raise ValueError
+        except ValueError:
+            errors.append("DESKTOP_GUACAMOLE_JSON_SECRET must be exactly 32 hex characters")
+
+    vnc_password = values.get("DESKTOP_VNC_PASSWORD", "")
+    if vnc_password:
+        try:
+            encoded_vnc_password = vnc_password.encode("ascii")
+        except UnicodeEncodeError:
+            encoded_vnc_password = b""
+        if len(encoded_vnc_password) != 8 or any(
+            byte < 0x20 or byte > 0x7E for byte in encoded_vnc_password
+        ):
+            errors.append("DESKTOP_VNC_PASSWORD must be exactly 8 printable ASCII characters")
 
     encryption_key = values.get("ENCRYPTION_KEY", "")
     if encryption_key:
@@ -138,6 +159,13 @@ def main() -> int:
         # используется query-token'ом. Генерируем один раз и сохраняем между release.
         "ADSETPRO_POSTBACK_SECRET": current.get("ADSETPRO_POSTBACK_SECRET")
         or secrets.token_urlsafe(48),
+        "DESKTOP_GUACAMOLE_JSON_SECRET": current.get("DESKTOP_GUACAMOLE_JSON_SECRET")
+        or secrets.token_hex(16),
+        "DESKTOP_VNC_PASSWORD": current.get("DESKTOP_VNC_PASSWORD")
+        or "".join(
+            secrets.choice("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+            for _ in range(8)
+        ),
         # Preserve an explicitly enabled staged rollout; new environments start
         # in shadow mode until a full-day reconciliation is accepted.
         "TRACKER_AUTO_CANCEL_ENABLED": current.get("TRACKER_AUTO_CANCEL_ENABLED") or "false",

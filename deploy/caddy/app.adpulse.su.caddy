@@ -85,6 +85,19 @@ app.adpulse.su {
 			}
 		}
 
+		# The panel BasicAuth has already authenticated this browser. Exchange that
+		# proof for a one-time ticket on the desktop host; never log the ticket URL.
+		handle /auth/desktop/launch {
+			log_skip
+			import panel_auth
+			rewrite * /desktop-auth/launch-recovery
+			reverse_proxy 127.0.0.1:8100 {
+				header_up X-Panel-Recovery-Key {$API_KEY}
+				header_up -Authorization
+				header_up -Proxy-Authorization
+			}
+		}
+
 		handle /tma* {
 			reverse_proxy 127.0.0.1:8081
 		}
