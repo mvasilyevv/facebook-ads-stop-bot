@@ -17,10 +17,11 @@
                        └─ webtop-контейнер: X-сервер 1366×768 + Vision (money-канал скана)
 ```
 
-- **Вход веб:** панель (BasicAuth) → POST `/desktop/launch` → одноразовый тикет →
+- **Вход веб:** панель (BasicAuth) → POST `/api/desktop/launch` → одноразовый тикет →
   `/desktop-auth/redeem` → cookie `__Secure-adpulse_desktop_session_v2`.
-- **Вход Mini App:** экран «Рабочий стол» → POST `/desktop/launch` → `openLink(url)`
-  (внешний браузер, не WebView-iframe).
+- **Вход Mini App:** экран «Рабочий стол» → POST `/api/desktop/launch` → `openLink(url)`
+  (внешний браузер, не WebView-iframe). Во фронтенд-коде вызовы выглядят как
+  относительный `/desktop/launch` — базу `/api` подставляет api-клиент.
 - **Здоровье:** `/desktop-readyz` (guacamole HTTP + JDBC + полный guacd→VNC handshake).
 - **Recovery:** только SSH. Break-glass basic-auth маршрутов нет и не добавлять.
 
