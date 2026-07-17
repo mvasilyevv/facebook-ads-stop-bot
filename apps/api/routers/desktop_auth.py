@@ -6,7 +6,8 @@ from __future__ import annotations
 import html
 import logging
 import time
-from asyncio import LimitOverrunError, open_connection, wait_for
+from asyncio import LimitOverrunError, Lock, open_connection, wait_for
+from collections.abc import Callable
 from typing import Annotated, Protocol
 from urllib.parse import quote
 
@@ -284,6 +285,36 @@ def get_desktop_readiness_probe() -> DesktopReadinessProbe:
 DepDesktopReadinessProbe = Annotated[DesktopReadinessProbe, Depends(get_desktop_readiness_probe)]
 
 
+class DesktopReadyzCache:
+    """Кэш результата readiness-пробы на ``desktop_readiness_cache_seconds``.
+
+    Проба выполняет полный guacd→VNC handshake, Guacamole-логин и JDBC-запросы
+    рядом с money-критичной Vision-сессией, поэтому входящие запросы не должны
+    транслироваться в новые подключения 1:1. Лок сериализует конкурентные
+    запросы: пробу выполняет один, остальные получают закэшированный результат.
+    TTL <= 0 полностью отключает кэш.
+    """
+
+    def __init__(self, monotonic: Callable[[], float] = time.monotonic) -> None:
+        self._monotonic = monotonic
+        self._lock = Lock()
+        self._checks: dict[str, bool] | None = None
+        self._expires_at = 0.0
+
+    async def get(self, settings: Settings, probe: DesktopReadinessProbe) -> dict[str, bool]:
+        ttl = settings.desktop_readiness_cache_seconds
+        if ttl <= 0:
+            return await probe.check(settings)
+        async with self._lock:
+            if self._checks is None or self._monotonic() >= self._expires_at:
+                self._checks = await probe.check(settings)
+                self._expires_at = self._monotonic() + ttl
+            return dict(self._checks)
+
+
+_READYZ_CACHE = DesktopReadyzCache()
+
+
 def _set_desktop_cookie(response: Response, token: str, max_age: int) -> None:
     response.set_cookie(
         DESKTOP_SESSION_COOKIE,
@@ -414,7 +445,7 @@ async def desktop_readyz(
     settings: DepSettings,
     probe: DepDesktopReadinessProbe,
 ) -> Response:
-    checks = await probe.check(settings)
+    checks = await _READYZ_CACHE.get(settings, probe)
     ready = bool(checks) and all(checks.values())
     return JSONResponse(
         {"status": "ok" if ready else "not_ready", "checks": checks},
@@ -423,4 +454,4 @@ async def desktop_readyz(
     )
 
 
-__all__ = ["get_desktop_readiness_probe", "router"]
+__all__ = ["DesktopReadyzCache", "get_desktop_readiness_probe", "router"]

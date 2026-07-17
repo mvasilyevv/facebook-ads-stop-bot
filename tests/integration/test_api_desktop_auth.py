@@ -59,6 +59,9 @@ def _settings(owner_id: int) -> Settings:
         desktop_access_owner_recheck_seconds=0,
         desktop_owner_telegram_user_id=owner_id,
         tma_session_secret=SecretStr("test-tma-secret"),
+        # Кэш readyz отключён: тест подменяет пробу между вызовами и проверяет
+        # оба состояния endpoint'а, кэшированный ответ исказил бы второй вызов.
+        desktop_readiness_cache_seconds=0,
     )
 
 

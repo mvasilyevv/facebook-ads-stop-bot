@@ -51,10 +51,13 @@ app.adpulse.su {
 			reverse_proxy 127.0.0.1:8100
 		}
 
-		# Desktop readiness is deliberately independent from bot readiness. The
-		# API checks Guacamole HTTP, JDBC state, guacd, and VNC through the private
-		# Docker network.
+		# Desktop readiness отделён от bot-readiness, но закрыт панельной BasicAuth:
+		# каждая проба выполняет реальный Guacamole-логин, JDBC-запросы и полный
+		# guacd→VNC handshake рядом с money-критичной Vision-сессией — анонимный
+		# интернет не должен уметь их запускать. Мониторинг с хоста ходит на
+		# 127.0.0.1:8100/desktop-readyz напрямую, мимо Caddy.
 		handle /desktop-readyz {
+			import panel_auth
 			reverse_proxy 127.0.0.1:8100 {
 				header_up -Remote-User
 				header_up -Authorization
@@ -154,6 +157,15 @@ app.adpulse.su {
 		handle /desktop/* {
 			import desktop_session_auth
 			reverse_proxy 127.0.0.1:8090 {
+				# Жёсткий потолок жизни WS-туннеля: forward_auth срабатывает только
+				# в момент upgrade, поэтому logout/истечение сессии/демоция владельца
+				# вступают в силу не позже, чем через 30 минут. Клиент Guacamole
+				# показывает дисконнект; повторное подключение (reconnect/перезагрузка
+				# вкладки) заново проходит desktop_session_auth, состояние десктопа
+				# при этом не теряется (VNC-сессия персистентна). Экстренный
+				# мгновенный обрыв — см. DEPLOYMENT.md («Экстренный обрыв
+				# desktop-доступа»).
+				stream_timeout 30m
 				stream_close_delay 5m
 				header_up -Remote-User
 				header_up Remote-User "adpulse-desktop"

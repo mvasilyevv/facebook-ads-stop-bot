@@ -83,6 +83,10 @@ class Settings(BaseSettings):
     # never returned or logged by the API.
     desktop_vnc_password: SecretStr = SecretStr("")
     desktop_readiness_timeout_seconds: float = 2.0
+    # Кэш результата desktop-readyz: проба гоняет реальный guacd→VNC handshake
+    # рядом с money-критичной Vision-сессией, поэтому не выполняется чаще этого
+    # интервала. Значение <= 0 отключает кэш (используется в тестах).
+    desktop_readiness_cache_seconds: float = 15.0
 
     # --- Шифрование (для хранения токенов в БД) ---
     encryption_key: SecretStr = SecretStr("")

@@ -4,6 +4,8 @@ ROOT = Path(__file__).resolve().parents[2]
 APP_SITE = ROOT / "deploy" / "caddy" / "app.adpulse.su.caddy"
 
 
+# Единственный desktop-канал: same-origin /desktop/* за forward_auth, Guacamole
+# с фиксированным Remote-User и потолком жизни WS-туннеля (ревокация ≤ 30 минут).
 def test_desktop_is_same_origin_header_authenticated_guacamole_only() -> None:
     config = APP_SITE.read_text(encoding="utf-8")
     desktop = config.split("handle /desktop/*", maxsplit=1)[1].split("handle /tma*", maxsplit=1)[0]
@@ -14,6 +16,7 @@ def test_desktop_is_same_origin_header_authenticated_guacamole_only() -> None:
     assert "desktop.adpulse.su" not in config
     assert "import desktop_session_auth" in desktop
     assert "reverse_proxy 127.0.0.1:8090" in desktop
+    assert "stream_timeout 30m" in desktop
     assert 'header_up Remote-User "adpulse-desktop"' in desktop
     assert "header_up -Authorization" in desktop
     assert "header_up -X-API-Key" in desktop
@@ -50,14 +53,17 @@ def test_only_redeem_logout_and_internal_verify_routes_remain() -> None:
         assert removed not in config
 
 
-def test_desktop_readiness_is_separate_from_bot_readiness() -> None:
+# Security-ревью 17.07.2026: /desktop-readyz гоняет реальный guacd→VNC handshake
+# рядом с money-стеком — маршрут отдельный от bot-readiness, но закрыт BasicAuth
+# (анонимный интернет не должен запускать пробы; мониторинг ходит по loopback).
+def test_desktop_readiness_is_separate_and_requires_panel_auth() -> None:
     config = APP_SITE.read_text(encoding="utf-8")
     readiness = config.split("handle /desktop-readyz", maxsplit=1)[1].split(
         "handle /api/v1/postback/*", maxsplit=1
     )[0]
 
     assert "reverse_proxy 127.0.0.1:8100" in readiness
-    assert "import panel_auth" not in readiness
+    assert "import panel_auth" in readiness
 
 
 def test_installer_atomically_removes_the_obsolete_desktop_site() -> None:

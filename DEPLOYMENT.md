@@ -55,13 +55,34 @@ Installer идемпотентно устанавливает официальн
 
 ```bash
 curl -fsS http://127.0.0.1:8090/desktop/ >/dev/null
-curl -fsS https://app.adpulse.su/desktop-readyz
+# /desktop-readyz снаружи закрыт панельной BasicAuth (security-ревью 17.07.2026);
+# с хоста проверяем напрямую через loopback, мимо Caddy.
+curl -fsS http://127.0.0.1:8100/desktop-readyz
 docker logs --tail=100 vision-webtop
 ```
 
 При первом запуске нужно открыть `https://app.adpulse.su/desktop/` и убедиться,
 что Vision доступен через единственную Guacamole-связь. Отдельного desktop-host,
 Selkies fallback или второго Guacamole login в production нет.
+
+#### Экстренный обрыв desktop-доступа
+
+Logout, истечение сессии и демоция владельца не рвут уже открытый
+WebSocket-туннель Guacamole: forward_auth проверяет сессию только в момент
+подключения. Жёсткий потолок жизни туннеля задаёт `stream_timeout 30m` в
+`deploy/caddy/app.adpulse.su.caddy` — ревокация вступает в силу максимум через
+30 минут. При обрыве клиент Guacamole показывает дисконнект; повторное
+подключение (reconnect или перезагрузка вкладки) заново проходит проверку
+сессии, состояние десктопа не теряется — VNC-сессия персистентна. Если доступ
+нужно оборвать **немедленно**:
+
+```bash
+ssh root@62.60.150.133 'docker restart vision-webtop-guacamole-1'
+```
+
+Рестарт рвёт все активные туннели и займёт ~10-20 секунд; контейнеры
+`vision-webtop` (X-сервер + Vision, канал сканирования) и `guacd` при этом не
+затрагиваются — money-скан продолжает работать без перерыва.
 
 ### 2. Приложение
 
