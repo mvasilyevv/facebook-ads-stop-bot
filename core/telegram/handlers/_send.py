@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """Общий helper для отправки текстовых сообщений в TG.
 
-Глушит сетевые ошибки (логирует через logger.exception). reply_to_message_id
-принимается, но клиент его не передаёт — оставлено в сигнатуре для документации
-вызывающего кода.
+Глушит сетевые ошибки (логирует через logger.exception). По умолчанию клиент
+отправляет HTML/Markdown через Bot API Rich Messages.
 """
 
 from __future__ import annotations
@@ -30,13 +29,13 @@ async def send_text(
     Для генерируемого markdown-контента (AI-ответ, отчёт /spy, каталог /tools)
     передавай parse_mode='Markdown' явно на месте вызова.
     """
-    _ = reply_to_message_id  # клиент не поддерживает — оставлено для документации
     try:
         await client.send_message(
             chat_id=str(chat_id),
             text=text,
             message_thread_id=message_thread_id,
             parse_mode=parse_mode,
+            reply_to_message_id=reply_to_message_id,
         )
     except Exception:
         logger.exception("send_message failed")

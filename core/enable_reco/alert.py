@@ -43,7 +43,7 @@ _LEVEL_HEAD = {
 
 
 def _snapshot_grid(snapshot: dict) -> str:
-    """Сводка метрик после disable → выровненный <pre>-блок (если есть данные)."""
+    """Сводка метрик после disable → нативная Rich Message таблица."""
     rows: list[list[tuple[str, str]]] = []
     if "metrics_count" in snapshot:
         rows.append([("Метрик в окне", str(snapshot["metrics_count"]))])
@@ -66,9 +66,9 @@ def render_enable_reco_alert(inp: EnableRecoRenderInput) -> tuple[str, dict | No
         emoji, head = "▶️", "Включить и держать до цены лида"
     title = inp.offer_code or inp.ad_name or "без названия"
 
-    lines = [f"{emoji} {fmt.b(head)} · {fmt.b(title)}", ""]
+    lines = [fmt.heading(f"{emoji} {head} · {title}", 2)]
 
-    lines.append(fmt.b("Причина" if inp.decision.hold_until_cpl else "Что выправилось"))
+    lines.append(fmt.heading("Причина" if inp.decision.hold_until_cpl else "Что выправилось", 4))
     if inp.decision.reasons:
         lines.extend(fmt.bullets(list(inp.decision.reasons)))
     else:
@@ -84,16 +84,14 @@ def render_enable_reco_alert(inp: EnableRecoRenderInput) -> tuple[str, dict | No
 
     grid = _snapshot_grid(inp.decision.snapshot or {})
     if grid:
-        lines.append("")
+        lines.append(fmt.heading("Метрики", 4))
         lines.append(grid)
 
     context = " / ".join(p for p in (inp.campaign_name, inp.adset_name) if p)
     if context:
-        lines.append("")
-        lines.append(fmt.quote(context))
+        lines.append(fmt.details("Контекст", context, open_by_default=True))
 
-    lines.append("")
-    lines.append(fmt.code(f"id {inp.fb_ad_id}"))
+    lines.append(fmt.footer(f"id {inp.fb_ad_id}"))
 
     text = "\n".join(lines)
 

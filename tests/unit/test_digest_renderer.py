@@ -51,11 +51,12 @@ def test_render_empty_day_shows_idle_notice() -> None:
 # Нулевые счётчики форматируются как «0», а не «—»
 def test_render_zero_counters_show_zero() -> None:
     text = render_digest(_payload_empty())
-    # Алерты ⚠️ 0 · 🛑 0 и отключения ✅ 0 · ❌ 0 — все нули
-    assert "⚠️ <b>0</b>" in text
-    assert "🛑 <b>0</b>" in text
-    assert "✅ <b>0</b>" in text
-    assert "❌ <b>0</b>" in text
+    # Алерты ⚠️ 0 · 🛑 0 и отключения ✅ 0 · ❌ 0 — все нули.
+    assert "⚠️ 0" in text
+    assert "🛑 0" in text
+    assert "✅ 0" in text
+    assert "❌ 0" in text
+    assert "<h1>" in text and "<table bordered>" in text
 
 
 # Обычный день: топ-5 объявлений отрисованы строкой каждое
@@ -99,8 +100,8 @@ def test_render_full_day_top_ads_listed() -> None:
     text = render_digest(payload)
 
     # Алерты
-    assert "⚠️ <b>12</b>" in text
-    assert "🛑 <b>3</b>" in text
+    assert "⚠️ 12" in text
+    assert "🛑 3" in text
     # Топ-таблица: офферы, spend и метрики (CPC/CPL — отдельные колонки)
     assert "DRC_CR2" in text
     assert "KE_CR2" in text
@@ -109,12 +110,12 @@ def test_render_full_day_top_ads_listed() -> None:
     assert "0.679" in text  # CPC в колонке
     assert "7.92" in text  # CPL в колонке
     # Отключения
-    assert "✅ <b>4</b>" in text
-    assert "❌ <b>1</b>" in text
+    assert "✅ 4" in text
+    assert "❌ 1" in text
     # Итоги
     assert "$1 234.50" in text
-    assert "офферов <b>7</b>" in text
-    assert "ads <b>42</b>" in text
+    assert "<th>Офферы</th>" in text and ">7</td>" in text
+    assert "<th>Объявления</th>" in text and ">42</td>" in text
     # «Тихий день» не должен появиться, активность есть
     assert "За окно не было активности" not in text
 

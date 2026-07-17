@@ -1,17 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Форматирование TG-сообщений для алертов observer — стиль «чистая карточка».
+"""Rich Message карточки алертов observer.
 
 Pure-функции без I/O — принимают данные, возвращают (text, inline_keyboard).
 parse_mode=HTML (передаётся явно из alert_dispatcher).
 
 Лейаут карточки:
-  ⚠️ ПРЕДУПРЕЖДЕНИЕ · KE_CR2          ← заголовок: стадия + оффер
-  <пусто>
+  <h2>⚠️ ПРЕДУПРЕЖДЕНИЕ · KE_CR2</h2> ← настоящий заголовок
   CPL $9.56 ▸ порог $3.00 (×3.2)      ← причина(ы) с фактом, порогом и кратностью
-  <пусто>
-  <pre>выровненный блок метрик</pre>   ← расход / деп / рег / клики / CTR / CPC
-  <пусто>
-  «название кампании»                  ← контекст в блок-цитате
+  <table>...</table>                    ← нативная таблица метрик
+  <details>...</details>                ← кампания и адсет
 
 Без технического ID-хвоста и без дублирования ad_name. Числа и выравнивание —
 через core.telegram.format.
@@ -104,7 +101,7 @@ def _reason_lines(inp: AlertRenderInput) -> list[str]:
 
 
 def _metrics_grid(m: dict[str, Any]) -> str:
-    """Выровненный moноширинный блок ключевых метрик.
+    """Нативная Rich Message таблица ключевых метрик.
 
     Колонки: Расход / (CPC) — деп / рег — клики / CTR. CPC и CTR показываем
     только при наличии (старые события могли не нести этих полей).
@@ -123,27 +120,28 @@ def _metrics_grid(m: dict[str, Any]) -> str:
 
 
 def render_alert_text(inp: AlertRenderInput) -> str:
-    """Текст TG-карточки для ПРЕДУПРЕЖДЕНИЯ/СТОП (русский, HTML)."""
+    """Rich HTML карточка ПРЕДУПРЕЖДЕНИЯ/СТОП."""
     emoji, word = _STAGE_HEAD.get(inp.stage, ("ℹ️", "АЛЕРТ"))
     title = inp.offer_code or inp.ad_name or "без названия"
 
-    lines = [f"{emoji} {fmt.b(word)} · {fmt.b(title)}", ""]
+    lines = [fmt.heading(f"{emoji} {word} · {title}", 2)]
+    lines.append(fmt.heading("Почему сработало", 4))
     lines.extend(_reason_lines(inp))
-    lines.append("")
+    lines.append(fmt.divider())
+    lines.append(fmt.heading("Метрики", 4))
     lines.append(_metrics_grid(inp.metrics))
 
     # Контекст: кампания + адсет. Адсет обязателен — названия объявлений
     # дублируются между адсетами, без него непонятно, к какому относится алерт.
     context = _context_block(inp)
     if context:
-        lines.append("")
         lines.append(context)
 
     return "\n".join(line for line in lines if line is not None)
 
 
 def _context_block(inp: AlertRenderInput) -> str:
-    """Блок-цитата с кампанией и адсетом (адсет — маркером вложенности '↳')."""
+    """Раскрытая по умолчанию секция с кампанией и адсетом."""
     ctx: list[str] = []
     if inp.campaign_name:
         ctx.append(inp.campaign_name)
@@ -151,7 +149,7 @@ def _context_block(inp: AlertRenderInput) -> str:
         # '↳' — вложенность под кампанией; без кампании показываем просто метку.
         prefix = "↳ адсет: " if inp.campaign_name else "адсет: "
         ctx.append(prefix + inp.adset_name)
-    return fmt.quote("\n".join(ctx)) if ctx else ""
+    return fmt.details("Контекст", "\n".join(ctx), open_by_default=True) if ctx else ""
 
 
 def render_inline_keyboard(inp: AlertRenderInput) -> dict | None:

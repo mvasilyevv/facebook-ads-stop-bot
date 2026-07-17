@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Интеграционный: TelegramBotClient → реальный HTTP через httpx + respx (без живого TG).
+"""Интеграционный: TelegramBotClient → Bot API через httpx + respx.
 
-Проверяет правильность сериализации параметров (parse_mode, reply_to, thread_id)
+Проверяет Rich Messages, legacy-fallback, reply и thread_id
 и обработку ошибок API. Без этого слоя поломки на стыке `core.telegram.client` ↔
 api.telegram.org не ловились бы до прод-инцидента.
 """
@@ -16,7 +16,7 @@ from httpx import Response
 from core.telegram.client import TelegramBotClient
 
 
-# Сценарий: send_message формирует POST с правильным payload
+# Сценарий: Markdown уходит через sendRichMessage / InputRichMessage.markdown.
 @pytest.mark.asyncio
 async def test_send_message_constructs_proper_request(tg_respx) -> None:
     async with httpx.AsyncClient() as http:
@@ -32,6 +32,8 @@ async def test_send_message_constructs_proper_request(tg_respx) -> None:
     assert sent["chat_id"] == "123"
     assert sent["text"] == "Привет 👋"
     assert sent["parse_mode"] == "Markdown"
+    assert sent["_method"] == "sendRichMessage"
+    assert sent["rich_message"] == {"markdown": "Привет 👋"}
 
 
 # Сценарий: thread_id (forum topics) проставляется в payload
@@ -48,6 +50,8 @@ async def test_send_message_with_thread_id(tg_respx) -> None:
     sent = tg_respx.sent_messages[0]
     assert sent["chat_id"] == "-100123"
     assert sent.get("message_thread_id") == 7
+    assert sent["_method"] == "sendRichMessage"
+    assert sent["rich_message"]["html"] == "алерт"
 
 
 # Сценарий: TG отвечает 5xx с ok=false → клиент бросает TelegramAPIError.
@@ -58,7 +62,7 @@ async def test_send_message_handles_api_error() -> None:
     from core.telegram.client import TelegramAPIError
 
     with respx.mock(assert_all_called=False) as mock:
-        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendMessage").mock(
+        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendRichMessage").mock(
             return_value=Response(500, json={"ok": False, "description": "internal server error"})
         )
 
@@ -67,6 +71,43 @@ async def test_send_message_handles_api_error() -> None:
             with pytest.raises(TelegramAPIError) as exc_info:
                 await client.send_message(chat_id="1", text="t")
             assert "internal" in str(exc_info.value).lower()
+
+
+# Bot API до 10.1 или malformed rich HTML: один безопасный fallback на sendMessage.
+@pytest.mark.asyncio
+async def test_send_message_falls_back_to_legacy_html() -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def _capture(request):
+        import json
+
+        payload = json.loads(request.content)
+        calls.append((request.url.path.rsplit("/", 1)[-1], payload))
+        return Response(200, json={"ok": True, "result": {"message_id": 77}})
+
+    with respx.mock(assert_all_called=True) as mock:
+        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendRichMessage").mock(
+            return_value=Response(
+                404,
+                json={"ok": False, "error_code": 404, "description": "method not found"},
+            )
+        )
+        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendMessage").mock(
+            side_effect=_capture
+        )
+
+        async with httpx.AsyncClient() as http:
+            client = TelegramBotClient(bot_token="FAKE:TOKEN", http_client=http)
+            result = await client.send_message(
+                chat_id="1",
+                text="<h2>Стоп</h2><table><tr><th>CPL</th><td>$9</td></tr></table>",
+            )
+
+    assert result["message_id"] == 77
+    assert calls[0][0] == "sendMessage"
+    assert "<h2>" not in calls[0][1]["text"]
+    assert "<table>" not in calls[0][1]["text"]
+    assert "<b>Стоп</b>" in calls[0][1]["text"]
 
 
 # Сценарий: getUpdates с offset формирует правильный запрос

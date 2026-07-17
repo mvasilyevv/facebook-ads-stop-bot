@@ -151,7 +151,7 @@ async def test_scan_emits_alert_dispatcher_delivers_once(
 
 
 # E2E: повторный scan того же STOP-row → ни одного нового alert_event,
-# ни одного нового sendMessage в TG (двойная idempotency: FSM + ref-dedup).
+# ни одного нового Rich Message в TG (двойная idempotency: FSM + ref-dedup).
 @pytest.mark.asyncio
 async def test_two_scans_one_dispatch_no_duplicate_tg_message(
     pg_engine,

@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Async-клиент Telegram Bot API: отправка, редактирование, long polling."""
+"""Async-клиент Telegram Bot API: Rich Messages, отправка и long polling."""
 
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 
@@ -15,8 +16,9 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-# Лимит Telegram на длину сообщения
+# Лимиты Telegram: legacy sendMessage и Rich Messages (Bot API 10.1+).
 _TG_MESSAGE_LIMIT = 4096
+_TG_RICH_MESSAGE_LIMIT = 32768
 
 # Теги HTML mode Telegram, у которых есть парная закрывашка.
 # Остальные ( <br>, <hr>, void-теги) Telegram HTML не поддерживает, игнорируем.
@@ -36,6 +38,29 @@ _TG_HTML_TAGS = (
     "blockquote",
     "tg-spoiler",
     "span",
+    # Rich Messages (Bot API 10.1+).
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "p",
+    "footer",
+    "ul",
+    "ol",
+    "li",
+    "table",
+    "tr",
+    "th",
+    "td",
+    "details",
+    "summary",
+    "aside",
+    "cite",
+    "mark",
+    "sub",
+    "sup",
 )
 
 # Регекс матчит открывающие и закрывающие теги, регистронезависимо.
@@ -98,6 +123,106 @@ def _truncate_message(text: str, limit: int = _TG_MESSAGE_LIMIT) -> str:
     return balanced + suffix
 
 
+_BLOCK_OPEN_RE = re.compile(
+    r"<\s*(h[1-6]|p|pre|footer|ul|ol|table|blockquote|aside|details)\b",
+    re.IGNORECASE,
+)
+_FULL_BOLD_LINE_RE = re.compile(
+    r"^\s*(?:[^<\n]{0,12}\s*)?<(?:b|strong)>.+</(?:b|strong)>\s*$",
+    re.IGNORECASE,
+)
+_TAG_STRIP_RE = re.compile(r"<[^>]+>")
+
+
+def _plain_html_text(value: str) -> str:
+    return html.unescape(_TAG_STRIP_RE.sub("", value)).strip()
+
+
+def _looks_like_title(line: str, *, first_content_line: bool) -> bool:
+    """Эвристика миграции старых карточек в реальные rich-heading блоки."""
+    if _BLOCK_OPEN_RE.match(line.strip()):
+        return False
+    plain = _plain_html_text(line)
+    if not plain or len(plain) > 160:
+        return False
+    if _FULL_BOLD_LINE_RE.match(line):
+        return True
+    if not first_content_line:
+        return False
+    first = plain[0]
+    starts_with_symbol = not first.isalnum() and ord(first) >= 0x2300
+    return starts_with_symbol or bool(re.search(r"<(?:b|strong)>", line, re.IGNORECASE))
+
+
+def _upgrade_html_to_rich(text: str) -> str:
+    """Поднимает старый HTML в Rich HTML, не меняя смысл сообщения.
+
+    Старые карточки уже отделяли заголовки первой строкой и жирными строками
+    секций. Превращаем их в настоящие h2/h4; таблицы/details, которые уже
+    сгенерированы новыми рендерами, оставляем как есть.
+    """
+    if not text:
+        return text
+
+    lines = text.splitlines()
+    upgraded: list[str] = []
+    first_content_seen = False
+    protected_depth = 0
+    protected_tags = ("pre", "blockquote", "table", "details", "aside")
+
+    for line in lines:
+        stripped = line.strip()
+        first_content_line = bool(stripped) and not first_content_seen
+        if (
+            stripped
+            and protected_depth == 0
+            and _looks_like_title(line, first_content_line=first_content_line)
+        ):
+            level = 2 if first_content_line else 4
+            upgraded.append(f"<h{level}>{stripped}</h{level}>")
+        else:
+            upgraded.append(line)
+
+        if stripped:
+            first_content_seen = True
+        lowered = line.lower()
+        for tag in protected_tags:
+            protected_depth += len(re.findall(rf"<{tag}\b", lowered))
+            protected_depth -= len(re.findall(rf"</{tag}\s*>", lowered))
+        protected_depth = max(0, protected_depth)
+
+    return "\n".join(upgraded)
+
+
+def _rich_html_to_legacy(text: str) -> str:
+    """Деградирует Rich HTML до поддерживаемого sendMessage HTML.
+
+    Нужен для старого self-hosted Bot API и как страховка от ошибок rich parser.
+    """
+    legacy = text
+    legacy = re.sub(r"<h[1-6]>(.*?)</h[1-6]>", r"<b>\1</b>\n", legacy, flags=re.I | re.S)
+    legacy = re.sub(r"<footer>(.*?)</footer>", r"<i>\1</i>", legacy, flags=re.I | re.S)
+    legacy = re.sub(r"<hr\s*/?>", "\n────────\n", legacy, flags=re.I)
+    legacy = re.sub(r"<br\s*/?>", "\n", legacy, flags=re.I)
+    legacy = re.sub(r"<summary>(.*?)</summary>", r"<b>\1</b>\n", legacy, flags=re.I | re.S)
+    legacy = re.sub(r"</?(?:details|p|aside|cite)\b[^>]*>", "", legacy, flags=re.I)
+    legacy = re.sub(r"<li\b[^>]*>", "• ", legacy, flags=re.I)
+    legacy = re.sub(r"</li\s*>", "\n", legacy, flags=re.I)
+    legacy = re.sub(r"</?(?:ul|ol)\b[^>]*>", "", legacy, flags=re.I)
+    legacy = re.sub(r"<(?:th|td)\b[^>]*>", "", legacy, flags=re.I)
+    legacy = re.sub(r"</(?:th|td)\s*>", "  ", legacy, flags=re.I)
+    legacy = re.sub(r"<tr\b[^>]*>", "", legacy, flags=re.I)
+    legacy = re.sub(r"</tr\s*>", "\n", legacy, flags=re.I)
+    legacy = re.sub(r"</?table\b[^>]*>", "", legacy, flags=re.I)
+    legacy = re.sub(r"<(?:mark)>(.*?)</(?:mark)>", r"<b>\1</b>", legacy, flags=re.I | re.S)
+    legacy = re.sub(r"</?(?:sub|sup)\b[^>]*>", "", legacy, flags=re.I)
+    return re.sub(r"\n{3,}", "\n\n", legacy).strip()
+
+
+def _truncate_rich_html(text: str) -> str:
+    return _truncate_message(text, limit=_TG_RICH_MESSAGE_LIMIT)
+
+
 class TelegramAPIError(RuntimeError):
     """Ошибка вызова Telegram Bot API."""
 
@@ -117,6 +242,26 @@ class TelegramAPIError(RuntimeError):
         if description:
             details = f"{details}: {description}"
         super().__init__(f"Ошибка Telegram API при вызове {method}{details}")
+
+
+def _should_fallback_rich(exc: TelegramAPIError) -> bool:
+    """Fallback только при несовместимости rich API/разметки, не при chat/ACL ошибках."""
+    if exc.error_code == 404:
+        return True
+    if exc.error_code != 400:
+        return False
+    description = (exc.description or "").lower()
+    return any(
+        marker in description
+        for marker in (
+            "rich message",
+            "rich_message",
+            "can't parse",
+            "cannot parse",
+            "unsupported tag",
+            "method not found",
+        )
+    )
 
 
 class TelegramBotClient:
@@ -237,18 +382,55 @@ class TelegramBotClient:
         reply_markup: dict | None = None,
         parse_mode: str | None = "HTML",
         reply_to_message_id: int | None = None,
+        rich: bool = True,
     ) -> dict:
-        """Отправляет сообщение в чат. Обрезает текст до лимита Telegram.
+        """Отправляет сообщение, по умолчанию через Bot API Rich Messages.
 
-        parse_mode: режим разметки Telegram (HTML/MarkdownV2). None — без разметки.
-        Дефолт HTML сохраняет обратную совместимость со старыми вызовами.
+        HTML автоматически получает настоящие заголовки для старых карточек.
+        Markdown отправляется как Rich Markdown. При 400/404 от rich-метода
+        выполняется безопасный fallback на legacy sendMessage.
         reply_to_message_id: ответ «реплаем» (AI-комментарий под алертом);
         allow_sending_without_reply — если оригинал удалён, шлём обычным сообщением.
         """
-        text = _truncate_message(text)
+        normalized_mode = (parse_mode or "").strip().lower()
+        rich_message: dict | None = None
+        if rich and normalized_mode == "html":
+            rich_message = {"html": _truncate_rich_html(_upgrade_html_to_rich(text))}
+        elif rich and normalized_mode in {"markdown", "markdownv2"}:
+            rich_message = {"markdown": _truncate_message(text, limit=_TG_RICH_MESSAGE_LIMIT)}
+
+        if rich_message is not None:
+            rich_payload: dict = {
+                "chat_id": chat_id,
+                "rich_message": rich_message,
+            }
+            if message_thread_id is not None:
+                rich_payload["message_thread_id"] = message_thread_id
+            if reply_markup:
+                rich_payload["reply_markup"] = reply_markup
+            if reply_to_message_id is not None:
+                rich_payload["reply_parameters"] = {
+                    "message_id": reply_to_message_id,
+                    "allow_sending_without_reply": True,
+                }
+            try:
+                data = await self._post_json("sendRichMessage", payload=rich_payload)
+                return dict(data["result"])
+            except TelegramAPIError as exc:
+                if not _should_fallback_rich(exc):
+                    raise
+                logger.warning(
+                    "sendRichMessage недоступен/отклонил разметку; fallback на sendMessage: %s",
+                    exc.description,
+                )
+
+        legacy_text = text
+        if normalized_mode == "html":
+            legacy_text = _rich_html_to_legacy(text)
+        legacy_text = _truncate_message(legacy_text)
         payload: dict = {
             "chat_id": chat_id,
-            "text": text,
+            "text": legacy_text,
         }
         if parse_mode is not None:
             payload["parse_mode"] = parse_mode
@@ -271,12 +453,31 @@ class TelegramBotClient:
         message_thread_id: int | None = None,
         reply_markup: dict | None = None,
     ) -> None:
-        """Редактирует текст существующего сообщения. Обрезает до лимита."""
-        text = _truncate_message(text)
+        """Редактирует rich-сообщение; при несовместимости откатывается на HTML."""
+        rich_payload: dict = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "rich_message": {"html": _truncate_rich_html(_upgrade_html_to_rich(text))},
+        }
+        if message_thread_id is not None:
+            rich_payload["message_thread_id"] = message_thread_id
+        if reply_markup:
+            rich_payload["reply_markup"] = reply_markup
+        try:
+            await self._post_json("editMessageText", payload=rich_payload)
+            return
+        except TelegramAPIError as exc:
+            if not _should_fallback_rich(exc):
+                raise
+            logger.warning(
+                "rich edit отклонён; fallback на legacy editMessageText: %s",
+                exc.description,
+            )
+
         payload: dict = {
             "chat_id": chat_id,
             "message_id": message_id,
-            "text": text,
+            "text": _truncate_message(_rich_html_to_legacy(text)),
             "parse_mode": "HTML",
         }
         if message_thread_id is not None:

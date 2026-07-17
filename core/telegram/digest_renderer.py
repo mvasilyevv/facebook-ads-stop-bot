@@ -1,18 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Рендер daily digest в HTML-строку для Telegram — стиль «чистая карточка».
+"""Рендер daily digest как Telegram Rich Message.
 
-Pure-функция без I/O — принимает `DigestPayload`, возвращает строку (parse_mode=HTML).
+Pure-функция без I/O — принимает `DigestPayload`, возвращает Rich HTML.
 
 Лейаут:
-  📊 Дайджест · 2026-05-26               ← заголовок + дата окна
-  окно 24ч до 2026-05-27 09:00 UTC
-  <пусто>
-  🔔 Алерты      ⚠️ 12 · 🛑 3            ← компактные сводки одной строкой
-  🔧 Отключения  ✅ 4 · ❌ 1
-  📈 Итого       спенд $1 234.50 · офферов 7 · ads 42
-  <пусто>
-  🏆 Топ-5 по spend                       ← выровненная моноширинная таблица
-  <pre># Оффер Spend CPC CPL Объявление</pre>
+  <h1>📊 Дайджест · 2026-05-26</h1>
+  <footer>окно 24ч ...</footer>
+  <table>сводка и топ-5</table>
 
 Числа, выравнивание и экранирование — через core.telegram.format.
 """
@@ -22,7 +16,7 @@ from __future__ import annotations
 from core.telegram import format as fmt
 from core.telegram.digest_builder import DigestPayload, TopAdRow
 
-# Максимальная длина названия объявления в таблице (моноширинный столбец).
+# Максимальная длина названия объявления в компактной таблице.
 _AD_NAME_MAX = 24
 
 
@@ -32,7 +26,7 @@ def _fmt_date_utc(payload: DigestPayload) -> str:
 
 
 def _top_table(rows: list[TopAdRow]) -> str:
-    """Топ-объявления по spend → выровненная таблица в <pre>."""
+    """Топ-объявления по spend → нативная Rich Message таблица."""
     table_rows: list[list[str]] = []
     for idx, row in enumerate(rows, 1):
         table_rows.append(
@@ -59,9 +53,10 @@ def render_digest(payload: DigestPayload) -> str:
     Если за окно не было spend и алертов — добавляем «тихий» блок внизу.
     """
     lines: list[str] = [
-        f"📊 {fmt.b('Дайджест')} · {fmt.b(_fmt_date_utc(payload))}",
-        fmt.i(f"окно 24ч до {payload.window_end_utc.strftime('%Y-%m-%d %H:%M UTC')}"),
-        "",
+        fmt.heading(f"📊 Дайджест · {_fmt_date_utc(payload)}", 1),
+        fmt.footer(f"Окно 24ч до {payload.window_end_utc.strftime('%Y-%m-%d %H:%M UTC')}"),
+        fmt.divider(),
+        fmt.heading("Сводка", 3),
     ]
 
     # Активность считаем по алертам и реальному spend; непустой топ из нулей —
@@ -72,35 +67,42 @@ def render_digest(payload: DigestPayload) -> str:
         or payload.total_spend_window_usd > 0
     )
 
-    # Сводки — по одной строке, метка жирным.
     lines.append(
-        f"🔔 {fmt.b('Алерты')}   "
-        f"⚠️ {fmt.b(fmt.num(payload.alerts_warning_count))} · "
-        f"🛑 {fmt.b(fmt.num(payload.alerts_stop_count))}"
+        fmt.kv_grid(
+            [
+                [
+                    (
+                        "🔔 Алерты",
+                        f"⚠️ {fmt.num(payload.alerts_warning_count)} · "
+                        f"🛑 {fmt.num(payload.alerts_stop_count)}",
+                    )
+                ],
+                [
+                    (
+                        "🔧 Отключения",
+                        f"✅ {fmt.num(payload.disable_tasks_succeeded)} · "
+                        f"❌ {fmt.num(payload.disable_tasks_failed)}",
+                    )
+                ],
+                [("💵 Спенд", fmt.money(payload.total_spend_window_usd))],
+                [
+                    ("Офферы", fmt.num(payload.active_offers_count)),
+                    ("Объявления", fmt.num(payload.active_ads_count)),
+                ],
+            ]
+        )
     )
-    lines.append(
-        f"🔧 {fmt.b('Отключения')}   "
-        f"✅ {fmt.b(fmt.num(payload.disable_tasks_succeeded))} · "
-        f"❌ {fmt.b(fmt.num(payload.disable_tasks_failed))}"
-    )
-    lines.append(
-        f"📈 {fmt.b('Итого')}   "
-        f"спенд {fmt.b(fmt.money(payload.total_spend_window_usd))} · "
-        f"офферов {fmt.b(fmt.num(payload.active_offers_count))} · "
-        f"ads {fmt.b(fmt.num(payload.active_ads_count))}"
-    )
-    lines.append("")
+    lines.append(fmt.divider())
 
     # Топ-5 spend.
-    lines.append(f"🏆 {fmt.b('Топ-5 по spend')}")
+    lines.append(fmt.heading("🏆 Топ-5 по spend", 3))
     if payload.top_ads_by_spend:
         lines.append(_top_table(payload.top_ads_by_spend))
     else:
-        lines.append("(нет данных за окно)")
+        lines.append(fmt.footer("Нет данных за окно"))
 
     if not has_activity:
-        lines.append("")
-        lines.append("😴 За окно не было активности.")
+        lines.append(fmt.details("😴 Тихое окно", "За окно не было активности."))
 
     return "\n".join(lines)
 

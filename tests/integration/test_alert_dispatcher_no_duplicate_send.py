@@ -108,7 +108,7 @@ async def alert_event_fixture(pg_engine, clean_dispatch_tables):
     yield {"ad_id": ad_id, "scan_id": scan_id, "open_token": open_token}
 
 
-# Сценарий: два параллельных dispatch'а одного scan_id → ровно 1 sendMessage и 1 ref
+# Сценарий: два параллельных dispatch'а одного scan_id → ровно 1 Rich Message и 1 ref
 @pytest.mark.asyncio
 async def test_parallel_dispatch_sends_message_once(
     pg_engine,
@@ -153,7 +153,7 @@ async def test_sentinel_message_id_zero_blocks_second_dispatch(
     alert_event_fixture,
     seeded_telegram_config,
 ) -> None:
-    """HIGH #10: если sendMessage успешен но message_id=0 — sentinel (message_id=0)
+    """HIGH #10: если sendRichMessage успешен но message_id=0 — sentinel
     остаётся в telegram_message_refs. Повторный dispatch для того же события
     натыкается на ON CONFLICT DO NOTHING → пропускает send (один send, не два).
     """
@@ -162,7 +162,7 @@ async def test_sentinel_message_id_zero_blocks_second_dispatch(
 
     scan_id = alert_event_fixture["scan_id"]
 
-    # Первый вызов: sendMessage возвращает message_id=0 (сервер не вернул реальный id)
+    # Первый вызов: sendRichMessage возвращает message_id=0.
     with respx.mock(assert_all_called=False) as mock:
         call_count = {"n": 0}
 
@@ -181,7 +181,7 @@ async def test_sentinel_message_id_zero_blocks_second_dispatch(
                 },
             )
 
-        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendMessage").mock(
+        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendRichMessage").mock(
             side_effect=_handler
         )
 
@@ -190,7 +190,7 @@ async def test_sentinel_message_id_zero_blocks_second_dispatch(
             c1 = await dispatch_pending_alerts(pg_engine, client=client, scan_id=scan_id)
 
     assert c1["sent"] == 1, "Первый dispatch должен посчитать sent=1 (send прошёл)"
-    assert call_count["n"] == 1, "sendMessage должен был вызван ровно один раз"
+    assert call_count["n"] == 1, "sendRichMessage должен быть вызван ровно один раз"
 
     # Sentinel должен остаться в БД с message_id=0
     async with pg_engine.connect() as conn:
@@ -208,7 +208,7 @@ async def test_sentinel_message_id_zero_blocks_second_dispatch(
             call_count2["n"] += 1
             return Response(200, json={"ok": True, "result": {"message_id": 9999}})
 
-        mock2.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendMessage").mock(
+        mock2.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendRichMessage").mock(
             side_effect=_handler2
         )
 
@@ -219,7 +219,7 @@ async def test_sentinel_message_id_zero_blocks_second_dispatch(
     assert c2["skipped_duplicates"] == 1, (
         "Второй dispatch должен пропустить событие через sentinel dedup"
     )
-    assert call_count2["n"] == 0, "sendMessage не должен быть вызван повторно"
+    assert call_count2["n"] == 0, "sendRichMessage не должен быть вызван повторно"
 
 
 # Сценарий: send упал → DELETE pre-claim записи, чтобы retry мог переслать
@@ -233,7 +233,7 @@ async def test_failed_send_releases_claim(
     scan_id = alert_event_fixture["scan_id"]
 
     with respx.mock(assert_all_called=False) as mock:
-        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendMessage").mock(
+        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendRichMessage").mock(
             return_value=Response(400, json={"ok": False, "description": "bad request"})
         )
 

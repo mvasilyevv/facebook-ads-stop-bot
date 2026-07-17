@@ -2,7 +2,7 @@
 """Интеграционный: end-to-end отправка алертов observer'a → TG (через respx + real DB).
 
 Покрывает критический контракт «алерт ушёл в TG ровно один раз»:
-- INSERT alert_event → dispatch → sendMessage через respx
+- INSERT alert_event → dispatch → sendRichMessage через respx
 - Идемпотентность через telegram_message_refs (повторный вызов → 0 отправок)
 - Корректный thread_id для warning vs stop
 - HTML escape, inline-кнопки в payload
@@ -126,7 +126,7 @@ async def _insert_alert(
         )
 
 
-# Сценарий: один WARNING → один sendMessage с правильным thread + кнопками
+# Сценарий: один WARNING → один Rich Message с правильным thread + кнопками
 @pytest.mark.asyncio
 async def test_dispatch_warning_sends_one_message(
     pg_engine, tg_respx, seeded_telegram_config, offer_and_ad
@@ -156,6 +156,9 @@ async def test_dispatch_warning_sends_one_message(
     assert sent.get("message_thread_id") is None
     assert "ПРЕДУПРЕЖДЕНИЕ" in sent["text"]
     assert sent.get("parse_mode") == "HTML"
+    assert sent["_method"] == "sendRichMessage"
+    assert "<h2>" in sent["rich_message"]["html"]
+    assert "<table bordered>" in sent["rich_message"]["html"]
     # Кнопки
     assert "reply_markup" in sent
     btns = sent["reply_markup"]["inline_keyboard"][0]
@@ -254,7 +257,7 @@ async def test_telegram_api_error_counted(pg_engine, seeded_telegram_config, off
     )
 
     with respx.mock(assert_all_called=False) as mock:
-        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendMessage").mock(
+        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendRichMessage").mock(
             return_value=Response(400, json={"ok": False, "description": "chat not found"})
         )
 

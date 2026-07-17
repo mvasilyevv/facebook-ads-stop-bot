@@ -276,12 +276,24 @@ def tg_respx():
     rec = TgRespxRecorder()
 
     with respx.mock(assert_all_called=False) as mock:
-        # sendMessage
+        # sendMessage / sendRichMessage. Для старых assertions добавляем
+        # нормализованные text/parse_mode, не удаляя исходный rich_message.
         def _send_message_handler(request):
             import json as _json
 
             payload = _json.loads(request.content) if request.content else {}
-            rec.sent_messages.append(payload)
+            recorded = dict(payload)
+            method = request.url.path.rsplit("/", 1)[-1]
+            recorded["_method"] = method
+            rich_message = payload.get("rich_message") or {}
+            if isinstance(rich_message, dict):
+                if "html" in rich_message:
+                    recorded.setdefault("text", rich_message["html"])
+                    recorded.setdefault("parse_mode", "HTML")
+                elif "markdown" in rich_message:
+                    recorded.setdefault("text", rich_message["markdown"])
+                    recorded.setdefault("parse_mode", "Markdown")
+            rec.sent_messages.append(recorded)
             return Response(
                 200,
                 json={
@@ -290,12 +302,16 @@ def tg_respx():
                         "message_id": 1000 + len(rec.sent_messages),
                         "chat": {"id": payload.get("chat_id"), "type": "private"},
                         "date": 0,
-                        "text": payload.get("text", ""),
+                        "text": recorded.get("text", ""),
+                        "rich_message": payload.get("rich_message"),
                     },
                 },
             )
 
         mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendMessage").mock(
+            side_effect=_send_message_handler
+        )
+        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendRichMessage").mock(
             side_effect=_send_message_handler
         )
 

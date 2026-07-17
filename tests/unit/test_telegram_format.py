@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import re
 from decimal import Decimal
 
 from core.telegram import format as f
@@ -61,8 +60,8 @@ def test_tag_wrappers_escape() -> None:
     assert f.quote("CR2 | KE") == "<blockquote>CR2 | KE</blockquote>"
 
 
-# kv_grid: значения второй колонки выровнены по одному столбцу во всех строках
-def test_kv_grid_aligns_columns() -> None:
+# kv_grid: нативная таблица с label/value cells.
+def test_kv_grid_renders_native_table() -> None:
     out = f.kv_grid(
         [
             [("Расход", "$45.20")],
@@ -70,13 +69,10 @@ def test_kv_grid_aligns_columns() -> None:
             [("Клики", "84"), ("CTR", "1.85%")],
         ]
     )
-    assert out.startswith("<pre>") and out.endswith("</pre>")
-    body = out[len("<pre>") : -len("</pre>")]
-    lines = body.split("\n")
-    # «Деп»/«Клики» — первая колонка-подпись: значения 0 и 84 начинаются в одной позиции
-    pos_dep = lines[1].index("0")
-    pos_clicks = lines[2].index("84")
-    assert pos_dep == pos_clicks, f"первая колонка не выровнена: {lines!r}"
+    assert out.startswith("<table bordered>") and out.endswith("</table>")
+    assert out.count("<tr>") == 3
+    assert '<td align="right">$45.20</td>' in out
+    assert "<th>Деп</th>" in out and "<th>CTR</th>" in out
 
 
 # kv_grid экранирует спецсимволы в ячейках, не ломая выравнивание
@@ -86,7 +82,7 @@ def test_kv_grid_escapes() -> None:
     assert "<Y>" not in out.replace("&lt;Y&gt;", "")
 
 
-# table: шапка + строки, числовые колонки выровнены вправо
+# table: нативная шапка + строки, числовые колонки помечены right-align.
 def test_table_renders_header_and_rows() -> None:
     out = f.table(
         ["#", "Оффер", "Spend"],
@@ -96,11 +92,10 @@ def test_table_renders_header_and_rows() -> None:
     assert "Оффер" in out
     assert "DRC_CR2" in out and "KE_CR2" in out
     assert "$142.55" in out and "$98.10" in out
-    # правое выравнивание чисел: '$98.10' дополнено пробелом слева до ширины '$142.55'
-    body = out[len("<pre>") : -len("</pre>")]
-    rows = body.split("\n")
-    assert rows[1].rstrip().endswith("$142.55")
-    assert rows[2].rstrip().endswith("$98.10")
+    assert out.startswith("<table bordered striped>")
+    assert "<th>Spend</th>" in out
+    assert '<td align="right">$142.55</td>' in out
+    assert '<td align="right">$98.10</td>' in out
 
 
 # truncate режет длинные строки с '...'
@@ -115,11 +110,18 @@ def test_kv_grid_empty() -> None:
     assert f.kv_grid([[]]) == ""
 
 
-# Регресс: ширина колонок считается по «сырой» длине, escape не сдвигает выравнивание
-def test_grid_escape_keeps_visual_width() -> None:
-    # '<' в сырой строке — 1 символ; после escape '&lt;' длиннее, но это один глиф.
+# Rich table сохраняет escape внутри cells.
+def test_grid_escape_stays_inside_cell() -> None:
     out = f.kv_grid([[("A", "<")], [("AAA", "1")]])
-    # подписи A и AAA → колонка-подпись шириной 3; убеждаемся что escape прошёл
     assert "&lt;" in out
-    # сырого '<' (как тега) не осталось
-    assert not re.search(r"<(?!/?pre>)", out)
+    assert '<td align="right">&lt;</td>' in out
+
+
+def test_rich_structure_helpers_escape_content() -> None:
+    assert f.heading("A<B", 1) == "<h1>A&lt;B</h1>"
+    assert f.footer("окно & дата") == "<footer>окно &amp; дата</footer>"
+    assert f.divider() == "<hr/>"
+    assert f.details("Контекст", "A&B\nАдсет <x>", open_by_default=True) == (
+        "<details open><summary>Контекст</summary><p>A&amp;B<br>Адсет &lt;x&gt;</p></details>"
+    )
+    assert f.bullets(["CPL > $3", "A&B"]) == ["<ul><li>CPL &gt; $3</li><li>A&amp;B</li></ul>"]

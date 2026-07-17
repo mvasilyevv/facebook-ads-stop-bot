@@ -48,7 +48,7 @@ async def authorized_recipient(pg_engine):
         )
 
 
-# Сценарий: /help для recipient'a → реальный HTTP POST на sendMessage через respx
+# Сценарий: /help для recipient'a → sendRichMessage с настоящими headings.
 @pytest.mark.asyncio
 async def test_help_command_e2e(pg_engine, tg_respx, authorized_recipient) -> None:
     async with httpx.AsyncClient() as http:
@@ -72,6 +72,8 @@ async def test_help_command_e2e(pg_engine, tg_respx, authorized_recipient) -> No
     assert sent["chat_id"] == str(authorized_recipient["chat_id"])
     assert "/spy" in sent["text"]
     assert sent.get("parse_mode") == "HTML"
+    assert sent["_method"] == "sendRichMessage"
+    assert "<h2>📖 Команды бота</h2>" in sent["rich_message"]["html"]
 
 
 # Сценарий: /start с неактивным кодом → дружелюбный отказ (не крашится)

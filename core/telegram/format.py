@@ -1,18 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Общие хелперы форматирования TG-сообщений — стиль «чистая карточка».
+"""Общие хелперы Telegram Rich Messages — стиль «операторская карточка».
 
 Единый источник правды для всех рендереров (алерты, дайджест, enable-reco,
-health, ответы команд). Все сообщения идут с parse_mode=HTML, поэтому хелперы
-возвращают готовые HTML-фрагменты и сами экранируют пользовательский ввод.
+health, ответы команд). Результат предназначен для ``sendRichMessage`` с HTML;
+клиент умеет безопасно деградировать его до legacy ``sendMessage``.
 
 Принципы стиля:
-- Заголовок жирным, одна мысль — одна строка.
+- Настоящие заголовки h1-h6 и смысловые секции вместо имитации жирным текстом.
 - Числа форматируются единообразно (деньги, целые, проценты).
-- Табличные данные — в моноширинном <pre>-блоке, выровненные по колонкам
-  (Telegram не выравнивает пропорциональный шрифт, моноширинный — единственный
-  способ получить ровные колонки).
-- Разделитель разрядов — обычный ASCII-пробел: он не схлопывается Telegram'ом
-  и сохраняет выравнивание внутри <pre>.
+- Табличные данные — нативные ``<table>`` Rich Messages.
+- Вторичный контекст можно убирать в ``<details>`` без потери доступности.
 
 Pure-функции без I/O — легко тестируются и переиспользуются.
 """
@@ -23,8 +20,7 @@ import html
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-# Неразрывного пробела избегаем намеренно — внутри <pre> он может рендериться
-# другой шириной и ломать выравнивание. Разряды разделяем обычным пробелом.
+# Разряды разделяем обычным ASCII-пробелом для стабильного отображения.
 _GROUP_SEP = " "
 _DASH = "—"  # заглушка для отсутствующих значений
 
@@ -54,14 +50,37 @@ def code(value: Any) -> str:
     return f"<code>{esc(value)}</code>"
 
 
+def heading(value: Any, level: int = 2) -> str:
+    """Настоящий заголовок Rich Message (h1-h6), значение экранируется."""
+    safe_level = min(6, max(1, int(level)))
+    return f"<h{safe_level}>{esc(value)}</h{safe_level}>"
+
+
+def footer(value: Any) -> str:
+    """Вторичный текст/служебная подпись карточки."""
+    return f"<footer>{esc(value)}</footer>"
+
+
+def divider() -> str:
+    """Смысловой разделитель Rich Message."""
+    return "<hr/>"
+
+
 def quote(value: Any) -> str:
     """Блок-цитата (одна строка контекста, напр. название кампании)."""
     return f"<blockquote>{esc(value)}</blockquote>"
 
 
 def expandable(value: Any) -> str:
-    """Раскрывающаяся блок-цитата — прячет детали за тапом."""
-    return f"<blockquote expandable>{esc(value)}</blockquote>"
+    """Сворачиваемый блок деталей с нейтральным заголовком."""
+    return details("Подробнее", value)
+
+
+def details(summary: Any, value: Any, *, open_by_default: bool = False) -> str:
+    """Сворачиваемая секция; переносы содержимого сохраняются через ``<br>``."""
+    attr = " open" if open_by_default else ""
+    body = esc(value).replace("\n", "<br>")
+    return f"<details{attr}><summary>{esc(summary)}</summary><p>{body}</p></details>"
 
 
 # ---------------------------------------------------------------------------
@@ -158,37 +177,28 @@ def multiplier(value: Any, threshold: Any) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Моноширинные таблицы (выравнивание колонок внутри <pre>)
+# Нативные Rich Message tables
 # ---------------------------------------------------------------------------
 
 
 def kv_grid(rows: list[list[tuple[str, str]]], *, gap: int = 2) -> str:
-    """Сетка «подпись значение» в <pre>, выровненная по колонкам ячеек.
+    """Нативная таблица пар «метрика / значение».
 
-    rows — список строк; каждая строка — список ячеек (подпись, значение).
-    Строки могут быть рваными (разное число ячеек). Ширина колонок считается
-    по «сырому» тексту, экранирование делается в самом конце — escape-сущности
-    (&lt; и т.п.) Telegram рисует одним глифом, поэтому выравнивание не плывёт.
+    ``gap`` оставлен в сигнатуре для обратной совместимости со старыми
+    рендерами; в Rich Messages расстояния задаёт клиент Telegram.
     """
+    _ = gap
     cells_rows = [r for r in rows if r]
     if not cells_rows:
         return ""
 
-    ncols = max(len(r) for r in cells_rows)
-    label_w = [0] * ncols
-    value_w = [0] * ncols
+    rendered_rows: list[str] = []
     for row in cells_rows:
-        for ci, (label, value) in enumerate(row):
-            label_w[ci] = max(label_w[ci], len(label))
-            value_w[ci] = max(value_w[ci], len(value))
-
-    out_lines: list[str] = []
-    for row in cells_rows:
-        parts: list[str] = []
-        for ci, (label, value) in enumerate(row):
-            parts.append(f"{label.ljust(label_w[ci])} {value.ljust(value_w[ci])}")
-        out_lines.append(esc((" " * gap).join(parts).rstrip()))
-    return "<pre>" + "\n".join(out_lines) + "</pre>"
+        cells = "".join(
+            f'<th>{esc(label)}</th><td align="right">{esc(value)}</td>' for label, value in row
+        )
+        rendered_rows.append(f"<tr>{cells}</tr>")
+    return "<table bordered>" + "".join(rendered_rows) + "</table>"
 
 
 def table(
@@ -198,38 +208,27 @@ def table(
     aligns: list[str] | None = None,
     gap: int = 2,
 ) -> str:
-    """Колоночная таблица с шапкой в <pre> (напр. топ-5 объявлений дайджеста).
-
-    aligns — выравнивание по колонкам: 'l' (влево, дефолт) или 'r' (вправо,
-    для чисел). Ширина = max(len(заголовок), max(len(ячейка))). Экранирование —
-    на финальной строке, после выравнивания по сырой длине.
-    """
+    """Нативная таблица Rich Message с заголовками и выравниванием."""
+    _ = gap
     ncols = len(headers)
     aligns = aligns or ["l"] * ncols
-    widths = [len(h) for h in headers]
+    head = "".join(f"<th>{esc(h)}</th>" for h in headers)
+    body_rows: list[str] = []
     for row in rows:
+        cells: list[str] = []
         for ci in range(ncols):
             cell = row[ci] if ci < len(row) else ""
-            widths[ci] = max(widths[ci], len(cell))
-
-    def _fmt_row(cells: list[str]) -> str:
-        parts: list[str] = []
-        for ci in range(ncols):
-            cell = cells[ci] if ci < len(cells) else ""
-            if aligns[ci] == "r":
-                parts.append(cell.rjust(widths[ci]))
-            else:
-                parts.append(cell.ljust(widths[ci]))
-        return esc((" " * gap).join(parts).rstrip())
-
-    lines = [_fmt_row(headers)]
-    lines.extend(_fmt_row(row) for row in rows)
-    return "<pre>" + "\n".join(lines) + "</pre>"
+            align = "right" if aligns[ci] == "r" else "left"
+            cells.append(f'<td align="{align}">{esc(cell)}</td>')
+        body_rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"<table bordered striped><tr>{head}</tr>" + "".join(body_rows) + "</table>"
 
 
 def bullets(items: list[str]) -> list[str]:
-    """Список строк-пунктов «• …» (каждый элемент экранируется)."""
-    return [f"• {esc(item)}" for item in items]
+    """Нативный Rich Message список; возвращает list для совместимости с ``extend``."""
+    if not items:
+        return []
+    return ["<ul>" + "".join(f"<li>{esc(item)}</li>" for item in items) + "</ul>"]
 
 
 def truncate(value: str, limit: int = 60) -> str:
@@ -245,8 +244,12 @@ __all__ = [
     "bullets",
     "code",
     "dec",
+    "details",
+    "divider",
     "esc",
     "expandable",
+    "footer",
+    "heading",
     "i",
     "kv_grid",
     "money",
