@@ -85,6 +85,20 @@ app.adpulse.su {
 			}
 		}
 
+		# Safari keeps the authenticated panel page open while this same-origin
+		# request creates a one-time ticket. The browser then navigates the new tab
+		# directly to desktop.adpulse.su, avoiding a second top-level panel request.
+		handle /auth/desktop/session {
+			log_skip
+			import panel_auth
+			rewrite * /desktop-auth/launch-url-recovery
+			reverse_proxy 127.0.0.1:8100 {
+				header_up X-Panel-Recovery-Key {$API_KEY}
+				header_up -Authorization
+				header_up -Proxy-Authorization
+			}
+		}
+
 		# The panel BasicAuth has already authenticated this browser. Exchange that
 		# proof for a one-time ticket on the desktop host; never log the ticket URL.
 		handle /auth/desktop/launch {

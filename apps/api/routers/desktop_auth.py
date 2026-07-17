@@ -9,7 +9,7 @@ import secrets
 import time
 
 from fastapi import APIRouter, Header, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from apps.api.deps import DepEngine, DepRedis, DepSettings
 from core.auth.desktop_access import (
@@ -255,6 +255,41 @@ async def launch_desktop_from_panel(
         logger.error("Desktop launch ticket could not be created: %s", exc)
         return _desktop_error("Рабочий стол временно не настроен", 503)
     return RedirectResponse(location, status_code=303, headers=_NO_STORE)
+
+
+@router.post("/launch-url-recovery", include_in_schema=False)
+async def create_desktop_launch_url_from_panel(
+    engine: DepEngine,
+    redis: DepRedis,
+    settings: DepSettings,
+    x_panel_recovery_key: str | None = Header(default=None),
+) -> Response:
+    """Issue a one-time desktop URL to an authenticated same-origin panel request."""
+    if not _valid_recovery_key(settings, x_panel_recovery_key):
+        return Response(status_code=404)
+    owner = await _load_single_owner(engine)
+    if owner is None:
+        return JSONResponse(
+            {"detail": "Подключение недоступно: состав владельцев неоднозначен"},
+            status_code=503,
+            headers=_NO_STORE,
+        )
+    try:
+        ticket, _ = await create_desktop_ticket(
+            redis,
+            telegram_user_id=owner.telegram_user_id,
+            source="panel_basic_auth",
+            ttl=settings.desktop_access_ticket_ttl_seconds,
+        )
+        location = build_desktop_launch_url(settings.desktop_access_base_url, ticket)
+    except DesktopAccessError as exc:
+        logger.error("Desktop launch ticket could not be created: %s", exc)
+        return JSONResponse(
+            {"detail": "Рабочий стол временно не настроен"},
+            status_code=503,
+            headers=_NO_STORE,
+        )
+    return JSONResponse({"url": location}, headers=_NO_STORE)
 
 
 __all__ = ["router"]
