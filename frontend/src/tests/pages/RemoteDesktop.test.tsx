@@ -56,7 +56,7 @@ describe("RemoteDesktopPage", () => {
     expect(replace).toHaveBeenCalledWith(
       "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
     );
-    expect(popup.opener).toBeNull();
+    expect(popup.opener).toBe(window);
   });
 
   it("закрывает пустую вкладку при небезопасном адресе", async () => {

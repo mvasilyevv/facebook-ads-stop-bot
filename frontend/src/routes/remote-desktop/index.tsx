@@ -26,7 +26,6 @@ function RemoteDesktopPage() {
       setConnectionError("Разрешите всплывающие окна для AdPulse и повторите подключение.");
       return;
     }
-    desktopWindow.opener = null;
     setIsConnecting(true);
 
     try {
@@ -56,6 +55,10 @@ function RemoteDesktopPage() {
       ) {
         throw new Error("Сервер вернул небезопасный адрес рабочего стола.");
       }
+      // Do not clear `opener` before this async navigation. Safari detaches the
+      // WindowProxy in that order and leaves the user on about:blank. The
+      // destination is strictly allow-listed above, so navigating the popup
+      // directly is safe here.
       desktopWindow.location.replace(launchUrl.toString());
     } catch (error) {
       desktopWindow.close();
