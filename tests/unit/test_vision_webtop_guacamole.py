@@ -119,6 +119,7 @@ def test_installer_is_change_aware_and_checks_full_desktop_contract() -> None:
     installer = INSTALLER.read_text(encoding="utf-8")
 
     assert 'readonly COMPOSE_ENV_FILE="$PROJECT_DIR/.env"' in installer
+    assert "stat -Lc '%a'" in installer
     assert "DESKTOP_WEBTOP_IMAGE must be an immutable image@sha256 reference" in installer
     assert "ACTIVE_MANIFEST_FILE" in installer
     assert "MANIFEST_CHANGED=false" in installer

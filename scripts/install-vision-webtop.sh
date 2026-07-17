@@ -94,7 +94,7 @@ for command in curl docker install python3 sha256sum; do
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is unavailable"
 [[ -s "$COMPOSE_ENV_FILE" ]] || die "release environment is missing: $COMPOSE_ENV_FILE"
-[[ "$(stat -c '%a' "$COMPOSE_ENV_FILE")" == "600" ]] || die "$COMPOSE_ENV_FILE must have mode 600"
+[[ "$(stat -Lc '%a' "$COMPOSE_ENV_FILE")" == "600" ]] || die "$COMPOSE_ENV_FILE must have mode 600"
 [[ -d "$TARGET_DIR/config" ]] || die "persistent webtop config is missing: $TARGET_DIR/config"
 docker network inspect fb_agent_default >/dev/null 2>&1 || docker network create fb_agent_default >/dev/null
 
