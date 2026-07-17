@@ -43,7 +43,7 @@ bootstrap_completed() {
 
 database_contract_is_ready() {
   local result=""
-  result="$(compose exec -T postgres sh -eu -c \
+  result="$(compose exec -T guacamole-postgres sh -eu -c \
     'psql --no-psqlrc --tuples-only --no-align --set ON_ERROR_STOP=1 \
       --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<"SQL"
 SELECT
@@ -59,7 +59,7 @@ SQL')"
 desktop_is_ready() {
   service_is_healthy webtop \
     && service_is_healthy guacd \
-    && service_is_healthy postgres \
+    && service_is_healthy guacamole-postgres \
     && bootstrap_completed \
     && service_is_healthy guacamole \
     && curl --silent --fail --max-time 3 http://127.0.0.1:8090/desktop/ >/dev/null \
