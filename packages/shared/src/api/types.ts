@@ -109,3 +109,11 @@ export type FunnelTotals = components["schemas"]["FunnelTotalsOut"];
 
 /** Производные метрики воронки (None = деление на ноль → «—») */
 export type FunnelDerived = components["schemas"]["FunnelDerivedOut"];
+
+// ─── Единая аналитика ──────────────────────────────────────────────────────
+
+export type AnalyticsPerformance = components["schemas"]["AnalyticsPerformanceOut"];
+export type AnalyticsPerformanceRow = components["schemas"]["AnalyticsPerformanceRowOut"];
+export type AnalyticsLiveBudget = components["schemas"]["AnalyticsLiveBudgetOut"];
+export type AnalyticsLiveBudgetSeries = components["schemas"]["AnalyticsLiveBudgetSeriesOut"];
+export type AnalyticsDaypart = components["schemas"]["AnalyticsDaypartOut"];

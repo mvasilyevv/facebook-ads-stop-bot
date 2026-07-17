@@ -81,6 +81,7 @@ class HistoryTimelineItem(BaseModel):
     ts: datetime
     fb_ad_id: str | None = None
     ad_name: str | None = None
+    campaign_id: str | None = None
     campaign_name: str | None = None
     # alert-поля
     stage: str | None = None

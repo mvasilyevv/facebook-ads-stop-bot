@@ -57,6 +57,8 @@ vi.mock("@/lib/api/settings", () => ({
     mutateAsync: mockToggleAutoEnable,
     isPending: false,
   }),
+  useAutoEnableExclusions: () => ({ data: [], isLoading: false, error: null }),
+  useRemoveAutoEnableExclusion: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useObserverCampaigns: () => ({ data: [], isLoading: false }),
   useRefreshObserverCampaigns: () => ({
     mutateAsync: vi.fn().mockResolvedValue([]),

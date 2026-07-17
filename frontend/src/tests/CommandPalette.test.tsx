@@ -34,7 +34,7 @@ describe("CommandPalette", () => {
   it("показывает разделы навигации", () => {
     useCommandPalette.setState({ open: true });
     render(<CommandPalette />);
-    expect(screen.getByText("Панель")).toBeInTheDocument();
+    expect(screen.getByText("Обзор")).toBeInTheDocument();
     expect(screen.getByText("Настройки")).toBeInTheDocument();
   });
 
@@ -44,7 +44,7 @@ describe("CommandPalette", () => {
     render(<CommandPalette />);
     await userEvent.type(screen.getByLabelText("Поиск"), "настр");
     expect(screen.getByText("Настройки")).toBeInTheDocument();
-    expect(screen.queryByText("Панель")).toBeNull();
+    expect(screen.queryByText("Обзор")).toBeNull();
   });
 
   // Enter по первому результату вызывает navigate на нужный раздел

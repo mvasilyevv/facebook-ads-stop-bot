@@ -1,0 +1,59 @@
+import { useUiStore } from "@/stores/ui";
+
+export function browserTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+export function isValidTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("ru-RU", { timeZone: value }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveDisplayTimeZone(value?: "auto" | string): string {
+  const configured = value ?? useUiStore.getState().displayTimeZone;
+  return configured === "auto" || !isValidTimeZone(configured) ? browserTimeZone() : configured;
+}
+
+function dateValue(value: string | Date | null | undefined): Date | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function formatDisplayTime(
+  value: string | Date | null | undefined,
+  options: Intl.DateTimeFormatOptions = {},
+  timeZone = resolveDisplayTimeZone(),
+): string {
+  const date = dateValue(value);
+  if (!date) return "—";
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    ...options,
+    timeZone,
+  }).format(date);
+}
+
+export function formatDisplayDateTime(
+  value: string | Date | null | undefined,
+  timeZone = resolveDisplayTimeZone(),
+): string {
+  return formatDisplayTime(
+    value,
+    { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" },
+    timeZone,
+  );
+}
+
+export function formatDisplayDate(
+  value: string | Date | null | undefined,
+  timeZone = resolveDisplayTimeZone(),
+): string {
+  return formatDisplayTime(value, { day: "2-digit", month: "short", year: "numeric" }, timeZone);
+}

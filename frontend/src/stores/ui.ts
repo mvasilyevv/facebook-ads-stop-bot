@@ -22,11 +22,13 @@ const DENSITY_CYCLE: Density[] = ["comfortable", "compact", "dense"];
 interface UiState {
   sidebarCollapsed: boolean;
   density: Density;
+  displayTimeZone: "auto" | string;
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebar: () => void;
   setDensity: (density: Density) => void;
   /** Переключает плотность по кругу comfortable → compact → dense → comfortable. */
   toggleDensity: () => void;
+  setDisplayTimeZone: (timeZone: "auto" | string) => void;
 }
 
 /**
@@ -45,6 +47,7 @@ export const useUiStore = create<UiState>()(
     (set, get) => ({
       sidebarCollapsed: false,
       density: "comfortable",
+      displayTimeZone: "auto",
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
       toggleSidebar: () => set({ sidebarCollapsed: !get().sidebarCollapsed }),
       setDensity: (density) => {
@@ -57,6 +60,7 @@ export const useUiStore = create<UiState>()(
         set({ density: next });
         applyDensity(next);
       },
+      setDisplayTimeZone: (displayTimeZone) => set({ displayTimeZone }),
     }),
     {
       name: "fb-ui",

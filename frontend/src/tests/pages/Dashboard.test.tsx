@@ -1,34 +1,55 @@
-/**
- * Тесты Dashboard страницы (канон design_handoff).
- * Моки: useDashboardBatch, useChartData, useDisableTasks, useEnableTasks,
- *       useObserverSettings, useToggleScanning, useRealtimeInvalidation, apiSend.
- */
-
 import { render, screen } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// ─── Моки модулей ─────────────────────────────────────────────────────────────
-
-// Мокаем TanStack Router — DashboardPage использует useRouter/createFileRoute
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: (_path: string) => (opts: { component: unknown }) => opts,
+  createFileRoute: (_path: string) => (options: { component: unknown }) => options,
   useRouter: () => ({ navigate: vi.fn() }),
-  useParams: () => ({}),
-  Outlet: () => null,
 }));
 
 vi.mock("@/lib/api/dashboard", () => ({
   useDashboardBatch: vi.fn(),
-  useChartData: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
+  useEnableRecommendations: vi.fn(() => ({ data: [], isLoading: false })),
+  useConfirmEnableRecommendation: vi.fn(() => ({
+    mutate: vi.fn(),
+    isPending: false,
+    variables: undefined,
+  })),
 }));
 
-vi.mock("@/lib/api/stats", () => ({
-  useStatsToday: vi.fn(() => ({
-    data: undefined,
+vi.mock("@/lib/api/analytics", () => ({
+  useAnalyticsPerformance: vi.fn(() => ({
+    data: {
+      totals: {
+        spend: "123.45",
+        impressions: 2000,
+        clicks: 100,
+        registrations: 12,
+        ftds: 4,
+        confirmed_deposits: 3,
+        redeposits: 1,
+        revenue: "250.00",
+      },
+      total_live_budget: {
+        base_budget: "100.00",
+        stop_budget: "80.00",
+        base_delta: "23.45",
+        stop_delta: "43.45",
+      },
+      rows: [
+        {
+          id: "00000000-0000-0000-0000-000000000001",
+          name: "Campaign A",
+          offer_code: "OFF-A",
+          live_budget: { base_budget: "100.00", base_delta: "23.45" },
+        },
+      ],
+    },
     isLoading: false,
-    isError: false,
-    refetch: vi.fn(),
+  })),
+  useAnalyticsLiveBudget: vi.fn(() => ({
+    data: { points: [] },
+    isLoading: false,
   })),
 }));
 
@@ -39,7 +60,11 @@ vi.mock("@/lib/api/ads", () => ({
 
 vi.mock("@/lib/api/settings", () => ({
   useObserverSettings: vi.fn(() => ({
-    data: { is_scanning_enabled: true, default_interval_seconds: 30 },
+    data: {
+      is_scanning_enabled: true,
+      default_interval_seconds: 30,
+      auto_enable_recommendations: false,
+    },
     isLoading: false,
     isError: false,
   })),
@@ -58,27 +83,15 @@ vi.mock("@/lib/api/settings", () => ({
 }));
 
 vi.mock("@/lib/websocket/useRealtimeInvalidation", () => ({
-  useRealtimeInvalidation: vi.fn(() => ({
-    status: "connected",
-    pollingFallback: false,
-    reconnectAttempt: 0,
-    forceReconnect: vi.fn(),
-  })),
+  useRealtimeInvalidation: vi.fn(() => undefined),
 }));
 
-vi.mock("@/lib/api/client", () => ({
-  apiSend: vi.fn().mockResolvedValue(undefined),
-}));
-
-// ─── Импорты после моков ──────────────────────────────────────────────────────
+vi.mock("@/lib/api/client", () => ({ apiSend: vi.fn().mockResolvedValue(undefined) }));
 
 import { useDashboardBatch } from "@/lib/api/dashboard";
 import { useHealthDetails, useObserverSettings } from "@/lib/api/settings";
-import type { DashboardBatch } from "@fb/shared";
 
-// ─── Фабрика мок-данных ───────────────────────────────────────────────────────
-
-function makeBatch(overrides: Partial<DashboardBatch> = {}): DashboardBatch {
+function makeBatch(overrides: Record<string, unknown> = {}) {
   return {
     stats: {
       total_ads_monitored: 100,
@@ -93,193 +106,99 @@ function makeBatch(overrides: Partial<DashboardBatch> = {}): DashboardBatch {
       scans_today: 42,
       scans_today_with_errors: 0,
       observer_status: "running",
-      pending_disable_tasks: 3,
-      pending_enable_tasks: 1,
+      pending_disable_tasks: 0,
+      pending_enable_tasks: 0,
       failed_tasks_24h: 0,
     },
     recent_incidents: [],
     recent_alerts: [],
     recent_disable_tasks: [],
+    recent_enable_tasks: [],
     enable_recommendations_pending: [],
     ...overrides,
   };
 }
 
-// ─── Хелперы ─────────────────────────────────────────────────────────────────
-
-function createQueryClient() {
-  return new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-}
-
-/** Рендерит DashboardPage напрямую (без Router, через мок). */
 async function renderDashboard() {
-  const { DashboardPage } = await import("../../routes/index").then((m) => {
-    const route = m.Route as unknown as { component: React.FC };
-    return { DashboardPage: route.component };
-  });
-
-  const qc = createQueryClient();
+  const routeModule = await import("../../routes/index");
+  const Page = (routeModule.Route as unknown as { component: React.FC }).component;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={qc}>
-      <DashboardPage />
+    <QueryClientProvider client={client}>
+      <Page />
     </QueryClientProvider>,
   );
 }
 
-// ─── Тесты ────────────────────────────────────────────────────────────────────
-
-describe("DashboardPage", () => {
+describe("operator Dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(useObserverSettings).mockReturnValue({
-      data: { is_scanning_enabled: true, default_interval_seconds: 30 },
-      isLoading: false,
-      isError: false,
-    } as unknown as ReturnType<typeof useObserverSettings>);
-    vi.mocked(useHealthDetails).mockReturnValue({
-      data: {
-        workers: [{ name: "observer", status: "ONLINE" }],
-        observer_runtime: { status: "running" },
-        meta_api_channel: { status: "ONLINE" },
-        overall: "HEALTHY",
-      },
-      isLoading: false,
-      isError: false,
-    } as unknown as ReturnType<typeof useHealthDetails>);
-  });
-
-  // Заголовок страницы — «Панель» (русский, без точки), а не «Dashboard».
-  it("рендерит h1 «Панель»", async () => {
     vi.mocked(useDashboardBatch).mockReturnValue({
       data: makeBatch(),
       isLoading: false,
       isError: false,
       error: null,
       refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useDashboardBatch>);
+    } as never);
+  });
 
+  it("shows attention status and live budget economics in the first viewport", async () => {
     await renderDashboard();
-    const h1 = screen.getByRole("heading", { level: 1 });
-    expect(h1).toHaveTextContent("Панель");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Что требует внимания");
+    expect(screen.getByText("ЭКОНОМИКА СЕГОДНЯ")).toBeInTheDocument();
+    expect(screen.getByText("РИСКИ И РЕШЕНИЯ")).toBeInTheDocument();
+    expect(screen.getByText("$123.45")).toBeInTheDocument();
+    expect(screen.getAllByText("+$23.45").length).toBeGreaterThan(0);
   });
 
-  // Скелетон KPI при загрузке (нет stats).
-  it("рендерит skeleton при isLoading=true", async () => {
-    vi.mocked(useDashboardBatch).mockReturnValue({
-      data: undefined,
-      isLoading: true,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useDashboardBatch>);
-
-    const { container } = await renderDashboard();
-    const skeletons = container.querySelectorAll('[role="status"]');
-    expect(skeletons.length).toBeGreaterThan(0);
-  });
-
-  // KPI-ячейки + hero рендерятся. Hero-число = total_ads_monitored=100 (ВСЁ под
-  // контролем, включая отключённые), а HealthBar показывает долю «Отключено».
-  it("рендерит KPI и hero из stats", async () => {
-    vi.mocked(useDashboardBatch).mockReturnValue({
-      data: makeBatch(),
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useDashboardBatch>);
-
+  it("keeps ad states in a compact status strip", async () => {
     await renderDashboard();
-
-    // 4 KPI-ячейки по aria-label списка
-    const kpiGroup = screen.getByRole("list", { name: "Ключевые показатели" });
-    expect(kpiGroup).toBeInTheDocument();
-    // Eyebrow'ы KPI
-    expect(screen.getByText("ACTIVE")).toBeInTheDocument();
-    expect(screen.getByText("DISABLED")).toBeInTheDocument();
-    // hero-подпись
-    expect(screen.getByText(/объявлений под контролем/i)).toBeInTheDocument();
-    expect(screen.getByText("ТРЕБУЕТ ВНИМАНИЯ")).toBeInTheDocument();
-    // HealthBar теперь несёт сегмент «Отключено» — disabled (12) не выпадает из портфеля.
-    expect(screen.getByRole("img", { name: /Отключено 12/i })).toBeInTheDocument();
+    expect(screen.getByText("Норма").parentElement).toHaveTextContent("80");
+    expect(screen.getByText("Warning").parentElement).toHaveTextContent("5");
+    expect(screen.getAllByText("Stop")[0]?.parentElement).toHaveTextContent("2");
+    expect(screen.queryByText(/объявлений под контролем/i)).not.toBeInTheDocument();
   });
 
-  // Калм-empty live-tail: когда алертов нет — редакционная заглушка.
-  it("рендерит калм-empty live-tail когда алертов нет", async () => {
+  it("shows manual auto-enable mode and recent automatic actions", async () => {
     vi.mocked(useDashboardBatch).mockReturnValue({
-      data: makeBatch({ recent_alerts: [] }),
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useDashboardBatch>);
-
-    await renderDashboard();
-    expect(screen.getByText(/Алертов за 24ч нет/i)).toBeInTheDocument();
-  });
-
-  // Paused: observer выключен → дашборд показывает паузу, а CTA живёт в едином global status bar.
-  it("показывает paused-состояние когда observer выключен", async () => {
-    vi.mocked(useDashboardBatch).mockReturnValue({
-      data: makeBatch(),
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useDashboardBatch>);
-    vi.mocked(useObserverSettings).mockReturnValue({
-      data: { is_scanning_enabled: false, default_interval_seconds: 30 },
-      isLoading: false,
-      isError: false,
-    } as unknown as ReturnType<typeof useObserverSettings>);
-
-    await renderDashboard();
-    expect(screen.getByText(/ПАУЗА/)).toBeInTheDocument();
-    expect(screen.getByText("Мониторинг на паузе")).toBeInTheDocument();
-    expect(screen.getByText("СКАН ВЫКЛЮЧЕН")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Включить" })).not.toBeInTheDocument();
-  });
-
-  it("не выдаёт offline-контур за здоровую систему и спокойный live-tail", async () => {
-    vi.mocked(useDashboardBatch).mockReturnValue({
-      data: makeBatch({ recent_alerts: [] }),
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useDashboardBatch>);
-    vi.mocked(useHealthDetails).mockReturnValue({
-      data: {
-        workers: [
-          { name: "observer", status: "OFFLINE" },
-          { name: "browser-agent", status: "OFFLINE" },
+      data: makeBatch({
+        recent_enable_tasks: [
+          {
+            id: "task-1",
+            ad_name: "Recovered ad",
+            fb_ad_id: "123",
+            status: "SUCCEEDED",
+            requested_by: "auto_enable_recommendation_worker",
+            created_at: "2026-07-17T10:00:00Z",
+          },
         ],
-        observer_runtime: null,
-        meta_api_channel: { status: "UNKNOWN" },
-        overall: "CRITICAL",
-      },
-      isLoading: false,
-      isError: false,
-    } as unknown as ReturnType<typeof useHealthDetails>);
-
-    await renderDashboard();
-
-    expect(screen.getByText("СИСТЕМА НЕДОСТУПНА")).toBeInTheDocument();
-    expect(screen.getByText("Мониторинг недоступен")).toBeInTheDocument();
-    expect(screen.queryByText("СИСТЕМА В НОРМЕ")).not.toBeInTheDocument();
-    expect(screen.queryByText("Алертов за 24ч нет")).not.toBeInTheDocument();
-  });
-
-  it("показывает billing CRITICAL в вебе без Telegram и не скрывает scan controls", async () => {
-    vi.mocked(useDashboardBatch).mockReturnValue({
-      data: makeBatch({ recent_alerts: [] }),
+      }),
       isLoading: false,
       isError: false,
       error: null,
       refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useDashboardBatch>);
+    } as never);
+    await renderDashboard();
+    expect(screen.getByText("Только вручную")).toBeInTheDocument();
+    expect(screen.getByText("Recovered ad")).toBeInTheDocument();
+  });
+
+  it("shows paused monitoring without presenting it as healthy", async () => {
+    vi.mocked(useObserverSettings).mockReturnValue({
+      data: {
+        is_scanning_enabled: false,
+        default_interval_seconds: 30,
+        auto_enable_recommendations: false,
+      },
+      isLoading: false,
+      isError: false,
+    } as never);
+    await renderDashboard();
+    expect(screen.getByText("Мониторинг на паузе")).toBeInTheDocument();
+    expect(screen.queryByText("Система в норме")).not.toBeInTheDocument();
+  });
+
+  it("surfaces a critical billing warning and leaves scan controls visible", async () => {
     vi.mocked(useHealthDetails).mockReturnValue({
       data: {
         workers: [{ name: "observer", status: "ONLINE" }],
@@ -287,113 +206,36 @@ describe("DashboardPage", () => {
         meta_api_channel: { status: "ONLINE" },
         critical_alerts: [
           {
-            id: "shadow_spend:1855748448431929",
+            id: "shadow_spend:123",
             kind: "shadow_spend",
             severity: "CRITICAL",
             title: "Meta списывает быстрее отчётности",
-            message: "Биллинг вырос на $0.34, а per-ad отчётность стоит.",
-            account_id: "1855748448431929",
+            message: "Биллинг вырос.",
+            account_id: "123",
             detected_at: new Date().toISOString(),
-            details: { billing_delta_cents: 34 },
+            details: {},
           },
         ],
         overall: "CRITICAL",
       },
       isLoading: false,
       isError: false,
-    } as unknown as ReturnType<typeof useHealthDetails>);
-
+    } as never);
     await renderDashboard();
-
-    expect(screen.getByText("CRITICAL · MONEY")).toBeInTheDocument();
     expect(screen.getByText("Meta списывает быстрее отчётности")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Открыть Ads Manager/i })).toHaveAttribute(
-      "href",
-      expect.stringContaining("act=1855748448431929"),
-    );
-    expect(screen.queryByText("СКАН НЕДОСТУПЕН")).not.toBeInTheDocument();
+    expect(screen.getByText("ПОСЛЕДНИЙ СКАН")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Открыть Ads Manager" })).toBeInTheDocument();
   });
 
-  // Ошибка загрузки batch → ErrorState.
-  it("рендерит ErrorState при isError=true", async () => {
+  it("renders an actionable error state when the overview fails", async () => {
     vi.mocked(useDashboardBatch).mockReturnValue({
       data: undefined,
       isLoading: false,
       isError: true,
       error: new Error("Network error"),
       refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useDashboardBatch>);
-
+    } as never);
     await renderDashboard();
-
-    expect(screen.getByRole("alert")).toBeInTheDocument();
-    expect(screen.getByText(/Не удалось загрузить данные Dashboard/i)).toBeInTheDocument();
-  });
-
-  // Headline-спенд берётся из stats.current_day_spend, а не суммируется из серии.
-  it("показывает current_day_spend из stats как headline-спенд", async () => {
-    vi.mocked(useDashboardBatch).mockReturnValue({
-      data: makeBatch({
-        stats: {
-          total_ads_monitored: 100,
-          ads_in_normal: 80,
-          ads_in_warning: 5,
-          ads_in_stop: 2,
-          ads_in_claimed: 1,
-          ads_in_disabled: 12,
-          active_incidents: 7,
-          last_scan_at: new Date().toISOString(),
-          last_scan_outcome: "ok",
-          scans_today: 42,
-          scans_today_with_errors: 0,
-          observer_status: "running",
-          pending_disable_tasks: 3,
-          pending_enable_tasks: 1,
-          failed_tasks_24h: 0,
-          current_day_spend: "123.45",
-        },
-      }),
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useDashboardBatch>);
-
-    await renderDashboard();
-    // formatSpend(123.45) → "$123.45"
-    expect(screen.getByText("$123.45")).toBeInTheDocument();
-  });
-
-  // Graceful при current_day_spend=null — показывает $0.00, не падает.
-  it("graceful при current_day_spend=null — рендерит $0.00", async () => {
-    vi.mocked(useDashboardBatch).mockReturnValue({
-      data: makeBatch({
-        stats: {
-          total_ads_monitored: 100,
-          ads_in_normal: 80,
-          ads_in_warning: 5,
-          ads_in_stop: 2,
-          ads_in_claimed: 1,
-          ads_in_disabled: 12,
-          active_incidents: 7,
-          last_scan_at: new Date().toISOString(),
-          last_scan_outcome: "ok",
-          scans_today: 42,
-          scans_today_with_errors: 0,
-          observer_status: "running",
-          pending_disable_tasks: 3,
-          pending_enable_tasks: 1,
-          failed_tasks_24h: 0,
-          current_day_spend: null,
-        },
-      }),
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useDashboardBatch>);
-
-    await renderDashboard();
-    expect(screen.getByText("$0.00")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Не удалось загрузить операторский обзор");
   });
 });

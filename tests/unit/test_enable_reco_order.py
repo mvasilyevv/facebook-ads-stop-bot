@@ -250,13 +250,10 @@ async def test_mark_recommended_called_on_send_success():
     assert counts.get("alerts_sent", 0) == 1
 
 
-# LOW (аудит 02.07): при сбое TG rec-запись должна откатываться (re-arm), иначе
-# idempotency_key блокирует повторную вставку навсегда и рекомендация теряется молча,
-# пока ад не сменит состояние (last_transition_at не изменится — тот же ключ снова
-# столкнётся с ON CONFLICT DO NOTHING).
+# Web — самостоятельный канал: сбой Telegram не должен удалять рекомендацию.
 @pytest.mark.asyncio
-async def test_send_failure_deletes_unpromoted_recommendation_for_retry():
-    """Сбой send_alert → insert откатывается delete_unpromoted_recommendation (re-arm)."""
+async def test_send_failure_keeps_recommendation_visible_in_web():
+    """Сбой send_alert не откатывает DB recommendation и auto-action."""
     call_log: list[str] = []
     fixed_rec_id = uuid.uuid4()
 
@@ -267,9 +264,6 @@ async def test_send_failure_deletes_unpromoted_recommendation_for_retry():
     async def fake_send(*_, **__):
         call_log.append("send")
         return False  # имитируем сбой TG
-
-    async def fake_delete(engine, *, rec_id):
-        call_log.append(f"delete:{rec_id}")
 
     async def fake_mark(redis_client, ad_id):
         call_log.append("mark")
@@ -299,7 +293,6 @@ async def test_send_failure_deletes_unpromoted_recommendation_for_retry():
         patch.object(er, "fetch_metrics_since", fake_metrics),
         patch.object(er, "insert_recommendation", fake_insert),
         patch.object(er, "send_alert", fake_send),
-        patch.object(er, "delete_unpromoted_recommendation", fake_delete),
         patch.object(er, "mark_recommended", fake_mark),
         patch.object(er, "is_recently_recommended", fake_is_recent),
         patch("apps.enable_recommendation_worker.main.load_scanning_enabled", fake_scanning),
@@ -312,7 +305,7 @@ async def test_send_failure_deletes_unpromoted_recommendation_for_retry():
             tg_client=AsyncMock(),
         )
 
-    # insert → send (fail) → delete отката, mark_recommended не вызван
-    assert call_log == ["insert", "send", f"delete:{fixed_rec_id}"]
+    # insert → send (fail); delete отката не вызывается, recommendation остаётся в web.
+    assert call_log == ["insert", "send"]
     assert counts.get("send_failed", 0) == 1
     assert counts.get("alerts_sent", 0) == 0

@@ -3,7 +3,7 @@
  *
  * Структура:
  *   - Brand-хедер (56px): 26×26 accent-квадрат «FB» + «STOP BOT / operator».
- *   - Nav-группы с numbered eyebrow (01 OPERATE / 02 CATALOG / 03 HISTORY / 04 SYSTEM).
+ *   - Nav-группы с numbered eyebrow (01 OPERATE / 02 SYSTEM).
  *     Item: 36px, icon + label + опциональный count-badge. Active = bg-2 fill +
  *     accent text + 3px accent left-bar.
  *   - Footer: ТОЛЬКО collapse-toggle (worker-статус живёт в TopBar, не дублируем).
@@ -19,7 +19,6 @@ import {
   Layers,
   Radar,
   Tag,
-  Clock,
   BarChart3,
   Settings,
   MonitorUp,
@@ -53,7 +52,7 @@ const NAV_GROUPS: NavGroup[] = [
     eyebrowNum: "01",
     eyebrow: "OPERATE",
     items: [
-      { to: "/", label: "Панель", icon: LayoutDashboard },
+      { to: "/", label: "Обзор", icon: LayoutDashboard },
       { to: "/ads", label: "Объявления", icon: Layers, badgeKey: "ads" },
       {
         to: "/campaigns",
@@ -61,23 +60,12 @@ const NAV_GROUPS: NavGroup[] = [
         icon: Radar,
         children: [{ to: "/campaigns/create", label: "Создание", icon: Rocket }],
       },
+      { to: "/offers", label: "Офферы", icon: Tag },
+      { to: "/analytics", label: "Аналитика", icon: BarChart3 },
     ],
   },
   {
     eyebrowNum: "02",
-    eyebrow: "CATALOG",
-    items: [{ to: "/offers", label: "Офферы", icon: Tag }],
-  },
-  {
-    eyebrowNum: "03",
-    eyebrow: "HISTORY",
-    items: [
-      { to: "/history", label: "История", icon: Clock },
-      { to: "/stats", label: "Статистика", icon: BarChart3 },
-    ],
-  },
-  {
-    eyebrowNum: "04",
     eyebrow: "SYSTEM",
     items: [
       { to: "/remote-desktop", label: "Рабочий стол", icon: MonitorUp },

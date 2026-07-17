@@ -9,12 +9,8 @@
 import { ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Pill } from "@/components/ui/Pill";
-import {
-  ruleCodeLabel,
-  ALERT_STAGE_LABELS,
-  formatTimeOfDay,
-  formatDateTime,
-} from "@fb/shared";
+import { formatDisplayDateTime, formatDisplayTime } from "@/lib/timezone";
+import { ruleCodeLabel, ALERT_STAGE_LABELS } from "@fb/shared";
 import type { AlertEvent } from "@fb/shared";
 import { cn } from "@/lib/utils/cn";
 
@@ -48,12 +44,12 @@ export function EventRow({ event, onClick }: EventRowProps) {
       )}
       style={{ gridTemplateColumns: "64px 116px 1fr auto 24px" }}
     >
-      {/* Время (UTC) */}
+      {/* Время в выбранном display timezone. */}
       <span
         className="font-display text-[11px] text-bg-9 tracking-tight tabular-nums"
-        title={`${formatDateTime(event.created_at)} UTC`}
+        title={formatDisplayDateTime(event.created_at)}
       >
-        {formatTimeOfDay(event.created_at)}
+        {formatDisplayTime(event.created_at)}
       </span>
 
       {/* Stage badge */}

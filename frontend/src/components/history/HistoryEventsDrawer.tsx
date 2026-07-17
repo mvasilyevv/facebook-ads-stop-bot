@@ -13,7 +13,8 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Select, type SelectOption } from "@/components/ui/Select";
 import { useHistoryEvents } from "@/lib/api/history";
-import { formatDateTime, ruleCodeLabel } from "@fb/shared";
+import { formatDisplayDateTime } from "@/lib/timezone";
+import { ruleCodeLabel } from "@fb/shared";
 import type { HistoryTimelineItem } from "@fb/shared";
 import { AlertCircle } from "lucide-react";
 
@@ -50,9 +51,13 @@ export const HistoryEventsDrawer: FC<HistoryEventsDrawerProps> = ({
 
   // isFetching при keepPreviousData: прежний список виден, но приглушён —
   // мягкий индикатор смены периода/фильтра вместо скелетон-моргания.
-  const { data: events, isLoading, isFetching, error, refetch } = useHistoryEvents(
-    open ? params : undefined,
-  );
+  const {
+    data: events,
+    isLoading,
+    isFetching,
+    error,
+    refetch,
+  } = useHistoryEvents(open ? params : undefined);
 
   const stageBadge = (s: string) => {
     if (s === "stop") return "stop" as const;
@@ -120,7 +125,7 @@ export const HistoryEventsDrawer: FC<HistoryEventsDrawerProps> = ({
               {/* Строка 1: время + бейдж стадии */}
               <div className="flex items-center justify-between gap-3 mb-2">
                 <span className="font-display text-[10.5px] text-bg-9 tracking-[0.04em]">
-                  {formatDateTime(ev.created_at)}
+                  {formatDisplayDateTime(ev.created_at)}
                 </span>
                 <Badge variant={stageBadge(ev.stage)} size="sm" withDot>
                   {ev.stage.toUpperCase()}
@@ -128,17 +133,13 @@ export const HistoryEventsDrawer: FC<HistoryEventsDrawerProps> = ({
               </div>
 
               {/* Строка 2: название объявления */}
-              <div className="font-display text-[13px] text-bg-11 mb-1 truncate">
-                {ev.ad_name}
-              </div>
+              <div className="font-display text-[13px] text-bg-11 mb-1 truncate">{ev.ad_name}</div>
 
               {/* Строка 3: кампания + оффер */}
               {(ev.campaign_name || ev.offer_code) && (
                 <div className="font-display text-[11px] text-bg-9 mb-2">
                   {ev.campaign_name}
-                  {ev.offer_code && (
-                    <span className="ml-2 text-bg-8">· {ev.offer_code}</span>
-                  )}
+                  {ev.offer_code && <span className="ml-2 text-bg-8">· {ev.offer_code}</span>}
                 </div>
               )}
 

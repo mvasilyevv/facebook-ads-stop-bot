@@ -16,6 +16,7 @@ import { Route as RemoteDesktopIndexRouteImport } from './routes/remote-desktop/
 import { Route as OffersIndexRouteImport } from './routes/offers/index'
 import { Route as HistoryIndexRouteImport } from './routes/history/index'
 import { Route as CampaignsIndexRouteImport } from './routes/campaigns/index'
+import { Route as AnalyticsIndexRouteImport } from './routes/analytics/index'
 import { Route as AdsIndexRouteImport } from './routes/ads/index'
 import { Route as OffersIdRouteImport } from './routes/offers/$id'
 import { Route as AdsFbAdIdRouteImport } from './routes/ads/$fbAdId'
@@ -56,6 +57,11 @@ const CampaignsIndexRoute = CampaignsIndexRouteImport.update({
   path: '/campaigns/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AnalyticsIndexRoute = AnalyticsIndexRouteImport.update({
+  id: '/analytics/',
+  path: '/analytics/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdsIndexRoute = AdsIndexRouteImport.update({
   id: '/ads/',
   path: '/ads/',
@@ -82,6 +88,7 @@ export interface FileRoutesByFullPath {
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
   '/offers/$id': typeof OffersIdRoute
   '/ads/': typeof AdsIndexRoute
+  '/analytics/': typeof AnalyticsIndexRoute
   '/campaigns/': typeof CampaignsIndexRoute
   '/history/': typeof HistoryIndexRoute
   '/offers/': typeof OffersIndexRoute
@@ -95,6 +102,7 @@ export interface FileRoutesByTo {
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
   '/offers/$id': typeof OffersIdRoute
   '/ads': typeof AdsIndexRoute
+  '/analytics': typeof AnalyticsIndexRoute
   '/campaigns': typeof CampaignsIndexRoute
   '/history': typeof HistoryIndexRoute
   '/offers': typeof OffersIndexRoute
@@ -109,6 +117,7 @@ export interface FileRoutesById {
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
   '/offers/$id': typeof OffersIdRoute
   '/ads/': typeof AdsIndexRoute
+  '/analytics/': typeof AnalyticsIndexRoute
   '/campaigns/': typeof CampaignsIndexRoute
   '/history/': typeof HistoryIndexRoute
   '/offers/': typeof OffersIndexRoute
@@ -124,6 +133,7 @@ export interface FileRouteTypes {
     | '/ads/$fbAdId'
     | '/offers/$id'
     | '/ads/'
+    | '/analytics/'
     | '/campaigns/'
     | '/history/'
     | '/offers/'
@@ -137,6 +147,7 @@ export interface FileRouteTypes {
     | '/ads/$fbAdId'
     | '/offers/$id'
     | '/ads'
+    | '/analytics'
     | '/campaigns'
     | '/history'
     | '/offers'
@@ -150,6 +161,7 @@ export interface FileRouteTypes {
     | '/ads/$fbAdId'
     | '/offers/$id'
     | '/ads/'
+    | '/analytics/'
     | '/campaigns/'
     | '/history/'
     | '/offers/'
@@ -164,6 +176,7 @@ export interface RootRouteChildren {
   AdsFbAdIdRoute: typeof AdsFbAdIdRoute
   OffersIdRoute: typeof OffersIdRoute
   AdsIndexRoute: typeof AdsIndexRoute
+  AnalyticsIndexRoute: typeof AnalyticsIndexRoute
   CampaignsIndexRoute: typeof CampaignsIndexRoute
   HistoryIndexRoute: typeof HistoryIndexRoute
   OffersIndexRoute: typeof OffersIndexRoute
@@ -224,6 +237,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CampaignsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/analytics/': {
+      id: '/analytics/'
+      path: '/analytics'
+      fullPath: '/analytics/'
+      preLoaderRoute: typeof AnalyticsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ads/': {
       id: '/ads/'
       path: '/ads'
@@ -260,6 +280,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdsFbAdIdRoute: AdsFbAdIdRoute,
   OffersIdRoute: OffersIdRoute,
   AdsIndexRoute: AdsIndexRoute,
+  AnalyticsIndexRoute: AnalyticsIndexRoute,
   CampaignsIndexRoute: CampaignsIndexRoute,
   HistoryIndexRoute: HistoryIndexRoute,
   OffersIndexRoute: OffersIndexRoute,

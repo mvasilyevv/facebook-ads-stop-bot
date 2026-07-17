@@ -11,8 +11,8 @@
  *   GET /api/dashboard/performance     → DashboardPerformance
  */
 
-import { useQuery } from "@tanstack/react-query";
-import { apiGet, apiGetWithCount } from "./client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiGet, apiGetWithCount, apiSend } from "./client";
 import type {
   AdSnapshot,
   ChartBucket,
@@ -21,6 +21,8 @@ import type {
   DashboardStats,
   Incident,
   SpendPoint,
+  EnableRecommendationRow,
+  TaskQueueRow,
 } from "@fb/shared";
 
 // ─── Batch (главный агрегат для DashboardPage) ────────────────────────────────
@@ -59,7 +61,11 @@ export function useDashboardAds(params?: AdsParams) {
   return useQuery<{ data: AdSnapshot[]; total: number | null }>({
     queryKey: ["dashboard", "ads", params],
     queryFn: ({ signal }) =>
-      apiGetWithCount<AdSnapshot[]>("/dashboard/ads", params as Record<string, string | number | boolean | null | undefined>, signal),
+      apiGetWithCount<AdSnapshot[]>(
+        "/dashboard/ads",
+        params as Record<string, string | number | boolean | null | undefined>,
+        signal,
+      ),
     staleTime: 10_000,
   });
 }
@@ -88,7 +94,11 @@ export function useChartData(params?: ChartParams) {
   return useQuery<ChartBucket[]>({
     queryKey: ["dashboard", "chart-data", params],
     queryFn: ({ signal }) =>
-      apiGet<ChartBucket[]>("/dashboard/chart-data", params as Record<string, string | number | boolean | null | undefined>, signal),
+      apiGet<ChartBucket[]>(
+        "/dashboard/chart-data",
+        params as Record<string, string | number | boolean | null | undefined>,
+        signal,
+      ),
     staleTime: 30_000,
   });
 }
@@ -104,7 +114,11 @@ export function useSpendHistory(params?: SpendHistoryParams) {
   return useQuery<SpendPoint[]>({
     queryKey: ["dashboard", "spend-history", params],
     queryFn: ({ signal }) =>
-      apiGet<SpendPoint[]>("/dashboard/spend-history", params as Record<string, string | number | boolean | null | undefined>, signal),
+      apiGet<SpendPoint[]>(
+        "/dashboard/spend-history",
+        params as Record<string, string | number | boolean | null | undefined>,
+        signal,
+      ),
     staleTime: 30_000,
     enabled: !!params?.fb_ad_id || params?.hours !== undefined,
   });
@@ -123,7 +137,40 @@ export function useDashboardPerformance(params?: PerformanceParams) {
   return useQuery<DashboardPerformance>({
     queryKey: ["dashboard", "performance", params],
     queryFn: ({ signal }) =>
-      apiGet<DashboardPerformance>("/dashboard/performance", params as Record<string, string | number | boolean | null | undefined>, signal),
+      apiGet<DashboardPerformance>(
+        "/dashboard/performance",
+        params as Record<string, string | number | boolean | null | undefined>,
+        signal,
+      ),
     staleTime: 60_000,
+  });
+}
+
+export function useEnableRecommendations(status: "PENDING" | "PROMOTED" = "PENDING") {
+  return useQuery<EnableRecommendationRow[]>({
+    queryKey: ["dashboard", "enable-recommendations", status],
+    queryFn: ({ signal }) =>
+      apiGet<EnableRecommendationRow[]>(
+        "/dashboard/enable-recommendations",
+        { status, limit: 100 },
+        signal,
+      ),
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useConfirmEnableRecommendation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (recommendationId: string) =>
+      apiSend<TaskQueueRow>(
+        "POST",
+        `/dashboard/enable-recommendations/${encodeURIComponent(recommendationId)}/enable`,
+        { requested_by: "web_dashboard" },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
   });
 }
