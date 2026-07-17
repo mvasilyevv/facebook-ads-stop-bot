@@ -51,7 +51,7 @@ SELECT
   (SELECT count(*) FROM guacamole_connection_permission WHERE permission = '"'"'READ'"'"')::text || '"'"':'"'"' ||
   (SELECT count(*) FROM guacamole_system_permission)::text || '"'"':'"'"' ||
   (SELECT count(*) FROM guacamole_connection_parameter
-   WHERE parameter_name = '"'"'hostname'"'"' AND parameter_value = '"'"'vision-webtop'"'"')::text;
+   WHERE parameter_name = '"'"'hostname'"'"' AND parameter_value = '"'"'127.0.0.1'"'"')::text;
 SQL')"
   [[ "$result" == "1:1:0:1" ]]
 }
