@@ -28,6 +28,11 @@ export const desktopNavigation = {
   assign(url: string): void {
     window.location.assign(url);
   },
+  // Пустая вкладка открывается синхронно в обработчике клика — Safari считает
+  // её user-initiated и не блокирует; целевой URL подставляется после ответа API.
+  openTab(): Window | null {
+    return window.open("about:blank", "_blank");
+  },
 };
 
 export const Route = createFileRoute("/remote-desktop/")({
@@ -42,13 +47,24 @@ function RemoteDesktopPage() {
     setConnectionError(null);
     setIsConnecting(true);
 
+    // До первого await — иначе Safari заблокирует попап как не user-initiated.
+    const desktopWindow = desktopNavigation.openTab();
     try {
       const payload = await apiSend<DesktopLaunchResponse>("POST", "/desktop/launch");
       if (typeof payload.url !== "string" || payload.url.length === 0) {
         throw new Error("Сервер вернул некорректный билет рабочего стола.");
       }
-      desktopNavigation.assign(validateDesktopLaunchUrl(payload.url));
+      const launchUrl = validateDesktopLaunchUrl(payload.url);
+      if (desktopWindow) {
+        desktopWindow.opener = null;
+        desktopWindow.location.replace(launchUrl);
+      } else {
+        // Попап заблокирован настройками браузера — открываем в текущей вкладке,
+        // чтобы одноразовый билет не пропал.
+        desktopNavigation.assign(launchUrl);
+      }
     } catch (error) {
+      desktopWindow?.close();
       setConnectionError(
         error instanceof Error ? error.message : "Не удалось открыть рабочий стол.",
       );
@@ -107,7 +123,7 @@ function RemoteDesktopPage() {
               Vision Desktop
             </h2>
             <p className="mx-auto mt-2 max-w-[450px] text-[13px] leading-relaxed text-bg-9">
-              Подключение откроется в этой вкладке. Дополнительный логин не потребуется.
+              Подключение откроется в новой вкладке. Дополнительный логин не потребуется.
             </p>
             <div className="mt-6 flex justify-center">
               <Button
