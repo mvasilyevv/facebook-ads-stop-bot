@@ -37,6 +37,7 @@ async def promote_enable_recommendation(
     recommendation_id: uuid.UUID | str,
     requested_by: str,
     created_by_chat_id: int | None = None,
+    auto_mode: bool = False,
 ) -> PromotionResult:
     """Заблокировать конкретную рекомендацию, revalidate и создать activate_ad.
 
@@ -58,6 +59,7 @@ async def promote_enable_recommendation(
                            er.ad_id,
                            er.promoted_to_task_id,
                            er.snapshot_metrics,
+                           er.recommendation_level,
                            fa.fb_ad_id,
                            fa.ad_name,
                            fc.ad_account_id
@@ -94,6 +96,17 @@ async def promote_enable_recommendation(
                     SELECT fa.delivery_status,
                            st.alert_state,
                            st.open_state_token,
+                           COALESCE((
+                               SELECT oc.auto_enable_recommendations
+                               FROM observer_config oc
+                               WHERE oc.singleton_key = 'default'
+                               LIMIT 1
+                           ), false) AS auto_enable_recommendations,
+                           EXISTS (
+                               SELECT 1
+                               FROM ad_auto_enable_disabled aed
+                               WHERE aed.ad_id = fa.id
+                           ) AS auto_enable_opt_out,
                            EXISTS (
                                SELECT 1
                                FROM task_queue tq
@@ -139,6 +152,23 @@ async def promote_enable_recommendation(
             raise RecommendationUnsafeStateError(
                 "Включение отклонено: отключение объявления ещё выполняется"
             )
+        if auto_mode:
+            if not bool(current.auto_enable_recommendations):
+                raise RecommendationUnsafeStateError(
+                    "Автовключение отключено глобальным переключателем"
+                )
+            if str(row.recommendation_level or "").strip().lower() != "ok":
+                raise RecommendationUnsafeStateError(
+                    "Автоматически исполняются только рекомендации уровня OK"
+                )
+            if bool(current.auto_enable_opt_out):
+                raise RecommendationUnsafeStateError(
+                    "Для объявления включено исключение из auto-enable"
+                )
+            if str(current.delivery_status or "").strip().upper() != "OFF":
+                raise RecommendationUnsafeStateError(
+                    "Автовключение отклонено: delivery_status объявления не OFF"
+                )
 
         snapshot = dict(row.snapshot_metrics or {})
         expected_incident = str(snapshot.get("incident_open_state_token") or "").strip()

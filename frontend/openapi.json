@@ -699,6 +699,454 @@
         }
       }
     },
+    "/api/analytics/performance": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Get Analytics Performance",
+        "description": "Return lossless performance metrics at one hierarchy level.",
+        "operationId": "get_analytics_performance_api_analytics_performance_get",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "today",
+                "custom"
+              ],
+              "type": "string",
+              "default": "today",
+              "title": "Period"
+            }
+          },
+          {
+            "name": "from_iso",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From Iso"
+            }
+          },
+          {
+            "name": "to_iso",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To Iso"
+            }
+          },
+          {
+            "name": "level",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "campaign",
+                "adset",
+                "ad"
+              ],
+              "type": "string",
+              "default": "campaign",
+              "title": "Level"
+            }
+          },
+          {
+            "name": "parent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Parent Id"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "offer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Offer Id"
+            }
+          },
+          {
+            "name": "campaign_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "name",
+                "spend",
+                "clicks",
+                "registrations",
+                "ftds",
+                "confirmed_deposits",
+                "revenue",
+                "base_delta"
+              ],
+              "type": "string",
+              "default": "spend",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string",
+              "default": "desc",
+              "title": "Direction"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 10,
+              "default": 50,
+              "title": "Page Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsPerformanceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/analytics/live-budget": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Get Analytics Live Budget",
+        "description": "Return hourly actual/base/stop series for the current cabinet day.",
+        "operationId": "get_analytics_live_budget_api_analytics_live_budget_get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "offer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Offer Id"
+            }
+          },
+          {
+            "name": "campaign_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsLiveBudgetSeriesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/analytics/daypart": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Get Analytics Daypart",
+        "description": "Return weekday x hour cells in a validated IANA display timezone.",
+        "operationId": "get_analytics_daypart_api_analytics_daypart_get",
+        "parameters": [
+          {
+            "name": "from_iso",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From Iso"
+            }
+          },
+          {
+            "name": "to_iso",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To Iso"
+            }
+          },
+          {
+            "name": "timezone",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "default": "UTC",
+              "title": "Timezone"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "offer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Offer Id"
+            }
+          },
+          {
+            "name": "campaign_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsDaypartOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboard/auto-enable-disabled": {
       "get": {
         "tags": [
@@ -2822,6 +3270,91 @@
                 }
               ],
               "title": "To Iso"
+            }
+          },
+          {
+            "name": "campaign_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "fb_ad_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fb Ad Id"
+            }
+          },
+          {
+            "name": "stage",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(warning|stop)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Stage"
+            }
+          },
+          {
+            "name": "task_status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(SUCCEEDED|FAILED|CANCELLED|succeeded|failed|cancelled)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Task Status"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
             }
           },
           {
@@ -6556,6 +7089,849 @@
         "title": "AlertRow",
         "description": "Одна строка alert_events (partitioned by created_at)."
       },
+      "AnalyticsBudgetPointOut": {
+        "properties": {
+          "ts": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Ts"
+          },
+          "actual": {
+            "type": "string",
+            "title": "Actual"
+          },
+          "base": {
+            "type": "string",
+            "title": "Base"
+          },
+          "stop": {
+            "type": "string",
+            "title": "Stop"
+          },
+          "available_ads": {
+            "type": "integer",
+            "title": "Available Ads",
+            "default": 0
+          },
+          "unavailable_ads": {
+            "type": "integer",
+            "title": "Unavailable Ads",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "ts",
+          "actual",
+          "base",
+          "stop"
+        ],
+        "title": "AnalyticsBudgetPointOut"
+      },
+      "AnalyticsDaypartCellOut": {
+        "properties": {
+          "weekday": {
+            "type": "integer",
+            "maximum": 7.0,
+            "minimum": 1.0,
+            "title": "Weekday"
+          },
+          "hour": {
+            "type": "integer",
+            "maximum": 23.0,
+            "minimum": 0.0,
+            "title": "Hour"
+          },
+          "clicks": {
+            "type": "integer",
+            "title": "Clicks",
+            "default": 0
+          },
+          "registrations": {
+            "type": "integer",
+            "title": "Registrations",
+            "default": 0
+          },
+          "ftds": {
+            "type": "integer",
+            "title": "Ftds",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "weekday",
+          "hour"
+        ],
+        "title": "AnalyticsDaypartCellOut"
+      },
+      "AnalyticsDaypartOut": {
+        "properties": {
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "from_iso": {
+            "type": "string",
+            "format": "date-time",
+            "title": "From Iso"
+          },
+          "to_iso": {
+            "type": "string",
+            "format": "date-time",
+            "title": "To Iso"
+          },
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsDaypartCellOut"
+            },
+            "type": "array",
+            "title": "Cells"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timezone",
+          "from_iso",
+          "to_iso",
+          "cells"
+        ],
+        "title": "AnalyticsDaypartOut"
+      },
+      "AnalyticsFilterOptionOut": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "AnalyticsFilterOptionOut"
+      },
+      "AnalyticsFilterOptionsOut": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsFilterOptionOut"
+            },
+            "type": "array",
+            "title": "Accounts"
+          },
+          "offers": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsFilterOptionOut"
+            },
+            "type": "array",
+            "title": "Offers"
+          },
+          "campaigns": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsFilterOptionOut"
+            },
+            "type": "array",
+            "title": "Campaigns"
+          }
+        },
+        "type": "object",
+        "title": "AnalyticsFilterOptionsOut"
+      },
+      "AnalyticsLiveBudgetOut": {
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "click",
+              "lead",
+              "registration",
+              "deposit",
+              "mixed"
+            ],
+            "title": "Stage"
+          },
+          "base_unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Unit"
+          },
+          "stop_unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Unit"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "base_budget": {
+            "type": "string",
+            "title": "Base Budget"
+          },
+          "stop_budget": {
+            "type": "string",
+            "title": "Stop Budget"
+          },
+          "base_delta": {
+            "type": "string",
+            "title": "Base Delta"
+          },
+          "stop_delta": {
+            "type": "string",
+            "title": "Stop Delta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stage",
+          "base_budget",
+          "stop_budget",
+          "base_delta",
+          "stop_delta"
+        ],
+        "title": "AnalyticsLiveBudgetOut"
+      },
+      "AnalyticsLiveBudgetSeriesOut": {
+        "properties": {
+          "window": {
+            "$ref": "#/components/schemas/AnalyticsWindowOut"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsBudgetPointOut"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "window",
+          "points"
+        ],
+        "title": "AnalyticsLiveBudgetSeriesOut"
+      },
+      "AnalyticsMetricsOut": {
+        "properties": {
+          "spend": {
+            "type": "string",
+            "title": "Spend",
+            "default": "0.00"
+          },
+          "impressions": {
+            "type": "integer",
+            "title": "Impressions",
+            "default": 0
+          },
+          "clicks": {
+            "type": "integer",
+            "title": "Clicks",
+            "default": 0
+          },
+          "leads": {
+            "type": "integer",
+            "title": "Leads",
+            "default": 0
+          },
+          "registrations": {
+            "type": "integer",
+            "title": "Registrations",
+            "default": 0
+          },
+          "ftds": {
+            "type": "integer",
+            "title": "Ftds",
+            "default": 0
+          },
+          "confirmed_deposits": {
+            "type": "integer",
+            "title": "Confirmed Deposits",
+            "default": 0
+          },
+          "redeposits": {
+            "type": "integer",
+            "title": "Redeposits",
+            "default": 0
+          },
+          "revenue": {
+            "type": "string",
+            "title": "Revenue",
+            "default": "0.00"
+          },
+          "cpc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpc"
+          },
+          "ctr_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ctr Pct"
+          },
+          "click_registration_cr_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Click Registration Cr Pct"
+          },
+          "registration_ftd_cr_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registration Ftd Cr Pct"
+          },
+          "cost_per_registration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Per Registration"
+          },
+          "cost_per_ftd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Per Ftd"
+          },
+          "roi_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roi Pct"
+          },
+          "roas": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roas"
+          }
+        },
+        "type": "object",
+        "title": "AnalyticsMetricsOut"
+      },
+      "AnalyticsPaginationOut": {
+        "properties": {
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "pages": {
+            "type": "integer",
+            "title": "Pages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page",
+          "page_size",
+          "total",
+          "pages"
+        ],
+        "title": "AnalyticsPaginationOut"
+      },
+      "AnalyticsPerformanceOut": {
+        "properties": {
+          "window": {
+            "$ref": "#/components/schemas/AnalyticsWindowOut"
+          },
+          "sources": {
+            "$ref": "#/components/schemas/AnalyticsSourcesOut"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/AnalyticsMetricsOut"
+          },
+          "total_live_budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsLiveBudgetOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total_budget_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Budget Unavailable Reason"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/AnalyticsPaginationOut"
+          },
+          "filter_options": {
+            "$ref": "#/components/schemas/AnalyticsFilterOptionsOut"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsPerformanceRowOut"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "window",
+          "sources",
+          "totals",
+          "pagination",
+          "filter_options",
+          "rows"
+        ],
+        "title": "AnalyticsPerformanceOut"
+      },
+      "AnalyticsPerformanceRowOut": {
+        "properties": {
+          "spend": {
+            "type": "string",
+            "title": "Spend",
+            "default": "0.00"
+          },
+          "impressions": {
+            "type": "integer",
+            "title": "Impressions",
+            "default": 0
+          },
+          "clicks": {
+            "type": "integer",
+            "title": "Clicks",
+            "default": 0
+          },
+          "leads": {
+            "type": "integer",
+            "title": "Leads",
+            "default": 0
+          },
+          "registrations": {
+            "type": "integer",
+            "title": "Registrations",
+            "default": 0
+          },
+          "ftds": {
+            "type": "integer",
+            "title": "Ftds",
+            "default": 0
+          },
+          "confirmed_deposits": {
+            "type": "integer",
+            "title": "Confirmed Deposits",
+            "default": 0
+          },
+          "redeposits": {
+            "type": "integer",
+            "title": "Redeposits",
+            "default": 0
+          },
+          "revenue": {
+            "type": "string",
+            "title": "Revenue",
+            "default": "0.00"
+          },
+          "cpc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpc"
+          },
+          "ctr_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ctr Pct"
+          },
+          "click_registration_cr_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Click Registration Cr Pct"
+          },
+          "registration_ftd_cr_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registration Ftd Cr Pct"
+          },
+          "cost_per_registration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Per Registration"
+          },
+          "cost_per_ftd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Per Ftd"
+          },
+          "roi_pct": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roi Pct"
+          },
+          "roas": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roas"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "fb_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fb Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "campaign",
+              "adset",
+              "ad"
+            ],
+            "title": "Level"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "parent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Name"
+          },
+          "has_children": {
+            "type": "boolean",
+            "title": "Has Children",
+            "default": false
+          },
+          "ad_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ad Account Id"
+          },
+          "offer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Id"
+          },
+          "offer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          },
+          "live_budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsLiveBudgetOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Unavailable Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "level"
+        ],
+        "title": "AnalyticsPerformanceRowOut"
+      },
+      "AnalyticsSourceOut": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "meta",
+              "tracker"
+            ],
+            "title": "Source"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "good",
+              "degraded",
+              "missing",
+              "unknown"
+            ],
+            "title": "Status"
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event At"
+          },
+          "lag_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag Seconds"
+          },
+          "unmatched_events": {
+            "type": "integer",
+            "title": "Unmatched Events",
+            "default": 0
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "status"
+        ],
+        "title": "AnalyticsSourceOut"
+      },
+      "AnalyticsSourcesOut": {
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/AnalyticsSourceOut"
+          },
+          "tracker": {
+            "$ref": "#/components/schemas/AnalyticsSourceOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "meta",
+          "tracker"
+        ],
+        "title": "AnalyticsSourcesOut"
+      },
+      "AnalyticsWindowOut": {
+        "properties": {
+          "from_iso": {
+            "type": "string",
+            "format": "date-time",
+            "title": "From Iso"
+          },
+          "to_iso": {
+            "type": "string",
+            "format": "date-time",
+            "title": "To Iso"
+          },
+          "is_live": {
+            "type": "boolean",
+            "title": "Is Live"
+          },
+          "cabinet_day_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cabinet Day Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_iso",
+          "to_iso",
+          "is_live"
+        ],
+        "title": "AnalyticsWindowOut"
+      },
       "Attribution": {
         "properties": {
           "click_through_days": {
@@ -9613,6 +10989,17 @@
               }
             ],
             "title": "Ad Name"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
           },
           "campaign_name": {
             "anyOf": [

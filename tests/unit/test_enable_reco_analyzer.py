@@ -33,6 +33,9 @@ def _metric(
     cost_per_registration: str | None = None,
     registrations: int | None = 0,
     deposits: int | None = 0,
+    leads: int | None = 0,
+    clicks: int | None = 0,
+    cpc: str | None = None,
 ) -> MetricSnapshot:
     return MetricSnapshot(
         cycle_ts=_now() - timedelta(minutes=minutes_ago),
@@ -43,6 +46,9 @@ def _metric(
         else None,
         registrations=registrations,
         deposits=deposits,
+        leads=leads,
+        clicks=clicks,
+        cpc=Decimal(cpc) if cpc is not None else None,
     )
 
 
@@ -85,28 +91,47 @@ def test_skips_when_no_metrics() -> None:
     assert "мало метрик" in (decision.skip_reason or "")
 
 
-# Сценарий: spend в норме (≤ 50% CPA) + cost_per_lead в норме → level=ok
-def test_recommends_ok_when_two_signals() -> None:
+# Канонический evaluator не видит ни STOP, ни WARNING → level=ok.
+def test_recommends_ok_when_canonical_rules_are_clear() -> None:
     decision = should_recommend(
         alert_state="stop_sent",
         snoozed_until=None,
         now=_now(),
-        metrics=[_metric(spend="2.0", cost_per_lead="5.0")],
+        metrics=[
+            _metric(
+                spend="2.0",
+                clicks=20,
+                cpc="0.10",
+                leads=2,
+                cost_per_lead="1.0",
+                registrations=1,
+                cost_per_registration="1.0",
+            )
+        ],
         offer=OfferThresholds(cpa_threshold=Decimal("10")),
     )
     assert decision.recommend is True
     assert decision.level == "ok"
-    # Хотя бы 2 reason'а
-    assert len(decision.reasons) >= 2
+    assert "Канонические" in decision.reasons[0]
 
 
-# Сценарий: только spend в норме (одно условие) → level=warning
-def test_recommends_warning_when_single_signal() -> None:
+# Канонический evaluator возвращает WARNING → рекомендация остаётся ручной.
+def test_recommends_warning_when_canonical_rule_is_warning() -> None:
     decision = should_recommend(
         alert_state="stop_sent",
         snoozed_until=None,
         now=_now(),
-        metrics=[_metric(spend="1.0", cost_per_lead="999.0")],
+        metrics=[
+            _metric(
+                spend="1.0",
+                clicks=20,
+                cpc="0.05",
+                leads=2,
+                cost_per_lead="0.5",
+                registrations=1,
+                cost_per_registration="1.40",
+            )
+        ],
         offer=OfferThresholds(cpa_threshold=Decimal("10")),
     )
     assert decision.recommend is True
@@ -124,7 +149,7 @@ def test_no_recommendation_when_metrics_still_bad() -> None:
         offer=OfferThresholds(cpa_threshold=Decimal("10")),
     )
     assert decision.recommend is False
-    assert "ни одно" in (decision.skip_reason or "")
+    assert "Стоп" in (decision.skip_reason or "") or "границ" in (decision.skip_reason or "")
 
 
 # Сценарий: state='disabled' — тоже допустим (юзер хотел потом включить вручную)
@@ -133,7 +158,17 @@ def test_disabled_state_is_recommendable() -> None:
         alert_state="disabled",
         snoozed_until=None,
         now=_now(),
-        metrics=[_metric(spend="2.0", cost_per_lead="5.0")],
+        metrics=[
+            _metric(
+                spend="1.0",
+                clicks=20,
+                cpc="0.05",
+                leads=2,
+                cost_per_lead="0.5",
+                registrations=1,
+                cost_per_registration="1.0",
+            )
+        ],
         offer=OfferThresholds(cpa_threshold=Decimal("10")),
     )
     assert decision.recommend is True
@@ -158,8 +193,8 @@ def test_deposits_without_registration_are_not_signal() -> None:
     assert decision.recommend is False
 
 
-# Registration + deposit — подтверждённая воронка и один recovery-сигнал.
-def test_registration_and_deposit_counted_as_signal() -> None:
+# Даже подтверждённая воронка не обходит действующий spend/CPA stop.
+def test_registration_and_deposit_do_not_override_canonical_stop() -> None:
     decision = should_recommend(
         alert_state="stop_sent",
         snoozed_until=None,
@@ -174,13 +209,11 @@ def test_registration_and_deposit_counted_as_signal() -> None:
         ],
         offer=OfferThresholds(cpa_threshold=Decimal("10")),
     )
-    assert decision.recommend is True
-    assert decision.level == "warning"
-    assert any("registrations=1" in r and "deposits=3" in r for r in decision.reasons)
+    assert decision.recommend is False
 
 
-# Без CPA recovery возможен только по подтверждённой воронке registration + deposit.
-def test_no_cpa_threshold_requires_registration_and_deposit() -> None:
+# Без CPA канонический evaluator не создаёт ложную уверенность даже при воронке.
+def test_no_cpa_threshold_never_auto_recommends() -> None:
     decision_no_deposits = should_recommend(
         alert_state="stop_sent",
         snoozed_until=None,
@@ -206,7 +239,7 @@ def test_no_cpa_threshold_requires_registration_and_deposit() -> None:
         metrics=[_metric(spend="100.0", registrations=1, deposits=5)],
         offer=OfferThresholds(cpa_threshold=None),
     )
-    assert decision_with_funnel.recommend is True
+    assert decision_with_funnel.recommend is False
 
 
 # Сценарий: min_metrics_required=3 в thresholds — две метрики не хватит
@@ -232,8 +265,24 @@ def test_snapshot_summary_keys() -> None:
         snoozed_until=None,
         now=_now(),
         metrics=[
-            _metric(spend="0.5", cost_per_lead="5.0", deposits=2),
-            _metric(minutes_ago=15, spend="0.5", deposits=1),
+            _metric(
+                spend="0.5",
+                clicks=20,
+                cpc="0.02",
+                leads=2,
+                cost_per_lead="0.25",
+                registrations=1,
+                cost_per_registration="0.5",
+            ),
+            _metric(
+                minutes_ago=15,
+                spend="0.5",
+                clicks=20,
+                cpc="0.02",
+                leads=2,
+                registrations=1,
+                cost_per_registration="0.5",
+            ),
         ],
         offer=OfferThresholds(cpa_threshold=Decimal("10")),
     )
@@ -247,13 +296,20 @@ def test_snapshot_summary_keys() -> None:
 
 # Сценарий R2 (CRIT-2): spend в ad_metrics кумулятивный (нарастающий с начала
 # cabinet-дня). После паузы рекламы все снимки в окне держат одно значение S.
-# Наивный SUM по 12 снимкам давал бы 12*S и ложно проваливал Rule 1
-# (spend ≤ 0.5*CPA), подавляя валидную рекомендацию включения. Берём ПОСЛЕДНИЙ
-# снимок: spend=4 при CPA=10 проходит порог 0.5*CPA=5, рекомендация выживает.
+# Snapshot и canonical evaluation должны использовать последний снимок, не сумму.
 def test_cumulative_spend_uses_latest_not_sum() -> None:
-    # 12 одинаковых кумулятивных снимков по 4.0 (реклама на паузе → spend плоский)
+    # 12 одинаковых кумулятивных снимков по 3.0 (реклама на паузе → spend плоский)
     metrics = [
-        _metric(minutes_ago=15 * i, spend="4.0", cost_per_lead="999.0", deposits=0)
+        _metric(
+            minutes_ago=15 * i,
+            spend="3.0",
+            clicks=30,
+            cpc="0.10",
+            leads=3,
+            cost_per_lead="1.0",
+            registrations=2,
+            cost_per_registration="1.0",
+        )
         for i in range(12)
     ]
     decision = should_recommend(
@@ -263,13 +319,10 @@ def test_cumulative_spend_uses_latest_not_sum() -> None:
         metrics=metrics,
         offer=OfferThresholds(cpa_threshold=Decimal("10")),
     )
-    # Наивный SUM = 48 > 5 → Rule 1 провалена, рекомендации нет (баг).
-    # Latest = 4 ≤ 5 → Rule 1 проходит, единственный сигнал → warning.
     assert decision.recommend is True
-    assert decision.level == "warning"
-    assert any("spend" in r for r in decision.reasons)
+    assert decision.level == "ok"
     # snapshot тоже отражает последний снимок, не сумму
-    assert decision.snapshot["total_spend"] == "4.0"
+    assert decision.snapshot["total_spend"] == "3.0"
 
 
 # ====================== alert renderer ======================

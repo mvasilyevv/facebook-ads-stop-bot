@@ -16,7 +16,7 @@ import {
   Table,
   Radar,
   Package,
-  Clock,
+  BarChart3,
   MonitorUp,
   Settings,
 } from "lucide-react";
@@ -37,18 +37,38 @@ interface CommandItem {
 }
 
 const PAGES = [
-  { to: "/", label: "Панель", kw: "dashboard панель главная обзор", icon: <LayoutDashboard size={15} /> },
+  {
+    to: "/",
+    label: "Обзор",
+    kw: "dashboard панель главная обзор",
+    icon: <LayoutDashboard size={15} />,
+  },
   { to: "/ads", label: "Объявления", kw: "ads объявления реклама", icon: <Table size={15} /> },
-  { to: "/campaigns", label: "Кампании", kw: "campaigns кампании скоуп owner tag отслеживаемые", icon: <Radar size={15} /> },
+  {
+    to: "/campaigns",
+    label: "Кампании",
+    kw: "campaigns кампании скоуп owner tag отслеживаемые",
+    icon: <Radar size={15} />,
+  },
   { to: "/offers", label: "Офферы", kw: "offers офферы", icon: <Package size={15} /> },
-  { to: "/history", label: "История", kw: "history история события", icon: <Clock size={15} /> },
+  {
+    to: "/analytics",
+    label: "Аналитика",
+    kw: "analytics статистика история события заливы",
+    icon: <BarChart3 size={15} />,
+  },
   {
     to: "/remote-desktop",
     label: "Рабочий стол",
     kw: "remote desktop рабочий стол vision сервер",
     icon: <MonitorUp size={15} />,
   },
-  { to: "/settings", label: "Настройки", kw: "settings настройки конфиг", icon: <Settings size={15} /> },
+  {
+    to: "/settings",
+    label: "Настройки",
+    kw: "settings настройки конфиг",
+    icon: <Settings size={15} />,
+  },
 ] as const;
 
 export function CommandPalette() {

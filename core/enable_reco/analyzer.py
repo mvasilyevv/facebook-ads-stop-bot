@@ -22,10 +22,17 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
+
+from core.domain import EnableRecommendationLevel
+from core.observer.pipeline import build_rule_context
+from core.observer.queries import OfferRules
+from core.rules.evaluator import determine_enable_recommendation_level, evaluate_stop_rules
+from core.scanner.models import ScannedAdRow
 
 RecommendationLevel = Literal["ok", "warning"]
 
@@ -52,6 +59,9 @@ class OfferThresholds:
     """Пороги оффера для конкретного объявления."""
 
     cpa_threshold: Decimal | None = None
+    frequency_threshold: Decimal | None = None
+    stop_percent_of_rule: Decimal | None = None
+    warning_percent_of_stop: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -64,9 +74,14 @@ class MetricSnapshot:
     cost_per_registration: Decimal | None = None
     registrations: int | None = None
     deposits: int | None = None
+    leads: int | None = None
+    clicks: int | None = None
+    reach: int | None = None
     # Кейс куратора: показы кумулятивны в cabinet-дне (как spend) — берём latest.
     impressions: int | None = None
     ctr: Decimal | None = None  # проценты (3.7 = 3.7%)
+    cpc: Decimal | None = None
+    frequency: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -115,6 +130,8 @@ def should_recommend(
     offer: OfferThresholds | None,
     thresholds: AnalyzerThresholds = DEFAULT_THRESHOLDS,
     allow_curator: bool = True,
+    tracker_registrations: int = 0,
+    tracker_confirmed_deposits: int = 0,
 ) -> RecommendationDecision:
     """Главная функция анализатора.
 
@@ -149,7 +166,6 @@ def should_recommend(
             skip_reason=f"мало метрик: {len(metrics)} < {thresholds.min_metrics_required}",
         )
 
-    reasons: list[str] = []
     cpa = offer.cpa_threshold if offer else None
 
     total_spend = _latest_spend(metrics)
@@ -184,44 +200,86 @@ def should_recommend(
             snapshot=snapshot,
         )
 
-    # Правило 1: текущий (последний кумулятивный) spend < (порог * share)
-    if cpa is not None and cpa > 0:
-        spend_cap = cpa * thresholds.spend_window_share_of_cpa
-        if total_spend <= spend_cap:
-            reasons.append(
-                f"spend {total_spend} ≤ {spend_cap} ({thresholds.spend_window_share_of_cpa} × CPA={cpa})"
-            )
-
-    # Правило 2: cost_per_lead вернулся в норму
-    if latest is not None and cpa is not None and latest.cost_per_lead is not None:
-        if latest.cost_per_lead <= cpa:
-            reasons.append(f"cost_per_lead={latest.cost_per_lead} ≤ CPA={cpa}")
-
-    # Правило 3: cost_per_registration в норме
-    if latest is not None and cpa is not None and latest.cost_per_registration is not None:
-        if latest.cost_per_registration <= cpa:
-            reasons.append(f"cost_per_registration={latest.cost_per_registration} ≤ CPA={cpa}")
-
-    # Правило 4: deposit считаем подтверждённым сигналом только при наличии
-    # регистрации. Deposit без registration не подтверждает воронку.
-    if latest is not None and (latest.registrations or 0) >= 1 and (latest.deposits or 0) >= 1:
-        reasons.append(
-            f"свежая воронка: registrations={latest.registrations}, deposits={latest.deposits}"
-        )
-
-    if not reasons:
+    if latest is None:
         return RecommendationDecision(
             recommend=False,
-            skip_reason="ни одно положительное условие не выполнено",
+            skip_reason="нет свежего снимка для канонической проверки",
             snapshot=_snapshot_summary(metrics, total_spend, latest),
         )
 
-    level: RecommendationLevel = "ok" if len(reasons) >= 2 else "warning"
+    if cpa is None or cpa <= 0:
+        return RecommendationDecision(
+            recommend=False,
+            skip_reason="у оффера не задан CPA для канонической проверки",
+            snapshot=_snapshot_summary(metrics, total_spend, latest),
+        )
+
+    tracker_registrations = max(tracker_registrations, int(latest.registrations or 0))
+    tracker_confirmed_deposits = max(
+        tracker_confirmed_deposits,
+        int(latest.deposits or 0) if tracker_registrations > 0 else 0,
+    )
+    offer_rules = OfferRules(
+        offer_id=uuid.uuid4(),
+        code="enable-recovery",
+        name="enable-recovery",
+        cpa_threshold=cpa,
+        frequency_threshold=offer.frequency_threshold if offer else None,
+        stop_percent_of_rule=offer.stop_percent_of_rule if offer else None,
+        warning_percent_of_stop=offer.warning_percent_of_stop if offer else None,
+    )
+    row = ScannedAdRow(
+        fb_ad_id="enable-recovery",
+        campaign_name="",
+        adset_name="",
+        ad_name="",
+        delivery_status="OFF",
+        spend=Decimal(latest.spend or 0),
+        reach=int(latest.reach or 0),
+        impressions=int(latest.impressions or 0),
+        clicks=int(latest.clicks or 0),
+        cpc=latest.cpc,
+        ctr=latest.ctr,
+        frequency=latest.frequency,
+        leads=int(latest.leads or 0),
+        cost_per_lead=latest.cost_per_lead,
+        registrations=tracker_registrations,
+        cost_per_registration=latest.cost_per_registration,
+        deposits=tracker_confirmed_deposits,
+    )
+    ctx = build_rule_context(
+        offer_rules,
+        external_deposits=tracker_confirmed_deposits,
+        frequency_current=latest.frequency,
+        impressions=latest.impressions,
+        reach=latest.reach,
+    )
+    evaluation = evaluate_stop_rules(row, ctx)
+    canonical_level = determine_enable_recommendation_level(
+        row,
+        ctx,
+        stop_evaluation=evaluation,
+    )
+    snapshot = _snapshot_summary(metrics, total_spend, latest)
+    snapshot["canonical_rule_stage"] = evaluation.stage.value if evaluation.stage else None
+    snapshot["canonical_rule_codes"] = evaluation.matched_rule_codes
+    snapshot["tracker_registrations"] = tracker_registrations
+    snapshot["tracker_confirmed_deposits"] = tracker_confirmed_deposits
+    if canonical_level is None:
+        return RecommendationDecision(
+            recommend=False,
+            skip_reason=evaluation.reason_text or "канонический evaluator не разрешил включение",
+            snapshot=snapshot,
+        )
+    level: RecommendationLevel = (
+        "ok" if canonical_level == EnableRecommendationLevel.OK else "warning"
+    )
+    reason = evaluation.reason_text or "Канонические стоп-правила больше не срабатывают"
     return RecommendationDecision(
         recommend=True,
         level=level,
-        reasons=tuple(reasons),
-        snapshot=_snapshot_summary(metrics, total_spend, latest),
+        reasons=(reason,),
+        snapshot=snapshot,
     )
 
 
@@ -245,4 +303,8 @@ def _snapshot_summary(
             summary["latest_registrations"] = int(latest.registrations)
         if latest.deposits is not None:
             summary["latest_deposits"] = int(latest.deposits)
+        if latest.clicks is not None:
+            summary["latest_clicks"] = int(latest.clicks)
+        if latest.leads is not None:
+            summary["latest_leads"] = int(latest.leads)
     return summary

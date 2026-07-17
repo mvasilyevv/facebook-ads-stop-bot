@@ -141,7 +141,8 @@ async def stopped_ad_e2e(pg_engine, clean_enable_reco_pipeline) -> dict[str, Any
             ),
             {"aid": ad_id, "tok": incident_token, "ts": last_transition},
         )
-        # 2 «выправленные» метрики после disable: spend низкий, cost_per_lead в норме
+        # 2 «выправленные» метрики после disable: CPC и no-lead guardrail
+        # ниже канонических порогов evaluator'а.
         for ts, spend, cpl in (
             (cycle_older, Decimal("1.0"), Decimal("4.0")),
             (cycle_recent, Decimal("0.5"), Decimal("5.0")),
@@ -150,8 +151,9 @@ async def stopped_ad_e2e(pg_engine, clean_enable_reco_pipeline) -> dict[str, Any
                 text(
                     """
                     INSERT INTO ad_metrics
-                        (ad_id, cycle_ts, scan_id, spend, cost_per_lead, deposits)
-                    VALUES (:aid, :ts, NULL, :sp, :cpl, 0)
+                        (ad_id, cycle_ts, scan_id, spend, cost_per_lead,
+                         clicks, cpc, deposits)
+                    VALUES (:aid, :ts, NULL, :sp, :cpl, 20, 0.025, 0)
                     """
                 ),
                 {"aid": ad_id, "ts": ts, "sp": spend, "cpl": cpl},

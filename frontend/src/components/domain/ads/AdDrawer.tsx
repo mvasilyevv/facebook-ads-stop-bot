@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Eyebrow } from "@/components/data/Eyebrow";
 import { cn } from "@/lib/utils/cn";
+import { analyticsHref } from "@/lib/analyticsSearch";
 
 import { useAdTimeline } from "@/lib/api/ads";
 import { adAccountId, readAdMetrics, deriveGeo } from "./adHelpers";
@@ -157,6 +158,12 @@ export function AdDrawer({
       }
       footer={
         <div className="flex w-full flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+          <a
+            href={analyticsHref({ search: resolvedId })}
+            className="inline-flex min-h-9 items-center justify-center rounded-[var(--radius-2)] border border-[var(--hairline-strong)] px-3 text-[11px] text-bg-10 no-underline hover:bg-bg-2 hover:text-bg-11"
+          >
+            Открыть в аналитике
+          </a>
           <AdsetDuplicateAction ad={ad} />
           <div className="min-w-0 flex-1">
             <AdDisableButton

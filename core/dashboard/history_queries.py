@@ -137,7 +137,16 @@ async def fetch_tasks_summary(
 
 
 async def fetch_timeline(
-    engine: AsyncEngine, from_dt: datetime, to_dt: datetime, limit: int
+    engine: AsyncEngine,
+    from_dt: datetime,
+    to_dt: datetime,
+    limit: int,
+    *,
+    campaign_uuid: uuid.UUID | None = None,
+    fb_ad_id: str | None = None,
+    stage: str | None = None,
+    task_status: str | None = None,
+    search: str | None = None,
 ) -> list[Row[Any]]:
     """Объединённая лента: AlertEvent + terminal TaskQueue (succeeded/failed/cancelled).
 
@@ -145,6 +154,23 @@ async def fetch_timeline(
     """
     target_expr = target_id_sql("tq")
     toggle_pred = f"({disable_channel_sql('tq')} OR {enable_channel_sql('tq')})"
+    common_campaign = "AND c.id = :campaign_uuid" if campaign_uuid else ""
+    common_ad = "AND a.fb_ad_id = :fb_ad_id" if fb_ad_id else ""
+    alert_stage = "AND lower(ae.stage) = lower(:stage)" if stage else ""
+    alert_task_guard = "AND false" if task_status else ""
+    task_status_filter = "AND lower(tq.status) = lower(:task_status)" if task_status else ""
+    task_stage_guard = "AND false" if stage else ""
+    alert_search = (
+        "AND (a.fb_ad_id ILIKE :search OR a.ad_name ILIKE :search OR c.campaign_name ILIKE :search)"
+        if search
+        else ""
+    )
+    task_search = (
+        f"AND ({target_expr} ILIKE :search OR a.ad_name ILIKE :search "
+        "OR c.campaign_name ILIKE :search)"
+        if search
+        else ""
+    )
     sql = text(
         f"""
         SELECT
@@ -152,6 +178,7 @@ async def fetch_timeline(
             ae.created_at   AS ts,
             a.fb_ad_id,
             a.ad_name,
+            c.id::text      AS campaign_id,
             c.campaign_name,
             ae.stage,
             ae.matched_rule_codes::text  AS rule_codes_raw,
@@ -162,6 +189,11 @@ async def fetch_timeline(
         JOIN fb_adsets s  ON s.id = a.adset_id
         JOIN fb_campaigns c ON c.id = s.campaign_id
         WHERE ae.created_at BETWEEN :from_dt AND :to_dt
+          {common_campaign}
+          {common_ad}
+          {alert_stage}
+          {alert_task_guard}
+          {alert_search}
 
         UNION ALL
 
@@ -170,6 +202,7 @@ async def fetch_timeline(
             tq.updated_at       AS ts,
             {target_expr}       AS fb_ad_id,
             a.ad_name,
+            c.id::text          AS campaign_id,
             c.campaign_name,
             NULL                AS stage,
             NULL                AS rule_codes_raw,
@@ -182,15 +215,29 @@ async def fetch_timeline(
         WHERE {toggle_pred}
           AND tq.status IN ('succeeded', 'failed', 'cancelled')
           AND tq.updated_at BETWEEN :from_dt AND :to_dt
+          {common_campaign}
+          {common_ad}
+          {task_status_filter}
+          {task_stage_guard}
+          {task_search}
 
         ORDER BY ts DESC
         LIMIT :limit
         """
     )
+    params: dict[str, Any] = {"from_dt": from_dt, "to_dt": to_dt, "limit": limit}
+    if campaign_uuid:
+        params["campaign_uuid"] = campaign_uuid
+    if fb_ad_id:
+        params["fb_ad_id"] = fb_ad_id
+    if stage:
+        params["stage"] = stage
+    if task_status:
+        params["task_status"] = task_status
+    if search:
+        params["search"] = f"%{search.strip()}%"
     async with engine.connect() as conn:
-        return (
-            await conn.execute(sql, {"from_dt": from_dt, "to_dt": to_dt, "limit": limit})
-        ).fetchall()
+        return (await conn.execute(sql, params)).fetchall()
 
 
 # ─────────────────────── Campaigns ───────────────────────────────────────────

@@ -175,6 +175,14 @@ async def get_history_timeline(
     engine: DepEngine,
     from_iso: str | None = Query(default=None),
     to_iso: str | None = Query(default=None),
+    campaign_id: uuid.UUID | None = Query(default=None),
+    fb_ad_id: str | None = Query(default=None, max_length=64),
+    stage: str | None = Query(default=None, pattern="^(warning|stop)$"),
+    task_status: str | None = Query(
+        default=None,
+        pattern="^(SUCCEEDED|FAILED|CANCELLED|succeeded|failed|cancelled)$",
+    ),
+    search: str | None = Query(default=None, max_length=200),
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> list[HistoryTimelineItem]:
     """Объединённая лента: AlertEvent + terminal TaskQueue (succeeded/failed/cancelled).
@@ -184,7 +192,17 @@ async def get_history_timeline(
     """
     from_dt, to_dt = _parse_window(from_iso, to_iso)
 
-    rows = await hq.fetch_timeline(engine, from_dt, to_dt, limit)
+    rows = await hq.fetch_timeline(
+        engine,
+        from_dt,
+        to_dt,
+        limit,
+        campaign_uuid=campaign_id,
+        fb_ad_id=fb_ad_id,
+        stage=stage,
+        task_status=task_status,
+        search=search,
+    )
 
     result: list[HistoryTimelineItem] = []
     for r in rows:
@@ -208,6 +226,7 @@ async def get_history_timeline(
                 ts=r.ts,
                 fb_ad_id=r.fb_ad_id,
                 ad_name=r.ad_name,
+                campaign_id=r.campaign_id,
                 campaign_name=r.campaign_name,
                 stage=r.stage,
                 rule_codes=rule_codes,

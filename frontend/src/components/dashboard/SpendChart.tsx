@@ -13,10 +13,16 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { PulseDot } from "@/components/data/PulseDot";
 import { formatSpend } from "@fb/shared";
+import { formatDisplayTime } from "@/lib/timezone";
+
+export interface SpendChartPoint {
+  ts: string;
+  spend: number;
+}
 
 interface SpendChartProps {
-  /** Ряд значений spend по часам (например, 24 точки). */
-  data: number[];
+  /** Реальные timestamp + spend; ось не придумывает номера часов. */
+  data: SpendChartPoint[];
   /** Высота области графика в px. */
   height?: number;
   /** Показывать пульсирующий «now»-дот на последней точке. */
@@ -33,7 +39,7 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-export function SpendChart({ data, height = 170, live = true, animate = true }: SpendChartProps) {
+export function SpendChart({ data, height = 170, live = true, animate = false }: SpendChartProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const lineRef = useRef<SVGPolylineElement>(null);
   const [w, setW] = useState(560);
@@ -87,14 +93,24 @@ export function SpendChart({ data, height = 170, live = true, animate = true }: 
     );
   }
 
-  const max = Math.max(...data) * 1.1 || 1;
-  const x = (i: number) => (i / (n - 1)) * w;
+  const values = data.map((point) => point.spend);
+  const max = Math.max(...values) * 1.1 || 1;
+  const padX = 8;
+  const x = (i: number) => padX + (i / (n - 1)) * Math.max(0, w - padX * 2);
   const y = (v: number) => padT + innerH - (v / max) * innerH;
-  const linePts = data.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+  const linePts = data.map((point, i) => `${x(i)},${y(point.spend)}`).join(" ");
   const areaPath =
-    `M${x(0)},${y(data[0]!)} ` +
-    data.map((v, i) => `L${x(i)},${y(v)}`).join(" ") +
+    `M${x(0)},${y(data[0]!.spend)} ` +
+    data.map((point, i) => `L${x(i)},${y(point.spend)}`).join(" ") +
     ` L${x(n - 1)},${H - padB} L${x(0)},${H - padB} Z`;
+  const tickCount = Math.max(2, Math.floor(w / 110));
+  const tickIndices = Array.from(
+    new Set(
+      Array.from({ length: tickCount }, (_, index) =>
+        Math.round((index / (tickCount - 1)) * (n - 1)),
+      ),
+    ),
+  );
 
   const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = wrapRef.current?.getBoundingClientRect();
@@ -107,11 +123,11 @@ export function SpendChart({ data, height = 170, live = true, animate = true }: 
   return (
     <div
       ref={wrapRef}
-      className="relative w-full"
+      className="relative w-full overflow-hidden"
       onMouseMove={onMove}
       onMouseLeave={() => setHover(null)}
     >
-      <svg width="100%" height={H} className="block overflow-visible">
+      <svg width="100%" height={H} className="block overflow-hidden">
         <defs>
           <linearGradient id={`fill${gid}`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.18} />
@@ -145,7 +161,7 @@ export function SpendChart({ data, height = 170, live = true, animate = true }: 
         />
 
         {/* Подписи часов по нижней оси */}
-        {[0, 6, 12, 18, n - 1].map((i) => (
+        {tickIndices.map((i) => (
           <text
             key={i}
             x={x(i)}
@@ -155,7 +171,7 @@ export function SpendChart({ data, height = 170, live = true, animate = true }: 
             fill="var(--bg-8)"
             textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"}
           >
-            {String(i % 24).padStart(2, "0")}:00
+            {formatDisplayTime(data[i]!.ts)}
           </text>
         ))}
 
@@ -172,7 +188,7 @@ export function SpendChart({ data, height = 170, live = true, animate = true }: 
             />
             <circle
               cx={x(hover)}
-              cy={y(data[hover]!)}
+              cy={y(data[hover]!.spend)}
               r={3.5}
               fill="var(--bg-0)"
               stroke="var(--accent)"
@@ -190,8 +206,8 @@ export function SpendChart({ data, height = 170, live = true, animate = true }: 
           style={{
             position: "absolute",
             pointerEvents: "none",
-            right: -1,
-            top: y(data[n - 1]!) - 4,
+            left: x(n - 1) - 4,
+            top: y(data[n - 1]!.spend) - 4,
           }}
         />
       )}
@@ -203,10 +219,10 @@ export function SpendChart({ data, height = 170, live = true, animate = true }: 
           style={{ left: Math.min(Math.max(x(hover) - 50, 0), w - 100), minWidth: 92 }}
         >
           <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
-            {String(hover % 24).padStart(2, "0")}:00 · SPEND
+            {formatDisplayTime(data[hover]!.ts)} · SPEND
           </div>
           <div className="mt-0.5 font-display text-[14px] tabular-nums text-bg-11">
-            {formatSpend(data[hover])}
+            {formatSpend(data[hover]!.spend)}
           </div>
         </div>
       )}

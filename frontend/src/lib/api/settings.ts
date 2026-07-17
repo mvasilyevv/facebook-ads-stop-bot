@@ -182,6 +182,34 @@ export function useToggleAutoEnable() {
   });
 }
 
+export interface AutoEnableExclusion {
+  fb_ad_id: string;
+  internal_id: string;
+  ad_name?: string | null;
+  disabled_at: string;
+  reason?: string | null;
+}
+
+export function useAutoEnableExclusions() {
+  return useQuery<AutoEnableExclusion[]>({
+    queryKey: ["settings", "auto-enable-exclusions"],
+    queryFn: ({ signal }) =>
+      apiGet<AutoEnableExclusion[]>("/dashboard/auto-enable-disabled", undefined, signal),
+    staleTime: 30_000,
+  });
+}
+
+export function useRemoveAutoEnableExclusion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (fbAdId: string) =>
+      apiSend<null>("DELETE", `/dashboard/auto-enable-disabled/${encodeURIComponent(fbAdId)}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "auto-enable-exclusions"] });
+    },
+  });
+}
+
 // ─── Отслеживаемые кампании (allowlist) ─────────────────────────────────────────
 
 /** Кампания-кандидат для allowlist: id (fb_campaign_id), имя, выбрана ли сейчас. */

@@ -341,6 +341,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/analytics/performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Analytics Performance
+         * @description Return lossless performance metrics at one hierarchy level.
+         */
+        get: operations["get_analytics_performance_api_analytics_performance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/live-budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Analytics Live Budget
+         * @description Return hourly actual/base/stop series for the current cabinet day.
+         */
+        get: operations["get_analytics_live_budget_api_analytics_live_budget_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analytics/daypart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Analytics Daypart
+         * @description Return weekday x hour cells in a validated IANA display timezone.
+         */
+        get: operations["get_analytics_daypart_api_analytics_daypart_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard/auto-enable-disabled": {
         parameters: {
             query?: never;
@@ -2793,6 +2853,340 @@ export interface components {
              */
             created_at: string;
         };
+        /** AnalyticsBudgetPointOut */
+        AnalyticsBudgetPointOut: {
+            /**
+             * Ts
+             * Format: date-time
+             */
+            ts: string;
+            /** Actual */
+            actual: string;
+            /** Base */
+            base: string;
+            /** Stop */
+            stop: string;
+            /**
+             * Available Ads
+             * @default 0
+             */
+            available_ads: number;
+            /**
+             * Unavailable Ads
+             * @default 0
+             */
+            unavailable_ads: number;
+        };
+        /** AnalyticsDaypartCellOut */
+        AnalyticsDaypartCellOut: {
+            /** Weekday */
+            weekday: number;
+            /** Hour */
+            hour: number;
+            /**
+             * Clicks
+             * @default 0
+             */
+            clicks: number;
+            /**
+             * Registrations
+             * @default 0
+             */
+            registrations: number;
+            /**
+             * Ftds
+             * @default 0
+             */
+            ftds: number;
+        };
+        /** AnalyticsDaypartOut */
+        AnalyticsDaypartOut: {
+            /** Timezone */
+            timezone: string;
+            /**
+             * From Iso
+             * Format: date-time
+             */
+            from_iso: string;
+            /**
+             * To Iso
+             * Format: date-time
+             */
+            to_iso: string;
+            /** Cells */
+            cells: components["schemas"]["AnalyticsDaypartCellOut"][];
+        };
+        /** AnalyticsFilterOptionOut */
+        AnalyticsFilterOptionOut: {
+            /** Value */
+            value: string;
+            /** Label */
+            label: string;
+        };
+        /** AnalyticsFilterOptionsOut */
+        AnalyticsFilterOptionsOut: {
+            /** Accounts */
+            accounts?: components["schemas"]["AnalyticsFilterOptionOut"][];
+            /** Offers */
+            offers?: components["schemas"]["AnalyticsFilterOptionOut"][];
+            /** Campaigns */
+            campaigns?: components["schemas"]["AnalyticsFilterOptionOut"][];
+        };
+        /** AnalyticsLiveBudgetOut */
+        AnalyticsLiveBudgetOut: {
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "click" | "lead" | "registration" | "deposit" | "mixed";
+            /** Base Unit */
+            base_unit?: string | null;
+            /** Stop Unit */
+            stop_unit?: string | null;
+            /** Quantity */
+            quantity?: number | null;
+            /** Base Budget */
+            base_budget: string;
+            /** Stop Budget */
+            stop_budget: string;
+            /** Base Delta */
+            base_delta: string;
+            /** Stop Delta */
+            stop_delta: string;
+        };
+        /** AnalyticsLiveBudgetSeriesOut */
+        AnalyticsLiveBudgetSeriesOut: {
+            window: components["schemas"]["AnalyticsWindowOut"];
+            /** Points */
+            points: components["schemas"]["AnalyticsBudgetPointOut"][];
+        };
+        /** AnalyticsMetricsOut */
+        AnalyticsMetricsOut: {
+            /**
+             * Spend
+             * @default 0.00
+             */
+            spend: string;
+            /**
+             * Impressions
+             * @default 0
+             */
+            impressions: number;
+            /**
+             * Clicks
+             * @default 0
+             */
+            clicks: number;
+            /**
+             * Leads
+             * @default 0
+             */
+            leads: number;
+            /**
+             * Registrations
+             * @default 0
+             */
+            registrations: number;
+            /**
+             * Ftds
+             * @default 0
+             */
+            ftds: number;
+            /**
+             * Confirmed Deposits
+             * @default 0
+             */
+            confirmed_deposits: number;
+            /**
+             * Redeposits
+             * @default 0
+             */
+            redeposits: number;
+            /**
+             * Revenue
+             * @default 0.00
+             */
+            revenue: string;
+            /** Cpc */
+            cpc?: string | null;
+            /** Ctr Pct */
+            ctr_pct?: string | null;
+            /** Click Registration Cr Pct */
+            click_registration_cr_pct?: string | null;
+            /** Registration Ftd Cr Pct */
+            registration_ftd_cr_pct?: string | null;
+            /** Cost Per Registration */
+            cost_per_registration?: string | null;
+            /** Cost Per Ftd */
+            cost_per_ftd?: string | null;
+            /** Roi Pct */
+            roi_pct?: string | null;
+            /** Roas */
+            roas?: string | null;
+        };
+        /** AnalyticsPaginationOut */
+        AnalyticsPaginationOut: {
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Total */
+            total: number;
+            /** Pages */
+            pages: number;
+        };
+        /** AnalyticsPerformanceOut */
+        AnalyticsPerformanceOut: {
+            window: components["schemas"]["AnalyticsWindowOut"];
+            sources: components["schemas"]["AnalyticsSourcesOut"];
+            totals: components["schemas"]["AnalyticsMetricsOut"];
+            total_live_budget?: components["schemas"]["AnalyticsLiveBudgetOut"] | null;
+            /** Total Budget Unavailable Reason */
+            total_budget_unavailable_reason?: string | null;
+            pagination: components["schemas"]["AnalyticsPaginationOut"];
+            filter_options: components["schemas"]["AnalyticsFilterOptionsOut"];
+            /** Rows */
+            rows: components["schemas"]["AnalyticsPerformanceRowOut"][];
+        };
+        /** AnalyticsPerformanceRowOut */
+        AnalyticsPerformanceRowOut: {
+            /**
+             * Spend
+             * @default 0.00
+             */
+            spend: string;
+            /**
+             * Impressions
+             * @default 0
+             */
+            impressions: number;
+            /**
+             * Clicks
+             * @default 0
+             */
+            clicks: number;
+            /**
+             * Leads
+             * @default 0
+             */
+            leads: number;
+            /**
+             * Registrations
+             * @default 0
+             */
+            registrations: number;
+            /**
+             * Ftds
+             * @default 0
+             */
+            ftds: number;
+            /**
+             * Confirmed Deposits
+             * @default 0
+             */
+            confirmed_deposits: number;
+            /**
+             * Redeposits
+             * @default 0
+             */
+            redeposits: number;
+            /**
+             * Revenue
+             * @default 0.00
+             */
+            revenue: string;
+            /** Cpc */
+            cpc?: string | null;
+            /** Ctr Pct */
+            ctr_pct?: string | null;
+            /** Click Registration Cr Pct */
+            click_registration_cr_pct?: string | null;
+            /** Registration Ftd Cr Pct */
+            registration_ftd_cr_pct?: string | null;
+            /** Cost Per Registration */
+            cost_per_registration?: string | null;
+            /** Cost Per Ftd */
+            cost_per_ftd?: string | null;
+            /** Roi Pct */
+            roi_pct?: string | null;
+            /** Roas */
+            roas?: string | null;
+            /** Id */
+            id: string;
+            /** Fb Id */
+            fb_id?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "campaign" | "adset" | "ad";
+            /** Parent Id */
+            parent_id?: string | null;
+            /** Parent Name */
+            parent_name?: string | null;
+            /**
+             * Has Children
+             * @default false
+             */
+            has_children: boolean;
+            /** Ad Account Id */
+            ad_account_id?: string | null;
+            /** Offer Id */
+            offer_id?: string | null;
+            /** Offer Code */
+            offer_code?: string | null;
+            live_budget?: components["schemas"]["AnalyticsLiveBudgetOut"] | null;
+            /** Budget Unavailable Reason */
+            budget_unavailable_reason?: string | null;
+        };
+        /** AnalyticsSourceOut */
+        AnalyticsSourceOut: {
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "meta" | "tracker";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "good" | "degraded" | "missing" | "unknown";
+            /** Last Event At */
+            last_event_at?: string | null;
+            /** Lag Seconds */
+            lag_seconds?: number | null;
+            /**
+             * Unmatched Events
+             * @default 0
+             */
+            unmatched_events: number;
+            /** Note */
+            note?: string | null;
+        };
+        /** AnalyticsSourcesOut */
+        AnalyticsSourcesOut: {
+            meta: components["schemas"]["AnalyticsSourceOut"];
+            tracker: components["schemas"]["AnalyticsSourceOut"];
+        };
+        /** AnalyticsWindowOut */
+        AnalyticsWindowOut: {
+            /**
+             * From Iso
+             * Format: date-time
+             */
+            from_iso: string;
+            /**
+             * To Iso
+             * Format: date-time
+             */
+            to_iso: string;
+            /** Is Live */
+            is_live: boolean;
+            /** Cabinet Day Note */
+            cabinet_day_note?: string | null;
+        };
         /**
          * Attribution
          * @description Окно атрибуции конверсий (preset).
@@ -4248,6 +4642,8 @@ export interface components {
             fb_ad_id?: string | null;
             /** Ad Name */
             ad_name?: string | null;
+            /** Campaign Id */
+            campaign_id?: string | null;
             /** Campaign Name */
             campaign_name?: string | null;
             /** Stage */
@@ -6471,6 +6867,118 @@ export interface operations {
             };
         };
     };
+    get_analytics_performance_api_analytics_performance_get: {
+        parameters: {
+            query?: {
+                period?: "today" | "custom";
+                from_iso?: string | null;
+                to_iso?: string | null;
+                level?: "campaign" | "adset" | "ad";
+                parent_id?: string | null;
+                account_id?: string | null;
+                offer_id?: string | null;
+                campaign_id?: string | null;
+                search?: string | null;
+                sort?: "name" | "spend" | "clicks" | "registrations" | "ftds" | "confirmed_deposits" | "revenue" | "base_delta";
+                direction?: "asc" | "desc";
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsPerformanceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_analytics_live_budget_api_analytics_live_budget_get: {
+        parameters: {
+            query?: {
+                account_id?: string | null;
+                offer_id?: string | null;
+                campaign_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsLiveBudgetSeriesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_analytics_daypart_api_analytics_daypart_get: {
+        parameters: {
+            query?: {
+                from_iso?: string | null;
+                to_iso?: string | null;
+                timezone?: string;
+                account_id?: string | null;
+                offer_id?: string | null;
+                campaign_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsDaypartOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_auto_enable_disabled_api_dashboard_auto_enable_disabled_get: {
         parameters: {
             query?: never;
@@ -7673,6 +8181,11 @@ export interface operations {
             query?: {
                 from_iso?: string | null;
                 to_iso?: string | null;
+                campaign_id?: string | null;
+                fb_ad_id?: string | null;
+                stage?: string | null;
+                task_status?: string | null;
+                search?: string | null;
                 limit?: number;
             };
             header?: never;

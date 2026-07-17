@@ -16,11 +16,8 @@ import { ChevronRight } from "lucide-react";
 import { PulseDot } from "@/components/data/PulseDot";
 import { Pill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/EmptyState";
-import {
-  ruleCodeLabel,
-  formatTimeOfDay,
-  formatDateTime,
-} from "@fb/shared";
+import { formatDisplayDateTime, formatDisplayTime } from "@/lib/timezone";
+import { ruleCodeLabel } from "@fb/shared";
 import type { AlertEvent } from "@fb/shared";
 import type { MonitoringState } from "./monitoringState";
 
@@ -71,9 +68,9 @@ function FeedRow({
       <span
         className="font-display tabular-nums text-bg-9"
         style={{ fontSize: "var(--row-fs)", minWidth: 62 }}
-        title={`${formatDateTime(event.created_at)} UTC`}
+        title={formatDisplayDateTime(event.created_at)}
       >
-        {formatTimeOfDay(event.created_at)}
+        {formatDisplayTime(event.created_at)}
       </span>
       {stage === "stop" ? (
         <PulseDot size={7} color={dot} />
@@ -84,10 +81,7 @@ function FeedRow({
           style={{ background: dot }}
         />
       )}
-      <span
-        className="truncate font-display text-bg-11"
-        style={{ fontSize: "var(--row-fs)" }}
-      >
+      <span className="truncate font-display text-bg-11" style={{ fontSize: "var(--row-fs)" }}>
         {event.ad_name ?? event.fb_ad_id ?? "—"}
       </span>
       <span className="flex shrink-0 items-center gap-1.5">
@@ -175,12 +169,7 @@ export function LiveTail({
 
   if (rows.length === 0) {
     const copy = EMPTY_COPY[monitoringState];
-    return (
-      <EmptyState
-        title={copy.title}
-        description={copy.description}
-      />
-    );
+    return <EmptyState title={copy.title} description={copy.description} />;
   }
 
   return (

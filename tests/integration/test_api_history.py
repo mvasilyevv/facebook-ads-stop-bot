@@ -449,6 +449,42 @@ async def test_timeline_limit(pg_engine, fake_redis_client, history_fixture):
     assert len(resp.json()) <= 2
 
 
+@pytest.mark.asyncio
+async def test_timeline_filters_are_applied_before_limit(
+    pg_engine, fake_redis_client, history_fixture
+):
+    """Events-tab filters run in SQL, not only over the first client-side page."""
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        stop_response = await ac.get(
+            "/api/history/timeline",
+            params={
+                "campaign_id": str(history_fixture["campaign_id"]),
+                "stage": "stop",
+                "limit": 1,
+            },
+        )
+        task_response = await ac.get(
+            "/api/history/timeline",
+            params={
+                "campaign_id": str(history_fixture["campaign_id"]),
+                "task_status": "SUCCEEDED",
+                "search": history_fixture["fb_ad1"],
+                "limit": 10,
+            },
+        )
+
+    assert stop_response.status_code == 200
+    assert stop_response.json()
+    assert all(item["event_type"] == "alert" for item in stop_response.json())
+    assert all(item["stage"] == "stop" for item in stop_response.json())
+
+    assert task_response.status_code == 200
+    assert task_response.json()
+    assert all(item["event_type"] == "task" for item in task_response.json())
+    assert all(item["task_status"] == "SUCCEEDED" for item in task_response.json())
+
+
 # ──────────── GET /history/campaigns ─────────────────────────────────────────
 
 

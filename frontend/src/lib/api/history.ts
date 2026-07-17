@@ -32,7 +32,11 @@ export function useHistorySummary(params?: HistoryParams) {
   return useQuery<HistorySummary>({
     queryKey: ["history", "summary", params],
     queryFn: ({ signal }) =>
-      apiGet<HistorySummary>("/history/summary", params as Record<string, string | number | boolean | null | undefined>, signal),
+      apiGet<HistorySummary>(
+        "/history/summary",
+        params as Record<string, string | number | boolean | null | undefined>,
+        signal,
+      ),
     staleTime: 60_000,
   });
 }
@@ -42,13 +46,22 @@ export function useHistorySummary(params?: HistoryParams) {
 interface TimelineParams extends HistoryParams {
   limit?: number;
   offset?: number;
+  campaign_id?: string;
+  fb_ad_id?: string;
+  stage?: string;
+  task_status?: string;
+  search?: string;
 }
 
 export function useHistoryTimeline(params?: TimelineParams) {
   return useQuery<HistoryTimelineItem[]>({
     queryKey: ["history", "timeline", params],
     queryFn: ({ signal }) =>
-      apiGet<HistoryTimelineItem[]>("/history/timeline", params as Record<string, string | number | boolean | null | undefined>, signal),
+      apiGet<HistoryTimelineItem[]>(
+        "/history/timeline",
+        params as Record<string, string | number | boolean | null | undefined>,
+        signal,
+      ),
     staleTime: 30_000,
   });
 }
@@ -59,7 +72,11 @@ export function useHistoryCampaigns(params?: HistoryParams) {
   return useQuery<HistoryCampaign[]>({
     queryKey: ["history", "campaigns", params],
     queryFn: ({ signal }) =>
-      apiGet<HistoryCampaign[]>("/history/campaigns", params as Record<string, string | number | boolean | null | undefined>, signal),
+      apiGet<HistoryCampaign[]>(
+        "/history/campaigns",
+        params as Record<string, string | number | boolean | null | undefined>,
+        signal,
+      ),
     staleTime: 60_000,
   });
 }
@@ -76,7 +93,11 @@ export function useHistoryEvents(params?: EventsParams) {
   return useQuery<HistoryEvent[]>({
     queryKey: ["history", "events", params],
     queryFn: ({ signal }) =>
-      apiGet<HistoryEvent[]>("/history/events", params as Record<string, string | number | boolean | null | undefined>, signal),
+      apiGet<HistoryEvent[]>(
+        "/history/events",
+        params as Record<string, string | number | boolean | null | undefined>,
+        signal,
+      ),
     staleTime: 30_000,
     // Смена периода/фильтра держит прежний список (приглушённый в drawer'е)
     // вместо «моргания» скелетоном — плавнее для drill-down сценария.
@@ -90,7 +111,11 @@ export function useHistoryOffers(params?: HistoryParams) {
   return useQuery<HistoryOffer[]>({
     queryKey: ["history", "offers", params],
     queryFn: ({ signal }) =>
-      apiGet<HistoryOffer[]>("/history/offers", params as Record<string, string | number | boolean | null | undefined>, signal),
+      apiGet<HistoryOffer[]>(
+        "/history/offers",
+        params as Record<string, string | number | boolean | null | undefined>,
+        signal,
+      ),
     staleTime: 60_000,
   });
 }
@@ -106,7 +131,11 @@ export function useHistoryAds(params?: AdsHistoryParams) {
   return useQuery<HistoryAd[]>({
     queryKey: ["history", "ads", params],
     queryFn: ({ signal }) =>
-      apiGet<HistoryAd[]>("/history/ads", params as Record<string, string | number | boolean | null | undefined>, signal),
+      apiGet<HistoryAd[]>(
+        "/history/ads",
+        params as Record<string, string | number | boolean | null | undefined>,
+        signal,
+      ),
     staleTime: 60_000,
   });
 }

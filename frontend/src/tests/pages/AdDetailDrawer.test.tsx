@@ -165,6 +165,14 @@ describe("AdDrawer (deep-link /ads/$fbAdId)", () => {
     ).toBeInTheDocument();
   });
 
+  it("связывает объявление с отфильтрованной аналитикой", async () => {
+    await renderDrawer();
+    expect(screen.getByRole("link", { name: "Открыть в аналитике" })).toHaveAttribute(
+      "href",
+      expect.stringContaining(`search=${FB_AD_ID}`),
+    );
+  });
+
   // Метрики-снимок: spend (money1 — один знак) + лейблы.
   it("отрисовывает metrics-snapshot grid с данными", async () => {
     await renderDrawer();

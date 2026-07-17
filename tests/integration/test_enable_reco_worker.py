@@ -130,7 +130,8 @@ async def stopped_ad(pg_engine, clean_reco_tables):
             ),
             {"aid": ad_id, "tok": incident_token, "ts": last_transition},
         )
-        # «Выправленные» метрики после отключения: spend низкий, cost_per_lead ок
+        # «Выправленные» метрики после отключения: CPC и no-lead guardrail снова
+        # ниже канонических порогов evaluator'а.
         for ts, spend, cpl in (
             (cycle_older, Decimal("1.0"), Decimal("4.0")),
             (cycle_recent, Decimal("0.5"), Decimal("5.0")),
@@ -139,8 +140,9 @@ async def stopped_ad(pg_engine, clean_reco_tables):
                 text(
                     """
                     INSERT INTO ad_metrics
-                        (ad_id, cycle_ts, scan_id, spend, cost_per_lead, deposits)
-                    VALUES (:aid, :ts, NULL, :sp, :cpl, 0)
+                        (ad_id, cycle_ts, scan_id, spend, cost_per_lead,
+                         clicks, cpc, deposits)
+                    VALUES (:aid, :ts, NULL, :sp, :cpl, 20, 0.025, 0)
                     """
                 ),
                 {"aid": ad_id, "ts": ts, "sp": spend, "cpl": cpl},
@@ -334,10 +336,22 @@ async def test_curator_candidate_rejected_when_safety_precondition_missing(
     await tg_client.close()
 
 
-# Сценарий: ad в ad_auto_enable_disabled → не попадает в кандидаты
+# Per-ad opt-out не скрывает ручную рекомендацию, но запрещает auto-promotion.
 @pytest.mark.asyncio
-async def test_skips_when_auto_enable_blocked(pg_engine, stopped_ad):
+async def test_auto_enable_opt_out_keeps_manual_recommendation(
+    pg_engine, stopped_ad, fake_redis_client, tg_respx
+):
+    from core.telegram.client import TelegramBotClient
+
     async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE ad_alert_state SET alert_state = 'disabled' WHERE ad_id = :aid"),
+            {"aid": stopped_ad["ad_id"]},
+        )
+        await conn.execute(
+            text("UPDATE fb_ads SET delivery_status = 'OFF' WHERE id = :aid"),
+            {"aid": stopped_ad["ad_id"]},
+        )
         await conn.execute(
             text(
                 "INSERT INTO ad_auto_enable_disabled (ad_id, cabinet_day_started_at, reason) "
@@ -345,9 +359,48 @@ async def test_skips_when_auto_enable_blocked(pg_engine, stopped_ad):
             ),
             {"aid": stopped_ad["ad_id"], "ts": _utcnow()},
         )
+        await conn.execute(
+            text(
+                "UPDATE observer_config SET auto_enable_recommendations = true "
+                "WHERE singleton_key = 'default'"
+            )
+        )
 
     cands = await fetch_candidates(pg_engine, limit=10)
-    assert cands == []
+    assert len(cands) == 1
+
+    tg_client = TelegramBotClient("fake-token")
+    try:
+        counts = await run_once(
+            pg_engine,
+            redis_client=fake_redis_client,
+            tg_client=tg_client,
+        )
+        assert counts["recommendations"] == 1
+        assert counts["auto_promotion_failed"] == 1
+        async with pg_engine.connect() as conn:
+            promoted, task_count = (
+                await conn.execute(
+                    text(
+                        "SELECT er.promoted_to_task_id, "
+                        "(SELECT COUNT(*) FROM task_queue tq "
+                        " WHERE tq.requested_by = 'auto_enable_recommendation_worker') "
+                        "FROM enable_recommendations er LIMIT 1"
+                    )
+                )
+            ).one()
+        assert promoted is None
+        assert task_count == 0
+        assert tg_respx.sent_messages[0]["reply_markup"]["inline_keyboard"]
+    finally:
+        await tg_client.close()
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE observer_config SET auto_enable_recommendations = false "
+                    "WHERE singleton_key = 'default'"
+                )
+            )
 
 
 # Сценарий: повторный run в течение 6 часов — не дублирует благодаря Redis dedup

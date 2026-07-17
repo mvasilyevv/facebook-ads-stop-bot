@@ -22,6 +22,8 @@ import {
   useToggleScanning,
   useToggleAutoEnable,
   useRestartObserver,
+  useAutoEnableExclusions,
+  useRemoveAutoEnableExclusion,
 } from "@/lib/api/settings";
 import type { ObserverConfig } from "@fb/shared";
 
@@ -46,9 +48,13 @@ function Field({ label, hint, children }: FieldProps) {
       }}
     >
       <div>
-        <div className="text-[13px]" style={{ color: "var(--bg-10)" }}>{label}</div>
+        <div className="text-[13px]" style={{ color: "var(--bg-10)" }}>
+          {label}
+        </div>
         {hint && (
-          <div className="text-[11px] mt-0.5" style={{ color: "var(--bg-8)" }}>{hint}</div>
+          <div className="text-[11px] mt-0.5" style={{ color: "var(--bg-8)" }}>
+            {hint}
+          </div>
         )}
       </div>
       <div>{children}</div>
@@ -64,6 +70,8 @@ export const ObserverTab: FC = () => {
   const toggleScanningMut = useToggleScanning();
   const toggleAutoEnableMut = useToggleAutoEnable();
   const restartMut = useRestartObserver();
+  const exclusionsQ = useAutoEnableExclusions();
+  const removeExclusion = useRemoveAutoEnableExclusion();
 
   const [form, setForm] = useState<Partial<ObserverConfig>>({});
 
@@ -141,15 +149,15 @@ export const ObserverTab: FC = () => {
         </Field>
 
         <Field
-          label="Рекомендации на включение"
-          hint="Только предлагает восстановление; запуск всегда подтверждает оператор"
+          label="Auto-enable рекомендаций OK"
+          hint="OK включаются автоматически; WARNING и curator всегда требуют ручного решения"
         >
           <Switch
             checked={form.auto_enable_recommendations ?? false}
             onChange={() =>
               handleToggle("auto_enable_recommendations", !form.auto_enable_recommendations)
             }
-            label="Формировать рекомендации на включение"
+            label="Автоматически исполнять безопасные рекомендации OK"
           />
         </Field>
       </div>
@@ -177,10 +185,51 @@ export const ObserverTab: FC = () => {
             >
               Перезапустить мониторинг
             </Button>
-
           </div>
         </div>
       </div>
+      <section className="lg:col-span-2 border-t border-[var(--hairline)] pt-6">
+        <div className="font-display text-[10px] uppercase tracking-[0.1em] text-bg-8">
+          Исключения auto-enable
+        </div>
+        <p className="mt-1 text-[11px] text-bg-8">
+          Рекомендации для этих объявлений остаются видимыми, но автоматически не исполняются.
+        </p>
+        <div className="mt-4 overflow-hidden rounded-[var(--radius-2)] border border-[var(--hairline)]">
+          {exclusionsQ.isLoading ? (
+            <div className="p-3">
+              <Skeleton height={34} className="w-full" />
+            </div>
+          ) : exclusionsQ.data?.length ? (
+            exclusionsQ.data.map((item) => (
+              <div
+                key={item.fb_ad_id}
+                className="flex items-center justify-between gap-4 border-b border-[var(--hairline)] px-4 py-3 last:border-0"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-[12px] text-bg-11">
+                    {item.ad_name || item.fb_ad_id}
+                  </div>
+                  <div className="mt-0.5 font-display text-[10px] text-bg-7">
+                    {item.fb_ad_id}
+                    {item.reason ? ` · ${item.reason}` : ""}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  loading={removeExclusion.isPending && removeExclusion.variables === item.fb_ad_id}
+                  onClick={() => removeExclusion.mutate(item.fb_ad_id)}
+                >
+                  Разрешить auto-enable
+                </Button>
+              </div>
+            ))
+          ) : (
+            <div className="px-4 py-6 text-center text-[11px] text-bg-7">Исключений нет</div>
+          )}
+        </div>
+      </section>
     </div>
   );
 };

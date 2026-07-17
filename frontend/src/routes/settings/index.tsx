@@ -9,9 +9,9 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Tabs, TabsList, TabsContent, type TabItem } from "@/components/ui/Tabs";
 import { ObserverTab } from "@/components/settings/ObserverTab";
-import { TelegramTab } from "@/components/settings/TelegramTab";
-import { VisionTab } from "@/components/settings/VisionTab";
 import { HealthTab } from "@/components/settings/HealthTab";
+import { DisplayTab } from "@/components/settings/DisplayTab";
+import { IntegrationsTab } from "@/components/settings/IntegrationsTab";
 
 export const Route = createFileRoute("/settings/")({
   component: SettingsPage,
@@ -19,15 +19,15 @@ export const Route = createFileRoute("/settings/")({
     tab:
       typeof search.tab === "string" && TAB_VALUES.has(search.tab)
         ? search.tab
-        : "observer",
+        : "display",
   }),
 });
 
 const TAB_ITEMS: TabItem[] = [
-  { value: "observer", label: "Мониторинг" },
-  { value: "telegram", label: "Telegram" },
-  { value: "vision", label: "Vision" },
-  { value: "health", label: "Диагностика" },
+  { value: "display", label: "Отображение" },
+  { value: "automation", label: "Автоматизация" },
+  { value: "integrations", label: "Интеграции" },
+  { value: "diagnostics", label: "Диагностика" },
 ];
 const TAB_VALUES = new Set(TAB_ITEMS.map((item) => item.value));
 
@@ -49,19 +49,19 @@ function SettingsPage() {
       >
         <TabsList items={TAB_ITEMS} className="mb-8" />
 
-        <TabsContent value="observer">
+        <TabsContent value="display">
+          <DisplayTab />
+        </TabsContent>
+
+        <TabsContent value="automation">
           <ObserverTab />
         </TabsContent>
 
-        <TabsContent value="telegram">
-          <TelegramTab />
+        <TabsContent value="integrations">
+          <IntegrationsTab />
         </TabsContent>
 
-        <TabsContent value="vision">
-          <VisionTab />
-        </TabsContent>
-
-        <TabsContent value="health">
+        <TabsContent value="diagnostics">
           <HealthTab />
         </TabsContent>
       </Tabs>

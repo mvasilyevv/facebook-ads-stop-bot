@@ -15,7 +15,8 @@
 
 import { useMemo, type ReactNode } from "react";
 import { cn } from "@/lib/utils/cn";
-import { formatTimeOfDay, formatRelativeTime, ruleCodeLabel } from "@fb/shared";
+import { formatDisplayTime } from "@/lib/timezone";
+import { formatRelativeTime, ruleCodeLabel } from "@fb/shared";
 
 // ─── Тип события таймлайна ────────────────────────────────────────────────────
 
@@ -76,7 +77,7 @@ function TimelineRow({ item }: TimelineRowProps) {
   const { type, ts, title, meta, ruleCodes } = item;
 
   const timeLabel = useMemo(() => {
-    const hms = formatTimeOfDay(ts);
+    const hms = formatDisplayTime(ts);
     const rel = formatRelativeTime(ts);
     return rel !== "—" ? `${hms} · ${rel}` : hms;
   }, [ts]);
@@ -104,12 +105,10 @@ function TimelineRow({ item }: TimelineRowProps) {
         </div>
 
         {/* Заголовок */}
-        <div className="font-display text-[13px] text-bg-11 mb-1 leading-tight">
-          {title}
-        </div>
+        <div className="font-display text-[13px] text-bg-11 mb-1 leading-tight">{title}</div>
 
         {/* Rule pills + meta */}
-        {(ruleCodes?.length || meta) ? (
+        {ruleCodes?.length || meta ? (
           <div className="font-display text-[11px] text-bg-10 leading-snug flex flex-wrap items-center gap-y-1">
             {ruleCodes?.map((code) => (
               <RulePill key={code} code={code} />
@@ -169,11 +168,7 @@ export function Timeline({ items, className, emptyMessage = "Событий не
   }
 
   return (
-    <div
-      className={cn("relative", className)}
-      role="list"
-      aria-label="Таймлайн событий"
-    >
+    <div className={cn("relative", className)} role="list" aria-label="Таймлайн событий">
       {/* Вертикальная линия: left 7px (половина dot 14px), от top 8 до bottom 8 */}
       <div
         className="absolute bg-bg-5"

@@ -3,13 +3,15 @@
 
 Раз в ENABLE_RECO_INTERVAL_SEC (дефолт 300):
 1. SELECT кандидатов: ad_alert_state.state IN ('stop_sent','disabled')
-   AND last_transition_at < NOW() - INTERVAL '1 hour'
-   AND ad_id NOT IN (SELECT ad_id FROM ad_auto_enable_disabled).
+   AND last_transition_at < NOW() - INTERVAL '1 hour'. Per-ad opt-out не скрывает
+   ручную рекомендацию и проверяется только перед автоматическим исполнением.
 2. Для каждого читает метрики из ad_metrics где cycle_ts > last_transition_at.
 3. Прогоняет через analyzer.should_recommend(...).
 4. Дедуп через Redis (`enable_reco:last:{ad_id}` TTL 6h, NX).
-5. INSERT enable_recommendations + SEND TG-алерт с inline-кнопкой.
-6. Heartbeat `worker:heartbeat:enable_reco` TTL 60s.
+5. INSERT enable_recommendations; OK при включённом master-toggle безопасно
+   переводится в enable-задачу, WARNING остаётся ручным решением.
+6. SEND TG-алерт best-effort: ошибка доставки не откатывает рекомендацию/задачу.
+7. Heartbeat `worker:heartbeat:enable_reco` TTL 60s.
 
 Graceful shutdown по SIGTERM/SIGINT.
 """
@@ -39,6 +41,12 @@ from core.enable_reco.analyzer import (
     OfferThresholds,
     RecommendationDecision,
     should_recommend,
+)
+from core.enable_reco.confirmation import (
+    RecommendationAlreadyPromotedError,
+    RecommendationNotFoundError,
+    RecommendationUnsafeStateError,
+    promote_enable_recommendation,
 )
 from core.observer.queries import load_scanning_enabled
 from core.telegram.service import load_active_recipients, load_telegram_config
@@ -85,6 +93,11 @@ class CandidateRow:
     snoozed_until: datetime | None
     offer_code: str | None
     cpa_threshold: Decimal | None
+    frequency_threshold: Decimal | None = None
+    stop_percent_of_rule: Decimal | None = None
+    warning_percent_of_stop: Decimal | None = None
+    tracker_registrations: int = 0
+    tracker_confirmed_deposits: int = 0
     open_state_token: uuid.UUID | None = None
     delivery_status: str | None = None
     has_unfinished_pause: bool = False
@@ -104,6 +117,19 @@ _CANDIDATES_SQL = text(
         st.snoozed_until,
         o.code AS offer_code,
         r.cpa_threshold,
+        r.frequency_threshold,
+        r.stop_percent_of_rule,
+        r.warning_percent_of_stop,
+        COALESCE((
+            SELECT COUNT(*)
+            FROM tracker_click_state tcs
+            WHERE tcs.ad_id = st.ad_id AND tcs.registration = true
+        ), 0)::int AS tracker_registrations,
+        COALESCE((
+            SELECT COUNT(*)
+            FROM tracker_click_state tcs
+            WHERE tcs.ad_id = st.ad_id AND tcs.confirmed_deposit = true
+        ), 0)::int AS tracker_confirmed_deposits,
         st.open_state_token,
         a.delivery_status,
         EXISTS (
@@ -122,9 +148,6 @@ _CANDIDATES_SQL = text(
     LEFT JOIN offer_rules r ON r.offer_id = o.id
     WHERE st.alert_state IN ('stop_sent', 'disabled')
       AND st.last_transition_at < NOW() - make_interval(secs => :cool)
-      AND NOT EXISTS (
-          SELECT 1 FROM ad_auto_enable_disabled d WHERE d.ad_id = st.ad_id
-      )
     ORDER BY st.last_transition_at ASC
     LIMIT :lim
     """
@@ -134,7 +157,7 @@ _CANDIDATES_SQL = text(
 _METRICS_SQL = text(
     """
     SELECT cycle_ts, spend, cost_per_lead, cost_per_registration, registrations, deposits,
-           impressions, ctr
+           impressions, ctr, leads, clicks, reach, cpc, frequency
     FROM ad_metrics
     WHERE ad_id = :aid
       AND cycle_ts > :since
@@ -164,9 +187,14 @@ async def fetch_candidates(engine: AsyncEngine, *, limit: int) -> list[Candidate
             snoozed_until=r[7],
             offer_code=str(r[8]) if r[8] else None,
             cpa_threshold=r[9],
-            open_state_token=r[10],
-            delivery_status=str(r[11]) if r[11] else None,
-            has_unfinished_pause=bool(r[12]),
+            frequency_threshold=r[10],
+            stop_percent_of_rule=r[11],
+            warning_percent_of_stop=r[12],
+            tracker_registrations=int(r[13] or 0),
+            tracker_confirmed_deposits=int(r[14] or 0),
+            open_state_token=r[15],
+            delivery_status=str(r[16]) if r[16] else None,
+            has_unfinished_pause=bool(r[17]),
         )
         for r in rows
     ]
@@ -191,6 +219,11 @@ async def fetch_metrics_since(
             deposits=int(r[5]) if r[5] is not None else None,
             impressions=int(r[6]) if r[6] is not None else None,
             ctr=r[7],
+            leads=int(r[8]) if r[8] is not None else None,
+            clicks=int(r[9]) if r[9] is not None else None,
+            reach=int(r[10]) if r[10] is not None else None,
+            cpc=r[11],
+            frequency=r[12],
         )
         for r in rows
     ]
@@ -286,29 +319,6 @@ async def insert_recommendation(
     return row[0] if row else None
 
 
-async def delete_unpromoted_recommendation(engine: AsyncEngine, *, rec_id: uuid.UUID) -> None:
-    """Откатывает INSERT из insert_recommendation при недоставленном алерте (re-arm).
-
-    LOW (аудит 02.07): idempotency_key = f(ad_id, last_transition_at) не меняется, пока
-    ад остаётся в том же инциденте — без отката запись в БД навсегда блокирует повтор
-    (ON CONFLICT DO NOTHING на следующих циклах), и рекомендация молча теряется при
-    любом сбое TG. Паттерн — как re-arm дедупа в observer._maybe_alert_degraded (246000c7):
-    неудачная попытка не должна оставлять постоянный след, мешающий ретраю.
-    Удаляем только НЕ подтверждённую (promoted_to_task_id IS NULL) запись — если между
-    insert и этим вызовом её кто-то успел confirm'ить (гонка с UI), запись не трогаем.
-    """
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                DELETE FROM enable_recommendations
-                WHERE id = :rid AND promoted_to_task_id IS NULL
-                """
-            ),
-            {"rid": rec_id},
-        )
-
-
 # ====================== TG отправка ======================
 
 
@@ -319,6 +329,7 @@ async def send_alert(
     decision: RecommendationDecision,
     recommendation_id: uuid.UUID,
     engine: Any,
+    auto_promoted: bool = False,
 ) -> bool:
     """Шлёт TG-алерт с inline-кнопкой «Включить» всем активным recipients.
 
@@ -338,6 +349,9 @@ async def send_alert(
             web_app_base=web_app_base,
         )
     )
+    if auto_promoted:
+        text_body = "⚡ Автовключение поставлено в очередь\n\n" + text_body
+        reply_markup = None
 
     if tg_client is None:
         logger.warning(
@@ -372,6 +386,22 @@ async def send_alert(
                 candidate.fb_ad_id,
             )
     return delivered
+
+
+async def load_auto_enable_recommendations(engine: AsyncEngine) -> bool:
+    """Read the master switch; recommendation detection itself always stays enabled."""
+    async with engine.connect() as conn:
+        value = await conn.scalar(
+            text(
+                """
+                SELECT auto_enable_recommendations
+                FROM observer_config
+                WHERE singleton_key = 'default'
+                LIMIT 1
+                """
+            )
+        )
+    return bool(value)
 
 
 # ====================== Один цикл ======================
@@ -419,6 +449,7 @@ async def run_once(
     if not candidates:
         return counts
 
+    auto_enable_on = await load_auto_enable_recommendations(engine)
     batch_started_at = now
 
     for cand in candidates:
@@ -444,9 +475,16 @@ async def run_once(
             snoozed_until=cand.snoozed_until,
             now=now,
             metrics=metrics,
-            offer=OfferThresholds(cpa_threshold=cand.cpa_threshold),
+            offer=OfferThresholds(
+                cpa_threshold=cand.cpa_threshold,
+                frequency_threshold=cand.frequency_threshold,
+                stop_percent_of_rule=cand.stop_percent_of_rule,
+                warning_percent_of_stop=cand.warning_percent_of_stop,
+            ),
             thresholds=thresholds,
             allow_curator=curator_allowed,
+            tracker_registrations=cand.tracker_registrations,
+            tracker_confirmed_deposits=cand.tracker_confirmed_deposits,
         )
         if not decision.recommend:
             counts["skipped_decision"] += 1
@@ -491,24 +529,42 @@ async def run_once(
 
         counts["recommendations"] += 1
 
-        # Сначала шлём алерт — mark_recommended только при успехе.
-        # Порядок критичен: если поставить дедуп до отправки, сбой TG потеряет
-        # рекомендацию навсегда (idempotency_key в БД + Redis NX уже стоят).
+        auto_promoted = False
+        if auto_enable_on and decision.level == "ok":
+            try:
+                await promote_enable_recommendation(
+                    engine,
+                    recommendation_id=new_id,
+                    requested_by="auto_enable_recommendation_worker",
+                    auto_mode=True,
+                )
+                auto_promoted = True
+                counts["auto_promoted"] = counts.get("auto_promoted", 0) + 1
+            except (
+                RecommendationAlreadyPromotedError,
+                RecommendationNotFoundError,
+                RecommendationUnsafeStateError,
+            ) as exc:
+                counts["auto_promotion_failed"] = counts.get("auto_promotion_failed", 0) + 1
+                logger.info(
+                    "auto-enable revalidation rejected recommendation=%s ad=%s: %s",
+                    new_id,
+                    cand.fb_ad_id,
+                    exc,
+                )
+
+        # Уведомление best-effort: web-рекомендация и auto-задача уже сохранены.
+        # Ошибка Telegram не откатывает решение и не скрывает его от Dashboard.
         sent = await send_alert(
             tg_client,
             candidate=cand,
             decision=decision,
             recommendation_id=new_id,
             engine=engine,
+            auto_promoted=auto_promoted,
         )
         if not sent:
             counts["send_failed"] = counts.get("send_failed", 0) + 1
-            # Re-arm (LOW, аудит 02.07): откатываем INSERT, иначе idempotency_key
-            # блокирует повтор навсегда — следующий цикл, пока ад в том же инциденте,
-            # снова получит new_id=None и рекомендация теряется молча. Redis-дедуп уже
-            # не ставится при недоставке (см. комментарий выше) — здесь закрываем
-            # аналогичную дыру на стороне БД.
-            await delete_unpromoted_recommendation(engine, rec_id=new_id)
             continue
 
         # Дедуп по Redis (NX) — ставим только после успешной отправки
@@ -654,7 +710,6 @@ async def _default_tg_factory(engine: AsyncEngine):
 
 __all__ = [
     "CandidateRow",
-    "delete_unpromoted_recommendation",
     "fetch_candidates",
     "fetch_metrics_since",
     "insert_recommendation",

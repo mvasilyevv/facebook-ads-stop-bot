@@ -3,7 +3,10 @@ import "@testing-library/jest-dom/vitest";
 // jsdom в vitest не инициализирует localStorage без --localstorage-file, поэтому
 // глобальный localStorage = undefined, и zustand persist падает на setItem.
 // Подкладываем минимальный in-memory stub (нужен для persist-store вроде useUiStore).
-if (typeof globalThis.localStorage === "undefined") {
+if (
+  typeof globalThis.localStorage === "undefined" ||
+  typeof globalThis.localStorage.setItem !== "function"
+) {
   const store = new Map<string, string>();
   const localStorageStub: Storage = {
     get length() {
