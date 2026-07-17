@@ -66,7 +66,7 @@ def test_installer_migrates_legacy_desktop_block_before_validation() -> None:
 def test_panel_launch_response_with_ticket_is_not_access_logged() -> None:
     config = (ROOT / "deploy/caddy/app.adpulse.su.caddy").read_text(encoding="utf-8")
     launch = config.split("handle /auth/desktop/launch", maxsplit=1)[1].split(
-        "handle /api/*", maxsplit=1
+        "handle /tma*", maxsplit=1
     )[0]
 
     assert "log_skip" in launch

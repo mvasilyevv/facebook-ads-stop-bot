@@ -65,19 +65,6 @@ app.adpulse.su {
 			}
 		}
 
-		# The panel BasicAuth has already authenticated this browser. Exchange that
-		# proof for a one-time ticket on the desktop host; never log the ticket URL.
-		handle /auth/desktop/launch {
-			log_skip
-			import panel_auth
-			rewrite * /desktop-auth/launch-recovery
-			reverse_proxy 127.0.0.1:8100 {
-				header_up X-Panel-Recovery-Key {$API_KEY}
-				header_up -Authorization
-				header_up -Proxy-Authorization
-			}
-		}
-
 		# Desktop browser proves operator access with same-origin BasicAuth. The
 		# master API key exists only in Caddy's root-owned environment and is
 		# overwritten server-side, so a client-supplied X-API-Key cannot win.
@@ -95,6 +82,19 @@ app.adpulse.su {
 			log_skip
 			reverse_proxy 127.0.0.1:8100 {
 				header_up X-API-Key {$API_KEY}
+			}
+		}
+
+		# The panel BasicAuth has already authenticated this browser. Exchange that
+		# proof for a one-time ticket on the desktop host; never log the ticket URL.
+		handle /auth/desktop/launch {
+			log_skip
+			import panel_auth
+			rewrite * /desktop-auth/launch-recovery
+			reverse_proxy 127.0.0.1:8100 {
+				header_up X-Panel-Recovery-Key {$API_KEY}
+				header_up -Authorization
+				header_up -Proxy-Authorization
 			}
 		}
 
