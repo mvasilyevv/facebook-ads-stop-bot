@@ -65,10 +65,19 @@ def test_installer_migrates_legacy_desktop_block_before_validation() -> None:
 
 def test_panel_launch_response_with_ticket_is_not_access_logged() -> None:
     config = (ROOT / "deploy/caddy/app.adpulse.su.caddy").read_text(encoding="utf-8")
+    session = config.split("handle /auth/desktop/session", maxsplit=1)[1].split(
+        "handle /auth/desktop/launch", maxsplit=1
+    )[0]
     launch = config.split("handle /auth/desktop/launch", maxsplit=1)[1].split(
         "handle /tma*", maxsplit=1
     )[0]
 
+    assert "log_skip" in session
+    assert "import panel_auth" in session
+    assert "rewrite * /desktop-auth/launch-url-recovery" in session
+    assert "header_up X-Panel-Recovery-Key {$API_KEY}" in session
+    assert "header_up -Authorization" in session
+    assert "header_up -Proxy-Authorization" in session
     assert "log_skip" in launch
     assert "import panel_auth" in launch
     assert "rewrite * /desktop-auth/launch-recovery" in launch

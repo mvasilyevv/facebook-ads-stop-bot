@@ -134,6 +134,31 @@ async def test_panel_launch_issues_single_use_cross_host_ticket(
 
 
 @pytest.mark.asyncio
+async def test_panel_launch_url_issues_json_ticket_for_same_origin_fetch(
+    pg_engine, fake_redis_client, desktop_owner
+):
+    app = _app(pg_engine, fake_redis_client)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
+    ) as client:
+        denied = await client.post("/desktop-auth/launch-url-recovery")
+        launched = await client.post(
+            "/desktop-auth/launch-url-recovery",
+            headers={"X-Panel-Recovery-Key": "recovery-secret"},
+        )
+        redeemed = await client.get(launched.json()["url"], follow_redirects=False)
+
+    assert denied.status_code == 404
+    assert launched.status_code == 200
+    assert launched.headers["cache-control"] == "no-store"
+    assert launched.json()["url"].startswith(
+        "https://desktop.adpulse.su/desktop-auth/redeem?ticket="
+    )
+    assert redeemed.status_code == 303
+    assert redeemed.headers["location"] == "/desktop-auth/connect"
+
+
+@pytest.mark.asyncio
 async def test_ticket_redeem_creates_host_session_and_ticket_is_single_use(
     pg_engine, fake_redis_client, desktop_owner
 ):

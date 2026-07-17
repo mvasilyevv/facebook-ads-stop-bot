@@ -1,16 +1,72 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ExternalLink, MonitorUp, ShieldCheck } from "lucide-react";
+import { useState } from "react";
 import { HeaderSep, PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
 
 const REMOTE_DESKTOP_URL = "https://desktop.adpulse.su";
-const DESKTOP_LAUNCH_URL = "/auth/desktop/launch";
+const DESKTOP_SESSION_URL = "/auth/desktop/session";
 
 export const Route = createFileRoute("/remote-desktop/")({
   component: RemoteDesktopPage,
 });
 
 function RemoteDesktopPage() {
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  const connectDesktop = async () => {
+    setConnectionError(null);
+
+    // Open synchronously so Safari treats this as a user-initiated popup. The
+    // authenticated ticket request stays in the current page and the new tab
+    // navigates directly to the desktop host instead of re-entering app.adpulse.su.
+    const desktopWindow = window.open("about:blank", "_blank");
+    if (!desktopWindow) {
+      setConnectionError("Разрешите всплывающие окна для AdPulse и повторите подключение.");
+      return;
+    }
+    desktopWindow.opener = null;
+    setIsConnecting(true);
+
+    try {
+      const response = await fetch(DESKTOP_SESSION_URL, {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | { url?: unknown; detail?: unknown }
+        | null;
+      if (!response.ok) {
+        throw new Error(
+          typeof payload?.detail === "string"
+            ? payload.detail
+            : "Не удалось получить билет рабочего стола.",
+        );
+      }
+      if (typeof payload?.url !== "string") {
+        throw new Error("Сервер вернул некорректный билет рабочего стола.");
+      }
+      const launchUrl = new URL(payload.url);
+      if (
+        launchUrl.origin !== REMOTE_DESKTOP_URL ||
+        launchUrl.pathname !== "/desktop-auth/redeem"
+      ) {
+        throw new Error("Сервер вернул небезопасный адрес рабочего стола.");
+      }
+      desktopWindow.location.replace(launchUrl.toString());
+    } catch (error) {
+      desktopWindow.close();
+      setConnectionError(
+        error instanceof Error ? error.message : "Не удалось открыть рабочий стол.",
+      );
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -65,23 +121,23 @@ function RemoteDesktopPage() {
               логин не потребуется.
             </p>
             <div className="mt-6 flex justify-center">
-              <form
-                action={DESKTOP_LAUNCH_URL}
-                method="get"
-                target="_blank"
-                rel="noopener noreferrer"
+              <Button
+                type="button"
+                variant="primary"
+                size="lg"
+                className="min-w-44"
+                leftIcon={<ExternalLink size={15} aria-hidden="true" />}
+                disabled={isConnecting}
+                onClick={connectDesktop}
               >
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="lg"
-                  className="min-w-44"
-                  leftIcon={<ExternalLink size={15} aria-hidden="true" />}
-                >
-                  Подключиться
-                </Button>
-              </form>
+                {isConnecting ? "Подключение…" : "Подключиться"}
+              </Button>
             </div>
+            {connectionError ? (
+              <p className="mt-3 text-[12px] text-danger" role="alert">
+                {connectionError}
+              </p>
+            ) : null}
           </div>
         </div>
       </section>
