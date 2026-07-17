@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { MonitorUp, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HeaderSep, PageHeader } from "@/components/layout/PageHeader";
-import { Button } from "@/components/ui/Button";
+import { buttonStyles } from "@/components/ui/Button";
 import { apiSend } from "@/lib/api/client";
+import { cn } from "@/lib/utils/cn";
 
 interface DesktopLaunchResponse {
   url: string;
@@ -11,6 +12,13 @@ interface DesktopLaunchResponse {
 }
 
 const DESKTOP_ORIGIN = "https://app.adpulse.su";
+// Ссылка-триггер: настоящий клик по <a target="_blank"> открывает новую вкладку
+// синхронно, а сам запуск (POST /desktop/launch + редирект на билет) происходит
+// уже ВНУТРИ новой вкладки. Так нет async-разрыва между жестом и открытием, из-за
+// которого Safari оставлял предоткрытый попап на about:blank.
+const LAUNCH_HREF = "/remote-desktop?launch=1";
+
+const ctaClassName = cn(buttonStyles({ variant: "primary", size: "lg" }), "min-w-44");
 
 function validateDesktopLaunchUrl(rawUrl: string): string {
   const url = new URL(rawUrl, DESKTOP_ORIGIN);
@@ -25,53 +33,58 @@ function validateDesktopLaunchUrl(rawUrl: string): string {
 }
 
 export const desktopNavigation = {
-  assign(url: string): void {
-    window.location.assign(url);
-  },
-  // Пустая вкладка открывается синхронно в обработчике клика — Safari считает
-  // её user-initiated и не блокирует; целевой URL подставляется после ответа API.
-  openTab(): Window | null {
-    return window.open("about:blank", "_blank");
+  replace(url: string): void {
+    window.location.replace(url);
   },
 };
+
+function isLaunchRequested(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return new URLSearchParams(window.location.search).get("launch") === "1";
+}
 
 export const Route = createFileRoute("/remote-desktop/")({
   component: RemoteDesktopPage,
 });
 
 function RemoteDesktopPage() {
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const launching = isLaunchRequested();
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const startedRef = useRef(false);
 
-  const connectDesktop = async () => {
-    setConnectionError(null);
-    setIsConnecting(true);
-
-    // До первого await — иначе Safari заблокирует попап как не user-initiated.
-    const desktopWindow = desktopNavigation.openTab();
-    try {
-      const payload = await apiSend<DesktopLaunchResponse>("POST", "/desktop/launch");
-      if (typeof payload.url !== "string" || payload.url.length === 0) {
-        throw new Error("Сервер вернул некорректный билет рабочего стола.");
-      }
-      const launchUrl = validateDesktopLaunchUrl(payload.url);
-      if (desktopWindow) {
-        desktopWindow.opener = null;
-        desktopWindow.location.replace(launchUrl);
-      } else {
-        // Попап заблокирован настройками браузера — открываем в текущей вкладке,
-        // чтобы одноразовый билет не пропал.
-        desktopNavigation.assign(launchUrl);
-      }
-    } catch (error) {
-      desktopWindow?.close();
-      setConnectionError(
-        error instanceof Error ? error.message : "Не удалось открыть рабочий стол.",
-      );
-    } finally {
-      setIsConnecting(false);
+  useEffect(() => {
+    // Запуск исполняется только в открытой вкладке (?launch=1) и ровно один раз.
+    if (!launching || startedRef.current) {
+      return;
     }
-  };
+    startedRef.current = true;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const payload = await apiSend<DesktopLaunchResponse>("POST", "/desktop/launch");
+        if (typeof payload.url !== "string" || payload.url.length === 0) {
+          throw new Error("Сервер вернул некорректный билет рабочего стола.");
+        }
+        const launchUrl = validateDesktopLaunchUrl(payload.url);
+        if (!cancelled) {
+          desktopNavigation.replace(launchUrl);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLaunchError(
+            error instanceof Error ? error.message : "Не удалось открыть рабочий стол.",
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [launching]);
 
   return (
     <>
@@ -122,27 +135,47 @@ function RemoteDesktopPage() {
             <h2 className="mt-5 font-display text-[20px] font-medium text-bg-11 sm:text-[22px]">
               Vision Desktop
             </h2>
-            <p className="mx-auto mt-2 max-w-[450px] text-[13px] leading-relaxed text-bg-9">
-              Подключение откроется в новой вкладке. Дополнительный логин не потребуется.
-            </p>
-            <div className="mt-6 flex justify-center">
-              <Button
-                type="button"
-                variant="primary"
-                size="lg"
-                className="min-w-44"
-                leftIcon={<MonitorUp size={15} aria-hidden="true" />}
-                disabled={isConnecting}
-                onClick={connectDesktop}
-              >
-                {isConnecting ? "Подключение…" : connectionError ? "Повторить" : "Подключиться"}
-              </Button>
-            </div>
-            {connectionError ? (
-              <p className="mt-3 text-[12px] text-danger" role="alert">
-                {connectionError}
-              </p>
-            ) : null}
+
+            {launching ? (
+              launchError ? (
+                <>
+                  <p className="mx-auto mt-2 max-w-[450px] text-[13px] leading-relaxed text-danger" role="alert">
+                    {launchError}
+                  </p>
+                  <div className="mt-6 flex justify-center">
+                    <a href={LAUNCH_HREF} className={ctaClassName}>
+                      <MonitorUp size={15} aria-hidden="true" />
+                      Повторить
+                    </a>
+                  </div>
+                </>
+              ) : (
+                <p className="mx-auto mt-2 flex max-w-[450px] items-center justify-center gap-2 text-[13px] leading-relaxed text-bg-9">
+                  <span
+                    aria-hidden="true"
+                    className="inline-block size-3.5 animate-spin rounded-full border border-current border-r-transparent"
+                  />
+                  Открываем рабочий стол…
+                </p>
+              )
+            ) : (
+              <>
+                <p className="mx-auto mt-2 max-w-[450px] text-[13px] leading-relaxed text-bg-9">
+                  Подключение откроется в новой вкладке. Дополнительный логин не потребуется.
+                </p>
+                <div className="mt-6 flex justify-center">
+                  <a
+                    href={LAUNCH_HREF}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={ctaClassName}
+                  >
+                    <MonitorUp size={15} aria-hidden="true" />
+                    Подключиться
+                  </a>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </section>

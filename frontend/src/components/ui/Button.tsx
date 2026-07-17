@@ -7,7 +7,7 @@ import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils/cn";
 
-const buttonStyles = cva(
+export const buttonStyles = cva(
   [
     "inline-flex items-center justify-center gap-2",
     "border font-medium font-body rounded-[var(--radius-2)]",
