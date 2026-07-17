@@ -1,21 +1,59 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ExternalLink, KeyRound, MonitorUp, Smartphone } from "lucide-react";
+import { MonitorUp, Smartphone } from "lucide-react";
+import { useState } from "react";
 import { MiniHeader } from "@/components/layout/MiniHeader";
 import { Button } from "@/components/ui";
 import { Eyebrow } from "@/components/data";
+import { fetchJson } from "@/lib/api";
 import { haptic, openLink } from "@/lib/tg";
 
-const REMOTE_DESKTOP_URL =
-  import.meta.env.VITE_REMOTE_DESKTOP_URL?.trim() || "https://desktop.adpulse.su";
+interface DesktopLaunchResponse {
+  url: string;
+  expires_at: string;
+}
+
+const DESKTOP_ORIGIN = "https://app.adpulse.su";
+
+function validateDesktopLaunchUrl(rawUrl: string): string {
+  const url = new URL(rawUrl, DESKTOP_ORIGIN);
+  if (
+    url.origin !== DESKTOP_ORIGIN ||
+    url.pathname !== "/desktop-auth/redeem" ||
+    !url.searchParams.get("ticket")
+  ) {
+    throw new Error("Сервер вернул некорректный билет рабочего стола.");
+  }
+  return url.toString();
+}
 
 export const Route = createFileRoute("/desktop/")({
   component: RemoteDesktopPage,
 });
 
 function RemoteDesktopPage() {
-  const handleOpen = () => {
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  const handleOpen = async () => {
     haptic.impact("medium");
-    openLink(REMOTE_DESKTOP_URL);
+    setConnectionError(null);
+    setIsConnecting(true);
+    try {
+      const payload = await fetchJson<DesktopLaunchResponse>("/desktop/launch", {
+        method: "POST",
+      });
+      if (typeof payload.url !== "string" || payload.url.length === 0) {
+        throw new Error("Сервер вернул некорректный билет рабочего стола.");
+      }
+      openLink(validateDesktopLaunchUrl(payload.url));
+    } catch (error) {
+      haptic.notify("error");
+      setConnectionError(
+        error instanceof Error ? error.message : "Не удалось открыть рабочий стол.",
+      );
+    } finally {
+      setIsConnecting(false);
+    }
   };
 
   return (
@@ -38,10 +76,6 @@ function RemoteDesktopPage() {
 
           <div className="space-y-3 px-4 py-4">
             <div className="flex items-center gap-3 text-[12px] text-bg-10">
-              <KeyRound size={16} strokeWidth={1.6} className="shrink-0 text-warning" />
-              Внешний HTTPS-сервис запросит отдельный вход
-            </div>
-            <div className="flex items-center gap-3 text-[12px] text-bg-10">
               <Smartphone size={16} strokeWidth={1.6} className="shrink-0 text-accent" />
               Откроется во внешнем браузере для корректной клавиатуры и жестов
             </div>
@@ -50,13 +84,15 @@ function RemoteDesktopPage() {
 
         <section>
           <Eyebrow className="mb-2.5 flex">ПОДКЛЮЧЕНИЕ</Eyebrow>
-          <Button fullWidth size="lg" onClick={handleOpen}>
-            <ExternalLink size={17} strokeWidth={1.7} aria-hidden="true" />
-            Подключиться к рабочему столу
+          <Button fullWidth size="lg" disabled={isConnecting} onClick={() => void handleOpen()}>
+            <MonitorUp size={17} strokeWidth={1.7} aria-hidden="true" />
+            {isConnecting ? "Подключение…" : connectionError ? "Повторить" : "Подключиться"}
           </Button>
-          <p className="mt-2 break-all text-center font-mono text-[10px] text-bg-7">
-            {REMOTE_DESKTOP_URL}
-          </p>
+          {connectionError ? (
+            <p className="mt-3 text-center text-[12px] text-danger" role="alert">
+              {connectionError}
+            </p>
+          ) : null}
         </section>
       </div>
     </div>

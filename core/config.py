@@ -64,16 +64,24 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
 
     # --- Protected Vision desktop ---
-    desktop_access_base_url: str = "https://desktop.adpulse.su"
-    desktop_access_ticket_ttl_seconds: int = 60
+    desktop_public_origin: str = "https://app.adpulse.su"
+    desktop_access_ticket_ttl_seconds: int = 300
     desktop_access_session_ttl_seconds: int = 12 * 60 * 60
     desktop_access_owner_recheck_seconds: int = 60
-    desktop_access_recovery_ttl_seconds: int = 2 * 60 * 60
-    # Guacamole JSON Auth requires a 128-bit hex key. RFB VNCAuth accepts
-    # exactly eight printable ASCII bytes and silently ignores anything longer.
-    desktop_guacamole_json_secret: SecretStr = SecretStr("")
-    desktop_guacamole_token_ttl_seconds: int = 300
-    desktop_vnc_password: SecretStr = SecretStr("")
+    # Explicit web-panel owner. Never infer identity from the current owner count.
+    desktop_owner_telegram_user_id: int = 0
+    # Dedicated desktop readiness targets on the shared production network.
+    desktop_guacamole_internal_url: str = "http://vision-guacamole:8080/desktop/"
+    desktop_guacamole_postgres_host: str = "vision-guacamole-db"
+    desktop_guacamole_postgres_port: int = 5432
+    desktop_guacamole_postgres_db: str = "guacamole"
+    desktop_guacamole_postgres_user: str = "guacamole"
+    desktop_guacamole_postgres_password: SecretStr = SecretStr("")
+    desktop_guacd_host: str = "vision-webtop"
+    desktop_guacd_port: int = 4822
+    desktop_vnc_host: str = "vision-webtop"
+    desktop_vnc_port: int = 5900
+    desktop_readiness_timeout_seconds: float = 2.0
 
     # --- Шифрование (для хранения токенов в БД) ---
     encryption_key: SecretStr = SecretStr("")

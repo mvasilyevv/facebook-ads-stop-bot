@@ -9,7 +9,7 @@ readonly SHARED_ENV_FILE="$ROOT_DIR/shared/.env"
 readonly CADDY_ENV_FILE="/etc/fb-agent/caddy.env"
 readonly CADDY_FILE="/etc/caddy/Caddyfile"
 readonly APP_CADDY_SITE="/etc/caddy/sites-enabled/app.adpulse.su.caddy"
-readonly DESKTOP_CADDY_SITE="/etc/caddy/sites-enabled/desktop.adpulse.su.caddy"
+readonly OBSOLETE_DESKTOP_CADDY_SITE="/etc/caddy/sites-enabled/desktop.adpulse.su.caddy"
 TEMP_DIR=""
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -52,10 +52,10 @@ if [[ -f "$APP_CADDY_SITE" ]]; then
   app_site_existed=true
   cp -- "$APP_CADDY_SITE" "$TEMP_DIR/app-site.caddy"
 fi
-desktop_site_existed=false
-if [[ -f "$DESKTOP_CADDY_SITE" ]]; then
-  desktop_site_existed=true
-  cp -- "$DESKTOP_CADDY_SITE" "$TEMP_DIR/desktop-site.caddy"
+obsolete_desktop_site_existed=false
+if [[ -f "$OBSOLETE_DESKTOP_CADDY_SITE" ]]; then
+  obsolete_desktop_site_existed=true
+  cp -- "$OBSOLETE_DESKTOP_CADDY_SITE" "$TEMP_DIR/obsolete-desktop-site.caddy"
 fi
 cp -- "$CADDY_FILE" "$TEMP_DIR/Caddyfile"
 
@@ -66,28 +66,19 @@ restore_caddy_config() {
   else
     rm -f -- "$APP_CADDY_SITE"
   fi
-  if [[ "$desktop_site_existed" == true ]]; then
-    cp -- "$TEMP_DIR/desktop-site.caddy" "$DESKTOP_CADDY_SITE"
-  else
-    rm -f -- "$DESKTOP_CADDY_SITE"
+  if [[ "$obsolete_desktop_site_existed" == true ]]; then
+    cp -- "$TEMP_DIR/obsolete-desktop-site.caddy" "$OBSOLETE_DESKTOP_CADDY_SITE"
   fi
 }
 
 install -m 0644 "$PROJECT_DIR/deploy/caddy/app.adpulse.su.caddy" "$APP_CADDY_SITE"
-install -m 0644 "$PROJECT_DIR/deploy/caddy/desktop.adpulse.su.caddy" "$DESKTOP_CADDY_SITE"
+# The same-origin route is the sole production desktop entrypoint. Remove the
+# old virtual host in the same validated/reversible Caddy transaction.
+rm -f -- "$OBSOLETE_DESKTOP_CADDY_SITE"
 install -m 0644 "$PROJECT_DIR"/deploy/systemd/fb-agent*.service /etc/systemd/system/
 install -m 0644 "$PROJECT_DIR"/deploy/systemd/fb-agent*.timer /etc/systemd/system/
 install -m 0644 "$PROJECT_DIR/deploy/systemd/caddy-fb-agent-env.conf" \
   /etc/systemd/system/caddy.service.d/fb-agent-env.conf
-
-# Older installations defined desktop.adpulse.su directly in the root Caddyfile.
-# Remove that exact block before importing the managed site to avoid a duplicate host.
-if ! python3 "$PROJECT_DIR/scripts/remove-caddy-site-block.py" \
-  "$CADDY_FILE" \
-  "desktop.adpulse.su"; then
-  restore_caddy_config
-  die "Legacy desktop Caddy migration failed; previous configuration restored"
-fi
 
 if ! grep -Eq '^[[:space:]]*import[[:space:]]+/etc/caddy/sites-enabled/\*' "$CADDY_FILE"; then
   printf '\nimport /etc/caddy/sites-enabled/*\n' >>"$CADDY_FILE"

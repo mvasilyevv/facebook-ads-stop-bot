@@ -147,13 +147,13 @@ export function tgAlert(message: string): Promise<void> {
 
 // ─── Ссылки ───────────────────────────────────────────────────────────────
 
-/** Открывает внешнюю ссылку через TG или новую вкладку (fallback). */
+/** Открывает внешнюю ссылку через TG или в текущей вкладке браузера. */
 export function openLink(url: string): void {
   const tg = getTg();
   if (tg?.openLink) {
     tg.openLink(url);
   } else {
-    window.open(url, "_blank", "noopener,noreferrer");
+    window.location.assign(url);
   }
 }
 

@@ -63,6 +63,10 @@ def _app(
     async def _tma():
         return {"ok": True}
 
+    @app.post("/desktop/logout")
+    async def _desktop_logout():
+        return {"ok": True}
+
     return TestClient(app)
 
 
@@ -115,6 +119,10 @@ def test_tma_path_exempt() -> None:
 
 def test_tma_prefix_lookalike_is_not_exempt() -> None:
     assert _app().post("/api/tmanual-dangerous").status_code == 401
+
+
+def test_desktop_logout_uses_its_session_cookie_instead_of_api_key() -> None:
+    assert _app().post("/desktop/logout").status_code == 200
 
 
 # require_api_key=False → enforcement выключен, POST без ключа проходит
