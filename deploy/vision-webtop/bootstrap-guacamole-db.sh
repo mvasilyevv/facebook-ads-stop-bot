@@ -108,7 +108,7 @@ INSERT INTO guacamole_connection_parameter
 SELECT connection_id, parameter_name, parameter_value
 FROM guacamole_connection
 CROSS JOIN (VALUES
-  ('hostname', 'vision-webtop'),
+  ('hostname', '127.0.0.1'),
   ('port', '5900'),
   ('password', :'vnc_password'),
   ('width', '1366'),

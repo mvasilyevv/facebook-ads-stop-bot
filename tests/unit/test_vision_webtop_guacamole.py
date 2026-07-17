@@ -82,7 +82,7 @@ def test_database_bootstrap_is_idempotent_and_enforces_single_read_connection() 
     assert "adpulse-desktop" in source
     assert "DELETE FROM guacamole_system_permission" in source
     assert "DELETE FROM guacamole_connection WHERE connection_name <> 'Vision Desktop'" in source
-    assert "('hostname', 'vision-webtop')" in source
+    assert "('hostname', '127.0.0.1')" in source
     assert "('port', '5900')" in source
     assert "('width', '1366')" in source
     assert "('height', '768')" in source
