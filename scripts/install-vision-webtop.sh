@@ -14,6 +14,7 @@ readonly BROWSER_AGENT_CONTAINER="fb_agent-browser-agent-1"
 ACTIVE_COMPOSE_BACKUP=""
 ACTIVE_MANIFEST_BACKUP=""
 MANIFEST_CHANGED=true
+STACK_MUTATED=false
 RESTART_APP=false
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -169,7 +170,8 @@ rollback() {
   local exit_code=$?
   trap - ERR
   printf 'ERROR: desktop stack update failed; restoring the previously active manifest\n' >&2
-  if [[ -n "$ACTIVE_COMPOSE_BACKUP" && -f "$ACTIVE_COMPOSE_BACKUP" ]]; then
+  if [[ "$STACK_MUTATED" == true \
+    && -n "$ACTIVE_COMPOSE_BACKUP" && -f "$ACTIVE_COMPOSE_BACKUP" ]]; then
     cp -a "$ACTIVE_COMPOSE_BACKUP" "$TARGET_DIR/compose.yaml"
     compose up -d --remove-orphans || true
   fi
@@ -194,7 +196,15 @@ while IFS= read -r image; do
 done < <(compose config --images)
 
 if [[ "$MANIFEST_CHANGED" == true ]]; then
-  compose pull
+  missing_image=false
+  while IFS= read -r image; do
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+      missing_image=true
+    fi
+  done < <(compose config --images)
+  if [[ "$missing_image" == true ]]; then
+    compose pull
+  fi
   if systemctl is-active --quiet fb-agent.service \
     || docker ps --format '{{.Names}}' | grep -qx "$BROWSER_AGENT_CONTAINER"; then
     RESTART_APP=true
@@ -207,6 +217,7 @@ if [[ "$MANIFEST_CHANGED" == true ]]; then
   # Bind-mounted extension/bootstrap changes do not alter Docker's container
   # config hash. Remove only the dependent desktop services so the new
   # production manifest is loaded exactly once; persistent JDBC/X11 data stays.
+  STACK_MUTATED=true
   compose rm -sf guacamole guacd database-bootstrap
   compose up -d --remove-orphans
 else
@@ -217,13 +228,16 @@ fi
 
 for _ in $(seq 1 60); do
   if desktop_is_ready; then
+    printf '%s\n' "$manifest_hash" >"$ACTIVE_MANIFEST_FILE"
+    # The desktop release is committed once its own full contract is healthy.
+    # A later app/browser-agent restart failure must fail the outer app release,
+    # but must not roll a healthy Header Auth/JDBC stack back to incompatible JSON.
+    trap - ERR
     if [[ "$RESTART_APP" == true ]] \
       && systemctl list-unit-files fb-agent.service >/dev/null 2>&1; then
       systemctl restart fb-agent.service
       ensure_cdp_ready
     fi
-    printf '%s\n' "$manifest_hash" >"$ACTIVE_MANIFEST_FILE"
-    trap - ERR
     printf 'Vision desktop production stack is ready on 127.0.0.1:8090/desktop/\n'
     exit 0
   fi
