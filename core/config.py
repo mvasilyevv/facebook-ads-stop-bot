@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     # Guacamole JSON Auth requires a 128-bit hex key. RFB VNCAuth accepts
     # exactly eight printable ASCII bytes and silently ignores anything longer.
     desktop_guacamole_json_secret: SecretStr = SecretStr("")
-    desktop_guacamole_token_ttl_seconds: int = 60
+    desktop_guacamole_token_ttl_seconds: int = 300
     desktop_vnc_password: SecretStr = SecretStr("")
 
     # --- Шифрование (для хранения токенов в БД) ---
