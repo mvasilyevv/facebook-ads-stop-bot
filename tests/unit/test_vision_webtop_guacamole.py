@@ -91,6 +91,13 @@ def test_database_bootstrap_is_idempotent_and_enforces_single_read_connection() 
     assert "permission <> 'READ'" in source
 
 
+def test_installer_readiness_requires_loopback_vnc_contract() -> None:
+    source = INSTALLER.read_text(encoding="utf-8")
+
+    assert """parameter_value = '"'"'127.0.0.1'"'"'""" in source
+    assert """parameter_value = '"'"'vision-webtop'"'"'""" not in source
+
+
 def test_webtop_exports_existing_x11_display_through_tigervnc() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     service = VNC_RUN.read_text(encoding="utf-8")
