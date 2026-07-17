@@ -1,0 +1,107 @@
+(desktop_recovery_auth) {
+	basic_auth {
+		{$PANEL_BASIC_AUTH_USER} {$PANEL_BASIC_AUTH_HASH}
+	}
+}
+
+(desktop_session_auth) {
+	forward_auth 127.0.0.1:8100 {
+		uri /desktop-auth/verify
+		# Keep the auth subrequest HTTP even when the original desktop request is
+		# a WebSocket upgrade; the original tunnel is left intact.
+		header_up -Connection
+		header_up -Upgrade
+		copy_headers X-Desktop-Telegram-User-Id X-Desktop-Role
+	}
+}
+
+desktop.adpulse.su {
+	log {
+		# Reuse the pre-created Caddy-owned application log. A separate root-created
+		# file would make a live reload fail before Caddy can change its ownership.
+		output file /var/log/caddy/fb-agent-access.log {
+			roll_size 20MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		format json
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	route {
+		# Hidden break-glass access. Basic Auth remains available only on this
+		# unlinked recovery endpoint, never on the desktop itself.
+		handle /desktop-auth/recovery {
+			import desktop_recovery_auth
+			reverse_proxy 127.0.0.1:8100 {
+				header_up X-Panel-Recovery-Key {$API_KEY}
+			}
+		}
+
+		# The ticket is a secret carried in the query string for one request.
+		# Do not persist it in Caddy access logs.
+		handle /desktop-auth/redeem {
+			log_skip
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -X-Panel-Recovery-Key
+			}
+		}
+
+		# Verify/logout enforce their own revocable owner-session contract.
+		handle /desktop-auth/* {
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -X-Panel-Recovery-Key
+			}
+		}
+
+		# Owner-only Guacamole canary. A short encrypted `data` grant is still a
+		# secret, so requests carrying it are never written to access logs.
+		@guacamole_grant {
+			path /guacamole/*
+			query data=*
+		}
+		handle @guacamole_grant {
+			log_skip
+			import desktop_session_auth
+			header Cache-Control "no-store"
+			header Pragma "no-cache"
+			reverse_proxy 127.0.0.1:8090 {
+				stream_close_delay 5m
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-Panel-Recovery-Key
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
+			}
+		}
+
+		handle /guacamole/* {
+			import desktop_session_auth
+			reverse_proxy 127.0.0.1:8090 {
+				stream_close_delay 5m
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-Panel-Recovery-Key
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
+			}
+		}
+
+		# Keep Selkies at the root until Guacamole passes physical iPhone/Android
+		# acceptance. Rollback is therefore only a launch-route change.
+		handle {
+			import desktop_session_auth
+			reverse_proxy 127.0.0.1:3000 {
+				stream_close_delay 5m
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
+			}
+		}
+	}
+}
