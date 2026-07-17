@@ -16,6 +16,30 @@ from core.config import Settings
 async def desktop_owner(pg_engine):
     owner_id = 89000001
     async with pg_engine.begin() as conn:
+        previous_owners = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT chat_id, telegram_user_id
+                    FROM telegram_recipients
+                    WHERE role = 'owner' AND revoked_at IS NULL
+                      AND telegram_user_id <> :uid
+                    """
+                ),
+                {"uid": owner_id},
+            )
+        ).all()
+        await conn.execute(
+            text(
+                """
+                UPDATE telegram_recipients
+                SET revoked_at = NOW()
+                WHERE role = 'owner' AND revoked_at IS NULL
+                  AND telegram_user_id <> :uid
+                """
+            ),
+            {"uid": owner_id},
+        )
         await conn.execute(
             text(
                 """
@@ -33,6 +57,17 @@ async def desktop_owner(pg_engine):
             text("DELETE FROM telegram_recipients WHERE telegram_user_id = :uid"),
             {"uid": owner_id},
         )
+        for chat_id, telegram_user_id in previous_owners:
+            await conn.execute(
+                text(
+                    """
+                    UPDATE telegram_recipients
+                    SET revoked_at = NULL
+                    WHERE chat_id = :chat_id AND telegram_user_id = :telegram_user_id
+                    """
+                ),
+                {"chat_id": chat_id, "telegram_user_id": telegram_user_id},
+            )
 
 
 def _settings() -> Settings:
