@@ -131,8 +131,19 @@ async def promote_enable_recommendation(
                                           WHERE bulk_ad.fb_ad_id = fa.fb_ad_id
                                       ))
                                  )
-                           ) AS has_unfinished_pause
+                           ) AS has_unfinished_pause,
+                           (
+                               SELECT am.spend
+                               FROM ad_metrics am
+                               WHERE am.ad_id = fa.id
+                               ORDER BY am.cycle_ts DESC
+                               LIMIT 1
+                           ) AS latest_spend,
+                           r.cpa_threshold AS current_cpa_threshold
                     FROM fb_ads fa
+                    JOIN fb_adsets fas ON fas.id = fa.adset_id
+                    JOIN fb_campaigns fc ON fc.id = fas.campaign_id
+                    LEFT JOIN offer_rules r ON r.offer_id = fc.offer_id
                     LEFT JOIN ad_alert_state st ON st.ad_id = fa.id
                     WHERE fa.id = :aid
                     """
@@ -185,16 +196,30 @@ async def promote_enable_recommendation(
                     "Рекомендация куратора устарела: объявление не подтверждено как OFF"
                 )
             try:
-                allowance = Decimal(str(snapshot.get("grace_spend_cap")))
+                approved_cap = Decimal(str(snapshot.get("grace_spend_cap")))
+                current_cpa = Decimal(str(current.current_cpa_threshold))
+                latest_spend = Decimal(str(current.latest_spend))
             except (InvalidOperation, TypeError, ValueError) as exc:
                 raise RecommendationUnsafeStateError(
                     "У рекомендации куратора отсутствует корректный лимит grace"
                 ) from exc
-            if not allowance.is_finite() or allowance <= 0:
+            if (
+                not approved_cap.is_finite()
+                or approved_cap <= 0
+                or not current_cpa.is_finite()
+                or current_cpa <= 0
+                or not latest_spend.is_finite()
+                or latest_spend < 0
+            ):
                 raise RecommendationUnsafeStateError(
-                    "У рекомендации куратора отсутствует корректный лимит grace"
+                    "Рекомендация куратора устарела: нет корректных текущих spend/CPA"
                 )
-            grace_payload = {"spend_allowance": str(allowance)}
+            spend_cap = min(approved_cap, current_cpa)
+            if latest_spend >= spend_cap:
+                raise RecommendationUnsafeStateError(
+                    "Рекомендация куратора устарела: общий spend уже достиг цены лида"
+                )
+            grace_payload = {"spend_cap": str(spend_cap), "cap_mode": "absolute_daily"}
 
         params: dict[str, object] = {
             "source": "recommendation",

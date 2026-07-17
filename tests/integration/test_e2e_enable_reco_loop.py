@@ -27,6 +27,10 @@ from sqlalchemy import text
 import apps.meta_api_worker.main as worker_main
 from apps.enable_recommendation_worker.main import run_once
 from apps.meta_api_worker.main import process_one_task
+from core.enable_reco.confirmation import (
+    RecommendationUnsafeStateError,
+    promote_enable_recommendation,
+)
 from core.meta_api.queue import claim_pending_task
 from core.observer.enable_grace import grace_is_active, load_enable_grace_map
 from core.telegram.client import TelegramBotClient
@@ -105,7 +109,9 @@ async def stopped_ad_e2e(pg_engine, clean_enable_reco_pipeline) -> dict[str, Any
 
     last_transition = _utcnow() - timedelta(hours=2)
     incident_token = uuid.uuid4()
-    cycle_recent = _utcnow() - timedelta(minutes=10)
+    # The worker deliberately refuses to reactivate from a stale Meta snapshot.
+    # Keep the success-path sample inside the freshness window.
+    cycle_recent = _utcnow() - timedelta(seconds=10)
     cycle_older = _utcnow() - timedelta(minutes=30)
 
     async with pg_engine.begin() as conn:
@@ -275,10 +281,10 @@ async def test_full_cycle_reco_to_enable_task(
     await tg_client.close()
 
 
-# Curator hold: marker появляется только после успешной activation и даёт
-# ДОПОЛНИТЕЛЬНЫЙ allowance поверх свежего baseline spend.
+# Curator hold: marker появляется только после успешной activation и держит
+# до абсолютного дневного spend cap, равного CPA (без прибавки baseline spend).
 @pytest.mark.asyncio
-async def test_curator_grace_starts_after_activation_with_incremental_cap(
+async def test_curator_grace_starts_after_activation_with_absolute_cap(
     pg_engine,
     stopped_ad_e2e,
     fake_redis_client,
@@ -333,7 +339,10 @@ async def test_curator_grace_starts_after_activation_with_incremental_cap(
 
     claim = await claim_pending_task(pg_engine)
     assert claim.task is not None
-    assert claim.task.payload["params"]["enable_grace"] == {"spend_allowance": "10.00"}
+    assert claim.task.payload["params"]["enable_grace"] == {
+        "spend_cap": "10.00",
+        "cap_mode": "absolute_daily",
+    }
 
     async def _fake_dispatch(_client, payload):
         return {
@@ -352,14 +361,110 @@ async def test_curator_grace_starts_after_activation_with_incremental_cap(
 
     grace_map = await load_enable_grace_map(fake_redis_client)
     grace = grace_map[stopped_ad_e2e["fb_ad_id"]]
-    # Последняя метрика фикстуры: baseline=0.50; allowance=10 → absolute cap=10.50.
+    # Последняя метрика фикстуры: baseline=0.50, но абсолютный cap остаётся CPA=10.00.
     assert grace.baseline_spend == Decimal("0.5")
-    assert grace.spend_cap == Decimal("10.50")
+    assert grace.spend_cap == Decimal("10.00")
+    assert grace.schema_version == 2
+    assert grace.cabinet_day_start is not None
     now = _utcnow()
-    assert grace_is_active(grace, now=now, spend=Decimal("10.49")) is True
-    assert grace_is_active(grace, now=now, spend=Decimal("10.50")) is False
+    assert (
+        grace_is_active(
+            grace,
+            now=now,
+            spend=Decimal("9.99"),
+            absolute_spend_cap=Decimal("10.00"),
+            current_cabinet_day_start=grace.cabinet_day_start,
+        )
+        is True
+    )
+    assert (
+        grace_is_active(
+            grace,
+            now=now,
+            spend=Decimal("10.00"),
+            absolute_spend_cap=Decimal("10.00"),
+            current_cabinet_day_start=grace.cabinet_day_start,
+        )
+        is False
+    )
     # Cabinet-day reset / рассинхрон ниже baseline завершает hold fail-safe.
-    assert grace_is_active(grace, now=now, spend=Decimal("0.10")) is False
+    assert (
+        grace_is_active(
+            grace,
+            now=now,
+            spend=Decimal("0.10"),
+            absolute_spend_cap=Decimal("10.00"),
+            current_cabinet_day_start=grace.cabinet_day_start + timedelta(days=1),
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_curator_confirmation_rejects_when_latest_spend_reached_cap(
+    pg_engine,
+    stopped_ad_e2e,
+) -> None:
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE fb_ads SET delivery_status = 'OFF' WHERE id = :aid"),
+            {"aid": stopped_ad_e2e["ad_id"]},
+        )
+        await conn.execute(
+            text("UPDATE ad_alert_state SET alert_state = 'disabled' WHERE ad_id = :aid"),
+            {"aid": stopped_ad_e2e["ad_id"]},
+        )
+        await conn.execute(
+            text("INSERT INTO ad_metrics (ad_id, cycle_ts, spend) VALUES (:aid, :ts, :spend)"),
+            {
+                "aid": stopped_ad_e2e["ad_id"],
+                "ts": _utcnow(),
+                "spend": Decimal("10.00"),
+            },
+        )
+        rec_id = (
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO enable_recommendations
+                        (ad_id, snapshot_metrics, recommendation_level,
+                         live_batch_started_at, idempotency_key)
+                    VALUES
+                        (:aid,
+                         jsonb_build_object(
+                             'hold_until_cpl', true,
+                             'grace_spend_cap', '10.00',
+                             'incident_open_state_token', CAST(:tok AS text)
+                         ),
+                         'warning', NOW(), :ik)
+                    RETURNING id
+                    """
+                ),
+                {
+                    "aid": stopped_ad_e2e["ad_id"],
+                    "tok": str(stopped_ad_e2e["incident_token"]),
+                    "ik": f"stale-spend-{uuid.uuid4().hex}",
+                },
+            )
+        ).scalar_one()
+
+    with pytest.raises(RecommendationUnsafeStateError, match="spend уже достиг"):
+        await promote_enable_recommendation(
+            pg_engine,
+            recommendation_id=rec_id,
+            requested_by="reviewer",
+        )
+
+    async with pg_engine.connect() as conn:
+        task_count = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM task_queue "
+                    "WHERE payload->>'mutation_kind' = 'activate_ad'"
+                )
+            )
+        ).scalar_one()
+    assert task_count == 0
 
 
 # E2E: повторный клик ereco (двойной тап) → idempotency_key совпал → no-op в БД.

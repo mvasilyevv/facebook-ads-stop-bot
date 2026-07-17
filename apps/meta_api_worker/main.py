@@ -35,13 +35,16 @@ import os
 import signal
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import redis.asyncio as redis_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from core.dashboard.cabinet_spend import cabinet_day_start_utc
 from core.db import WORKER_ENGINE_KWARGS
+from core.meta_api.account_tz import DEFAULT_OFFSET_HOURS, load_offset
 from core.meta_api.audit import AuditedMetaApiClient
 from core.meta_api.autostop_alert import (
     maybe_alert_autostop_channel_down,
@@ -158,18 +161,71 @@ async def _publish_task_changed(
         logger.warning("meta_api_worker: не удалось publish task:changed task_id=%s", task_id)
 
 
+async def _trigger_curator_fail_safe_scan(
+    redis_client: redis_asyncio.Redis | None,
+    *,
+    task_id: int,
+    fb_ad_id: str,
+) -> None:
+    """Best-effort wakeup after Meta activate succeeded without a grace marker."""
+    if redis_client is None:
+        return
+    try:
+        await redis_client.publish(
+            CHANNEL_OBSERVER_TRIGGER,
+            json.dumps(
+                {
+                    "reason": "curator_grace_install_failed",
+                    "fb_ad_id": fb_ad_id,
+                    "task_id": task_id,
+                }
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "meta_api: не удалось разбудить observer после grace failure task=%s",
+            task_id,
+            exc_info=True,
+        )
+
+
 async def _apply_enable_grace_after_success(
     engine: AsyncEngine,
     redis_client: redis_asyncio.Redis | None,
     *,
     payload: MetaMutationPayload,
-) -> None:
+) -> bool:
     """Поставить curator grace только после успешного внешнего activate_ad."""
     if payload.mutation_kind != "activate_ad":
-        return
+        return True
+    if "enable_grace" not in payload.params:
+        return True
     intent = payload.params.get("enable_grace")
-    if not isinstance(intent, dict) or not intent.get("spend_allowance"):
-        return
+    if not isinstance(intent, dict):
+        return False
+    # Backward compatibility: задачи, созданные до фикса, несут ключ
+    # spend_allowance. Его значение всегда было CPA оффера, поэтому трактуем его
+    # как абсолютный cap, не прибавляя к уже накопленному spend.
+    spend_cap = intent.get("spend_cap")
+    if spend_cap in (None, "", "None"):
+        spend_cap = intent.get("spend_allowance")
+    if spend_cap in (None, "", "None"):
+        return False
+    day_start_raw = intent.get("cabinet_day_start")
+    if day_start_raw:
+        try:
+            cabinet_day_start = datetime.fromisoformat(str(day_start_raw))
+        except (TypeError, ValueError):
+            cabinet_day_start = None
+    else:
+        cabinet_day_start = None
+    if cabinet_day_start is None:
+        offset = await load_offset(
+            redis_client,
+            str(payload.ad_account_id or ""),
+            default=DEFAULT_OFFSET_HOURS,
+        )
+        cabinet_day_start = cabinet_day_start_utc(offset, datetime.now(UTC))
 
     try:
         async with engine.connect() as conn:
@@ -181,14 +237,21 @@ async def _apply_enable_grace_after_success(
                         FROM ad_metrics am
                         JOIN fb_ads fa ON fa.id = am.ad_id
                         WHERE fa.fb_ad_id = :fbid
+                          AND am.cycle_ts >= :day_start
                         ORDER BY am.cycle_ts DESC
                         LIMIT 1
                         """
                     ),
-                    {"fbid": str(payload.target_id)},
+                    {"fbid": str(payload.target_id), "day_start": cabinet_day_start},
                 )
             ).first()
-        baseline_spend = row[0] if row and row[0] is not None else "0"
+        if row is None or row[0] is None:
+            logger.warning(
+                "enable_grace для %s не поставлен: нет spend текущего cabinet-day",
+                payload.target_id,
+            )
+            return False
+        baseline_spend = row[0]
 
         from core.config import get_settings
         from core.observer.enable_grace import set_enable_grace
@@ -197,8 +260,9 @@ async def _apply_enable_grace_after_success(
             redis_client,
             fb_ad_id=str(payload.target_id),
             grace_seconds=get_settings().enable_reco_hold_grace_seconds,
+            spend_cap=spend_cap,
             baseline_spend=baseline_spend,
-            spend_allowance=intent.get("spend_allowance"),
+            cabinet_day_start=cabinet_day_start,
         )
         if not ok:
             logger.warning(
@@ -206,12 +270,118 @@ async def _apply_enable_grace_after_success(
                 "действуют обычные stop-правила",
                 payload.target_id,
             )
+        return ok
     except Exception:  # noqa: BLE001 — succeeded mutation не откатываем из-за grace
         logger.warning(
             "enable_grace для %s не удалось применить после activation — fail-safe stop",
             payload.target_id,
             exc_info=True,
         )
+        return False
+
+
+async def _preflight_enable_grace_activation(
+    engine: AsyncEngine,
+    redis_client: redis_asyncio.Redis | None,
+    *,
+    payload: MetaMutationPayload,
+) -> tuple[bool, str | None]:
+    """Последний money-gate curator activate перед внешним вызовом Meta.
+
+    Старый ``spend_allowance`` читается как абсолютный одобренный CPA cap. При
+    успехе intent нормализуется в v2 прямо в in-memory payload, чтобы after-success
+    записал marker для того же cabinet-day и не расширил лимит.
+    """
+    if payload.mutation_kind != "activate_ad":
+        return True, None
+    if "enable_grace" not in payload.params:
+        return True, None
+    intent = payload.params.get("enable_grace")
+    if not isinstance(intent, dict):
+        return False, "curator_grace_preflight: enable_grace intent повреждён"
+
+    cap_raw = intent.get("spend_cap")
+    if cap_raw in (None, "", "None"):
+        cap_raw = intent.get("spend_allowance")
+    try:
+        approved_cap = Decimal(str(cap_raw))
+    except (InvalidOperation, TypeError, ValueError):
+        return False, "curator_grace_preflight: отсутствует корректный absolute spend cap"
+    if not approved_cap.is_finite() or approved_cap <= 0:
+        return False, "curator_grace_preflight: absolute spend cap должен быть > 0"
+
+    freshness = await load_meta_snapshot_freshness(
+        engine,
+        fb_ad_id=str(payload.target_id),
+    )
+    if not freshness.fresh:
+        return (
+            False,
+            "curator_grace_preflight_stale_snapshot: нужен свежий Meta spend "
+            f"(latest={freshness.latest_cycle_at})",
+        )
+
+    offset = await load_offset(
+        redis_client,
+        str(payload.ad_account_id or ""),
+        default=DEFAULT_OFFSET_HOURS,
+    )
+    day_start = cabinet_day_start_utc(offset, datetime.now(UTC))
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT fa.delivery_status,
+                           latest.spend,
+                           r.cpa_threshold
+                    FROM fb_ads fa
+                    JOIN fb_adsets fas ON fas.id = fa.adset_id
+                    JOIN fb_campaigns fc ON fc.id = fas.campaign_id
+                    LEFT JOIN offer_rules r ON r.offer_id = fc.offer_id
+                    LEFT JOIN LATERAL (
+                        SELECT am.spend
+                        FROM ad_metrics am
+                        WHERE am.ad_id = fa.id
+                          AND am.cycle_ts >= :day_start
+                        ORDER BY am.cycle_ts DESC
+                        LIMIT 1
+                    ) latest ON TRUE
+                    WHERE fa.fb_ad_id = :fbid
+                    """
+                ),
+                {"fbid": str(payload.target_id), "day_start": day_start},
+            )
+        ).first()
+    if row is None:
+        return False, "curator_grace_preflight: объявление отсутствует в каталоге"
+    if str(row.delivery_status or "").strip().upper() != "OFF":
+        return False, "curator_grace_preflight: объявление уже не OFF"
+    try:
+        latest_spend = Decimal(str(row.spend))
+        current_cpa = Decimal(str(row.cpa_threshold))
+    except (InvalidOperation, TypeError, ValueError):
+        return False, "curator_grace_preflight: нет текущих spend/CPA"
+    if (
+        not latest_spend.is_finite()
+        or latest_spend < 0
+        or not current_cpa.is_finite()
+        or current_cpa <= 0
+    ):
+        return False, "curator_grace_preflight: текущие spend/CPA невалидны"
+    effective_cap = min(approved_cap, current_cpa)
+    if latest_spend >= effective_cap:
+        return False, "curator_grace_preflight: общий spend уже достиг цены лида"
+
+    intent.clear()
+    intent.update(
+        {
+            "spend_cap": str(effective_cap),
+            "cap_mode": "absolute_daily",
+            "cabinet_day_start": day_start.isoformat(),
+        }
+    )
+    return True, None
 
 
 def _get_database_url() -> str:
@@ -784,6 +954,60 @@ async def process_one_task(
             )
         return
 
+    # Curator activate может ждать в очереди, пока cumulative spend/CPA уже изменились.
+    # Повторно валидируем прямо перед внешней границей; после activate проверять поздно —
+    # объявление уже начало бы тратить деньги без гарантированного grace.
+    grace_safe, grace_error = await _preflight_enable_grace_activation(
+        engine,
+        redis_client,
+        payload=payload,
+    )
+    if not grace_safe:
+        if str(grace_error or "").startswith("curator_grace_preflight_stale_snapshot"):
+            retried = await defer_auto_stop_for_fresh_snapshot(
+                engine,
+                task_id=task.id,
+            )
+            if retried and redis_client is not None:
+                await _publish_task_changed(
+                    redis_client,
+                    task_id=task.id,
+                    task_type=task.task_type,
+                    status="retrying",
+                )
+                try:
+                    await redis_client.publish(
+                        CHANNEL_OBSERVER_TRIGGER,
+                        json.dumps(
+                            {
+                                "reason": "curator_activate_requires_fresh_meta",
+                                "task_id": task.id,
+                                "fb_ad_id": str(payload.target_id),
+                            }
+                        ),
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug("curator freshness trigger publish failed", exc_info=True)
+            return
+        applied = await mark_task_failed(
+            engine,
+            task_id=task.id,
+            error=str(grace_error or "curator_grace_preflight_rejected")[:500],
+        )
+        if applied:
+            await _publish_task_changed(
+                redis_client,
+                task_id=task.id,
+                task_type=task.task_type,
+                status="failed",
+            )
+        logger.warning(
+            "meta_api: curator activate task id=%s отклонена ДО внешнего вызова: %s",
+            task.id,
+            grace_error,
+        )
+        return
+
     # Auto-stop is a money decision. A task may sit or retry for a long time, so
     # re-check freshness immediately before the external boundary. Manual and
     # bulk operations are intentionally outside this automatic-decision gate.
@@ -893,11 +1117,12 @@ async def process_one_task(
         # Если процесс упадёт сразу после внешнего activate, task останется running:
         # reconciler повторит идемпотентный activate и восстановит marker. Обратный
         # порядок оставлял терминальную задачу и активный ad без grace навсегда.
-        await _apply_enable_grace_after_success(
+        grace_applied = await _apply_enable_grace_after_success(
             engine,
             redis_client,
             payload=payload,
         )
+        needs_fail_safe_scan = grace_applied is False
         applied = await mark_task_succeeded(engine, task_id=task.id, result=result)
         if not applied:
             # Race: другой воркер уже закрыл задачу после reconciler-таймаута.
@@ -907,6 +1132,12 @@ async def process_one_task(
                 "(status != running) — гонка с другим воркером, пропускаю",
                 task.id,
             )
+            if needs_fail_safe_scan:
+                await _trigger_curator_fail_safe_scan(
+                    redis_client,
+                    task_id=task.id,
+                    fb_ad_id=str(payload.target_id),
+                )
             return
         logger.info("meta_api: task id=%s succeeded", task.id)
         # Publish изменения статуса в Redis-канал (best-effort)
@@ -921,6 +1152,14 @@ async def process_one_task(
         # без этого FSM застревал в stop_sent при auto-stop через API. result прокидываем
         # для bulk (H2): метим FSM только по реально применённым id (modified_ids).
         await sync_fsm_after_mutation(engine, payload, result)
+        if needs_fail_safe_scan:
+            # FSM уже синхронизирован в normal, поэтому быстрый observer STOP не
+            # будет затёрт последующим activate-sync.
+            await _trigger_curator_fail_safe_scan(
+                redis_client,
+                task_id=task.id,
+                fb_ad_id=str(payload.target_id),
+            )
         # R3 partial: bulk применился частично (succeeded>0, failed>0). FSM-sync корректен
         # (метит только modified_ids), задача succeeded, но часть объявлений НЕ выключилась —
         # owner должен узнать через money-fail DM, иначе недовыключенные тратят бюджет.

@@ -46,9 +46,6 @@ class AnalyzerThresholds:
     # Кейс куратора: «показов мало + CTR хороший» → включить и держать до цены лида.
     curator_impr_ceiling: int = 500
     curator_ctr_floor: Decimal = Decimal("3.0")  # проценты, как ad_metrics.ctr
-    # Ревью M-1: grace ОБЯЗАН иметь денежную границу. Если у оффера нет
-    # cpa_threshold — кап берётся отсюда, а не остаётся безлимитным на всё окно.
-    curator_fallback_spend_cap: Decimal = Decimal("10.00")
 
 
 DEFAULT_THRESHOLDS = AnalyzerThresholds()
@@ -173,11 +170,18 @@ def should_recommend(
 
     # --- Кейс куратора (отдельная ветка, НЕ смешивается с recovery-сигналами) ---
     # Показов мало при хорошем CTR: данных для вердикта недостаточно, ранний стоп
-    # мог убить потенциального виннера. Рекомендуем включить и держать до ~1×CPA
-    # спенда — судить по реальной цене лида (правило байера/куратора).
+    # мог убить потенциального виннера. Curator-hold безопасен только когда известны
+    # и CPA, и текущий cumulative spend, причём spend ещё строго ниже CPA. CPA —
+    # абсолютный потолок общего расхода, а не дополнительный allowance после включения.
     if (
         allow_curator
         and latest is not None
+        and cpa is not None
+        and cpa.is_finite()
+        and cpa > 0
+        and latest.spend is not None
+        and latest.spend.is_finite()
+        and 0 <= latest.spend < cpa
         and latest.impressions is not None
         and latest.impressions < thresholds.curator_impr_ceiling
         and latest.ctr is not None
@@ -185,17 +189,17 @@ def should_recommend(
     ):
         snapshot = _snapshot_summary(metrics, total_spend, latest)
         snapshot["hold_until_cpl"] = True
-        # Денежная граница grace всегда есть: 1×CPA оффера, а без CPA — фолбэк (M-1).
-        cap = cpa if (cpa is not None and cpa > 0) else thresholds.curator_fallback_spend_cap
-        snapshot["grace_spend_cap"] = str(cap)
+        snapshot["grace_spend_cap"] = str(cpa)
+        snapshot["grace_spend_remaining"] = str(cpa - latest.spend)
         return RecommendationDecision(
             recommend=True,
             level="warning",
             hold_until_cpl=True,
             reasons=(
+                f"общий spend {latest.spend} < CPA {cpa}; "
                 f"показов мало ({latest.impressions} < {thresholds.curator_impr_ceiling}) "
                 f"при хорошем CTR ({latest.ctr}% ≥ {thresholds.curator_ctr_floor}%) — "
-                f"дать открутить до ~1×CPA и судить по цене лида",
+                "дать общему spend дойти только до CPA и затем снова применять стоп-правила",
             ),
             snapshot=snapshot,
         )
@@ -207,7 +211,7 @@ def should_recommend(
             snapshot=_snapshot_summary(metrics, total_spend, latest),
         )
 
-    if cpa is None or cpa <= 0:
+    if cpa is None or not cpa.is_finite() or cpa <= 0:
         return RecommendationDecision(
             recommend=False,
             skip_reason="у оффера не задан CPA для канонической проверки",

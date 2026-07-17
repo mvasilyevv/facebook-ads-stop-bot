@@ -15,23 +15,62 @@ succeeded + FSM-sync по modified_ids + money-fail DM.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import apps.meta_api_worker.main as meta
 
 
-def _task(kind: str, tid: int = 1, requested_by: str = "") -> SimpleNamespace:
+def _task(
+    kind: str,
+    tid: int = 1,
+    requested_by: str = "",
+    *,
+    params: dict[str, object] | None = None,
+) -> SimpleNamespace:
+    payload: dict[str, object] = {"mutation_kind": kind, "target_id": "100"}
+    if params is not None:
+        payload["params"] = params
     return SimpleNamespace(
         id=tid,
         task_type="meta_api_mutation",
-        payload={"mutation_kind": kind, "target_id": "100"},
+        payload=payload,
         requested_by=requested_by,
         attempt_count=0,
         max_attempts=5,
     )
+
+
+def _preflight_engine(
+    *,
+    spend: object = Decimal("9.00"),
+    cpa: object = Decimal("10.00"),
+    delivery_status: str = "OFF",
+) -> tuple[MagicMock, AsyncMock]:
+    """Fake AsyncEngine, достаточный для единственного SELECT grace-preflight."""
+
+    result = MagicMock()
+    result.first.return_value = SimpleNamespace(
+        delivery_status=delivery_status,
+        spend=spend,
+        cpa_threshold=cpa,
+    )
+    execute = AsyncMock(return_value=result)
+    connection = SimpleNamespace(execute=execute)
+
+    class _ConnectContext:
+        async def __aenter__(self):
+            return connection
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    engine = MagicMock()
+    engine.connect.side_effect = _ConnectContext
+    return engine, execute
 
 
 @pytest.fixture
@@ -43,6 +82,11 @@ def _patched(monkeypatch):
     """
     monkeypatch.setattr(meta, "load_scanning_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(meta, "load_owner_tag", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        meta,
+        "load_meta_snapshot_freshness",
+        AsyncMock(return_value=SimpleNamespace(fresh=True, latest_cycle_at=None)),
+    )
     monkeypatch.setattr(
         meta,
         "check_mutation_ownership",
@@ -193,3 +237,130 @@ async def test_curator_grace_is_applied_before_terminal_success(monkeypatch, _pa
     await meta.process_one_task(object(), _task("activate_ad"), client=AsyncMock())
 
     assert events == ["grace", "succeeded"]
+
+
+@pytest.mark.asyncio
+async def test_curator_preflight_treats_legacy_allowance_as_absolute_cap(
+    monkeypatch, _patched
+) -> None:
+    engine, query = _preflight_engine(spend=Decimal("9.99"), cpa=Decimal("10.00"))
+    execute = AsyncMock(return_value={"success": True, "modified_ids": ["100"]})
+    apply_grace = AsyncMock()
+    monkeypatch.setattr(meta, "execute_mutation", execute)
+    monkeypatch.setattr(meta, "_apply_enable_grace_after_success", apply_grace)
+
+    await meta.process_one_task(
+        engine,
+        _task(
+            "activate_ad",
+            params={"enable_grace": {"spend_allowance": "10.00"}},
+        ),
+        client=AsyncMock(),
+    )
+
+    query.assert_awaited_once()
+    execute.assert_awaited_once()
+    dispatched_payload = execute.await_args.args[0]
+    normalized = dispatched_payload.params["enable_grace"]
+    assert normalized["spend_cap"] == "10.00"
+    assert normalized["cap_mode"] == "absolute_daily"
+    assert normalized["cabinet_day_start"].endswith("+00:00")
+    assert "spend_allowance" not in normalized
+    _patched.fail.assert_not_awaited()
+    _patched.succeed.assert_awaited_once()
+    apply_grace.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spend", [Decimal("10.00"), Decimal("10.01")])
+async def test_curator_preflight_rejects_spend_at_or_above_absolute_cap_before_dispatch(
+    monkeypatch, _patched, spend: Decimal
+) -> None:
+    engine, query = _preflight_engine(spend=spend, cpa=Decimal("10.00"))
+    execute = AsyncMock(return_value={"success": True, "modified_ids": ["100"]})
+    apply_grace = AsyncMock()
+    monkeypatch.setattr(meta, "execute_mutation", execute)
+    monkeypatch.setattr(meta, "_apply_enable_grace_after_success", apply_grace)
+
+    await meta.process_one_task(
+        engine,
+        _task(
+            "activate_ad",
+            params={"enable_grace": {"spend_allowance": "10.00"}},
+        ),
+        client=AsyncMock(),
+    )
+
+    query.assert_awaited_once()
+    execute.assert_not_awaited()
+    apply_grace.assert_not_awaited()
+    _patched.fail.assert_awaited_once()
+    _patched.succeed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "intent",
+    [
+        {},
+        {"spend_cap": None},
+        {"spend_cap": "bad"},
+        {"spend_cap": "NaN"},
+        {"spend_cap": "Infinity"},
+        {"spend_cap": "0"},
+        {"spend_cap": "-1"},
+    ],
+)
+async def test_curator_preflight_rejects_missing_or_invalid_cap_before_dispatch(
+    monkeypatch, _patched, intent: dict[str, object]
+) -> None:
+    engine, query = _preflight_engine()
+    execute = AsyncMock(return_value={"success": True, "modified_ids": ["100"]})
+    monkeypatch.setattr(meta, "execute_mutation", execute)
+
+    await meta.process_one_task(
+        engine,
+        _task("activate_ad", params={"enable_grace": intent}),
+        client=AsyncMock(),
+    )
+
+    query.assert_not_awaited()
+    execute.assert_not_awaited()
+    _patched.fail.assert_awaited_once()
+    _patched.succeed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "spend,cpa",
+    [
+        (None, Decimal("10.00")),
+        (Decimal("NaN"), Decimal("10.00")),
+        (Decimal("Infinity"), Decimal("10.00")),
+        (Decimal("1.00"), None),
+        (Decimal("1.00"), Decimal("NaN")),
+        (Decimal("1.00"), Decimal("Infinity")),
+        (Decimal("1.00"), Decimal("0")),
+        (Decimal("1.00"), Decimal("-1")),
+    ],
+)
+async def test_curator_preflight_rejects_missing_or_invalid_current_money_values(
+    monkeypatch, _patched, spend: object, cpa: object
+) -> None:
+    engine, query = _preflight_engine(spend=spend, cpa=cpa)
+    execute = AsyncMock(return_value={"success": True, "modified_ids": ["100"]})
+    monkeypatch.setattr(meta, "execute_mutation", execute)
+
+    await meta.process_one_task(
+        engine,
+        _task(
+            "activate_ad",
+            params={"enable_grace": {"spend_cap": "10.00"}},
+        ),
+        client=AsyncMock(),
+    )
+
+    query.assert_awaited_once()
+    execute.assert_not_awaited()
+    _patched.fail.assert_awaited_once()
+    _patched.succeed.assert_not_awaited()

@@ -75,11 +75,16 @@ def render_enable_reco_alert(inp: EnableRecoRenderInput) -> tuple[str, dict | No
         lines.append("• (нет деталей)")
     if inp.decision.hold_until_cpl:
         cap = (inp.decision.snapshot or {}).get("grace_spend_cap")
-        cap_part = f" (~{fmt.money(cap)})" if cap else ""
+        current_spend = (inp.decision.snapshot or {}).get("total_spend")
+        remaining = (inp.decision.snapshot or {}).get("grace_spend_remaining")
         lines.append("")
         lines.append(
-            f"{fmt.i('После включения стоп-правила придержим до ~1×CPA спенда' + cap_part)}"
-            f"{fmt.i(' — дальше решает цена лида.')}"
+            fmt.i(
+                "Общий spend сейчас "
+                f"{fmt.money(current_spend)}; абсолютный лимит CPA {fmt.money(cap)}; "
+                f"осталось не более {fmt.money(remaining)}. Уже накопленный расход входит "
+                "в лимит; затем снова действуют стоп-правила."
+            )
         )
 
     grid = _snapshot_grid(inp.decision.snapshot or {})

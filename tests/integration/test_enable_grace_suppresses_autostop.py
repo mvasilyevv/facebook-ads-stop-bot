@@ -69,6 +69,19 @@ async def grace_offer(pg_engine, clean_grace_tables):
     return {"offer_id": offer_id, "code": code}
 
 
+@pytest_asyncio.fixture
+async def grace_offer_without_cpa(pg_engine, clean_grace_tables):
+    """Активный оффер без CPA: grace обязан fail-close, не подавляя STOP."""
+    offer_id = uuid.uuid4()
+    code = f"GN{uuid.uuid4().hex[:4].upper()}"
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO offers (id, code, name, is_active) VALUES (:i, :c, :n, TRUE)"),
+            {"i": offer_id, "c": code, "n": f"No-CPA grace offer {code}"},
+        )
+    return {"offer_id": offer_id, "code": code}
+
+
 def _stop_row(*, code: str, fb_ad_id: str, spend: str = "25.00") -> ScannedAdRow:
     """Строка с метриками, которые evaluator оценивает как STOP (spend ≫ CPA, депозитов нет)."""
     return ScannedAdRow(
@@ -110,18 +123,24 @@ async def _fsm_and_tasks(pg_engine) -> tuple[str | None, int]:
 # Активный grace: STOP-метрики есть, но ни алерта, ни pause-задачи, FSM=normal
 async def test_active_grace_suppresses_stop(pg_engine, grace_offer) -> None:
     fb_ad_id = f"7788{uuid.uuid4().hex[:8]}"
+    cycle_ts = datetime.now(timezone.utc)
+    day_start = cycle_ts.replace(hour=0, minute=0, second=0, microsecond=0)
     grace_map = {
         fb_ad_id: EnableGrace(
-            until=datetime.now(timezone.utc) + timedelta(hours=1),
-            spend_cap=Decimal("100.00"),  # spend=25 < 100 — кап не выбран
+            until=cycle_ts + timedelta(hours=1),
+            spend_cap=Decimal("10.00"),
+            baseline_spend=Decimal("0.50"),
+            cabinet_day_start=day_start,
         )
     }
 
     result = await process_scan_rows(
         pg_engine,
-        rows=[_stop_row(code=grace_offer["code"], fb_ad_id=fb_ad_id)],
+        rows=[_stop_row(code=grace_offer["code"], fb_ad_id=fb_ad_id, spend="9.00")],
         scan_id=1001,
+        cycle_ts=cycle_ts,
         enable_grace_map=grace_map,
+        tracker_day_start=day_start,
     )
 
     assert result.rows_grace_suppressed == 1
@@ -135,18 +154,24 @@ async def test_active_grace_suppresses_stop(pg_engine, grace_offer) -> None:
 # Grace истёк по времени: тот же скан штатно даёт stop_sent + pause_ad задачу
 async def test_expired_grace_stop_fires(pg_engine, grace_offer) -> None:
     fb_ad_id = f"7788{uuid.uuid4().hex[:8]}"
+    cycle_ts = datetime.now(timezone.utc)
+    day_start = cycle_ts.replace(hour=0, minute=0, second=0, microsecond=0)
     grace_map = {
         fb_ad_id: EnableGrace(
-            until=datetime.now(timezone.utc) - timedelta(seconds=5),
-            spend_cap=Decimal("100.00"),
+            until=cycle_ts - timedelta(seconds=5),
+            spend_cap=Decimal("10.00"),
+            baseline_spend=Decimal("0.50"),
+            cabinet_day_start=day_start,
         )
     }
 
     result = await process_scan_rows(
         pg_engine,
-        rows=[_stop_row(code=grace_offer["code"], fb_ad_id=fb_ad_id)],
+        rows=[_stop_row(code=grace_offer["code"], fb_ad_id=fb_ad_id, spend="9.00")],
         scan_id=1002,
+        cycle_ts=cycle_ts,
         enable_grace_map=grace_map,
+        tracker_day_start=day_start,
     )
 
     assert result.rows_grace_suppressed == 0
@@ -159,18 +184,61 @@ async def test_expired_grace_stop_fires(pg_engine, grace_offer) -> None:
 # «держать до цены лида» закончилось, дальше решают обычные правила
 async def test_spend_cap_reached_stop_fires(pg_engine, grace_offer) -> None:
     fb_ad_id = f"7788{uuid.uuid4().hex[:8]}"
+    cycle_ts = datetime.now(timezone.utc)
+    day_start = cycle_ts.replace(hour=0, minute=0, second=0, microsecond=0)
     grace_map = {
         fb_ad_id: EnableGrace(
-            until=datetime.now(timezone.utc) + timedelta(hours=1),
-            spend_cap=Decimal("10.00"),  # кап = 1×CPA; spend=25 ≥ 10
+            until=cycle_ts + timedelta(hours=1),
+            spend_cap=Decimal("10.00"),  # абсолютный cap = CPA; spend ровно на границе
+            baseline_spend=Decimal("0.50"),
+            cabinet_day_start=day_start,
         )
     }
 
     result = await process_scan_rows(
         pg_engine,
-        rows=[_stop_row(code=grace_offer["code"], fb_ad_id=fb_ad_id)],
+        rows=[_stop_row(code=grace_offer["code"], fb_ad_id=fb_ad_id, spend="10.00")],
         scan_id=1003,
+        cycle_ts=cycle_ts,
         enable_grace_map=grace_map,
+        tracker_day_start=day_start,
+    )
+
+    assert result.rows_grace_suppressed == 0
+    state, tasks = await _fsm_and_tasks(pg_engine)
+    assert state == "stop_sent"
+    assert tasks == 1
+
+
+# Даже валидный marker v2 не имеет права suppress без актуального CPA оффера.
+async def test_current_cpa_missing_does_not_suppress_stop(
+    pg_engine, grace_offer_without_cpa
+) -> None:
+    fb_ad_id = f"7788{uuid.uuid4().hex[:8]}"
+    cycle_ts = datetime.now(timezone.utc)
+    day_start = cycle_ts.replace(hour=0, minute=0, second=0, microsecond=0)
+    grace_map = {
+        fb_ad_id: EnableGrace(
+            until=cycle_ts + timedelta(hours=1),
+            spend_cap=Decimal("200.00"),
+            baseline_spend=Decimal("0.50"),
+            cabinet_day_start=day_start,
+        )
+    }
+
+    result = await process_scan_rows(
+        pg_engine,
+        rows=[
+            _stop_row(
+                code=grace_offer_without_cpa["code"],
+                fb_ad_id=fb_ad_id,
+                spend="100.00",
+            )
+        ],
+        scan_id=1004,
+        cycle_ts=cycle_ts,
+        enable_grace_map=grace_map,
+        tracker_day_start=day_start,
     )
 
     assert result.rows_grace_suppressed == 0

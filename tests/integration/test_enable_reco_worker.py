@@ -184,7 +184,7 @@ async def _make_curator_only_candidate(
             text(
                 """
                 UPDATE ad_metrics
-                SET spend = 25, cost_per_lead = 40, cost_per_registration = 40,
+                SET spend = 9, cost_per_lead = 40, cost_per_registration = 40,
                     registrations = 0, deposits = 0, impressions = 108, ctr = 3.7
                 WHERE ad_id = :aid
                 """

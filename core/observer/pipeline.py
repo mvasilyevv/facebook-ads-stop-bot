@@ -285,6 +285,7 @@ async def process_scan_rows(
                 ad_account_id=ad_account_id,
                 is_cabinet_reset=is_cabinet_reset,
                 enable_grace_map=enable_grace_map,
+                tracker_day_start=tracker_day_start,
             )
         except Exception:
             logger.exception(
@@ -311,6 +312,7 @@ async def _process_one_row(
     is_cabinet_reset: bool = False,
     external_registrations: dict[str, int] | None = None,
     enable_grace_map: dict[str, EnableGrace] | None = None,
+    tracker_day_start: datetime | None = None,
 ) -> None:
     """Обработка одной строки. Вынесено отдельно ради читаемости + try/except в caller'е."""
 
@@ -413,19 +415,31 @@ async def _process_one_row(
     # (в отличие от снуза, который по MID-2 глушит только алерты). Подавляем именно
     # коды ДО decide(): иначе FSM ушёл бы в stop_sent без задачи и после окна grace
     # повторный STOP уже не сработал бы (FSM однонаправленная). Выход из grace —
-    # по времени ИЛИ по спенд-капу (~1×CPA) — дальше обычные правила.
+    # по времени ИЛИ когда общий spend достиг абсолютного CPA — дальше обычные правила.
+    # Актуальный CPA дополнительно уменьшает marker cap, если CPA позднее снизили.
     grace = (enable_grace_map or {}).get(row.fb_ad_id)
     if (
         grace is not None
         and (stop_codes or warning_codes)
-        and grace_is_active(grace, now=cycle_ts, spend=row.spend)
+        and matched_offer.cpa_threshold is not None
+        and matched_offer.cpa_threshold.is_finite()
+        and matched_offer.cpa_threshold > 0
+        and grace_is_active(
+            grace,
+            now=cycle_ts,
+            spend=row.spend,
+            absolute_spend_cap=matched_offer.cpa_threshold,
+            current_cabinet_day_start=tracker_day_start,
+        )
     ):
         logger.info(
-            "observer: enable-grace активен fb_ad_id=%s (до %s, cap=%s, spend=%s) — "
+            "observer: enable-grace активен fb_ad_id=%s "
+            "(до %s, marker_cap=%s, cpa_cap=%s, spend=%s) — "
             "срабатывания правил подавлены: %s",
             row.fb_ad_id,
             grace.until.isoformat(),
             grace.spend_cap,
+            matched_offer.cpa_threshold,
             row.spend,
             list(stop_codes + warning_codes),
         )
