@@ -4,6 +4,24 @@
 	}
 }
 
+(desktop_session_auth) {
+	forward_auth 127.0.0.1:8100 {
+		uri /desktop-auth/verify
+		# The verification endpoint trusts only this loopback subrequest. Never
+		# forward identity, API credentials, or WebSocket transport headers from
+		# the public request into the authorization decision.
+		header_up -Remote-User
+		header_up -Authorization
+		header_up -Proxy-Authorization
+		header_up -X-API-Key
+		header_up -X-Panel-Recovery-Key
+		header_up -X-Desktop-Telegram-User-Id
+		header_up -X-Desktop-Role
+		header_up -Connection
+		header_up -Upgrade
+	}
+}
+
 app.adpulse.su {
 	log {
 		output file /var/log/caddy/fb-agent-access.log {
@@ -31,6 +49,18 @@ app.adpulse.su {
 
 		handle /readyz {
 			reverse_proxy 127.0.0.1:8100
+		}
+
+		# Desktop readiness is deliberately independent from bot readiness. The
+		# API checks Guacamole HTTP, JDBC state, guacd, and VNC through the private
+		# Docker network.
+		handle /desktop-readyz {
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -Remote-User
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+			}
 		}
 
 		# AdSet.pro передаёт секрет в query string и не умеет custom headers.
@@ -85,31 +115,54 @@ app.adpulse.su {
 			}
 		}
 
-		# Safari keeps the authenticated panel page open while this same-origin
-		# request creates a one-time ticket. The browser then navigates the new tab
-		# directly to desktop.adpulse.su, avoiding a second top-level panel request.
-		handle /auth/desktop/session {
+		# A one-time ticket may arrive from Telegram in the query string. Keep the
+		# redemption request out of access logs and strip all spoofable identity.
+		handle /desktop-auth/redeem {
 			log_skip
-			import panel_auth
-			rewrite * /desktop-auth/launch-url-recovery
 			reverse_proxy 127.0.0.1:8100 {
-				header_up X-API-Key {$API_KEY}
-				header_up X-Panel-Recovery-Key {$API_KEY}
+				header_up -Remote-User
+				header_up -X-API-Key
+				header_up -X-Panel-Recovery-Key
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
 				header_up -Authorization
 				header_up -Proxy-Authorization
 			}
 		}
 
-		# The panel BasicAuth has already authenticated this browser. Exchange that
-		# proof for a one-time ticket on the desktop host; never log the ticket URL.
-		handle /auth/desktop/launch {
+		# The verification route is an internal forward_auth target, not a public
+		# API. Caddy calls the API directly over loopback above.
+		handle /desktop-auth/verify {
+			respond 404
+		}
+
+		handle /desktop/logout {
 			log_skip
-			import panel_auth
-			rewrite * /desktop-auth/launch-recovery
 			reverse_proxy 127.0.0.1:8100 {
-				header_up X-Panel-Recovery-Key {$API_KEY}
+				header_up -Remote-User
+				header_up -X-API-Key
+				header_up -X-Panel-Recovery-Key
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
 				header_up -Authorization
 				header_up -Proxy-Authorization
+			}
+		}
+
+		# Guacamole is the only production desktop UI. The authenticated principal
+		# is fixed by this trusted proxy and can never be supplied by the client.
+		handle /desktop/* {
+			import desktop_session_auth
+			reverse_proxy 127.0.0.1:8090 {
+				stream_close_delay 5m
+				header_up -Remote-User
+				header_up Remote-User "adpulse-desktop"
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+				header_up -X-Panel-Recovery-Key
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
 			}
 		}
 

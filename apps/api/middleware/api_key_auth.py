@@ -45,7 +45,7 @@ _PROTECTED_READ_PATHS = frozenset({"/api/ai/pulse"})
 _PROTECTED_READ_PREFIXES = ("/api/tools/adset-duplicates/",)
 
 # Префиксы путей со своим механизмом auth или публичные — ключ не требуем.
-_EXEMPT_PATH_PREFIXES = ("/api/v1/postback", "/api/tma")
+_EXEMPT_PATH_PREFIXES = ("/api/v1/postback", "/api/tma", "/desktop/logout")
 
 TmaAuthorizer = Callable[[str, Settings], Awaitable[str | None]]
 

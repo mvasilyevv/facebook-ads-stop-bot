@@ -205,7 +205,6 @@ services:
       dockerfile: docker/Dockerfile.frontend
       args:
         VITE_API_BASE: /api
-        VITE_REMOTE_DESKTOP_URL: ${VITE_REMOTE_DESKTOP_URL:-}
     image: ${IMAGE_REPOSITORY:-fb-stop-bot}/frontend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     logging: *default-logging
@@ -227,7 +226,6 @@ services:
       dockerfile: docker/Dockerfile.mini-app
       args:
         VITE_API_BASE: /api
-        VITE_REMOTE_DESKTOP_URL: ${VITE_REMOTE_DESKTOP_URL:-}
     image: ${IMAGE_REPOSITORY:-fb-stop-bot}/mini-app:${IMAGE_TAG:-latest}
     restart: unless-stopped
     logging: *default-logging

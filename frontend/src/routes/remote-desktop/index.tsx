@@ -1,11 +1,34 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ExternalLink, MonitorUp, ShieldCheck } from "lucide-react";
+import { MonitorUp, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { HeaderSep, PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
+import { apiSend } from "@/lib/api/client";
 
-const REMOTE_DESKTOP_URL = "https://desktop.adpulse.su";
-const DESKTOP_SESSION_URL = "/auth/desktop/session";
+interface DesktopLaunchResponse {
+  url: string;
+  expires_at: string;
+}
+
+const DESKTOP_ORIGIN = "https://app.adpulse.su";
+
+function validateDesktopLaunchUrl(rawUrl: string): string {
+  const url = new URL(rawUrl, DESKTOP_ORIGIN);
+  if (
+    url.origin !== DESKTOP_ORIGIN ||
+    url.pathname !== "/desktop-auth/redeem" ||
+    !url.searchParams.get("ticket")
+  ) {
+    throw new Error("Сервер вернул некорректный билет рабочего стола.");
+  }
+  return url.toString();
+}
+
+export const desktopNavigation = {
+  assign(url: string): void {
+    window.location.assign(url);
+  },
+};
 
 export const Route = createFileRoute("/remote-desktop/")({
   component: RemoteDesktopPage,
@@ -17,51 +40,15 @@ function RemoteDesktopPage() {
 
   const connectDesktop = async () => {
     setConnectionError(null);
-
-    // Open synchronously so Safari treats this as a user-initiated popup. The
-    // authenticated ticket request stays in the current page and the new tab
-    // navigates directly to the desktop host instead of re-entering app.adpulse.su.
-    const desktopWindow = window.open("about:blank", "_blank");
-    if (!desktopWindow) {
-      setConnectionError("Разрешите всплывающие окна для AdPulse и повторите подключение.");
-      return;
-    }
     setIsConnecting(true);
 
     try {
-      const response = await fetch(DESKTOP_SESSION_URL, {
-        method: "POST",
-        credentials: "same-origin",
-        cache: "no-store",
-        headers: { Accept: "application/json" },
-      });
-      const payload = (await response.json().catch(() => null)) as
-        | { url?: unknown; detail?: unknown }
-        | null;
-      if (!response.ok) {
-        throw new Error(
-          typeof payload?.detail === "string"
-            ? payload.detail
-            : "Не удалось получить билет рабочего стола.",
-        );
-      }
-      if (typeof payload?.url !== "string") {
+      const payload = await apiSend<DesktopLaunchResponse>("POST", "/desktop/launch");
+      if (typeof payload.url !== "string" || payload.url.length === 0) {
         throw new Error("Сервер вернул некорректный билет рабочего стола.");
       }
-      const launchUrl = new URL(payload.url);
-      if (
-        launchUrl.origin !== REMOTE_DESKTOP_URL ||
-        launchUrl.pathname !== "/desktop-auth/redeem"
-      ) {
-        throw new Error("Сервер вернул небезопасный адрес рабочего стола.");
-      }
-      // Do not clear `opener` before this async navigation. Safari detaches the
-      // WindowProxy in that order and leaves the user on about:blank. The
-      // destination is strictly allow-listed above, so navigating the popup
-      // directly is safe here.
-      desktopWindow.location.replace(launchUrl.toString());
+      desktopNavigation.assign(validateDesktopLaunchUrl(payload.url));
     } catch (error) {
-      desktopWindow.close();
       setConnectionError(
         error instanceof Error ? error.message : "Не удалось открыть рабочий стол.",
       );
@@ -93,7 +80,7 @@ function RemoteDesktopPage() {
             </span>
             <div className="min-w-0">
               <p className="font-display text-[13px] text-bg-11">Vision Desktop</p>
-              <p className="truncate font-mono text-[11px] text-bg-8">{REMOTE_DESKTOP_URL}</p>
+              <p className="truncate font-mono text-[11px] text-bg-8">Единый защищённый контур</p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5 font-display text-[10px] uppercase tracking-[0.08em] text-success">
@@ -120,8 +107,7 @@ function RemoteDesktopPage() {
               Vision Desktop
             </h2>
             <p className="mx-auto mt-2 max-w-[450px] text-[13px] leading-relaxed text-bg-9">
-              Панель выдаст одноразовый билет и откроет рабочий стол в новой вкладке. Дополнительный
-              логин не потребуется.
+              Подключение откроется в этой вкладке. Дополнительный логин не потребуется.
             </p>
             <div className="mt-6 flex justify-center">
               <Button
@@ -129,11 +115,11 @@ function RemoteDesktopPage() {
                 variant="primary"
                 size="lg"
                 className="min-w-44"
-                leftIcon={<ExternalLink size={15} aria-hidden="true" />}
+                leftIcon={<MonitorUp size={15} aria-hidden="true" />}
                 disabled={isConnecting}
                 onClick={connectDesktop}
               >
-                {isConnecting ? "Подключение…" : "Подключиться"}
+                {isConnecting ? "Подключение…" : connectionError ? "Повторить" : "Подключиться"}
               </Button>
             </div>
             {connectionError ? (

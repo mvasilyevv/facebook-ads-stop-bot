@@ -14,13 +14,6 @@ RUN apt-get update \
     && rm -f /tmp/vision.deb \
     && rm -rf /var/lib/apt/lists/*
 
-COPY selkies-clipboard-bridge.js /usr/share/selkies/selkies-dashboard/adpulse-clipboard-bridge.js
-RUN sed -i \
-        's#<script type="module" crossorigin#<script src="./adpulse-clipboard-bridge.js"></script><script type="module" crossorigin#' \
-        /usr/share/selkies/selkies-dashboard/index.html \
-    && grep -Fq '<script src="./adpulse-clipboard-bridge.js"></script>' \
-        /usr/share/selkies/selkies-dashboard/index.html
-
 COPY vision-service-run /etc/s6-overlay/s6-rc.d/svc-vision/run
 COPY vision-window-fit-run /etc/s6-overlay/s6-rc.d/svc-vision-window-fit/run
 COPY vision-vnc-run /etc/s6-overlay/s6-rc.d/svc-vision-vnc/run

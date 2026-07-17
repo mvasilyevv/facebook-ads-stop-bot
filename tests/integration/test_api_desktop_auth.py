@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -8,84 +10,59 @@ from sqlalchemy import text
 
 from apps.api.deps import get_engine, get_settings
 from apps.api.main import create_app
-from core.auth.desktop_access import create_desktop_ticket
+from apps.api.routers.desktop_auth import get_desktop_readiness_probe
+from core.auth.desktop_access import (
+    DESKTOP_SESSION_COOKIE,
+    consume_desktop_ticket,
+    create_desktop_ticket,
+)
+from core.auth.tma import issue_session_token
 from core.config import Settings
 
 
 @pytest_asyncio.fixture
-async def desktop_owner(pg_engine):
+async def desktop_users(pg_engine):
     owner_id = 89000001
+    recipient_id = 89000002
     async with pg_engine.begin() as conn:
-        previous_owners = (
+        for uid, role in ((owner_id, "owner"), (recipient_id, "recipient")):
             await conn.execute(
                 text(
                     """
-                    SELECT chat_id, telegram_user_id
-                    FROM telegram_recipients
-                    WHERE role = 'owner' AND revoked_at IS NULL
-                      AND telegram_user_id <> :uid
+                    INSERT INTO telegram_recipients (chat_id, telegram_user_id, username, role)
+                    VALUES (:uid, :uid, :username, :role)
+                    ON CONFLICT (chat_id, telegram_user_id)
+                    DO UPDATE SET role = :role, revoked_at = NULL
                     """
                 ),
-                {"uid": owner_id},
+                {"uid": uid, "username": f"desktop_{role}", "role": role},
             )
-        ).all()
-        await conn.execute(
-            text(
-                """
-                UPDATE telegram_recipients
-                SET revoked_at = NOW()
-                WHERE role = 'owner' AND revoked_at IS NULL
-                  AND telegram_user_id <> :uid
-                """
-            ),
-            {"uid": owner_id},
-        )
-        await conn.execute(
-            text(
-                """
-                INSERT INTO telegram_recipients (chat_id, telegram_user_id, username, role)
-                VALUES (:uid, :uid, 'desktop_owner', 'owner')
-                ON CONFLICT (chat_id, telegram_user_id)
-                DO UPDATE SET role = 'owner', revoked_at = NULL
-                """
-            ),
-            {"uid": owner_id},
-        )
-    yield owner_id
+    yield owner_id, recipient_id
     async with pg_engine.begin() as conn:
         await conn.execute(
-            text("DELETE FROM telegram_recipients WHERE telegram_user_id = :uid"),
-            {"uid": owner_id},
+            text(
+                "DELETE FROM telegram_recipients "
+                "WHERE telegram_user_id IN (:owner_id, :recipient_id)"
+            ),
+            {"owner_id": owner_id, "recipient_id": recipient_id},
         )
-        for chat_id, telegram_user_id in previous_owners:
-            await conn.execute(
-                text(
-                    """
-                    UPDATE telegram_recipients
-                    SET revoked_at = NULL
-                    WHERE chat_id = :chat_id AND telegram_user_id = :telegram_user_id
-                    """
-                ),
-                {"chat_id": chat_id, "telegram_user_id": telegram_user_id},
-            )
 
 
-def _settings() -> Settings:
+def _settings(owner_id: int) -> Settings:
     return Settings(
         _env_file=None,
         require_api_key=False,
-        api_key=SecretStr("recovery-secret"),
-        desktop_access_ticket_ttl_seconds=60,
-        desktop_access_session_ttl_seconds=3600,
+        api_key=SecretStr("desktop-api-key"),
+        desktop_public_origin="https://app.adpulse.su",
+        desktop_access_ticket_ttl_seconds=300,
+        desktop_access_session_ttl_seconds=43_200,
         desktop_access_owner_recheck_seconds=0,
-        desktop_guacamole_json_secret=SecretStr("00112233445566778899aabbccddeeff"),
-        desktop_guacamole_token_ttl_seconds=60,
-        desktop_vnc_password=SecretStr("vnc-pass"),
+        desktop_owner_telegram_user_id=owner_id,
+        tma_session_secret=SecretStr("test-tma-secret"),
     )
 
 
-def _app(pg_engine, fake_redis_client):
-    settings = _settings()
+def _app(pg_engine, fake_redis_client, settings):
     app = create_app()
     app.state.redis = fake_redis_client
     app.dependency_overrides[get_engine] = lambda: pg_engine
@@ -93,176 +70,206 @@ def _app(pg_engine, fake_redis_client):
     return app
 
 
-@pytest.mark.asyncio
-async def test_direct_connect_without_desktop_cookie_returns_to_panel(pg_engine, fake_redis_client):
-    app = _app(pg_engine, fake_redis_client)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="https://desktop.adpulse.su"
-    ) as client:
-        response = await client.get("/desktop-auth/connect", follow_redirects=False)
+def _web_headers(**overrides: str) -> dict[str, str]:
+    headers = {
+        "Origin": "https://app.adpulse.su",
+        "X-API-Key": "desktop-api-key",
+    }
+    headers.update(overrides)
+    return headers
 
-    assert response.status_code == 303
-    assert response.headers["location"] == "https://app.adpulse.su/remote-desktop"
+
+@pytest.mark.asyncio
+async def test_web_owner_launch_has_documented_no_body_contract(
+    pg_engine, fake_redis_client, desktop_users
+):
+    owner_id, _ = desktop_users
+    app = _app(pg_engine, fake_redis_client, _settings(owner_id))
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
+    ) as client:
+        response = await client.post("/api/desktop/launch", headers=_web_headers())
+
+    assert response.status_code == 200
+    assert response.json()["url"].startswith("https://app.adpulse.su/desktop-auth/redeem?ticket=")
+    assert datetime.fromisoformat(response.json()["expires_at"])
     assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    operation = app.openapi()["paths"]["/api/desktop/launch"]["post"]
+    assert "requestBody" not in operation
 
 
 @pytest.mark.asyncio
-async def test_panel_launch_issues_single_use_cross_host_ticket(
-    pg_engine, fake_redis_client, desktop_owner
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        ({"X-API-Key": "desktop-api-key"}, 403),
+        ({"Origin": "https://evil.example", "X-API-Key": "desktop-api-key"}, 403),
+        ({"Origin": "https://app.adpulse.su"}, 401),
+        ({"Origin": "https://app.adpulse.su", "X-API-Key": "wrong"}, 401),
+    ],
+)
+async def test_web_launch_validates_exact_origin_and_api_key(
+    pg_engine, fake_redis_client, desktop_users, headers, status
 ):
-    app = _app(pg_engine, fake_redis_client)
+    owner_id, _ = desktop_users
+    app = _app(pg_engine, fake_redis_client, _settings(owner_id))
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
     ) as client:
-        denied = await client.get("/desktop-auth/launch-recovery", follow_redirects=False)
-        launched = await client.get(
-            "/desktop-auth/launch-recovery",
-            headers={"X-Panel-Recovery-Key": "recovery-secret"},
-            follow_redirects=False,
+        response = await client.post("/api/desktop/launch", headers=headers)
+    assert response.status_code == status
+
+
+@pytest.mark.asyncio
+async def test_web_launch_uses_explicit_owner_and_rejects_revocation(
+    pg_engine, fake_redis_client, desktop_users
+):
+    owner_id, _ = desktop_users
+    settings = _settings(owner_id)
+    app = _app(pg_engine, fake_redis_client, settings)
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE telegram_recipients SET revoked_at=NOW() WHERE telegram_user_id=:uid"),
+            {"uid": owner_id},
         )
-        redeemed = await client.get(launched.headers["location"], follow_redirects=False)
-
-    assert denied.status_code == 404
-    assert launched.status_code == 303
-    assert launched.headers["location"].startswith(
-        "https://desktop.adpulse.su/desktop-auth/redeem?ticket="
-    )
-    assert launched.headers["cache-control"] == "no-store"
-    assert redeemed.status_code == 303
-    assert redeemed.headers["location"] == "/desktop-auth/connect"
-    assert "adpulse_desktop_session=" in redeemed.headers["set-cookie"]
-
-
-@pytest.mark.asyncio
-async def test_panel_launch_url_issues_json_ticket_for_same_origin_fetch(
-    pg_engine, fake_redis_client, desktop_owner
-):
-    app = _app(pg_engine, fake_redis_client)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
     ) as client:
-        denied = await client.post("/desktop-auth/launch-url-recovery")
+        response = await client.post("/api/desktop/launch", headers=_web_headers())
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_tma_bearer_launch_records_real_owner_and_rejects_recipient(
+    pg_engine, fake_redis_client, desktop_users
+):
+    owner_id, recipient_id = desktop_users
+    settings = _settings(owner_id)
+    app = _app(pg_engine, fake_redis_client, settings)
+    owner_token = issue_session_token(
+        str(owner_id), settings.tma_session_ttl_seconds, "test-tma-secret"
+    )
+    recipient_token = issue_session_token(
+        str(recipient_id), settings.tma_session_ttl_seconds, "test-tma-secret"
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
+    ) as client:
         launched = await client.post(
-            "/desktop-auth/launch-url-recovery",
-            headers={"X-Panel-Recovery-Key": "recovery-secret"},
+            "/api/desktop/launch", headers={"Authorization": f"Bearer {owner_token}"}
         )
-        redeemed = await client.get(launched.json()["url"], follow_redirects=False)
+        denied = await client.post(
+            "/api/desktop/launch", headers={"Authorization": f"Bearer {recipient_token}"}
+        )
 
-    assert denied.status_code == 404
     assert launched.status_code == 200
-    assert launched.headers["cache-control"] == "no-store"
-    assert launched.json()["url"].startswith(
-        "https://desktop.adpulse.su/desktop-auth/redeem?ticket="
-    )
-    assert redeemed.status_code == 303
-    assert redeemed.headers["location"] == "/desktop-auth/connect"
+    ticket = launched.json()["url"].split("ticket=", 1)[1]
+    grant = await consume_desktop_ticket(fake_redis_client, ticket)
+    assert grant.telegram_user_id == owner_id
+    assert grant.source == "telegram_mini_app"
+    assert denied.status_code == 403
 
 
 @pytest.mark.asyncio
-async def test_ticket_redeem_creates_host_session_and_ticket_is_single_use(
-    pg_engine, fake_redis_client, desktop_owner
-):
+async def test_redeem_cookie_verify_logout_and_replay(pg_engine, fake_redis_client, desktop_users):
+    owner_id, _ = desktop_users
     ticket, _ = await create_desktop_ticket(
         fake_redis_client,
-        telegram_user_id=desktop_owner,
+        telegram_user_id=owner_id,
         source="telegram_mini_app",
-        ttl=60,
+        ttl=300,
     )
-    app = _app(pg_engine, fake_redis_client)
+    app = _app(pg_engine, fake_redis_client, _settings(owner_id))
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="https://desktop.adpulse.su"
+        transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
     ) as client:
         redeemed = await client.get(f"/desktop-auth/redeem?ticket={ticket}", follow_redirects=False)
-        verified = await client.get("/desktop-auth/verify", follow_redirects=False)
-        connected = await client.get("/desktop-auth/connect", follow_redirects=False)
+        token = redeemed.cookies.get(DESKTOP_SESSION_COOKIE)
+        cookie_header = {"Cookie": f"{DESKTOP_SESSION_COOKIE}={token}"}
+        verified = await client.get(
+            "/desktop-auth/verify",
+            headers={**cookie_header, "Remote-User": "attacker"},
+            follow_redirects=False,
+        )
+        logged_out = await client.post(
+            "/desktop/logout", headers=cookie_header, follow_redirects=False
+        )
+        denied = await client.get(
+            "/desktop-auth/verify", headers=cookie_header, follow_redirects=False
+        )
         replay = await client.get(f"/desktop-auth/redeem?ticket={ticket}", follow_redirects=False)
 
     assert redeemed.status_code == 303
-    assert redeemed.headers["location"] == "/desktop-auth/connect"
+    assert redeemed.headers["location"] == "/desktop/"
     cookie = redeemed.headers["set-cookie"]
-    assert "adpulse_desktop_session=" in cookie
+    assert f"{DESKTOP_SESSION_COOKIE}=" in cookie
+    assert "Path=/desktop" in cookie
     assert "HttpOnly" in cookie and "Secure" in cookie and "SameSite=lax" in cookie
-    assert "Max-Age=3600" in cookie
+    assert "Max-Age=43200" in cookie
     assert verified.status_code == 200
-    assert verified.headers["x-desktop-telegram-user-id"] == str(desktop_owner)
-    assert connected.status_code == 303
-    assert connected.headers["location"].startswith("/guacamole/?data=")
-    assert "vnc-pass" not in connected.headers["location"]
+    assert verified.headers["remote-user"] == "adpulse-desktop"
+    assert logged_out.status_code == 303
+    assert denied.status_code == 303
     assert replay.status_code == 403
 
 
 @pytest.mark.asyncio
-async def test_recovery_cookie_continues_through_guacamole_connect(
-    pg_engine, fake_redis_client, desktop_owner
+async def test_removed_legacy_desktop_routes_are_not_registered(
+    pg_engine, fake_redis_client, desktop_users
 ):
-    app = _app(pg_engine, fake_redis_client)
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="https://desktop.adpulse.su"
-    ) as client:
-        recovered = await client.get(
-            "/desktop-auth/recovery",
-            headers={"X-Panel-Recovery-Key": "recovery-secret"},
-            follow_redirects=False,
-        )
-        connected = await client.get("/desktop-auth/connect", follow_redirects=False)
+    owner_id, _ = desktop_users
+    app = _app(pg_engine, fake_redis_client, _settings(owner_id))
+    paths = app.openapi()["paths"]
+    assert "/api/desktop/launch" in paths
+    for path in (
+        "/desktop-auth/connect",
+        "/desktop-auth/recovery",
+        "/desktop-auth/launch-recovery",
+        "/desktop-auth/launch-url-recovery",
+        "/auth/desktop/session",
+        "/auth/desktop/launch",
+    ):
+        assert path not in paths
 
-    assert recovered.status_code == 303
-    assert recovered.headers["location"] == "/desktop-auth/connect"
-    assert "adpulse_desktop_session=" in recovered.headers["set-cookie"]
-    assert connected.status_code == 303
-    assert connected.headers["location"].startswith("/guacamole/?data=")
+
+class _ReadinessProbe:
+    def __init__(self, checks):
+        self.checks = checks
+
+    async def check(self, settings):
+        del settings
+        return self.checks
 
 
 @pytest.mark.asyncio
-async def test_connect_fails_closed_when_guacamole_secrets_are_missing(
-    pg_engine, fake_redis_client, desktop_owner
+async def test_desktop_readyz_is_separate_and_fail_closed(
+    pg_engine, fake_redis_client, desktop_users
 ):
-    ticket, _ = await create_desktop_ticket(
-        fake_redis_client,
-        telegram_user_id=desktop_owner,
-        source="panel_telegram",
-        ttl=60,
+    owner_id, _ = desktop_users
+    app = _app(pg_engine, fake_redis_client, _settings(owner_id))
+    app.dependency_overrides[get_desktop_readiness_probe] = lambda: _ReadinessProbe(
+        {"guacamole": True, "jdbc": False, "guacd": True, "vnc": True}
     )
-    settings = _settings()
-    settings.desktop_guacamole_json_secret = SecretStr("")
-    app = create_app()
-    app.state.redis = fake_redis_client
-    app.dependency_overrides[get_engine] = lambda: pg_engine
-    app.dependency_overrides[get_settings] = lambda: settings
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="https://desktop.adpulse.su"
+        transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
     ) as client:
-        await client.get(f"/desktop-auth/redeem?ticket={ticket}", follow_redirects=False)
-        connected = await client.get("/desktop-auth/connect", follow_redirects=False)
+        failed = await client.get("/desktop-readyz")
+    assert failed.status_code == 503
+    assert failed.json() == {
+        "status": "not_ready",
+        "checks": {"guacamole": True, "jdbc": False, "guacd": True, "vnc": True},
+    }
+    assert "password" not in failed.text.lower()
 
-    assert connected.status_code == 503
-    assert "временно не настроен" in connected.text
-
-
-@pytest.mark.asyncio
-async def test_desktop_session_is_rejected_after_owner_revocation(
-    pg_engine, fake_redis_client, desktop_owner
-):
-    ticket, _ = await create_desktop_ticket(
-        fake_redis_client,
-        telegram_user_id=desktop_owner,
-        source="panel_telegram",
-        ttl=60,
+    app.dependency_overrides[get_desktop_readiness_probe] = lambda: _ReadinessProbe(
+        {"guacamole": True, "jdbc": True, "guacd": True, "vnc": True}
     )
-    app = _app(pg_engine, fake_redis_client)
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="https://desktop.adpulse.su"
+        transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
     ) as client:
-        await client.get(f"/desktop-auth/redeem?ticket={ticket}", follow_redirects=False)
-        async with pg_engine.begin() as conn:
-            await conn.execute(
-                text(
-                    "UPDATE telegram_recipients SET revoked_at = NOW() "
-                    "WHERE telegram_user_id = :uid"
-                ),
-                {"uid": desktop_owner},
-            )
-        denied = await client.get("/desktop-auth/verify", follow_redirects=False)
-
-    assert denied.status_code == 303
-    assert denied.headers["location"] == "https://app.adpulse.su/remote-desktop"
+        ready = await client.get("/desktop-readyz")
+        core_ready = await client.get("/readyz")
+    assert ready.status_code == 200
+    assert ready.json()["status"] == "ok"
+    assert core_ready.status_code != 503 or core_ready.json() != ready.json()

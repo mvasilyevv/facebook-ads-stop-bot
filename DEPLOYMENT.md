@@ -14,7 +14,7 @@ raw Kubernetes-манифесты остаются эксперименталь�
 | Telegram Mini App | Docker, `127.0.0.1:8081` | `https://app.adpulse.su/tma/` |
 | FastAPI | Docker, `127.0.0.1:8100` | `/api`, `/ws`, `/healthz`, `/readyz` |
 | Postgres / Redis | Docker, loopback | не публикуются наружу |
-| Vision + desktop | отдельный webtop, persistent `/config` | `https://desktop.adpulse.su` |
+| Vision + Guacamole | отдельный digest-pinned stack, persistent `/config` и JDBC | `https://app.adpulse.su/desktop/` |
 | browser-agent | Docker, network namespace Vision | gRPC через `127.0.0.1:50051` |
 
 Vision и browser-agent разделяют network namespace. Это принципиально: Vision
@@ -27,7 +27,7 @@ Vision и browser-agent разделяют network namespace. Это принц�
 - Docker Engine и Docker Compose v2;
 - Caddy 2;
 - активный firewall: наружу открыты только SSH, `80`, `443` и `443/udp`;
-- DNS `app.adpulse.su` и `desktop.adpulse.su` указывает на сервер;
+- DNS `app.adpulse.su` указывает на сервер;
 - swap 4 GB рекомендуется как страховка от пиков сборки/Vision;
 - локальный `.env` с `ENCRYPTION_KEY`, Vision, Telegram и API-секретами.
 
@@ -38,22 +38,30 @@ Vision и browser-agent разделяют network namespace. Это принц�
 Существующий `/opt/vision-webtop/config` не удаляется: там находятся профиль,
 cookies и настройки рабочего стола.
 
+Production workflow собирает custom webtop в GHCR и передаёт installer его
+immutable `image@sha256` reference. Installer не пересобирает desktop на VPS и
+не пересоздаёт его при релизах, в которых manifest и desktop secrets не менялись.
+Для ручного запуска укажите тот же immutable artifact:
+
 ```bash
-sudo ./scripts/install-vision-webtop.sh
+DESKTOP_WEBTOP_IMAGE='ghcr.io/owner/repo-vision-webtop@sha256:...' \
+  sudo -E ./scripts/install-vision-webtop.sh
 ```
 
-Скрипт собирает закреплённую версию Vision, проверяет SHA-256 пакета, сохраняет
-предыдущий Compose-файл и откатывает его при неуспешном старте. После установки:
+Installer идемпотентно устанавливает официальную схему Guacamole 1.6.0 в
+отдельный Postgres 16, создаёт principal `adpulse-desktop` и ровно одну READ-связь
+`Vision Desktop`. Частично созданная или несовместимая схема приводит к fail-fast.
+После установки:
 
 ```bash
-curl -fsS http://127.0.0.1:3000/ >/dev/null
-curl -sS -o /dev/null http://127.0.0.1:3030/
+curl -fsS http://127.0.0.1:8090/desktop/ >/dev/null
+curl -fsS https://app.adpulse.su/desktop-readyz
 docker logs --tail=100 vision-webtop
 ```
 
-При первом запуске нужно один раз открыть `https://desktop.adpulse.su`, войти в
-Vision и убедиться, что нужный профиль доступен. Сканирование при установке не
-включается автоматически.
+При первом запуске нужно открыть `https://app.adpulse.su/desktop/` и убедиться,
+что Vision доступен через единственную Guacamole-связь. Отдельного desktop-host,
+Selkies fallback или второго Guacamole login в production нет.
 
 ### 2. Приложение
 
@@ -121,8 +129,8 @@ Frontend получает доступ через BasicAuth, а Caddy добав
 sudo /opt/fb-agent/current/scripts/install-server-units.sh
 ```
 
-Скрипт добавляет Caddy site через `import`, не перезаписывая существующий
-`desktop.adpulse.su`, и устанавливает:
+Скрипт устанавливает единственный Caddy site `app.adpulse.su` с защищённым
+same-origin маршрутом `/desktop/*` и устанавливает:
 
 - `fb-agent.service` — автозапуск текущего release;
 - `fb-agent-backup.timer` — ежедневный `pg_dump`;
@@ -150,6 +158,7 @@ sudo /opt/fb-agent/current/scripts/server-compose.sh ready
 
 curl -fsS http://127.0.0.1:8100/healthz
 curl -fsS http://127.0.0.1:8100/readyz
+curl -fsS http://127.0.0.1:8100/desktop-readyz
 curl -i https://app.adpulse.su/               # 401 без Basic Auth
 curl -fsS https://app.adpulse.su/tma/ >/dev/null
 curl -fsS https://app.adpulse.su/healthz

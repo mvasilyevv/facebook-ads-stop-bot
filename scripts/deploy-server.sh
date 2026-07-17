@@ -9,6 +9,8 @@ TARGET="${DEPLOY_TARGET:-root@62.60.150.133}"
 ROOT_DIR="${DEPLOY_ROOT:-/opt/fb-agent}"
 ENV_FILE="$PROJECT_DIR/.env"
 PUBLIC_URL="${PUBLIC_URL:-https://app.adpulse.su}"
+DESKTOP_WEBTOP_IMAGE_OVERRIDE="${DESKTOP_WEBTOP_IMAGE:-}"
+DESKTOP_DOCKER_CONFIG_OVERRIDE="${DESKTOP_DOCKER_CONFIG:-}"
 RELEASE_ID=""
 ALLOW_VISION_OFFLINE=false
 DRY_RUN=false
@@ -35,6 +37,10 @@ for command in ssh rsync python3 git; do
 done
 [[ -f "$ENV_FILE" ]] || die "environment file not found: $ENV_FILE"
 [[ "$ROOT_DIR" == /* ]] || die "--root must be an absolute path"
+if [[ -n "$DESKTOP_DOCKER_CONFIG_OVERRIDE" ]]; then
+  [[ "$DESKTOP_DOCKER_CONFIG_OVERRIDE" =~ ^/[-A-Za-z0-9._/]+$ ]] \
+    || die "DESKTOP_DOCKER_CONFIG must be a safe absolute path"
+fi
 if [[ -z "$RELEASE_ID" ]]; then
   RELEASE_ID="$(date -u +%Y%m%dT%H%M%SZ)-$(git -C "$PROJECT_DIR" rev-parse --short HEAD)"
 fi
@@ -49,9 +55,16 @@ if ssh "$TARGET" "test -f '$ROOT_DIR/shared/.env'"; then
   chmod 600 "$ENV_SOURCE"
   printf 'Using the existing server environment as the secret source.\n'
 fi
-python3 "$SCRIPT_DIR/prepare_production_env.py" \
-  --input "$ENV_SOURCE" --output "$PROD_ENV" --public-url "$PUBLIC_URL" \
+prepare_env_args=(
+  --input "$ENV_SOURCE"
+  --output "$PROD_ENV"
+  --public-url "$PUBLIC_URL"
   --generate-postgres-password-if-insecure
+)
+if [[ -n "$DESKTOP_WEBTOP_IMAGE_OVERRIDE" ]]; then
+  prepare_env_args+=(--desktop-webtop-image "$DESKTOP_WEBTOP_IMAGE_OVERRIDE")
+fi
+python3 "$SCRIPT_DIR/prepare_production_env.py" "${prepare_env_args[@]}"
 
 remote_release="$ROOT_DIR/releases/$RELEASE_ID"
 printf 'Deployment target: %s:%s\n' "$TARGET" "$remote_release"
@@ -77,7 +90,12 @@ ssh "$TARGET" "set -eu; chmod 600 '$ROOT_DIR/shared/.env.new'; mv '$ROOT_DIR/sha
 # The desktop host and API routes are one release contract. Bring the private
 # Vision/Guacamole stack to a healthy state before switching Caddy/app release;
 # the installer rolls back its compose/image if any desktop health gate fails.
-ssh "$TARGET" "'$remote_release/scripts/install-vision-webtop.sh'"
+if [[ -n "$DESKTOP_DOCKER_CONFIG_OVERRIDE" ]]; then
+  ssh "$TARGET" \
+    "DOCKER_CONFIG='$DESKTOP_DOCKER_CONFIG_OVERRIDE' '$remote_release/scripts/install-vision-webtop.sh'"
+else
+  ssh "$TARGET" "'$remote_release/scripts/install-vision-webtop.sh'"
+fi
 
 if [[ "$ALLOW_VISION_OFFLINE" == true ]]; then
   ssh "$TARGET" \
