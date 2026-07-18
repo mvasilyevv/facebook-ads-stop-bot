@@ -99,8 +99,8 @@ export function useDashboardSocket(options: DashboardSocketOptions = {}): Dashbo
     setStatus("connecting");
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    // Browser reuses the same-origin BasicAuth protection space for the upgrade;
-    // Caddy injects the server-only key upstream. No credential belongs in the URL.
+    // Browser reuses the same-origin panel session for the upgrade; Caddy validates
+    // it with forward_auth and injects the server-only key upstream.
     const url = `${protocol}://${window.location.host}${pathRef.current}`;
     let ws: WebSocket;
     try {

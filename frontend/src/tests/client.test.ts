@@ -1,7 +1,63 @@
 // Тест: buildApiError и apiGetWithCount — базовые контракты HTTP-клиента.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { buildApiError, buildQuery, ApiError } from "@/lib/api/client";
+import {
+  buildApiError,
+  buildQuery,
+  ApiError,
+  redirectToLoginOnUnauthorized,
+} from "@/lib/api/client";
+
+describe("Telegram session expiry redirect", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the server login URL for API 401", () => {
+    const assign = vi.fn();
+    vi.stubGlobal("window", {
+      location: {
+        pathname: "/campaigns",
+        search: "?tab=active",
+        hash: "#run",
+        origin: "https://app.adpulse.su",
+        assign,
+      },
+    });
+    const response = new Response(JSON.stringify({ detail: "login" }), {
+      status: 401,
+      headers: { "X-Auth-Login-Url": "/auth/login?return_to=%2Fcampaigns" },
+    });
+
+    redirectToLoginOnUnauthorized(response);
+
+    expect(assign).toHaveBeenCalledWith(
+      "https://app.adpulse.su/auth/login?return_to=%2Fcampaigns",
+    );
+  });
+
+  it("ignores a cross-origin login URL", () => {
+    const assign = vi.fn();
+    vi.stubGlobal("window", {
+      location: {
+        pathname: "/",
+        search: "",
+        hash: "",
+        origin: "https://app.adpulse.su",
+        assign,
+      },
+    });
+    const response = new Response(null, {
+      status: 401,
+      headers: { "X-Auth-Login-Url": "https://evil.example/steal" },
+    });
+
+    redirectToLoginOnUnauthorized(response);
+
+    expect(assign).not.toHaveBeenCalled();
+  });
+});
 
 // ─── buildApiError ─────────────────────────────────────────────────────────────
 

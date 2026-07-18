@@ -24,7 +24,7 @@ def test_caddy_keeps_master_key_server_side_and_preserves_tma_auth() -> None:
     tma_public = config.split("handle /api/tma/*", maxsplit=1)[1].split(
         "@tma_bearer_api", maxsplit=1
     )[0]
-    assert "panel_auth" not in tma_public
+    assert "panel_session_auth" not in tma_public
     assert "{$API_KEY}" not in tma_public
     assert "header_up -X-API-Key" in tma_public
 
@@ -34,20 +34,20 @@ def test_caddy_keeps_master_key_server_side_and_preserves_tma_auth() -> None:
     assert "path /api/*" in bearer_matcher
     assert 'header Authorization "Bearer *"' in bearer_matcher
     bearer_route = config.split("handle @tma_bearer_api", maxsplit=1)[1].split(
-        "handle /api/*", maxsplit=1
+        "handle /auth/login", maxsplit=1
     )[0]
-    assert "panel_auth" not in bearer_route
+    assert "panel_session_auth" not in bearer_route
     assert "{$API_KEY}" not in bearer_route
     assert "header_up -X-API-Key" in bearer_route
 
     desktop_api = config.split("handle /api/*", maxsplit=1)[1].split("handle /ws/*", maxsplit=1)[0]
-    assert "import panel_auth" in desktop_api
+    assert "import panel_session_auth" in desktop_api
     assert "header_up X-API-Key {$API_KEY}" in desktop_api
 
     websocket_route = config.split("handle /ws/*", maxsplit=1)[1].split("handle /tma*", maxsplit=1)[
         0
     ]
-    assert "import panel_auth" in websocket_route
+    assert "import panel_session_auth" in websocket_route
     assert "header_up X-API-Key {$API_KEY}" in websocket_route
 
 

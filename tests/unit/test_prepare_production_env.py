@@ -25,6 +25,9 @@ def _valid_values() -> dict[str, str]:
         "VISION_X_TOKEN": "vision-token",
         "VISION_PROFILE_ID": "profile-id",
         "TELEGRAM_BOT_TOKEN": "telegram-token",
+        "TELEGRAM_OIDC_CLIENT_ID": "123456789",
+        "TELEGRAM_OIDC_CLIENT_SECRET": "o" * 48,
+        "TELEGRAM_OIDC_REDIRECT_URI": "https://app.adpulse.su/auth/telegram/callback",
         "API_KEY": "a" * 32,
         "TMA_SESSION_SECRET": "t" * 48,
         "ADSETPRO_POSTBACK_SECRET": "p" * 48,
@@ -91,6 +94,19 @@ def test_validate_rejects_short_postback_secret() -> None:
     values["ADSETPRO_POSTBACK_SECRET"] = "short"
 
     assert "ADSETPRO_POSTBACK_SECRET must be at least 32 characters" in ENV.validate(values)
+
+
+def test_validate_rejects_missing_or_misdirected_telegram_oidc() -> None:
+    values = _valid_values()
+    values["TELEGRAM_OIDC_CLIENT_SECRET"] = ""
+    values["TELEGRAM_OIDC_REDIRECT_URI"] = "https://evil.example/callback"
+
+    errors = ENV.validate(values)
+
+    assert "TELEGRAM_OIDC_CLIENT_SECRET is empty" in errors
+    assert (
+        "TELEGRAM_OIDC_REDIRECT_URI must be https://app.adpulse.su/auth/telegram/callback" in errors
+    )
 
 
 def test_validate_accepts_explicit_auto_cancel_rollout_boolean_only() -> None:

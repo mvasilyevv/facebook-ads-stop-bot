@@ -53,9 +53,22 @@ async function rawFetch(path: string, options: RequestOptions = {}): Promise<Res
   });
 
   if (!resp.ok) {
+    redirectToLoginOnUnauthorized(resp);
     throw await buildApiError(resp);
   }
   return resp;
+}
+
+/** Redirect a browser session to Telegram login while preserving its current route. */
+export function redirectToLoginOnUnauthorized(resp: Response): void {
+  if (resp.status !== 401 || typeof window === "undefined") return;
+  const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const fallback = `/auth/login?${new URLSearchParams({ return_to: returnTo }).toString()}`;
+  const requested = resp.headers.get("X-Auth-Login-Url") || fallback;
+  const destination = new URL(requested, window.location.origin);
+  if (destination.origin === window.location.origin) {
+    window.location.assign(destination.href);
+  }
 }
 
 /**

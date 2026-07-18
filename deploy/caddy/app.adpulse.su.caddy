@@ -1,20 +1,36 @@
-(panel_auth) {
+(breakglass_auth) {
 	basic_auth {
 		{$PANEL_BASIC_AUTH_USER} {$PANEL_BASIC_AUTH_HASH}
+	}
+}
+
+(panel_session_auth) {
+	forward_auth 127.0.0.1:8100 {
+		uri /auth/verify
+		# The verifier trusts only its Redis cookie. Strip all client-controlled
+		# identities, credentials and upgrade headers from the auth subrequest.
+		header_up -Remote-User
+		header_up -Authorization
+		header_up -Proxy-Authorization
+		header_up -X-API-Key
+		header_up -X-Panel-Telegram-User-Id
+		header_up -X-Panel-Role
+		header_up -X-Desktop-Telegram-User-Id
+		header_up -X-Desktop-Role
+		header_up -Connection
+		header_up -Upgrade
 	}
 }
 
 (desktop_session_auth) {
 	forward_auth 127.0.0.1:8100 {
 		uri /desktop-auth/verify
-		# The verification endpoint trusts only this loopback subrequest. Never
-		# forward identity, API credentials, or WebSocket transport headers from
-		# the public request into the authorization decision.
 		header_up -Remote-User
 		header_up -Authorization
 		header_up -Proxy-Authorization
 		header_up -X-API-Key
-		header_up -X-Panel-Recovery-Key
+		header_up -X-Panel-Telegram-User-Id
+		header_up -X-Panel-Role
 		header_up -X-Desktop-Telegram-User-Id
 		header_up -X-Desktop-Role
 		header_up -Connection
@@ -40,8 +56,8 @@ app.adpulse.su {
 		-Server
 	}
 
-	# `route` preserves this security order literally: public narrow carve-outs,
-	# validated TMA Bearer transport, then BasicAuth-protected desktop surfaces.
+	# `route` preserves this order literally: narrow independent auth surfaces,
+	# Telegram OIDC, then cookie-protected panel/API/WS and desktop transport.
 	route {
 		handle /healthz {
 			reverse_proxy 127.0.0.1:8100
@@ -51,24 +67,6 @@ app.adpulse.su {
 			reverse_proxy 127.0.0.1:8100
 		}
 
-		# Desktop readiness отделён от bot-readiness, но закрыт панельной BasicAuth:
-		# каждая проба выполняет реальный Guacamole-логин, JDBC-запросы и полный
-		# guacd→VNC handshake рядом с money-критичной Vision-сессией — анонимный
-		# интернет не должен уметь их запускать. Мониторинг с хоста ходит на
-		# 127.0.0.1:8100/desktop-readyz напрямую, мимо Caddy.
-		handle /desktop-readyz {
-			import panel_auth
-			reverse_proxy 127.0.0.1:8100 {
-				header_up -Remote-User
-				header_up -Authorization
-				header_up -Proxy-Authorization
-				header_up -X-API-Key
-			}
-		}
-
-		# AdSet.pro передаёт секрет в query string и не умеет custom headers.
-		# Никогда не пишем этот request target в access log: иначе токен окажется
-		# в /var/log/caddy/fb-agent-access.log и его ротационных копиях.
 		handle /api/v1/postback/* {
 			log_skip
 			header Cache-Control "no-store"
@@ -77,17 +75,13 @@ app.adpulse.su {
 			}
 		}
 
-		# Telegram Mini App bootstrap/actions have their own HMAC/Bearer guard.
-		# Never expose or inject the desktop master key on this public route.
+		# Telegram Mini App keeps its independent initData/Bearer trust boundary.
 		handle /api/tma/* {
 			reverse_proxy 127.0.0.1:8100 {
 				header_up -X-API-Key
 			}
 		}
 
-		# Mini App also consumes shared read/write endpoints. Caddy only identifies
-		# the Bearer transport here; ApiKeyAuthMiddleware validates the signed token,
-		# current recipient and owner role before any protected operation.
 		@tma_bearer_api {
 			path /api/*
 			header Authorization "Bearer *"
@@ -98,34 +92,62 @@ app.adpulse.su {
 			}
 		}
 
-		# Desktop browser proves operator access with same-origin BasicAuth. The
-		# master API key exists only in Caddy's root-owned environment and is
-		# overwritten server-side, so a client-supplied X-API-Key cannot win.
-		handle /api/* {
-			import panel_auth
+		# Public Telegram OIDC endpoints. Ticket-bearing requests are never logged.
+		handle /auth/login {
 			reverse_proxy 127.0.0.1:8100 {
-				header_up X-API-Key {$API_KEY}
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
 			}
 		}
 
-		handle /ws/* {
-			import panel_auth
-			# BasicAuth protects the upgrade; the server-only master key is injected
-			# into the upstream handshake and never appears in the browser URL/bundle.
+		handle /auth/telegram/start {
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+			}
+		}
+
+		handle /auth/telegram/callback {
 			log_skip
 			reverse_proxy 127.0.0.1:8100 {
-				header_up X-API-Key {$API_KEY}
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
 			}
 		}
 
-		# A one-time ticket may arrive from Telegram in the query string. Keep the
-		# redemption request out of access logs and strip all spoofable identity.
+		handle /auth/redeem {
+			log_skip
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+			}
+		}
+
+		handle /auth/logout {
+			log_skip
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+			}
+		}
+
+		# Internal forward_auth targets are deliberately invisible on the public host.
+		handle /auth/verify {
+			respond 404
+		}
+
 		handle /desktop-auth/redeem {
 			log_skip
 			reverse_proxy 127.0.0.1:8100 {
 				header_up -Remote-User
 				header_up -X-API-Key
-				header_up -X-Panel-Recovery-Key
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
 				header_up -X-Desktop-Telegram-User-Id
 				header_up -X-Desktop-Role
 				header_up -Authorization
@@ -133,8 +155,6 @@ app.adpulse.su {
 			}
 		}
 
-		# The verification route is an internal forward_auth target, not a public
-		# API. Caddy calls the API directly over loopback above.
 		handle /desktop-auth/verify {
 			respond 404
 		}
@@ -144,7 +164,8 @@ app.adpulse.su {
 			reverse_proxy 127.0.0.1:8100 {
 				header_up -Remote-User
 				header_up -X-API-Key
-				header_up -X-Panel-Recovery-Key
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
 				header_up -X-Desktop-Telegram-User-Id
 				header_up -X-Desktop-Role
 				header_up -Authorization
@@ -152,31 +173,58 @@ app.adpulse.su {
 			}
 		}
 
-		# Guacamole is the only production desktop UI. The authenticated principal
-		# is fixed by this trusted proxy and can never be supplied by the client.
+		# Guacamole remains the accepted production desktop transport in Phase 0.
 		handle /desktop/* {
 			import desktop_session_auth
 			reverse_proxy 127.0.0.1:8090 {
-				# Жёсткий потолок жизни WS-туннеля: forward_auth срабатывает только
-				# в момент upgrade, поэтому logout/истечение сессии/демоция владельца
-				# вступают в силу не позже, чем через 30 минут. Клиент Guacamole
-				# показывает дисконнект; повторное подключение (reconnect/перезагрузка
-				# вкладки) заново проходит desktop_session_auth, состояние десктопа
-				# при этом не теряется (VNC-сессия персистентна). Экстренный
-				# мгновенный обрыв — см. DEPLOYMENT.md («Экстренный обрыв
-				# desktop-доступа»).
 				stream_timeout 30m
 				stream_close_delay 5m
-				# ВНИМАНИЕ: не снимать клиентский Remote-User отдельной строкой
-				# удаления. Caddy применяет header_up-удаление ПОСЛЕ установки,
-				# поэтому strip стёр бы этот set — Guacamole получал бы запрос без
-				# заголовка и показывал форму логина вместо header-auth. Set ниже
-				# сам перезаписывает любой клиентский заголовок, strip не нужен.
 				header_up Remote-User "adpulse-desktop"
 				header_up -Authorization
 				header_up -Proxy-Authorization
 				header_up -X-API-Key
-				header_up -X-Panel-Recovery-Key
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
+			}
+		}
+
+		handle /desktop-readyz {
+			import panel_session_auth
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -Remote-User
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+			}
+		}
+
+		handle /api/* {
+			import panel_session_auth
+			reverse_proxy 127.0.0.1:8100 {
+				# Overwrite, never preserve, any browser-supplied master key.
+				header_up X-API-Key {$API_KEY}
+				header_up -Remote-User
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
+			}
+		}
+
+		handle /ws/* {
+			import panel_session_auth
+			log_skip
+			reverse_proxy 127.0.0.1:8100 {
+				header_up X-API-Key {$API_KEY}
+				header_up -Remote-User
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
 				header_up -X-Desktop-Telegram-User-Id
 				header_up -X-Desktop-Role
 			}
@@ -187,7 +235,58 @@ app.adpulse.su {
 		}
 
 		handle {
-			import panel_auth
+			import panel_session_auth
+			reverse_proxy 127.0.0.1:8080
+		}
+	}
+}
+
+# SSH-only break-glass. There is no public DNS/TLS route to this listener.
+# Usage: ssh -L 8099:127.0.0.1:8099 <server>, then open http://127.0.0.1:8099.
+http://127.0.0.1:8099 {
+	bind 127.0.0.1
+	route {
+		import breakglass_auth
+
+		handle /api/* {
+			reverse_proxy 127.0.0.1:8100 {
+				header_up X-API-Key {$API_KEY}
+				header_up -Remote-User
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
+			}
+		}
+
+		handle /ws/* {
+			log_skip
+			reverse_proxy 127.0.0.1:8100 {
+				header_up X-API-Key {$API_KEY}
+				header_up -Remote-User
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
+			}
+		}
+
+		handle /desktop/* {
+			reverse_proxy 127.0.0.1:8090 {
+				stream_timeout 30m
+				stream_close_delay 5m
+				header_up Remote-User "adpulse-desktop"
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+			}
+		}
+
+		handle {
 			reverse_proxy 127.0.0.1:8080
 		}
 	}

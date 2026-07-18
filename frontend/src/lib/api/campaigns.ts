@@ -14,7 +14,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiGetWithCount, apiSend } from "./client";
+import { apiGet, apiGetWithCount, apiSend, redirectToLoginOnUnauthorized } from "./client";
 
 // ─── Типы (сматчены с schemas/campaigns_create.py) ───────────────────────────
 
@@ -356,13 +356,14 @@ export async function uploadConcepts(
   }
   if (uploadId) fd.append("upload_id", uploadId);
   // multipart нельзя гнать через apiSend (он шлёт JSON) — fetch напрямую c BASE=/api.
-  // Same-origin Caddy auth injects the server-only upstream key after BasicAuth.
+  // Same-origin Caddy auth injects the server-only key after cookie forward_auth.
   const resp = await fetch("/api/tools/campaigns/upload", {
     method: "POST",
     body: fd,
     cache: "no-store",
   });
   if (!resp.ok) {
+    redirectToLoginOnUnauthorized(resp);
     const text = await resp.text().catch(() => "");
     throw new Error(`Upload failed ${resp.status}: ${text}`);
   }

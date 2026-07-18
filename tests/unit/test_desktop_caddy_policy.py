@@ -8,7 +8,9 @@ APP_SITE = ROOT / "deploy" / "caddy" / "app.adpulse.su.caddy"
 # с фиксированным Remote-User и потолком жизни WS-туннеля (ревокация ≤ 30 минут).
 def test_desktop_is_same_origin_header_authenticated_guacamole_only() -> None:
     config = APP_SITE.read_text(encoding="utf-8")
-    desktop = config.split("handle /desktop/*", maxsplit=1)[1].split("handle /tma*", maxsplit=1)[0]
+    desktop = config.split("handle /desktop/*", maxsplit=1)[1].split(
+        "handle /desktop-readyz", maxsplit=1
+    )[0]
     auth = config.split("(desktop_session_auth)", maxsplit=1)[1].split(
         "app.adpulse.su", maxsplit=1
     )[0]
@@ -59,17 +61,16 @@ def test_only_redeem_logout_and_internal_verify_routes_remain() -> None:
         assert removed not in config
 
 
-# Security-ревью 17.07.2026: /desktop-readyz гоняет реальный guacd→VNC handshake
-# рядом с money-стеком — маршрут отдельный от bot-readiness, но закрыт BasicAuth
-# (анонимный интернет не должен запускать пробы; мониторинг ходит по loopback).
-def test_desktop_readiness_is_separate_and_requires_panel_auth() -> None:
+# /desktop-readyz performs the real Guacamole/VNC handshake and therefore stays
+# behind the owner panel session; monitoring can still call the API on loopback.
+def test_desktop_readiness_is_separate_and_requires_panel_session() -> None:
     config = APP_SITE.read_text(encoding="utf-8")
     readiness = config.split("handle /desktop-readyz", maxsplit=1)[1].split(
-        "handle /api/v1/postback/*", maxsplit=1
+        "handle /api/*", maxsplit=1
     )[0]
 
     assert "reverse_proxy 127.0.0.1:8100" in readiness
-    assert "import panel_auth" in readiness
+    assert "import panel_session_auth" in readiness
 
 
 def test_installer_atomically_removes_the_obsolete_desktop_site() -> None:
@@ -86,9 +87,21 @@ def test_installer_atomically_removes_the_obsolete_desktop_site() -> None:
     assert "remove-caddy-site-block.py" not in installer
 
 
-def test_panel_keeps_basic_auth_for_existing_surfaces() -> None:
+def test_public_panel_uses_forward_auth_and_basic_auth_is_loopback_only() -> None:
     config = APP_SITE.read_text(encoding="utf-8")
+    public = config.split("app.adpulse.su {", maxsplit=1)[1].split(
+        "http://127.0.0.1:8099", maxsplit=1
+    )[0]
+    breakglass = config.split("http://127.0.0.1:8099", maxsplit=1)[1]
 
-    assert "(panel_auth)" in config
-    assert "telegram_panel_auth" not in config
-    assert config.count("import panel_auth") >= 3
+    assert "basic_auth" not in public
+    assert public.count("import panel_session_auth") >= 4
+    assert "uri /auth/verify" in config
+    assert "bind 127.0.0.1" in breakglass
+    assert "import breakglass_auth" in breakglass
+    assert (
+        "basic_auth"
+        in config.split("(breakglass_auth)", maxsplit=1)[1].split(
+            "(panel_session_auth)", maxsplit=1
+        )[0]
+    )

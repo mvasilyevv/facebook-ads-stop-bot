@@ -72,6 +72,9 @@ def validate(values: dict[str, str]) -> list[str]:
         "VISION_X_TOKEN",
         "VISION_PROFILE_ID",
         "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_OIDC_CLIENT_ID",
+        "TELEGRAM_OIDC_CLIENT_SECRET",
+        "TELEGRAM_OIDC_REDIRECT_URI",
         "API_KEY",
         "TMA_SESSION_SECRET",
         "ADSETPRO_POSTBACK_SECRET",
@@ -94,6 +97,19 @@ def validate(values: dict[str, str]) -> list[str]:
         errors.append("TMA_SESSION_SECRET must be at least 32 characters")
     if values.get("ADSETPRO_POSTBACK_SECRET") and len(values["ADSETPRO_POSTBACK_SECRET"]) < 32:
         errors.append("ADSETPRO_POSTBACK_SECRET must be at least 32 characters")
+    if values.get("TELEGRAM_OIDC_CLIENT_ID") and not values["TELEGRAM_OIDC_CLIENT_ID"].isdigit():
+        errors.append("TELEGRAM_OIDC_CLIENT_ID must be numeric")
+    if (
+        values.get("TELEGRAM_OIDC_CLIENT_SECRET")
+        and len(values["TELEGRAM_OIDC_CLIENT_SECRET"]) < 32
+    ):
+        errors.append("TELEGRAM_OIDC_CLIENT_SECRET must be at least 32 characters")
+    if values.get("TELEGRAM_OIDC_REDIRECT_URI") != (
+        "https://app.adpulse.su/auth/telegram/callback"
+    ):
+        errors.append(
+            "TELEGRAM_OIDC_REDIRECT_URI must be https://app.adpulse.su/auth/telegram/callback"
+        )
 
     desktop_postgres_password = values.get("DESKTOP_GUACAMOLE_POSTGRES_PASSWORD", "")
     if desktop_postgres_password and len(desktop_postgres_password) < 32:

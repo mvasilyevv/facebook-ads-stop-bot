@@ -12,6 +12,7 @@ from apps.api import deps
 from apps.api.routers.v1 import desktop as desktop_router
 from apps.api.routers.v1 import tma as tma_router
 from core.auth.desktop_access import consume_desktop_ticket
+from core.auth.panel_access import PANEL_SESSION_COOKIE, create_panel_session
 from core.auth.tma import issue_session_token
 from core.config import Settings
 
@@ -50,13 +51,20 @@ async def test_web_and_tma_launch_use_explicit_verified_identities(monkeypatch):
             )
         return None
 
-    monkeypatch.setattr(desktop_router, "find_recipient_by_telegram_user_id", recipient)
     monkeypatch.setattr(tma_router, "find_recipient_by_telegram_user_id", recipient)
     app = _app(redis, settings)
     bearer = issue_session_token("2002", settings.tma_session_ttl_seconds, "tma-secret")
+    panel_token, _ = await create_panel_session(
+        redis,
+        telegram_user_id=1001,
+        role="owner",
+        source="telegram_oidc",
+        ttl=43_200,
+    )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
     ) as client:
+        client.cookies.set(PANEL_SESSION_COOKIE, panel_token, domain="app.adpulse.su")
         web = await client.post(
             "/api/desktop/launch",
             headers={"Origin": "https://app.adpulse.su", "X-API-Key": "api-key"},
@@ -87,7 +95,6 @@ async def test_launch_rejects_bad_web_transport_and_non_owner_tma(monkeypatch):
             role="recipient" if telegram_user_id == 2002 else "owner",
         )
 
-    monkeypatch.setattr(desktop_router, "find_recipient_by_telegram_user_id", recipient)
     monkeypatch.setattr(tma_router, "find_recipient_by_telegram_user_id", recipient)
     app = _app(redis, settings)
     bearer = issue_session_token("2002", settings.tma_session_ttl_seconds, "tma-secret")
