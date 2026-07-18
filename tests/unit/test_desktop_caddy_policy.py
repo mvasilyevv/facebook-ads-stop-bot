@@ -61,6 +61,9 @@ def test_installer_atomically_installs_and_restores_desktop_site() -> None:
     assert 'install -m 0644 "$PROJECT_DIR/deploy/caddy/desktop.adpulse.su.caddy"' in installer
     assert 'cp -- "$TEMP_DIR/desktop-site.caddy" "$DESKTOP_CADDY_SITE"' in installer
     assert "caddy validate --config" in installer
+    assert 'DESKTOP_ACCESS_LOG="$CADDY_LOG_DIR/fb-agent-desktop-access.log"' in installer
+    assert '[[ ! -L "$access_log" ]]' in installer
+    assert 'chown -- caddy:caddy "$access_log"' in installer
 
 
 def test_basic_auth_is_loopback_breakglass_only() -> None:

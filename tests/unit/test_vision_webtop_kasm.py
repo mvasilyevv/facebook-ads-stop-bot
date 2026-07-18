@@ -53,6 +53,8 @@ def test_kasm_image_and_release_package_are_immutable() -> None:
     assert 'kasmxproxy -a "${source_display}" -v "${kasm_display}" -f 30' in entrypoint
     assert "kasmxproxy -a" in entrypoint
     assert 'kasmxproxy -a "${source_display}" -v "${kasm_display}" -f 30 -r' not in entrypoint
+    assert 'DISPLAY="${kasm_display}" xdpyinfo' in entrypoint
+    assert "rm -f -- /tmp/.X11-unix/X10 /tmp/.X10-lock" in entrypoint
 
 
 def test_installer_is_quiescent_snapshotting_and_rollback_safe() -> None:
