@@ -155,7 +155,7 @@ async def test_web_launch_uses_explicit_owner_and_rejects_revocation(
                 {"uid": owner_id},
             )
         response = await client.post("/api/desktop/launch", headers=_web_headers())
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
