@@ -3,6 +3,7 @@ services:
     image: ${DESKTOP_WEBTOP_IMAGE:?set DESKTOP_WEBTOP_IMAGE to an immutable image@sha256 reference}
     container_name: vision-webtop
     restart: unless-stopped
+    ipc: shareable
     shm_size: 2gb
     environment:
       PUID: ${PUID:-1000}

@@ -16,6 +16,7 @@ def test_kasm_is_the_only_digest_pinned_desktop_transport() -> None:
     assert "DESKTOP_KASMVNC_IMAGE:?" in source
     assert '"127.0.0.1:8444:8444"' in source
     assert "network_mode: service:webtop" in source
+    assert "ipc: shareable" in source
     assert "ipc: service:webtop" in source
     assert "x11-socket:/tmp/.X11-unix" in source
     assert 'DISPLAY_WIDTH: "1366"' in source
