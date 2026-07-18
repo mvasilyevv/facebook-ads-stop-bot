@@ -359,14 +359,15 @@ jobs:
             ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:${{ github.sha }}
             ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:latest
 
-  # Vision webtop is an independent production artifact. Unlike the app
-  # images, the server never rebuilds it and accepts only this immutable digest.
+  # Vision webtop and its Kasm transport are independent production artifacts.
+  # The server never rebuilds them and accepts only immutable digests.
   build-desktop:
-    name: Production artifact — Vision webtop
+    name: Production artifacts — Vision + KasmVNC
     runs-on: ubuntu-latest
     needs: [test, web-test]
     outputs:
-      image_ref: ${{ steps.artifact.outputs.image_ref }}
+      webtop_image_ref: ${{ steps.artifact.outputs.webtop_image_ref }}
+      kasm_image_ref: ${{ steps.artifact.outputs.kasm_image_ref }}
 
     steps:
       - name: Checkout
@@ -383,7 +384,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Сборка и push — Vision webtop
-        id: build
+        id: build_webtop
         uses: docker/build-push-action@v6
         with:
           context: deploy/vision-webtop
@@ -393,14 +394,29 @@ jobs:
           cache-to: type=gha,mode=max,scope=vision-webtop
           tags: ${{ env.IMAGE_BASE }}-vision-webtop:${{ github.sha }}
 
+      - name: Сборка и push — KasmVNC sidecar
+        id: build_kasm
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/kasmvnc-sidecar
+          file: deploy/kasmvnc-sidecar/Dockerfile
+          push: true
+          cache-from: type=gha,scope=kasmvnc-sidecar
+          cache-to: type=gha,mode=max,scope=kasmvnc-sidecar
+          tags: ${{ env.IMAGE_BASE }}-kasmvnc-sidecar:${{ github.sha }}
+
       - name: Зафиксировать immutable reference
         id: artifact
         env:
-          IMAGE_NAME: ${{ env.IMAGE_BASE }}-vision-webtop
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          WEBTOP_IMAGE_NAME: ${{ env.IMAGE_BASE }}-vision-webtop
+          WEBTOP_IMAGE_DIGEST: ${{ steps.build_webtop.outputs.digest }}
+          KASM_IMAGE_NAME: ${{ env.IMAGE_BASE }}-kasmvnc-sidecar
+          KASM_IMAGE_DIGEST: ${{ steps.build_kasm.outputs.digest }}
         run: |
-          test -n "$IMAGE_DIGEST"
-          printf 'image_ref=%s@%s\n' "$IMAGE_NAME" "$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+          test -n "$WEBTOP_IMAGE_DIGEST"
+          test -n "$KASM_IMAGE_DIGEST"
+          printf 'webtop_image_ref=%s@%s\n' "$WEBTOP_IMAGE_NAME" "$WEBTOP_IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+          printf 'kasm_image_ref=%s@%s\n' "$KASM_IMAGE_NAME" "$KASM_IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
 
   # ─────────────────────────────────────────────
   # JOB 3: деплой на боевой сервер (релизная схема releases/ + shared/.env)
@@ -470,7 +486,8 @@ jobs:
         timeout-minutes: 25
         env:
           DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
-          DESKTOP_WEBTOP_IMAGE: ${{ needs.build-desktop.outputs.image_ref }}
+          DESKTOP_WEBTOP_IMAGE: ${{ needs.build-desktop.outputs.webtop_image_ref }}
+          DESKTOP_KASMVNC_IMAGE: ${{ needs.build-desktop.outputs.kasm_image_ref }}
           DESKTOP_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
         run: ./scripts/deploy-server.sh
 

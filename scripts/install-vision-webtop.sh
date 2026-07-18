@@ -6,18 +6,34 @@ umask 077
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 readonly SOURCE_DIR="$PROJECT_DIR/deploy/vision-webtop"
+readonly KASM_SOURCE_DIR="$PROJECT_DIR/deploy/kasmvnc-sidecar"
 readonly TARGET_DIR="${VISION_WEBTOP_ROOT:-/opt/vision-webtop}"
 readonly COMPOSE_ENV_FILE="$PROJECT_DIR/.env"
 readonly ACTIVE_MANIFEST_FILE="$TARGET_DIR/.production-manifest.sha256"
-readonly GUACAMOLE_IMAGE="guacamole/guacamole@sha256:f344085e618bb05e22b964b0208dbd06d3468275bac70206f93805245e067b40"
 readonly BROWSER_AGENT_CONTAINER="fb_agent-browser-agent-1"
+readonly LEGACY_FILES=(
+  "$TARGET_DIR/adpulse-desktop-navigation.jar"
+  "$TARGET_DIR/bootstrap-guacamole-db.sh"
+  "$TARGET_DIR/guacamole-schema.sql"
+  "$TARGET_DIR/vision-vnc-run"
+)
+
 ACTIVE_COMPOSE_BACKUP=""
 ACTIVE_MANIFEST_BACKUP=""
+CONFIG_SNAPSHOT=""
+BASELINE_FILE=""
+POSTCHECK_FILE=""
 MANIFEST_CHANGED=true
 STACK_MUTATED=false
 RESTART_APP=false
 
-die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+die() {
+  printf 'ERROR: %s\n' "$*" >&2
+  if [[ "$STACK_MUTATED" == true ]]; then
+    rollback
+  fi
+  exit 1
+}
 
 compose() {
   docker compose \
@@ -27,6 +43,11 @@ compose() {
     "$@"
 }
 
+dotenv_value() {
+  local key=$1
+  sed -n "s/^${key}=//p" "$COMPOSE_ENV_FILE" | tail -n 1
+}
+
 service_is_healthy() {
   local container_id=""
   container_id="$(compose ps -q "$1")"
@@ -34,53 +55,100 @@ service_is_healthy() {
     && [[ "$(docker inspect "$container_id" --format '{{.State.Health.Status}}')" == "healthy" ]]
 }
 
-bootstrap_completed() {
-  local container_id=""
-  container_id="$(compose ps -a -q database-bootstrap)"
-  [[ -n "$container_id" ]] \
-    && [[ "$(docker inspect "$container_id" --format '{{.State.Status}}:{{.State.ExitCode}}')" == "exited:0" ]]
+assert_database_quiescent() {
+  local postgres_container=""
+  local state=""
+  postgres_container="$(docker ps \
+    --filter label=com.docker.compose.project=fb_agent \
+    --filter label=com.docker.compose.service=postgres \
+    --format '{{.Names}}' | head -n 1)"
+  [[ -n "$postgres_container" ]] || die "fb_agent postgres container is not running"
+  state="$(docker exec "$postgres_container" sh -eu -c \
+    'psql --no-psqlrc --tuples-only --no-align --set ON_ERROR_STOP=1 \
+      --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'"'"'SQL'"'"'
+SELECT
+  COALESCE((
+    SELECT is_scanning_enabled::text
+    FROM observer_config
+    WHERE singleton_key = '"'"'default'"'"'
+  ), '"'"'false'"'"') || '"'"':'"'"' ||
+  (SELECT count(*)::text FROM task_queue WHERE lower(status) = '"'"'running'"'"');
+SQL')"
+  [[ "$state" == "false:0" ]] || {
+    die "desktop migration requires scanning paused and zero running tasks (current: $state)"
+  }
 }
 
-database_contract_is_ready() {
-  local result=""
-  result="$(compose exec -T guacamole-postgres sh -eu -c \
-    'psql --no-psqlrc --tuples-only --no-align --set ON_ERROR_STOP=1 \
-      --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<"SQL"
-SELECT
-  (SELECT count(*) FROM guacamole_connection)::text || '"'"':'"'"' ||
-  (SELECT count(*) FROM guacamole_connection_permission WHERE permission = '"'"'READ'"'"')::text || '"'"':'"'"' ||
-  (SELECT count(*) FROM guacamole_system_permission)::text || '"'"':'"'"' ||
-  (SELECT count(*) FROM guacamole_connection_parameter
-   WHERE parameter_name = '"'"'hostname'"'"' AND parameter_value = '"'"'127.0.0.1'"'"')::text;
-SQL')"
-  [[ "$result" == "1:1:0:1" ]]
+capture_runtime_contract() {
+  local destination=$1
+  local api_key=""
+  api_key="$(dotenv_value API_KEY)"
+  [[ -n "$api_key" ]] || die "API_KEY is missing; cannot capture Vision contract"
+  {
+    printf 'display=:1\n'
+    docker exec vision-webtop sh -eu -c \
+      'DISPLAY=:1 xdpyinfo | awk '\''/dimensions:/{print "dimensions=" $2; exit}'\'''
+    curl --silent --show-error --fail --max-time 15 \
+      --header "X-API-Key: $api_key" \
+      http://127.0.0.1:8100/api/settings/vision
+    printf '\n'
+  } >"$destination"
+  chmod 0600 "$destination"
+}
+
+runtime_contract_matches() {
+  python3 - "$BASELINE_FILE" "$POSTCHECK_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+def load(path: str) -> tuple[str, dict[str, object]]:
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    dimensions = next((line for line in lines if line.startswith("dimensions=")), "")
+    payload = json.loads(lines[-1])
+    return dimensions, payload
+
+before_dimensions, before = load(sys.argv[1])
+after_dimensions, after = load(sys.argv[2])
+stable_keys = ("profile_id", "cdp_port")
+ok = (
+    before_dimensions == "dimensions=1366x768"
+    and after_dimensions == before_dimensions
+    and all(before.get(key) == after.get(key) for key in stable_keys)
+)
+raise SystemExit(0 if ok else 1)
+PY
 }
 
 desktop_is_ready() {
+  local anonymous_status=""
+  local user=""
+  local password=""
+  user="$(dotenv_value DESKTOP_KASM_SERVICE_USER)"
+  password="$(dotenv_value DESKTOP_KASM_SERVICE_PASSWORD)"
+  anonymous_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+    --max-time 3 http://127.0.0.1:8444/ || true)"
   service_is_healthy webtop \
-    && service_is_healthy guacd \
-    && service_is_healthy guacamole-postgres \
-    && bootstrap_completed \
-    && service_is_healthy guacamole \
-    && curl --silent --fail --max-time 3 http://127.0.0.1:8090/desktop/ >/dev/null \
-    && docker exec vision-webtop bash -c \
-      'exec 8<>/dev/tcp/127.0.0.1/4822 && exec 9<>/dev/tcp/127.0.0.1/5900' \
-    && database_contract_is_ready
+    && service_is_healthy kasmvnc \
+    && [[ "$anonymous_status" == "401" ]] \
+    && curl --silent --fail --max-time 3 \
+      --user "$user:$password" http://127.0.0.1:8444/ >/dev/null \
+    && docker exec vision-webtop sh -eu -c \
+      'DISPLAY=:1 xdpyinfo | grep -Eq "dimensions:[[:space:]]+1366x768"' \
+    && compose exec -T kasmvnc sh -eu -c \
+      'pgrep -f "X(kasmvnc|vnc).*:10" >/dev/null && pgrep -x kasmxproxy >/dev/null'
 }
 
 ensure_cdp_ready() {
   local api_key=""
   local response=""
-
-  api_key="$(sed -n 's/^API_KEY=//p' "$COMPOSE_ENV_FILE" | tail -n 1)"
-  [[ -n "$api_key" ]] || die "API_KEY is missing; cannot restore Vision CDP"
+  api_key="$(dotenv_value API_KEY)"
   response="$(curl --silent --show-error --fail --max-time 30 \
     --request POST --header "X-API-Key: $api_key" \
     http://127.0.0.1:8100/api/vision/ensure-cdp)"
   python3 -c \
     'import json,sys; raise SystemExit(0 if json.loads(sys.argv[1]).get("ok") else 1)' \
     "$response"
-  printf 'Vision CDP readiness restored\n'
 }
 
 cleanup() {
@@ -89,36 +157,67 @@ cleanup() {
 }
 trap cleanup EXIT
 
+rollback() {
+  local exit_code=$?
+  trap - ERR
+  printf 'ERROR: Kasm desktop update failed; restoring compose, /config and browser-agent\n' >&2
+  if [[ "$STACK_MUTATED" == true ]]; then
+    compose down --remove-orphans >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$CONFIG_SNAPSHOT" && -f "$CONFIG_SNAPSHOT" ]]; then
+    tar --extract --gzip --file "$CONFIG_SNAPSHOT" --directory "$TARGET_DIR" || true
+  fi
+  if [[ -n "$ACTIVE_COMPOSE_BACKUP" && -f "$ACTIVE_COMPOSE_BACKUP" ]]; then
+    cp -a "$ACTIVE_COMPOSE_BACKUP" "$TARGET_DIR/compose.yaml"
+    compose up -d --remove-orphans || true
+  fi
+  if [[ -n "$ACTIVE_MANIFEST_BACKUP" && -f "$ACTIVE_MANIFEST_BACKUP" ]]; then
+    cp -a "$ACTIVE_MANIFEST_BACKUP" "$ACTIVE_MANIFEST_FILE"
+  else
+    rm -f -- "$ACTIVE_MANIFEST_FILE"
+  fi
+  if [[ "$RESTART_APP" == true ]] \
+    && systemctl list-unit-files fb-agent.service >/dev/null 2>&1; then
+    docker rm -f "$BROWSER_AGENT_CONTAINER" >/dev/null 2>&1 || true
+    systemctl restart fb-agent.service || true
+  fi
+  exit "$exit_code"
+}
+
 [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "run as root"
-for command in curl docker install python3 sha256sum; do
+for command in curl docker install python3 sha256sum tar; do
   command -v "$command" >/dev/null 2>&1 || die "$command is not installed"
 done
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is unavailable"
 [[ -s "$COMPOSE_ENV_FILE" ]] || die "release environment is missing: $COMPOSE_ENV_FILE"
 [[ "$(stat -Lc '%a' "$COMPOSE_ENV_FILE")" == "600" ]] || die "$COMPOSE_ENV_FILE must have mode 600"
 [[ -d "$TARGET_DIR/config" ]] || die "persistent webtop config is missing: $TARGET_DIR/config"
-docker network inspect fb_agent_default >/dev/null 2>&1 || docker network create fb_agent_default >/dev/null
+docker network inspect fb_agent_default >/dev/null 2>&1 \
+  || docker network create fb_agent_default >/dev/null
 
-desktop_webtop_image="$(sed -n 's/^DESKTOP_WEBTOP_IMAGE=//p' "$COMPOSE_ENV_FILE" | tail -n 1)"
-[[ "$desktop_webtop_image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] \
-  || die "DESKTOP_WEBTOP_IMAGE must be an immutable image@sha256 reference"
+for key in DESKTOP_WEBTOP_IMAGE DESKTOP_KASMVNC_IMAGE; do
+  image="$(dotenv_value "$key")"
+  [[ "$image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] \
+    || die "$key must be an immutable image@sha256 reference"
+done
 
 manifest_hash="$({
   sha256sum \
     "$SOURCE_DIR/compose.yaml" \
     "$SOURCE_DIR/Dockerfile" \
-    "$SOURCE_DIR/bootstrap-guacamole-db.sh" \
-    "$SOURCE_DIR/build-guacamole-extension.py" \
-    "$SOURCE_DIR/guacamole-extension/guac-manifest.json" \
-    "$SOURCE_DIR/guacamole-extension/html/user-menu.html" \
-    "$SOURCE_DIR/guacamole-extension/css/adpulse-desktop.css" \
     "$SOURCE_DIR/vision-service-run" \
     "$SOURCE_DIR/vision-window-fit-run" \
-    "$SOURCE_DIR/vision-vnc-run"
+    "$SOURCE_DIR/disable-server-capslock" \
+    "$SOURCE_DIR/disable-server-capslock.desktop" \
+    "$KASM_SOURCE_DIR/Dockerfile" \
+    "$KASM_SOURCE_DIR/entrypoint.sh" \
+    "$KASM_SOURCE_DIR/healthcheck.sh" \
+    "$KASM_SOURCE_DIR/kasmvnc.yaml"
   sed -n \
     -e '/^DESKTOP_WEBTOP_IMAGE=/p' \
-    -e '/^DESKTOP_VNC_PASSWORD=/p' \
-    -e '/^DESKTOP_GUACAMOLE_POSTGRES_/p' \
+    -e '/^DESKTOP_KASMVNC_IMAGE=/p' \
+    -e '/^DESKTOP_KASM_SERVICE_USER=/p' \
+    -e '/^DESKTOP_KASM_SERVICE_PASSWORD=/p' \
     "$COMPOSE_ENV_FILE" | sort | sha256sum
 } | sha256sum | awk '{print $1}')"
 
@@ -136,17 +235,21 @@ if [[ -f "$ACTIVE_MANIFEST_FILE" ]]; then
   cp -a "$ACTIVE_MANIFEST_FILE" "$ACTIVE_MANIFEST_BACKUP"
 fi
 
+if [[ "$MANIFEST_CHANGED" == true ]]; then
+  assert_database_quiescent
+  install -d -m 0700 "$TARGET_DIR/backups"
+  snapshot_id="$(date -u +%Y%m%dT%H%M%SZ)"
+  CONFIG_SNAPSHOT="$TARGET_DIR/backups/${snapshot_id}-pre-kasm-config.tar.gz"
+  BASELINE_FILE="$TARGET_DIR/backups/${snapshot_id}-pre-kasm-baseline.txt"
+  POSTCHECK_FILE="$TARGET_DIR/backups/${snapshot_id}-post-kasm-baseline.txt"
+  tar --create --gzip --file "$CONFIG_SNAPSHOT" --directory "$TARGET_DIR" config
+  capture_runtime_contract "$BASELINE_FILE"
+fi
+
 install -m 0600 "$SOURCE_DIR/compose.yaml" "$TARGET_DIR/compose.yaml"
-install -m 0700 "$SOURCE_DIR/bootstrap-guacamole-db.sh" "$TARGET_DIR/bootstrap-guacamole-db.sh"
-python3 "$SOURCE_DIR/build-guacamole-extension.py" \
-  --source "$SOURCE_DIR/guacamole-extension" \
-  --output "$TARGET_DIR/adpulse-desktop-navigation.jar"
-chmod 0644 "$TARGET_DIR/adpulse-desktop-navigation.jar"
 install -m 0755 "$SOURCE_DIR/vision-service-run" "$TARGET_DIR/vision-service-run"
 install -m 0755 "$SOURCE_DIR/vision-window-fit-run" "$TARGET_DIR/vision-window-fit-run"
-install -m 0755 "$SOURCE_DIR/vision-vnc-run" "$TARGET_DIR/vision-vnc-run"
-install -d -m 0700 \
-  "$TARGET_DIR/config/.local/bin" "$TARGET_DIR/config/.config/autostart"
+install -d -m 0700 "$TARGET_DIR/config/.local/bin" "$TARGET_DIR/config/.config/autostart"
 install -m 0755 "$SOURCE_DIR/disable-server-capslock" \
   "$TARGET_DIR/config/.local/bin/disable-server-capslock"
 install -m 0644 "$SOURCE_DIR/disable-server-capslock.desktop" \
@@ -157,38 +260,7 @@ chown 1000:1000 \
   "$TARGET_DIR/config/.local/bin/disable-server-capslock" \
   "$TARGET_DIR/config/.config/autostart/disable-server-capslock.desktop"
 
-if [[ "$MANIFEST_CHANGED" == true || ! -s "$TARGET_DIR/guacamole-schema.sql" ]]; then
-  schema_tmp="$(mktemp)"
-  docker run --rm "$GUACAMOLE_IMAGE" /opt/guacamole/bin/initdb.sh --postgresql >"$schema_tmp"
-  grep -Fq 'CREATE TABLE guacamole_connection (' "$schema_tmp" \
-    || die "Guacamole 1.6.0 schema generation failed"
-  install -m 0600 "$schema_tmp" "$TARGET_DIR/guacamole-schema.sql"
-  rm -f -- "$schema_tmp"
-fi
-
-rollback() {
-  local exit_code=$?
-  trap - ERR
-  printf 'ERROR: desktop stack update failed; restoring the previously active manifest\n' >&2
-  if [[ "$STACK_MUTATED" == true \
-    && -n "$ACTIVE_COMPOSE_BACKUP" && -f "$ACTIVE_COMPOSE_BACKUP" ]]; then
-    cp -a "$ACTIVE_COMPOSE_BACKUP" "$TARGET_DIR/compose.yaml"
-    compose up -d --remove-orphans || true
-  fi
-  if [[ -n "$ACTIVE_MANIFEST_BACKUP" && -f "$ACTIVE_MANIFEST_BACKUP" ]]; then
-    cp -a "$ACTIVE_MANIFEST_BACKUP" "$ACTIVE_MANIFEST_FILE"
-  else
-    rm -f -- "$ACTIVE_MANIFEST_FILE"
-  fi
-  if [[ "$RESTART_APP" == true ]] \
-    && systemctl list-unit-files fb-agent.service >/dev/null 2>&1; then
-    docker rm -f "$BROWSER_AGENT_CONTAINER" >/dev/null 2>&1 || true
-    systemctl restart fb-agent.service || true
-  fi
-  exit "$exit_code"
-}
 trap rollback ERR
-
 compose config --quiet
 while IFS= read -r image; do
   [[ "$image" =~ @sha256:[0-9a-f]{64}$ ]] \
@@ -196,51 +268,49 @@ while IFS= read -r image; do
 done < <(compose config --images)
 
 if [[ "$MANIFEST_CHANGED" == true ]]; then
-  missing_image=false
-  while IFS= read -r image; do
-    if ! docker image inspect "$image" >/dev/null 2>&1; then
-      missing_image=true
-    fi
-  done < <(compose config --images)
-  if [[ "$missing_image" == true ]]; then
-    compose pull
-  fi
+  compose pull
   if systemctl is-active --quiet fb-agent.service \
     || docker ps --format '{{.Names}}' | grep -qx "$BROWSER_AGENT_CONTAINER"; then
     RESTART_APP=true
   fi
   if docker ps -a --format '{{.Names}}' | grep -qx "$BROWSER_AGENT_CONTAINER"; then
     docker stop --time 90 "$BROWSER_AGENT_CONTAINER" >/dev/null 2>&1 || true
-    # network_mode: container:vision-webtop stores the old container ID.
     docker rm -f "$BROWSER_AGENT_CONTAINER" >/dev/null
   fi
-  # Bind-mounted extension/bootstrap changes do not alter Docker's container
-  # config hash. Remove only the dependent desktop services so the new
-  # production manifest is loaded exactly once; persistent JDBC/X11 data stays.
   STACK_MUTATED=true
-  compose rm -sf guacamole guacd database-bootstrap
-  compose up -d --remove-orphans
+  compose up -d --remove-orphans --force-recreate
 else
-  # A release that does not change the desktop manifest must not rebuild or
-  # force-recreate this independent stack. This only restores missing services.
   compose up -d --remove-orphans
 fi
 
-for _ in $(seq 1 60); do
+for _ in $(seq 1 90); do
   if desktop_is_ready; then
-    printf '%s\n' "$manifest_hash" >"$ACTIVE_MANIFEST_FILE"
-    # The desktop release is committed once its own full contract is healthy.
-    # A later app/browser-agent restart failure must fail the outer app release,
-    # but must not roll a healthy Header Auth/JDBC stack back to incompatible JSON.
-    trap - ERR
     if [[ "$RESTART_APP" == true ]] \
       && systemctl list-unit-files fb-agent.service >/dev/null 2>&1; then
       systemctl restart fb-agent.service
       ensure_cdp_ready
     fi
-    printf 'Vision desktop production stack is ready on 127.0.0.1:8090/desktop/\n'
+    if [[ "$MANIFEST_CHANGED" == true ]]; then
+      capture_runtime_contract "$POSTCHECK_FILE"
+      runtime_contract_matches \
+        || die "DISPLAY, geometry, Vision profile or CDP port changed during migration"
+    fi
+    printf '%s\n' "$manifest_hash" >"$ACTIVE_MANIFEST_FILE"
+    trap - ERR
+
+    # Delete the retired Guacamole artifacts only after the Kasm contract and
+    # Vision baseline have passed. Rollback never needs data deleted here.
+    rm -f -- "${LEGACY_FILES[@]}"
+    while IFS= read -r legacy_volume; do
+      [[ -z "$legacy_volume" ]] || docker volume rm "$legacy_volume" >/dev/null
+    done < <(docker volume ls \
+      --filter label=com.docker.compose.project=vision-webtop \
+      --filter label=com.docker.compose.volume=guacamole-postgres \
+      --format '{{.Name}}')
+
+    printf 'Vision desktop is ready through KasmVNC on 127.0.0.1:8444\n'
     exit 0
   fi
   sleep 2
 done
-die "desktop stack did not become ready"
+die "Kasm desktop stack did not become ready"

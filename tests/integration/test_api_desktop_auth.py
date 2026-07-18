@@ -54,7 +54,7 @@ def _settings(owner_id: int) -> Settings:
         _env_file=None,
         require_api_key=False,
         api_key=SecretStr("desktop-api-key"),
-        desktop_public_origin="https://app.adpulse.su",
+        desktop_public_origin="https://desktop.adpulse.su",
         desktop_access_ticket_ttl_seconds=300,
         desktop_access_session_ttl_seconds=43_200,
         desktop_access_owner_recheck_seconds=0,
@@ -108,7 +108,10 @@ async def test_web_owner_launch_has_documented_no_body_contract(
         response = await client.post("/api/desktop/launch", headers=_web_headers())
 
     assert response.status_code == 200
-    assert response.json()["url"].startswith("https://app.adpulse.su/desktop-auth/redeem?ticket=")
+    assert response.json()["url"].startswith(
+        "https://desktop.adpulse.su/desktop-auth/redeem?ticket="
+    )
+    assert response.json()["transport"] == "kasm"
     assert datetime.fromisoformat(response.json()["expires_at"])
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["referrer-policy"] == "no-referrer"
@@ -196,11 +199,12 @@ async def test_redeem_cookie_verify_logout_and_replay(pg_engine, fake_redis_clie
         fake_redis_client,
         telegram_user_id=owner_id,
         source="telegram_mini_app",
+        expected_hostname="desktop.adpulse.su",
         ttl=300,
     )
     app = _app(pg_engine, fake_redis_client, _settings(owner_id))
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
+        transport=ASGITransport(app=app), base_url="https://desktop.adpulse.su"
     ) as client:
         redeemed = await client.get(f"/desktop-auth/redeem?ticket={ticket}", follow_redirects=False)
         token = redeemed.cookies.get(DESKTOP_SESSION_COOKIE)
@@ -219,10 +223,10 @@ async def test_redeem_cookie_verify_logout_and_replay(pg_engine, fake_redis_clie
         replay = await client.get(f"/desktop-auth/redeem?ticket={ticket}", follow_redirects=False)
 
     assert redeemed.status_code == 303
-    assert redeemed.headers["location"] == "/desktop/"
+    assert redeemed.headers["location"] == "/"
     cookie = redeemed.headers["set-cookie"]
     assert f"{DESKTOP_SESSION_COOKIE}=" in cookie
-    assert "Path=/desktop" in cookie
+    assert "Path=/" in cookie
     assert "HttpOnly" in cookie and "Secure" in cookie and "SameSite=lax" in cookie
     assert "Max-Age=43200" in cookie
     assert verified.status_code == 200
@@ -267,7 +271,7 @@ async def test_desktop_readyz_is_separate_and_fail_closed(
     owner_id, _ = desktop_users
     app = _app(pg_engine, fake_redis_client, _settings(owner_id))
     app.dependency_overrides[get_desktop_readiness_probe] = lambda: _ReadinessProbe(
-        {"guacamole": True, "jdbc": False, "guacd_vnc": True}
+        {"configured": True, "auth_challenge": False, "authenticated": False}
     )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
@@ -276,12 +280,12 @@ async def test_desktop_readyz_is_separate_and_fail_closed(
     assert failed.status_code == 503
     assert failed.json() == {
         "status": "not_ready",
-        "checks": {"guacamole": True, "jdbc": False, "guacd_vnc": True},
+        "checks": {"configured": True, "auth_challenge": False, "authenticated": False},
     }
     assert "password" not in failed.text.lower()
 
     app.dependency_overrides[get_desktop_readiness_probe] = lambda: _ReadinessProbe(
-        {"guacamole": True, "jdbc": True, "guacd_vnc": True}
+        {"configured": True, "auth_challenge": True, "authenticated": True}
     )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"

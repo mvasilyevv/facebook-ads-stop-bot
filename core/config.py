@@ -73,28 +73,17 @@ class Settings(BaseSettings):
     panel_auth_owner_recheck_seconds: int = 60
 
     # --- Protected Vision desktop ---
-    desktop_public_origin: str = "https://app.adpulse.su"
+    desktop_public_origin: str = "https://desktop.adpulse.su"
     desktop_access_ticket_ttl_seconds: int = 300
     desktop_access_session_ttl_seconds: int = 12 * 60 * 60
     desktop_access_owner_recheck_seconds: int = 60
     # Explicit web-panel owner. Never infer identity from the current owner count.
     desktop_owner_telegram_user_id: int = 0
-    # Dedicated desktop readiness targets on the shared production network.
-    desktop_guacamole_internal_url: str = "http://vision-guacamole:8080/desktop/"
-    desktop_guacamole_postgres_host: str = "vision-guacamole-db"
-    desktop_guacamole_postgres_port: int = 5432
-    desktop_guacamole_postgres_db: str = "guacamole"
-    desktop_guacamole_postgres_user: str = "guacamole"
-    desktop_guacamole_postgres_password: SecretStr = SecretStr("")
-    desktop_guacd_host: str = "vision-webtop"
-    desktop_guacd_port: int = 4822
-    # Used only for the private guacd->TigerVNC readiness handshake. It is
-    # never returned or logged by the API.
-    desktop_vnc_password: SecretStr = SecretStr("")
+    desktop_kasm_internal_url: str = "http://vision-webtop:8444/"
+    desktop_kasm_service_user: str = ""
+    desktop_kasm_service_password: SecretStr = SecretStr("")
     desktop_readiness_timeout_seconds: float = 2.0
-    # Кэш результата desktop-readyz: проба гоняет реальный guacd→VNC handshake
-    # рядом с money-критичной Vision-сессией, поэтому не выполняется чаще этого
-    # интервала. Значение <= 0 отключает кэш (используется в тестах).
+    # Значение <= 0 отключает readiness-кэш (используется в тестах).
     desktop_readiness_cache_seconds: float = 15.0
 
     # --- Шифрование (для хранения токенов в БД) ---

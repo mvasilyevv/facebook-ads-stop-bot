@@ -141,56 +141,17 @@ app.adpulse.su {
 			respond 404
 		}
 
-		handle /desktop-auth/redeem {
-			log_skip
-			reverse_proxy 127.0.0.1:8100 {
-				header_up -Remote-User
-				header_up -X-API-Key
-				header_up -X-Panel-Telegram-User-Id
-				header_up -X-Panel-Role
-				header_up -X-Desktop-Telegram-User-Id
-				header_up -X-Desktop-Role
-				header_up -Authorization
-				header_up -Proxy-Authorization
-			}
-		}
-
-		handle /desktop-auth/verify {
-			respond 404
-		}
-
-		handle /desktop/logout {
-			log_skip
-			reverse_proxy 127.0.0.1:8100 {
-				header_up -Remote-User
-				header_up -X-API-Key
-				header_up -X-Panel-Telegram-User-Id
-				header_up -X-Panel-Role
-				header_up -X-Desktop-Telegram-User-Id
-				header_up -X-Desktop-Role
-				header_up -Authorization
-				header_up -Proxy-Authorization
-			}
-		}
-
-		# Guacamole remains the accepted production desktop transport in Phase 0.
-		handle /desktop/* {
-			import desktop_session_auth
-			reverse_proxy 127.0.0.1:8090 {
-				stream_timeout 30m
-				stream_close_delay 5m
-				header_up Remote-User "adpulse-desktop"
-				header_up -Authorization
-				header_up -Proxy-Authorization
-				header_up -X-API-Key
-				header_up -X-Panel-Telegram-User-Id
-				header_up -X-Panel-Role
-				header_up -X-Desktop-Telegram-User-Id
-				header_up -X-Desktop-Role
-			}
-		}
-
 		handle /desktop-readyz {
+			import panel_session_auth
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -Remote-User
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+			}
+		}
+
+		handle /desktop-kasm-readyz {
 			import panel_session_auth
 			reverse_proxy 127.0.0.1:8100 {
 				header_up -Remote-User
@@ -272,17 +233,6 @@ http://127.0.0.1:8099 {
 				header_up -X-Panel-Role
 				header_up -X-Desktop-Telegram-User-Id
 				header_up -X-Desktop-Role
-			}
-		}
-
-		handle /desktop/* {
-			reverse_proxy 127.0.0.1:8090 {
-				stream_timeout 30m
-				stream_close_delay 5m
-				header_up Remote-User "adpulse-desktop"
-				header_up -Authorization
-				header_up -Proxy-Authorization
-				header_up -X-API-Key
 			}
 		}
 

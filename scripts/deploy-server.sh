@@ -10,6 +10,7 @@ ROOT_DIR="${DEPLOY_ROOT:-/opt/fb-agent}"
 ENV_FILE="$PROJECT_DIR/.env"
 PUBLIC_URL="${PUBLIC_URL:-https://app.adpulse.su}"
 DESKTOP_WEBTOP_IMAGE_OVERRIDE="${DESKTOP_WEBTOP_IMAGE:-}"
+DESKTOP_KASMVNC_IMAGE_OVERRIDE="${DESKTOP_KASMVNC_IMAGE:-}"
 DESKTOP_DOCKER_CONFIG_OVERRIDE="${DESKTOP_DOCKER_CONFIG:-}"
 RELEASE_ID=""
 ALLOW_VISION_OFFLINE=false
@@ -64,6 +65,9 @@ prepare_env_args=(
 if [[ -n "$DESKTOP_WEBTOP_IMAGE_OVERRIDE" ]]; then
   prepare_env_args+=(--desktop-webtop-image "$DESKTOP_WEBTOP_IMAGE_OVERRIDE")
 fi
+if [[ -n "$DESKTOP_KASMVNC_IMAGE_OVERRIDE" ]]; then
+  prepare_env_args+=(--desktop-kasmvnc-image "$DESKTOP_KASMVNC_IMAGE_OVERRIDE")
+fi
 python3 "$SCRIPT_DIR/prepare_production_env.py" "${prepare_env_args[@]}"
 
 remote_release="$ROOT_DIR/releases/$RELEASE_ID"
@@ -88,7 +92,7 @@ rsync -a "$PROD_ENV" "$TARGET:$ROOT_DIR/shared/.env.new"
 ssh "$TARGET" "set -eu; chmod 600 '$ROOT_DIR/shared/.env.new'; mv '$ROOT_DIR/shared/.env.new' '$ROOT_DIR/shared/.env'; printf '%s\\n' '$RELEASE_ID' > '$remote_release/.release-id'; ln -sfn '$ROOT_DIR/shared/.env' '$remote_release/.env'; chmod +x '$remote_release'/scripts/*.sh"
 
 # The desktop host and API routes are one release contract. Bring the private
-# Vision/Guacamole stack to a healthy state before switching Caddy/app release;
+# Vision/KasmVNC stack to a healthy state before switching Caddy/app release;
 # the installer rolls back its compose/image if any desktop health gate fails.
 if [[ -n "$DESKTOP_DOCKER_CONFIG_OVERRIDE" ]]; then
   ssh "$TARGET" \

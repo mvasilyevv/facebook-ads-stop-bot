@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -13,6 +14,14 @@ class DesktopLaunchResponse(BaseModel):
 
     url: str
     expires_at: datetime
+    transport: Literal["kasm"]
 
 
-__all__ = ["DesktopLaunchResponse"]
+class DesktopTransportsResponse(BaseModel):
+    """Configured transport selection exposed to owner launchers."""
+
+    active: Literal["kasm"]
+    available: list[Literal["kasm"]]
+
+
+__all__ = ["DesktopLaunchResponse", "DesktopTransportsResponse"]

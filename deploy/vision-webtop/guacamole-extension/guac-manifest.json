@@ -1,7 +1,0 @@
-{
-  "guacamoleVersion": "1.6.0",
-  "name": "AdPulse Desktop Navigation",
-  "namespace": "adpulse-desktop-navigation",
-  "css": ["css/adpulse-desktop.css"],
-  "html": ["html/user-menu.html"]
-}

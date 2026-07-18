@@ -9,9 +9,10 @@ import { cn } from "@/lib/utils/cn";
 interface DesktopLaunchResponse {
   url: string;
   expires_at: string;
+  transport: "kasm";
 }
 
-const DESKTOP_ORIGIN = "https://app.adpulse.su";
+const DESKTOP_ORIGIN = "https://desktop.adpulse.su";
 // Ссылка-триггер: настоящий клик по <a target="_blank"> открывает новую вкладку
 // синхронно, а сам запуск (POST /desktop/launch + редирект на билет) происходит
 // уже ВНУТРИ новой вкладки. Так нет async-разрыва между жестом и открытием, из-за
@@ -67,6 +68,9 @@ function RemoteDesktopPage() {
         const payload = await apiSend<DesktopLaunchResponse>("POST", "/desktop/launch");
         if (typeof payload.url !== "string" || payload.url.length === 0) {
           throw new Error("Сервер вернул некорректный билет рабочего стола.");
+        }
+        if (payload.transport !== "kasm") {
+          throw new Error("Сервер вернул неизвестный transport рабочего стола.");
         }
         const launchUrl = validateDesktopLaunchUrl(payload.url);
         if (!cancelled) {

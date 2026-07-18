@@ -31,11 +31,12 @@ def _valid_values() -> dict[str, str]:
         "API_KEY": "a" * 32,
         "TMA_SESSION_SECRET": "t" * 48,
         "ADSETPRO_POSTBACK_SECRET": "p" * 48,
-        "DESKTOP_VNC_PASSWORD": "vnc-pass",
-        "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD": "d" * 48,
         "DESKTOP_WEBTOP_IMAGE": "registry.example/webtop@sha256:" + "a" * 64,
+        "DESKTOP_KASMVNC_IMAGE": "registry.example/kasm@sha256:" + "b" * 64,
         "DESKTOP_OWNER_TELEGRAM_USER_ID": "911436108",
-        "DESKTOP_PUBLIC_ORIGIN": "https://app.adpulse.su",
+        "DESKTOP_PUBLIC_ORIGIN": "https://desktop.adpulse.su",
+        "DESKTOP_KASM_SERVICE_USER": "adpulse-desktop",
+        "DESKTOP_KASM_SERVICE_PASSWORD": "k" * 48,
         "TRACKER_AUTO_CANCEL_ENABLED": "false",
         "REQUIRE_API_KEY": "true",
         "TRUST_PROXY_HEADERS": "true",
@@ -63,6 +64,8 @@ def test_render_removes_retired_desktop_credentials() -> None:
             "DESKTOP_ACCESS_BASE_URL=https://desktop.adpulse.su",
             "DESKTOP_GUACAMOLE_JSON_SECRET=retired",
             "DESKTOP_RECOVERY_KEY=retired",
+            "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD=retired",
+            "DESKTOP_VNC_PASSWORD=retired",
             "CUSTOM=value",
         ],
         {},
@@ -71,6 +74,8 @@ def test_render_removes_retired_desktop_credentials() -> None:
     assert "DESKTOP_ACCESS_BASE_URL" not in rendered
     assert "DESKTOP_GUACAMOLE_JSON_SECRET" not in rendered
     assert "DESKTOP_RECOVERY_KEY" not in rendered
+    assert "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD" not in rendered
+    assert "DESKTOP_VNC_PASSWORD" not in rendered
     assert "CUSTOM=value" in rendered
 
 
@@ -120,15 +125,15 @@ def test_validate_accepts_explicit_auto_cancel_rollout_boolean_only() -> None:
 
 def test_validate_rejects_invalid_desktop_secrets() -> None:
     values = _valid_values()
-    values["DESKTOP_VNC_PASSWORD"] = "too-long-password"
-    values["DESKTOP_GUACAMOLE_POSTGRES_PASSWORD"] = "short"
     values["DESKTOP_WEBTOP_IMAGE"] = "registry.example/webtop:latest"
+    values["DESKTOP_KASMVNC_IMAGE"] = "registry.example/kasm:latest"
+    values["DESKTOP_KASM_SERVICE_PASSWORD"] = "short"
 
     errors = ENV.validate(values)
 
-    assert "DESKTOP_VNC_PASSWORD must be exactly 8 printable ASCII characters" in errors
-    assert "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD must be at least 32 characters" in errors
     assert "DESKTOP_WEBTOP_IMAGE must be an immutable image@sha256 reference" in errors
+    assert "DESKTOP_KASMVNC_IMAGE must be an immutable image@sha256 reference" in errors
+    assert "DESKTOP_KASM_SERVICE_PASSWORD must be at least 32 characters" in errors
 
 
 def test_parse_lines_does_not_include_comments() -> None:

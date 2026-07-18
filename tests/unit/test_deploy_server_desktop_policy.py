@@ -18,10 +18,15 @@ def test_ci_artifact_digest_is_forwarded_into_production_environment() -> None:
     workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
 
     assert 'DESKTOP_WEBTOP_IMAGE_OVERRIDE="${DESKTOP_WEBTOP_IMAGE:-}"' in script
+    assert 'DESKTOP_KASMVNC_IMAGE_OVERRIDE="${DESKTOP_KASMVNC_IMAGE:-}"' in script
     assert "--desktop-webtop-image" in script
+    assert "--desktop-kasmvnc-image" in script
     assert "DESKTOP_DOCKER_CONFIG_OVERRIDE" in script
     assert "build-desktop:" in workflow
     assert "deploy/vision-webtop/Dockerfile" in workflow
-    assert "${{ steps.build.outputs.digest }}" in workflow
-    assert "DESKTOP_WEBTOP_IMAGE: ${{ needs.build-desktop.outputs.image_ref }}" in workflow
+    assert "deploy/kasmvnc-sidecar/Dockerfile" in workflow
+    assert "${{ steps.build_webtop.outputs.digest }}" in workflow
+    assert "${{ steps.build_kasm.outputs.digest }}" in workflow
+    assert "DESKTOP_WEBTOP_IMAGE: ${{ needs.build-desktop.outputs.webtop_image_ref }}" in workflow
+    assert "DESKTOP_KASMVNC_IMAGE: ${{ needs.build-desktop.outputs.kasm_image_ref }}" in workflow
     assert "DOCKER_CONFIG='$DESKTOP_DOCKER_CONFIG' docker login ghcr.io" in workflow
