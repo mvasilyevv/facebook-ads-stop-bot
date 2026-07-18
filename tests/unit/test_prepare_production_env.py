@@ -58,24 +58,24 @@ def test_render_replaces_once_and_preserves_unrelated_lines() -> None:
     assert "NEW_KEY=new" in rendered
 
 
-def test_render_removes_retired_desktop_credentials() -> None:
+def test_render_removes_retired_desktop_flags() -> None:
     rendered = ENV.render(
         [
             "DESKTOP_ACCESS_BASE_URL=https://desktop.adpulse.su",
-            "DESKTOP_GUACAMOLE_JSON_SECRET=retired",
             "DESKTOP_RECOVERY_KEY=retired",
-            "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD=retired",
-            "DESKTOP_VNC_PASSWORD=retired",
+            "X_PANEL_RECOVERY_KEY=retired",
+            "DESKTOP_ACTIVE_TRANSPORT=retired",
+            "DESKTOP_KASM_ENABLED=true",
             "CUSTOM=value",
         ],
         {},
     )
 
     assert "DESKTOP_ACCESS_BASE_URL" not in rendered
-    assert "DESKTOP_GUACAMOLE_JSON_SECRET" not in rendered
     assert "DESKTOP_RECOVERY_KEY" not in rendered
-    assert "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD" not in rendered
-    assert "DESKTOP_VNC_PASSWORD" not in rendered
+    assert "X_PANEL_RECOVERY_KEY" not in rendered
+    assert "DESKTOP_ACTIVE_TRANSPORT" not in rendered
+    assert "DESKTOP_KASM_ENABLED" not in rendered
     assert "CUSTOM=value" in rendered
 
 

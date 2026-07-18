@@ -44,6 +44,15 @@ printf '%s\n%s\n' \
 # before translating the system YAML, so point that path at the tmpfs secret.
 ln -sfn "${password_file}" /root/.kasmpasswd
 
+# The X11 socket lives in a named volume shared with webtop. Docker can stop a
+# previous sidecar before Xvnc removes X10, so force-recreate must distinguish a
+# live display from an orphaned socket instead of entering a restart loop.
+if DISPLAY="${kasm_display}" xdpyinfo >/dev/null 2>&1; then
+  printf 'Display %s is already served by another process\n' "${kasm_display}" >&2
+  exit 1
+fi
+rm -f -- /tmp/.X11-unix/X10 /tmp/.X10-lock
+
 # The official wrapper converts the locked YAML policy to Xvnc arguments.
 # `-noxstartup` keeps this display transport-only; Vision remains on :1.
 kasmvncserver "${kasm_display}" -noxstartup

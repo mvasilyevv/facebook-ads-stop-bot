@@ -10,6 +10,9 @@ readonly CADDY_ENV_FILE="/etc/fb-agent/caddy.env"
 readonly CADDY_FILE="/etc/caddy/Caddyfile"
 readonly APP_CADDY_SITE="/etc/caddy/sites-enabled/app.adpulse.su.caddy"
 readonly DESKTOP_CADDY_SITE="/etc/caddy/sites-enabled/desktop.adpulse.su.caddy"
+readonly CADDY_LOG_DIR="/var/log/caddy"
+readonly APP_ACCESS_LOG="$CADDY_LOG_DIR/fb-agent-access.log"
+readonly DESKTOP_ACCESS_LOG="$CADDY_LOG_DIR/fb-agent-desktop-access.log"
 TEMP_DIR=""
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -17,7 +20,7 @@ cleanup() { [[ -n "$TEMP_DIR" ]] && rm -rf -- "$TEMP_DIR"; }
 trap cleanup EXIT
 
 [[ "${EUID:-$(id -u)}" -eq 0 ]] || { printf 'ERROR: run as root\n' >&2; exit 1; }
-for command in install systemctl caddy python3; do
+for command in caddy chmod chown install python3 systemctl touch; do
   command -v "$command" >/dev/null 2>&1 || die "$command is not installed"
 done
 [[ -s "$CADDY_ENV_FILE" ]] || {
@@ -49,6 +52,14 @@ python3 "$PROJECT_DIR/scripts/sync-caddy-env.py" \
 
 TEMP_DIR="$(mktemp -d)"
 install -d -m 0755 /etc/caddy/sites-enabled /etc/systemd/system/caddy.service.d
+install -d -o caddy -g caddy -m 0755 "$CADDY_LOG_DIR"
+for access_log in "$APP_ACCESS_LOG" "$DESKTOP_ACCESS_LOG"; do
+  [[ ! -L "$access_log" ]] || die "refusing symlinked Caddy access log: $access_log"
+  touch -- "$access_log"
+  [[ -f "$access_log" ]] || die "Caddy access log is not a regular file: $access_log"
+  chown -- caddy:caddy "$access_log"
+  chmod -- 0600 "$access_log"
+done
 
 # Caddy-конфиг меняем с проверкой и возможностью вернуть предыдущую рабочую
 # версию. Это особенно важно для публичного postback-route: ошибка в site-файле
