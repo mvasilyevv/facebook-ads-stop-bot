@@ -11,12 +11,6 @@ readonly TARGET_DIR="${VISION_WEBTOP_ROOT:-/opt/vision-webtop}"
 readonly COMPOSE_ENV_FILE="$PROJECT_DIR/.env"
 readonly ACTIVE_MANIFEST_FILE="$TARGET_DIR/.production-manifest.sha256"
 readonly BROWSER_AGENT_CONTAINER="fb_agent-browser-agent-1"
-readonly LEGACY_FILES=(
-  "$TARGET_DIR/adpulse-desktop-navigation.jar"
-  "$TARGET_DIR/bootstrap-guacamole-db.sh"
-  "$TARGET_DIR/guacamole-schema.sql"
-  "$TARGET_DIR/vision-vnc-run"
-)
 
 ACTIVE_COMPOSE_BACKUP=""
 ACTIVE_MANIFEST_BACKUP=""
@@ -297,16 +291,6 @@ for _ in $(seq 1 90); do
     fi
     printf '%s\n' "$manifest_hash" >"$ACTIVE_MANIFEST_FILE"
     trap - ERR
-
-    # Delete the retired Guacamole artifacts only after the Kasm contract and
-    # Vision baseline have passed. Rollback never needs data deleted here.
-    rm -f -- "${LEGACY_FILES[@]}"
-    while IFS= read -r legacy_volume; do
-      [[ -z "$legacy_volume" ]] || docker volume rm "$legacy_volume" >/dev/null
-    done < <(docker volume ls \
-      --filter label=com.docker.compose.project=vision-webtop \
-      --filter label=com.docker.compose.volume=guacamole-postgres \
-      --format '{{.Name}}')
 
     printf 'Vision desktop is ready through KasmVNC on 127.0.0.1:8444\n'
     exit 0

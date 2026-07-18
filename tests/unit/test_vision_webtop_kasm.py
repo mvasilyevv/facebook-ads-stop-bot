@@ -71,5 +71,7 @@ def test_installer_is_quiescent_snapshotting_and_rollback_safe() -> None:
     assert "restoring compose, /config and browser-agent" in source
     assert "service_is_healthy kasmvnc" in source
     assert "http://127.0.0.1:8444/" in source
-    assert "guacamole-postgres" in source  # explicit one-way legacy volume cleanup
+    assert "guacamole" not in source.lower()
+    assert "guacd" not in source.lower()
+    assert "tigervnc" not in source.lower()
     assert "compose build" not in source
