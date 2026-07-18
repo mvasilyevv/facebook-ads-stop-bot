@@ -10,7 +10,7 @@ raw Kubernetes-манифесты остаются эксперименталь�
 | Компонент | Размещение | Внешний доступ |
 |---|---|---|
 | Caddy | systemd на хосте | `80/443` |
-| React-панель | Docker, `127.0.0.1:8080` | `https://app.adpulse.su/`, Basic Auth |
+| React-панель | Docker, `127.0.0.1:8080` | `https://app.adpulse.su/`, Telegram OIDC session |
 | Telegram Mini App | Docker, `127.0.0.1:8081` | `https://app.adpulse.su/tma/` |
 | FastAPI | Docker, `127.0.0.1:8100` | `/api`, `/ws`, `/healthz`, `/readyz` |
 | Postgres / Redis | Docker, loopback | не публикуются наружу |
@@ -28,6 +28,8 @@ Vision и browser-agent разделяют network namespace. Это принц�
 - Caddy 2;
 - активный firewall: наружу открыты только SSH, `80`, `443` и `443/udp`;
 - DNS `app.adpulse.su` указывает на сервер;
+- в BotFather зарегистрированы origin `https://app.adpulse.su` и callback
+  `https://app.adpulse.su/auth/telegram/callback`;
 - swap 4 GB рекомендуется как страховка от пиков сборки/Vision;
 - локальный `.env` с `ENCRYPTION_KEY`, Vision, Telegram и API-секретами.
 
@@ -55,7 +57,7 @@ Installer идемпотентно устанавливает официальн
 
 ```bash
 curl -fsS http://127.0.0.1:8090/desktop/ >/dev/null
-# /desktop-readyz снаружи закрыт панельной BasicAuth (security-ревью 17.07.2026);
+# /desktop-readyz снаружи закрыт owner-сессией панели;
 # с хоста проверяем напрямую через loopback, мимо Caddy.
 curl -fsS http://127.0.0.1:8100/desktop-readyz
 docker logs --tail=100 vision-webtop
@@ -131,6 +133,21 @@ degraded-режиме `/readyz` должен быть зелёным, а `/syste
 
 ### 3. Caddy и systemd
 
+Сначала зарегистрируйте в BotFather точные production origin и callback, затем
+запишите выданные Client ID/Secret в общий root-only env. Secret читается из
+stdin и не попадает в argv или shell history:
+
+```bash
+sudo /opt/fb-agent/current/scripts/configure-panel-oidc.py \
+  --env-file /opt/fb-agent/shared/.env \
+  --client-id '<numeric-client-id>' \
+  --redirect-uri 'https://app.adpulse.su/auth/telegram/callback'
+# Введите Client Secret и завершите stdin через Ctrl-D.
+```
+
+`install-server-units.sh` запускает полную production-env validation до первого
+изменения Caddy и остановится, если OIDC не настроен.
+
 Создайте `/etc/fb-agent/caddy.env` с правами `0600`:
 
 ```dotenv
@@ -138,11 +155,20 @@ PANEL_BASIC_AUTH_USER=operator
 PANEL_BASIC_AUTH_HASH='$2a$...bcrypt-hash...'
 ```
 
-`API_KEY` вручную в этот файл копировать не нужно. При установке каждого release
+Эти credentials используются только hidden break-glass listener на
+`127.0.0.1:8099`; публичный host не содержит BasicAuth. `API_KEY` вручную в этот
+файл копировать не нужно. При установке каждого release
 `scripts/sync-caddy-env.py` читает его из `/opt/fb-agent/shared/.env` как данные
 (без shell `source/eval`) и атомарно обновляет только server-side Caddy env.
-Frontend получает доступ через BasicAuth, а Caddy добавляет ключ в upstream;
-секрет не попадает в JS bundle, browser storage или WebSocket URL.
+Frontend проходит cookie `forward_auth`, после чего Caddy добавляет ключ в
+upstream; секрет не попадает в JS bundle, browser storage или WebSocket URL.
+
+Break-glass открывается только через SSH tunnel:
+
+```bash
+ssh -L 8099:127.0.0.1:8099 root@62.60.150.133
+# Затем открыть http://127.0.0.1:8099 и использовать PANEL_BASIC_AUTH_*.
+```
 
 Затем:
 
@@ -180,7 +206,8 @@ sudo /opt/fb-agent/current/scripts/server-compose.sh ready
 curl -fsS http://127.0.0.1:8100/healthz
 curl -fsS http://127.0.0.1:8100/readyz
 curl -fsS http://127.0.0.1:8100/desktop-readyz
-curl -i https://app.adpulse.su/               # 401 без Basic Auth
+curl -I https://app.adpulse.su/                # 303 на /auth/login без session cookie
+curl -i https://app.adpulse.su/api/stats/today # 401 + X-Auth-Login-Url без session cookie
 curl -fsS https://app.adpulse.su/tma/ >/dev/null
 curl -fsS https://app.adpulse.su/healthz
 ```

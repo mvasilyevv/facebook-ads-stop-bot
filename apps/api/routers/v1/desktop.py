@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from apps.api.deps import DepEngine, DepRedis, DepSettings
+from apps.api.routers.panel_auth import resolve_panel_session
 from apps.api.routers.v1.schemas.desktop import DesktopLaunchResponse
 from apps.api.routers.v1.tma import get_tma_principal
 from core.auth.desktop_access import (
@@ -18,7 +19,6 @@ from core.auth.desktop_access import (
     create_desktop_ticket,
 )
 from core.config import reveal_secret
-from core.telegram.service import find_recipient_by_telegram_user_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/desktop", tags=["desktop"])
@@ -34,6 +34,7 @@ _NO_STORE = {
 async def _resolve_launch_identity(
     request: Request,
     engine: DepEngine,
+    redis: DepRedis,
     settings: DepSettings,
 ) -> tuple[int, str]:
     authorization = request.headers.get("authorization") or ""
@@ -54,16 +55,11 @@ async def _resolve_launch_identity(
     if not provided_key or not secrets.compare_digest(provided_key, expected_key):
         raise HTTPException(status_code=401, detail="Требуется корректный X-API-Key")
 
-    telegram_user_id = settings.desktop_owner_telegram_user_id
-    if telegram_user_id <= 0:
-        raise HTTPException(
-            status_code=503,
-            detail="DESKTOP_OWNER_TELEGRAM_USER_ID не сконфигурирован",
-        )
-    recipient = await find_recipient_by_telegram_user_id(engine, telegram_user_id=telegram_user_id)
-    if recipient is None or recipient.role != "owner":
-        raise HTTPException(status_code=403, detail="Доступ владельца отозван")
-    return telegram_user_id, "web_panel"
+    resolved = await resolve_panel_session(request, engine, redis, settings)
+    if resolved is None:
+        raise HTTPException(status_code=401, detail="Требуется вход через Telegram")
+    _, session = resolved
+    return session.telegram_user_id, "web_panel"
 
 
 @router.post(
@@ -89,7 +85,7 @@ async def launch_desktop(
             status_code=503,
             detail="DESKTOP_PUBLIC_ORIGIN должен указывать на production-панель",
         )
-    telegram_user_id, source = await _resolve_launch_identity(request, engine, settings)
+    telegram_user_id, source = await _resolve_launch_identity(request, engine, redis, settings)
     try:
         ticket, grant = await create_desktop_ticket(
             redis,

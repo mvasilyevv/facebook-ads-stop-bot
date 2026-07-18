@@ -63,6 +63,15 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr = SecretStr("")
     telegram_chat_id: str = ""
 
+    # --- Owner-only panel login (Telegram OIDC Authorization Code + PKCE) ---
+    telegram_oidc_client_id: str = ""
+    telegram_oidc_client_secret: SecretStr = SecretStr("")
+    telegram_oidc_redirect_uri: str = "https://app.adpulse.su/auth/telegram/callback"
+    panel_auth_state_ttl_seconds: int = 10 * 60
+    panel_auth_ticket_ttl_seconds: int = 60
+    panel_auth_session_ttl_seconds: int = 12 * 60 * 60
+    panel_auth_owner_recheck_seconds: int = 60
+
     # --- Protected Vision desktop ---
     desktop_public_origin: str = "https://app.adpulse.su"
     desktop_access_ticket_ttl_seconds: int = 300

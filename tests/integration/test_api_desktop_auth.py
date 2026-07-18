@@ -16,6 +16,7 @@ from core.auth.desktop_access import (
     consume_desktop_ticket,
     create_desktop_ticket,
 )
+from core.auth.panel_access import PANEL_SESSION_COOKIE, create_panel_session
 from core.auth.tma import issue_session_token
 from core.config import Settings
 
@@ -57,6 +58,7 @@ def _settings(owner_id: int) -> Settings:
         desktop_access_ticket_ttl_seconds=300,
         desktop_access_session_ttl_seconds=43_200,
         desktop_access_owner_recheck_seconds=0,
+        panel_auth_owner_recheck_seconds=0,
         desktop_owner_telegram_user_id=owner_id,
         tma_session_secret=SecretStr("test-tma-secret"),
         # Кэш readyz отключён: тест подменяет пробу между вызовами и проверяет
@@ -82,6 +84,17 @@ def _web_headers(**overrides: str) -> dict[str, str]:
     return headers
 
 
+async def _set_panel_owner_cookie(client: AsyncClient, redis, owner_id: int) -> None:
+    token, _ = await create_panel_session(
+        redis,
+        telegram_user_id=owner_id,
+        role="owner",
+        source="telegram_oidc",
+        ttl=43_200,
+    )
+    client.cookies.set(PANEL_SESSION_COOKIE, token, domain="app.adpulse.su")
+
+
 @pytest.mark.asyncio
 async def test_web_owner_launch_has_documented_no_body_contract(
     pg_engine, fake_redis_client, desktop_users
@@ -91,6 +104,7 @@ async def test_web_owner_launch_has_documented_no_body_contract(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
     ) as client:
+        await _set_panel_owner_cookie(client, fake_redis_client, owner_id)
         response = await client.post("/api/desktop/launch", headers=_web_headers())
 
     assert response.status_code == 200
@@ -131,16 +145,17 @@ async def test_web_launch_uses_explicit_owner_and_rejects_revocation(
     owner_id, _ = desktop_users
     settings = _settings(owner_id)
     app = _app(pg_engine, fake_redis_client, settings)
-    async with pg_engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE telegram_recipients SET revoked_at=NOW() WHERE telegram_user_id=:uid"),
-            {"uid": owner_id},
-        )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
     ) as client:
+        await _set_panel_owner_cookie(client, fake_redis_client, owner_id)
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE telegram_recipients SET revoked_at=NOW() WHERE telegram_user_id=:uid"),
+                {"uid": owner_id},
+            )
         response = await client.post("/api/desktop/launch", headers=_web_headers())
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio

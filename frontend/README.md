@@ -157,7 +157,7 @@ pnpm gen:api                # → packages/shared/src/api/generated.ts
 ## Backend
 
 Этот фронт интегрируется с 61 endpoint бэка (см. `apps/api/routers/v1/`). Префикс
-`/api`. В production browser использует same-origin Caddy BasicAuth; Caddy
+`/api`. В production browser использует same-origin Telegram session; Caddy
 добавляет server-only `X-API-Key` только в upstream-запрос. Ключ не компилируется
 во frontend и не хранится в browser storage.
 

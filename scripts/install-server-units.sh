@@ -34,6 +34,12 @@ done
 }
 [[ -f "$CADDY_FILE" ]] || die "$CADDY_FILE is missing"
 
+# Fail before touching Caddy if Telegram OIDC or any other production secret is
+# incomplete. BotFather setup and the atomic env update must happen first.
+python3 "$PROJECT_DIR/scripts/prepare_production_env.py" \
+  --input "$SHARED_ENV_FILE" \
+  --validate-only
+
 # Caddy receives only the server-side API key required for upstream injection.
 # The helper parses dotenv as data (never shell source/eval) and replaces the
 # root-only target atomically, preserving the operator-managed BasicAuth values.

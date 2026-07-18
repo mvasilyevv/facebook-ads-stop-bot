@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from apps.api.middleware.api_key_auth import ApiKeyAuthMiddleware
+from core.auth.panel_access import PANEL_SESSION_COOKIE
 
 _KEY = "secret-key-123"
 
@@ -45,6 +46,10 @@ def _app(
 
     @app.post("/thing")
     async def _post():
+        return {"ok": True}
+
+    @app.post("/api/thing")
+    async def _api_post():
         return {"ok": True}
 
     @app.get("/api/ai/pulse")
@@ -169,3 +174,36 @@ def test_tma_owner_can_use_shared_write_and_protected_read() -> None:
     assert client.post("/thing", headers=headers).status_code == 200
     assert client.get("/api/ai/pulse", headers=headers).status_code == 200
     assert client.get("/api/tools/adset-duplicates/123", headers=headers).status_code == 200
+
+
+def test_cookie_authenticated_api_write_requires_exact_production_origin() -> None:
+    client = _app()
+    cookie = f"{PANEL_SESSION_COOKIE}=server-side-session"
+    common = {"X-API-Key": _KEY, "Cookie": cookie}
+
+    assert client.post("/api/thing", headers=common).status_code == 403
+    assert (
+        client.post(
+            "/api/thing",
+            headers={**common, "Origin": "https://evil.example"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/api/thing",
+            headers={**common, "Origin": "https://app.adpulse.su"},
+        ).status_code
+        == 200
+    )
+
+
+def test_tma_bearer_is_not_misclassified_as_cookie_auth() -> None:
+    response = _app(tma_role="owner").post(
+        "/api/thing",
+        headers={
+            "Authorization": "Bearer valid-tma-token",
+            "Cookie": f"{PANEL_SESSION_COOKIE}=stale-panel-session",
+        },
+    )
+    assert response.status_code == 200

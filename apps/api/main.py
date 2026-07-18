@@ -36,6 +36,7 @@ from apps.api.middleware.body_size import BodySizeLimitMiddleware
 from apps.api.middleware.request_id import RequestIdMiddleware
 from apps.api.routers import desktop_auth as desktop_auth_router
 from apps.api.routers import health as health_router
+from apps.api.routers import panel_auth as panel_auth_router
 from apps.api.routers import postback as postback_router
 from apps.api.routers import ws as ws_router
 from apps.api.routers.v1 import register_all as register_v1_routers
@@ -206,6 +207,7 @@ def create_app() -> FastAPI:
     # Routers.
     # health и postback — без префикса /api (используются k8s/Prometheus и внешними сервисами).
     # ws — WebSocket без префикса /api (фронт коннектится на /ws/dashboard).
+    app.include_router(panel_auth_router.router)
     app.include_router(desktop_auth_router.router)
     app.include_router(health_router.router)
     app.include_router(postback_router.router)

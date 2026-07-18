@@ -4,7 +4,7 @@
 API биндится на 0.0.0.0 + Ingress (доступен извне), а write-операции —
 money-критичны (выключить авто-стоп, рестартнуть observer, подтвердить
 money-черновик). Desktop POST/PUT/PATCH/DELETE требуют `X-API-Key`, который в
-production добавляет Caddy только после BasicAuth. Mini App может использовать
+production добавляет Caddy только после cookie forward_auth. Mini App может использовать
 общий API с подписанным Bearer: любой токен проверяется и для read, write требует
 актуальную роль owner.
 
@@ -30,6 +30,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from core.auth.panel_access import PANEL_SESSION_COOKIE
 from core.auth.tma import InvalidInitDataError, verify_session_token
 from core.config import Settings, get_settings, reveal_secret
 from core.db import get_engine
@@ -48,6 +49,7 @@ _PROTECTED_READ_PREFIXES = ("/api/tools/adset-duplicates/",)
 _EXEMPT_PATH_PREFIXES = ("/api/v1/postback", "/api/tma", "/desktop/logout")
 
 TmaAuthorizer = Callable[[str, Settings], Awaitable[str | None]]
+_PRODUCTION_PANEL_ORIGIN = "https://app.adpulse.su"
 
 
 def _has_own_auth(path: str) -> bool:
@@ -106,10 +108,26 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         call_next: RequestResponseEndpoint,
     ) -> Response:
         settings = self._settings or get_settings()
+        method = request.method.upper()
+        authorization = request.headers.get("authorization") or ""
+
+        # A valid panel cookie is ambient browser authority. Require the exact
+        # production Origin on every cookie-authenticated state change so an
+        # external site cannot drive the API through the operator's session.
+        if (
+            method in _WRITE_METHODS
+            and request.url.path.startswith("/api/")
+            and PANEL_SESSION_COOKIE in request.cookies
+            and not authorization.startswith("Bearer ")
+            and request.headers.get("origin") != _PRODUCTION_PANEL_ORIGIN
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Недопустимый Origin для panel write-запроса"},
+            )
 
         if not settings.require_api_key:
             return await call_next(request)
-        method = request.method.upper()
         is_protected_read = method in {"GET", "HEAD"} and (
             request.url.path in _PROTECTED_READ_PATHS
             or any(request.url.path.startswith(prefix) for prefix in _PROTECTED_READ_PREFIXES)
@@ -117,7 +135,6 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         if _has_own_auth(request.url.path):
             return await call_next(request)
 
-        authorization = request.headers.get("authorization") or ""
         if authorization.startswith("Bearer "):
             token = authorization[len("Bearer ") :].strip()
             role = await self._tma_authorizer(token, settings)
