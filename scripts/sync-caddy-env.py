@@ -9,6 +9,7 @@ must never be evaluated or printed.
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 import stat
 import tempfile
@@ -44,6 +45,13 @@ def _read_lines(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
+def _dotenv_value(raw_value: str) -> str:
+    value = raw_value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    return value
+
+
 def sync_caddy_env(source: Path, target: Path) -> None:
     source = source.resolve(strict=True)
     target = target.resolve(strict=True)
@@ -53,15 +61,29 @@ def sync_caddy_env(source: Path, target: Path) -> None:
 
     source_lines = _read_lines(source)
     _, api_key_raw = _require_value(source_lines, "API_KEY", path=source)
+    _, kasm_user_raw = _require_value(source_lines, "DESKTOP_KASM_SERVICE_USER", path=source)
+    _, kasm_password_raw = _require_value(
+        source_lines, "DESKTOP_KASM_SERVICE_PASSWORD", path=source
+    )
+    kasm_user = _dotenv_value(kasm_user_raw)
+    kasm_password = _dotenv_value(kasm_password_raw)
+    if not kasm_user or ":" in kasm_user:
+        raise ValueError("DESKTOP_KASM_SERVICE_USER must be non-empty and contain no colon")
+    kasm_auth_b64 = base64.b64encode(f"{kasm_user}:{kasm_password}".encode()).decode("ascii")
     target_lines = _read_lines(target)
     for key in REQUIRED_CADDY_KEYS:
         _require_value(target_lines, key, path=target)
-    api_key_index, _ = _unique_assignment(target_lines, "API_KEY", path=target)
-    assignment = f"API_KEY={api_key_raw}"
-    if api_key_index is None:
-        target_lines.append(assignment)
-    else:
-        target_lines[api_key_index] = assignment
+    synchronized = {
+        "API_KEY": api_key_raw,
+        "DESKTOP_KASM_SERVICE_AUTH_B64": kasm_auth_b64,
+    }
+    for key, value in synchronized.items():
+        index, _ = _unique_assignment(target_lines, key, path=target)
+        assignment = f"{key}={value}"
+        if index is None:
+            target_lines.append(assignment)
+        else:
+            target_lines[index] = assignment
     rendered = "\n".join(target_lines) + "\n"
 
     temp_fd, temp_name = tempfile.mkstemp(

@@ -10,9 +10,10 @@ import { haptic, openLink } from "@/lib/tg";
 interface DesktopLaunchResponse {
   url: string;
   expires_at: string;
+  transport: "kasm";
 }
 
-const DESKTOP_ORIGIN = "https://app.adpulse.su";
+const DESKTOP_ORIGIN = "https://desktop.adpulse.su";
 
 function validateDesktopLaunchUrl(rawUrl: string): string {
   const url = new URL(rawUrl, DESKTOP_ORIGIN);
@@ -44,6 +45,9 @@ function RemoteDesktopPage() {
       });
       if (typeof payload.url !== "string" || payload.url.length === 0) {
         throw new Error("Сервер вернул некорректный билет рабочего стола.");
+      }
+      if (payload.transport !== "kasm") {
+        throw new Error("Сервер вернул неизвестный transport рабочего стола.");
       }
       openLink(validateDesktopLaunchUrl(payload.url));
     } catch (error) {

@@ -6,7 +6,7 @@ ARG VISION_DEB_SHA256=b0040ba8feac569d86b4b6a1ab9269837c8b0a2d2c5a26657b591395f4
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl tigervnc-scraping-server tigervnc-tools wmctrl \
+        ca-certificates curl wmctrl x11-utils \
     && curl --fail --location --retry 4 --output /tmp/vision.deb "$VISION_DEB_URL" \
     && echo "$VISION_DEB_SHA256  /tmp/vision.deb" | sha256sum --check --strict \
     && apt-get install -y --no-install-recommends /tmp/vision.deb \
@@ -16,23 +16,16 @@ RUN apt-get update \
 
 COPY vision-service-run /etc/s6-overlay/s6-rc.d/svc-vision/run
 COPY vision-window-fit-run /etc/s6-overlay/s6-rc.d/svc-vision-window-fit/run
-COPY vision-vnc-run /etc/s6-overlay/s6-rc.d/svc-vision-vnc/run
 RUN install -d /etc/s6-overlay/s6-rc.d/svc-vision/dependencies.d \
     /etc/s6-overlay/s6-rc.d/svc-vision-window-fit/dependencies.d \
-    /etc/s6-overlay/s6-rc.d/svc-vision-vnc/dependencies.d \
     /etc/s6-overlay/s6-rc.d/user/contents.d \
     && printf 'longrun\n' >/etc/s6-overlay/s6-rc.d/svc-vision/type \
     && printf 'longrun\n' >/etc/s6-overlay/s6-rc.d/svc-vision-window-fit/type \
-    && printf 'longrun\n' >/etc/s6-overlay/s6-rc.d/svc-vision-vnc/type \
     && touch /etc/s6-overlay/s6-rc.d/svc-vision/dependencies.d/svc-xorg \
     /etc/s6-overlay/s6-rc.d/svc-vision/dependencies.d/svc-de \
     /etc/s6-overlay/s6-rc.d/svc-vision/dependencies.d/init-services \
     /etc/s6-overlay/s6-rc.d/svc-vision-window-fit/dependencies.d/svc-vision \
-    /etc/s6-overlay/s6-rc.d/svc-vision-vnc/dependencies.d/svc-xorg \
-    /etc/s6-overlay/s6-rc.d/svc-vision-vnc/dependencies.d/init-services \
     /etc/s6-overlay/s6-rc.d/user/contents.d/svc-vision \
     /etc/s6-overlay/s6-rc.d/user/contents.d/svc-vision-window-fit \
-    /etc/s6-overlay/s6-rc.d/user/contents.d/svc-vision-vnc \
     && chmod 0755 /etc/s6-overlay/s6-rc.d/svc-vision/run \
-    /etc/s6-overlay/s6-rc.d/svc-vision-window-fit/run \
-    /etc/s6-overlay/s6-rc.d/svc-vision-vnc/run
+    /etc/s6-overlay/s6-rc.d/svc-vision-window-fit/run

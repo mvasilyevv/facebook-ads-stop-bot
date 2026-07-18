@@ -14,7 +14,7 @@ raw Kubernetes-манифесты остаются эксперименталь�
 | Telegram Mini App | Docker, `127.0.0.1:8081` | `https://app.adpulse.su/tma/` |
 | FastAPI | Docker, `127.0.0.1:8100` | `/api`, `/ws`, `/healthz`, `/readyz` |
 | Postgres / Redis | Docker, loopback | не публикуются наружу |
-| Vision + Guacamole | отдельный digest-pinned stack, persistent `/config` и JDBC | `https://app.adpulse.su/desktop/` |
+| Vision + KasmVNC | два digest-pinned образа, persistent `/config`, общий X11/IPC | `https://desktop.adpulse.su/` |
 | browser-agent | Docker, network namespace Vision | gRPC через `127.0.0.1:50051` |
 
 Vision и browser-agent разделяют network namespace. Это принципиально: Vision
@@ -26,8 +26,8 @@ Vision и browser-agent разделяют network namespace. Это принц�
 - Ubuntu x86_64, минимум 4 CPU / 8 GB RAM / 40 GB SSD;
 - Docker Engine и Docker Compose v2;
 - Caddy 2;
-- активный firewall: наружу открыты только SSH, `80`, `443` и `443/udp`;
-- DNS `app.adpulse.su` указывает на сервер;
+- активный firewall: наружу открыты только SSH, `80` и `443`; Kasm работает через WebSocket без публичного UDP;
+- DNS `app.adpulse.su` и `desktop.adpulse.su` указывает на сервер;
 - в BotFather зарегистрированы origin `https://app.adpulse.su` и callback
   `https://app.adpulse.su/auth/telegram/callback`;
 - swap 4 GB рекомендуется как страховка от пиков сборки/Vision;
@@ -47,44 +47,46 @@ immutable `image@sha256` reference. Installer не пересобирает desk
 
 ```bash
 DESKTOP_WEBTOP_IMAGE='ghcr.io/owner/repo-vision-webtop@sha256:...' \
+DESKTOP_KASMVNC_IMAGE='ghcr.io/owner/repo-kasmvnc-sidecar@sha256:...' \
   sudo -E ./scripts/install-vision-webtop.sh
 ```
 
-Installer идемпотентно устанавливает официальную схему Guacamole 1.6.0 в
-отдельный Postgres 16, создаёт principal `adpulse-desktop` и ровно одну READ-связь
-`Vision Desktop`. Частично созданная или несовместимая схема приводит к fail-fast.
+Перед первым переносом нужно выключить scanning и дождаться нуля `running`-задач.
+Installer проверяет это fail-closed, сохраняет `/config`, DISPLAY/геометрию,
+Vision profile и CDP port, затем запускает KasmVNC 1.4.0 поверх существующего
+`DISPLAY=:1` через `kasmxproxy` без resize. При любой ошибке compose, `/config` и
+browser-agent возвращаются в предыдущее состояние.
 После установки:
 
 ```bash
-curl -fsS http://127.0.0.1:8090/desktop/ >/dev/null
+curl -u "$DESKTOP_KASM_SERVICE_USER:$DESKTOP_KASM_SERVICE_PASSWORD" \
+  -fsS http://127.0.0.1:8444/ >/dev/null
 # /desktop-readyz снаружи закрыт owner-сессией панели;
 # с хоста проверяем напрямую через loopback, мимо Caddy.
 curl -fsS http://127.0.0.1:8100/desktop-readyz
 docker logs --tail=100 vision-webtop
 ```
 
-При первом запуске нужно открыть `https://app.adpulse.su/desktop/` и убедиться,
-что Vision доступен через единственную Guacamole-связь. Отдельного desktop-host,
-Selkies fallback или второго Guacamole login в production нет.
+При первом запуске нужно открыть `https://desktop.adpulse.su/` через launcher
+панели и убедиться, что Vision доступен без повторного логина и изменения Meta-сессии.
 
 #### Экстренный обрыв desktop-доступа
 
 Logout, истечение сессии и демоция владельца не рвут уже открытый
-WebSocket-туннель Guacamole: forward_auth проверяет сессию только в момент
+WebSocket-туннель Kasm: forward_auth проверяет сессию только в момент
 подключения. Жёсткий потолок жизни туннеля задаёт `stream_timeout 30m` в
-`deploy/caddy/app.adpulse.su.caddy` — ревокация вступает в силу максимум через
-30 минут. При обрыве клиент Guacamole показывает дисконнект; повторное
+`deploy/caddy/desktop.adpulse.su.caddy` — ревокация вступает в силу максимум через
+30 минут. При обрыве клиент Kasm показывает дисконнект; повторное
 подключение (reconnect или перезагрузка вкладки) заново проходит проверку
-сессии, состояние десктопа не теряется — VNC-сессия персистентна. Если доступ
+сессии, состояние `DISPLAY=:1` не теряется. Если доступ
 нужно оборвать **немедленно**:
 
 ```bash
-ssh root@62.60.150.133 'docker restart vision-webtop-guacamole-1'
+ssh root@62.60.150.133 'docker restart vision-webtop-kasmvnc-1'
 ```
 
-Рестарт рвёт все активные туннели и займёт ~10-20 секунд; контейнеры
-`vision-webtop` (X-сервер + Vision, канал сканирования) и `guacd` при этом не
-затрагиваются — money-скан продолжает работать без перерыва.
+Рестарт рвёт активные туннели, но не перезапускает `vision-webtop`, Vision,
+профиль или browser-agent.
 
 ### 2. Приложение
 
@@ -163,11 +165,13 @@ PANEL_BASIC_AUTH_HASH='$2a$...bcrypt-hash...'
 Frontend проходит cookie `forward_auth`, после чего Caddy добавляет ключ в
 upstream; секрет не попадает в JS bundle, browser storage или WebSocket URL.
 
-Break-glass открывается только через SSH tunnel:
+Break-glass открывается только через SSH tunnel. Панель доступна по loopback IP,
+desktop — по отдельному `.localhost` Host на том же listener:
 
 ```bash
 ssh -L 8099:127.0.0.1:8099 root@62.60.150.133
 # Затем открыть http://127.0.0.1:8099 и использовать PANEL_BASIC_AUTH_*.
+# Для desktop открыть http://desktop.localhost:8099.
 ```
 
 Затем:
@@ -176,8 +180,9 @@ ssh -L 8099:127.0.0.1:8099 root@62.60.150.133
 sudo /opt/fb-agent/current/scripts/install-server-units.sh
 ```
 
-Скрипт устанавливает единственный Caddy site `app.adpulse.su` с защищённым
-same-origin маршрутом `/desktop/*` и устанавливает:
+Скрипт атомарно устанавливает Caddy sites `app.adpulse.su` и
+`desktop.adpulse.su`; desktop host допускает только одноразовый redeem/logout и
+cookie-защищённый Kasm upstream. Также устанавливаются:
 
 - `fb-agent.service` — автозапуск текущего release;
 - `fb-agent-backup.timer` — ежедневный `pg_dump`;

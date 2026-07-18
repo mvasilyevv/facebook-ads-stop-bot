@@ -35,8 +35,9 @@ describe("Mini App RemoteDesktopPage", () => {
   it("получает Bearer launch через общий API-клиент и открывает URL через Telegram", async () => {
     const user = userEvent.setup();
     fetchJson.mockResolvedValue({
-      url: "https://app.adpulse.su/desktop-auth/redeem?ticket=single-use",
+      url: "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
       expires_at: "2026-07-17T12:00:00Z",
+      transport: "kasm",
     });
     render(<RemoteDesktopPage />);
 
@@ -44,7 +45,7 @@ describe("Mini App RemoteDesktopPage", () => {
 
     expect(fetchJson).toHaveBeenCalledWith("/desktop/launch", { method: "POST" });
     expect(openLink).toHaveBeenCalledWith(
-      "https://app.adpulse.su/desktop-auth/redeem?ticket=single-use",
+      "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
     );
     expect(screen.getAllByRole("button")).toHaveLength(1);
     expect(screen.queryByText(/desktop\.adpulse\.su/i)).not.toBeInTheDocument();
@@ -68,6 +69,7 @@ describe("Mini App RemoteDesktopPage", () => {
     fetchJson.mockResolvedValue({
       url: "https://evil.example/desktop-auth/redeem?ticket=stolen",
       expires_at: "2026-07-17T12:00:00Z",
+      transport: "kasm",
     });
     render(<RemoteDesktopPage />);
 

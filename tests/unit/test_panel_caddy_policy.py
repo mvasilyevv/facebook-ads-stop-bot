@@ -2,6 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SITE = ROOT / "deploy" / "caddy" / "app.adpulse.su.caddy"
+DESKTOP_SITE = ROOT / "deploy" / "caddy" / "desktop.adpulse.su.caddy"
 
 
 def _config() -> str:
@@ -77,5 +78,10 @@ def test_breakglass_is_loopback_basic_auth_with_full_panel_and_desktop_proxy() -
     assert "import breakglass_auth" in breakglass
     assert "reverse_proxy 127.0.0.1:8080" in breakglass
     assert "reverse_proxy 127.0.0.1:8100" in breakglass
-    assert "reverse_proxy 127.0.0.1:8090" in breakglass
-    assert 'header_up Remote-User "adpulse-desktop"' in breakglass
+    desktop_breakglass = DESKTOP_SITE.read_text(encoding="utf-8").split(
+        "http://desktop.localhost:8099", maxsplit=1
+    )[1]
+    assert "bind 127.0.0.1" in desktop_breakglass
+    assert "import breakglass_auth" in desktop_breakglass
+    assert "reverse_proxy 127.0.0.1:8444" in desktop_breakglass
+    assert "DESKTOP_KASM_SERVICE_AUTH_B64" in desktop_breakglass

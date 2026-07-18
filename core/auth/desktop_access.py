@@ -11,11 +11,11 @@ from dataclasses import asdict, dataclass
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
-DESKTOP_SESSION_COOKIE = "__Secure-adpulse_desktop_session_v2"
+DESKTOP_SESSION_COOKIE = "__Secure-adpulse_desktop_session_v3"
 DESKTOP_PRINCIPAL = "adpulse-desktop"
 
-_TICKET_PREFIX = "desktop_access:v2:ticket:"
-_SESSION_PREFIX = "desktop_access:v2:session:"
+_TICKET_PREFIX = "desktop_access:v3:ticket:"
+_SESSION_PREFIX = "desktop_access:v3:session:"
 
 
 class DesktopAccessError(ValueError):
@@ -28,6 +28,7 @@ class DesktopGrant:
     source: str
     issued_at: int
     expires_at: int
+    expected_hostname: str
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class DesktopSession:
     issued_at: int
     expires_at: int
     owner_checked_at: int
+    expected_hostname: str
 
 
 def _digest_key(prefix: str, token: str) -> str:
@@ -68,11 +70,13 @@ async def create_desktop_ticket(
     *,
     telegram_user_id: int,
     source: str,
+    expected_hostname: str,
     ttl: int,
     now: int | None = None,
 ) -> tuple[str, DesktopGrant]:
     current = int(time.time()) if now is None else int(now)
-    if telegram_user_id <= 0 or ttl <= 0 or not source:
+    hostname = expected_hostname.strip().lower().rstrip(".")
+    if telegram_user_id <= 0 or ttl <= 0 or not source or not hostname:
         raise DesktopAccessError("Нельзя создать desktop ticket")
     ticket = secrets.token_urlsafe(48)
     grant = DesktopGrant(
@@ -80,6 +84,7 @@ async def create_desktop_ticket(
         source=source,
         issued_at=current,
         expires_at=current + ttl,
+        expected_hostname=hostname,
     )
     created = await redis.set(
         _digest_key(_TICKET_PREFIX, ticket),
@@ -107,11 +112,17 @@ async def consume_desktop_ticket(
             source=str(payload["source"]),
             issued_at=int(payload["issued_at"]),
             expires_at=int(payload["expires_at"]),
+            expected_hostname=str(payload["expected_hostname"]).strip().lower().rstrip("."),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise DesktopAccessError("Повреждён desktop ticket") from exc
     current = int(time.time()) if now is None else int(now)
-    if grant.telegram_user_id <= 0 or not grant.source or grant.expires_at <= current:
+    if (
+        grant.telegram_user_id <= 0
+        or not grant.source
+        or grant.expires_at <= current
+        or not grant.expected_hostname
+    ):
         raise DesktopAccessError("Desktop ticket истёк или невалиден")
     return grant
 
@@ -121,11 +132,13 @@ async def create_desktop_session(
     *,
     telegram_user_id: int,
     source: str,
+    expected_hostname: str,
     ttl: int,
     now: int | None = None,
 ) -> tuple[str, DesktopSession]:
     current = int(time.time()) if now is None else int(now)
-    if telegram_user_id <= 0 or ttl <= 0 or not source:
+    hostname = expected_hostname.strip().lower().rstrip(".")
+    if telegram_user_id <= 0 or ttl <= 0 or not source or not hostname:
         raise DesktopAccessError("Нельзя создать desktop-сессию")
     token = secrets.token_urlsafe(48)
     session = DesktopSession(
@@ -134,6 +147,7 @@ async def create_desktop_session(
         issued_at=current,
         expires_at=current + ttl,
         owner_checked_at=current,
+        expected_hostname=hostname,
     )
     created = await redis.set(
         _digest_key(_SESSION_PREFIX, token),
@@ -163,12 +177,18 @@ async def load_desktop_session(
             issued_at=int(payload["issued_at"]),
             expires_at=int(payload["expires_at"]),
             owner_checked_at=int(payload["owner_checked_at"]),
+            expected_hostname=str(payload["expected_hostname"]).strip().lower().rstrip("."),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         await redis.delete(key)
         return None
     current = int(time.time()) if now is None else int(now)
-    if session.telegram_user_id <= 0 or not session.source or session.expires_at <= current:
+    if (
+        session.telegram_user_id <= 0
+        or not session.source
+        or session.expires_at <= current
+        or not session.expected_hostname
+    ):
         await redis.delete(key)
         return None
     return session

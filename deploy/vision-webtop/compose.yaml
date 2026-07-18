@@ -17,12 +17,13 @@ services:
       SELKIES_MANUAL_WIDTH: "1366"
       SELKIES_MANUAL_HEIGHT: "768"
       SELKIES_SCALING_DPI: "96"
-      DESKTOP_VNC_PASSWORD: ${DESKTOP_VNC_PASSWORD:?set DESKTOP_VNC_PASSWORD}
     ports:
       - "127.0.0.1:3030:3030"
       - "127.0.0.1:50051:50051"
+      - "127.0.0.1:8444:8444"
     volumes:
       - ./config:/config
+      - x11-socket:/tmp/.X11-unix
     networks:
       fb-agent:
         aliases:
@@ -33,126 +34,41 @@ services:
         max-size: "20m"
         max-file: "5"
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -x X0tigervnc >/dev/null"]
+      test: ["CMD-SHELL", "DISPLAY=:1 xdpyinfo >/dev/null 2>&1 && pgrep -f '/opt/Vision/vision' >/dev/null"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 18
       start_period: 30s
 
-  guacd:
-    image: guacamole/guacd@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f
+  kasmvnc:
+    image: ${DESKTOP_KASMVNC_IMAGE:?set DESKTOP_KASMVNC_IMAGE to an immutable image@sha256 reference}
     restart: unless-stopped
     network_mode: service:webtop
-    command: ["-b", "0.0.0.0"]
+    ipc: service:webtop
     depends_on:
       webtop:
         condition: service_healthy
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 4822"]
-      interval: 10s
-      timeout: 3s
-      retries: 6
-
-  guacamole-postgres:
-    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
-    restart: unless-stopped
     environment:
-      POSTGRES_DB: ${DESKTOP_GUACAMOLE_POSTGRES_DB:-guacamole}
-      POSTGRES_USER: ${DESKTOP_GUACAMOLE_POSTGRES_USER:-guacamole}
-      POSTGRES_PASSWORD: ${DESKTOP_GUACAMOLE_POSTGRES_PASSWORD:?set DESKTOP_GUACAMOLE_POSTGRES_PASSWORD}
+      DESKTOP_KASM_SERVICE_USER: ${DESKTOP_KASM_SERVICE_USER:?set DESKTOP_KASM_SERVICE_USER}
+      DESKTOP_KASM_SERVICE_PASSWORD: ${DESKTOP_KASM_SERVICE_PASSWORD:?set DESKTOP_KASM_SERVICE_PASSWORD}
     volumes:
-      - guacamole-postgres:/var/lib/postgresql/data
-    networks:
-      fb-agent:
-        aliases:
-          - vision-guacamole-db
+      - x11-socket:/tmp/.X11-unix
     logging:
       driver: json-file
       options:
         max-size: "20m"
         max-file: "5"
     healthcheck:
-      test:
-        - CMD-SHELL
-        - >-
-          pg_isready --host 127.0.0.1
-          --dbname "$${POSTGRES_DB}" --username "$${POSTGRES_USER}"
-      interval: 10s
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 15s
       timeout: 5s
       retries: 12
-      start_period: 10s
-
-  database-bootstrap:
-    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
-    restart: "no"
-    depends_on:
-      guacamole-postgres:
-        condition: service_healthy
-    environment:
-      PGHOST: vision-guacamole-db
-      PGPORT: "5432"
-      PGDATABASE: ${DESKTOP_GUACAMOLE_POSTGRES_DB:-guacamole}
-      PGUSER: ${DESKTOP_GUACAMOLE_POSTGRES_USER:-guacamole}
-      PGPASSWORD: ${DESKTOP_GUACAMOLE_POSTGRES_PASSWORD:?set DESKTOP_GUACAMOLE_POSTGRES_PASSWORD}
-      DESKTOP_VNC_PASSWORD: ${DESKTOP_VNC_PASSWORD:?set DESKTOP_VNC_PASSWORD}
-    volumes:
-      - ./guacamole-schema.sql:/bootstrap/guacamole-schema.sql:ro
-      - ./bootstrap-guacamole-db.sh:/bootstrap/bootstrap-guacamole-db.sh:ro
-    command: ["/bin/sh", "/bootstrap/bootstrap-guacamole-db.sh"]
-    networks:
-      - fb-agent
-
-  guacamole:
-    image: guacamole/guacamole@sha256:f344085e618bb05e22b964b0208dbd06d3468275bac70206f93805245e067b40
-    restart: unless-stopped
-    depends_on:
-      guacd:
-        condition: service_healthy
-      database-bootstrap:
-        condition: service_completed_successfully
-    environment:
-      GUACD_HOSTNAME: vision-webtop
-      GUACD_PORT: "4822"
-      HTTP_AUTH_ENABLED: "true"
-      HTTP_AUTH_HEADER: Remote-User
-      POSTGRESQL_ENABLED: "true"
-      POSTGRESQL_HOSTNAME: vision-guacamole-db
-      POSTGRESQL_PORT: "5432"
-      POSTGRESQL_DATABASE: ${DESKTOP_GUACAMOLE_POSTGRES_DB:-guacamole}
-      POSTGRESQL_USERNAME: ${DESKTOP_GUACAMOLE_POSTGRES_USER:-guacamole}
-      POSTGRESQL_PASSWORD: ${DESKTOP_GUACAMOLE_POSTGRES_PASSWORD:?set DESKTOP_GUACAMOLE_POSTGRES_PASSWORD}
-      POSTGRESQL_AUTO_CREATE_ACCOUNTS: "false"
-      WEBAPP_CONTEXT: desktop
-      REMOTE_IP_VALVE_ENABLED: "true"
-    ports:
-      - "127.0.0.1:8090:8080"
-    volumes:
-      - ./adpulse-desktop-navigation.jar:/etc/guacamole/extensions/adpulse-desktop-navigation.jar:ro
-    networks:
-      fb-agent:
-        aliases:
-          - vision-guacamole
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - curl --silent --fail --max-time 3 http://127.0.0.1:8080/desktop/ >/dev/null
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
-  guacamole-postgres:
+  x11-socket:
 
 networks:
   fb-agent:

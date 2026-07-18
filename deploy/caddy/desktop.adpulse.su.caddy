@@ -1,0 +1,85 @@
+desktop.adpulse.su {
+	log {
+		output file /var/log/caddy/fb-agent-desktop-access.log {
+			roll_size 20MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
+		format json
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	route {
+		# A ticket is issued for this exact hostname and consumed only once.
+		handle /desktop-auth/redeem {
+			log_skip
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -Remote-User
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
+			}
+		}
+
+		# The verifier is reachable only as Caddy's internal forward_auth target.
+		handle /desktop-auth/verify {
+			respond 404
+		}
+
+		handle /desktop/logout {
+			log_skip
+			reverse_proxy 127.0.0.1:8100 {
+				header_up -Remote-User
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+			}
+		}
+
+		handle {
+			import desktop_session_auth
+			reverse_proxy 127.0.0.1:8444 {
+				stream_timeout 30m
+				stream_close_delay 5m
+				# Kasm BasicAuth is an upstream-only service credential. The browser
+				# authenticates exclusively with the host-only desktop session cookie.
+				header_up Authorization "Basic {$DESKTOP_KASM_SERVICE_AUTH_B64}"
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+				header_up -Remote-User
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
+			}
+		}
+	}
+}
+
+# Complete SSH break-glass desktop on the same loopback listener as the panel,
+# separated by Host. Usage: ssh -L 8099:127.0.0.1:8099 <server>, then open
+# http://desktop.localhost:8099 (the .localhost name resolves to loopback).
+http://desktop.localhost:8099 {
+	bind 127.0.0.1
+	route {
+		import breakglass_auth
+		reverse_proxy 127.0.0.1:8444 {
+			stream_timeout 30m
+			stream_close_delay 5m
+			header_up Authorization "Basic {$DESKTOP_KASM_SERVICE_AUTH_B64}"
+			header_up -Proxy-Authorization
+			header_up -X-API-Key
+		}
+	}
+}

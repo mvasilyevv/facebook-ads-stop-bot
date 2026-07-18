@@ -23,7 +23,7 @@ def _settings() -> Settings:
         require_api_key=False,
         api_key=SecretStr("api-key"),
         desktop_owner_telegram_user_id=1001,
-        desktop_public_origin="https://app.adpulse.su",
+        desktop_public_origin="https://desktop.adpulse.su",
         tma_session_secret=SecretStr("tma-secret"),
     )
 
@@ -72,8 +72,12 @@ async def test_web_and_tma_launch_use_explicit_verified_identities(monkeypatch):
         tma = await client.post(
             "/api/desktop/launch", headers={"Authorization": f"Bearer {bearer}"}
         )
+        transports = await client.get("/api/desktop/transports", headers={"X-API-Key": "api-key"})
 
     assert web.status_code == 200 and tma.status_code == 200
+    assert transports.status_code == 200
+    assert transports.json() == {"active": "kasm", "available": ["kasm"]}
+    assert web.json()["transport"] == tma.json()["transport"] == "kasm"
     assert web.headers["cache-control"] == "no-store"
     assert web.headers["referrer-policy"] == "no-referrer"
     web_grant = await consume_desktop_ticket(redis, web.json()["url"].split("ticket=", 1)[1])
@@ -121,9 +125,7 @@ async def test_launch_rejects_bad_web_transport_and_non_owner_tma(monkeypatch):
 @pytest.mark.asyncio
 async def test_launch_fails_closed_for_non_production_public_origin():
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    settings = _settings().model_copy(
-        update={"desktop_public_origin": "https://desktop.adpulse.su"}
-    )
+    settings = _settings().model_copy(update={"desktop_public_origin": "https://app.adpulse.su"})
     app = _app(redis, settings)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"

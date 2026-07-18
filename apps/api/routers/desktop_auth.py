@@ -6,12 +6,10 @@ from __future__ import annotations
 import html
 import logging
 import time
-from asyncio import LimitOverrunError, Lock, open_connection, wait_for
+from asyncio import Lock
 from collections.abc import Callable
 from typing import Annotated, Protocol
-from urllib.parse import quote
 
-import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -48,234 +46,34 @@ class DesktopReadinessProbe(Protocol):
     async def check(self, settings: Settings) -> dict[str, bool]: ...
 
 
-def _encode_guacamole_instruction(opcode: str, *arguments: str) -> bytes:
-    elements = (opcode, *arguments)
-    return (",".join(f"{len(value)}.{value}" for value in elements) + ";").encode()
-
-
-def _decode_guacamole_instruction(raw: bytes) -> tuple[str, list[str]]:
-    """Decode one length-prefixed Guacamole instruction, rejecting ambiguity."""
-    try:
-        document = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError("invalid Guacamole instruction encoding") from exc
-    if not document.endswith(";"):
-        raise ValueError("unterminated Guacamole instruction")
-    elements: list[str] = []
-    cursor = 0
-    end = len(document) - 1
-    while cursor < end:
-        dot = document.find(".", cursor, end)
-        if dot < 0 or not document[cursor:dot].isdigit():
-            raise ValueError("invalid Guacamole element length")
-        length = int(document[cursor:dot])
-        if length > 16_384:
-            raise ValueError("Guacamole element is too large")
-        value_start = dot + 1
-        value_end = value_start + length
-        if value_end > end:
-            raise ValueError("truncated Guacamole element")
-        elements.append(document[value_start:value_end])
-        cursor = value_end
-        if cursor < end:
-            if document[cursor] != ",":
-                raise ValueError("invalid Guacamole element separator")
-            cursor += 1
-    if not elements or not elements[0] or cursor != end:
-        raise ValueError("empty Guacamole instruction")
-    return elements[0], elements[1:]
-
-
 class NetworkDesktopReadinessProbe:
-    """Fail-closed HTTP, JDBC and real guacd-to-VNC connection checks."""
+    """Fail-closed Kasm HTTP and BasicAuth readiness check."""
 
-    async def _guacamole_ready(self, settings: Settings) -> bool:
-        token = ""
+    async def check(self, settings: Settings) -> dict[str, bool]:
+        """Require both the Kasm auth challenge and authenticated HTTP surface."""
+        username = settings.desktop_kasm_service_user.strip()
+        password = reveal_secret(settings.desktop_kasm_service_password)
+        configured = bool(username and password)
+        if not configured:
+            return {"configured": False, "auth_challenge": False, "authenticated": False}
         try:
             async with httpx.AsyncClient(
                 timeout=settings.desktop_readiness_timeout_seconds,
                 follow_redirects=False,
             ) as client:
-                endpoint = settings.desktop_guacamole_internal_url.rstrip("/")
-                response = await client.post(
-                    f"{endpoint}/api/tokens",
-                    headers={
-                        "Remote-User": DESKTOP_PRINCIPAL,
-                        "Content-Type": "application/x-www-form-urlencoded",
-                    },
-                    content=b"",
+                endpoint = settings.desktop_kasm_internal_url.rstrip("/") + "/"
+                anonymous = await client.get(endpoint)
+                authenticated = await client.get(
+                    endpoint,
+                    auth=httpx.BasicAuth(username, password),
                 )
-                if response.status_code != 200:
-                    return False
-                payload = response.json()
-                token = str(payload.get("authToken") or "")
-                authenticated = payload.get("username") == DESKTOP_PRINCIPAL and bool(token)
-                if token:
-                    await client.delete(f"{endpoint}/api/tokens/{quote(token, safe='')}")
-                return authenticated
-        except (httpx.HTTPError, TypeError, ValueError):
-            return False
-
-    async def _jdbc_ready(self, settings: Settings) -> bool:
-        password = reveal_secret(settings.desktop_guacamole_postgres_password)
-        if not password:
-            return False
-        connection: asyncpg.Connection | None = None
-        try:
-            connection = await wait_for(
-                asyncpg.connect(
-                    host=settings.desktop_guacamole_postgres_host,
-                    port=settings.desktop_guacamole_postgres_port,
-                    database=settings.desktop_guacamole_postgres_db,
-                    user=settings.desktop_guacamole_postgres_user,
-                    password=password,
-                ),
-                timeout=settings.desktop_readiness_timeout_seconds,
-            )
-            rows = await wait_for(
-                connection.fetch(
-                    "SELECT c.connection_id, c.connection_name, c.protocol "
-                    "FROM guacamole_connection AS c ORDER BY c.connection_id"
-                ),
-                timeout=settings.desktop_readiness_timeout_seconds,
-            )
-            if (
-                len(rows) != 1
-                or rows[0]["connection_name"] != "Vision Desktop"
-                or rows[0]["protocol"] != "vnc"
-            ):
-                return False
-            connection_id = int(rows[0]["connection_id"])
-            permissions = await wait_for(
-                connection.fetch(
-                    "SELECT e.name, p.permission FROM guacamole_connection_permission AS p "
-                    "JOIN guacamole_entity AS e ON e.entity_id = p.entity_id "
-                    "WHERE p.connection_id = $1",
-                    connection_id,
-                ),
-                timeout=settings.desktop_readiness_timeout_seconds,
-            )
-            if [dict(row) for row in permissions] != [
-                {"name": DESKTOP_PRINCIPAL, "permission": "READ"}
-            ]:
-                return False
-            parameter_rows = await wait_for(
-                connection.fetch(
-                    "SELECT parameter_name, parameter_value "
-                    "FROM guacamole_connection_parameter WHERE connection_id = $1",
-                    connection_id,
-                ),
-                timeout=settings.desktop_readiness_timeout_seconds,
-            )
-            parameters = {row["parameter_name"]: row["parameter_value"] for row in parameter_rows}
-            return parameters == {
-                "hostname": "127.0.0.1",
-                "port": "5900",
-                "password": parameters.get("password"),
-                "width": "1366",
-                "height": "768",
-                "disable-display-resize": "true",
-                "read-only": "false",
-            } and bool(parameters["password"])
-        except (asyncpg.PostgresError, OSError, TimeoutError):
-            return False
-        finally:
-            if connection is not None:
-                await connection.close()
-
-    async def _guacd_vnc_ready(self, settings: Settings) -> bool:
-        """Complete guacd's VNC handshake and require its ``ready`` response.
-
-        A TCP connect to port 5900 from the API cannot work because TigerVNC is
-        intentionally bound to loopback inside webtop's network namespace.
-        guacd shares that namespace, so a successful ``ready`` proves the real
-        guacd -> 127.0.0.1:5900 path, including VNC authentication.
-        """
-        password = reveal_secret(settings.desktop_vnc_password)
-        try:
-            password_bytes = password.encode("ascii")
-        except UnicodeEncodeError:
-            return False
-        if len(password_bytes) != 8 or any(byte < 0x20 or byte > 0x7E for byte in password_bytes):
-            return False
-        timeout = settings.desktop_readiness_timeout_seconds
-        writer = None
-        try:
-            reader, writer = await wait_for(
-                open_connection(settings.desktop_guacd_host, settings.desktop_guacd_port),
-                timeout=timeout,
-            )
-            writer.write(_encode_guacamole_instruction("select", "vnc"))
-            await wait_for(writer.drain(), timeout=timeout)
-
-            opcode = ""
-            arguments: list[str] = []
-            for _ in range(8):
-                raw = await wait_for(reader.readuntil(b";"), timeout=timeout)
-                opcode, arguments = _decode_guacamole_instruction(raw)
-                if opcode == "args":
-                    break
-                if opcode in {"error", "disconnect"}:
-                    return False
-            if opcode != "args" or not arguments:
-                return False
-
-            values = {
-                "hostname": "127.0.0.1",
-                "port": "5900",
-                "password": password,
-                "width": "1366",
-                "height": "768",
-                "disable-display-resize": "true",
-                "read-only": "false",
+            return {
+                "configured": True,
+                "auth_challenge": anonymous.status_code == 401,
+                "authenticated": authenticated.status_code == 200,
             }
-            connect_values = [
-                argument if argument.startswith("VERSION_") else values.get(argument, "")
-                for argument in arguments
-            ]
-            handshake = b"".join(
-                (
-                    _encode_guacamole_instruction("size", "1366", "768", "96"),
-                    _encode_guacamole_instruction("audio"),
-                    _encode_guacamole_instruction("video"),
-                    _encode_guacamole_instruction("image", "image/png", "image/jpeg"),
-                    _encode_guacamole_instruction("timezone", "Europe/Kaliningrad"),
-                    _encode_guacamole_instruction("name", "desktop-readiness"),
-                    _encode_guacamole_instruction("connect", *connect_values),
-                )
-            )
-            writer.write(handshake)
-            await wait_for(writer.drain(), timeout=timeout)
-
-            for _ in range(16):
-                raw = await wait_for(reader.readuntil(b";"), timeout=timeout)
-                opcode, _ = _decode_guacamole_instruction(raw)
-                if opcode == "ready":
-                    writer.write(_encode_guacamole_instruction("disconnect"))
-                    await wait_for(writer.drain(), timeout=timeout)
-                    return True
-                if opcode in {"error", "disconnect"}:
-                    return False
-            return False
-        except (OSError, EOFError, LimitOverrunError, TimeoutError, ValueError):
-            return False
-        finally:
-            if writer is not None:
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except OSError:
-                    pass
-
-    async def check(self, settings: Settings) -> dict[str, bool]:
-        import asyncio
-
-        guacamole, jdbc, guacd_vnc = await asyncio.gather(
-            self._guacamole_ready(settings),
-            self._jdbc_ready(settings),
-            self._guacd_vnc_ready(settings),
-        )
-        return {"guacamole": guacamole, "jdbc": jdbc, "guacd_vnc": guacd_vnc}
+        except (httpx.HTTPError, TypeError, ValueError):
+            return {"configured": True, "auth_challenge": False, "authenticated": False}
 
 
 def get_desktop_readiness_probe() -> DesktopReadinessProbe:
@@ -288,10 +86,10 @@ DepDesktopReadinessProbe = Annotated[DesktopReadinessProbe, Depends(get_desktop_
 class DesktopReadyzCache:
     """Кэш результата readiness-пробы на ``desktop_readiness_cache_seconds``.
 
-    Проба выполняет полный guacd→VNC handshake, Guacamole-логин и JDBC-запросы
-    рядом с money-критичной Vision-сессией, поэтому входящие запросы не должны
-    транслироваться в новые подключения 1:1. Лок сериализует конкурентные
-    запросы: пробу выполняет один, остальные получают закэшированный результат.
+    Проба выполняет два HTTP-запроса к Kasm рядом с money-критичной
+    Vision-сессией, поэтому входящие запросы не должны транслироваться в новые
+    подключения 1:1. Лок сериализует конкурентные запросы: пробу выполняет один,
+    остальные получают закэшированный результат.
     TTL <= 0 полностью отключает кэш.
     """
 
@@ -323,14 +121,14 @@ def _set_desktop_cookie(response: Response, token: str, max_age: int) -> None:
         httponly=True,
         secure=True,
         samesite="lax",
-        path="/desktop",
+        path="/",
     )
 
 
 def _clear_desktop_cookie(response: Response) -> None:
     response.delete_cookie(
         DESKTOP_SESSION_COOKIE,
-        path="/desktop",
+        path="/",
         secure=True,
         httponly=True,
         samesite="lax",
@@ -373,6 +171,10 @@ async def _resolve_desktop_session(
     session = await load_desktop_session(redis, token)
     if session is None or token is None:
         return None
+    request_hostname = (request.url.hostname or "").lower().rstrip(".")
+    if request_hostname != session.expected_hostname:
+        await delete_desktop_session(redis, token)
+        return None
     now = int(time.time())
     if now - session.owner_checked_at >= settings.desktop_access_owner_recheck_seconds:
         recipient = await find_recipient_by_telegram_user_id(
@@ -389,6 +191,7 @@ async def _resolve_desktop_session(
 
 @router.get("/desktop-auth/redeem", include_in_schema=False)
 async def redeem_desktop_ticket(
+    request: Request,
     engine: DepEngine,
     redis: DepRedis,
     settings: DepSettings,
@@ -396,6 +199,9 @@ async def redeem_desktop_ticket(
 ) -> Response:
     try:
         grant = await consume_desktop_ticket(redis, ticket)
+        request_hostname = (request.url.hostname or "").lower().rstrip(".")
+        if request_hostname != grant.expected_hostname:
+            raise DesktopAccessError("Desktop ticket выпущен для другого hostname")
         recipient = await find_recipient_by_telegram_user_id(
             engine, telegram_user_id=grant.telegram_user_id
         )
@@ -405,11 +211,12 @@ async def redeem_desktop_ticket(
             redis,
             telegram_user_id=grant.telegram_user_id,
             source=grant.source,
+            expected_hostname=grant.expected_hostname,
             ttl=settings.desktop_access_session_ttl_seconds,
         )
     except DesktopAccessError as exc:
         return _desktop_error(str(exc))
-    response = RedirectResponse("/desktop/", status_code=303, headers=_NO_STORE)
+    response = RedirectResponse("/", status_code=303, headers=_NO_STORE)
     _set_desktop_cookie(response, token, settings.desktop_access_session_ttl_seconds)
     return response
 
@@ -423,9 +230,14 @@ async def verify_desktop_session(
 ) -> Response:
     resolved = await _resolve_desktop_session(request, engine, redis, settings)
     if resolved is not None:
+        _, session = resolved
         return Response(
             status_code=200,
-            headers={**_NO_STORE, "Remote-User": DESKTOP_PRINCIPAL},
+            headers={
+                **_NO_STORE,
+                "Remote-User": DESKTOP_PRINCIPAL,
+                "X-Desktop-Transport": "kasm",
+            },
         )
     response = RedirectResponse(_PANEL_DESKTOP_PAGE, status_code=303, headers=_NO_STORE)
     _clear_desktop_cookie(response)
@@ -434,12 +246,14 @@ async def verify_desktop_session(
 
 @router.post("/desktop/logout", include_in_schema=False)
 async def logout_desktop(request: Request, redis: DepRedis) -> Response:
-    await delete_desktop_session(redis, request.cookies.get(DESKTOP_SESSION_COOKIE))
+    token = request.cookies.get(DESKTOP_SESSION_COOKIE)
+    await delete_desktop_session(redis, token)
     response = RedirectResponse(_PANEL_DESKTOP_PAGE, status_code=303, headers=_NO_STORE)
     _clear_desktop_cookie(response)
     return response
 
 
+@router.get("/desktop-kasm-readyz", include_in_schema=False)
 @router.get("/desktop-readyz", include_in_schema=False)
 async def desktop_readyz(
     settings: DepSettings,

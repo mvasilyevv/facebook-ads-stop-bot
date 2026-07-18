@@ -50,8 +50,9 @@ describe("RemoteDesktopPage", () => {
       .spyOn(desktopNavigation, "replace")
       .mockImplementation(() => undefined);
     apiSend.mockResolvedValue({
-      url: "https://app.adpulse.su/desktop-auth/redeem?ticket=single-use",
+      url: "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
       expires_at: "2026-07-17T12:00:00Z",
+      transport: "kasm",
     });
 
     render(<RemoteDesktopPage />);
@@ -59,7 +60,7 @@ describe("RemoteDesktopPage", () => {
     await waitFor(() => {
       expect(apiSend).toHaveBeenCalledWith("POST", "/desktop/launch");
       expect(replace).toHaveBeenCalledWith(
-        "https://app.adpulse.su/desktop-auth/redeem?ticket=single-use",
+        "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
       );
     });
   });
@@ -85,6 +86,7 @@ describe("RemoteDesktopPage", () => {
     apiSend.mockResolvedValue({
       url: "https://evil.example/desktop-auth/redeem?ticket=stolen",
       expires_at: "2026-07-17T12:00:00Z",
+      transport: "kasm",
     });
 
     render(<RemoteDesktopPage />);

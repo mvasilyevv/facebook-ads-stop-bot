@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import os
 from pathlib import Path
@@ -22,7 +23,12 @@ def test_sync_preserves_basic_auth_and_atomically_replaces_api_key(tmp_path, mon
     module = _load_module()
     source = tmp_path / "shared.env"
     target = tmp_path / "caddy.env"
-    source.write_text("API_KEY=new-server-key\nPOSTGRES_PASSWORD=must-not-copy\n")
+    source.write_text(
+        "API_KEY=new-server-key\n"
+        "DESKTOP_KASM_SERVICE_USER=desktop-user\n"
+        "DESKTOP_KASM_SERVICE_PASSWORD=desktop-password\n"
+        "POSTGRES_PASSWORD=must-not-copy\n"
+    )
     target.write_text(
         "PANEL_BASIC_AUTH_USER=operator\nPANEL_BASIC_AUTH_HASH='$2a$hash'\nAPI_KEY=old-server-key\n"
     )
@@ -42,6 +48,8 @@ def test_sync_preserves_basic_auth_and_atomically_replaces_api_key(tmp_path, mon
     assert "PANEL_BASIC_AUTH_USER=operator" in rendered
     assert "PANEL_BASIC_AUTH_HASH='$2a$hash'" in rendered
     assert "API_KEY=new-server-key" in rendered
+    encoded = base64.b64encode(b"desktop-user:desktop-password").decode()
+    assert f"DESKTOP_KASM_SERVICE_AUTH_B64={encoded}" in rendered
     assert "old-server-key" not in rendered
     assert "POSTGRES_PASSWORD" not in rendered
     assert os.stat(target).st_mode & 0o777 == 0o600
@@ -52,7 +60,11 @@ def test_sync_leaves_target_intact_when_atomic_replace_fails(tmp_path, monkeypat
     module = _load_module()
     source = tmp_path / "shared.env"
     target = tmp_path / "caddy.env"
-    source.write_text("API_KEY=new-server-key\n")
+    source.write_text(
+        "API_KEY=new-server-key\n"
+        "DESKTOP_KASM_SERVICE_USER=desktop-user\n"
+        "DESKTOP_KASM_SERVICE_PASSWORD=desktop-password\n"
+    )
     original = "PANEL_BASIC_AUTH_USER=operator\nPANEL_BASIC_AUTH_HASH=hash\n"
     target.write_text(original)
     target.chmod(0o600)
@@ -88,7 +100,11 @@ def test_sync_fails_closed_for_missing_empty_or_duplicate_keys(
     module = _load_module()
     source = tmp_path / "shared.env"
     target = tmp_path / "caddy.env"
-    source.write_text(source_text)
+    source.write_text(
+        source_text
+        + "DESKTOP_KASM_SERVICE_USER=desktop-user\n"
+        + "DESKTOP_KASM_SERVICE_PASSWORD=desktop-password\n"
+    )
     target.write_text(target_text)
     target.chmod(0o600)
 

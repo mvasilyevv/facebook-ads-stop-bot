@@ -20,6 +20,18 @@ REMOVED_DESKTOP_KEYS = frozenset(
         "DESKTOP_RECOVERY_TTL_SECONDS",
         "DESKTOP_RECOVERY_KEY",
         "X_PANEL_RECOVERY_KEY",
+        "DESKTOP_VNC_PASSWORD",
+        "DESKTOP_GUACAMOLE_INTERNAL_URL",
+        "DESKTOP_GUACAMOLE_POSTGRES_HOST",
+        "DESKTOP_GUACAMOLE_POSTGRES_PORT",
+        "DESKTOP_GUACAMOLE_POSTGRES_DB",
+        "DESKTOP_GUACAMOLE_POSTGRES_USER",
+        "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD",
+        "DESKTOP_GUACD_HOST",
+        "DESKTOP_GUACD_PORT",
+        "DESKTOP_KASM_PUBLIC_ORIGIN",
+        "DESKTOP_ACTIVE_TRANSPORT",
+        "DESKTOP_KASM_ENABLED",
     }
 )
 
@@ -78,11 +90,12 @@ def validate(values: dict[str, str]) -> list[str]:
         "API_KEY",
         "TMA_SESSION_SECRET",
         "ADSETPRO_POSTBACK_SECRET",
-        "DESKTOP_VNC_PASSWORD",
-        "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD",
         "DESKTOP_WEBTOP_IMAGE",
+        "DESKTOP_KASMVNC_IMAGE",
         "DESKTOP_OWNER_TELEGRAM_USER_ID",
         "DESKTOP_PUBLIC_ORIGIN",
+        "DESKTOP_KASM_SERVICE_USER",
+        "DESKTOP_KASM_SERVICE_PASSWORD",
     )
     errors = [f"{key} is empty" for key in required if not values.get(key, "").strip()]
 
@@ -111,35 +124,29 @@ def validate(values: dict[str, str]) -> list[str]:
             "TELEGRAM_OIDC_REDIRECT_URI must be https://app.adpulse.su/auth/telegram/callback"
         )
 
-    desktop_postgres_password = values.get("DESKTOP_GUACAMOLE_POSTGRES_PASSWORD", "")
-    if desktop_postgres_password and len(desktop_postgres_password) < 32:
-        errors.append("DESKTOP_GUACAMOLE_POSTGRES_PASSWORD must be at least 32 characters")
-
     desktop_webtop_image = values.get("DESKTOP_WEBTOP_IMAGE", "")
     if desktop_webtop_image and not re.fullmatch(
         r"[^\s@]+@sha256:[0-9a-f]{64}", desktop_webtop_image
     ):
         errors.append("DESKTOP_WEBTOP_IMAGE must be an immutable image@sha256 reference")
 
-    if values.get("DESKTOP_PUBLIC_ORIGIN") != "https://app.adpulse.su":
-        errors.append("DESKTOP_PUBLIC_ORIGIN must be https://app.adpulse.su")
+    kasm_image = values.get("DESKTOP_KASMVNC_IMAGE", "")
+    if kasm_image and not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", kasm_image):
+        errors.append("DESKTOP_KASMVNC_IMAGE must be an immutable image@sha256 reference")
+    kasm_user = values.get("DESKTOP_KASM_SERVICE_USER", "")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", kasm_user):
+        errors.append("DESKTOP_KASM_SERVICE_USER contains unsupported characters")
+    if len(values.get("DESKTOP_KASM_SERVICE_PASSWORD", "")) < 32:
+        errors.append("DESKTOP_KASM_SERVICE_PASSWORD must be at least 32 characters")
+
+    if values.get("DESKTOP_PUBLIC_ORIGIN") != "https://desktop.adpulse.su":
+        errors.append("DESKTOP_PUBLIC_ORIGIN must be https://desktop.adpulse.su")
     try:
         desktop_owner_id = int(values.get("DESKTOP_OWNER_TELEGRAM_USER_ID", "0"))
     except ValueError:
         desktop_owner_id = 0
     if desktop_owner_id <= 0:
         errors.append("DESKTOP_OWNER_TELEGRAM_USER_ID must be a positive integer")
-
-    vnc_password = values.get("DESKTOP_VNC_PASSWORD", "")
-    if vnc_password:
-        try:
-            encoded_vnc_password = vnc_password.encode("ascii")
-        except UnicodeEncodeError:
-            encoded_vnc_password = b""
-        if len(encoded_vnc_password) != 8 or any(
-            byte < 0x20 or byte > 0x7E for byte in encoded_vnc_password
-        ):
-            errors.append("DESKTOP_VNC_PASSWORD must be exactly 8 printable ASCII characters")
 
     encryption_key = values.get("ENCRYPTION_KEY", "")
     if encryption_key:
@@ -174,6 +181,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--public-url", default="https://app.adpulse.su")
     parser.add_argument("--desktop-webtop-image")
+    parser.add_argument("--desktop-kasmvnc-image")
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--generate-postgres-password-if-insecure", action="store_true")
     args = parser.parse_args()
@@ -192,7 +200,10 @@ def main() -> int:
     overrides = {
         "FRONTEND_ORIGIN": public_url,
         "WEB_APP_URL": f"{public_url}/tma/",
-        "DESKTOP_PUBLIC_ORIGIN": public_url,
+        "DESKTOP_PUBLIC_ORIGIN": "https://desktop.adpulse.su",
+        "DESKTOP_KASM_SERVICE_USER": current.get("DESKTOP_KASM_SERVICE_USER") or "adpulse-desktop",
+        "DESKTOP_KASM_SERVICE_PASSWORD": current.get("DESKTOP_KASM_SERVICE_PASSWORD")
+        or secrets.token_urlsafe(48),
         "REQUIRE_API_KEY": "true",
         "TRUST_PROXY_HEADERS": "true",
         "DEV_TOOLS_ENABLED": "false",
@@ -203,21 +214,10 @@ def main() -> int:
         # используется query-token'ом. Генерируем один раз и сохраняем между release.
         "ADSETPRO_POSTBACK_SECRET": current.get("ADSETPRO_POSTBACK_SECRET")
         or secrets.token_urlsafe(48),
-        "DESKTOP_VNC_PASSWORD": current.get("DESKTOP_VNC_PASSWORD")
-        or "".join(
-            secrets.choice("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-            for _ in range(8)
-        ),
-        "DESKTOP_GUACAMOLE_POSTGRES_HOST": "vision-guacamole-db",
-        "DESKTOP_GUACAMOLE_POSTGRES_PORT": "5432",
-        "DESKTOP_GUACAMOLE_POSTGRES_DB": current.get("DESKTOP_GUACAMOLE_POSTGRES_DB")
-        or "guacamole",
-        "DESKTOP_GUACAMOLE_POSTGRES_USER": current.get("DESKTOP_GUACAMOLE_POSTGRES_USER")
-        or "guacamole",
-        "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD": current.get("DESKTOP_GUACAMOLE_POSTGRES_PASSWORD")
-        or secrets.token_urlsafe(48),
         "DESKTOP_WEBTOP_IMAGE": args.desktop_webtop_image
         or current.get("DESKTOP_WEBTOP_IMAGE", ""),
+        "DESKTOP_KASMVNC_IMAGE": args.desktop_kasmvnc_image
+        or current.get("DESKTOP_KASMVNC_IMAGE", ""),
         # Preserve an explicitly enabled staged rollout; new environments start
         # in shadow mode until a full-day reconciliation is accepted.
         "TRACKER_AUTO_CANCEL_ENABLED": current.get("TRACKER_AUTO_CANCEL_ENABLED") or "false",
