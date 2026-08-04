@@ -79,9 +79,23 @@ export function createMetaApiServiceHandlers(
       // иначе reload рвёт in-flight fetch → «Execution context was destroyed».
       // Резолв вкладки кабинета (может открыть новую) — тоже под локом.
       const result = await withPageLock(session.id, async () => {
-        const page = actId
-          ? await sessionManager.ensureAdsManagerPage(session, { actId })
-          : getPage(session);
+        let page: Page;
+        if (actId) {
+          page = await sessionManager.ensureAdsManagerPage(session, { actId });
+        } else {
+          try {
+            page = _getPage(session);
+          } catch (err) {
+            // Read-only helper'ы визарда не передают ad_account_id, чтобы не менять
+            // вкладку кабинета. Если primary-вкладку закрыли, но CDP ещё жив, используем
+            // тот же Layer 1 self-heal, что и scanner: переоткрываем last known Ads Manager
+            // URL и выполняем Graph GET без 503 оператору.
+            console.warn(
+              `[meta-api] primary-вкладка недоступна → пробую восстановить: ${String((err as Error)?.message ?? err)}`,
+            );
+            page = await sessionManager.ensureAdsManagerPage(session);
+          }
+        }
         return executeGraphCall(page, params);
       });
 

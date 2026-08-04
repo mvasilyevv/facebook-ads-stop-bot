@@ -14,7 +14,13 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiGetWithCount, apiSend, redirectToLoginOnUnauthorized } from "./client";
+import {
+  ApiError,
+  apiGet,
+  apiGetWithCount,
+  apiSend,
+  redirectToLoginOnUnauthorized,
+} from "./client";
 
 // ─── Типы (сматчены с schemas/campaigns_create.py) ───────────────────────────
 
@@ -270,6 +276,19 @@ export interface AdAccountTimezoneOut {
 }
 
 /**
+ * Vision при старте профиля может несколько секунд отвечать 503. Повторяем только этот
+ * транзиентный статус: 4xx/валидация Meta должны сразу дойти до оператора.
+ * failureCount < 3 = максимум три повтора после исходного запроса (1с + 2с + 4с).
+ */
+export function shouldRetryVisionMetadata(failureCount: number, error: Error): boolean {
+  return error instanceof ApiError && error.status === 503 && failureCount < 3;
+}
+
+export function visionMetadataRetryDelay(attemptIndex: number): number {
+  return Math.min(1_000 * 2 ** attemptIndex, 4_000);
+}
+
+/**
  * Подтягивает таймзону рекламного кабинета по act_id.
  * TZ кабинета зафиксирована при создании и неизменна — тянем её из Graph через бэк.
  * act_id принимается с префиксом act_ или без (бэк нормализует).
@@ -278,6 +297,8 @@ export function useAdAccountTimezone() {
   return useMutation<AdAccountTimezoneOut, Error, string>({
     mutationFn: (actId: string) =>
       apiGet<AdAccountTimezoneOut>("/campaigns/ad-account-timezone", { act_id: actId }),
+    retry: shouldRetryVisionMetadata,
+    retryDelay: visionMetadataRetryDelay,
   });
 }
 
@@ -301,6 +322,8 @@ export function useAdAccountPages() {
   return useMutation<AdAccountPagesOut, Error, string>({
     mutationFn: (actId: string) =>
       apiGet<AdAccountPagesOut>("/campaigns/ad-account-pages", { act_id: actId }),
+    retry: shouldRetryVisionMetadata,
+    retryDelay: visionMetadataRetryDelay,
   });
 }
 
