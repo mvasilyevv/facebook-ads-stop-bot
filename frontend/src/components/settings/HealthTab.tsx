@@ -33,11 +33,16 @@ function metaChannelVariant(
   return "neutral";
 }
 
-/** Пояснение под статусом канала — по каждому из трёх состояний. */
-function metaChannelDescription(status: MetaApiChannelStatus["status"]): string {
-  if (status === "ONLINE") return "Реальный запрос к Marketing API прошёл успешно.";
-  if (status === "DEGRADED")
+/** Пояснение под статусом канала — с фактической причиной намеренно пропущенного probe. */
+function metaChannelDescription(channel: MetaApiChannelStatus): string {
+  if (channel.status === "ONLINE") return "Реальный запрос к Marketing API прошёл успешно.";
+  if (channel.status === "DEGRADED")
     return "Канал недоступен: сеть не отвечает или токен протух. Авто-стоп объявлений может не сработать.";
+
+  const probeDetail = `${channel.reason ?? ""} ${channel.detail ?? ""}`.toLowerCase();
+  if (probeDetail.includes("сканирование выключено") || probeDetail.includes("scanning_disabled")) {
+    return "Сканирование выключено — health_watchdog намеренно не проверяет канал авто-стопа.";
+  }
   return "Нет данных прободера — health_watchdog ещё не проверял канал или ключ протух.";
 }
 
@@ -157,7 +162,7 @@ export const HealthTab: FC = () => {
               </Badge>
             </div>
             <div className="text-[11px] text-bg-8 font-display">
-              {metaChannelDescription(metaChannel.status)}
+              {metaChannelDescription(metaChannel)}
             </div>
             {metaChannel.checked_at && (
               <div className="flex items-center justify-between">

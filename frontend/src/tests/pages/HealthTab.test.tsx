@@ -90,6 +90,25 @@ describe("HealthTab — карточка «Канал авто-стопа»", ()
     expect(screen.getByText(/Нет данных прободера/)).toBeInTheDocument();
   });
 
+  // Выключенное сканирование — намеренный пропуск probe, а не протухший ключ.
+  it("показывает фактическую причину UNKNOWN при выключенном сканировании", () => {
+    mockHealth({
+      status: "UNKNOWN",
+      healthy: null,
+      reason: "сканирование выключено",
+      detail: "сканирование выключено — канал авто-стопа не проверяется",
+      checked_at: new Date().toISOString(),
+    });
+    render(wrap(<HealthTab />));
+
+    expect(
+      screen.getByText(
+        "Сканирование выключено — health_watchdog намеренно не проверяет канал авто-стопа.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/ключ протух/)).not.toBeInTheDocument();
+  });
+
   // Старый бэк без поля meta_api_channel в ответе — компонент не должен падать,
   // должен показать явное "нет данных" вместо статус-бейджа.
   it("не падает при отсутствии meta_api_channel в ответе (старый бэк)", () => {
