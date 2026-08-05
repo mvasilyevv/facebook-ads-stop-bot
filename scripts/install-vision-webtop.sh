@@ -83,6 +83,7 @@ capture_runtime_contract() {
     docker exec vision-webtop sh -eu -c \
       'DISPLAY=:1 xdpyinfo | awk '\''/dimensions:/{print "dimensions=" $2; exit}'\'''
     curl --silent --show-error --fail --max-time 15 \
+      --retry 5 --retry-all-errors --retry-delay 2 \
       --header "X-API-Key: $api_key" \
       http://127.0.0.1:8100/api/settings/vision
     printf '\n'
@@ -104,11 +105,12 @@ def load(path: str) -> tuple[str, dict[str, object]]:
 
 before_dimensions, before = load(sys.argv[1])
 after_dimensions, after = load(sys.argv[2])
-stable_keys = ("profile_id", "cdp_port")
 ok = (
     before_dimensions == "dimensions=1366x768"
     and after_dimensions == before_dimensions
-    and all(before.get(key) == after.get(key) for key in stable_keys)
+    and before.get("profile_id") == after.get("profile_id")
+    and after.get("cdp_ready") is True
+    and isinstance(after.get("cdp_port"), int)
 )
 raise SystemExit(0 if ok else 1)
 PY
@@ -143,6 +145,19 @@ ensure_cdp_ready() {
   python3 -c \
     'import json,sys; raise SystemExit(0 if json.loads(sys.argv[1]).get("ok") else 1)' \
     "$response"
+
+  for _ in $(seq 1 30); do
+    response="$(curl --silent --show-error --fail --max-time 15 \
+      --header "X-API-Key: $api_key" \
+      http://127.0.0.1:8100/api/settings/vision)"
+    if python3 -c \
+      'import json,sys; value=json.loads(sys.argv[1]); raise SystemExit(0 if value.get("cdp_ready") and value.get("cdp_port") else 1)' \
+      "$response"; then
+      return 0
+    fi
+    sleep 2
+  done
+  die "Vision did not expose a ready CDP session after restart"
 }
 
 cleanup() {
@@ -262,7 +277,18 @@ while IFS= read -r image; do
 done < <(compose config --images)
 
 if [[ "$MANIFEST_CHANGED" == true ]]; then
-  compose pull
+  # CI authenticates production only for the duration of deploy. Re-running the
+  # installer later (recovery/systemd repair) must work from the immutable
+  # digest images already present on the host instead of failing with GHCR 401.
+  missing_image=false
+  while IFS= read -r image; do
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+      missing_image=true
+    fi
+  done < <(compose config --images)
+  if [[ "$missing_image" == true ]]; then
+    compose pull
+  fi
   if systemctl is-active --quiet fb-agent.service \
     || docker ps --format '{{.Names}}' | grep -qx "$BROWSER_AGENT_CONTAINER"; then
     RESTART_APP=true

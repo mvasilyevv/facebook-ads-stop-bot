@@ -37,6 +37,13 @@ def test_webtop_no_longer_installs_or_runs_tigervnc() -> None:
     assert not (WEBTOP / "guacamole-extension").exists()
 
 
+def test_webtop_healthcheck_matches_the_production_vision_executable() -> None:
+    source = COMPOSE.read_text(encoding="utf-8")
+
+    assert "pgrep -x Vision" in source
+    assert "/opt/Vision/vision" not in source
+
+
 def test_kasm_image_and_release_package_are_immutable() -> None:
     dockerfile = (KASM / "Dockerfile").read_text(encoding="utf-8")
     config = (KASM / "kasmvnc.yaml").read_text(encoding="utf-8")
@@ -66,11 +73,17 @@ def test_installer_is_quiescent_snapshotting_and_rollback_safe() -> None:
     assert "pre-kasm-config.tar.gz" in source
     assert "pre-kasm-baseline.txt" in source
     assert "printf 'display=:1\\n'" in source
-    assert 'stable_keys = ("profile_id", "cdp_port")' in source
+    assert 'before.get("profile_id") == after.get("profile_id")' in source
+    assert 'after.get("cdp_ready") is True' in source
+    assert 'isinstance(after.get("cdp_port"), int)' in source
+    assert 'value.get("cdp_ready") and value.get("cdp_port")' in source
+    assert "--retry 5 --retry-all-errors --retry-delay 2" in source
     assert "compose down --remove-orphans" in source
     assert "restoring compose, /config and browser-agent" in source
     assert "service_is_healthy kasmvnc" in source
     assert "http://127.0.0.1:8444/" in source
+    assert 'docker image inspect "$image"' in source
+    assert 'if [[ "$missing_image" == true ]]' in source
     assert "guacamole" not in source.lower()
     assert "guacd" not in source.lower()
     assert "tigervnc" not in source.lower()

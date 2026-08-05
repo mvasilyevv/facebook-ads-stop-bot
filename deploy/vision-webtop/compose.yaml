@@ -35,7 +35,10 @@ services:
         max-size: "20m"
         max-file: "5"
     healthcheck:
-      test: ["CMD-SHELL", "DISPLAY=:1 xdpyinfo >/dev/null 2>&1 && pgrep -f '/opt/Vision/vision' >/dev/null"]
+      # The production image installs Vision as /usr/bin/Vision. Match the
+      # executable name instead of a historical install path, otherwise a live
+      # desktop is marked unhealthy and the KasmVNC sidecar never starts.
+      test: ["CMD-SHELL", "DISPLAY=:1 xdpyinfo >/dev/null 2>&1 && pgrep -x Vision >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 18
