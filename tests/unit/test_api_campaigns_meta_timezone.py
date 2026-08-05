@@ -41,6 +41,7 @@ class _FakeClient:
         self._raises = raises
         self.started = False
         self.closed = False
+        self.last_kwargs: dict[str, Any] | None = None
 
     async def start(self) -> None:
         self.started = True
@@ -49,6 +50,7 @@ class _FakeClient:
         self.closed = True
 
     async def execute_graph_call(self, **kwargs: Any) -> dict[str, Any]:
+        self.last_kwargs = kwargs
         if self._raises is not None:
             raise self._raises
         return self._resp
@@ -75,6 +77,8 @@ def test_positive_offset(monkeypatch) -> None:
         "tz_offset_str": "+03:00",
         "timezone_name": "Europe/Moscow",
     }
+    assert fake.last_kwargs is not None
+    assert fake.last_kwargs["ad_account_id"] == "act_123"
     # Канал закрыли в finally даже на успехе.
     assert fake.closed is True
 

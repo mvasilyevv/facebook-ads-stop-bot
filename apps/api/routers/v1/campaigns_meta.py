@@ -14,8 +14,8 @@ Endpoints под /api (auto-discovery, prefix="/api"):
 страницы (`/act_{id}/promote_pages`) → байер выбирает из дропдауна вместо ручного ввода ID.
 
 Канал: read-only `MetaApiClient.execute_graph_call` через активную Vision-сессию (как
-account_tz warmup в meta_api_worker). НЕ открываем новый браузер, НЕ дёргаем живую сессию
-сверх одного GET.
+account_tz warmup в meta_api_worker). Для надежного self-heal передаём ad_account_id
+и даём browser-agent определить нужную вкладку кабинета.
 """
 
 from __future__ import annotations
@@ -99,14 +99,11 @@ async def fetch_account_timezone(
     их на HTTP-коды. timezone_offset_hours_utc — целое, МОЖЕТ быть отрицательным
     (напр. -7 для America/Hermosillo).
     """
-    # ВАЖНО (money): НЕ передаём ad_account_id — иначе browser-agent ушёл бы в
-    # ensureAdsManagerPage и НАВИГИРОВАЛ живую вкладку кабинета (риск порвать
-    # in-flight скан авто-стопа). Read-only GET /act_{id} отрабатывает из primary
-    # facebook.com-вкладки (юзер залогинен и имеет доступ к своим кабинетам).
     resp = await client.execute_graph_call(
         method="GET",
         endpoint=f"/act_{numeric_act_id}",
         query_params={"fields": "timezone_name,timezone_offset_hours_utc"},
+        ad_account_id=f"act_{numeric_act_id}",
     )
     raw_offset = resp.get("timezone_offset_hours_utc")
     if raw_offset is None:
@@ -139,13 +136,11 @@ async def fetch_account_pages(
     Пагинацию НЕ доходим (limit=100 достаточно для UI-дропдауна). Элементы без id
     пропускаем; name пустой/None → "". id/name приводим к строке.
     """
-    # ВАЖНО (money): НЕ передаём ad_account_id — иначе browser-agent ушёл бы в
-    # ensureAdsManagerPage и НАВИГИРОВАЛ живую вкладку кабинета (риск порвать in-flight
-    # скан авто-стопа). Read-only GET из primary facebook.com-вкладки.
     resp = await client.execute_graph_call(
         method="GET",
         endpoint=f"/act_{numeric_act_id}/promote_pages",
         query_params={"fields": "id,name", "limit": "100"},
+        ad_account_id=f"act_{numeric_act_id}",
     )
     data = resp.get("data") or []
     pages: list[AdAccountPage] = []
@@ -184,8 +179,7 @@ async def get_ad_account_timezone(
     """Автоподхват таймзоны кабинета для start_time кампании.
 
     400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула
-    ошибку или кабинет не найден. read-only: один GET /act_{id} через Vision-сессию,
-    без открытия браузера.
+    ошибку или кабинет не найден. read-only: один GET /act_{id} через Vision-сессию.
     """
     numeric = _normalize_act_id(act_id)
     if not numeric:
@@ -241,7 +235,7 @@ async def get_ad_account_pages(
 
     400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула
     ошибку или кабинет не найден. read-only: один GET /act_{id}/promote_pages через
-    Vision-сессию, без открытия браузера. Массив может быть пустым (нет страниц).
+    Vision-сессию. Массив может быть пустым (нет страниц).
     """
     numeric = _normalize_act_id(act_id)
     if not numeric:

@@ -79,10 +79,10 @@ def test_two_pages(monkeypatch) -> None:
             {"id": "222", "name": "Brand B"},
         ]
     }
-    # Канал закрыли в finally; ad_account_id НЕ передан (money: не навигируем кабинет).
+    # Канал закрыли в finally, срабатывание через целевой ad_account_id для self-heal вкладок.
     assert fake.closed is True
     assert fake.last_kwargs is not None
-    assert "ad_account_id" not in fake.last_kwargs
+    assert fake.last_kwargs["ad_account_id"] == "act_123"
     assert fake.last_kwargs["endpoint"] == "/act_123/promote_pages"
 
 
