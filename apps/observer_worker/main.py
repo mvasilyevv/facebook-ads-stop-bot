@@ -7,8 +7,7 @@
 3. gate.run_scan_cycle() → ScanResult.rows
 4. process_scan_rows(...) → метрики/FSM/outbox
 5. UPDATE scan_runs финальным результатом
-6. Redis heartbeat
-7. Sleep до следующего старта по адаптивному периоду (база = interval_seconds = CALM,
+6. Sleep до следующего старта по адаптивному периоду (база = interval_seconds = CALM,
    дефолт 30с): stop/теневой spend→CRITICAL 10с, warning→ELEVATED 15с,
    офферные ads→CALM 30с, пусто→IDLE 45с. Длительность цикла вычитается из периода;
    jitter ±10%. См. core/observer/adaptive_interval.py.
@@ -20,12 +19,12 @@ Gate инжектируется (паттерн как у toggle_workers): в п
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import random
 import signal
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -34,10 +33,13 @@ from typing import Protocol
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from apps.telegram_poller.main import _get_database_url
-from core.dashboard.cabinet_spend import cabinet_day_start_utc
+from core.config import get_settings
 from core.db import WORKER_ENGINE_KWARGS
-from core.meta_api.account_tz import DEFAULT_OFFSET_HOURS, load_offset
+from core.meta_api.account_tz import (
+    CabinetCurrencyUnknownError,
+    CabinetTimezoneUnknownError,
+)
+from core.meta_api.identity import require_ad_account_id
 from core.observer.accounts import (
     allowlist_blocks_scan,
     list_offers_without_accounts,
@@ -46,79 +48,75 @@ from core.observer.accounts import (
 from core.observer.adaptive_interval import (
     DEFAULT_BASE_INTERVAL_SECONDS,
     JITTER_FRACTION,
-    MIN_INTERVAL_SECONDS,
     clamp_interval,
     compute_adaptive_interval,
     compute_remaining_sleep,
     resolve_scan_mode,
 )
-from core.observer.enable_grace import load_enable_grace_map
+from core.observer.cabinet_supervisor import (
+    CabinetLease,
+    CabinetSupervisor,
+    assert_cabinet_lease,
+)
 from core.observer.pipeline import CycleResult, process_scan_rows
 from core.observer.queries import (
     load_observer_config,
-    load_vision_auto_restart_flag,
     multi_cabinet_requires_owner_tag,
 )
-from core.scanner.models import ScannedAdRow
-from core.telegram import format as fmt
-from core.telegram.worker_notify import notify_owners, notify_recipients
+from core.observer.scan_tasks import (
+    OBSERVER_SCAN_POLL_SECONDS,
+    ObserverScanCancelled,
+    ObserverScanFenceLost,
+    claim_observer_scan,
+    enqueue_scheduled_observer_scan,
+    run_with_observer_scan_control,
+)
+from core.scanner.identity import find_incomplete_scan_row_ids
+from core.scanner.models import (
+    SCANNER_METRICS_CONTRACT_REVISION,
+    ScannedAdRow,
+)
+from core.tasks.queue import Task, mark_cancelled, mark_failed, mark_succeeded
+from core.telegram.worker_notify import (
+    notify_recurring_incident,
+    resolve_recurring_incident,
+)
+from core.worker_metrics import SNAPSHOT_AGE, mark_worker_heartbeat, start_worker_metrics_server
 
 logger = logging.getLogger(__name__)
 
-# Heartbeat — имя ДОЛЖНО совпадать с EXPECTED_WORKERS в health_watchdog.
+_OBSERVER_INSTANCE_ID = uuid.uuid4()
+_CABINET_SCAN_CONCURRENCY = max(1, int(os.environ.get("OBSERVER_CABINET_CONCURRENCY", "1")))
+_CABINET_SCAN_DEADLINE_SECONDS = max(
+    30,
+    int(os.environ.get("OBSERVER_SCAN_DEADLINE_SECONDS", "120")),
+)
+
+
+def _get_database_url() -> str:
+    """Resolve the observer database URL without importing legacy TG runtime."""
+    return get_settings().database_url
+
+
 WORKER_NAME = "observer"
-HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
-HEARTBEAT_TTL_SECONDS = 60
 
-# TTL ключа observer:runtime. Должен быть с запасом больше интервала скана+jitter,
-# иначе ключ протухает между записями: на паузе цикл пишет runtime раз в interval+jitter
-# (дефолт 90-105с), и при TTL 60с возникала «дыра» — health_watchdog ложно слал
-# «observer:runtime устарел (missing)» каждый час. Держим TTL > watchdog
-# OBSERVER_STALE_AFTER_SECONDS (300с), чтобы при реальном зависании срабатывал точный
-# staleness-детект по updated_at, а не «missing».
-RUNTIME_TTL_SECONDS = int(os.environ.get("OBSERVER_RUNTIME_TTL_SEC", "360"))
-
-# Период освежения observer:runtime во время sleep между сканами. Адаптивный интервал
-# (см. core/observer/adaptive_interval.py) в IDLE-режиме при высоком базовом интервале
-# может превышать и TTL ключа (360с), и watchdog-порог staleness (300с) — тогда вернулся
-# бы ложный «observer:runtime stale/missing»-алерт (тот, что чинили в PR #17). Поэтому
-# длинный sleep бьём на чанки ≤ этого значения и между ними переписываем runtime со
-# свежим updated_at. Держим заметно < 300с, чтобы updated_at всегда был «молодым».
-RUNTIME_REFRESH_SECONDS = 120
-
-# Управляющие каналы observer'а.
-CHANNEL_TRIGGER = "fb_agent:observer:trigger"  # форс-скан вне расписания
-CHANNEL_CABINET_DAY = "fb_agent:observer:cabinet_day"  # сигнал нового кабинетного дня
-CHANNEL_RESTART = "fb_agent:worker:restart:observer"  # graceful restart
-
-# Health watchdog включает этот короткоживущий режим, когда billing amount_spent уже
-# растёт, а per-ad am_tabular ещё стоит. Это только ускоряет наблюдение; по общему
-# счётчику кабинета нельзя безопасно выбрать конкретное объявление для auto-pause.
-SHADOW_BURST_KEY = "observer:burst:shadow"
-
-# Layer 3 — алерт о «тихой» деградации: observer жив (heartbeat/runtime свежие), но сканы
+# Layer 3 — алерт о «тихой» деградации: процесс жив, но сканы
 # стабильно падают и self-heal (Layer 1/2) не помог. Без него мониторинг был слеп ~104 минуты.
 DEGRADED_ALERT_THRESHOLD = int(os.environ.get("OBSERVER_DEGRADED_ALERT_THRESHOLD", "3"))
-DEGRADED_ALERT_TTL_SECONDS = int(os.environ.get("OBSERVER_DEGRADED_ALERT_TTL_SEC", "1800"))
-DEGRADED_ALERT_DEDUP_KEY = "observer:degraded:alerted"
+OBSERVER_DEGRADED_INCIDENT_KEY = "observer:degraded"
 
 # MID X-16 (аудит 02.07): разлогин/чекпоинт Vision-профиля. browser-agent детектит
 # redirect на login.php/checkpoint, HTML вместо JSON или Graph 190 с login-subcode и
 # отдаёт empty_reason='login_required'. Money-критично: скан слеп, авто-стоп не работает —
-# owner должен получить ЯВНЫЙ алерт «нужен ре-логин», а не тихий пустой скан. Дедуп с
-# re-arm при недоставке (как degraded), TTL ~30 мин, чтобы не спамить каждый цикл.
-LOGIN_REQUIRED_ALERT_TTL_SECONDS = int(
-    os.environ.get("OBSERVER_LOGIN_REQUIRED_ALERT_TTL_SEC", "1800")
-)
-LOGIN_REQUIRED_ALERT_DEDUP_KEY = "observer:login_required:alerted"
+# owner должен получить ЯВНЫЙ алерт «нужен ре-логин», а не тихий пустой скан.
+OBSERVER_LOGIN_REQUIRED_INCIDENT_PREFIX = "observer:login_required:"
+OBSERVER_TIMEZONE_UNKNOWN_INCIDENT_PREFIX = "observer:cabinet_timezone_unknown:"
+OBSERVER_CURRENCY_UNKNOWN_INCIDENT_PREFIX = "observer:cabinet_currency_unknown:"
+OBSERVER_OFFER_CURRENCY_INCIDENT_PREFIX = "observer:offer_currency_mismatch:"
 
 # Money-гард R4: мульти-каб (>1 кабинета) без owner_tag → скан остановлен ради безопасности
-# (иначе авто-стоп чужой рекламы в shared-кабинете). Дедуп ops-алерта, чтобы не спамить
-# каждый цикл, пока конфиг не исправят.
-MULTI_CAB_NO_OWNER_ALERT_TTL_SECONDS = int(
-    os.environ.get("OBSERVER_MULTI_CAB_NO_OWNER_ALERT_TTL_SEC", "3600")
-)
-MULTI_CAB_NO_OWNER_ALERT_DEDUP_KEY = "observer:multi_cab_no_owner:alerted"
+# (иначе авто-стоп чужой рекламы в shared-кабинете).
+OBSERVER_MULTI_CAB_UNSAFE_INCIDENT_KEY = "observer:multi_cabinet_unsafe"
 
 
 @dataclass
@@ -126,10 +124,13 @@ class ScanCycleOutput:
     """То что вернул scanner gate за один цикл."""
 
     rows: list[ScannedAdRow]
+    metrics_contract_revision: int
     total_passes: int = 0
     duration_seconds: float = 0.0
     empty_reason: str | None = None
     warnings: list[str] | None = None
+    partial_row_ids: list[str] | None = None
+    rows_with_all_metrics_empty: int = 0
 
 
 class ScannerGate(Protocol):
@@ -141,18 +142,15 @@ class ScannerGate(Protocol):
 
     async def run_one_scan(
         self,
+        ad_account_id: str,
         campaign_ids: list[str] | None = None,
         owner_tag: str | None = None,
-        auto_recover_page: bool = True,
-        ad_account_id: str | None = None,
     ) -> ScanCycleOutput:
         """Делает один scan-цикл (am_tabular) и возвращает строки + метаданные.
 
         campaign_ids — allowlist кампаний (#3). owner_tag — am-резолв campaign.id по тегу
-        (тянуть сразу свой скоуп, не весь кабинет). auto_recover_page — self-heal Layer 2:
-        при «страница недоступна» эскалировать reconnect (gated vision_config флагом).
-        ad_account_id — мульти-кабинет: какой кабинет сканировать (None → legacy
-        текущая вкладка). Ошибка сканера → исключение (loop решит retry).
+        (тянуть сразу свой скоуп, не весь кабинет).
+        ad_account_id — обязательный кабинет скана. Ошибка сканера → исключение.
         """
         ...
 
@@ -169,15 +167,16 @@ class ScannerGate(Protocol):
 # ====================== Scan_runs writers ======================
 
 
-async def _begin_scan_run(engine: AsyncEngine, *, ad_account_id: str | None = None) -> int:
+async def _begin_scan_run(engine: AsyncEngine, *, ad_account_id: str) -> int:
     """INSERT в partitioned scan_runs → возвращаем монотонный id.
 
     Атомарный: scan_id = id за один INSERT через CTE с явным nextval.
     Никакого последующего UPDATE — если процесс крашится до RETURNING, sequence
     откатится вместе с транзакцией и осиротевшего scan_id не возникнет.
 
-    ad_account_id — мульти-кабинет: какой кабинет сканировался (NULL — legacy-скан).
+    ad_account_id — явный кабинет скана; пустое значение отклоняется до INSERT.
     """
+    account_id = require_ad_account_id(ad_account_id)
     started_at = datetime.now(timezone.utc)
     async with engine.begin() as conn:
         row = (
@@ -190,7 +189,7 @@ async def _begin_scan_run(engine: AsyncEngine, *, ad_account_id: str | None = No
                     RETURNING id
                     """
                 ),
-                {"sa": started_at, "acct": ad_account_id},
+                {"sa": started_at, "acct": account_id},
             )
         ).first()
     return int(row[0])
@@ -233,122 +232,19 @@ async def _finish_scan_run(
         )
 
 
-# ====================== Redis heartbeat ======================
-
-
-async def _publish_runtime_status(
-    redis_client,
+async def metrics_loop(
+    stop: asyncio.Event,
     *,
-    status: str,
-    active_phase: str | None = None,
-    status_message: str | None = None,
-    next_scan_at: datetime | None = None,
-    last_successful_scan_at: datetime | None = None,
-    current_account_id: str | None = None,
-    accounts_done: int | None = None,
-    accounts_total: int | None = None,
-    scan_mode: str | None = None,
+    snapshot_age_provider: Callable[[], float | None] | None = None,
 ) -> None:
-    """SET observer:runtime → JSON с TTL RUNTIME_TTL_SECONDS. Frontend/health_watchdog читают ключ.
-
-    Контракт:
-        worker_status — детальный статус: "scanning" | "idle" | "dispatch" | "paused"
-        status        — нормализованный для читателей: "running" | "paused"
-            Маппинг: scanning/idle/dispatch → running, paused → paused
-
-    Мульти-кабинет (аддитивные поля, читатели старого формата не ломаются):
-        current_account_id — кабинет, сканируемый прямо сейчас (None вне скана/legacy)
-        accounts_done / accounts_total — прогресс обхода кабинетов в цикле
-
-    Читатели используют read_observer_runtime() из core/observer/runtime.py.
-    """
-    if redis_client is None:
-        return
-
-    # Это накопительный маркер, а не состояние текущей фазы. Переходы
-    # idle → scanning → parse не должны стирать подтверждение предыдущего
-    # успешного цикла. Новый timestamp передаётся только после success;
-    # в остальных публикациях сохраняем уже записанное значение.
-    if last_successful_scan_at is None:
-        try:
-            previous_raw = await redis_client.get("observer:runtime")
-            if previous_raw:
-                previous = json.loads(previous_raw)
-                previous_last_ok = previous.get("last_successful_scan_at")
-                if isinstance(previous_last_ok, str) and previous_last_ok:
-                    last_successful_scan_at = datetime.fromisoformat(previous_last_ok)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            # Битый/legacy payload будет целиком заменён свежим контрактом ниже.
-            pass
-        except Exception:
-            logger.exception("redis GET observer:runtime failed while preserving last success")
-
-    # Нормализованный статус для читателей (scanning/idle/dispatch/preparing → running)
-    _RUNNING_DETAIL = {"scanning", "idle", "dispatch", "preparing"}
-    normalized_status = "running" if status in _RUNNING_DETAIL else status
-
-    payload = {
-        "worker_status": status,  # детальный (для отладки/granularity)
-        "status": normalized_status,  # нормализованный (running|paused) для читателей
-        "active_phase": active_phase,
-        "status_message": status_message,  # человекочитаемый текст фазы (UI/TG)
-        "next_scan_at": next_scan_at.isoformat() if next_scan_at else None,
-        "last_successful_scan_at": (
-            last_successful_scan_at.isoformat() if last_successful_scan_at else None
-        ),
-        "current_account_id": current_account_id,
-        "accounts_done": accounts_done,
-        "accounts_total": accounts_total,
-        # Режим адаптивного скана текущего цикла (CRITICAL/ELEVATED/CALM/IDLE) — для UI-индикатора.
-        "scan_mode": scan_mode,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    try:
-        await redis_client.set("observer:runtime", json.dumps(payload), ex=RUNTIME_TTL_SECONDS)
-    except Exception:
-        logger.exception("redis SET observer:runtime failed")
-
-
-async def _publish_scan_finished(
-    redis_client,
-    *,
-    scan_id: int,
-    outcome: str,
-    cycle_result: CycleResult | None,
-) -> None:
-    """PUBLISH fb_agent:scan:finished — trigger refetch на фронте."""
-    if redis_client is None:
-        return
-    event = {
-        "scan_id": scan_id,
-        "outcome": outcome,
-        "rows_total": cycle_result.rows_total if cycle_result else 0,
-        "alerts_warning": cycle_result.alerts_warning if cycle_result else 0,
-        "alerts_stop": cycle_result.alerts_stop if cycle_result else 0,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    try:
-        await redis_client.publish("fb_agent:scan:finished", json.dumps(event))
-    except Exception:
-        logger.exception("redis PUBLISH fb_agent:scan:finished failed")
-
-
-# ====================== Heartbeat ======================
-
-
-async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
-    """Периодически пишет worker:heartbeat:observer с TTL 60s.
-
-    Параллельный таск — не блокирует main-loop сканирования.
-    """
-    if redis_client is None:
-        return
-    interval = HEARTBEAT_TTL_SECONDS / 2
+    """Refresh process-local Prometheus liveness and snapshot age."""
+    interval = 15.0
     while not stop.is_set():
-        try:
-            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
-        except Exception:  # noqa: BLE001
-            logger.exception("observer heartbeat: ошибка записи в Redis")
+        mark_worker_heartbeat(WORKER_NAME)
+        snapshot_age = None if snapshot_age_provider is None else snapshot_age_provider()
+        SNAPSHOT_AGE.labels(source="observer_ads").set(
+            float("inf") if snapshot_age is None else max(0.0, snapshot_age)
+        )
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
@@ -358,27 +254,14 @@ async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
 # ====================== One cycle ======================
 
 
-# Перенесено в core.observer.accounts (single source — переиспользуется API-дашбордом
-# для scan_blocked_reason). Алиас сохраняет существующий импорт/тесты.
-_allowlist_blocks_scan = allowlist_blocks_scan
+_AUTHENTICATED_EMPTY_REASONS = frozenset({"no_active_ads", "filter_excludes_all"})
 
 
-async def _notify_synced_disabled(engine, redis_client, *, fb_ad_ids: list[str]) -> None:
-    """DM owner'у про тихий sync OFF→disabled (внешнее отключение ада). Best-effort."""
-    for fb_ad_id in fb_ad_ids:
-        text = (
-            f"ℹ️ <b>Объявление помечено disabled</b>\n"
-            f"fb_ad_id=<code>{fb_ad_id}</code> — в Meta уже OFF "
-            f"(внешнее отключение/наш pause не подтвердился)."
-        )
-        await notify_owners(
-            engine,
-            redis_client,
-            category="sync_disabled",
-            text=text,
-            dedup_key=f"sync_offline_disabled:{fb_ad_id}",
-            dedup_ttl_seconds=21600,
-        )
+def _scan_confirms_authenticated_session(scan_out: ScanCycleOutput) -> bool:
+    """Return true only for a live response that proves the profile is logged in."""
+    return scan_out.metrics_contract_revision == SCANNER_METRICS_CONTRACT_REVISION and (
+        bool(scan_out.rows) or (scan_out.empty_reason or "") in _AUTHENTICATED_EMPTY_REASONS
+    )
 
 
 async def _run_account_scan(
@@ -386,28 +269,17 @@ async def _run_account_scan(
     *,
     gate: ScannerGate,
     config: dict,
-    auto_recover_page: bool,
-    redis_client=None,
-    tg_client=None,
-    ad_account_id: str | None = None,
-    accounts_done: int | None = None,
+    ad_account_id: str,
     accounts_total: int | None = None,
+    cabinet_lease: CabinetLease | None = None,
 ) -> dict:
-    """Скан ОДНОГО кабинета (или legacy-скан текущей вкладки при ad_account_id=None).
+    """Скан одного явно выбранного кабинета.
 
     Свой scan_run, свой process_scan_rows, свой TG-dispatch. Не бросает исключения
     наверх — ошибки пишутся в scan_runs.outcome (цикл по кабинетам продолжается).
     """
     scan_id = await _begin_scan_run(engine, ad_account_id=ad_account_id)
     started_monotonic = time.monotonic()
-    await _publish_runtime_status(
-        redis_client,
-        status="scanning",
-        active_phase="scan",
-        current_account_id=ad_account_id,
-        accounts_done=accounts_done,
-        accounts_total=accounts_total,
-    )
 
     cycle_result: CycleResult | None = None
     outcome = "success"
@@ -416,9 +288,8 @@ async def _run_account_scan(
 
     # Allowlist кампаний (observer_config.campaign_ids) — ГЛОБАЛЬНЫЙ. campaign.id уникальны
     # per кабинет → при НЕСКОЛЬКИХ кабинетах в чужом фильтр отсёк бы ВСЁ (скан пуст →
-    # слепота, FSM не реагирует). Поэтому allowlist применяем, когда в scan set ОДИН кабинет
-    # (его кампании = allowlist, фильтр безопасен) ИЛИ legacy-режим (ad_account_id=None);
-    # при мульти-кабе (>1 кабинета) — игнор, скоупинг через owner_tag.
+    # слепота, FSM не реагирует). Поэтому allowlist применяем, когда в scan set один кабинет
+    # (его кампании = allowlist, фильтр безопасен); при мульти-кабе — скоупинг через owner_tag.
     single_cabinet = (accounts_total or 1) <= 1
     campaign_ids = list(config.get("campaign_ids") or []) if single_cabinet else []
 
@@ -426,113 +297,177 @@ async def _run_account_scan(
         # Opt-in мониторинг: при ОДНОМ кабинете пустой allowlist = НИЧЕГО не отслеживаем
         # (раньше пусто = «все мои кампании»). Скан не гоняем — отдаём пустой результат,
         # FSM не трогается, авто-стоп по этим объявлениям не работает (так и задумано).
-        if _allowlist_blocks_scan(single_cabinet, campaign_ids):
+        live_scan_performed = False
+        if allowlist_blocks_scan(single_cabinet, campaign_ids):
             scan_out = ScanCycleOutput(
-                rows=[], empty_reason="ничего не отслеживается (allowlist пуст)"
+                rows=[],
+                metrics_contract_revision=0,
+                empty_reason="ничего не отслеживается (allowlist пуст)",
             )
         else:
+            live_scan_performed = True
             scan_out = await gate.run_one_scan(
                 campaign_ids=campaign_ids,
                 owner_tag=config.get("owner_campaign_tag"),
-                auto_recover_page=auto_recover_page,
                 ad_account_id=ad_account_id,
             )
+
+        if live_scan_performed and _scan_confirms_authenticated_session(scan_out):
+            confirmed_account_id = require_ad_account_id(ad_account_id)
+            await resolve_recurring_incident(
+                engine,
+                incident_key=(f"{OBSERVER_LOGIN_REQUIRED_INCIDENT_PREFIX}{confirmed_account_id}"),
+                audience="all",
+                summary=(f"Кабинет {confirmed_account_id}: авторизованная сессия подтверждена."),
+            )
+
+        scan_issues = list(scan_out.warnings or [])
+        if (
+            live_scan_performed
+            and scan_out.metrics_contract_revision != SCANNER_METRICS_CONTRACT_REVISION
+        ):
+            scan_issues.append(f"metrics_contract_revision:{scan_out.metrics_contract_revision}")
+        # Revalidate producer output locally as a deployment-skew guard. A
+        # malformed identity/hierarchy skips the whole cabinet snapshot before
+        # any catalog, metric, FSM, incident or money-task write.
+        partial_row_ids = list(
+            dict.fromkeys(
+                [
+                    *(scan_out.partial_row_ids or []),
+                    *find_incomplete_scan_row_ids(scan_out.rows),
+                ]
+            )
+        )
+        scan_out.partial_row_ids = partial_row_ids
+        if partial_row_ids:
+            scan_issues.append(f"partial_rows:{len(partial_row_ids)}")
+        if scan_out.rows_with_all_metrics_empty:
+            scan_issues.append(f"all_metrics_empty:{scan_out.rows_with_all_metrics_empty}")
 
         if not scan_out.rows:
             # Разлогин/чекпоинт Vision-профиля (money-критично): browser-agent отдал
             # empty_reason='login_required'. Это НЕ «пустой кабинет» (нет активной рекламы) —
             # это слепота канала: скан ничего не видит, авто-стоп не работает. Классифицируем
             # как error (→ resolve_scan_mode=CALM, degraded-счётчик, а не тихий IDLE) и шлём
-            # deduped алерт «нужен ре-логин». Проверяем ДО обычной empty-ветки.
+            # recurring incident «нужен ре-логин». Проверяем ДО обычной empty-ветки.
             if (scan_out.empty_reason or "") == "login_required":
                 outcome = "error"
                 error_msg = "login_required"
-                await _maybe_alert_login_required(engine, redis_client, ad_account_id=ad_account_id)
-            else:
+                await _maybe_alert_login_required(engine, ad_account_id=ad_account_id)
+            elif scan_issues:
+                outcome = "partial"
+                error_msg = ";".join(scan_issues)[:8000]
+            elif (scan_out.empty_reason or "") in {
+                "no_active_ads",
+                "filter_excludes_all",
+                "ничего не отслеживается (allowlist пуст)",
+            }:
                 outcome = "empty"
                 error_msg = scan_out.empty_reason or "no rows"
+            else:
+                # An unexplained empty response is not a confirmed zero. It can
+                # be a lost final gRPC message or incomplete Meta response.
+                outcome = "partial"
+                error_msg = scan_out.empty_reason or "unclassified_empty_scan"
+        elif scan_issues:
+            # Incomplete rows must never drive FSM or money decisions. A later
+            # complete scan will persist the snapshot and resume evaluation.
+            outcome = "partial"
+            error_msg = ";".join(scan_issues)[:8000]
         else:
-            await _publish_runtime_status(
-                redis_client,
-                status="scanning",
-                active_phase="parse",
-                current_account_id=ad_account_id,
-                accounts_done=accounts_done,
-                accounts_total=accounts_total,
-            )
-            # Grace-маркеры «держать до цены лида» (кейс куратора) — один SCAN
-            # на цикл; ошибка Redis → пустая карта (fail-safe к обычным правилам).
-            grace_map = await load_enable_grace_map(redis_client)
-            cycle_ts = datetime.now(timezone.utc)
-            account_offset = await load_offset(
-                redis_client,
-                ad_account_id or "",
-                default=DEFAULT_OFFSET_HOURS,
-            )
+            if cabinet_lease is not None and not await assert_cabinet_lease(
+                engine,
+                cabinet_lease,
+            ):
+                raise RuntimeError("cabinet_lease_lost_before_scan_commit")
             cycle_result = await process_scan_rows(
                 engine,
                 rows=scan_out.rows,
                 scan_id=scan_id,
-                cycle_ts=cycle_ts,
                 owner_tag=config.get("owner_campaign_tag"),
                 ad_account_id=ad_account_id,
-                enable_grace_map=grace_map,
-                tracker_day_start=cabinet_day_start_utc(account_offset, cycle_ts),
+                **({"cabinet_lease": cabinet_lease} if cabinet_lease is not None else {}),
             )
-
-            # Нотификация owner'а при тихом sync OFF→disabled
-            if cycle_result.synced_offline_disabled:
-                try:
-                    await _notify_synced_disabled(
-                        engine, redis_client, fb_ad_ids=cycle_result.synced_offline_disabled
-                    )
-                except Exception:
-                    logger.exception("sync_disabled notify failed — продолжаю")
-
-            # Доставка алертов в TG — если был хоть один emit
-            if (
-                tg_client is not None
-                and cycle_result
-                and (cycle_result.alerts_warning + cycle_result.alerts_stop > 0)
-            ):
-                from core.telegram.alert_dispatcher import dispatch_pending_alerts
-
-                await _publish_runtime_status(
-                    redis_client,
-                    status="scanning",
-                    active_phase="dispatch",
-                    current_account_id=ad_account_id,
-                    accounts_done=accounts_done,
-                    accounts_total=accounts_total,
+            await resolve_recurring_incident(
+                engine,
+                incident_key=(f"{OBSERVER_TIMEZONE_UNKNOWN_INCIDENT_PREFIX}{ad_account_id}"),
+                audience="all",
+                summary=f"Кабинет {ad_account_id}: IANA timezone подтверждена.",
+            )
+            await resolve_recurring_incident(
+                engine,
+                incident_key=(f"{OBSERVER_CURRENCY_UNKNOWN_INCIDENT_PREFIX}{ad_account_id}"),
+                audience="all",
+                summary=f"Кабинет {ad_account_id}: валюта Meta подтверждена.",
+            )
+            if cycle_result.currency_mismatch_offers:
+                mismatches = ", ".join(cycle_result.currency_mismatch_offers[:3])
+                await notify_recurring_incident(
+                    engine,
+                    incident_key=(f"{OBSERVER_OFFER_CURRENCY_INCIDENT_PREFIX}{ad_account_id}"),
+                    audience="all",
+                    event_type="observer_offer_currency_mismatch",
+                    severity="critical",
+                    title="Автостоп остановлен: валюта правила не совпадает",
+                    summary=f"Кабинет {ad_account_id} · {mismatches}",
+                    risk="CPA и spend имеют разные денежные единицы",
+                    lines=["Исправь валюту CPA-правила; FX-конвертация не выполняется"],
+                    resource_type="ad_account",
+                    resource_id=ad_account_id,
                 )
-                try:
-                    dispatched = await dispatch_pending_alerts(
-                        engine,
-                        client=tg_client,
-                        scan_id=scan_id,
-                        redis_client=redis_client,
-                    )
-                except Exception:
-                    logger.exception("alert dispatch failed — продолжаю")
-                    dispatched = {"sent": 0, "errors": 1}
+            else:
+                await resolve_recurring_incident(
+                    engine,
+                    incident_key=(f"{OBSERVER_OFFER_CURRENCY_INCIDENT_PREFIX}{ad_account_id}"),
+                    audience="all",
+                    summary=(f"Кабинет {ad_account_id}: валюты Meta и CPA-правил совпадают."),
+                )
 
-            # Retry-sweep осиротевших алертов (TG-outage мог удалить pre-claim
-            # без отправки; FSM уже в stop_sent → emit_alert=False → без sweep навсегда потерян).
-            # Запускаем каждый цикл независимо от наличия новых алертов.
-            if tg_client is not None:
-                from core.telegram.alert_dispatcher import sweep_orphan_alerts
+            if cycle_result.row_errors:
+                outcome = "partial"
+                error_msg = f"row_processing_errors:{len(cycle_result.row_errors)}"
 
-                try:
-                    swept = await sweep_orphan_alerts(
-                        engine, client=tg_client, redis_client=redis_client
-                    )
-                    if swept.get("sent"):
-                        logger.info(
-                            "sweep_orphan_alerts: досланы %d осиротевших алертов",
-                            swept["sent"],
-                        )
-                except Exception:
-                    logger.exception("sweep_orphan_alerts failed — продолжаю")
+            # Alert events and recipient deliveries are committed by
+            # core.observer.writers in the same transaction as the FSM change.
+            # The observer never performs Telegram network I/O.
+            if cycle_result.alerts_warning + cycle_result.alerts_stop > 0:
+                dispatched = {
+                    "outbox_events": cycle_result.alerts_warning + cycle_result.alerts_stop
+                }
+    except CabinetTimezoneUnknownError as exc:
+        logger.critical("observer cabinet timezone is unknown: %s", exc)
+        outcome = "error"
+        error_msg = "cabinet_timezone_unknown"
+        await notify_recurring_incident(
+            engine,
+            incident_key=f"{OBSERVER_TIMEZONE_UNKNOWN_INCIDENT_PREFIX}{ad_account_id}",
+            audience="all",
+            event_type="observer_cabinet_timezone_unknown",
+            severity="critical",
+            title="Автостоп остановлен: timezone неизвестна",
+            summary=f"Кабинет {ad_account_id} · нет валидной IANA timezone",
+            risk="Граница денежных суток не подтверждена",
+            lines=["Обнови Meta account snapshot перед возобновлением решений"],
+            resource_type="ad_account",
+            resource_id=ad_account_id,
+        )
+    except CabinetCurrencyUnknownError as exc:
+        logger.critical("observer cabinet currency is unknown: %s", exc)
+        outcome = "error"
+        error_msg = "cabinet_currency_unknown"
+        await notify_recurring_incident(
+            engine,
+            incident_key=f"{OBSERVER_CURRENCY_UNKNOWN_INCIDENT_PREFIX}{ad_account_id}",
+            audience="all",
+            event_type="observer_cabinet_currency_unknown",
+            severity="critical",
+            title="Автостоп остановлен: валюта неизвестна",
+            summary=f"Кабинет {ad_account_id} · Meta currency не подтверждена",
+            risk="Денежные пороги нельзя сравнивать без единицы",
+            lines=["Обнови Meta account snapshot перед возобновлением решений"],
+            resource_type="ad_account",
+            resource_id=ad_account_id,
+        )
     except Exception as exc:
         logger.exception("scan cycle crashed (кабинет=%s): %s", ad_account_id or "-", exc)
         outcome = "error"
@@ -546,10 +481,6 @@ async def _run_account_scan(
         cycle_result=cycle_result,
         error_message=error_msg,
         duration_ms=duration_ms,
-    )
-
-    await _publish_scan_finished(
-        redis_client, scan_id=scan_id, outcome=outcome, cycle_result=cycle_result
     )
 
     return {
@@ -575,29 +506,33 @@ ACCOUNT_SCAN_PAUSE_SECONDS = 3.0
 def _aggregate_cycle_summary(per_account: list[dict]) -> dict:
     """Свод цикла из per-account summary (для логов и адаптивного интервала).
 
-    Семантика outcome (важно для Layer 3 degraded-трекинга и resolve_scan_mode):
-      - "error"   — ТОЛЬКО если упали ВСЕ кабинеты (полный провал цикла);
-      - "success" — хотя бы один кабинет отсканирован успешно;
-      - "empty"   — остальное (все empty или смесь empty+error).
+    Семантика outcome сохраняет полноту, а не скрывает частичные провалы:
+      - "error"   — все кабинеты failed/timeout/skipped;
+      - "partial" — хотя бы один кабинет не дал полный snapshot;
+      - "success" — все завершились, хотя бы один вернул строки;
+      - "empty"   — все кабинеты подтвердили отсутствие строк.
     Счётчики суммируются → worst-case агрегация для адаптивного интервала:
     stop-хит в любом кабинете даёт CRITICAL всему циклу.
     """
     outcomes = [s["outcome"] for s in per_account]
-    if all(o == "error" for o in outcomes):
+    hard_failure = {"error", "timeout", "skipped"}
+    degraded = hard_failure | {"partial"}
+    if outcomes and all(o in hard_failure for o in outcomes):
         outcome = "error"
+    elif any(o in degraded for o in outcomes):
+        outcome = "partial"
     elif any(o == "success" for o in outcomes):
         outcome = "success"
-    else:
+    elif outcomes and all(o == "empty" for o in outcomes):
         outcome = "empty"
-    # error — только от реально упавших кабинетов: empty_reason ("no_active_ads")
-    # НЕ ошибка и не должен светиться в summary success-цикла.
+    else:
+        outcome = "partial"
     first_error = next(
-        (s["error"] for s in per_account if s["outcome"] == "error" and s.get("error")), None
+        (s["error"] for s in per_account if s["outcome"] in degraded and s.get("error")),
+        None,
     )
     return {
         "outcome": outcome,
-        # Для совместимости с потребителями старого summary — последний scan_id.
-        "scan_id": per_account[-1]["scan_id"] if per_account else None,
         "duration_ms": sum(s.get("duration_ms", 0) for s in per_account),
         "rows_total": sum(s.get("rows_total", 0) for s in per_account),
         "rows_with_offer": sum(s.get("rows_with_offer", 0) for s in per_account),
@@ -610,7 +545,12 @@ def _aggregate_cycle_summary(per_account: list[dict]) -> dict:
         ),
         "error": first_error,
         "accounts": [
-            {"ad_account_id": s.get("ad_account_id"), "outcome": s["outcome"]} for s in per_account
+            {
+                "ad_account_id": s.get("ad_account_id"),
+                "scan_id": s.get("scan_id"),
+                "outcome": s["outcome"],
+            }
+            for s in per_account
         ],
     }
 
@@ -627,60 +567,17 @@ def _reset_prepared_accounts() -> None:
     _prepared_accounts = None
 
 
-# TTL дедупа TG-уведомлений фазы подготовки (по набору кабинетов): при устойчивом
-# сбое Vision не спамить «Подготавливаю…» каждые ~90с — повтор не чаще этого окна.
-PREPARE_TG_DEDUP_TTL_SECONDS = 3600
-
-
-async def _notify_tg_simple(engine: AsyncEngine, tg_client, text: str) -> None:
-    """Best-effort простое TG-уведомление (без дедупа). Не бросает."""
-    if tg_client is None:
-        return
-    try:
-        from core.telegram.service import load_telegram_config
-
-        cfg = await load_telegram_config(engine)
-        if cfg is None or cfg.chat_id is None:
-            return
-        await tg_client.send_message(chat_id=str(cfg.chat_id), text=text, parse_mode="HTML")
-    except Exception:
-        logger.exception("observer: не удалось отправить TG-уведомление подготовки")
-
-
-async def _prepare_tg_allowed(redis_client, accounts: frozenset[str]) -> bool:
-    """Дедуп TG-уведомлений подготовки по набору кабинетов (Redis SET NX EX).
-
-    True → этот набор ещё не уведомляли в текущем окне (слать можно). False → уже слали
-    (молчим, чтобы не спамить при повторных попытках того же набора). Redis недоступен →
-    True (лучше уведомить, чем потерять).
-    """
-    if redis_client is None:
-        return True
-    import hashlib
-
-    digest = hashlib.sha1(":".join(sorted(accounts)).encode()).hexdigest()[:16]
-    key = f"observer:prepare:tg:{digest}"
-    try:
-        ok = await redis_client.set(key, "1", ex=PREPARE_TG_DEDUP_TTL_SECONDS, nx=True)
-        return bool(ok)
-    except Exception:
-        logger.exception("observer: ошибка дедупа TG-уведомления подготовки")
-        return True
-
-
 async def _prepare_workspace(
     engine: AsyncEngine,
     *,
     gate: ScannerGate,
     accounts: list[str],
-    redis_client=None,
-    tg_client=None,
 ) -> None:
     """Фаза «подготовка рабочего места»: открыть вкладки кабинетов активных офферов
     перед сканом (manage/campaigns + колонки пользователя).
 
     Выполняется при первом цикле после старта и при изменении набора кабинетов
-    (активирован новый оффер). Статус preparing → веб-панель + TG. Не блокирует скан:
+    (активирован новый оффер). Не блокирует скан:
     при сбое open_cabinet_tabs скан сам переоткроет вкладки по ходу (ensureAdsManagerPage).
     """
     global _prepared_accounts
@@ -691,24 +588,17 @@ async def _prepare_workspace(
     n = len(accounts)
     msg = f"Подготавливаю рабочее место: открываю кабинеты ({n})…"
     logger.info("observer: %s [%s]", msg, ", ".join(accounts))
-    # Статус в runtime пишем всегда (дёшево, не спамит — это перезапись одного ключа).
-    await _publish_runtime_status(
-        redis_client,
-        status="preparing",
-        active_phase="preparing",
-        status_message=msg,
-        accounts_total=n,
-    )
-
-    # TG: дедуп по набору, чтобы при устойчивом сбое Vision не слать «Подготавливаю…»
-    # каждый цикл (~90с). Стартовое и сообщение о ПОЛНОМ провале — под дедупом; итог
-    # успеха шлём всегда (он происходит ровно один раз: дальше набор помечен prepared).
-    notify_allowed = await _prepare_tg_allowed(redis_client, current)
-    if notify_allowed:
-        await _notify_tg_simple(engine, tg_client, f"🛠 {msg}")
 
     try:
-        results = await gate.open_cabinet_tabs(accounts)
+        from core.deadlines import bind_absolute_deadline
+
+        prepare_deadline_seconds = max(60, 20 * len(accounts))
+        prepare_deadline_at = datetime.now(timezone.utc) + timedelta(
+            seconds=prepare_deadline_seconds
+        )
+        with bind_absolute_deadline(prepare_deadline_at):
+            async with asyncio.timeout(prepare_deadline_seconds):
+                results = await gate.open_cabinet_tabs(accounts)
     except Exception:
         logger.exception("observer: фаза подготовки — open_cabinet_tabs упал")
         return  # не блокируем скан
@@ -721,125 +611,84 @@ async def _prepare_workspace(
             ", ".join(f"{r.get('ad_account_id')}({r.get('error', '')})" for r in failed),
         )
     logger.info("observer: подготовка завершена — открыто %d/%d кабинетов", len(opened), n)
-    done_msg = f"✅ Кабинеты открыты ({len(opened)}/{n}), начинаю сканирование."
-    if failed:
-        done_msg += " Не открылись: " + ", ".join(str(r.get("ad_account_id")) for r in failed) + "."
-
     if opened:
-        # Успех (хотя бы частичный) — итог шлём ВСЕГДА (один раз: набор станет prepared).
-        await _notify_tg_simple(engine, tg_client, done_msg)
         _prepared_accounts = current
-    elif notify_allowed:
-        # Полный провал — сообщаем только в окне дедупа (иначе на следующем цикле попробуем
-        # снова, но без TG-спама).
-        await _notify_tg_simple(engine, tg_client, done_msg)
 
 
 async def _maybe_alert_multi_cab_no_owner(
     engine: AsyncEngine,
-    redis_client,
-    tg_client,
     *,
     account_count: int,
-) -> None:
-    """Deduped ops-алерт R4: мульти-каб без owner_tag → скан остановлен ради безопасности.
-
-    Дедуп через Redis SET NX EX (как degraded-алерт): повтор не чаще TTL, чтобы не
-    спамить каждый цикл, пока конфиг не исправят. Redis недоступен → алерт всё равно
-    шлём (лучше шумнее, чем пропустить money-критичный сигнал).
-    """
-    allowed = True
-    if redis_client is not None:
-        try:
-            ok = await redis_client.set(
-                MULTI_CAB_NO_OWNER_ALERT_DEDUP_KEY,
-                "1",
-                ex=MULTI_CAB_NO_OWNER_ALERT_TTL_SECONDS,
-                nx=True,
-            )
-            allowed = bool(ok)
-        except Exception:
-            logger.exception("observer: ошибка SET дедупа multi_cab_no_owner")
-            allowed = True
-    if not allowed:
-        return
-    msg = (
-        f"🚨 {fmt.b('Скан остановлен ради безопасности')}\n"
-        f"Подключено кабинетов: {account_count}, но owner_campaign_tag не задан.\n"
-        "В мульти-кабинете без тега бот оценивал бы стоп-правила и мог авто-стопнуть "
-        "ЧУЖУЮ рекламу в общем кабинете.\n"
-        "Задай owner_campaign_tag в настройках observer, чтобы скан возобновился."
-    )
+) -> bool:
+    """Persist the fail-closed multi-cabinet recurring incident."""
     logger.critical(
         "observer: мульти-каб (%d кабинетов) без owner_tag — скан остановлен ради безопасности",
         account_count,
     )
-    await _notify_tg_simple(engine, tg_client, msg)
+    return await notify_recurring_incident(
+        engine,
+        incident_key=OBSERVER_MULTI_CAB_UNSAFE_INCIDENT_KEY,
+        audience="all",
+        event_type="observer_multi_cabinet_unsafe",
+        severity="critical",
+        title="Скан остановлен ради безопасности",
+        summary=f"Кабинетов: {account_count} · owner_campaign_tag не задан",
+        risk="Авто-стоп мог бы затронуть чужую рекламу",
+        lines=["Задай owner_campaign_tag в настройках Observer"],
+        resource_type="observer",
+        resource_id="multi_cabinet_scope",
+    )
 
 
 async def run_one_cycle(
     engine: AsyncEngine,
     *,
     gate: ScannerGate,
-    redis_client=None,
-    tg_client=None,
 ) -> dict:
     """Один полный цикл observer'а. Возвращает summary для логов/тестов.
 
-    Мульти-кабинет (MULTI_CABINET_PLAN.md §M3): scan set = union offers.ad_account_ids
-    активных офферов; кабинеты обходятся ПОСЛЕДОВАТЕЛЬНО, каждый со своим scan_run.
-    Ошибка одного кабинета НЕ прерывает остальные. Пустой scan set → legacy-скан
-    текущей вкладки (поведение до мульти-кабинетности).
+    Scan set = union offers.ad_account_ids активных офферов. Каждый кабинет
+    получает собственный actor/lease и scan_run; ошибка одного кабинета не
+    прерывает остальные. Пустой scan set останавливается fail-closed: текущая
+    вкладка браузера никогда не используется как неявный кабинет.
 
     Не бросает исключения наверх — все ошибки логирует и записывает в scan_runs.outcome.
 
-    Если tg_client передан — после process_scan_rows зовём dispatch_pending_alerts(scan_id):
-    события записанные в этом scan'е улетают в TG чат с inline-кнопками.
     """
     config = await load_observer_config(engine)
     if config is None or not config["is_scanning_enabled"]:
-        await _publish_runtime_status(redis_client, status="paused")
-        return {"outcome": "paused", "scan_id": None}
+        return {"outcome": "paused", "accounts": []}
 
-    # Self-heal Layer 2 gate: разрешать ли клиенту эскалировать reconnect при пропаже вкладки.
-    auto_recover_page = await load_vision_auto_restart_flag(engine)
-
-    # Scan set кабинетов из активных офферов. Пустой → legacy одно-кабинетный скан.
+    # Кабинет обязан быть выбран явно. Неявная текущая вкладка не имеет
+    # identity/fencing и может направить money-решение не в тот аккаунт.
     accounts = await resolve_scan_account_ids(engine)
     if not accounts:
-        summary = await _run_account_scan(
-            engine,
-            gate=gate,
-            config=config,
-            auto_recover_page=auto_recover_page,
-            redis_client=redis_client,
-            tg_client=tg_client,
-            ad_account_id=None,
+        orphan_offers = await list_offers_without_accounts(engine)
+        logger.warning(
+            "observer: скан пропущен — нет явно настроенных кабинетов%s",
+            f"; офферы без кабинета: {', '.join(orphan_offers)}" if orphan_offers else "",
         )
-        await _publish_runtime_status(
-            redis_client,
-            status="idle",
-            last_successful_scan_at=(
-                datetime.now(timezone.utc) if summary["outcome"] == "success" else None
-            ),
-        )
-        return summary
+        return {
+            "outcome": "skipped",
+            "accounts": [],
+            "reason": "no_configured_cabinets",
+            "orphan_offers": orphan_offers,
+        }
 
     # Money-гард R4: мульти-каб (>1 кабинета) без owner_tag → скоупинг чужих кампаний
     # отсутствует (allowlist в мульти-кабе игнорируется, campaign_matches_owner→True для
     # ВСЕХ). Без тега бот авто-стопнул бы чужую рекламу в shared-кабинете (необратимо).
     # Зеркалит single-cab guard (allowlist_blocks_scan): скан этого набора кабинетов НЕ
-    # запускаем, шлём deduped ops-алерт. Возобновится, как только owner_tag будет задан.
+    # запускаем, открываем recurring incident. Возобновится после безопасного owner_tag.
     if multi_cabinet_requires_owner_tag(len(accounts), config.get("owner_campaign_tag")):
-        await _maybe_alert_multi_cab_no_owner(
-            engine, redis_client, tg_client, account_count=len(accounts)
-        )
-        await _publish_runtime_status(
-            redis_client,
-            status="idle",
-            status_message="Скан остановлен: мульти-каб без owner_tag (безопасность)",
-        )
-        return {"outcome": "skipped", "scan_id": None, "reason": "multi_cab_no_owner_tag"}
+        await _maybe_alert_multi_cab_no_owner(engine, account_count=len(accounts))
+        return {"outcome": "skipped", "accounts": [], "reason": "multi_cab_no_owner_tag"}
+    await resolve_recurring_incident(
+        engine,
+        incident_key=OBSERVER_MULTI_CAB_UNSAFE_INCIDENT_KEY,
+        audience="all",
+        summary="Owner scope кабинетов снова задан безопасно.",
+    )
 
     # Warning о выпавших из скана офферах (активны, но без кабинетов) — раз в цикл в лог.
     orphan_offers = await list_offers_without_accounts(engine)
@@ -864,260 +713,255 @@ async def run_one_cycle(
         engine,
         gate=gate,
         accounts=accounts,
-        redis_client=redis_client,
-        tg_client=tg_client,
     )
 
-    per_account: list[dict] = []
-    for idx, account_id in enumerate(accounts):
-        if idx > 0:
-            # Короткая пауза между кабинетами — «человеческий» темп переключения вкладок.
-            await asyncio.sleep(ACCOUNT_SCAN_PAUSE_SECONDS)
-        summary = await _run_account_scan(
+    supervisor = CabinetSupervisor(
+        engine,
+        owner_instance=_OBSERVER_INSTANCE_ID,
+        concurrency=_CABINET_SCAN_CONCURRENCY,
+        scan_deadline_seconds=_CABINET_SCAN_DEADLINE_SECONDS,
+    )
+
+    async def _run_cabinet(account_id: str, _index: int, lease: CabinetLease) -> dict:
+        return await _run_account_scan(
             engine,
             gate=gate,
             config=config,
-            auto_recover_page=auto_recover_page,
-            redis_client=redis_client,
-            tg_client=tg_client,
             ad_account_id=account_id,
-            accounts_done=idx,
             accounts_total=len(accounts),
+            cabinet_lease=lease,
         )
-        per_account.append(summary)
 
-    aggregated = _aggregate_cycle_summary(per_account)
-    await _publish_runtime_status(
-        redis_client,
-        status="idle",
-        last_successful_scan_at=(
-            datetime.now(timezone.utc) if aggregated["outcome"] == "success" else None
-        ),
-    )
-    return aggregated
+    # Each cabinet is an isolated actor.  The TaskGroup cancels and drains all
+    # children on shutdown; the semaphore keeps the canary at one browser
+    # operation until OBSERVER_CABINET_CONCURRENCY is explicitly raised to two.
+    per_account = await supervisor.run_cycle(accounts, _run_cabinet)
+
+    return _aggregate_cycle_summary(per_account)
 
 
-# ====================== Shared state для pubsub-сигналов ======================
+# ====================== Process-local runtime state ======================
 
 
 @dataclass
 class _ObserverState:
-    """Разделяемое состояние между main_loop и pubsub-handler'ами."""
+    """In-process diagnostics; never a command or deduplication authority."""
 
-    force_scan_pending: bool = False  # выставляется триггером fb_agent:observer:trigger
-    should_stop: bool = False  # выставляется сигналом restart
     consecutive_scan_failures: int = 0  # подряд error-циклов (Layer 3 degraded-алерт)
-
-
-async def _shadow_burst_context(redis_client) -> dict | None:
-    """Прочитать активный billing-burst; битый/отсутствующий ключ означает обычный режим."""
-    if redis_client is None:
-        return None
-    try:
-        raw = await redis_client.get(SHADOW_BURST_KEY)
-        if not raw:
-            return None
-        payload = json.loads(raw)
-        return payload if isinstance(payload, dict) else {"reason": "shadow_spend"}
-    except (json.JSONDecodeError, TypeError):
-        return {"reason": "shadow_spend"}
-    except Exception:
-        logger.warning("observer: не удалось прочитать billing-burst", exc_info=True)
-        return None
+    last_complete_snapshot_at: datetime | None = None
 
 
 async def _maybe_alert_login_required(
     engine: AsyncEngine,
-    redis_client,
     *,
-    ad_account_id: str | None = None,
+    ad_account_id: str,
 ) -> bool:
-    """Deduped алерт «Vision-профиль разлогинен» (MID X-16). Возвращает True, если отправлен.
+    """Persist a login-required incident; PostgreSQL is the suppression authority."""
+    account_id = require_ad_account_id(ad_account_id)
+    logger.error("ALERT (observer login_required): кабинет=%s", account_id)
 
-    Доставка через notify_recipients (тот же путь, что degraded/health_watchdog). Дедуп
-    через Redis SET NX EX; при недоставке дедуп снимается — следующий разлогин-цикл
-    попробует доставить снова (алерт не теряется на TTL). Redis недоступен → всё равно
-    шлём (money-критичный сигнал важнее анти-спама).
-    """
-    allowed = True
-    if redis_client is not None:
-        try:
-            ok = await redis_client.set(
-                LOGIN_REQUIRED_ALERT_DEDUP_KEY,
-                "1",
-                ex=LOGIN_REQUIRED_ALERT_TTL_SECONDS,
-                nx=True,
-            )
-            allowed = bool(ok)
-        except Exception:
-            logger.exception("observer login_required-alert: ошибка SET дедуп-ключа")
-            allowed = True
-    if not allowed:
-        return False
-
-    cabinet_line = f"Кабинет: {fmt.code(str(ad_account_id))}\n" if ad_account_id else ""
-    text_msg = (
-        f"🔒 {fmt.b('Vision-профиль разлогинен')}\n"
-        f"Скан вернулся на страницу входа/чекпоинт Facebook — сессия протухла.\n"
-        f"{cabinet_line}"
-        "Скан слеп, авто-стоп не работает. Зайди в Vision-профиль и залогинься "
-        "заново (re-login Facebook), затем проверь вкладку Ads Manager на :3030."
-    )
-    logger.error("ALERT (observer login_required): кабинет=%s", ad_account_id or "-")
-
-    sent = await notify_recipients(
+    sent = await notify_recurring_incident(
         engine,
-        redis_client,
-        category="observer:login_required",
-        text=text_msg,
+        incident_key=f"{OBSERVER_LOGIN_REQUIRED_INCIDENT_PREFIX}{account_id}",
+        audience="all",
+        event_type="observer_login_required",
+        severity="critical",
+        title="Vision-профиль разлогинен",
+        summary=f"Кабинет: {account_id}",
+        risk="Скан и авто-стоп не работают",
+        lines=["Войди в Facebook в Vision-профиле и проверь Ads Manager"],
+        resource_type="ad_account",
+        resource_id=account_id,
     )
     if not sent:
-        logger.warning(
-            "observer login_required-алерт НЕ доставлен (нет получателей/токена или сбой TG) — "
-            "дедуп снят, ретрай на следующем цикле"
-        )
-        if redis_client is not None:
-            try:
-                await redis_client.delete(LOGIN_REQUIRED_ALERT_DEDUP_KEY)
-            except Exception:
-                logger.exception(
-                    "observer login_required-alert: ошибка DEL дедуп-ключа после недоставки"
-                )
+        logger.warning("observer login_required event не принят durable outbox")
     return bool(sent)
 
 
 async def _maybe_alert_degraded(
     engine: AsyncEngine,
-    redis_client,
     *,
     consecutive_failures: int,
     last_error: str | None,
 ) -> bool:
-    """Layer 3: deduped TG-алерт о «тихой» деградации observer'а.
-
-    Срабатывает, когда сканы стабильно падают и self-heal (Layer 1/2) не восстановил
-    primary-вкладку. Доставка через notify_recipients (telegram_recipients) — тот же
-    путь, что у health_watchdog. Легаси telegram_config.chat_id убран (инцидент 01.07:
-    chat_id NULL в проде → алерт молча терялся при сработавшем детекте).
-    Дедуп через Redis SET NX EX; при недоставке дедуп снимается — следующий
-    падающий цикл попробует доставить снова (алерт не теряется на TTL).
-    Возвращает True, если алерт реально отправлен в TG.
-    """
-    if redis_client is None:
-        return False
-    # Дедуп ставим ПЕРВЫМ — чтобы не дёргать БД/TG на каждом падающем цикле (~90с).
-    try:
-        ok = await redis_client.set(
-            DEGRADED_ALERT_DEDUP_KEY, "1", ex=DEGRADED_ALERT_TTL_SECONDS, nx=True
-        )
-    except Exception:
-        logger.exception("observer degraded-alert: ошибка SET дедуп-ключа")
-        return False
-    if not ok:
-        return False
-
-    text_msg = (
-        f"🚨 {fmt.b('Observer — деградация')}\n"
-        f"{consecutive_failures} циклов подряд не удалось отсканировать кабинет, "
-        "самовосстановление не помогло.\n"
-        "Проверь Vision-профиль/браузер (вкладку Ads Manager на :3030).\n"
-        f"Последняя ошибка: {fmt.code(str(last_error or 'н/д'))}"
+    """Persist a degraded-scan incident; PostgreSQL collapses repeated ticks."""
+    logger.error(
+        "ALERT (observer degraded): failures=%s error=%r",
+        consecutive_failures,
+        last_error,
     )
-    logger.error("ALERT (observer degraded): %s", text_msg)
 
-    sent = await notify_recipients(
+    sent = await notify_recurring_incident(
         engine,
-        redis_client,
-        category="observer:degraded",
-        text=text_msg,
+        incident_key=OBSERVER_DEGRADED_INCIDENT_KEY,
+        audience="all",
+        event_type="observer_degraded",
+        severity="critical",
+        title="Observer не может отсканировать кабинет",
+        summary=f"Сбоев подряд: {consecutive_failures}",
+        risk="Данные и авто-стоп недостоверны",
+        lines=["Проверь Vision-профиль, browser-agent и вкладку Ads Manager"],
+        resource_type="worker",
+        resource_id="observer",
     )
     if not sent:
-        logger.warning(
-            "observer degraded-алерт НЕ доставлен (нет получателей/токена или сбой TG) — "
-            "проверь telegram_recipients; дедуп снят, ретрай на следующем цикле"
-        )
-        try:
-            await redis_client.delete(DEGRADED_ALERT_DEDUP_KEY)
-        except Exception:
-            logger.exception("observer degraded-alert: ошибка DEL дедуп-ключа после недоставки")
+        logger.warning("observer degraded event не принят durable outbox")
     return bool(sent)
 
 
-async def _clear_degraded_dedup(redis_client) -> None:
-    """Сбрасывает дедуп degraded-алерта при восстановлении — следующая деградация алертит сразу."""
-    if redis_client is None:
-        return
-    try:
-        await redis_client.delete(DEGRADED_ALERT_DEDUP_KEY)
-    except Exception:
-        logger.exception("observer degraded-alert: ошибка DEL дедуп-ключа")
-
-
-async def _wait_interruptible(*events: asyncio.Event, seconds: float) -> None:
-    """Спит до ``seconds``, но просыпается раньше, если любой из ``events`` выставлен.
-
-    Нужен, чтобы scan-now (trigger) реально прерывал sleep между циклами, а не ждал
-    полного интервала. Не бросает по таймауту; корректно отменяет и дренирует waiter'ы.
-    """
-    waiters = [asyncio.ensure_future(e.wait()) for e in events]
-    try:
-        await asyncio.wait(waiters, timeout=seconds, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        for w in waiters:
-            w.cancel()
-        for w in waiters:
-            try:
-                await w
-            except (asyncio.CancelledError, Exception):
-                pass
-
-
-async def _sleep_with_runtime_refresh(
-    redis_client,
-    *events: asyncio.Event,
-    seconds: float,
-    status: str = "idle",
-    next_scan_at: datetime | None = None,
-    scan_mode: str | None = None,
-    status_message: str | None = None,
-    last_successful_scan_at: datetime | None = None,
+async def _track_degraded_incident(
+    engine: AsyncEngine,
+    *,
+    state: _ObserverState,
+    summary: dict,
 ) -> None:
-    """Спит до ``seconds`` (прерываясь на любой из ``events``), освежая observer:runtime.
+    """Advance degraded lifecycle without ever treating partial/unknown as healthy."""
+    outcome = str(summary.get("outcome") or "")
+    if outcome in {"error", "partial"}:
+        state.consecutive_scan_failures += 1
+        if state.consecutive_scan_failures >= DEGRADED_ALERT_THRESHOLD:
+            await _maybe_alert_degraded(
+                engine,
+                consecutive_failures=state.consecutive_scan_failures,
+                last_error=summary.get("error"),
+            )
+        return
+    if outcome not in {"success", "empty"}:
+        return
 
-    Сразу при входе публикует целевое состояние сна (next_scan_at + scan_mode), чтобы фронт
-    получил реальный адаптивный отсчёт и режим немедленно: на интервалах короче
-    RUNTIME_REFRESH_SECONDS публикации в цикле могло не быть вовсе (CALM 30с < 120с), и эти
-    поля не доезжали — UI сидел на mock-отсчёте «всегда база».
+    # Resolve on every confirmed complete/known-empty cycle so a persisted
+    # incident is also closed after process restart (local counter starts at 0).
+    await resolve_recurring_incident(
+        engine,
+        incident_key=OBSERVER_DEGRADED_INCIDENT_KEY,
+        audience="all",
+        summary="Полный scan Observer снова подтверждён.",
+    )
+    state.consecutive_scan_failures = 0
 
-    Длинный sleep бьётся на чанки ≤ RUNTIME_REFRESH_SECONDS; после каждого чанка, если
-    ни один event не выставлен и сон не закончился, переписываем observer:runtime со
-    свежим updated_at. Так health_watchdog не считает observer «протухшим» (TTL/stale)
-    даже на длинных интервалах. Прерываемость scan-now/shutdown сохраняется.
 
-    ``status`` сохраняет фактическое состояние между сканами ("paused" на паузе, иначе
-    "idle"), чтобы освежение не затирало paused-статус ложным running.
+async def _wait_for_durable_scan(
+    engine: AsyncEngine,
+    shutdown_event: asyncio.Event,
+    *,
+    worker_id: uuid.UUID,
+    seconds: float,
+) -> Task | None:
+    """Poll PostgreSQL for durable work during the adaptive idle interval.
+
+    A claim is made only when the observer is ready to execute it, so its lease
+    is not consumed behind an already-running browser scan.  Missing wake-ups
+    cannot lose work: every poll reconciles against ``task_queue``.
     """
 
-    async def _refresh() -> None:
-        await _publish_runtime_status(
-            redis_client,
-            status=status,
-            status_message=status_message,
-            next_scan_at=next_scan_at,
-            scan_mode=scan_mode,
-            last_successful_scan_at=last_successful_scan_at,
-        )
+    loop = asyncio.get_running_loop()
+    stop_at = loop.time() + max(0.0, float(seconds))
+    while not shutdown_event.is_set():
+        try:
+            task = await claim_observer_scan(engine, worker_id=worker_id)
+        except Exception:
+            logger.exception("observer: failed to poll durable scan queue")
+            task = None
+        if task is not None:
+            return task
 
-    await _refresh()
-    remaining = float(seconds)
-    while remaining > 0:
-        chunk = min(remaining, float(RUNTIME_REFRESH_SECONDS))
-        await _wait_interruptible(*events, seconds=chunk)
-        if any(e.is_set() for e in events):
-            return
-        remaining -= chunk
-        if remaining > 0:
-            await _refresh()
+        remaining = stop_at - loop.time()
+        if remaining <= 0:
+            return None
+        wait_for = min(float(OBSERVER_SCAN_POLL_SECONDS), remaining)
+        try:
+            await asyncio.wait_for(shutdown_event.wait(), timeout=wait_for)
+        except asyncio.TimeoutError:
+            pass
+    return None
+
+
+async def _run_claimed_observer_scan(
+    engine: AsyncEngine,
+    *,
+    task: Task,
+    gate: ScannerGate,
+) -> dict:
+    """Execute and terminally finalize one claimed scan under its lease fence."""
+    fence = {
+        "task_id": task.id,
+        "lease_owner": task.lease_owner,
+        "lease_token": task.lease_token,
+    }
+    try:
+        summary = await run_with_observer_scan_control(
+            engine,
+            task,
+            lambda: run_one_cycle(
+                engine,
+                gate=gate,
+            ),
+        )
+    except ObserverScanCancelled as exc:
+        if exc.reason == "cancel_requested":
+            finalized = await mark_cancelled(
+                engine,
+                reason="operator cancelled observer scan",
+                **fence,
+            )
+            if not finalized:
+                logger.critical("observer scan task %s lost fence during cancellation", task.id)
+            return {"outcome": "cancelled", "task_id": task.id}
+        finalized = await mark_failed(
+            engine,
+            error="observer scan absolute deadline exceeded",
+            result={"outcome": "REJECTED", "reason": exc.reason},
+            **fence,
+        )
+        if not finalized:
+            logger.critical("observer scan task %s lost fence at deadline", task.id)
+        return {"outcome": "error", "task_id": task.id, "error": exc.reason}
+    except ObserverScanFenceLost:
+        logger.critical("observer scan task %s lost its lease; finalization refused", task.id)
+        return {"outcome": "error", "task_id": task.id, "error": "lease_lost"}
+    except Exception as exc:
+        logger.exception("observer scan task %s crashed", task.id)
+        finalized = await mark_failed(
+            engine,
+            error=f"{type(exc).__name__}: {exc}",
+            result={"outcome": "REJECTED", "reason": "scan_crashed"},
+            **fence,
+        )
+        if not finalized:
+            logger.critical("observer scan task %s lost fence after crash", task.id)
+        return {"outcome": "error", "task_id": task.id, "error": type(exc).__name__}
+
+    scan_outcome = str(summary.get("outcome") or "")
+    task_result = {
+        **summary,
+        "outcome": "CONFIRMED" if scan_outcome in {"success", "empty"} else "REJECTED",
+        "scan_outcome": scan_outcome,
+        "task_id": task.id,
+    }
+    if scan_outcome in {"success", "empty"}:
+        finalized = await mark_succeeded(engine, result=task_result, **fence)
+    else:
+        finalized = await mark_failed(
+            engine,
+            error=f"observer scan finished without a complete snapshot: {scan_outcome}",
+            result=task_result,
+            **fence,
+        )
+    if not finalized:
+        logger.critical("observer scan task %s lost fence during finalization", task.id)
+    return summary
+
+
+async def _close_scanner_gate(gate: ScannerGate | None) -> None:
+    """Close a production gate when its canonical Vision revision is replaced."""
+    if gate is None:
+        return
+    close = getattr(gate, "close", None)
+    if close is None:
+        return
+    result = close()
+    if result is not None:
+        await result
 
 
 # ====================== Main loop ======================
@@ -1126,35 +970,26 @@ async def _sleep_with_runtime_refresh(
 async def main_loop(
     *,
     gate_factory: Callable[[], Awaitable[ScannerGate]] | None = None,
-    redis_factory: Callable[[], Awaitable[object]] | None = None,
-    tg_client_factory: Callable[[], Awaitable[object]] | None = None,
     should_continue: Callable[[], bool] = lambda: True,
 ) -> None:
     """Бесконечный цикл observer.
 
     Args:
         gate_factory: создаёт ScannerGate (default: BrowserAgentClient wrapper).
-        redis_factory: создаёт redis.asyncio.Redis для heartbeat.
-        tg_client_factory: создаёт TelegramBotClient для отправки алертов.
-            Если None — алерты не отправляются (полезно в тестах).
         should_continue: для тестов — управляет выходом из цикла.
     """
-    from core.control.pubsub_listener import RedisPubSubListener
+    start_worker_metrics_server(WORKER_NAME)
 
     db_url = _get_database_url()
     engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
 
+    uses_default_gate = gate_factory is None
     if gate_factory is None:
-        gate_factory = _default_gate_factory
-    if redis_factory is None:
-        redis_factory = _default_redis_factory
-    if tg_client_factory is None:
-        # bind engine в default factory чтобы интерфейс остался Callable[[], Awaitable]
-        async def _bound_tg_factory():
-            return await _default_tg_client_factory(engine)
 
-        tg_client_factory = _bound_tg_factory
+        async def create_default_gate() -> ScannerGate:
+            return await _default_gate_factory(engine)
 
+        gate_factory = create_default_gate
     # Graceful shutdown по SIGTERM/SIGINT.
     shutdown_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -1164,88 +999,112 @@ async def main_loop(
         except (NotImplementedError, RuntimeError):
             pass
 
-    # Разделяемое состояние для pubsub-handler'ов.
     state = _ObserverState()
-    # Событие пробуждения sleep'а по scan-now (отдельно от shutdown_event).
-    trigger_event = asyncio.Event()
 
     gate: ScannerGate | None = None
-    redis_client = None
-    tg_client = None
-    listener_task: asyncio.Task | None = None
-    listener: RedisPubSubListener | None = None
-    heartbeat_task: asyncio.Task | None = None
+    metrics_task: asyncio.Task | None = None
+    pending_scan_task: Task | None = None
 
     try:
-        redis_client = await redis_factory()
+        metrics_task = asyncio.create_task(
+            metrics_loop(
+                shutdown_event,
+                snapshot_age_provider=lambda: (
+                    None
+                    if state.last_complete_snapshot_at is None
+                    else (
+                        datetime.now(timezone.utc) - state.last_complete_snapshot_at
+                    ).total_seconds()
+                ),
+            )
+        )
 
-        # Heartbeat стартуем СРАЗУ после Redis — до загрузки TG-конфига из БД и gate,
-        # чтобы health_watchdog не считал observer мёртвым во время инициализации.
-        if redis_client is not None:
-            heartbeat_task = asyncio.create_task(heartbeat_loop(redis_client, shutdown_event))
-
-        tg_client = await tg_client_factory()
         logger.info("observer_worker запущен")
 
-        # Подписываемся на управляющие каналы если Redis доступен.
-        if redis_client is not None:
-            listener = RedisPubSubListener(
-                redis_client,
-                [CHANNEL_TRIGGER, CHANNEL_CABINET_DAY, CHANNEL_RESTART],
-            )
-
-            async def _on_trigger(_payload: dict) -> None:
-                """Форс-скан: будим sleep (trigger_event) и выставляем флаг."""
-                logger.info("observer: получен trigger scan-now")
-                state.force_scan_pending = True
-                trigger_event.set()
-
-            async def _on_cabinet_day(_payload: dict) -> None:
-                """Новый кабинетный день → форс-рескан (тот же механизм, что scan-now).
-
-                Зачем рескан: единственный publisher cabinet_day — ручной эндпоинт
-                POST /observer/start-new-cabinet-day, который шлёт ТОЛЬКО cabinet_day
-                (не trigger). Без этой реакции ручной старт нового дня не вызывал
-                немедленный скан — observer ждал штатный интервал. Рескан сразу
-                подхватывает обнулённые суточные метрики.
-
-                Чего НЕ делаем: архив уже пишет сам эндпоинт-публишер (синхронно,
-                до publish) — дублировать нельзя. In-memory стейта на «день» у
-                observer'а нет (config грузится каждый цикл, FSM — в БД), сбрасывать
-                нечего. Owner-scoping сохраняется — рескан читает свой скоуп по тегу.
-                """
-                logger.info("observer: получен сигнал cabinet_day — форс-рескан нового дня")
-                state.force_scan_pending = True
-                trigger_event.set()
-
-            async def _on_restart(_payload: dict) -> None:
-                """Graceful restart: выставляем should_stop + shutdown_event."""
-                logger.info("observer: получен сигнал restart по каналу %s", CHANNEL_RESTART)
-                state.should_stop = True
-                shutdown_event.set()
-
-            listener.register(CHANNEL_TRIGGER, _on_trigger)
-            listener.register(CHANNEL_CABINET_DAY, _on_cabinet_day)
-            listener.register(CHANNEL_RESTART, _on_restart)
-            listener_task = asyncio.create_task(listener.run_forever())
-
-        while should_continue() and not shutdown_event.is_set() and not state.should_stop:
-            if gate is None:
+        while should_continue() and not shutdown_event.is_set():
+            if pending_scan_task is None:
                 try:
-                    gate = await gate_factory()
+                    pending_scan_task = await claim_observer_scan(
+                        engine,
+                        worker_id=_OBSERVER_INSTANCE_ID,
+                    )
                 except Exception:
-                    logger.exception("Не смог создать gate — sleep 10s")
-                    await asyncio.sleep(10.0)
-                    continue
+                    logger.exception("observer: failed to claim durable scan task")
+
+            if pending_scan_task is None:
+                try:
+                    await enqueue_scheduled_observer_scan(engine)
+                    pending_scan_task = await claim_observer_scan(
+                        engine,
+                        worker_id=_OBSERVER_INSTANCE_ID,
+                    )
+                except Exception:
+                    logger.exception("observer: failed to publish/claim scheduled scan")
+
+            if pending_scan_task is None:
+                pending_scan_task = await _wait_for_durable_scan(
+                    engine,
+                    shutdown_event,
+                    worker_id=_OBSERVER_INSTANCE_ID,
+                    seconds=float(OBSERVER_SCAN_POLL_SECONDS),
+                )
+                continue
+
+            claimed_task = pending_scan_task
+            pending_scan_task = None
+            try:
+                if gate is not None and uses_default_gate:
+                    from core.vision_runtime import load_vision_runtime_config
+
+                    current_vision = await load_vision_runtime_config(engine)
+                    if (
+                        getattr(gate, "configuration_revision", None)
+                        != current_vision.configuration_revision
+                    ):
+                        await _close_scanner_gate(gate)
+                        gate = None
+                if gate is None:
+                    gate = await gate_factory()
+            except Exception as exc:
+                logger.exception("observer: could not create the canonical scanner gate")
+                finalized = await mark_failed(
+                    engine,
+                    task_id=claimed_task.id,
+                    lease_owner=claimed_task.lease_owner,
+                    lease_token=claimed_task.lease_token,
+                    error=f"{type(exc).__name__}: scanner gate unavailable",
+                    result={
+                        "outcome": "REJECTED",
+                        "reason": "scanner_gate_unavailable",
+                    },
+                )
+                if not finalized:
+                    logger.critical(
+                        "observer scan task %s lost fence before gate creation",
+                        claimed_task.id,
+                    )
+                summary = {
+                    "outcome": "error",
+                    "task_id": claimed_task.id,
+                    "error": "scanner_gate_unavailable",
+                }
+                await _track_degraded_incident(
+                    engine,
+                    state=state,
+                    summary=summary,
+                )
+                continue
 
             cycle_started_monotonic = time.monotonic()
             try:
-                summary = await run_one_cycle(
+                summary = await _run_claimed_observer_scan(
                     engine,
+                    task=claimed_task,
                     gate=gate,
-                    redis_client=redis_client,
-                    tg_client=tg_client,
                 )
+                if summary.get("outcome") in {"success", "empty"}:
+                    state.last_complete_snapshot_at = datetime.now(timezone.utc)
+                    SNAPSHOT_AGE.labels(source="observer_ads").set(0.0)
                 logger.info("cycle done: %s", summary)
             except Exception as exc:
                 # MID-6 (аудит 02.07): падение ВНЕ _run_account_scan (например DB-ошибка
@@ -1254,14 +1113,14 @@ async def main_loop(
                 # degraded-детектора (он считает только summary["outcome"] == "error" из
                 # штатного пути). Теперь такой краш тоже засчитывается в тот же счётчик
                 # consecutive_scan_failures — иначе воркер мог биться в этой ветке часами
-                # (heartbeat/observer:runtime живы) без единого алерта.
-                logger.exception("run_one_cycle crashed — пересоздаю gate")
+                # с живым процессом, но без единого operator-visible инцидента.
+                logger.exception("claimed observer scan crashed — пересоздаю gate")
+                await _close_scanner_gate(gate)
                 gate = None
                 state.consecutive_scan_failures += 1
                 if state.consecutive_scan_failures >= DEGRADED_ALERT_THRESHOLD:
                     await _maybe_alert_degraded(
                         engine,
-                        redis_client,
                         consecutive_failures=state.consecutive_scan_failures,
                         last_error=f"{type(exc).__name__}: {exc}",
                     )
@@ -1269,25 +1128,23 @@ async def main_loop(
                 continue
 
             # Layer 3: трекинг «тихой» деградации — N подряд error-циклов → degraded-алерт.
-            if summary.get("outcome") == "error":
-                state.consecutive_scan_failures += 1
-                if state.consecutive_scan_failures >= DEGRADED_ALERT_THRESHOLD:
-                    await _maybe_alert_degraded(
-                        engine,
-                        redis_client,
-                        consecutive_failures=state.consecutive_scan_failures,
-                        last_error=summary.get("error"),
-                    )
-            elif state.consecutive_scan_failures:
-                # Скан восстановился — сброс счётчика и дедупа, чтобы новая деградация алертила сразу.
-                state.consecutive_scan_failures = 0
-                await _clear_degraded_dedup(redis_client)
+            await _track_degraded_incident(
+                engine,
+                state=state,
+                summary=summary,
+            )
 
-            # Если выставлен форс-скан — немедленно делаем следующий цикл без sleep.
-            if state.force_scan_pending:
-                logger.info("observer: force_scan_pending — пропускаю sleep, запускаю сразу")
-                state.force_scan_pending = False
-                trigger_event.clear()
+            # Reconcile work committed during the just-finished browser scan
+            # before entering the adaptive sleep.
+            try:
+                pending_scan_task = await claim_observer_scan(
+                    engine,
+                    worker_id=_OBSERVER_INSTANCE_ID,
+                )
+            except Exception:
+                logger.exception("observer: failed to reconcile durable scan queue")
+                pending_scan_task = None
+            if pending_scan_task is not None:
                 continue
 
             # Адаптивный интервал: база (UI-слайдер interval_seconds) = CALM-режим,
@@ -1298,18 +1155,6 @@ async def main_loop(
             )
             scan_mode = resolve_scan_mode(summary)
             interval = compute_adaptive_interval(base_interval, scan_mode)
-            burst_context = await _shadow_burst_context(redis_client)
-            status_message = None
-            if burst_context is not None and summary.get("outcome") != "paused":
-                # Тень открута — системный CRITICAL: до истечения TTL держим самый короткий
-                # период и показываем причину в runtime. Никаких money-мутаций здесь нет.
-                scan_mode = "CRITICAL"
-                interval = MIN_INTERVAL_SECONDS
-                account_id = str(burst_context.get("account_id") or "").removeprefix("act_")
-                status_message = "Тень отчётности Meta: ускоренный скан"
-                if account_id:
-                    status_message += f" · act_{account_id}"
-
             # Jitter ±10% применяется к ЦЕЛЕВОМУ периоду между началами циклов.
             jitter_offset = interval * JITTER_FRACTION
             target_period = clamp_interval(interval + random.uniform(-jitter_offset, jitter_offset))
@@ -1327,73 +1172,38 @@ async def main_loop(
                 sleep_for,
             )
 
-            # Sleep, прерываемый shutdown'ом ИЛИ trigger'ом scan-now. На длинных
-            # интервалах освежаем observer:runtime, чтобы watchdog не считал нас протухшими.
-            # На паузе сохраняем статус "paused" (не затираем ложным "idle").
-            next_scan_at = datetime.now(timezone.utc) + timedelta(seconds=sleep_for)
-            runtime_status = "paused" if summary.get("outcome") == "paused" else "idle"
-            # last_successful_scan_at пишем тем же контрактом, что и финальный publish цикла
-            # (now при success, иначе None) — чтобы освежение сна не затирало «последний скан».
-            last_ok_at = datetime.now(timezone.utc) if summary.get("outcome") == "success" else None
-            await _sleep_with_runtime_refresh(
-                redis_client,
+            pending_scan_task = await _wait_for_durable_scan(
+                engine,
                 shutdown_event,
-                trigger_event,
+                worker_id=_OBSERVER_INSTANCE_ID,
                 seconds=sleep_for,
-                status=runtime_status,
-                next_scan_at=next_scan_at,
-                scan_mode=scan_mode,
-                status_message=status_message,
-                last_successful_scan_at=last_ok_at,
             )
-
-            # Если trigger пришёл во время sleep — сбрасываем флаги, цикл идёт сразу.
-            if trigger_event.is_set() or state.force_scan_pending:
-                logger.info("observer: trigger во время sleep — запускаю скан немедленно")
-                trigger_event.clear()
-                state.force_scan_pending = False
     finally:
         logger.info("observer_worker завершён")
 
-        # Останавливаем heartbeat-таск.
-        if heartbeat_task is not None:
-            heartbeat_task.cancel()
+        if metrics_task is not None:
+            metrics_task.cancel()
             try:
-                await heartbeat_task
+                await metrics_task
             except asyncio.CancelledError:
                 pass
 
-        # Останавливаем pubsub-listener.
-        if listener is not None:
-            try:
-                await listener.stop()
-            except Exception:
-                pass
-        if listener_task is not None:
-            listener_task.cancel()
-            try:
-                await listener_task
-            except asyncio.CancelledError:
-                pass
-
-        if redis_client is not None:
-            try:
-                await redis_client.aclose()
-            except Exception:
-                pass
+        await _close_scanner_gate(gate)
         await engine.dispose()
 
 
 # ====================== Default factories (прод-реализация) ======================
 
 
-async def _default_gate_factory() -> ScannerGate:
+async def _default_gate_factory(engine: AsyncEngine) -> ScannerGate:
     """Прод-реализация: оборачивает BrowserAgentClient в ScannerGate-протокол."""
     from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
     from clients.python_grpc.client import ScanResult as GrpcScanResult
-    from core.config import get_settings, reveal_secret
+    from core.config import get_settings
+    from core.vision_runtime import load_vision_runtime_config
 
     s = get_settings()
+    vision = await load_vision_runtime_config(engine)
     client = BrowserAgentClient(
         BrowserAgentConfig(
             # grpc_host/port из env — иначе в Docker observer пойдёт на localhost
@@ -1401,74 +1211,54 @@ async def _default_gate_factory() -> ScannerGate:
             # (host.docker.internal). Консистентно с meta_api/creator-воркерами.
             grpc_host=os.environ.get("BROWSER_AGENT_HOST", "localhost"),
             grpc_port=int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051")),
-            vision_x_token=reveal_secret(s.vision_x_token),
+            vision_x_token=vision.x_token,
             vision_api_url=s.vision_api_url,
-            vision_profile_id=s.vision_profile_id,
+            vision_profile_id=vision.profile_id,
+            vision_folder_id=os.environ.get("VISION_FOLDER_ID") or None,
         )
     )
     await client.start()
     # run_scan_cycle сам поднимет browser-сессию (ensure_browser_session внутри).
 
     class _BrowserAgentScannerGate:
+        configuration_revision = vision.configuration_revision
+
         async def run_one_scan(
             self,
+            ad_account_id: str,
             campaign_ids: list[str] | None = None,
             owner_tag: str | None = None,
-            auto_recover_page: bool = True,
-            ad_account_id: str | None = None,
         ) -> ScanCycleOutput:
             final_result: GrpcScanResult | None = None
             async for event in client.run_scan_cycle(
                 campaign_ids=campaign_ids or [],
                 owner_tag=owner_tag,
-                auto_recover_page=auto_recover_page,
                 ad_account_id=ad_account_id,
             ):
                 # ScanProgress нам пока не нужен — слушаем только финальный ScanResult
                 if isinstance(event, GrpcScanResult):
                     final_result = event
             if final_result is None:
-                return ScanCycleOutput(rows=[], empty_reason="no final result")
+                return ScanCycleOutput(
+                    rows=[],
+                    metrics_contract_revision=0,
+                    empty_reason="no final result",
+                )
             return ScanCycleOutput(
                 rows=final_result.rows,
+                metrics_contract_revision=final_result.metrics_contract_revision,
                 total_passes=final_result.total_passes,
                 duration_seconds=final_result.duration_seconds,
                 empty_reason=final_result.empty_reason,
                 warnings=list(final_result.warnings),
+                partial_row_ids=list(final_result.partial_row_ids),
+                rows_with_all_metrics_empty=final_result.rows_with_all_metrics_empty,
             )
 
         async def open_cabinet_tabs(self, ad_account_ids: list[str]) -> list[dict]:
             return await client.open_cabinet_tabs(ad_account_ids)
 
+        async def close(self) -> None:
+            await client.close()
+
     return _BrowserAgentScannerGate()
-
-
-async def _default_redis_factory():
-    """Прод-реализация: redis.asyncio.Redis к docker-compose:6380."""
-    try:
-        import redis.asyncio as redis_async  # type: ignore
-    except ImportError:
-        logger.warning("redis package не установлен — heartbeat отключён")
-        return None
-
-    redis_url = os.environ.get("REDIS_URL", "")
-    if redis_url:
-        return redis_async.from_url(redis_url, decode_responses=True)
-
-    host = os.environ.get("REDIS_HOST", "127.0.0.1")
-    port = int(os.environ.get("REDIS_PORT", "6380"))
-    return redis_async.Redis(host=host, port=port, decode_responses=True)
-
-
-async def _default_tg_client_factory(engine):
-    """Прод-реализация: TelegramBotClient из telegram_config (если есть)."""
-    import httpx
-
-    from core.telegram.client import TelegramBotClient
-    from core.telegram.service import load_telegram_config
-
-    cfg = await load_telegram_config(engine)
-    if cfg is None or not cfg.bot_token:
-        logger.warning("telegram_config пустой — алерты в TG отключены")
-        return None
-    return TelegramBotClient(bot_token=cfg.bot_token, http_client=httpx.AsyncClient(timeout=30.0))

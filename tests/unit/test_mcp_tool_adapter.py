@@ -2,12 +2,10 @@
 """Unit-тесты адаптера ToolHandler → mcp.types.Tool.
 
 Покрытие:
-- READ_ONLY tool: description без префикса, schema копируется.
-- DRAFT_REQUIRED tool: префикс "[ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ В TELEGRAM] ".
+- READ_ONLY tool: description и schema копируются.
 - input_schema → inputSchema (camelCase) — main mapping.
 - Отсутствие input_schema → пустая object-schema (fallback).
 - GLOBAL_REGISTRY реально адаптируется без падений.
-- Идемпотентность: повторный adapt не накладывает второй префикс.
 """
 
 from __future__ import annotations
@@ -57,19 +55,6 @@ def test_adapt_read_only_keeps_description_as_is() -> None:
     assert tool.inputSchema == {"type": "object", "properties": {}}
 
 
-# DRAFT_REQUIRED: префикс приклеивается ровно один раз.
-def test_adapt_draft_required_prepends_prefix() -> None:
-    stub = _StubTool(
-        "request_budget_change",
-        RiskLevel.DRAFT_REQUIRED,
-        description="Создать DRAFT задачу на изменение бюджета",
-    )
-    tool = adapt_to_mcp_tool(stub)
-    assert tool.description is not None
-    assert tool.description.startswith("[ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ В TELEGRAM] ")
-    assert "Создать DRAFT задачу" in tool.description
-
-
 # CREATIVE tools: префикс не нужен (они не правят прод).
 def test_adapt_creative_no_prefix() -> None:
     stub = _StubTool(
@@ -79,20 +64,6 @@ def test_adapt_creative_no_prefix() -> None:
     )
     tool = adapt_to_mcp_tool(stub)
     assert tool.description == "Сгенерировать варианты текста"
-
-
-# Адаптация дважды не накладывает второй префикс — на случай повторного list_tools.
-def test_adapt_idempotent_for_draft() -> None:
-    stub = _StubTool(
-        "request_bulk_pause",
-        RiskLevel.DRAFT_REQUIRED,
-        description="Bulk pause draft",
-    )
-    once = adapt_to_mcp_tool(stub)
-    # Симулируем "повторный заход" — модифицируем stub.description и адаптируем.
-    stub.schema["description"] = once.description
-    twice = adapt_to_mcp_tool(stub)
-    assert twice.description == once.description
 
 
 # Без input_schema адаптер подставляет пустую object-схему — иначе MCP откажет.
@@ -117,11 +88,6 @@ def test_global_registry_all_tools_adapt_without_errors() -> None:
         assert tool.name == name
         # У MCP Tool inputSchema всегда непустой dict.
         assert isinstance(tool.inputSchema, dict)
-        # У DRAFT_REQUIRED — префикс обязан быть.
-        if handler.risk_level == RiskLevel.DRAFT_REQUIRED:
-            assert tool.description and tool.description.startswith(
-                "[ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ В TELEGRAM] "
-            )
 
 
 if __name__ == "__main__":  # pragma: no cover

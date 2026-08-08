@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 
-# Путь к .env — корень проекта (рядом с run.sh)
+# Путь к .env — корень проекта; local launcher требует FB_AGENT_PROFILE=local.
 _ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
 
@@ -61,8 +61,12 @@ class Settings(BaseSettings):
 
     # --- Telegram ---
     telegram_bot_token: SecretStr = SecretStr("")
-    telegram_chat_id: str = ""
-
+    # Independent Bot API webhook secret passed in
+    # X-Telegram-Bot-Api-Secret-Token. Never derive it from the bot token.
+    telegram_webhook_secret: SecretStr = SecretStr("")
+    # Dedicated bearer credential used only by the off-host Alertmanager
+    # webhook. It is never shared with panel/TMA/API-key authentication.
+    alertmanager_webhook_secret: SecretStr = SecretStr("")
     # --- Owner-only panel login (Telegram OIDC Authorization Code + PKCE) ---
     telegram_oidc_client_id: str = ""
     telegram_oidc_client_secret: SecretStr = SecretStr("")
@@ -70,19 +74,18 @@ class Settings(BaseSettings):
     panel_auth_state_ttl_seconds: int = 10 * 60
     panel_auth_ticket_ttl_seconds: int = 60
     panel_auth_session_ttl_seconds: int = 12 * 60 * 60
-    panel_auth_owner_recheck_seconds: int = 60
 
     # --- Protected Vision desktop ---
     desktop_public_origin: str = "https://desktop.adpulse.su"
     desktop_access_ticket_ttl_seconds: int = 300
     desktop_access_session_ttl_seconds: int = 12 * 60 * 60
-    desktop_access_owner_recheck_seconds: int = 60
     # Explicit web-panel owner. Never infer identity from the current owner count.
     desktop_owner_telegram_user_id: int = 0
     desktop_kasm_internal_url: str = "http://vision-webtop:8444/"
     desktop_kasm_service_user: str = ""
     desktop_kasm_service_password: SecretStr = SecretStr("")
     desktop_readiness_timeout_seconds: float = 2.0
+    desktop_readiness_credentials_path: str = "/run/fb-agent-desktop-readiness/active.env"
     # Значение <= 0 отключает readiness-кэш (используется в тестах).
     desktop_readiness_cache_seconds: float = 15.0
 
@@ -107,19 +110,11 @@ class Settings(BaseSettings):
     # --- Observer ---
     default_observer_interval_seconds: int = 30
 
-    # --- Vision Anti-detect браузер ---
-    vision_x_token: SecretStr = SecretStr("")
+    # --- Vision transport (credentials live only in PostgreSQL vision_config) ---
     vision_api_url: str = "http://127.0.0.1:3030"
-    vision_profile_id: str = ""
-    vision_auto_restart_on_missing_cdp: bool = True
 
-    # --- Redis (очередь алёртов) ---
+    # --- Redis (non-durable cache and wake-up acceleration only) ---
     redis_url: str = "redis://localhost:6380/0"
-    alerts_queue_enabled: bool = True
-
-    # --- Sentry (опционально) ---
-    sentry_dsn: SecretStr = SecretStr("")
-    sentry_environment: str = "production"
 
     # --- Telegram Mini App ---
     tma_session_ttl_seconds: int = 3600
@@ -128,8 +123,8 @@ class Settings(BaseSettings):
     # клиент шлёт свежий initData при каждом открытии Mini App.
     tma_init_data_max_age_seconds: int = 3600
     web_app_url: str | None = None
-    # Секрет для подписи TMA-сессионных токенов (itsdangerous). Пусто → фолбэк на
-    # encryption_key. Должен быть стабильным между рестартами (иначе токены протухают).
+    # Dedicated secret for TMA session tokens. Empty means fail-closed; it is
+    # never substituted with ENCRYPTION_KEY. Must remain stable across restarts.
     tma_session_secret: SecretStr = SecretStr("")
 
     # --- Telegram Daily Digest ---
@@ -150,7 +145,7 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://gateway.nekocode.app/andromeda/v1"
     # Имя модели БЕЗ префикса провайдера — гейтвей ждёт голый id (см. GET /models).
     # luna — лёгкий тир 5.6 ($1/$6 за 1M против $5/$30 у sol): tool-calling проверен
-    # бенчем 15.07, агентный индекс 75 vs 80 у sol, money защищён draft-first.
+    # benchmark 15.07, agent index 75 vs 80 for sol; money paths stay fail-closed.
     # Если ассистент где-то тупит — переключение на gpt-5.6-sol одной строкой в .env.
     openai_model: str = "gpt-5.6-luna"
     ai_diagnostics_cooldown_seconds: int = 1800
@@ -158,18 +153,7 @@ class Settings(BaseSettings):
     ai_max_log_lines: int = 200
     ai_max_tool_iterations: int = 5
     ai_rate_limit_per_hour: int = 30
-    # Объяснения причин алертов через AI (приклеиваются к STOP/WARNING в Telegram)
-    ai_explain_alerts_enabled: bool = True
-    # 8s было мало для сторонних gateway: 💡-объяснение всегда падало по timeout.
-    # 20s — компромисс между UX и блокировкой алерта.
-    ai_explain_timeout_seconds: float = 20.0
-    # --- AI-ассистент в Telegram (чат /ai + DM, owner-only) ---
-    ai_tg_chat_enabled: bool = True
-    # История диалога в Redis: сколько последних сообщений держим и как долго.
-    ai_chat_history_ttl_seconds: int = 1800
-    ai_chat_history_max_messages: int = 12
     # --- Проактивные AI-статусы ---
-    ai_digest_summary_enabled: bool = True
     # «Пульс кабинета»: выключен по умолчанию — включаем после обкатки комментариев к алертам.
     ai_pulse_enabled: bool = False
     ai_pulse_slots_utc: str = "12:00,16:00,20:00"
@@ -177,22 +161,16 @@ class Settings(BaseSettings):
     # лида» (grace-окно; спенд-кап ~1×CPA живёт в самой рекомендации).
     enable_reco_hold_grace_seconds: int = 3600
 
-    # --- AdSet.pro (внешний MCP-сервер post-click статистики, см. META_INTEGRATION_PLAN §4.4 / Этап 6) ---
+    # --- AdSet.pro (внешний MCP-сервер post-click статистики) ---
     # Live verify (2026-05-27): AdSet.pro работает как MCP-сервер `platform-stats-mcp`
     # на https://adset.pro/mcp (JSON-RPC 2.0 + Bearer). REST вида /api/stats/query
     # не существует — host api.adset.pro вообще не резолвится.
     adsetpro_mcp_key: SecretStr = SecretStr("")
     adsetpro_base_url: str = "https://adset.pro"
     adsetpro_timeout_seconds: float = 15.0
-    # Секрет для аутентификации входящего postback'а от AdSet.pro:
-    # GET query token; legacy POST header X-Postback-Secret. Пустая строка → 503
-    # «not configured», чтобы случайно не принимать неавторизованные постбэки.
+    # Bootstrap/import source for the AdSet.pro GET callback secret. Runtime
+    # authorization reads the encrypted database singleton only.
     adsetpro_postback_secret: SecretStr = SecretStr("")
-    # Staged rollout: projection and UI are always live, while cancellation of
-    # not-yet-started bot_auto_stop tasks stays shadow-only until a full-day
-    # reconciliation is accepted by the operator.
-    tracker_auto_cancel_enabled: bool = False
-
     # --- syntx.ai (прямой API генерации креативов, см. core/syntx/) ---
     # JWT из localStorage.auth_token залогиненного syntx (recon_profile), живёт 30 дней.
     # Пусто → клиент возьмёт env SYNTX_AUTH_TOKEN или строку в .env (см. core/syntx/auth.py).
@@ -210,14 +188,6 @@ class Settings(BaseSettings):
     syntx_default_video_ai: str = "kling"
     syntx_default_video_model: str = "kling_image2video"
 
-    # --- Исходящий postback (форвард конверсий во внешнюю систему/трекер) ---
-    # URL-шаблон с макросами {click_id}/{event_type}/{goal}/{revenue}/{payout}/
-    # {currency}/{fb_ad_id}/{country}. Пустой → отправка отключена (см. tracker_outgoing_enabled).
-    tracker_outgoing_postback_url: str = ""
-    tracker_outgoing_enabled: bool = False
-    tracker_outgoing_method: str = "GET"
-    tracker_outgoing_timeout_seconds: float = 10.0
-
     # --- Frontend (CORS) ---
     # Origin основного фронта (например, http://localhost:5173). None → CORS не подключаем.
     frontend_origin: str | None = None
@@ -230,7 +200,7 @@ class Settings(BaseSettings):
 
     # --- Reverse-proxy ---
     # Доверять заголовку X-Forwarded-For для определения client IP (rate-limit и т.п.).
-    # ВКЛЮЧАТЬ ТОЛЬКО если API стоит за доверенным reverse-proxy (k8s-ingress/nginx),
+    # ВКЛЮЧАТЬ ТОЛЬКО если API стоит за доверенным reverse-proxy (production Caddy),
     # который сам выставляет XFF. По умолчанию False: XFF подделывается любым клиентом,
     # и доверие ему без прокси = обход IP-rate-limit (H7a) → используем реальный TCP-peer.
     trust_proxy_headers: bool = False
@@ -251,8 +221,21 @@ class Settings(BaseSettings):
             )
         if not self.encryption_key.get_secret_value():
             logger.warning("ENCRYPTION_KEY не задан — шифрование токенов в БД не будет работать")
+        elif not self.encryption_key_verify.get_secret_value():
+            logger.error(
+                "ENCRYPTION_KEY_VERIFY не задан — проверка ключа шифрования завершится fail-closed"
+            )
         if not self.telegram_bot_token.get_secret_value():
-            logger.warning("TELEGRAM_BOT_TOKEN не задан — Telegram-бот не будет работать")
+            logger.warning(
+                "TELEGRAM_BOT_TOKEN не задан — locked migrator не импортирует "
+                "начальный токен; runtime использует только telegram_config"
+            )
+        elif not self.telegram_webhook_secret.get_secret_value():
+            logger.warning("TELEGRAM_WEBHOOK_SECRET не задан — Telegram webhook будет fail-closed")
+        if not self.alertmanager_webhook_secret.get_secret_value():
+            logger.warning(
+                "ALERTMANAGER_WEBHOOK_SECRET не задан — Alertmanager webhook будет fail-closed"
+            )
         if not self.api_key.get_secret_value() and self.require_api_key:
             # L6: НЕ генерим эфемерный ключ. Раньше пустой API_KEY → ротирующийся ключ
             # in-memory (свой на каждый из 12 процессов) → Caddy/API clients ловили 401, а

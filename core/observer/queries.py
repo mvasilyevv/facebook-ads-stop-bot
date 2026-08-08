@@ -32,7 +32,9 @@ class OfferRules:
     name: str
     cpa_threshold: Decimal | None
     frequency_threshold: Decimal | None
-    # Чувствительность per-offer (NULL если у оффера ещё нет offer_rules → дефолт 80 в pipeline).
+    currency: str | None = None
+    # Чувствительность per-offer. NULL означает отсутствие подтверждённых правил;
+    # pipeline в этом случае fail-closed и не принимает автоматическое решение.
     stop_percent_of_rule: Decimal | None = None
     warning_percent_of_stop: Decimal | None = None
 
@@ -47,6 +49,12 @@ class AdAlertSnapshot:
     current_stage: str | None
     open_state_token: uuid.UUID | None
     snoozed_until: datetime | None
+    enable_grace_until: datetime | None = None
+    enable_grace_spend_cap: Decimal | None = None
+    enable_grace_baseline_spend: Decimal | None = None
+    enable_grace_cabinet_day_start: datetime | None = None
+    enable_grace_currency: str | None = None
+    enable_grace_currency_exponent: int | None = None
 
 
 async def load_active_offers(engine: AsyncEngine) -> list[OfferRules]:
@@ -63,6 +71,7 @@ async def load_active_offers(engine: AsyncEngine) -> list[OfferRules]:
                     SELECT
                         o.id, o.code, o.name,
                         r.cpa_threshold,
+                        r.currency,
                         r.frequency_threshold,
                         r.stop_percent_of_rule,
                         r.warning_percent_of_stop
@@ -80,9 +89,10 @@ async def load_active_offers(engine: AsyncEngine) -> list[OfferRules]:
             code=str(row[1]),
             name=str(row[2]),
             cpa_threshold=row[3],
-            frequency_threshold=row[4],
-            stop_percent_of_rule=row[5],
-            warning_percent_of_stop=row[6],
+            currency=str(row[4]) if row[4] else None,
+            frequency_threshold=row[5],
+            stop_percent_of_rule=row[6],
+            warning_percent_of_stop=row[7],
         )
         for row in rows
     ]
@@ -109,7 +119,13 @@ async def load_alert_state_by_fb_ad_id(
                     SELECT
                         a.id, a.fb_ad_id,
                         s.alert_state, s.current_stage, s.open_state_token,
-                        s.snoozed_until
+                        s.snoozed_until,
+                        s.enable_grace_until,
+                        s.enable_grace_spend_cap,
+                        s.enable_grace_baseline_spend,
+                        s.enable_grace_cabinet_day_start,
+                        s.enable_grace_currency,
+                        s.enable_grace_currency_exponent
                     FROM fb_ads a
                     JOIN ad_alert_state s ON s.ad_id = a.id
                     WHERE a.fb_ad_id = ANY(:ids)
@@ -127,13 +143,19 @@ async def load_alert_state_by_fb_ad_id(
             current_stage=row[3],
             open_state_token=row[4],
             snoozed_until=row[5],
+            enable_grace_until=row[6],
+            enable_grace_spend_cap=row[7],
+            enable_grace_baseline_spend=row[8],
+            enable_grace_cabinet_day_start=row[9],
+            enable_grace_currency=row[10],
+            enable_grace_currency_exponent=row[11],
         )
         for row in rows
     }
 
 
 async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
-    """Singleton observer_config — интервал, флаги, install_cost.
+    """Singleton observer_config — интервал, флаги и operator scope.
 
     Возвращает None если строки нет (что не должно случаться после apply_schema).
     """
@@ -143,9 +165,7 @@ async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
                 text(
                     """
                     SELECT
-                        interval_seconds, jitter_seconds,
-                        stale_data_threshold_seconds, install_cost_usd,
-                        agent_commission_percent, is_scanning_enabled,
+                        interval_seconds, is_scanning_enabled,
                         owner_campaign_tag,
                         campaign_ids
                     FROM observer_config WHERE singleton_key = 'default'
@@ -157,13 +177,9 @@ async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
         return None
     return {
         "interval_seconds": int(row[0]),
-        "jitter_seconds": int(row[1]),
-        "stale_data_threshold_seconds": int(row[2]),
-        "install_cost_usd": row[3],
-        "agent_commission_percent": row[4],
-        "is_scanning_enabled": bool(row[5]),
-        "owner_campaign_tag": row[6],
-        "campaign_ids": list(row[7]) if row[7] else [],
+        "is_scanning_enabled": bool(row[1]),
+        "owner_campaign_tag": row[2],
+        "campaign_ids": list(row[3]) if row[3] else [],
     }
 
 
@@ -192,30 +208,6 @@ async def load_scanning_enabled(engine: AsyncEngine) -> bool:
         ).first()
     if row is None:
         return False
-    return bool(row[0])
-
-
-async def load_vision_auto_restart_flag(engine: AsyncEngine) -> bool:
-    """Читает vision_config.auto_restart_on_missing_cdp (self-heal Vision-сессии).
-
-    Дефолт TRUE — если строки/колонки нет (свежая БД до миграции) или ошибка чтения,
-    самовосстановление включено (проверенное поведение по умолчанию). Флаг — ручной
-    kill-switch для observer-side эскалации reconnect/StartBrowser при пропаже primary-вкладки.
-    """
-    try:
-        async with engine.connect() as conn:
-            row = (
-                await conn.execute(
-                    text(
-                        "SELECT auto_restart_on_missing_cdp "
-                        "FROM vision_config WHERE singleton_key = 'default'"
-                    )
-                )
-            ).first()
-    except Exception:
-        return True
-    if not row or row[0] is None:
-        return True
     return bool(row[0])
 
 

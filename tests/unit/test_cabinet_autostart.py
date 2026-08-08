@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
+from core.meta_api.bulk import AccountScopedAdResolution, AutostartActivationGuards
 from core.scheduler.cabinet_autostart import (
     DEFAULT_CONFIG,
     _normalize_config,
-    autostart_done_key,
     is_in_autostart_window,
 )
 
@@ -58,25 +59,6 @@ def test_is_in_window_rejects_naive() -> None:
         is_in_autostart_window(datetime(2026, 5, 29, 6, 0, 0), 6, 0)
 
 
-# Ключ дедупа содержит дату YYYY-MM-DD по UTC
-def test_done_key_format() -> None:
-    now = datetime(2026, 5, 29, 6, 0, 0, tzinfo=timezone.utc)
-    assert autostart_done_key(now) == "cabinet:autostart:2026-05-29"
-
-
-# Дата ключа берётся по UTC: 01:00 +3 == 22:00 предыдущего дня UTC
-def test_done_key_uses_utc() -> None:
-    plus3 = timezone(timedelta(hours=3))
-    now = datetime(2026, 5, 30, 1, 0, 0, tzinfo=plus3)
-    assert autostart_done_key(now) == "cabinet:autostart:2026-05-29"
-
-
-# Naive datetime запрещён и в autostart_done_key
-def test_done_key_rejects_naive() -> None:
-    with pytest.raises(ValueError):
-        autostart_done_key(datetime(2026, 5, 29, 6, 0, 0))
-
-
 # Пустой/None конфиг нормализуется в дефолты (фича выключена)
 def test_normalize_empty_returns_defaults() -> None:
     cfg = _normalize_config(None)
@@ -94,61 +76,6 @@ def test_normalize_coerces_types() -> None:
     assert "campaign_ids" not in cfg, "campaign_ids живёт в observer allowlist, не здесь"
 
 
-# ====================== N6: ошибка Redis GET не пропускает день молча ==========
-
-
-class _RaisingRedis:
-    """fake Redis: .get падает (имитация недоступного Redis в окне автостарта)."""
-
-    async def get(self, *_a, **_k):
-        raise RuntimeError("redis down")
-
-
-# N6: ошибка Redis GET дедуп-ключа → outcome 'redis_error' (retryable), НЕ 'already_done'.
-# Иначе money-критичный автостарт молча пропускался бы на весь день при сбое Redis.
-@pytest.mark.asyncio
-async def test_redis_get_error_is_retryable_not_already_done(monkeypatch) -> None:
-    from unittest.mock import AsyncMock
-
-    import apps.cabinet_scheduler.main as m
-
-    monkeypatch.setattr(m, "load_scanning_enabled", AsyncMock(return_value=True))
-    monkeypatch.setattr(
-        m,
-        "read_autostart_config",
-        AsyncMock(return_value={"enabled": True, "hour_utc": 6, "minute_utc": 0}),
-    )
-    now = datetime(2026, 5, 29, 9, 0, 0, tzinfo=timezone.utc)  # 09:00 UTC — в окне (после 6:00)
-
-    summary = await m.run_one_tick(engine=object(), redis_client=_RaisingRedis(), now=now)
-
-    # КЛЮЧЕВОЕ: НЕ 'already_done' (день не помечается выполненным) → след. тик повторит.
-    assert summary["outcome"] == "redis_error"
-
-
-# ====================== M3/M5: чанки >50 + скан раз в сутки ====================
-
-
-class _FakeRedis:
-    """fake Redis с поддержкой get/set(nx)/publish — для проверки логики тика."""
-
-    def __init__(self) -> None:
-        self.store: dict = {}
-        self.published: list = []
-
-    async def get(self, key):
-        return self.store.get(key)
-
-    async def set(self, key, value, ex=None, nx=False):
-        if nx and key in self.store:
-            return None
-        self.store[key] = value
-        return True
-
-    async def publish(self, channel, payload):
-        self.published.append((channel, payload))
-
-
 def _patch_window_open(monkeypatch, m, *, campaign_ids, owner_tag="MV"):
     from unittest.mock import AsyncMock
 
@@ -163,6 +90,43 @@ def _patch_window_open(monkeypatch, m, *, campaign_ids, owner_tag="MV"):
         "load_observer_config",
         AsyncMock(return_value={"owner_campaign_tag": owner_tag, "campaign_ids": campaign_ids}),
     )
+    monkeypatch.setattr(m, "_load_scheduled_autostart_ads", AsyncMock(return_value=([], set())))
+    monkeypatch.setattr(
+        m,
+        "capture_autostart_activation_guards",
+        AsyncMock(
+            side_effect=lambda _connection, *, ad_ids, **_kwargs: AutostartActivationGuards(
+                guards_by_ad_id={
+                    ad_id: {"version": 1, "generation": f"generation:{ad_id}"} for ad_id in ad_ids
+                },
+                rejected_by_ad_id={},
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        m,
+        "enqueue_observer_scan",
+        AsyncMock(return_value=SimpleNamespace(task_id=900, created=True)),
+    )
+    monkeypatch.setattr(m, "notify_owners_in_transaction", AsyncMock(return_value=True))
+
+
+class _UnitConnection:
+    async def execute(self, *_args, **_kwargs):
+        return None
+
+
+class _UnitBegin:
+    async def __aenter__(self):
+        return _UnitConnection()
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+class _UnitEngine:
+    def begin(self):
+        return _UnitBegin()
 
 
 # M3: >MAX_BULK объявлений → несколько bulk-задач (чанки ≤50) с уникальными idem-ключами,
@@ -176,18 +140,32 @@ async def test_started_chunks_over_max_bulk(monkeypatch) -> None:
     _patch_window_open(monkeypatch, m, campaign_ids=["c1"])
     ad_ids = [f"ad{i:03d}" for i in range(120)]  # 120 → чанки 50/50/20
     monkeypatch.setattr(
-        m, "resolve_owner_ad_ids_by_campaign_ids", AsyncMock(return_value=(ad_ids, 120))
+        m,
+        "resolve_owner_ads_by_account",
+        AsyncMock(
+            return_value=AccountScopedAdResolution(
+                ads_by_account={"123": tuple(ad_ids)}, total=120, missing_account_count=0
+            )
+        ),
     )
     created: list = []
 
-    async def _fake_create(engine, *, payload, requested_by, status, idempotency_key):
+    async def _fake_create(
+        engine,
+        *,
+        payload,
+        requested_by,
+        status,
+        idempotency_key,
+        connection,
+    ):
         created.append((payload, idempotency_key))
         return len(created)
 
     monkeypatch.setattr(m, "create_mutation_task", _fake_create)
     now = datetime(2026, 5, 29, 9, 0, 0, tzinfo=timezone.utc)
 
-    summary = await m.run_one_tick(engine=object(), redis_client=_FakeRedis(), now=now)
+    summary = await m.run_one_tick(engine=_UnitEngine(), now=now)
 
     assert summary["outcome"] == "started"
     assert summary["ad_count"] == 120
@@ -197,6 +175,7 @@ async def test_started_chunks_over_max_bulk(monkeypatch) -> None:
     all_ids: list = []
     keys = set()
     for payload, key in created:
+        assert payload.ad_account_id == "123"
         assert len(payload.params["ad_ids"]) <= m.MAX_BULK
         all_ids.extend(payload.params["ad_ids"])
         keys.add(key)
@@ -204,7 +183,7 @@ async def test_started_chunks_over_max_bulk(monkeypatch) -> None:
     assert len(keys) == 3, "idempotency_key каждого чанка уникален"
 
 
-# M5: при no_owner_ads observer-scan триггерится не чаще раза в сутки (а не каждый тик).
+# M5: при no_owner_ads один и тот же durable scan key не дублирует работу.
 @pytest.mark.asyncio
 async def test_no_owner_ads_scan_triggers_once_per_day(monkeypatch) -> None:
     from unittest.mock import AsyncMock
@@ -212,13 +191,98 @@ async def test_no_owner_ads_scan_triggers_once_per_day(monkeypatch) -> None:
     import apps.cabinet_scheduler.main as m
 
     _patch_window_open(monkeypatch, m, campaign_ids=["c1"])
-    monkeypatch.setattr(m, "resolve_owner_ad_ids_by_campaign_ids", AsyncMock(return_value=([], 0)))
-    redis = _FakeRedis()
+    monkeypatch.setattr(
+        m,
+        "resolve_owner_ads_by_account",
+        AsyncMock(return_value=AccountScopedAdResolution({}, 0, 0)),
+    )
+    enqueue = AsyncMock(
+        side_effect=[
+            SimpleNamespace(task_id=901, created=True),
+            SimpleNamespace(task_id=901, created=False),
+        ]
+    )
+    monkeypatch.setattr(m, "enqueue_observer_scan", enqueue)
     now = datetime(2026, 5, 29, 9, 0, 0, tzinfo=timezone.utc)
 
-    first = await m.run_one_tick(engine=object(), redis_client=redis, now=now)
-    second = await m.run_one_tick(engine=object(), redis_client=redis, now=now)
+    first = await m.run_one_tick(engine=_UnitEngine(), now=now)
+    second = await m.run_one_tick(engine=_UnitEngine(), now=now)
 
     assert first["outcome"] == "no_owner_ads" and first["scan_triggered"] is True
     assert second["outcome"] == "no_owner_ads" and second["scan_triggered"] is False
-    assert len(redis.published) == 1, "форс-скан публикуется ровно один раз за сутки"
+    assert enqueue.await_count == 2
+    assert first["scan_task_id"] == second["scan_task_id"] == 901
+
+
+@pytest.mark.asyncio
+async def test_started_groups_tasks_by_explicit_account(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    import apps.cabinet_scheduler.main as m
+
+    _patch_window_open(monkeypatch, m, campaign_ids=["c1", "c2"])
+    monkeypatch.setattr(
+        m,
+        "resolve_owner_ads_by_account",
+        AsyncMock(
+            return_value=AccountScopedAdResolution(
+                ads_by_account={"222": ("ad2",), "111": ("ad1", "ad3")},
+                total=3,
+                missing_account_count=0,
+            )
+        ),
+    )
+    created = []
+
+    async def _fake_create(
+        engine,
+        *,
+        payload,
+        requested_by,
+        status,
+        idempotency_key,
+        connection,
+    ):
+        created.append((payload, idempotency_key))
+        return len(created)
+
+    monkeypatch.setattr(m, "create_mutation_task", _fake_create)
+    summary = await m.run_one_tick(
+        engine=_UnitEngine(),
+        now=datetime(2026, 5, 29, 9, tzinfo=timezone.utc),
+    )
+
+    assert summary["outcome"] == "started"
+    assert summary["accounts"] == 2
+    assert [(p.ad_account_id, p.params["ad_ids"]) for p, _ in created] == [
+        ("111", ["ad1", "ad3"]),
+        ("222", ["ad2"]),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_missing_account_rejects_entire_run_without_enqueue(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    import apps.cabinet_scheduler.main as m
+
+    _patch_window_open(monkeypatch, m, campaign_ids=["c1"])
+    monkeypatch.setattr(
+        m,
+        "resolve_owner_ads_by_account",
+        AsyncMock(
+            return_value=AccountScopedAdResolution(
+                ads_by_account={"123": ("ad1",)}, total=2, missing_account_count=1
+            )
+        ),
+    )
+    create = AsyncMock()
+    monkeypatch.setattr(m, "create_mutation_task", create)
+    summary = await m.run_one_tick(
+        engine=_UnitEngine(),
+        now=datetime(2026, 5, 29, 9, tzinfo=timezone.utc),
+    )
+
+    assert summary["outcome"] == "rejected_missing_account"
+    assert summary["task_ids"] == []
+    create.assert_not_awaited()

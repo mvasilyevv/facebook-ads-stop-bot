@@ -17,12 +17,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
 
-# GITHUB_TOKEN: push образов в GHCR для валидации Dockerfile и build-cache.
-# Основные app-образы пока пересобираются на VPS. Исключение — Vision webtop:
-# он публикуется отдельной job и передаётся в deploy строго как image@digest.
+# Read-only is the workflow default. Registry mutation is granted only to jobs
+# that publish images; registry consumers receive packages:read explicitly.
 permissions:
   contents: read
-  packages: write
 
 # ─────────────────────────────────────────────
 # JOB 1: тесты (unit + integration)
@@ -36,7 +34,7 @@ jobs:
     # Боевая БД не используется — только эти сервисы.
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
         env:
           POSTGRES_USER: fb_agent
           POSTGRES_PASSWORD: ci_password
@@ -50,7 +48,7 @@ jobs:
           --health-retries 10
 
       redis:
-        image: redis:7-alpine
+        image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
         ports:
           - 6379:6379
         options: >-
@@ -61,10 +59,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Настройка Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
           cache: pip
@@ -72,7 +70,7 @@ jobs:
       # ── Регенерация pb2-стабов ────────────────────────────────────────────
       # КРИТИЧНО: committed pb2 может дрейфовать от proto (известная грабля).
       # Регенерируем ДО установки зависимостей, чтобы тесты всегда видели
-      # актуальные стабы. Зеркалим команду из run.sh строки 713-728.
+      # актуальные стабы. Зеркалим `make proto-compile`.
       - name: Установка grpcio-tools для регенерации pb2
         run: |
           # grpcio-tools И protobuf берём ТОЙ ЖЕ версии, что залочена в uv.lock для
@@ -93,12 +91,10 @@ jobs:
             --pyi_out=clients/python_grpc \
             proto/v1/browser_session.proto \
             proto/v1/scanner.proto \
-            proto/v1/creator.proto \
-            proto/v1/meta_api.proto \
-            proto/v1/ad_library.proto
+            proto/v1/meta_api.proto
 
           # grpc_tools генерирует absolute import `from v1 import ...` —
-          # чиним на относительный (зеркало run.sh:728)
+          # чиним на относительный (зеркало `make proto-compile`)
           python -c "
           from pathlib import Path
           for p in Path('clients/python_grpc/v1').glob('*_pb2_grpc.py'):
@@ -113,6 +109,15 @@ jobs:
       # ── Линтинг ───────────────────────────────────────────────────────────
       - name: ruff check (линтер)
         run: ruff check .
+
+      - name: Alembic fresh baseline + ORM drift
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: fb_agent
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: fb_agent_test
+        run: python -m scripts.run-migrations-locked
 
       # ── Тесты ─────────────────────────────────────────────────────────────
       # DATABASE_URL и REDIS_URL указывают на сервисы CI, не на боевые.
@@ -131,8 +136,8 @@ jobs:
           # ENCRYPTION_KEY обязан быть валидным Fernet (32 байта base64) — иначе
           # тесты, реально шифрующие через Fernet (test_adsetpro_credentials), падают.
           ENCRYPTION_KEY: UOGaDCkFFfSv7XMSdwQq_rqmossFFl8wSG7z69_5nO0=
-          VISION_X_TOKEN: ci_test_token
-          VISION_PROFILE_ID: ci_test_profile
+          ENCRYPTION_KEY_VERIFY: gAAAAABqZwkRi9J37pVDxsdD0LHKWe_L6EkbhQVu1yKi_N43MdYL_I1IV_-5gsOOBXzCRMY9phj3dpLhDtQCsDcJPQKhEQjiRNeb6RuubyvM6vuxf6dgr30=
+          TMA_SESSION_SECRET: ci_tma_session_secret_0123456789abcdef
           TELEGRAM_BOT_TOKEN: ci:test_token
           API_KEY: ci_api_key
           ANTHROPIC_API_KEY: ci_anthropic_key
@@ -144,15 +149,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: pnpm 11.6.0
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 11.6.0
 
       - name: Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: pnpm
@@ -170,6 +175,11 @@ jobs:
       - name: Frontend tests
         run: pnpm test
 
+      - name: Docker workspace build gate (web + TMA)
+        run: |
+          docker build --target builder --file docker/Dockerfile.frontend .
+          docker build --target builder --file docker/Dockerfile.mini-app .
+
       - name: Установка browser-agent зависимостей
         run: npm ci --prefix services/browser-agent
 
@@ -178,17 +188,66 @@ jobs:
           npm run lint --prefix services/browser-agent
           npm test --prefix services/browser-agent
 
+  platform-config:
+    name: Platform contracts (Compose + observability + shell)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install platform validators
+        run: sudo apt-get update && sudo apt-get install -y ripgrep shellcheck
+
+      - name: Compose and telemetry configuration
+        run: ./scripts/validate-platform-configs.sh --containers
+
+      - name: ShellCheck release and restore automation
+        run: >-
+          shellcheck
+          scripts/browser-control-env.sh
+          scripts/browser-maintenance-lease.sh
+          scripts/bluegreen-deploy.sh
+          scripts/bluegreen-switch-caddy.sh
+          scripts/bluegreen-worker-handoff.sh
+          scripts/create-release-manifest.sh
+          scripts/deploy-lock-remote.sh
+          scripts/deploy-platform-server.sh
+          scripts/install-alloy-agent-unit.sh
+          scripts/install-host-metrics.sh
+          scripts/install-platform-units.sh
+          scripts/install-release-reconciler.sh
+          scripts/install-server-units.sh
+          scripts/install-vision-webtop.sh
+          scripts/platform-compose.sh
+          scripts/platform-desktop-compose.sh
+          scripts/platform-desktop-heal.sh
+          scripts/platform-desktop-release.sh
+          scripts/platform-desktop-transaction.sh
+          scripts/reconcile-platform-release.sh
+          scripts/release-backup-gate.sh
+          scripts/pgbackrest-admin.sh
+          scripts/pgbackrest-restore-drill.sh
+          scripts/platform-bootstrap.sh
+          scripts/platform-alloy-agent.sh
+          scripts/run-local.sh
+          scripts/server-platform-release.sh
+          scripts/validate-platform-configs.sh
+          scripts/wait-for-vision-container.sh
+
   # ─────────────────────────────────────────────
   # JOB 2a: базовый Python-образ. Собирается ДО остальных — иначе параллельная
   # matrix не найдёт python-base (api/workers начинаются с FROM него).
   # ─────────────────────────────────────────────
   build-base:
-    name: Валидационная сборка python-base (не deploy artifact)
+    name: Production artifact — python-base
     runs-on: ubuntu-latest
-    needs: [test, web-test]  # только после зелёных backend/web/browser-agent тестов
+    needs: [test, web-test, platform-config]
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # pb2 регенерируем ДО сборки — committed-стабы дрейфуют от proto (грабля).
       - name: Установка grpcio-tools для регенерации pb2
@@ -211,9 +270,7 @@ jobs:
             --pyi_out=clients/python_grpc \
             proto/v1/browser_session.proto \
             proto/v1/scanner.proto \
-            proto/v1/creator.proto \
-            proto/v1/meta_api.proto \
-            proto/v1/ad_library.proto
+            proto/v1/meta_api.proto
 
           python -c "
           from pathlib import Path
@@ -222,23 +279,25 @@ jobs:
           "
 
       - name: Настройка Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Авторизация в GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Сборка и push — python-base
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: docker/Dockerfile.python-base
           push: true
           cache-from: type=gha,scope=python-base
           cache-to: type=gha,mode=max,scope=python-base
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ env.IMAGE_BASE }}-python-base:${{ github.sha }}
             ${{ env.IMAGE_BASE }}-python-base:latest
@@ -249,9 +308,12 @@ jobs:
   # подменяем источник на свежесобранный ghcr-образ через build-contexts.
   # ─────────────────────────────────────────────
   build:
-    name: Валидационная сборка образов (не deploy artifacts)
+    name: Production artifacts — application images
     runs-on: ubuntu-latest
     needs: build-base
+    permissions:
+      contents: read
+      packages: write
 
     strategy:
       fail-fast: false
@@ -280,10 +342,14 @@ jobs:
             dockerfile: docker/Dockerfile.browser-agent
             image_suffix: browser-agent
             is_python: false
+          - name: postgres
+            dockerfile: docker/Dockerfile.postgres
+            image_suffix: postgres
+            is_python: false
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # pb2 нужен только Python-образам (api/workers наследуют python-base).
       - name: Установка grpcio-tools (только Python-образы)
@@ -308,9 +374,7 @@ jobs:
             --pyi_out=clients/python_grpc \
             proto/v1/browser_session.proto \
             proto/v1/scanner.proto \
-            proto/v1/creator.proto \
-            proto/v1/meta_api.proto \
-            proto/v1/ad_library.proto
+            proto/v1/meta_api.proto
 
           python -c "
           from pathlib import Path
@@ -319,10 +383,10 @@ jobs:
           "
 
       - name: Настройка Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Авторизация в GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -332,7 +396,7 @@ jobs:
       # из job build-base (build-contexts работает только если запись присутствует).
       - name: Сборка и push — ${{ matrix.name }} (Python)
         if: matrix.is_python
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -341,6 +405,8 @@ jobs:
             fb-stop-bot/python-base:latest=docker-image://${{ env.IMAGE_BASE }}-python-base:${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.image_suffix }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image_suffix }}
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:${{ github.sha }}
             ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:latest
@@ -348,13 +414,15 @@ jobs:
       # Не-Python образы (browser-agent/frontend/mini-app) — без base и pb2.
       - name: Сборка и push — ${{ matrix.name }}
         if: ${{ !matrix.is_python }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
           cache-from: type=gha,scope=${{ matrix.image_suffix }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image_suffix }}
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:${{ github.sha }}
             ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:latest
@@ -365,19 +433,22 @@ jobs:
     name: Production artifacts — Vision + KasmVNC
     runs-on: ubuntu-latest
     needs: [test, web-test]
+    permissions:
+      contents: read
+      packages: write
     outputs:
       webtop_image_ref: ${{ steps.artifact.outputs.webtop_image_ref }}
       kasm_image_ref: ${{ steps.artifact.outputs.kasm_image_ref }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Настройка Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Авторизация в GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -385,24 +456,28 @@ jobs:
 
       - name: Сборка и push — Vision webtop
         id: build_webtop
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: deploy/vision-webtop
           file: deploy/vision-webtop/Dockerfile
           push: true
           cache-from: type=gha,scope=vision-webtop
           cache-to: type=gha,mode=max,scope=vision-webtop
+          provenance: mode=max
+          sbom: true
           tags: ${{ env.IMAGE_BASE }}-vision-webtop:${{ github.sha }}
 
       - name: Сборка и push — KasmVNC sidecar
         id: build_kasm
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: deploy/kasmvnc-sidecar
           file: deploy/kasmvnc-sidecar/Dockerfile
           push: true
           cache-from: type=gha,scope=kasmvnc-sidecar
           cache-to: type=gha,mode=max,scope=kasmvnc-sidecar
+          provenance: mode=max
+          sbom: true
           tags: ${{ env.IMAGE_BASE }}-kasmvnc-sidecar:${{ github.sha }}
 
       - name: Зафиксировать immutable reference
@@ -418,84 +493,118 @@ jobs:
           printf 'webtop_image_ref=%s@%s\n' "$WEBTOP_IMAGE_NAME" "$WEBTOP_IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
           printf 'kasm_image_ref=%s@%s\n' "$KASM_IMAGE_NAME" "$KASM_IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
 
-  # ─────────────────────────────────────────────
-  # JOB 3: деплой на боевой сервер (релизная схема releases/ + shared/.env)
-  #
-  # Хост переведён на release-based деплой: scripts/deploy-server.sh →
-  # server-release.sh (rsync релиза, миграции, health-гейт, атомарное
-  # переключение current, авто-rollback). Старый git-checkout-флоу удалён —
-  # несовместим с раскладкой сервера (инцидент 15.07: cd в несуществующий
-  # DEPLOY_PROJECT_DIR + БД уже на миграции, которой нет в git).
-  # ВАЖНО: server-release.sh собирает образы из rsync-снимка на самом VPS; GHCR
-  # images из build jobs выше сейчас служат только валидацией и кэшем.
-  #
-  # ГЕЙТ vars.CI_DEPLOY_ENABLED: автодеплой включается ТОЛЬКО когда весь боевой
-  # контур закоммичен (docker-compose с новыми сервисами, докерфайлы под
-  # релизные теги, миграция 0034 и её код). До этого автодеплой из чистого git
-  # ОТКАТИЛ бы прод — фичи там из ещё не закоммиченной работы. Пока гейт
-  # выключен, джоба скипается (пайплайн зелёный), деплой ручной одной командой:
-  #   ./scripts/deploy-server.sh
-  # Включение: gh variable set CI_DEPLOY_ENABLED --body true
-  # ─────────────────────────────────────────────
-  deploy:
-    name: Деплой на сервер (релизная схема)
+  release-manifest:
+    name: Immutable application release manifest
     runs-on: ubuntu-latest
     needs: [build, build-desktop]
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Configure Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve all production images to digests
+        run: >-
+          ./scripts/create-release-manifest.sh
+          --image-base "${IMAGE_BASE}"
+          --tag "${GITHUB_SHA}"
+          --desktop-webtop-image "${{ needs.build-desktop.outputs.webtop_image_ref }}"
+          --desktop-kasmvnc-image "${{ needs.build-desktop.outputs.kasm_image_ref }}"
+          --output release-images.env
+
+      - name: Upload immutable release manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-images-${{ github.sha }}
+          path: release-images.env
+          if-no-files-found: error
+          retention-days: 35
+
+  # ─────────────────────────────────────────────
+  # JOB 3: immutable blue/green deployment. A new target always bootstraps
+  # blue from the single safety-first database baseline.
+  # ─────────────────────────────────────────────
+  deploy:
+    name: Deploy immutable blue/green release
+    runs-on: ubuntu-latest
+    needs: [release-manifest]
     if: github.ref == 'refs/heads/main' && vars.CI_DEPLOY_ENABLED == 'true'
+    permissions:
+      contents: read
+      packages: read
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Download immutable release manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-images-${{ github.sha }}
+          path: .
 
       - name: SSH-ключ и known_hosts
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
           mkdir -p ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' \
+            'Host *' \
+            '  StrictHostKeyChecking yes' \
+            '  UserKnownHostsFile ~/.ssh/known_hosts' \
+            '  IdentitiesOnly yes' > ~/.ssh/config
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: .env-фолбэк из PROD_ENV_B64
-        # deploy-server.sh требует локальный .env, но фактический источник
-        # секретов — shared/.env на сервере (скрипт сам подтягивает его, если
-        # существует). Фолбэк нужен только для инициализации чистого хоста.
-        env:
-          PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
-        run: |
-          if [ -n "$PROD_ENV_B64" ]; then
-            printf '%s' "$PROD_ENV_B64" | base64 -d > .env
-          else
-            touch .env
-          fi
-          chmod 600 .env
+          chmod 600 ~/.ssh/known_hosts ~/.ssh/config
+          ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts >/dev/null
 
       - name: Временная авторизация production Docker в GHCR
         env:
           DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DESKTOP_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
+          DEPLOY_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
         run: |
-          ssh "$DEPLOY_TARGET" "install -d -m 700 '$DESKTOP_DOCKER_CONFIG'"
+          # Validated local values deliberately form the remote command.
+          # shellcheck disable=SC2029
+          ssh "$DEPLOY_TARGET" "install -d -m 700 '$DEPLOY_DOCKER_CONFIG'"
+          # shellcheck disable=SC2029
           printf '%s' "$GHCR_TOKEN" | ssh "$DEPLOY_TARGET" \
-            "DOCKER_CONFIG='$DESKTOP_DOCKER_CONFIG' docker login ghcr.io --username '$GHCR_USER' --password-stdin >/dev/null"
+            "DOCKER_CONFIG='$DEPLOY_DOCKER_CONFIG' docker login ghcr.io --username '$GHCR_USER' --password-stdin >/dev/null"
 
       - name: Деплой релиза
         timeout-minutes: 25
         env:
           DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
-          DESKTOP_WEBTOP_IMAGE: ${{ needs.build-desktop.outputs.webtop_image_ref }}
-          DESKTOP_KASMVNC_IMAGE: ${{ needs.build-desktop.outputs.kasm_image_ref }}
-          DESKTOP_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
-        run: ./scripts/deploy-server.sh
+          DEPLOY_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
+        run: >-
+          ./scripts/deploy-platform-server.sh
+          --host "$DEPLOY_TARGET"
+          --release-env release-images.env
 
       - name: Удалить временную GHCR-авторизацию
         if: always()
         env:
           DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
-          DESKTOP_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
+          DEPLOY_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
         run: |
+          # Validated local path is deliberately removed remotely.
+          # shellcheck disable=SC2029
           ssh "$DEPLOY_TARGET" \
-            "test ! -d '$DESKTOP_DOCKER_CONFIG' || { find '$DESKTOP_DOCKER_CONFIG' -type f -delete; rmdir '$DESKTOP_DOCKER_CONFIG'; }"
+            "test ! -d '$DEPLOY_DOCKER_CONFIG' || { find '$DEPLOY_DOCKER_CONFIG' -type f -delete; rmdir '$DEPLOY_DOCKER_CONFIG'; }"

@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from core.meta_api.shadow_spend import (
-    DEFAULT_BILLING_MIN_DELTA_CENTS,
+    DEFAULT_BILLING_MIN_DELTA_MINOR,
     ShadowSample,
     detect_shadow,
 )
@@ -23,8 +25,9 @@ def _sample(offset_seconds: int, billing: int, reported: int) -> ShadowSample:
     """Снимок со сдвигом offset_seconds от _T0 (для читаемости хронологии в тестах)."""
     return ShadowSample(
         ts=_T0 + timedelta(seconds=offset_seconds),
-        billing_cents=billing,
-        reported_cents=reported,
+        currency="USD",
+        billing_minor=billing,
+        reported_minor=reported,
     )
 
 
@@ -36,8 +39,9 @@ def test_detect_shadow_billing_moves_reported_stands() -> None:
     ]
     verdict = detect_shadow(samples, window_seconds=360)
     assert verdict is not None
-    assert verdict.billing_delta_cents == 30
-    assert verdict.reported_delta_cents == 0
+    assert verdict.currency == "USD"
+    assert verdict.billing_delta_minor == 30
+    assert verdict.reported_delta_minor == 0
     assert verdict.window_seconds == 300
 
 
@@ -57,7 +61,7 @@ def test_detect_shadow_billing_below_threshold_boundary() -> None:
         _sample(300, 1024, 500),  # +24¢ < 25¢
     ]
     assert detect_shadow(samples, window_seconds=360) is None
-    assert DEFAULT_BILLING_MIN_DELTA_CENTS == 25  # фиксируем дефолт-контракт
+    assert DEFAULT_BILLING_MIN_DELTA_MINOR == 25  # фиксируем дефолт-контракт
 
 
 # Ровно на пороге: билл +25¢, отчётность стоит → тревога (≥ порога, не >)
@@ -66,9 +70,9 @@ def test_detect_shadow_billing_exactly_at_threshold() -> None:
         _sample(0, 1000, 500),
         _sample(300, 1025, 500),  # ровно +25¢
     ]
-    verdict = detect_shadow(samples, window_seconds=360, billing_min_delta_cents=25)
+    verdict = detect_shadow(samples, window_seconds=360, billing_min_delta_minor=25)
     assert verdict is not None
-    assert verdict.billing_delta_cents == 25
+    assert verdict.billing_delta_minor == 25
 
 
 # Отчётность ровно на допуске +5¢ → тревога (Δreported ≤ 5, включительно)
@@ -77,9 +81,9 @@ def test_detect_shadow_reported_exactly_at_tolerance() -> None:
         _sample(0, 1000, 500),
         _sample(300, 1030, 505),  # +5¢ отчётность = допуск
     ]
-    verdict = detect_shadow(samples, window_seconds=360, reported_max_delta_cents=5)
+    verdict = detect_shadow(samples, window_seconds=360, reported_max_delta_minor=5)
     assert verdict is not None
-    assert verdict.reported_delta_cents == 5
+    assert verdict.reported_delta_minor == 5
 
 
 # Окно отсекает старые сэмплы: старейший (билл 1000) вне окна 360с, срез внутри окна
@@ -102,7 +106,7 @@ def test_detect_shadow_window_uses_oldest_in_window() -> None:
     ]
     verdict = detect_shadow(samples, window_seconds=360)
     assert verdict is not None
-    assert verdict.billing_delta_cents == 30
+    assert verdict.billing_delta_minor == 30
     assert verdict.window_seconds == 300
 
 
@@ -119,8 +123,18 @@ def test_detect_shadow_single_sample() -> None:
 # Все снимки одномоментны (окно вырождается) → None, деления/сравнения не падают
 def test_detect_shadow_degenerate_window_same_ts() -> None:
     samples = [
-        ShadowSample(ts=_T0, billing_cents=1000, reported_cents=500),
-        ShadowSample(ts=_T0, billing_cents=2000, reported_cents=500),
+        ShadowSample(
+            ts=_T0,
+            currency="USD",
+            billing_minor=1000,
+            reported_minor=500,
+        ),
+        ShadowSample(
+            ts=_T0,
+            currency="USD",
+            billing_minor=2000,
+            reported_minor=500,
+        ),
     ]
     assert detect_shadow(samples, window_seconds=360) is None
 
@@ -134,7 +148,7 @@ def test_detect_shadow_unordered_input() -> None:
     ]
     verdict = detect_shadow(samples, window_seconds=360)
     assert verdict is not None
-    assert verdict.billing_delta_cents == 30
+    assert verdict.billing_delta_minor == 30
 
 
 # Сброс биллинга на границе суток (Δ отрицательна) не даёт ложную тревогу
@@ -144,3 +158,45 @@ def test_detect_shadow_billing_reset_negative_delta() -> None:
         _sample(300, 20, 0),  # полночь кабинета: оба обнулились
     ]
     assert detect_shadow(samples, window_seconds=360) is None
+
+
+def test_detect_shadow_rejects_cross_currency_evidence() -> None:
+    samples = [
+        _sample(0, 1000, 500),
+        ShadowSample(
+            ts=_T0 + timedelta(seconds=300),
+            currency="KES",
+            billing_minor=1030,
+            reported_minor=500,
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="one confirmed currency"):
+        detect_shadow(samples, window_seconds=360)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"window_seconds": 0}, "window_seconds"),
+        ({"billing_min_delta_minor": 0}, "billing threshold"),
+        ({"reported_max_delta_minor": -1}, "reporting tolerance"),
+    ],
+)
+def test_detect_shadow_rejects_unsafe_detector_configuration(
+    kwargs: dict[str, int],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        detect_shadow([_sample(0, 1000, 500), _sample(300, 1030, 500)], **kwargs)
+
+
+def test_detect_shadow_rejects_negative_counters() -> None:
+    with pytest.raises(ValueError, match="non-negative minor units"):
+        detect_shadow(
+            [
+                _sample(0, -1, 0),
+                _sample(300, 30, 0),
+            ],
+            window_seconds=360,
+        )

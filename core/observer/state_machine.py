@@ -2,7 +2,8 @@
 """Pure FSM-логика для ad_alert_state.
 
 Без ORM-зависимостей, без I/O. Принимает текущее состояние + результат evaluator'а,
-возвращает план: что записать в БД, что отправить в TG, нужна ли disable-задача.
+возвращает план: что записать в БД, какое notification event создать и нужна ли
+pause-команда.
 
 Состояния:
 - normal              — норма, не уведомляли
@@ -17,10 +18,10 @@
 - warning_sent → warning_sent  (всё ещё WARNING — НЕ дублируем алерт)
 - warning_sent → stop_sent     (эскалация)
 - warning_sent → normal        (восстановление)
-- stop_sent    → claimed       (внешний триггер от disable_reconciler)
+- stop_sent    → claimed       (pause-команда принята CommandService)
 - stop_sent    → normal        (восстановление до клика)
-- claimed      → disabled      (disable_worker подтвердил)
-- disabled     → normal        (enable_worker сбросил)
+- claimed      → disabled      (Meta worker подтвердил pause)
+- disabled     → normal        (Meta worker подтвердил activate)
 """
 
 from __future__ import annotations
@@ -62,12 +63,12 @@ class FsmTransition:
     new_stage: AlertStage | None
     new_open_token: uuid.UUID | None
 
-    # Нужно ли отправить алерт в TG (новый WARNING или STOP)
+    # Нужно ли создать notification event (новый WARNING или STOP)
     emit_alert: bool = False
     alert_stage: AlertStage | None = None  # warning / stop — для рендерера
     alert_rule_codes: tuple[str, ...] = field(default_factory=tuple)
 
-    # Нужно ли создать disable-task (auto-stop)
+    # Нужно ли создать pause-задачу auto-stop
     create_disable_task: bool = False
 
     # Описание перехода для логов
@@ -91,7 +92,7 @@ def decide(inp: FsmInput) -> FsmTransition:
     Контракт open_state_token:
     - normal → warning_sent / stop_sent — новый incident, генерируем uuid4().
     - warning_sent → stop_sent — эскалация ТОГО ЖЕ incident'а: token сохраняется,
-      callback'и на старой WARNING-карточке (`dis:<fb>:<token>`) остаются валидными.
+      notification plane обновляет ту же incident-карточку.
     - повторы внутри одного состояния (stop_sent → stop_sent и пр.) — token сохраняется.
     - восстановление в normal — token обнуляется (incident закрыт).
     """
@@ -228,7 +229,7 @@ def should_reopen_disabled(current_state: AlertState, delivery_status: str | Non
     """True если ад в `disabled`, но снова ACTIVE в кабинете → нужен reopen в `normal`.
 
     Реактивация ВНЕ бота (вручную в Ads Manager или autostart bulk-activate) не проходит
-    через enable-путь (reset_after_enable_succeeded), поэтому FSM остаётся `disabled` —
+    через подтверждённую activate-команду, поэтому FSM остаётся `disabled` —
     и decide() для disabled+STOP ничего не делает. Убыточный реактивированный ад крутится
     без стопа (H3). Обнаружив ACTIVE delivery у disabled-ада, observer сбрасывает FSM в
     normal, и повторный STOP срабатывает заново.
@@ -257,30 +258,12 @@ def should_sync_disabled(current_state: AlertState, delivery_status: str | None)
     return (delivery_status or "").strip().upper() == "OFF"
 
 
-def reset_after_disable_succeeded(current_state: AlertState) -> AlertState:
-    """Вызывается из disable_worker'а после успешного клика.
-
-    Любое состояние перед disable → 'disabled'.
-    """
-    return "disabled"
-
-
-def reset_after_enable_succeeded(current_state: AlertState) -> AlertState:
-    """Вызывается из enable_worker'а после успешного клика.
-
-    Любое состояние → 'normal' (новая жизнь объявления).
-    """
-    return "normal"
-
-
 __all__ = [
     "AlertStage",
     "AlertState",
     "FsmInput",
     "FsmTransition",
     "decide",
-    "reset_after_disable_succeeded",
-    "reset_after_enable_succeeded",
     "should_reopen_disabled",
     "should_sync_disabled",
 ]

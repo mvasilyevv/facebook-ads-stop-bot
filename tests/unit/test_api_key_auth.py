@@ -3,7 +3,8 @@
 
 write (POST/PUT/PATCH/DELETE) на не-исключённых путях → нужен корректный X-API-Key.
 обычный read (GET) и исключённые пути (/api/v1/postback, /api/tma) — без ключа;
-GET /api/ai/pulse требует ключ, потому что может инициировать платный AI.
+POST /api/ai/pulse требует owner auth и exact Origin для panel cookie, потому
+что cache miss может инициировать платный AI-вызов. GET отсутствует.
 require_api_key=False → enforcement выключен. api_key пуст + require → 503.
 
 Middleware получает явный settings (SimpleNamespace) — тест не зависит от
@@ -14,10 +15,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from apps.api.middleware.api_key_auth import ApiKeyAuthMiddleware
+from apps.api.middleware.api_key_auth import ApiKeyAuthMiddleware, TmaAuthorization
 from core.auth.panel_access import PANEL_SESSION_COOKIE
 
 _KEY = "secret-key-123"
@@ -31,8 +32,14 @@ def _app(
 ) -> TestClient:
     app = FastAPI()
 
-    async def authorize_tma(token: str, _settings) -> str | None:
-        return tma_role if token == "valid-tma-token" else None
+    async def authorize_tma(token: str, _settings) -> TmaAuthorization | None:
+        if token != "valid-tma-token" or tma_role is None:
+            return None
+        return TmaAuthorization(
+            role=tma_role,
+            telegram_user_id=424242,
+            bot_generation=1,
+        )
 
     app.add_middleware(
         ApiKeyAuthMiddleware,
@@ -48,11 +55,15 @@ def _app(
     async def _post():
         return {"ok": True}
 
+    @app.post("/principal")
+    async def _principal(request: Request):
+        return {"principal": getattr(request.state, "operator_principal", None)}
+
     @app.post("/api/thing")
     async def _api_post():
         return {"ok": True}
 
-    @app.get("/api/ai/pulse")
+    @app.post("/api/ai/pulse")
     async def _ai_pulse():
         return {"important": False}
 
@@ -60,8 +71,28 @@ def _app(
     async def _adset_duplicate_status():
         return {"status": "draft"}
 
+    @app.get("/api/settings/telegram")
+    async def _telegram_settings():
+        return {"activation_command": "/start owner-capability"}
+
     @app.post("/api/v1/postback/adsetpro")
     async def _postback():
+        return {"ok": True}
+
+    @app.post("/api/v1/internal/browser-operations/consume")
+    async def _browser_consume():
+        return {"ok": True}
+
+    @app.post("/api/v1/internal/browser-operations/admin")
+    async def _browser_admin():
+        return {"ok": True}
+
+    @app.post("/api/v1/internal/browser-maintenance/consume")
+    async def _browser_maintenance_consume():
+        return {"ok": True}
+
+    @app.post("/api/v1/internal/browser-maintenance/admin")
+    async def _browser_maintenance_admin():
         return {"ok": True}
 
     @app.post("/api/tma/draft-tasks/1/confirm")
@@ -80,11 +111,12 @@ def test_get_without_key_allowed() -> None:
     assert _app().get("/thing").status_code == 200
 
 
-# Чувствительный GET без ключа закрыт, с верным ключом доступен.
-def test_ai_pulse_get_requires_key() -> None:
+# Платный side effect не доступен через GET; POST проходит общий write boundary.
+def test_ai_pulse_is_post_only_and_requires_owner_auth() -> None:
     client = _app()
-    assert client.get("/api/ai/pulse").status_code == 401
-    assert client.get("/api/ai/pulse", headers={"X-API-Key": _KEY}).status_code == 200
+    assert client.get("/api/ai/pulse").status_code == 405
+    assert client.post("/api/ai/pulse").status_code == 401
+    assert client.post("/api/ai/pulse", headers={"X-API-Key": _KEY}).status_code == 200
 
 
 def test_adset_duplicate_status_get_requires_owner_auth() -> None:
@@ -93,6 +125,24 @@ def test_adset_duplicate_status_get_requires_owner_auth() -> None:
 
     assert client.get(path).status_code == 401
     assert client.get(path, headers={"X-API-Key": _KEY}).status_code == 200
+
+
+def test_telegram_admin_reads_require_owner_auth() -> None:
+    path = "/api/settings/telegram"
+    assert _app().get(path).status_code == 401
+    assert _app().get(path, headers={"X-API-Key": _KEY}).status_code == 200
+    assert (
+        _app(tma_role="recipient")
+        .get(path, headers={"Authorization": "Bearer valid-tma-token"})
+        .status_code
+        == 403
+    )
+    assert (
+        _app(tma_role="owner")
+        .get(path, headers={"Authorization": "Bearer valid-tma-token"})
+        .status_code
+        == 200
+    )
 
 
 # POST без ключа → 401
@@ -115,6 +165,17 @@ def test_post_correct_key_allowed() -> None:
 # Исключённый путь postback (свой секрет) → POST без ключа проходит
 def test_postback_path_exempt() -> None:
     assert _app().post("/api/v1/postback/adsetpro").status_code == 200
+
+
+def test_only_exact_browser_consume_paths_are_exempt() -> None:
+    client = _app()
+    for path in (
+        "/api/v1/internal/browser-operations/consume",
+        "/api/v1/internal/browser-maintenance/consume",
+    ):
+        assert client.post(path).status_code == 200
+    assert client.post("/api/v1/internal/browser-operations/admin").status_code == 401
+    assert client.post("/api/v1/internal/browser-maintenance/admin").status_code == 401
 
 
 # Исключённый путь TMA (Bearer) → POST без ключа проходит
@@ -163,8 +224,9 @@ def test_tma_recipient_cannot_use_shared_write_or_protected_read() -> None:
     headers = {"Authorization": "Bearer valid-tma-token"}
 
     assert client.post("/thing", headers=headers).status_code == 403
-    assert client.get("/api/ai/pulse", headers=headers).status_code == 403
+    assert client.post("/api/ai/pulse", headers=headers).status_code == 403
     assert client.get("/api/tools/adset-duplicates/123", headers=headers).status_code == 403
+    assert client.get("/api/settings/telegram", headers=headers).status_code == 403
 
 
 def test_tma_owner_can_use_shared_write_and_protected_read() -> None:
@@ -172,8 +234,43 @@ def test_tma_owner_can_use_shared_write_and_protected_read() -> None:
     headers = {"Authorization": "Bearer valid-tma-token"}
 
     assert client.post("/thing", headers=headers).status_code == 200
-    assert client.get("/api/ai/pulse", headers=headers).status_code == 200
+    assert client.post("/api/ai/pulse", headers=headers).status_code == 200
     assert client.get("/api/tools/adset-duplicates/123", headers=headers).status_code == 200
+    assert client.get("/api/settings/telegram", headers=headers).status_code == 200
+
+
+def test_authenticated_boundary_owns_operator_principal() -> None:
+    spoofed = {"X-Operator-Principal": "forged", "X-API-Key": _KEY}
+    assert _app().post("/principal", headers=spoofed).json() == {"principal": "operator:web"}
+
+    tma = _app(tma_role="owner").post(
+        "/principal",
+        headers={
+            "Authorization": "Bearer valid-tma-token",
+            "X-Operator-Principal": "forged",
+        },
+    )
+    assert tma.json() == {"principal": "tma:424242"}
+
+
+def test_verified_panel_identity_is_used_for_immutable_attribution() -> None:
+    response = _app().post(
+        "/principal",
+        headers={
+            "X-API-Key": _KEY,
+            "X-Verified-Operator-Principal": "panel:424242",
+        },
+    )
+    assert response.json() == {"principal": "operator:web:424242"}
+
+    malformed = _app().post(
+        "/principal",
+        headers={
+            "X-API-Key": _KEY,
+            "X-Verified-Operator-Principal": "panel:owner",
+        },
+    )
+    assert malformed.json() == {"principal": "operator:web"}
 
 
 def test_cookie_authenticated_api_write_requires_exact_production_origin() -> None:

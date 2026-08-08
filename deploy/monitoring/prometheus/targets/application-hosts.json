@@ -1,0 +1,11 @@
+[
+  {
+    "targets": [
+      "localhost:9090"
+    ],
+    "labels": {
+      "node": "fb-agent-app-1",
+      "role": "application"
+    }
+  }
+]

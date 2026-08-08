@@ -43,6 +43,53 @@ function mockHealthPage(opts: {
 const baseParams = { method: 'GET' as const, endpoint: '/me', queryParams: {} };
 
 describe('executeGraphCall error-mapping (H-8)', () => {
+  it('rejects method override variants before touching the browser page', async () => {
+    let pageCalls = 0;
+    const page = {
+      waitForFunction: async () => {
+        pageCalls += 1;
+        return true;
+      },
+      evaluate: async () => {
+        pageCalls += 1;
+        return { status_code: 200, response_json: '{}' };
+      },
+    };
+    const variants: Array<{
+      endpoint?: string;
+      queryParams?: Record<string, string>;
+      bodyJson?: string;
+    }> = [
+      { queryParams: { method: 'post' } },
+      { queryParams: { MeThOd: 'POST' } },
+      { queryParams: { '%256dethod': 'post' } },
+      { queryParams: { '%25252525256dethod': 'post' } },
+      { queryParams: { method: 'get', METHOD: 'post' } },
+      { endpoint: '/me?method=post&method=get' },
+      { endpoint: '/me%253Fmethod%253Dpost' },
+      { endpoint: '/me%25252525253Fmethod%25252525253Dpost' },
+      { bodyJson: '{"method":"post"}' },
+      { bodyJson: '{"\\u006dethod":"post"}' },
+      { bodyJson: '{"%256dethod":"post"}' },
+      { bodyJson: '{"%25252525256dethod":"post"}' },
+      { bodyJson: '{"method":"GET","method":"POST"}' },
+      { bodyJson: 'method%3Dpost' },
+    ];
+
+    for (const variant of variants) {
+      await assert.rejects(
+        () => executeGraphCall(page as any, {
+          method: 'GET',
+          endpoint: variant.endpoint ?? '/me',
+          queryParams: variant.queryParams ?? {},
+          bodyJson: variant.bodyJson,
+        }),
+        /method|semantics|query\/fragment/i,
+      );
+    }
+    assert.equal(pageCalls, 0);
+  });
+
   it('успешный ответ → error undefined, statusCode/responseJson проброшены', async () => {
     const page = mockPage(() => ({ status_code: 200, response_json: '{"id":"act_1"}' }));
     const r = await executeGraphCall(page, baseParams);
@@ -114,6 +161,52 @@ describe('executeGraphCall error-mapping (H-8)', () => {
       queryParams: {},
     });
     assert.equal(r.error, undefined);
+  });
+
+  it('AbortSignal вызывает browser-side abort и сохраняет UNKNOWN-семантику (-2)', async () => {
+    const abort = new AbortController();
+    let notifyMainStarted!: () => void;
+    const mainStarted = new Promise<void>((resolve) => { notifyMainStarted = resolve; });
+    let finishGraph!: (value: { status_code: number; response_json: string }) => void;
+    let abortEvaluations = 0;
+    const page = {
+      waitForFunction: async () => true,
+      evaluate: async (_fn: any, args: any) => {
+        if (args && typeof args === 'object' && 'endpoint' in args) {
+          notifyMainStarted();
+          return new Promise<{ status_code: number; response_json: string }>((resolve) => {
+            finishGraph = resolve;
+          });
+        }
+        if (typeof args === 'string') {
+          abortEvaluations += 1;
+          finishGraph?.({
+            status_code: 0,
+            response_json: JSON.stringify({
+              error: {
+                code: -2,
+                type: 'NetworkError',
+                message: 'gRPC request cancelled; external result is unknown',
+              },
+            }),
+          });
+        }
+        return undefined;
+      },
+    };
+
+    const pending = executeGraphCall(page as any, baseParams, {
+      signal: abort.signal,
+      operationId: 'cancel-test',
+    });
+    await mainStarted;
+    abort.abort('grpc_cancelled');
+    const result = await pending;
+
+    assert.ok(abortEvaluations >= 1, 'cancel дошёл до отдельного page.evaluate(abort)');
+    assert.equal(result.statusCode, 0);
+    assert.equal(result.error?.code, -2);
+    assert.equal(result.error?.type, 'NetworkError');
   });
 });
 

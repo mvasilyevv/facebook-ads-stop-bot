@@ -15,7 +15,6 @@ from core.auth.desktop_access import (
     create_desktop_ticket,
     delete_desktop_session,
     load_desktop_session,
-    mark_desktop_owner_checked,
 )
 
 
@@ -28,13 +27,14 @@ def test_launch_url_is_fixed_to_https_application_origin():
         build_desktop_launch_url("http://app.adpulse.su", "ticket")
 
 
-def test_v3_cookie_name_intentionally_does_not_accept_legacy_names():
-    assert DESKTOP_SESSION_COOKIE == "__Secure-adpulse_desktop_session_v3"
+def test_v4_cookie_name_intentionally_does_not_accept_legacy_names():
+    assert DESKTOP_SESSION_COOKIE == "__Secure-adpulse_desktop_session_v4"
     assert DESKTOP_SESSION_COOKIE != "adpulse_desktop_session"
+    assert DESKTOP_SESSION_COOKIE != "__Secure-adpulse_desktop_session_v3"
 
 
 @pytest.mark.asyncio
-async def test_ticket_is_hashed_v3_host_bound_short_lived_and_single_use():
+async def test_ticket_is_hashed_v4_host_bound_short_lived_and_single_use():
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     ticket, grant = await create_desktop_ticket(
         redis,
@@ -44,7 +44,7 @@ async def test_ticket_is_hashed_v3_host_bound_short_lived_and_single_use():
         ttl=300,
         now=1_700_000_000,
     )
-    keys = await redis.keys("desktop_access:v3:ticket:*")
+    keys = await redis.keys("desktop_access:v4:ticket:*")
     assert len(keys) == 1
     assert ticket not in keys[0]
     assert await redis.ttl(keys[0]) <= 300
@@ -65,7 +65,7 @@ async def test_corrupted_and_expired_tickets_fail_closed():
         ttl=60,
         now=1_700_000_000,
     )
-    key = (await redis.keys("desktop_access:v3:ticket:*"))[0]
+    key = (await redis.keys("desktop_access:v4:ticket:*"))[0]
     await redis.set(key, "not-json", ex=60)
     with pytest.raises(DesktopAccessError, match="Повреждён"):
         await consume_desktop_ticket(redis, ticket, now=1_700_000_001)
@@ -95,7 +95,7 @@ async def test_session_creation_uses_checked_set_nx(monkeypatch):
         ttl=43_200,
         now=1_700_000_000,
     )
-    keys = await redis.keys("desktop_access:v3:session:*")
+    keys = await redis.keys("desktop_access:v4:session:*")
     assert len(keys) == 1
     assert "fixed-token" not in keys[0]
     assert await load_desktop_session(redis, "fixed-token", now=1_700_000_100) == session
@@ -112,7 +112,7 @@ async def test_session_creation_uses_checked_set_nx(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_owner_refresh_uses_set_xx_so_logout_wins_race():
+async def test_logout_removes_desktop_session_without_resurrection():
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     token, session = await create_desktop_session(
         redis,
@@ -123,9 +123,9 @@ async def test_owner_refresh_uses_set_xx_so_logout_wins_race():
         now=1_700_000_000,
     )
     await delete_desktop_session(redis, token)
-    assert await mark_desktop_owner_checked(redis, token, session, 1_700_000_010) is None
+    assert session.telegram_user_id == 123456
     assert await load_desktop_session(redis, token, now=1_700_000_011) is None
-    assert not await redis.keys("desktop_access:v3:session:*")
+    assert not await redis.keys("desktop_access:v4:session:*")
     await redis.aclose()
 
 
@@ -140,7 +140,7 @@ async def test_malformed_session_is_deleted():
         ttl=300,
         now=1_700_000_000,
     )
-    key = (await redis.keys("desktop_access:v3:session:*"))[0]
+    key = (await redis.keys("desktop_access:v4:session:*"))[0]
     await redis.set(key, json.dumps({"telegram_user_id": 123456}), ex=300)
     assert await load_desktop_session(redis, token, now=1_700_000_001) is None
     assert await redis.get(key) is None

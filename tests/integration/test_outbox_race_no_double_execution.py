@@ -45,16 +45,16 @@ async def test_zombie_worker_after_reconciler_does_not_overwrite_success(
     fb_ad_id = f"23000{uuid.uuid4().hex[:8]}"
     task_id = await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=f"race-{fb_ad_id}",
-        payload={"fb_ad_id": fb_ad_id},
+        payload={"source": "test", "target_id": fb_ad_id},
         requested_by="test",
         max_attempts=5,
     )
     assert task_id is not None
 
     # Worker A захватил задачу — status='running', attempt_count=0
-    claim_a = await claim_next_task(pg_engine, task_type="disable")
+    claim_a = await claim_next_task(pg_engine, task_type="observer_scan")
     assert claim_a.task is not None
     assert claim_a.task.id == task_id
     assert claim_a.task.status == "running"
@@ -62,7 +62,10 @@ async def test_zombie_worker_after_reconciler_does_not_overwrite_success(
     # Симулируем зависший worker A: updated_at в прошлом на 2 часа.
     async with pg_engine.begin() as conn:
         await conn.execute(
-            text("UPDATE task_queue SET updated_at = NOW() - INTERVAL '2 hours' WHERE id = :i"),
+            text(
+                "UPDATE task_queue SET updated_at = NOW() - INTERVAL '2 hours', "
+                "lease_expires_at = NOW() - INTERVAL '1 second' WHERE id = :i"
+            ),
             {"i": task_id},
         )
 
@@ -71,7 +74,7 @@ async def test_zombie_worker_after_reconciler_does_not_overwrite_success(
     assert moved >= 1
 
     # Worker B перехватывает (status='retrying' → 'running')
-    claim_b = await claim_next_task(pg_engine, task_type="disable")
+    claim_b = await claim_next_task(pg_engine, task_type="observer_scan")
     assert claim_b.task is not None
     assert claim_b.task.id == task_id
     assert claim_b.task.attempt_count == 1  # после reconciler-bump
@@ -81,6 +84,8 @@ async def test_zombie_worker_after_reconciler_does_not_overwrite_success(
         pg_engine,
         task_id=task_id,
         result={"fb_ad_id": fb_ad_id, "final_state": "false", "by": "worker_B"},
+        lease_owner=claim_b.task.lease_owner,
+        lease_token=claim_b.task.lease_token,
     )
     assert applied_b is True
 
@@ -90,6 +95,8 @@ async def test_zombie_worker_after_reconciler_does_not_overwrite_success(
         pg_engine,
         task_id=task_id,
         result={"fb_ad_id": fb_ad_id, "final_state": "ZOMBIE_VALUE", "by": "worker_A"},
+        lease_owner=claim_a.task.lease_owner,
+        lease_token=claim_a.task.lease_token,
     )
     assert applied_a is False, "зомби worker A не должен применять mark_succeeded"
 
@@ -119,38 +126,51 @@ async def test_zombie_worker_does_not_downgrade_failed_to_succeeded(
     fb_ad_id = f"24000{uuid.uuid4().hex[:8]}"
     task_id = await create_task(
         pg_engine,
-        task_type="enable",
+        task_type="tracker_event_process",
         idempotency_key=f"race-fail-{fb_ad_id}",
-        payload={"fb_ad_id": fb_ad_id},
+        payload={"source": "test", "target_id": fb_ad_id},
         requested_by="test",
         max_attempts=5,
     )
     assert task_id is not None
 
     # Worker A захватил
-    claim_a = await claim_next_task(pg_engine, task_type="enable")
+    claim_a = await claim_next_task(pg_engine, task_type="tracker_event_process")
     assert claim_a.task is not None
 
     # Stuck → reconciler → retrying
     async with pg_engine.begin() as conn:
         await conn.execute(
-            text("UPDATE task_queue SET updated_at = NOW() - INTERVAL '2 hours' WHERE id = :i"),
+            text(
+                "UPDATE task_queue SET updated_at = NOW() - INTERVAL '2 hours', "
+                "lease_expires_at = NOW() - INTERVAL '1 second' WHERE id = :i"
+            ),
             {"i": task_id},
         )
     await reconcile_stuck_running(pg_engine, stuck_after_seconds=1800)
 
     # Worker B захватил и завершил FAILED (permanent ошибка)
-    claim_b = await claim_next_task(pg_engine, task_type="enable")
+    claim_b = await claim_next_task(pg_engine, task_type="tracker_event_process")
     assert claim_b.task is not None
 
     from core.tasks import mark_failed
 
-    applied_b = await mark_failed(pg_engine, task_id=task_id, error="ad permanently deleted")
+    applied_b = await mark_failed(
+        pg_engine,
+        task_id=task_id,
+        error="ad permanently deleted",
+        lease_owner=claim_b.task.lease_owner,
+        lease_token=claim_b.task.lease_token,
+    )
     assert applied_b is True
 
     # Зомби A приходит с success — НЕ должен downgrade'нуть failed → succeeded
     applied_a = await mark_succeeded(
-        pg_engine, task_id=task_id, result={"final_state": "true", "by": "zombie"}
+        pg_engine,
+        task_id=task_id,
+        result={"final_state": "true", "by": "zombie"},
+        lease_owner=claim_a.task.lease_owner,
+        lease_token=claim_a.task.lease_token,
     )
     assert applied_a is False
 

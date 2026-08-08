@@ -4,9 +4,8 @@
 Два урока инцидента:
 1. main_loop = asyncio.gather без защиты — упавший/зависший цикл молча гасит воркер,
    и «сторож без сторожа» никем не перезапускается → _supervised рестартует цикл.
-2. Успех отправки CRITICAL и пропуск по дедупу/выключенному сканированию НЕ логировались —
-   тишина в логах неотличима от зависания (расследование 01.07 приняло успешную
-   доставку за провал). Каждый проход probe обязан оставлять след в логе.
+2. Каждый проход probe обязан оставлять след в логе; notification intent фиксируется
+   через PostgreSQL outbox.
 """
 
 from __future__ import annotations
@@ -21,12 +20,27 @@ import pytest
 import apps.health_watchdog.main as hw
 
 
-def _redis_mock(*, dedup_value=None):
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=dedup_value)
-    redis.set = AsyncMock(return_value=True)
-    redis.delete = AsyncMock(return_value=1)
-    return redis
+@pytest.fixture(autouse=True)
+def durable_browser_fence(monkeypatch):
+    class FakeBrowserOperationFence:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def assert_held(self):
+            return None
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(hw, "BrowserOperationFence", FakeBrowserOperationFence)
+    monkeypatch.setattr(
+        hw,
+        "_load_canonical_vision_profile_id",
+        AsyncMock(return_value="vision-profile-1"),
+    )
 
 
 def _probe_client(probe: dict) -> AsyncMock:
@@ -88,13 +102,20 @@ def test_main_loop_uses_supervisor():
 @pytest.mark.asyncio
 async def test_probe_healthy_pass_leaves_log_trace(monkeypatch, caplog):
     _scanning(monkeypatch, True)
+    resolve = AsyncMock(return_value=False)
+    monkeypatch.setattr(hw, "_resolve_critical_notification", resolve)
     client = _probe_client(
-        {"healthy": True, "probe_performed": True, "probe_ok": True, "probe_detail": "ok"}
+        {
+            "healthy": True,
+            "probe_performed": True,
+            "probe_ok": True,
+            "probe_detail": "ok",
+            "browser_contract_version": hw.BROWSER_CONTRACT_VERSION,
+            "vision_profile_id": "vision-profile-1",
+        }
     )
-    redis = _redis_mock()
-
     with caplog.at_level(logging.INFO, logger="health_watchdog"):
-        alerted = await hw.check_meta_api_channel(client, redis, engine=object())
+        alerted = await hw.check_meta_api_channel(client, engine=object())
 
     assert alerted is False
     assert any("жив" in r.getMessage() for r in caplog.records)
@@ -105,24 +126,22 @@ async def test_probe_healthy_pass_leaves_log_trace(monkeypatch, caplog):
 async def test_probe_scanning_off_logs_and_skips(monkeypatch, caplog):
     _scanning(monkeypatch, False)
     spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(hw, "notify_recipients", spy)
+    monkeypatch.setattr(hw, "notify_recurring_incident", spy)
     client = _probe_client({"healthy": True})
-    redis = _redis_mock()
-
     with caplog.at_level(logging.INFO, logger="health_watchdog"):
-        alerted = await hw.check_meta_api_channel(client, redis, engine=object())
+        alerted = await hw.check_meta_api_channel(client, engine=object())
 
     assert alerted is False
     spy.assert_not_awaited()
     assert any("выключено" in r.getMessage() for r in caplog.records)
 
 
-# Probe: канал мёртв → CRITICAL доставлен через notify_recipients + INFO «отправлен»
+# Probe: канал мёртв → CRITICAL принят durable outbox + INFO trace.
 @pytest.mark.asyncio
 async def test_probe_down_delivers_critical_with_trace(monkeypatch, caplog):
     _scanning(monkeypatch, True)
     spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(hw, "notify_recipients", spy)
+    monkeypatch.setattr(hw, "notify_recurring_incident", spy)
     client = _probe_client(
         {
             "healthy": False,
@@ -132,23 +151,22 @@ async def test_probe_down_delivers_critical_with_trace(monkeypatch, caplog):
             "detail": "Failed to fetch",
         }
     )
-    redis = _redis_mock(dedup_value=None)
-
     with caplog.at_level(logging.INFO, logger="health_watchdog"):
-        alerted = await hw.check_meta_api_channel(client, redis, engine=object())
+        alerted = await hw.check_meta_api_channel(client, engine=object())
 
     assert alerted is True
     spy.assert_awaited_once()
-    assert "CRITICAL" in spy.await_args.kwargs["text"]
-    assert any("отправлен" in r.getMessage() for r in caplog.records)
+    assert spy.await_args.kwargs["severity"] == "critical"
+    assert "Marketing API" in spy.await_args.kwargs["title"]
+    assert any("принят durable plane" in r.getMessage() for r in caplog.records)
 
 
-# Probe: канал мёртв, дедуп стоит → отправки нет, но след «подавлен дедупом» есть
+# Probe failures are persisted without any Redis liveness dependency.
 @pytest.mark.asyncio
-async def test_probe_down_dedup_suppression_is_visible(monkeypatch, caplog):
+async def test_probe_down_has_no_redis_dependency(monkeypatch):
     _scanning(monkeypatch, True)
     spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(hw, "notify_recipients", spy)
+    monkeypatch.setattr(hw, "notify_recurring_incident", spy)
     client = _probe_client(
         {
             "healthy": False,
@@ -158,11 +176,8 @@ async def test_probe_down_dedup_suppression_is_visible(monkeypatch, caplog):
             "detail": "Failed to fetch",
         }
     )
-    redis = _redis_mock(dedup_value="1")  # алерт уже отправлен в этом окне
+    alerted = await hw.check_meta_api_channel(client, engine=object())
 
-    with caplog.at_level(logging.INFO, logger="health_watchdog"):
-        alerted = await hw.check_meta_api_channel(client, redis, engine=object())
-
-    assert alerted is False
-    spy.assert_not_awaited()
-    assert any("подавлен" in r.getMessage() for r in caplog.records)
+    assert alerted is True
+    spy.assert_awaited_once()
+    assert spy.await_args.kwargs["incident_key"] == hw.META_CHANNEL_INCIDENT_KEY

@@ -16,28 +16,31 @@ dependencies = [
   "httpx>=0.28.1,<1.0.0",
   "pydantic-settings>=2.8.0,<3.0.0",
   "pydantic>=2.11.0,<3.0.0",
-  "python-json-logger>=3.3.0,<4.0.0",
   "pillow>=11.0.0,<12.0.0",
   "python-multipart>=0.0.20,<1.0.0",
-  "sqlalchemy>=2.0.38,<3.0.0",
+  "sqlalchemy[asyncio]>=2.0.38,<3.0.0",
   "tenacity>=9.0.0,<10.0.0",
-  "supervisor>=4.2.0,<5.0.0",
   "uvicorn[standard]>=0.34.0,<1.0.0",
   "cryptography>=44.0.0,<45.0.0",
-  "sentry-sdk[fastapi]>=2.0.0,<3.0.0",
-  "structlog>=24.0,<27.0",
   "grpcio>=1.80.0,<2.0.0",
   "protobuf>=6.31.1,<7.0.0",
   "redis>=5.0,<6.0",
   "prometheus_client>=0.20",
   "mcp>=1.0.0,<2.0.0",
+  "opentelemetry-api>=1.39.0,<2.0.0",
+  "opentelemetry-sdk>=1.39.0,<2.0.0",
+  "opentelemetry-exporter-otlp-proto-grpc>=1.39.0,<2.0.0",
+  "opentelemetry-instrumentation-fastapi>=0.60b0,<1.0.0",
+  "opentelemetry-instrumentation-httpx>=0.60b0,<1.0.0",
+  "opentelemetry-instrumentation-sqlalchemy>=0.60b0,<1.0.0",
+  "opentelemetry-instrumentation-grpc>=0.60b0,<1.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
   "aiosqlite>=0.20.0,<1.0.0",
   "fakeredis>=2.0,<3.0",
-  # Регенерация gRPC-стабов (make proto-compile / run.sh): версия в одной линии с grpcio.
+  # Регенерация gRPC-стабов (make proto-compile): версия в одной линии с grpcio.
   "grpcio-tools>=1.80.0,<2.0.0",
   "pytest>=8.3.5,<9.0.0",
   "pytest-asyncio>=0.25.3,<1.0.0",
@@ -64,6 +67,7 @@ filterwarnings = [
   'ignore:.*asyncio.set_event_loop_policy.*:DeprecationWarning:pytest_asyncio.plugin',
 ]
 markers = [
+  "integration: requires a disposable PostgreSQL database.",
   "live: hit a real external service (off by default; run with `pytest -m live`).",
 ]
 # Live-тесты бьют по внешним сервисам — по умолчанию исключены, чтобы CI и
@@ -77,16 +81,10 @@ target-version = "py312"
 # Исключаем из линтинга код, который не поддерживаем вручную:
 # - clients/python_grpc/v1 — gRPC-стабы, генерируются protoc (F401/I001 неизбежны;
 #   CI регенерирует их перед ruff → линтинг их всегда ронял, ломая весь pipeline).
-# - scripts/recon_*, overlay_captions — разведочные one-off скрипты, не прод-код.
+# - recon_adlib — изолированный ручной research-инструмент, не runtime.
 extend-exclude = [
     "clients/python_grpc/v1",
     "scripts/recon_adlib.py",
-    "scripts/recon_diag.py",
-    "scripts/recon_video.py",
-    "scripts/recon_video2.py",
-    "scripts/recon_video_v2.py",
-    "scripts/recon_video_v3.py",
-    "scripts/overlay_captions.py",
 ]
 
 [tool.ruff.lint]
@@ -116,6 +114,5 @@ module = [
   "tenacity.*",
   "alembic.*",
   "uvicorn.*",
-  "sentry_sdk.*",
 ]
 ignore_missing_imports = true

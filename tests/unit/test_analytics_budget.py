@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+
 from core.analytics.budget import calculate_live_budget
 
 
@@ -67,3 +69,11 @@ def test_confirmed_deposit_stage_uses_single_cpa_cap() -> None:
 
 def test_missing_cpa_returns_none_instead_of_fake_zero() -> None:
     assert _budget(cpa_threshold=None) is None
+
+
+@pytest.mark.parametrize(
+    "stop_percent",
+    [None, Decimal("0"), Decimal("-1"), Decimal("101"), Decimal("NaN")],
+)
+def test_missing_or_unsafe_stop_percent_never_invents_a_budget(stop_percent) -> None:
+    assert _budget(stop_percent_of_rule=stop_percent) is None

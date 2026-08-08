@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+
 from core.domain import AlertStage, EnableRecommendationLevel
 from core.rules.evaluator import determine_enable_recommendation_level, evaluate_stop_rules
 from core.rules.types import RuleContext
@@ -41,6 +43,8 @@ def _make_row(**kwargs) -> ScannedAdRow:
 def _make_ctx(**kwargs) -> RuleContext:
     """Создаёт контекст правил с CPA=5 и warning=80%."""
     defaults = {
+        "currency": "USD",
+        "currency_exponent": 2,
         "cpa_amount": Decimal("5.00"),
         "warning_percent_of_stop": Decimal("80"),
         "stop_percent_of_base": Decimal("100"),
@@ -81,6 +85,62 @@ def test_click_stage_returns_cpc_warning_after_cent_rounding():
 
     assert result.stage == AlertStage.WARNING
     assert result.matched_rule_codes == ["cpc_stop"]
+
+
+@pytest.mark.parametrize("derived_cpc", [Decimal("0.0004"), Decimal("0.0005")])
+def test_kwd_subminor_cpc_is_not_rounded_into_stop(derived_cpc: Decimal) -> None:
+    row = _make_row(
+        spend=Decimal("0.000"),
+        clicks=1,
+        cpc=derived_cpc,
+    )
+    ctx = _make_ctx(
+        currency="KWD",
+        currency_exponent=3,
+        cpa_amount=Decimal("0.062"),
+    )
+
+    result = evaluate_stop_rules(row, ctx)
+
+    assert ctx.cpc_stop_threshold == Decimal("0.001")
+    assert result.stage is None
+
+
+def test_currency_exponent_controls_money_summary_precision() -> None:
+    row = _make_row(
+        spend=Decimal("20"),
+        clicks=1,
+        cpc=Decimal("20"),
+    )
+    ctx = _make_ctx(
+        currency="JPY",
+        currency_exponent=0,
+        cpa_amount=Decimal("1000"),
+    )
+
+    result = evaluate_stop_rules(row, ctx)
+
+    assert result.stage == AlertStage.STOP
+    assert result.stop_hits[0].summary.startswith("CPC 20 ")
+    assert ".00" not in result.stop_hits[0].summary
+
+
+def test_kwd_money_summary_preserves_third_decimal() -> None:
+    row = _make_row(
+        spend=Decimal("0.001"),
+        clicks=1,
+        cpc=Decimal("0.001"),
+    )
+    ctx = _make_ctx(
+        currency="KWD",
+        currency_exponent=3,
+        cpa_amount=Decimal("0.062"),
+    )
+
+    result = evaluate_stop_rules(row, ctx)
+
+    assert result.stage == AlertStage.STOP
+    assert result.stop_hits[0].summary.startswith("CPC 0.001 ")
 
 
 # Проверяем что отдельные проценты CPC переопределяют legacy-настройки только для шага клика.

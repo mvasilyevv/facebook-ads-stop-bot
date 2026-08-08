@@ -13,6 +13,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { toast } from "@/components/ui/Toast";
 import {
   useCreateTelegramOwnerInvite,
+  useTelegramNotificationDiagnostics,
   useTelegramSettings,
   useUpdateTelegramToken,
   useDeleteTelegramToken,
@@ -20,7 +21,8 @@ import {
 import { CheckCircle2, Copy, ExternalLink, KeyRound, XCircle } from "lucide-react";
 
 export const TelegramTab: FC = () => {
-  const { data, isLoading, error, refetch } = useTelegramSettings();
+  const { data, isLoading, error } = useTelegramSettings();
+  const diagnosticsQuery = useTelegramNotificationDiagnostics();
   const inviteMut = useCreateTelegramOwnerInvite();
   const tokenMut = useUpdateTelegramToken();
   const deleteMut = useDeleteTelegramToken();
@@ -38,7 +40,7 @@ export const TelegramTab: FC = () => {
   }
 
   if (error) {
-    return <ErrorState error={error} onRetry={() => void refetch()} />;
+    return <ErrorState error={error} onRetry={() => void 0} />;
   }
 
   const handleSaveToken = async () => {
@@ -81,7 +83,25 @@ export const TelegramTab: FC = () => {
   };
 
   const isAuthorized = data?.is_authorized ?? false;
-  const pollerOnline = data?.poller_status === "ONLINE";
+  const diagnostics = diagnosticsQuery.data;
+  const activeOutbox = diagnostics
+    ? [
+        diagnostics.inbox_counts,
+        diagnostics.delivery_counts,
+        diagnostics.command_reply_counts,
+      ].reduce(
+        (total, counts) =>
+          total + (counts.pending ?? 0) + (counts.retry ?? 0) + (counts.leased ?? 0),
+        0,
+      )
+    : null;
+  const failedOutbox = diagnostics
+    ? [
+        diagnostics.inbox_counts,
+        diagnostics.delivery_counts,
+        diagnostics.command_reply_counts,
+      ].reduce((total, counts) => total + (counts.dead ?? 0) + (counts.unknown ?? 0), 0)
+    : null;
   const hasOwnerInvite = Boolean(data?.activation_command);
   const inviteExpiresAt = data?.auth_invite_expires_at
     ? new Intl.DateTimeFormat("ru-RU", {
@@ -98,11 +118,11 @@ export const TelegramTab: FC = () => {
       <Card eyebrow="Статус бота" padded>
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-[13px] text-bg-10">Авторизация</span>
+            <span className="text-[13px] text-bg-10">Токен</span>
             {isAuthorized ? (
-              <Badge variant="success" size="sm">
+              <Badge variant="neutral" size="sm">
                 <CheckCircle2 size={10} aria-hidden="true" />
-                Авторизован
+                Настроен
               </Badge>
             ) : (
               <Badge variant="neutral" size="sm">
@@ -112,10 +132,63 @@ export const TelegramTab: FC = () => {
             )}
           </div>
 
-          <div className="flex items-center justify-between">
-            <span className="text-[13px] text-bg-10">Poller</span>
-            <Badge variant={pollerOnline ? "success" : "neutral"} size="sm">
-              {data?.poller_status ?? "OFFLINE"}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[13px] text-bg-10">Webhook</span>
+            <Badge
+              variant={diagnostics?.webhook_state === "unconfigured" ? "warning" : "neutral"}
+              size="sm"
+            >
+              {diagnosticsQuery.isError
+                ? "Недоступен"
+                : diagnostics?.webhook_state === "configured"
+                  ? "Настроен"
+                  : diagnostics?.webhook_state === "unconfigured"
+                    ? "Не настроен"
+                    : "Проверка…"}
+            </Badge>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[13px] text-bg-10">Gateway</span>
+            <Badge
+              variant={diagnostics?.gateway_state === "auth_error" ? "failed" : "neutral"}
+              size="sm"
+            >
+              {diagnosticsQuery.isError
+                ? "Недоступен"
+                : diagnostics?.gateway_state === "configured"
+                  ? "Настроен"
+                  : diagnostics?.gateway_state === "auth_error"
+                    ? "Ошибка авторизации"
+                    : diagnostics?.gateway_state === "unconfigured"
+                      ? "Не настроен"
+                      : "Проверка…"}
+            </Badge>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[13px] text-bg-10">Outbox</span>
+            <Badge
+              variant={
+                diagnostics?.outbox_state === "degraded"
+                  ? "failed"
+                  : diagnostics?.outbox_state === "active"
+                    ? "warning"
+                    : diagnostics?.outbox_state === "idle"
+                      ? "success"
+                      : "neutral"
+              }
+              size="sm"
+            >
+              {diagnosticsQuery.isError
+                ? "Недоступен"
+                : diagnostics?.outbox_state === "degraded"
+                  ? `${failedOutbox ?? 0} ошибок`
+                  : diagnostics?.outbox_state === "active"
+                    ? `${activeOutbox ?? 0} в работе`
+                    : diagnostics?.outbox_state === "idle"
+                      ? "Очередь пуста"
+                      : "Проверка…"}
             </Badge>
           </div>
 
@@ -129,8 +202,8 @@ export const TelegramTab: FC = () => {
 
         {/* Одноразовая owner-ссылка */}
         {isAuthorized && (
-          <div className="mt-4 pt-4 border-t border-[var(--hairline)]">
-            <div className="flex items-center gap-2 text-[11px] text-bg-8 uppercase tracking-wider mb-2">
+          <div className="mt-4 pt-4 border-t border-[var(--color-hairline)]">
+            <div className="flex items-center gap-2 text-[12px] text-bg-8 uppercase tracking-wider mb-2">
               <KeyRound size={12} aria-hidden="true" />
               Подключение владельца
             </div>
@@ -147,8 +220,8 @@ export const TelegramTab: FC = () => {
                     {data.auth_deep_link}
                   </a>
                 )}
-                <div className="rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 px-3 py-2.5">
-                  <div className="text-[10px] uppercase tracking-[0.14em] text-bg-7 mb-1">
+                <div className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 px-3 py-2.5">
+                  <div className="mb-1 text-[12px] uppercase tracking-[0.14em] text-bg-8">
                     Команда
                   </div>
                   <code className="font-display text-[13px] text-bg-12 break-all">
@@ -161,7 +234,7 @@ export const TelegramTab: FC = () => {
                       href={data.auth_deep_link}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex min-h-9 items-center gap-2 rounded-[var(--radius-2)] bg-accent px-3 text-[12px] font-medium text-bg-0 transition-opacity hover:opacity-90"
+                      className="inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] bg-accent px-3 text-[12px] font-medium text-bg-0 transition-opacity hover:opacity-90"
                     >
                       Открыть в Telegram
                       <ExternalLink size={13} aria-hidden="true" />
@@ -173,7 +246,7 @@ export const TelegramTab: FC = () => {
                   </Button>
                 </div>
                 {inviteExpiresAt && (
-                  <p className="text-[11px] text-bg-8">
+                  <p className="text-[12px] text-bg-8">
                     Одноразовая ссылка действует до {inviteExpiresAt} и исчезнет после подключения.
                   </p>
                 )}

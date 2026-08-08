@@ -5,10 +5,9 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -16,11 +15,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from core.adset_pro.schemas import PostbackEvent
+from core.money import validated_currency_code
+from core.tasks.queue import create_task
 
 logger = logging.getLogger(__name__)
 
 SOURCE_ADSETPRO = "adsetpro"
 SUPPORTED_EVENT_TYPES = frozenset({"registration", "ftd", "redeposit"})
+_TRACKER_ATTEMPT_DEADLINE = timedelta(seconds=120)
 _EVENT_ALIASES = {
     "reg": "registration",
     "registration": "registration",
@@ -53,22 +55,6 @@ def canonical_event_type(value: str | None) -> str | None:
     return _EVENT_ALIASES.get(normalized)
 
 
-def canonical_event_type_sql(column: str) -> str:
-    """Return immutable SQL CASE mirroring :func:`canonical_event_type`.
-
-    Revision 0035 deliberately keeps raw aliases compatible with an N-1 app
-    rollback. Current readers must therefore canonicalize without mutating the
-    inbox row, otherwise a second rollback would stop seeing its own `redep` /
-    `hold` vocabulary.
-    """
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", column):
-        raise ValueError(f"unsafe SQL column reference: {column!r}")
-    cases = " ".join(
-        f"WHEN '{alias}' THEN '{canonical}'" for alias, canonical in _EVENT_ALIASES.items()
-    )
-    return f"CASE lower(replace(trim({column}), ' ', '_')) {cases} ELSE NULL END"
-
-
 def provider_event_id_from_raw(raw: dict[str, Any] | None) -> str | None:
     """Extract a stable provider transaction/event identifier from raw payload."""
     if not raw:
@@ -78,11 +64,6 @@ def provider_event_id_from_raw(raw: dict[str, Any] | None) -> str | None:
         if value not in (None, ""):
             return str(value).strip() or None
     return None
-
-
-# Backward-compatible private alias used by older callers/tests.
-_TXN_ID_RAW_KEYS = _PROVIDER_ID_RAW_KEYS
-_txn_id_from_raw = provider_event_id_from_raw
 
 
 @dataclass(slots=True, frozen=True)
@@ -116,11 +97,7 @@ async def resolve_attribution(
     conn: AsyncConnection,
     event: PostbackEvent,
 ) -> AttributionResult:
-    """Resolve sub8 directly, otherwise exact legacy sub4/sub5/sub6/sub7.
-
-    ``ext_sub6`` is the ad-set name/angle in the established URL contract and is
-    intentionally never interpreted as a Meta ad id.
-    """
+    """Resolve attribution only from the canonical Meta ad id/sub8 contract."""
     raw = event.raw or {}
     direct_id = (event.fb_ad_id or _first(raw, "sub8", "ext_sub8") or "").strip()
     if direct_id:
@@ -134,37 +111,6 @@ async def resolve_attribution(
             return AttributionResult(ad_id=rows[0][0], fb_ad_id=rows[0][1], status="matched_direct")
         if len(rows) > 1:
             return AttributionResult(ad_id=None, fb_ad_id=direct_id, status="ambiguous")
-
-    account = _first(raw, "sub4", "ext_sub4", "account", "account_id", "ad_account_id")
-    campaign = _first(raw, "sub5", "ext_sub5", "campaign", "campaign_name")
-    adset = _first(raw, "sub6", "ext_sub6", "adset", "adset_name")
-    ad = _first(raw, "sub7", "ext_sub7", "ad", "ad_name")
-    if not all((account, campaign, adset, ad)):
-        return AttributionResult(ad_id=None, fb_ad_id=direct_id or None, status="unmatched")
-
-    account = account.removeprefix("act_")
-    rows = (
-        await conn.execute(
-            text(
-                """
-                SELECT a.id, a.fb_ad_id
-                FROM fb_ads a
-                JOIN fb_adsets s ON s.id = a.adset_id
-                JOIN fb_campaigns c ON c.id = s.campaign_id
-                WHERE regexp_replace(COALESCE(c.ad_account_id, ''), '^act_', '') = :account
-                  AND c.campaign_name = :campaign
-                  AND s.adset_name = :adset
-                  AND a.ad_name = :ad
-                LIMIT 2
-                """
-            ),
-            {"account": account, "campaign": campaign, "adset": adset, "ad": ad},
-        )
-    ).all()
-    if len(rows) == 1:
-        return AttributionResult(ad_id=rows[0][0], fb_ad_id=rows[0][1], status="matched_legacy")
-    if len(rows) > 1:
-        return AttributionResult(ad_id=None, fb_ad_id=direct_id or None, status="ambiguous")
     return AttributionResult(ad_id=None, fb_ad_id=direct_id or None, status="unmatched")
 
 
@@ -197,6 +143,7 @@ async def ingest_postback(
         raise ValueError("redeposit requires provider_event_id")
 
     occurred_at = event.occurred_at or event.received_at
+    currency = validated_currency_code(event.currency)
     if event_type == "redeposit":
         dedupe_key = f"{source}:provider:{provider_event_id}"
     else:
@@ -243,19 +190,7 @@ async def ingest_postback(
                         FROM adsetpro_postback_events
                         WHERE source = :source
                           AND click_id = :click_id
-                          AND CASE
-                              WHEN replace(lower(trim(event_type)), ' ', '_') IN
-                                  ('registration', 'reg', 'signup', 'hold', 'cpa_hold')
-                                  THEN 'registration'
-                              WHEN replace(lower(trim(event_type)), ' ', '_') IN
-                                  ('ftd', 'first_deposit', 'first-deposit',
-                                   'accept', 'cpa_accept')
-                                  THEN 'ftd'
-                              WHEN replace(lower(trim(event_type)), ' ', '_') IN
-                                  ('redeposit', 'redep', 'cpa_redep')
-                                  THEN 'redeposit'
-                              ELSE NULL
-                          END = :event_type
+                          AND event_type = :event_type
                           AND is_duplicate = FALSE
                         ORDER BY received_at DESC
                         LIMIT 1
@@ -302,7 +237,7 @@ async def ingest_postback(
                         "fb_ad_fk": existing[1],
                         "event_type": event_type,
                         "revenue": event.revenue,
-                        "currency": (event.currency or "USD").upper()[:8],
+                        "currency": currency,
                         "raw_json": _dumps_jsonable(duplicate_raw),
                         "signature_valid": signature_valid,
                         "attribution_status": str(existing[2] or "unmatched"),
@@ -346,7 +281,7 @@ async def ingest_postback(
                     "fb_ad_fk": attribution.ad_id,
                     "event_type": event_type,
                     "revenue": event.revenue,
-                    "currency": (event.currency or "USD").upper()[:8],
+                    "currency": currency,
                     "raw_json": _dumps_jsonable(raw_json),
                     "signature_valid": signature_valid,
                     "attribution_status": attribution.status,
@@ -356,34 +291,29 @@ async def ingest_postback(
         event_id = int(inserted[0])
         event_received_at = inserted[1]
         task_key = f"tracker:event:{source}:{event_id}:{event_received_at.isoformat()}"[:128]
-        task = (
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO task_queue
-                        (task_type, status, idempotency_key, payload, requested_by,
-                         attempt_count, max_attempts, created_at, updated_at)
-                    VALUES
-                        ('tracker_event_process', 'pending', :key, CAST(:payload AS JSONB),
-                         'adsetpro_postback', 0, 10080, now(), now())
-                    ON CONFLICT (idempotency_key) DO NOTHING
-                    RETURNING id
-                    """
-                ),
-                {
-                    "key": task_key,
-                    "payload": json.dumps(
-                        {
-                            "event_id": event_id,
-                            "received_at": event_received_at.isoformat(),
-                            "source": source,
-                            "click_id": click_id,
-                        }
-                    ),
-                },
-            )
-        ).first()
-        if task is None:
+        queue_now_row = (await conn.execute(text("SELECT clock_timestamp()"))).first()
+        if queue_now_row is None:
+            raise RuntimeError("failed to read PostgreSQL clock for tracker task")
+        queue_now = queue_now_row[0]
+        task_id = await create_task(
+            engine,
+            task_type="tracker_event_process",
+            idempotency_key=task_key,
+            payload={
+                "event_id": event_id,
+                "received_at": event_received_at.isoformat(),
+                "source": source,
+                "click_id": click_id,
+            },
+            requested_by="adsetpro_postback",
+            max_attempts=10080,
+            lane="background",
+            priority=0,
+            available_at=queue_now,
+            deadline_at=queue_now + _TRACKER_ATTEMPT_DEADLINE,
+            connection=conn,
+        )
+        if task_id is None:
             raise RuntimeError("failed to create durable tracker_event_process task")
 
     return IngestResult(
@@ -392,7 +322,7 @@ async def ingest_postback(
         event_id=event_id,
         fb_ad_fk=attribution.ad_id,
         attribution_status=attribution.status,
-        task_id=int(task[0]),
+        task_id=task_id,
     )
 
 
@@ -421,7 +351,6 @@ __all__ = [
     "SOURCE_ADSETPRO",
     "SUPPORTED_EVENT_TYPES",
     "canonical_event_type",
-    "canonical_event_type_sql",
     "ingest_postback",
     "provider_event_id_from_raw",
     "resolve_attribution",

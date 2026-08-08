@@ -1,130 +1,146 @@
-# FB Stop Bot
+# FB Agent
 
-Бот для real-time мониторинга и автоматической остановки объявлений Facebook
-Ads по стоп-правилам. Подключается к Ads Manager через anti-detect браузер
-(Vision + Playwright + Node.js gRPC), оценивает 7 стоп-правил, шлёт алерты
-в Telegram, отключает объявления и подключает Marketing API для latency-
-tolerant операций (создание кампаний, изменение бюджетов).
+Safety-first операторская платформа для мониторинга Facebook Ads, исполнения
+денежных действий и доставки уведомлений. PostgreSQL является источником
+истины для задач, leases, fencing, incidents и уведомлений; Redis не входит в
+контур гарантий.
 
----
+## Что входит в систему
 
-## Возможности
+- Observer сканирует каждый настроенный рекламный кабинет в отдельном actor.
+- `autopause_worker` единолично обслуживает money-lane; остальные mutations
+  исполняются в `interactive`, `bulk` и `background` lanes.
+- Любая browser/Meta-операция имеет абсолютный deadline и завершение
+  `CONFIRMED`, `REJECTED` или `UNKNOWN`. Неоднозначный результат сверяется с
+  фактическим состоянием и не повторяется вслепую.
+- Web и Telegram Mini App используют общий типизированный operator API и
+  одинаковую семантику `ready | empty | partial | stale | unavailable`.
+- Telegram принимает updates только через HTTPS webhook. Уведомления проходят
+  через PostgreSQL outbox и один HTML gateway; incident обновляет одну карточку
+  на получателя.
+- Production выпускается immutable blue/green релизами. Desktop/browser-agent,
+  durable infra, monitoring и backup имеют независимые lifecycle.
 
-- **Real-time мониторинг** Ads Manager через Vision-сессию (интервал по умолчанию 90 с).
-- **7 стоп-правил** с двухуровневой WARNING (80% от порога) и STOP логикой:
-  CPC / CPL / CPR / реги без депов / расход без депа / расход с депом / frequency-anomaly (opt-in).
-- **Telegram-бот**: алерты с inline-кнопками `Отключить` / `Отложить`, команды `/start`, `/help`, `/spy <slot> <country>` (Ad Library).
-- **Автоматическое отключение** через очередь `task_queue` (outbox-pattern) с retry exponential backoff.
-- **Marketing API** через Vision-сессию (`page.evaluate(fetch)`) для mutations: pause/activate/duplicate campaign, set budget, bulk operations, create campaign.
-- **Ad Library spy** (по команде `/spy`): сканирование рекламы конкурентов, классификация, S/A/B/C-ранжирование, markdown-отчёт.
-- **Ежедневный дайджест** в Telegram в 9:00 UTC (агрегации по `alert_events`, `task_queue`, `ad_metrics`).
-- **Рекомендации на включение**: воркер анализирует выключенные ads через 5+ минут после disable и предлагает revert если метрики восстановились.
-- **AI-ассистент** в Telegram (`/ask`): READ-tools (insights, find_ads, account_health) и DRAFT-tools (создание `task_queue` со `status='draft'` для подтверждения пользователем).
+## Компоненты
 
----
+| Контур | Компоненты |
+| --- | --- |
+| Operator | FastAPI, React web, Telegram Mini App, WebSocket reconciliation |
+| Safety | `task_queue`, `CommandService`, leases, fencing, deadlines, actors |
+| Notifications | incidents, events/deliveries, Telegram webhook and delivery workers |
+| Browser | отдельный Kasm/Vision desktop и Node.js browser-agent |
+| Platform | PostgreSQL, pgBackRest, Caddy blue/green, Alloy, Prometheus, Loki, Tempo |
 
-## Архитектура (краткое)
+Список production-сервисов и порядок переключения описаны в
+[DEPLOYMENT.md](DEPLOYMENT.md). Актуальные операционные сценарии находятся в
+[docs/playbooks/RUNBOOKS.md](docs/playbooks/RUNBOOKS.md).
 
-```
-   Vision browser           Telegram API           AdSet.pro tracker
-        |                        |                        |
-   [browser-agent]          [tg_poller]             [FastAPI postback]
-   Node.js gRPC :50051                                    |
-        |                        |                        v
-        +-----[observer_worker]--+--[disable/enable]--[task_queue]
-        |                        |          ^             |
-   [meta_api_worker]    [telegram_alerts]    +--[reconciler]
-        |                                                 |
-        +---[health_watchdog]---[Redis :6380]<--heartbeats+
-                                       |
-                                  [Postgres :5433]
-                                  35 таблиц, 7 partitioned
-```
+## Локальная разработка
 
-12 Python воркеров + FastAPI + Node.js gRPC + 2 фронта. Полный список —
-в [CLAUDE.md](CLAUDE.md) § Architecture.
-
----
-
-## Быстрый старт
+Единственный поддерживаемый local runtime — `scripts/run-local.sh`. Он требует
+точный маркер `FB_AGENT_PROFILE=local` и запускает только PostgreSQL, Redis,
+locked migrator, API и Telegram inbox/outbox workers. Observer, browser-agent,
+Meta mutations, campaign/cabinet schedulers и любые money workers в корневом
+Compose физически отсутствуют.
 
 ```bash
-cp .env.example .env             # заполнить POSTGRES_PASSWORD, ENCRYPTION_KEY,
-                                  # VISION_X_TOKEN, VISION_PROFILE_ID, TELEGRAM_BOT_TOKEN
-make bootstrap                    # Docker + venv + установка зависимостей + apply schema
-./run.sh                          # старт всех воркеров через supervisord
-./run.sh --down                   # остановка
-./run.sh --logs                   # tail -20 каждого *.log
+cp .env.local.example .env
+make install
+make start
+# make logs
+# make stop
 ```
 
-Развёрнутая инструкция (внешние зависимости, секреты, production checklist) —
-[DEPLOYMENT.md](DEPLOYMENT.md). Подробности по архитектуре, воркерам,
-конвенциям кода — [CLAUDE.md](CLAUDE.md).
-
-Production-сервер выкатывается отдельным воспроизводимым Compose-релизом:
+Первичное создание схемы в пустой dev-базе:
 
 ```bash
-make deploy-dry-run
-make deploy-server
+make migrate
 ```
 
----
-
-## Тесты и линтинг
+`make migrate` вызывает `python -m scripts.run-migrations-locked`: advisory lock
+удерживается на протяжении `alembic upgrade head` и `alembic check`. Команда
+ничего не удаляет, требует локальный профиль и принимает только пустую БД или
+уже установленный точный fresh baseline.
+Если disposable dev/test-базу действительно нужно пересоздать, это отдельная
+трёхфакторная команда. Она игнорирует `.env` и обычный `DATABASE_URL`, принимает
+только loopback/local Compose DSN и имя с суффиксом `_dev`/`_test`:
 
 ```bash
-make verify                       # lint + unit + integration
-make test-unit
-make test-integration             # требует поднятого Postgres
+export FB_AGENT_DISPOSABLE_DATABASE_URL='postgresql+asyncpg://user:pass@127.0.0.1:5433/fb_stop_bot_dev'
+export FB_AGENT_ALLOW_DESTRUCTIVE_RESET='I_UNDERSTAND_THIS_DELETES_DATA'
+make reset-disposable-db CONFIRM_DATABASE=fb_stop_bot_dev
+```
+
+Текущая Alembic-история состоит из одного irreversible fresh-install
+baseline. Migrator принимает только пустую PostgreSQL-базу или базу,
+уже находящуюся на этом baseline. In-place upgrade с исторических
+revision намеренно запрещён; production cutover требует отдельно
+согласованного export → recreate → import runbook.
+
+Frontend:
+
+```bash
+pnpm install
+pnpm gen:api
+pnpm --filter fb-stop-bot-frontend dev
+pnpm --filter fb-agent-mini dev
+```
+
+Browser-agent:
+
+```bash
+cd services/browser-agent
+npm ci
+npm run build
+npm test
+```
+
+## Проверки
+
+```bash
 ruff check .
-ruff format .
-cd services/browser-agent && npm test
+make test-unit
+make test-integration
+pnpm -r typecheck
+pnpm -r lint
+pnpm -r test
+pnpm -r build
+./scripts/validate-platform-configs.sh --containers
 ```
 
----
+Тесты интеграции должны использовать отдельную disposable PostgreSQL-базу.
+Нельзя направлять test suite на production DSN.
 
-## Команды Makefile
+## Production
+
+Production images собираются один раз в CI и передаются по digest. VPS не
+собирает приложения из исходников. Production topology существует только в
+`deploy/compose/`, а lifecycle выполняют platform scripts. Единственный
+удалённый entrypoint:
 
 ```bash
-make help                         # список всех целей
-make api                          # uvicorn apps.api.main:app --reload (порт 8100)
-make observer | disable-worker | enable-worker | meta-api-worker
-make telegram | health-watchdog | digest-scheduler | enable-reco-worker
-make cleanup-worker | reconciler-worker | creator-worker | creator-recorder
-make backup-secrets | restore-secrets | apply-schema
-make proto-compile                # перегенерация gRPC stubs
-make deploy-dry-run | deploy-server  # production Compose release
-make docker-build | helm-install     # experimental k8s flow
+sudo /opt/fb-agent/current/scripts/server-platform-release.sh
 ```
 
-Полный workflow — в [CLAUDE.md](CLAUDE.md) § Commands.
+Первичное принятие существующих durable volumes выполняется только в
+maintenance window после полного pgBackRest backup и изолированного restore
+drill. Подробный порядок и rollback contract:
+[deploy/bluegreen/README.md](deploy/bluegreen/README.md).
 
----
+## Источники правды
 
-## Документация
-
-| Документ | Назначение |
-|----------|-----------|
-| [DEPLOYMENT.md](DEPLOYMENT.md) | Развёртывание с нуля + production checklist |
-| [docs/playbooks/RUNBOOKS.md](docs/playbooks/RUNBOOKS.md) | Реакция на инциденты, восстановление |
-| [docs/playbooks/](docs/playbooks/) | Операционные playbooks: залив, креативы, PWA, рынок гео |
-| [CLAUDE.md](CLAUDE.md) | Архитектура, воркеры, конвенции (источник правды) |
-| [META_INTEGRATION_PLAN.md](META_INTEGRATION_PLAN.md) | Marketing API интеграция, этапы |
-| [DB_REDESIGN.md](DB_REDESIGN.md) | Схема БД, партиционирование, retention |
-
----
+- ORM и Alembic migrations — фактический контракт БД.
+- OpenAPI — контракт API; клиенты генерируются, ручные response interfaces не
+  добавляются.
+- `deploy/compose/` и release scripts — production topology.
+- `packages/shared/` и `packages/operator-api/` — общая семантика web/TMA.
+- `docs/playbooks/` — только актуальные операционные сценарии.
 
 ## Требования
 
-- Linux / macOS
-- Python 3.12+, Node.js 20+
-- Docker + Docker Compose v2
-- Vision anti-detect browser (внешний, `:3030`)
-
-См. [DEPLOYMENT.md § 1](DEPLOYMENT.md) для полного списка.
-
----
-
-## Лицензия
+- Python 3.12+
+- Node.js 22+ и pnpm 11.6
+- Docker Engine и Docker Compose v2
+- PostgreSQL 16 для production-like проверок
 
 Внутренний проект. Не для внешнего использования без согласования.

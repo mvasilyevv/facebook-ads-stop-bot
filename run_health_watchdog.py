@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Entrypoint для health_watchdog (run.sh / supervisord)."""
+"""Container entrypoint для health_watchdog."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 
-from apps.health_watchdog.main import main_loop
-from core.worker_lock import acquire_singleton_lock
+from apps.health_watchdog.main import _get_database_url, main_loop
+from core.worker_lock import acquire_singleton_lock, run_postgres_singleton
+from core.worker_metrics import start_worker_metrics_server
 
 if __name__ == "__main__":
     logging.basicConfig(
@@ -15,4 +16,12 @@ if __name__ == "__main__":
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     acquire_singleton_lock("health_watchdog")
-    asyncio.run(main_loop())
+    start_worker_metrics_server("health_watchdog")
+    database_url = _get_database_url()
+    asyncio.run(
+        run_postgres_singleton(
+            "health_watchdog",
+            lambda: main_loop(database_url),
+            database_url=database_url,
+        )
+    )

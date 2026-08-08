@@ -3,11 +3,28 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+
+_FINGERPRINT = "a" * 64
+
+
+@asynccontextmanager
+async def _authority(authorized: bool):
+    yield authorized
+
+
+def _configured_snapshot() -> SimpleNamespace:
+    return SimpleNamespace(
+        bot_token_encrypted="gAAAAAB...",
+        is_enabled=True,
+        webhook_generation=7,
+        credential_fingerprint=_FINGERPRINT,
+    )
+
 
 # --- compute_is_authorized ---
 
@@ -35,6 +52,13 @@ def test_compute_is_authorized_has_token() -> None:
     assert compute_is_authorized(config) is True
 
 
+def test_compute_is_authorized_disabled_token_is_not_active() -> None:
+    from core.telegram.settings_compute import compute_is_authorized
+
+    config = SimpleNamespace(bot_token_encrypted="gAAAAAB...", is_enabled=False)
+    assert compute_is_authorized(config) is False
+
+
 # bot_token_encrypted=None → не авторизован
 def test_compute_is_authorized_token_is_none() -> None:
     from core.telegram.settings_compute import compute_is_authorized
@@ -43,156 +67,125 @@ def test_compute_is_authorized_token_is_none() -> None:
     assert compute_is_authorized(config) is False
 
 
-# --- compute_poller_status ---
-
-
-# Если config=None — OFFLINE
-@pytest.mark.asyncio
-async def test_compute_poller_status_none_config() -> None:
-    from core.telegram.settings_compute import compute_poller_status
-
-    result = await compute_poller_status(None)
-    assert result == "OFFLINE"
-
-
-# Если heartbeat=None — OFFLINE
-@pytest.mark.asyncio
-async def test_compute_poller_status_no_heartbeat() -> None:
-    from core.telegram.settings_compute import compute_poller_status
-
-    config = SimpleNamespace(poller_heartbeat_at=None)
-    result = await compute_poller_status(config)
-    assert result == "OFFLINE"
-
-
-# Heartbeat 30 секунд назад — ONLINE
-@pytest.mark.asyncio
-async def test_compute_poller_status_online() -> None:
-    from core.telegram.settings_compute import compute_poller_status
-
-    heartbeat = datetime.now(UTC) - timedelta(seconds=30)
-    config = SimpleNamespace(poller_heartbeat_at=heartbeat)
-    result = await compute_poller_status(config)
-    assert result == "ONLINE"
-
-
-# Heartbeat 90 секунд назад — OFFLINE (превысил порог 60с)
-@pytest.mark.asyncio
-async def test_compute_poller_status_expired_heartbeat() -> None:
-    from core.telegram.settings_compute import compute_poller_status
-
-    heartbeat = datetime.now(UTC) - timedelta(seconds=90)
-    config = SimpleNamespace(poller_heartbeat_at=heartbeat)
-    result = await compute_poller_status(config)
-    assert result == "OFFLINE"
-
-
-# 59 секунд назад — ONLINE (чуть ниже порога 60с)
-@pytest.mark.asyncio
-async def test_compute_poller_status_just_below_threshold() -> None:
-    from core.telegram.settings_compute import compute_poller_status
-
-    heartbeat = datetime.now(UTC) - timedelta(seconds=59)
-    config = SimpleNamespace(poller_heartbeat_at=heartbeat)
-    result = await compute_poller_status(config)
-    assert result == "ONLINE"
-
-
-# Naive datetime — должен обработать без ошибки
-@pytest.mark.asyncio
-async def test_compute_poller_status_naive_datetime() -> None:
-    from core.telegram.settings_compute import compute_poller_status
-
-    # Naive datetime — coerce к UTC
-    heartbeat = datetime.utcnow() - timedelta(seconds=10)
-    config = SimpleNamespace(poller_heartbeat_at=heartbeat)
-    result = await compute_poller_status(config)
-    assert result == "ONLINE"
-
-
 # --- compute_bot_username ---
 
 
-# Если config=None — возвращает None без обращения к Redis
+# Если config=None — возвращает explicit unknown без внешнего запроса.
 @pytest.mark.asyncio
 async def test_compute_bot_username_none_config() -> None:
     from core.telegram.settings_compute import compute_bot_username
 
-    redis = AsyncMock()
-    result = await compute_bot_username(None, redis)
+    result = await compute_bot_username(None, engine=object())  # type: ignore[arg-type]
     assert result is None
-    redis.get.assert_not_called()
 
 
-# Redis кэш-хит: возвращает кэшированное имя без вызова httpx
+# Gateway успешно возвращает канонический username.
 @pytest.mark.asyncio
-async def test_compute_bot_username_redis_cache_hit() -> None:
+async def test_compute_bot_username_gateway_ok() -> None:
     from core.telegram.settings_compute import compute_bot_username
 
-    redis = AsyncMock()
-    redis.get.return_value = "mybot"
-
-    config = SimpleNamespace(bot_token_encrypted="gAAAAAB...")
-    result = await compute_bot_username(config, redis)
-    assert result == "mybot"
-
-
-# Redis кэш-miss, httpx успешно возвращает username и кэширует
-@pytest.mark.asyncio
-async def test_compute_bot_username_redis_miss_httpx_ok() -> None:
-    from core.telegram.settings_compute import compute_bot_username
-
-    redis = AsyncMock()
-    redis.get.return_value = None  # кэш пустой
-
-    config = SimpleNamespace(bot_token_encrypted="gAAAAAB...")
-
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"result": {"username": "testbot"}}
-    mock_response.raise_for_status = MagicMock()
+    config = _configured_snapshot()
+    engine = object()
 
     with (
         patch("core.telegram.settings_compute.compute_is_authorized", return_value=True),
         patch("core.crypto.decrypt", return_value="real_token"),
-        patch("httpx.AsyncClient") as mock_client_cls,
+        patch("core.telegram.gateway.TelegramHTMLGateway") as gateway_cls,
+        patch(
+            "core.telegram.outbound_authority.hold_telegram_outbound_authority",
+            side_effect=lambda *_args, **_kwargs: _authority(True),
+        ),
     ):
-        mock_http = AsyncMock()
-        mock_http.get.return_value = mock_response
-        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
-        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+        gateway = gateway_cls.return_value
+        gateway.credential_fingerprint = _FINGERPRINT
+        gateway.get_me = AsyncMock(return_value={"username": "testbot"})
+        gateway.close = AsyncMock()
 
-        result = await compute_bot_username(config, redis)
+        result = await compute_bot_username(config, engine=engine)  # type: ignore[arg-type]
 
     assert result == "testbot"
-    # Кэш должен быть обновлён
-    redis.set.assert_called_once()
+    gateway.close.assert_awaited_once()
 
 
-# httpx выбрасывает ошибку — возвращает None, не пробрасывает
+# Gateway выбрасывает ошибку — возвращает None, не пробрасывает
 @pytest.mark.asyncio
 async def test_compute_bot_username_httpx_error_returns_none() -> None:
-    import httpx
-
     from core.telegram.settings_compute import compute_bot_username
 
-    redis = AsyncMock()
-    redis.get.return_value = None
-
-    config = SimpleNamespace(bot_token_encrypted="gAAAAAB...")
+    config = _configured_snapshot()
 
     with (
         patch("core.telegram.settings_compute.compute_is_authorized", return_value=True),
         patch("core.crypto.decrypt", return_value="real_token"),
-        patch("httpx.AsyncClient") as mock_client_cls,
+        patch("core.telegram.gateway.TelegramHTMLGateway") as gateway_cls,
+        patch(
+            "core.telegram.outbound_authority.hold_telegram_outbound_authority",
+            side_effect=lambda *_args, **_kwargs: _authority(True),
+        ),
     ):
-        mock_http = AsyncMock()
-        mock_http.get.side_effect = httpx.RequestError("connection failed")
-        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_http)
-        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=None)
+        gateway = gateway_cls.return_value
+        gateway.credential_fingerprint = _FINGERPRINT
+        gateway.get_me = AsyncMock(side_effect=RuntimeError("connection failed"))
+        gateway.close = AsyncMock()
 
-        result = await compute_bot_username(config, redis)
+        result = await compute_bot_username(config, engine=object())  # type: ignore[arg-type]
 
     assert result is None
+    gateway.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_compute_bot_username_never_logs_decrypt_exception_payload(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from core.telegram.settings_compute import compute_bot_username
+
+    config = _configured_snapshot()
+    credential_marker = "123456789:do-not-log-this-token-material"
+
+    with (
+        patch("core.telegram.settings_compute.compute_is_authorized", return_value=True),
+        patch(
+            "core.crypto.decrypt",
+            side_effect=RuntimeError(credential_marker),
+        ),
+    ):
+        result = await compute_bot_username(config, engine=object())  # type: ignore[arg-type]
+
+    assert result is None
+    assert credential_marker not in caplog.text
+    assert "RuntimeError" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_compute_bot_username_denied_authority_never_calls_get_me() -> None:
+    from core.telegram.settings_compute import compute_bot_username
+
+    config = _configured_snapshot()
+    engine = object()
+    with (
+        patch("core.crypto.decrypt", return_value="real_token"),
+        patch("core.telegram.gateway.TelegramHTMLGateway") as gateway_cls,
+        patch(
+            "core.telegram.outbound_authority.hold_telegram_outbound_authority",
+            side_effect=lambda *_args, **_kwargs: _authority(False),
+        ) as hold,
+    ):
+        gateway = gateway_cls.return_value
+        gateway.credential_fingerprint = _FINGERPRINT
+        gateway.get_me = AsyncMock()
+        gateway.close = AsyncMock()
+
+        result = await compute_bot_username(config, engine=engine)  # type: ignore[arg-type]
+
+    assert result is None
+    gateway.get_me.assert_not_awaited()
+    gateway.close.assert_awaited_once()
+    hold.assert_called_once_with(
+        engine,
+        bot_generation=7,
+        credential_fingerprint=_FINGERPRINT,
+    )
 
 
 # --- compute_auth_deep_link ---

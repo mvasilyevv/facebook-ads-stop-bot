@@ -17,8 +17,9 @@ class FbAdset(UUIDPrimaryKey, Timestamp, Base):
     """Группа объявлений Facebook.
 
     campaign_id — ON DELETE CASCADE: при удалении кампании все adset'ы удаляются.
-    fb_adset_id — partial UNIQUE только при NOT NULL.
-    UNIQUE(campaign_id, adset_name) — для upsert.
+    fb_adset_id — каноническая identity свежего Graph-скана; partial UNIQUE
+    сохранён для исторических NULL-строк. UNIQUE(campaign_id, adset_name) остаётся
+    защитой от конфликтующей иерархии, но writer upsert'ит по fb_adset_id.
     """
 
     __tablename__ = "fb_adsets"

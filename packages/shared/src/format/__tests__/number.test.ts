@@ -1,86 +1,78 @@
 import { describe, it, expect } from "vitest";
 import {
   formatSpend,
-  formatSpend1,
+  formatSpendPerUnit,
   formatCompact,
   formatInt,
   formatPercent,
   formatPercentValue,
+  isSupportedCurrencyCode,
 } from "../number";
 
 describe("formatSpend", () => {
-  // Обычное положительное число
-  it("форматирует положительное число", () => {
-    expect(formatSpend(1234.56)).toBe("$1,234.56");
+  it("formats a major-unit value with an explicit currency code", () => {
+    expect(formatSpend(1234.56, "USD")).toBe("USD\u00a01,234.56");
   });
 
-  // Строковый вход (бэк отдаёт Decimal как строку)
-  it("принимает строку", () => {
-    expect(formatSpend("99.5")).toBe("$99.50");
+  it("uses the ISO exponent instead of assuming two decimals", () => {
+    expect(formatSpend("1234", "JPY")).toBe("JPY\u00a01,234");
+    expect(formatSpend("1.234", "KWD")).toBe("KWD\u00a01.234");
   });
 
-  // Ноль — валидный кейс
-  it("форматирует ноль", () => {
-    expect(formatSpend(0)).toBe("$0.00");
+  it("uses the repo-owned currency contract instead of the runtime ICU list", () => {
+    expect(isSupportedCurrencyCode("VED")).toBe(true);
+    expect(formatSpend("1.23", "VED")).toBe("VED\u00a01.23");
   });
 
-  // null → "—"
-  it("null → —", () => {
-    expect(formatSpend(null)).toBe("—");
+  it("preserves exact decimal strings beyond Number.MAX_SAFE_INTEGER", () => {
+    expect(formatSpend("9007199254740993.01", "USD")).toBe(
+      "USD\u00a09,007,199,254,740,993.01",
+    );
   });
 
-  // undefined → "—"
-  it("undefined → —", () => {
-    expect(formatSpend(undefined)).toBe("—");
+  it("formats a confirmed zero", () => {
+    expect(formatSpend(0, "EUR")).toBe("EUR\u00a00.00");
   });
 
-  // Пустая строка → "—"
-  it("пустая строка → —", () => {
-    expect(formatSpend("")).toBe("—");
+  it("does not invent a unit for unknown evidence", () => {
+    expect(formatSpend("12.50", null)).toBe("—");
+    expect(formatSpend("12.50", "")).toBe("—");
+    expect(formatSpend("12.50", "ZZZ")).toBe("—");
   });
 
-  // Не-число строка → "—"
-  it("невалидная строка → —", () => {
-    expect(formatSpend("abc")).toBe("—");
+  it("returns unknown for absent and invalid amounts", () => {
+    expect(formatSpend(null, "USD")).toBe("—");
+    expect(formatSpend(undefined, "USD")).toBe("—");
+    expect(formatSpend("", "USD")).toBe("—");
+    expect(formatSpend("abc", "USD")).toBe("—");
+    expect(formatSpend("12.50oops", "USD")).toBe("—");
+    expect(formatSpend(Number.POSITIVE_INFINITY, "USD")).toBe("—");
   });
 
-  // Отрицательное (бывает при корректировках)
-  it("форматирует отрицательное число", () => {
-    expect(formatSpend(-50)).toBe("-$50.00");
+  it("formats negative adjustments without losing the currency", () => {
+    expect(formatSpend(-50, "USD")).toBe("-USD\u00a050.00");
   });
 });
 
-// Единый источник для web money1() (аудит 02.07, LOW F1 «дубль money1()») —
-// сведено в @fb/shared, тесты дублируют прежний контракт web-версии.
-describe("formatSpend1", () => {
-  // Один знак после запятой (не два, как formatSpend)
-  it("форматирует с одним знаком", () => {
-    expect(formatSpend1(1234.56)).toBe("$1,234.6");
+describe("formatSpendPerUnit", () => {
+  it("divides and rounds in minor units without Number coercion", () => {
+    expect(formatSpendPerUnit("9007199254740993.01", 3, "USD")).toBe(
+      "USD\u00a03,002,399,751,580,331.00",
+    );
+    expect(formatSpendPerUnit("10.00", 3, "USD")).toBe("USD\u00a03.33");
+    expect(formatSpendPerUnit("10.00", 6, "USD")).toBe("USD\u00a01.67");
   });
 
-  // Ноль — валидный кейс
-  it("ноль → $0.0", () => {
-    expect(formatSpend1(0)).toBe("$0.0");
+  it("uses the confirmed currency exponent", () => {
+    expect(formatSpendPerUnit("10", 4, "JPY")).toBe("JPY\u00a03");
+    expect(formatSpendPerUnit("1", 6, "KWD")).toBe("KWD\u00a00.167");
   });
 
-  // null → "—"
-  it("null → —", () => {
-    expect(formatSpend1(null)).toBe("—");
-  });
-
-  // undefined → "—"
-  it("undefined → —", () => {
-    expect(formatSpend1(undefined)).toBe("—");
-  });
-
-  // Строковый вход (бэк отдаёт Decimal как строку)
-  it("принимает строку", () => {
-    expect(formatSpend1("99.55")).toBe("$99.6");
-  });
-
-  // Не-число строка → "—"
-  it("невалидная строка → —", () => {
-    expect(formatSpend1("abc")).toBe("—");
+  it("fails closed for absent, zero or unsupported evidence", () => {
+    expect(formatSpendPerUnit(null, 3, "USD")).toBe("—");
+    expect(formatSpendPerUnit("10", 0, "USD")).toBe("—");
+    expect(formatSpendPerUnit("10", 3, null)).toBe("—");
+    expect(formatSpendPerUnit("10", 3, "XAU")).toBe("—");
   });
 });
 

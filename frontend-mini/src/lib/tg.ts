@@ -1,9 +1,9 @@
 /**
  * tg.ts — обёртка над Telegram WebApp API.
  *
- * Все вызовы безопасны: при отсутствии window.Telegram (браузер / тесты)
- * функции возвращают fallback или ничего не делают. Экспортирует только
- * стабильный публичный контракт — не трогай TG-объект напрямую.
+ * Production-shell — только Telegram Mini App. При отсутствии Telegram API
+ * money-confirmation закрывается fail-closed; браузерные native-dialog
+ * подмены не используются.
  */
 
 // ─── Тип из Telegram WebApp SDK (достаточно для нашего использования) ─────
@@ -40,7 +40,9 @@ interface TelegramWebApp {
     offClick(fn: () => void): void;
   };
   HapticFeedback: {
-    impactOccurred(style: "light" | "medium" | "heavy" | "rigid" | "soft"): void;
+    impactOccurred(
+      style: "light" | "medium" | "heavy" | "rigid" | "soft",
+    ): void;
     notificationOccurred(type: "error" | "success" | "warning"): void;
     selectionChanged(): void;
   };
@@ -54,10 +56,15 @@ interface TelegramWebApp {
   };
   viewportHeight: number;
   viewportStableHeight: number;
+  safeAreaInset?: TelegramSafeArea;
+  contentSafeAreaInset?: TelegramSafeArea;
   isExpanded: boolean;
   expand(): void;
   close(): void;
   ready(): void;
+  setHeaderColor(color: string): void;
+  setBackgroundColor(color: string): void;
+  setBottomBarColor?(color: string): void;
   onEvent(eventType: string, fn: () => void): void;
   offEvent(eventType: string, fn: () => void): void;
   showAlert(message: string, callback?: () => void): void;
@@ -66,8 +73,16 @@ interface TelegramWebApp {
   openTelegramLink(url: string): void;
 }
 
+interface TelegramSafeArea {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
 function getTg(): TelegramWebApp | undefined {
-  return (window as unknown as { Telegram?: { WebApp?: TelegramWebApp } }).Telegram?.WebApp;
+  return (window as unknown as { Telegram?: { WebApp?: TelegramWebApp } })
+    .Telegram?.WebApp;
 }
 
 // ─── Инициализация темы ───────────────────────────────────────────────────
@@ -77,18 +92,65 @@ function getTg(): TelegramWebApp | undefined {
  * Мы ИГНОРИРУЕМ themeParams TG — используем собственные CSS-токены (#0a0a0b).
  * Но вызываем tg.ready() и expand() — обязательно для Mini App.
  */
-export function initTheme(): void {
+export function initTheme(): () => void {
   const tg = getTg();
-  if (!tg) return;
+  document.documentElement.dataset.theme = "dark";
+  document.documentElement.style.colorScheme = "dark";
+  if (!tg) {
+    syncViewportCss();
+    return () => {};
+  }
+  tg.setHeaderColor?.("#0a0a0b");
+  tg.setBackgroundColor?.("#0a0a0b");
+  tg.setBottomBarColor?.("#101012");
   tg.ready();
   tg.expand();
+  syncViewportCss();
+
+  const events = [
+    "viewportChanged",
+    "safeAreaChanged",
+    "contentSafeAreaChanged",
+    "activated",
+  ];
+  events.forEach((event) => tg.onEvent(event, syncViewportCss));
+  return () => events.forEach((event) => tg.offEvent(event, syncViewportCss));
+}
+
+function syncViewportCss(): void {
+  const tg = getTg();
+  const root = document.documentElement;
+  root.style.setProperty(
+    "--tg-viewport-stable-height",
+    `${Math.max(tg?.viewportStableHeight ?? window.innerHeight, 1)}px`,
+  );
+  setInsets(root, "--tg-safe", tg?.safeAreaInset);
+  setInsets(
+    root,
+    "--tg-content-safe",
+    tg?.contentSafeAreaInset ?? tg?.safeAreaInset,
+  );
+}
+
+function setInsets(
+  root: HTMLElement,
+  prefix: string,
+  inset?: TelegramSafeArea,
+): void {
+  if (!inset) return;
+  root.style.setProperty(`${prefix}-top`, `${Math.max(inset.top, 0)}px`);
+  root.style.setProperty(`${prefix}-bottom`, `${Math.max(inset.bottom, 0)}px`);
+  root.style.setProperty(`${prefix}-left`, `${Math.max(inset.left, 0)}px`);
+  root.style.setProperty(`${prefix}-right`, `${Math.max(inset.right, 0)}px`);
 }
 
 // ─── Haptic feedback ─────────────────────────────────────────────────────
 
 export const haptic = {
   /** Тактильный удар (при нажатии кнопок действий). */
-  impact(style: "light" | "medium" | "heavy" | "rigid" | "soft" = "medium"): void {
+  impact(
+    style: "light" | "medium" | "heavy" | "rigid" | "soft" = "medium",
+  ): void {
     try {
       getTg()?.HapticFeedback.impactOccurred(style);
     } catch {
@@ -116,8 +178,7 @@ export const haptic = {
 // ─── Нативные диалоги ─────────────────────────────────────────────────────
 
 /**
- * Нативный Telegram confirm. Fallback → window.confirm (браузер / dev).
- * Всегда асинхронный — возвращает Promise<boolean>.
+ * Нативный Telegram confirm. В неподдерживаемом shell возвращает false.
  */
 export function tgConfirm(message: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -125,13 +186,14 @@ export function tgConfirm(message: string): Promise<boolean> {
     if (tg?.showConfirm) {
       tg.showConfirm(message, resolve);
     } else {
-      resolve(window.confirm(message));
+      resolve(false);
     }
   });
 }
 
 /**
- * Нативный Telegram alert. Fallback → window.alert.
+ * Нативный Telegram alert. В неподдерживаемом shell ничего не показывает:
+ * AuthGuard не допускает такой shell до product routes.
  */
 export function tgAlert(message: string): Promise<void> {
   return new Promise((resolve) => {
@@ -139,7 +201,6 @@ export function tgAlert(message: string): Promise<void> {
     if (tg?.showAlert) {
       tg.showAlert(message, resolve);
     } else {
-      window.alert(message);
       resolve();
     }
   });
@@ -147,24 +208,14 @@ export function tgAlert(message: string): Promise<void> {
 
 // ─── Ссылки ───────────────────────────────────────────────────────────────
 
-/** Открывает внешнюю ссылку через TG или в текущей вкладке браузера. */
+/** Открывает внешнюю ссылку только через подтверждённый Telegram shell. */
 export function openLink(url: string): void {
-  const tg = getTg();
-  if (tg?.openLink) {
-    tg.openLink(url);
-  } else {
-    window.location.assign(url);
-  }
+  getTg()?.openLink(url);
 }
 
 /** Открывает ссылку t.me (Telegram Deep Link). */
 export function openTelegramLink(url: string): void {
-  const tg = getTg();
-  if (tg?.openTelegramLink) {
-    tg.openTelegramLink(url);
-  } else {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
+  getTg()?.openTelegramLink(url);
 }
 
 // ─── BackButton ───────────────────────────────────────────────────────────
@@ -207,4 +258,12 @@ export function getInitData(): string {
 /** Данные пользователя из initDataUnsafe (НЕ для security-проверок — только UI). */
 export function getTgUser() {
   return getTg()?.initDataUnsafe?.user ?? null;
+}
+
+/** Opaque launch capability only; backend still binds it to the verified principal. */
+export function getTgStartParam(): string | null {
+  const value = getTg()?.initDataUnsafe?.start_param;
+  return typeof value === "string" && /^[A-Za-z0-9_-]{22}$/.test(value)
+    ? value
+    : null;
 }

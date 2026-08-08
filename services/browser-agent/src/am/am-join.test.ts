@@ -47,7 +47,8 @@ describe('buildScannedRow money-маппинг (H-8)', () => {
       {
         adName: 'Ad X',
         campaignName: 'CR2 | KE | MV',
-        campaignId: 'c1',
+        campaignId: '101',
+        adsetId: '201',
         adsetName: 'as1',
         effectiveStatus: 'ACTIVE',
       },
@@ -74,12 +75,14 @@ describe('buildScannedRow money-маппинг (H-8)', () => {
     // Meta.
     assert.equal(row.delivery_status, 'ACTIVE');
     assert.equal(row.campaign_name, 'CR2 | KE | MV');
+    assert.equal(row.campaign_id, '101');
+    assert.equal(row.adset_id, '201');
     assert.equal(row.ad_name, 'Ad X');
   });
 
-  it('пустая строка: spend дефолтит "0", счётчики 0, опц. Decimal → null', () => {
+  it('пустая строка получает transport placeholders, но помечается incomplete', () => {
     const row = buildScannedRow(amRow({ adId: 'e' }));
-    assert.equal(row.spend, '0'); // money всегда заполнен (как в DOM-пути)
+    assert.equal(row.spend, '0');
     assert.equal(row.impressions, 0);
     assert.equal(row.leads, 0);
     assert.equal(row.registrations, 0);
@@ -89,6 +92,12 @@ describe('buildScannedRow money-маппинг (H-8)', () => {
     assert.equal(row.delivery_status, 'UNKNOWN'); // нет статуса
     assert.equal(row.campaign_name, ''); // нет meta
     assert.equal(row.ad_name, '');
+    assert.deepEqual(row.metric_issues, [
+      'spend:missing',
+      'reach:missing',
+      'impressions:missing',
+      'clicks:missing',
+    ]);
   });
 
   it('мелкие десятичные НЕ ломаются locale-эвристикой ("0.005" остаётся)', () => {
@@ -98,9 +107,19 @@ describe('buildScannedRow money-маппинг (H-8)', () => {
     assert.equal(row.ctr, '0.50');
   });
 
-  it('amInt: нечисло → 0, дробное → trunc', () => {
-    assert.equal(buildScannedRow(amRow({ atomic: { impressions: 'abc' } })).impressions, 0);
-    assert.equal(buildScannedRow(amRow({ atomic: { impressions: '1000.9' } })).impressions, 1000);
+  it('нечисловой или дробный count не становится подтверждённым целым', () => {
+    const baseAtomic = { spend: '1', reach: '10', clicks: '2' };
+    const malformed = buildScannedRow(
+      amRow({ atomic: { ...baseAtomic, impressions: 'abc' } }),
+    );
+    const fractional = buildScannedRow(
+      amRow({ atomic: { ...baseAtomic, impressions: '1000.9' } }),
+    );
+
+    assert.equal(malformed.impressions, 0);
+    assert.deepEqual(malformed.metric_issues, ['impressions:invalid']);
+    assert.equal(fractional.impressions, 0);
+    assert.deepEqual(fractional.metric_issues, ['impressions:invalid']);
   });
 });
 

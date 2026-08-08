@@ -13,6 +13,7 @@ ASGITransport (без живого HTTP-сервера). Каждый тест �
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -36,48 +37,66 @@ def _make_app(*, engine=None, redis=None):
 
 
 @pytest_asyncio.fixture
-async def clean_campaigns(pg_engine):
+async def clean_campaigns(pg_engine, tmp_path, monkeypatch):
     """Чистит campaign_run/campaign_preset/task_queue до и после теста.
 
     Также сбрасывает реестр креативов (campaign_creative) и счётчики
     нумерации (offer_creative_seq) для полной изоляции тестов.
     """
 
-    async def _truncate():
+    upload_dir = tmp_path / "valid-upload"
+    upload_dir.mkdir()
+    (upload_dir / "a.jpg").write_bytes(b"a")
+    monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(tmp_path))
+
+    async def _truncate(*, seed_account_context: bool):
         async with pg_engine.begin() as conn:
             await conn.execute(text("DELETE FROM task_queue WHERE task_type = 'campaign_create'"))
             await conn.execute(text("DELETE FROM campaign_creative"))
             await conn.execute(text("DELETE FROM offer_creative_seq"))
             await conn.execute(text("DELETE FROM campaign_run"))
             await conn.execute(text("DELETE FROM campaign_preset"))
+            await conn.execute(text("DELETE FROM meta_account_snapshot WHERE account_id = '123'"))
+            if seed_account_context:
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO meta_account_snapshot(
+                            account_id,
+                            timezone_name,
+                            currency,
+                            currency_observed_at
+                        )
+                        VALUES ('123', 'America/New_York', 'USD', clock_timestamp())
+                        """
+                    )
+                )
 
-    await _truncate()
+    await _truncate(seed_account_context=True)
     yield
-    await _truncate()
+    await _truncate(seed_account_context=False)
 
 
 def _valid_config() -> dict:
-    """Минимально-валидный CampaignConfig (2 adset → раскладка K×2)."""
+    """Канонический плоский frontend config (1 concept × 2 adset)."""
     return {
-        "account": {"act_id": "123", "page_id": "100", "pixel_id": "200"},
+        "act_id": "123",
+        "page_id": "100",
+        "pixel_id": "200",
         "offer_code": "GH_CR",
         "destination_link": "https://example.com",
-        "start_date": "2026-07-01",
-        "targeting": {"countries": ["DE"]},
-        "budget": {
-            "level": "campaign",
-            "daily_cents": 5000,
-            "bid_strategy": "COST_CAP",
-            "bid_amount_cents": 150,
-        },
+        "start_date": "2099-07-01",
+        "countries": ["DE"],
+        "budget_level": "campaign",
+        "daily_budget": "50.00",
+        "bid_strategy": "COST_CAP",
+        "bid_amount": "1.50",
+        "creo_root": "valid-upload",
         "campaigns": [
             {
                 "key": "static",
-                "name": "{byer} | {offer} | static | adset.pro | {date}",
-                "adsets": [
-                    {"name": "as1", "dir": "as1", "glob": "*.jpg"},
-                    {"name": "as2", "dir": "as2", "glob": "*.jpg"},
-                ],
+                "adset_count": 2,
+                "concept_refs": ["a.jpg"],
             }
         ],
     }
@@ -165,11 +184,17 @@ async def test_validate_returns_plan(pg_engine, fake_redis_client, clean_campaig
     plan = resp.json()
     assert plan["campaign_count"] == 1
     assert plan["adset_count"] == 2
-    # Без концептов в конфиге превью использует фолбэк (1 концепт/блок):
-    # adset i = 1 ad → 2 adset × 1 = 2 ads (parity с исполнителем, не баговые 4).
+    # Один реальный concept_ref → 2 adset × 1 = 2 ads.
     assert plan["ad_count"] == 2
-    assert plan["launch_state"] == "campaign_paused"
+    assert plan["creation_policy"] == "all_paused"
+    assert plan["campaigns"][0]["status"] == "PAUSED"
+    assert all(adset["status"] == "PAUSED" for adset in plan["campaigns"][0]["adsets"])
     assert "GH_CR" in plan["campaigns"][0]["name"]
+    assert plan["start_date"] == "2099-07-01"
+    assert plan["start_time"] == "2099-07-01T00:00:00-04:00"
+    assert plan["timezone_name"] == "America/New_York"
+    assert plan["currency"] == "USD"
+    assert plan["account_context_observed_at"] is not None
 
     # validate не создал ни одного run.
     async with pg_engine.connect() as conn:
@@ -208,14 +233,21 @@ async def test_launch_creates_run_and_task(pg_engine, fake_redis_client, clean_c
     async with pg_engine.connect() as conn:
         run = (
             await conn.execute(
-                text("SELECT status, idempotency_key FROM campaign_run WHERE id = :rid"),
+                text("SELECT status, idempotency_key, config FROM campaign_run WHERE id = :rid"),
                 {"rid": uuid.UUID(run_id)},
             )
         ).first()
         task = (
             await conn.execute(
                 text(
-                    "SELECT task_type, status, payload->>'run_id' AS run_id, idempotency_key "
+                    "SELECT task_type, status, payload->>'run_id' AS run_id, "
+                    "payload->>'account_id' AS account_id, "
+                    "payload->>'currency' AS currency, "
+                    "payload->>'currency_exponent' AS currency_exponent, "
+                    "payload->>'cabinet_timezone' AS cabinet_timezone, "
+                    "payload->>'account_context_observed_at' AS context_observed_at, "
+                    "idempotency_key, "
+                    "lane, priority, available_at, deadline_at, lease_token, correlation_id "
                     "FROM task_queue WHERE id = :tid"
                 ),
                 {"tid": out["task_id"]},
@@ -225,8 +257,31 @@ async def test_launch_creates_run_and_task(pg_engine, fake_redis_client, clean_c
     assert task.task_type == "campaign_create"
     assert task.status == "pending"
     assert task.run_id == run_id
+    assert task.account_id == "123"
+    assert task.currency == "USD"
+    assert task.currency_exponent == "2"
+    assert task.cabinet_timezone == "America/New_York"
+    assert task.context_observed_at is not None
+    assert task.lane == "bulk"
+    assert task.priority == 20
+    assert task.available_at is not None
+    assert task.deadline_at is not None
+    assert task.deadline_at > task.available_at
+    assert task.lease_token == 0
+    assert task.correlation_id is not None
     # Money-safety: один idempotency_key у run и задачи.
     assert task.idempotency_key == run.idempotency_key == out["idempotency_key"]
+    assert run.config["account"] == {
+        "act_id": "123",
+        "account_context_observed_at": task.context_observed_at,
+        "currency": "USD",
+        "currency_exponent": 2,
+        "page_id": "100",
+        "pixel_id": "200",
+        "timezone_name": "America/New_York",
+    }
+    assert run.config["budget"]["currency"] == "USD"
+    assert run.config["budget"]["daily_amount"] == "50.00"
 
 
 # Повторный launch того же конфига идемпотентен: тот же run, без дубля задачи.
@@ -259,11 +314,7 @@ async def test_launch_idempotent(pg_engine, fake_redis_client, clean_campaigns):
 async def test_launch_rejects_budget_over_cap(pg_engine, fake_redis_client, clean_campaigns):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     cfg = _valid_config()
-    cfg["budget"] = {
-        "daily_cents": 100_000_00 + 1,
-        "bid_strategy": "COST_CAP",
-        "bid_amount_cents": 150,
-    }
+    cfg["daily_budget"] = "100000.01"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/tools/campaigns/launch", json={"config": cfg})
     assert resp.status_code == 422
@@ -282,8 +333,8 @@ async def test_launch_rejects_block_without_concepts(pg_engine, fake_redis_clien
         "pixel_id": "200",
         "offer_code": "GH_CR",
         "destination_link": "https://example.com",
-        "daily_budget_cents": 20000,
-        "bid_amount_cents": 150,
+        "daily_budget": "200.00",
+        "bid_amount": "1.50",
         "countries": ["DE"],
         "campaigns": [{"key": "video", "adset_count": 2, "concept_refs": []}],
     }
@@ -291,7 +342,7 @@ async def test_launch_rejects_block_without_concepts(pg_engine, fake_redis_clien
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/tools/campaigns/launch", json={"config": flat})
     assert resp.status_code == 422
-    assert "video" in resp.json()["detail"]
+    assert resp.json()["message"] == "Параметры запроса не прошли проверку"
     async with pg_engine.connect() as conn:
         cnt = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
     assert cnt == 0
@@ -369,12 +420,12 @@ async def test_upload_rejects_renamed_file_magic_mismatch(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/tools/campaigns/upload", files=files)
     assert resp.status_code == 422
-    assert "содержимое" in resp.json()["detail"]
+    assert "содержимое" in resp.json()["message"]
     # Никаких осиротевших temp-папок после отказа (cleanup на ошибке).
     assert list(tmp_path.iterdir()) == []
 
 
-# ─────────────────────────── runs / clone / cancel / cleanup ───────────────────────────
+# ─────────────────────────────── runs / cancel ───────────────────────────────
 
 
 # runs возвращает список с offer_code из снимка config + X-Total-Count.
@@ -411,73 +462,357 @@ async def test_get_run_detail(pg_engine, fake_redis_client, clean_campaigns):
         assert missing.status_code == 404
 
 
-# clone создаёт новый queued-черновик без задачи и без idempotency_key.
 @pytest.mark.asyncio
-async def test_clone_run(pg_engine, fake_redis_client, clean_campaigns):
+async def test_run_detail_exposes_task_lifecycle_and_safe_controls(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         launched = (
             await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
         ).json()
-        resp = await ac.post(f"/api/tools/campaigns/runs/{launched['run_id']}/clone")
-    assert resp.status_code == 201
-    clone = resp.json()
-    assert clone["run_id"] != launched["run_id"]
-    assert clone["task_id"] is None
-    assert clone["status"] == "queued"
+        detail = (await ac.get(f"/api/tools/campaigns/runs/{launched['run_id']}")).json()
 
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    "SELECT config->>'offer_code' AS offer_code, idempotency_key "
-                    "FROM campaign_run WHERE id = :rid"
-                ),
-                {"rid": uuid.UUID(clone["run_id"])},
-            )
-        ).first()
-    assert row.offer_code == "GH_CR"
-    assert row.idempotency_key is None
+    assert detail["task"]["id"] == launched["task_id"]
+    assert detail["task"]["state"] == "queued"
+    assert detail["task"]["queue_status"] == "pending"
+    assert detail["task"]["outcome"] is None
+    assert detail["task"]["external_started"] is False
+    assert detail["controls"]["abort"] == {
+        "available": True,
+        "reason": "abort_available",
+    }
+    assert detail["controls"]["resume"] == {
+        "available": False,
+        "reason": "run_not_terminal",
+    }
 
 
-# cancel переводит queued-run в cancelled и отменяет задачу.
 @pytest.mark.asyncio
-async def test_cancel_run_in_queue(pg_engine, fake_redis_client, clean_campaigns):
+async def test_abort_queued_is_atomic_confirmed_and_idempotent(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    command_key = f"test:campaign-abort:{uuid.uuid4()}"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        launched = (
+            await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
+        ).json()
+        first = await ac.post(
+            f"/api/tools/campaigns/runs/{launched['run_id']}/abort",
+            headers={"Idempotency-Key": command_key},
+        )
+        replay = await ac.post(
+            f"/api/tools/campaigns/runs/{launched['run_id']}/abort",
+            headers={"Idempotency-Key": command_key},
+        )
+        detail = await ac.get(f"/api/tools/campaigns/runs/{launched['run_id']}")
+
+    assert first.status_code == 200
+    assert first.json()["state"] == "confirmed"
+    assert first.json()["run_status"] == "cancelled"
+    assert first.json()["created"] is True
+    assert replay.status_code == 200
+    assert replay.json()["task_id"] == first.json()["task_id"]
+    assert replay.json()["created"] is False
+    assert detail.json()["task"]["queue_status"] == "cancelled"
+    assert detail.json()["task"]["outcome"] == "REJECTED"
+    assert detail.json()["controls"]["resume"] == {
+        "available": True,
+        "reason": "pre_external_checkpoint_available",
+    }
+
+
+@pytest.mark.asyncio
+async def test_new_abort_key_never_confirms_an_unproven_cancelled_task(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         launched = (
             await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
         ).json()
-        resp = await ac.post(f"/api/tools/campaigns/runs/{launched['run_id']}/cancel")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "cancelled"
-
-    async with pg_engine.connect() as conn:
-        task_status = (
-            await conn.execute(
-                text("SELECT status FROM task_queue WHERE id = :tid"),
-                {"tid": launched["task_id"]},
-            )
-        ).scalar()
-    assert task_status == "cancelled"
-
-
-# cancel запрещён, если run уже creating (необратимое создание Meta) → 409.
-@pytest.mark.asyncio
-async def test_cancel_run_creating_conflict(pg_engine, fake_redis_client, clean_campaigns):
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        launched = (
-            await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
-        ).json()
-        # Двигаем run в creating (имитация воркера).
         async with pg_engine.begin() as conn:
             await conn.execute(
-                text("UPDATE campaign_run SET status = 'creating' WHERE id = :rid"),
-                {"rid": uuid.UUID(launched["run_id"])},
+                text(
+                    """
+                    UPDATE task_queue
+                    SET status = 'cancelled',
+                        completed_at = NOW(),
+                        result = '{}'::jsonb
+                    WHERE id = :task_id
+                    """
+                ),
+                {"task_id": launched["task_id"]},
             )
-        resp = await ac.post(f"/api/tools/campaigns/runs/{launched['run_id']}/cancel")
-    assert resp.status_code == 409
+            await conn.execute(
+                text("UPDATE campaign_run SET status = 'cancelled' WHERE id = :run_id"),
+                {"run_id": uuid.UUID(launched["run_id"])},
+            )
+        response = await ac.post(
+            f"/api/tools/campaigns/runs/{launched['run_id']}/abort",
+            headers={"Idempotency-Key": f"test:unproven-abort:{uuid.uuid4()}"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "run_already_cancelled"
+    async with pg_engine.connect() as conn:
+        receipts = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM command_idempotency_receipts "
+                    "WHERE target_id = :run_id "
+                    "AND action_kind = 'abort_campaign_run'"
+                ),
+                {"run_id": launched["run_id"]},
+            )
+        ).scalar()
+    assert receipts == 0
+
+
+@pytest.mark.asyncio
+async def test_abort_running_sets_cooperative_request_without_false_success(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        launched = (
+            await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
+        ).json()
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    UPDATE task_queue
+                    SET status = 'running',
+                        lease_owner = :owner,
+                        lease_token = 1,
+                        lease_expires_at = NOW() + INTERVAL '30 minutes'
+                    WHERE id = :task_id
+                    """
+                ),
+                {"task_id": launched["task_id"], "owner": uuid.uuid4()},
+            )
+            await conn.execute(
+                text("UPDATE campaign_run SET status = 'uniquifying' WHERE id = :run_id"),
+                {"run_id": uuid.UUID(launched["run_id"])},
+            )
+        response = await ac.post(
+            f"/api/tools/campaigns/runs/{launched['run_id']}/abort",
+            headers={"Idempotency-Key": f"test:running-abort:{uuid.uuid4()}"},
+        )
+
+    assert response.status_code == 202
+    assert response.json()["state"] == "running"
+    assert response.json()["run_status"] == "uniquifying"
+    assert response.json()["reason"] == "cooperative_abort_requested"
+    async with pg_engine.connect() as conn:
+        task = (
+            await conn.execute(
+                text(
+                    "SELECT status, cancel_requested_at, external_started_at "
+                    "FROM task_queue WHERE id = :task_id"
+                ),
+                {"task_id": launched["task_id"]},
+            )
+        ).first()
+        run_status = (
+            await conn.execute(
+                text("SELECT status FROM campaign_run WHERE id = :run_id"),
+                {"run_id": uuid.UUID(launched["run_id"])},
+            )
+        ).scalar()
+    assert task.status == "running"
+    assert task.cancel_requested_at is not None
+    assert task.external_started_at is None
+    assert run_status == "uniquifying"
+
+
+@pytest.mark.asyncio
+async def test_resume_creates_one_lineage_task_from_pre_external_checkpoint(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    abort_key = f"test:resume-abort:{uuid.uuid4()}"
+    resume_key = f"test:resume:{uuid.uuid4()}"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        launched = (
+            await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
+        ).json()
+        aborted = await ac.post(
+            f"/api/tools/campaigns/runs/{launched['run_id']}/abort",
+            headers={"Idempotency-Key": abort_key},
+        )
+        assert aborted.status_code == 200
+        resumed = await ac.post(
+            f"/api/tools/campaigns/runs/{launched['run_id']}/resume",
+            headers={"Idempotency-Key": resume_key},
+        )
+        replay = await ac.post(
+            f"/api/tools/campaigns/runs/{launched['run_id']}/resume",
+            headers={"Idempotency-Key": resume_key},
+        )
+
+    assert resumed.status_code == 202
+    assert resumed.json()["state"] == "queued"
+    assert resumed.json()["created"] is True
+    assert resumed.json()["task_id"] != launched["task_id"]
+    assert replay.status_code == 202
+    assert replay.json()["task_id"] == resumed.json()["task_id"]
+    assert replay.json()["created"] is False
+
+    async with pg_engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT id, status, payload
+                    FROM task_queue
+                    WHERE task_type = 'campaign_create'
+                      AND payload->>'run_id' = :run_id
+                    ORDER BY id
+                    """
+                ),
+                {"run_id": launched["run_id"]},
+            )
+        ).fetchall()
+        run = (
+            await conn.execute(
+                text("SELECT status, progress, error FROM campaign_run WHERE id = :run_id"),
+                {"run_id": uuid.UUID(launched["run_id"])},
+            )
+        ).first()
+    assert len(rows) == 2
+    assert rows[0].status == "cancelled"
+    assert rows[1].status == "pending"
+    assert rows[1].payload["resume_of_task_id"] == launched["task_id"]
+    assert rows[1].payload["resume_generation"] == 1
+    assert run.status == "queued"
+    assert run.progress["checkpoint"] == "pre_external"
+    assert run.error is None
+
+
+@pytest.mark.asyncio
+async def test_resume_rejects_unknown_post_boundary_checkpoint(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        launched = (
+            await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
+        ).json()
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    UPDATE task_queue
+                    SET status = 'failed',
+                        external_started_at = NOW(),
+                        completed_at = NOW(),
+                        result = CAST(:result AS JSONB)
+                    WHERE id = :task_id
+                    """
+                ),
+                {
+                    "task_id": launched["task_id"],
+                    "result": '{"outcome":"UNKNOWN","reconcile_required":true}',
+                },
+            )
+            await conn.execute(
+                text(
+                    """
+                    UPDATE campaign_run
+                    SET status = 'failed',
+                        progress = '{"stage":"failed","outcome":"UNKNOWN"}'::jsonb
+                    WHERE id = :run_id
+                    """
+                ),
+                {"run_id": uuid.UUID(launched["run_id"])},
+            )
+        response = await ac.post(
+            f"/api/tools/campaigns/runs/{launched['run_id']}/resume",
+            headers={"Idempotency-Key": f"test:unsafe-resume:{uuid.uuid4()}"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "external_boundary_crossed"
+    async with pg_engine.connect() as conn:
+        count = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM task_queue "
+                    "WHERE task_type = 'campaign_create' "
+                    "AND payload->>'run_id' = :run_id"
+                ),
+                {"run_id": launched["run_id"]},
+            )
+        ).scalar()
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_two_distinct_resume_commands_have_one_cas_winner(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        launched = (
+            await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
+        ).json()
+        aborted = await ac.post(
+            f"/api/tools/campaigns/runs/{launched['run_id']}/abort",
+            headers={"Idempotency-Key": f"test:cas-abort:{uuid.uuid4()}"},
+        )
+        assert aborted.status_code == 200
+
+        async def resume_once() -> object:
+            return await ac.post(
+                f"/api/tools/campaigns/runs/{launched['run_id']}/resume",
+                headers={"Idempotency-Key": f"test:cas-resume:{uuid.uuid4()}"},
+            )
+
+        first, second = await asyncio.gather(resume_once(), resume_once())
+
+    assert sorted([first.status_code, second.status_code]) == [202, 409]
+    conflict = first if first.status_code == 409 else second
+    assert conflict.json()["code"] == "run_not_terminal"
+    async with pg_engine.connect() as conn:
+        task_count = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM task_queue "
+                    "WHERE task_type = 'campaign_create' "
+                    "AND payload->>'run_id' = :run_id"
+                ),
+                {"run_id": launched["run_id"]},
+            )
+        ).scalar()
+        resume_receipts = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM command_idempotency_receipts "
+                    "WHERE action_kind = 'resume_campaign_run' "
+                    "AND target_id = :run_id"
+                ),
+                {"run_id": launched["run_id"]},
+            )
+        ).scalar()
+    assert task_count == 2
+    assert resume_receipts == 1
 
 
 # Два launch одного оффера с разными датами → code_start второго продолжает первый (нет коллизии CRxxx).
@@ -538,28 +873,3 @@ async def test_launch_allocates_continuing_code_start(
     # span = число КОНЦЕПТОВ (код общий по adset'ам): 2 концепта → 2 кода на запуск.
     span1 = 2
     assert base2 == base1 + span1
-
-
-# cleanup возвращает созданные Meta-ID для сноса (или сообщение, что их нет).
-@pytest.mark.asyncio
-async def test_cleanup_run(pg_engine, fake_redis_client, clean_campaigns):
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        launched = (
-            await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
-        ).json()
-        # Заполняем created_meta_ids (имитация partial-fail воркера).
-        async with pg_engine.begin() as conn:
-            await conn.execute(
-                text(
-                    "UPDATE campaign_run SET created_meta_ids = CAST(:ids AS JSONB) WHERE id = :rid"
-                ),
-                {
-                    "ids": '{"campaigns": ["c1"], "adsets": ["a1"]}',
-                    "rid": uuid.UUID(launched["run_id"]),
-                },
-            )
-        resp = await ac.post(f"/api/tools/campaigns/runs/{launched['run_id']}/cleanup")
-    assert resp.status_code == 200
-    out = resp.json()
-    assert out["meta_ids"]["campaigns"] == ["c1"]

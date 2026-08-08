@@ -3,7 +3,7 @@
  *
  * Эндпоинты:
  *   POST /api/ai/chat   →  { answer, tool_calls, generated_at, model }
- *   GET  /api/ai/pulse  →  { important, text, generated_at }
+ *   POST /api/ai/pulse  →  { important, text, generated_at }
  *
  * Историю диалога держит КЛИЕНТ (стор chatWidget) — сервер её не хранит.
  * В запрос уходят последние ≤12 сообщений (role: user|assistant, content ≤4000
@@ -16,39 +16,39 @@
  * Ошибки: 429 (лимит 30/час), 503 (AI-провайдеры не настроены) — приходят как
  * ApiError через apiSend, разбираются в сторе.
  */
-import { apiGet, apiSend } from "./client";
+import type { components } from "@fb/shared/api/generated";
+import { ApiError } from "./client";
+import { generatedFetchApi } from "./generatedClient";
 
-export type AiChatRole = "user" | "assistant";
+export type AiChatRole = components["schemas"]["ChatMessageIn"]["role"];
+export type AiChatMessageIn = components["schemas"]["ChatMessageIn"];
+export type AiChatResponse = components["schemas"]["AIChatResponse"];
+export type AiPulseResponse = components["schemas"]["AIPulseResponse"];
+export type AiChatToolCall = NonNullable<AiChatResponse["tool_calls"]>[number];
 
-export interface AiChatMessageIn {
-  role: AiChatRole;
-  content: string;
-}
-
-export interface AiChatToolCall {
-  name: string;
-  error: string | null;
-}
-
-export interface AiChatResponse {
-  answer: string;
-  tool_calls: AiChatToolCall[];
-  generated_at: string;
-  model: string;
-}
-
-export interface AiPulseResponse {
-  important: boolean;
-  text: string | null;
-  generated_at: string;
+function generatedApiError(status: number, error: unknown): ApiError {
+  const message =
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+      ? error.message
+      : `Ошибка API ${status}`;
+  return new ApiError(message, status, error);
 }
 
 /** Отправляет историю диалога и возвращает ответ ассистента. */
-export function sendAiChatMessage(messages: AiChatMessageIn[]): Promise<AiChatResponse> {
-  return apiSend<AiChatResponse>("POST", "/ai/chat", { messages });
+export async function sendAiChatMessage(messages: AiChatMessageIn[]): Promise<AiChatResponse> {
+  const { data, error, response } = await generatedFetchApi.POST("/api/ai/chat", { body: { messages } });
+  if (!response.ok) throw generatedApiError(response.status, error);
+  if (!data) throw new Error(`Пустой ответ API: ${response.status}`);
+  return data;
 }
 
 /** Почасовой пульс кабинета: important=false → тишина, виджет молчит. */
-export function fetchAiPulse(): Promise<AiPulseResponse> {
-  return apiGet<AiPulseResponse>("/ai/pulse");
+export async function fetchAiPulse(): Promise<AiPulseResponse> {
+  const { data, error, response } = await generatedFetchApi.POST("/api/ai/pulse");
+  if (!response.ok) throw generatedApiError(response.status, error);
+  if (!data) throw new Error(`Пустой ответ API: ${response.status}`);
+  return data;
 }

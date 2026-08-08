@@ -35,7 +35,7 @@ async def clean_scan_runs(pg_engine):
 # Сценарий: один _begin_scan_run пишет ровно одну строку с scan_id == id
 @pytest.mark.asyncio
 async def test_begin_scan_run_writes_consistent_scan_id(pg_engine, clean_scan_runs) -> None:
-    scan_id = await _begin_scan_run(pg_engine)
+    scan_id = await _begin_scan_run(pg_engine, ad_account_id="123")
     assert scan_id > 0
 
     async with pg_engine.connect() as conn:
@@ -55,7 +55,7 @@ async def test_begin_scan_run_writes_consistent_scan_id(pg_engine, clean_scan_ru
 # Сценарий: 5 параллельных _begin_scan_run → 5 разных id, у каждого scan_id == id
 @pytest.mark.asyncio
 async def test_parallel_begin_scan_run_unique_ids(pg_engine, clean_scan_runs) -> None:
-    ids = await asyncio.gather(*[_begin_scan_run(pg_engine) for _ in range(5)])
+    ids = await asyncio.gather(*[_begin_scan_run(pg_engine, ad_account_id="123") for _ in range(5)])
 
     assert len(set(ids)) == 5  # все уникальны
 
@@ -83,7 +83,7 @@ async def test_cancelled_begin_does_not_leave_orphan(pg_engine, clean_scan_runs)
 
     async def _interrupt():
         # Запускаем begin и моментально cancel'им
-        task = asyncio.create_task(_begin_scan_run(pg_engine))
+        task = asyncio.create_task(_begin_scan_run(pg_engine, ad_account_id="123"))
         await asyncio.sleep(0)  # даём task стартовать
         task.cancel()
         try:

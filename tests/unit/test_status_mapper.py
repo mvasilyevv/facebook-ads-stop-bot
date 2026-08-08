@@ -9,15 +9,8 @@ from __future__ import annotations
 import pytest
 
 from apps.api.utils.status_mapper import (
-    from_frontend_task_status,
     to_frontend_task_status,
-    to_frontend_task_status_safe,
 )
-
-
-# draft считается черновиком и маппится в PENDING — фронт не знает о draft-состоянии.
-def test_draft_maps_to_pending() -> None:
-    assert to_frontend_task_status("draft") == "PENDING"
 
 
 # pending → PENDING: обычная очередь до обработки воркером.
@@ -54,55 +47,3 @@ def test_cancelled_maps_to_cancelled() -> None:
 def test_unknown_db_status_raises_value_error() -> None:
     with pytest.raises(ValueError, match="Неизвестный db-статус"):
         to_frontend_task_status("unknown_garbage")
-
-
-# Обратный маппинг PENDING → pending (не draft — draft внутренний).
-def test_pending_frontend_maps_to_pending_db() -> None:
-    assert from_frontend_task_status("PENDING") == "pending"
-
-
-# Обратный маппинг RUNNING → running.
-def test_running_frontend_maps_to_running_db() -> None:
-    assert from_frontend_task_status("RUNNING") == "running"
-
-
-# Обратный маппинг SUCCEEDED → succeeded.
-def test_succeeded_frontend_maps_to_succeeded_db() -> None:
-    assert from_frontend_task_status("SUCCEEDED") == "succeeded"
-
-
-# Обратный маппинг FAILED → failed.
-def test_failed_frontend_maps_to_failed_db() -> None:
-    assert from_frontend_task_status("FAILED") == "failed"
-
-
-# Обратный маппинг RETRYING → retrying.
-def test_retrying_frontend_maps_to_retrying_db() -> None:
-    assert from_frontend_task_status("RETRYING") == "retrying"
-
-
-# Обратный маппинг CANCELLED → cancelled.
-def test_cancelled_frontend_maps_to_cancelled_db() -> None:
-    assert from_frontend_task_status("CANCELLED") == "cancelled"
-
-
-# Неизвестный frontend-статус поднимает ValueError.
-def test_unknown_frontend_status_raises_value_error() -> None:
-    with pytest.raises(ValueError, match="Неизвестный frontend-статус"):
-        from_frontend_task_status("INVALID_STATUS")
-
-
-# L9: safe-вариант для известного статуса работает как обычный маппинг.
-def test_safe_known_status_maps_normally() -> None:
-    assert to_frontend_task_status_safe("draft") == "PENDING"
-    assert to_frontend_task_status_safe("succeeded") == "SUCCEEDED"
-
-
-# L9: safe-вариант для неизвестного статуса НЕ падает — отдаёт .upper() (read-путь 500-safe).
-def test_safe_unknown_status_falls_back_to_upper() -> None:
-    assert to_frontend_task_status_safe("some_future_status") == "SOME_FUTURE_STATUS"
-
-
-# L9: safe-вариант на пустой строке не падает.
-def test_safe_empty_status_returns_empty() -> None:
-    assert to_frontend_task_status_safe("") == ""

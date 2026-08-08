@@ -1,10 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Pydantic-схемы для роутера offers (CRUD + compare + rules).
-
-схема БД: Offer содержит только code/name/vertical/is_active.
-Поля country_code, use_vision_creator, notes отсутствуют в ORM —
-возвращаются как null для совместимости с фронтовым shape.
-"""
+"""Strict Pydantic contracts for offer CRUD and rules."""
 
 from __future__ import annotations
 
@@ -12,7 +7,15 @@ import re
 import uuid
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from core.money import (
+    InvalidCurrencyAmountError,
+    UnsupportedCurrencyExponentError,
+    currency_exponent,
+    require_exact_currency_amount,
+    validated_currency_code,
+)
 
 # Паттерн для валидации кода оффера: 1-64 символа, A-Z 0-9 _ - .
 _CODE_RE = re.compile(r"^[A-Z0-9_\-\.]{1,64}$")
@@ -77,8 +80,6 @@ class OfferOut(BaseModel):
     vertical: str | None = None
     # FB Pixel ID оффера (для создания кампаний — событие оптимизации Purchase/FTD).
     pixel_id: str | None = None
-    # Поля отсутствующие в ORM — возвращаем null для стабильного shape фронта.
-    country_code: None = None
     is_active: bool
     # Мульти-кабинет: кабинеты оффера (числовые ID без act_). Scan set = union по активным.
     ad_account_ids: list[str] = Field(default_factory=list)
@@ -87,10 +88,9 @@ class OfferOut(BaseModel):
     # Целевой CPA оффера из правил (offer_rules.cpa_threshold, доллары). Единый CPA:
     # и стоп-пороги, и префилл бида визарда. None — правила/CPA не заданы.
     cpa_threshold: Decimal | None = None
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     created_at: str | None = None  # ISO-строка из ORM datetime
     updated_at: str | None = None
-    use_vision_creator: None = None
-    notes: None = None
 
     @classmethod
     def from_orm_offer(cls, offer: object) -> "OfferOut":
@@ -112,21 +112,17 @@ class OfferOut(BaseModel):
 class OfferCreateIn(BaseModel):
     """Тело POST /offers."""
 
+    model_config = ConfigDict(extra="forbid")
+
     code: str = Field(..., min_length=1, max_length=64, description="Уникальный код оффера")
-    # name убрано из формы — оффер именуется кодом (name = code в endpoint).
-    # Принимаем опционально для обратной совместимости, но значение игнорируем.
-    name: str | None = None
     vertical: str | None = Field(None, max_length=32)
+    is_active: bool = True
     # FB Pixel ID оффера (числовой; пусто — не задан).
     pixel_id: str | None = Field(None, max_length=64)
     # Мульти-кабинет: кабинеты оффера, минимум 1 (без них оффер выпадает из скана).
     ad_account_ids: list[str] = Field(..., min_length=1)
     # Гео оффера (ISO-2 upper), дефолт пусто. Визард префиллит гео из этого списка.
     countries: list[str] = Field(default_factory=list)
-    # country_code и notes принимаем но игнорируем (нет в ORM)
-    country_code: str | None = None
-    use_vision_creator: bool | None = None
-    notes: str | None = None
 
     @field_validator("code")
     @classmethod
@@ -157,14 +153,12 @@ class OfferCreateIn(BaseModel):
 class OfferUpdateIn(BaseModel):
     """Тело PUT /offers/{id}.
 
-    code — immutable: если передан, игнорируется (не обновляется).
-    Все остальные поля optional.
+    Identity is immutable and therefore is not accepted in this payload.
+    All mutable fields are optional.
     """
 
-    # Принимаем code, но не применяем его — задокументировано в docstring.
-    code: str | None = None
-    # name не редактируется — всегда равно коду; поле принимается, но игнорируется.
-    name: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
     vertical: str | None = Field(None, max_length=32)
     # FB Pixel ID: None — не трогать; строка (в т.ч. пустая → null) — заменить.
     pixel_id: str | None = Field(None, max_length=64)
@@ -173,9 +167,6 @@ class OfferUpdateIn(BaseModel):
     ad_account_ids: list[str] | None = None
     # Гео: None — не трогать; список (в т.ч. пустой) — заменить (ISO-2 upper, дедуп).
     countries: list[str] | None = None
-    country_code: str | None = None
-    use_vision_creator: bool | None = None
-    notes: str | None = None
 
     @field_validator("ad_account_ids")
     @classmethod
@@ -197,32 +188,6 @@ class OfferUpdateIn(BaseModel):
         return _normalize_countries(v)
 
 
-# ─────────────────────── OfferCompare ───────────────────────
-
-
-class OfferCompareRow(BaseModel):
-    """Агрегированные метрики одного оффера для /offers/compare."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    offer_id: uuid.UUID
-    offer_code: str
-    offer_name: str
-    days: int
-
-    spend: Decimal
-    leads: int
-    registrations: int
-    deposits: int
-    active_ads_count: int
-    stop_alerts_count: int
-
-    # Вычисляемые cost_per_* — null если знаменатель = 0
-    cost_per_lead: Decimal | None
-    cost_per_registration: Decimal | None
-    cost_per_deposit: Decimal | None
-
-
 # ─────────────────────── OfferRule ───────────────────────
 
 
@@ -239,6 +204,7 @@ class OfferRuleOut(BaseModel):
     offer_id: uuid.UUID | None = None
 
     cpa_threshold: Decimal | None = None
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     frequency_threshold: Decimal | None = None
     # Чувствительность (per-offer, дефолт 80/80). stop_percent_of_rule — стоп = N% от
     # базового правила (CPC-база 2%×CPA и т.д.); warning_percent_of_stop — ворнинг = M% от стопа.
@@ -249,34 +215,70 @@ class OfferRuleOut(BaseModel):
 class OfferRuleUpsertIn(BaseModel):
     """Тело PUT /offers/{id}/rules — upsert всех пороговых полей.
 
-    Все поля nullable. Отрицательные пороги запрещены (ge=0).
+    Monetary/frequency пороги nullable; заданные значения строго положительны.
     """
 
-    # LOW (аудит 02.07): cpa_threshold=0 раньше молча превращался в дефолт 100 в
-    # build_rule_context (`offer.cpa_threshold or Decimal("100")` трактует 0 как falsy).
-    # gt=0 запрещает 0 на входе явно, не полагаясь на скрытый фолбэк ниже по пайплайну.
-    cpa_threshold: Decimal | None = Field(None, gt=0)
-    frequency_threshold: Decimal | None = Field(None, ge=0)
+    # NULL выключает rule; observer повторяет fail-closed проверку после прямых DB-записей.
+    cpa_threshold: Decimal | None = Field(
+        None,
+        gt=0,
+        max_digits=20,
+        decimal_places=6,
+    )
+    currency: str | None = Field(default=None, pattern=r"^[A-Za-z]{3}$")
+    frequency_threshold: Decimal | None = Field(None, gt=0)
     # Чувствительность 1–100% (всегда задано, дефолт 80). НЕ nullable — колонки NOT NULL.
     stop_percent_of_rule: Decimal = Field(Decimal("80"), ge=1, le=100)
     warning_percent_of_stop: Decimal = Field(Decimal("80"), ge=1, le=100)
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = validated_currency_code(value)
+        if normalized is None:
+            raise ValueError("unknown ISO 4217 currency")
+        try:
+            currency_exponent(normalized)
+        except UnsupportedCurrencyExponentError as exc:
+            raise ValueError("currency has no reviewed exponent") from exc
+        return normalized
+
+    @model_validator(mode="after")
+    def require_cpa_currency(self) -> "OfferRuleUpsertIn":
+        if self.cpa_threshold is not None and self.currency is None:
+            raise ValueError("currency is required when cpa_threshold is set")
+        if self.cpa_threshold is not None and self.currency is not None:
+            exponent = currency_exponent(self.currency)
+            try:
+                self.cpa_threshold = require_exact_currency_amount(
+                    self.cpa_threshold,
+                    currency=self.currency,
+                    exponent=exponent,
+                    field="cpa_threshold",
+                    allow_zero=False,
+                )
+            except InvalidCurrencyAmountError as exc:
+                raise ValueError(str(exc)) from exc
+        return self
 
 
 # ─────────────────────── Rule preview (live-расчёт стоимостей) ───────────────────────
 
 
 class RuleThresholdPreview(BaseModel):
-    """Один порог-правило: при какой $-стоимости сработают стоп и ворнинг."""
+    """Один денежный порог: при какой стоимости сработают стоп и ворнинг."""
 
     rule: str
     label: str
-    base: Decimal  # база (фикс. правило), $
-    stop: Decimal  # стоп, $
-    warning: Decimal  # ворнинг, $
+    base: Decimal
+    stop: Decimal
+    warning: Decimal
 
 
 class SpendRangePreview(BaseModel):
-    """Диапазон расхода (% от CPA → $)."""
+    """Диапазон расхода в валюте CPA."""
 
     rule: str
     label: str
@@ -293,6 +295,7 @@ class RulePreviewOut(BaseModel):
     """
 
     cpa: Decimal
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
     stop_percent_of_rule: Decimal
     warning_percent_of_stop: Decimal
     cost_rules: list[RuleThresholdPreview]

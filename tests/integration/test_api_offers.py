@@ -123,167 +123,6 @@ async def test_list_offers_include_inactive(pg_engine, fake_redis_client, clean_
     assert len(resp.json()) == 3
 
 
-# ─────────────────────── GET /offers/compare ───────────────────────
-
-
-# compare с кумулятивными метриками: берём ПОСЛЕДНИЙ snapshot за день, не сумму.
-@pytest.mark.asyncio
-async def test_compare_offers_with_metrics(pg_engine, fake_redis_client, clean_offers):
-    """CRIT-1: два snapshot'а одного ad в одни сутки — кумулятив, не два события.
-
-    ad_metrics пишет накопленное за сутки значение каждый scan-цикл. Два снимка
-    (1h: spend=300, 2h: spend=200) — это рост кумулятива, latest (300) и есть
-    дневной итог. Наивный SUM дал бы 500 (завышение). Проверяем что берётся 300.
-    """
-    offer_id = uuid.uuid4()
-    campaign_id = uuid.uuid4()
-    adset_id = uuid.uuid4()
-    ad_id = uuid.uuid4()
-    suffix = uuid.uuid4().hex[:6]
-
-    async with pg_engine.begin() as conn:
-        await conn.execute(
-            text("INSERT INTO offers (id, code, name) VALUES (:i, :c, :n)"),
-            {"i": offer_id, "c": f"COMP_{suffix}", "n": "Compare offer"},
-        )
-        await conn.execute(
-            text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
-            {"i": campaign_id, "n": f"CMP_{suffix}", "o": offer_id},
-        )
-        await conn.execute(
-            text("INSERT INTO fb_adsets (id, campaign_id, adset_name) VALUES (:i, :c, :n)"),
-            {"i": adset_id, "c": campaign_id, "n": f"ADS_{suffix}"},
-        )
-        await conn.execute(
-            text("INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name) VALUES (:i, :a, :f, :n)"),
-            {"i": ad_id, "a": adset_id, "f": f"230{suffix}", "n": f"AD_{suffix}"},
-        )
-        # Два снимка одного ad в текущие сутки: кумулятив рос 200 → 300.
-        # Поздний снимок (1h назад) = дневной итог. Оба внутри 7-дневного окна.
-        await conn.execute(
-            text(
-                "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, leads, registrations, deposits) "
-                "VALUES (gen_random_uuid(), :a, NOW() - INTERVAL '1 hour', :s, :l, :r, :d)"
-            ),
-            {"a": ad_id, "s": Decimal("300.00"), "l": 10, "r": 6, "d": 3},
-        )
-        await conn.execute(
-            text(
-                "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, leads, registrations, deposits) "
-                "VALUES (gen_random_uuid(), :a, NOW() - INTERVAL '2 hours', :s, :l, :r, :d)"
-            ),
-            {"a": ad_id, "s": Decimal("200.00"), "l": 5, "r": 4, "d": 2},
-        )
-
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/offers/compare", params={"days": 7})
-
-    assert resp.status_code == 200
-    rows = resp.json()
-    row = next((r for r in rows if r["offer_code"] == f"COMP_{suffix}"), None)
-    assert row is not None, "Оффер не найден в compare-ответе"
-
-    # Latest snapshot за день, НЕ сумма обоих снимков (которая дала бы 500).
-    assert Decimal(row["spend"]) == Decimal("300.00")
-    assert row["leads"] == 10
-    assert row["registrations"] == 6
-    assert row["deposits"] == 3
-    # cost_per_lead = 300 / 10 = 30.00
-    assert Decimal(row["cost_per_lead"]) == Decimal("30.00")
-    # cost_per_registration = 300 / 6 = 50.00
-    assert Decimal(row["cost_per_registration"]) == Decimal("50.00")
-    # cost_per_deposit = 300 / 3 = 100.00
-    assert Decimal(row["cost_per_deposit"]) == Decimal("100.00")
-
-
-# Anti-naive-SUM кейс: 5 циклов, 2 ad'а → spend = latest per-ad sum, не SUM всех строк.
-# ad1: 50→100→150→200→250 (latest=250), ad2: 20→40→60→80→100 (latest=100).
-# Итого latest sum: 350. Naive SUM всех строк: 50+100+150+200+250 + 20+40+60+80+100 = 1050.
-# Ловит CRIT-1 в самом жёстком сценарии: 5 циклов, 2 ad, exact value.
-@pytest.mark.asyncio
-async def test_compare_offers_multicycle_anti_naive_sum(pg_engine, fake_redis_client, clean_offers):
-    """5 циклов × 2 ad → compare spend = 350 (latest per-ad), не 1050 (naive SUM)."""
-    offer_id = uuid.uuid4()
-    campaign_id = uuid.uuid4()
-    adset_id = uuid.uuid4()
-    ad1_id = uuid.uuid4()
-    ad2_id = uuid.uuid4()
-    suffix = uuid.uuid4().hex[:6]
-
-    async with pg_engine.begin() as conn:
-        await conn.execute(
-            text("INSERT INTO offers (id, code, name) VALUES (:i, :c, :n)"),
-            {"i": offer_id, "c": f"ANTI_{suffix}", "n": "Anti naive SUM"},
-        )
-        await conn.execute(
-            text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
-            {"i": campaign_id, "n": f"ANTI_CMP_{suffix}", "o": offer_id},
-        )
-        await conn.execute(
-            text("INSERT INTO fb_adsets (id, campaign_id, adset_name) VALUES (:i, :c, :n)"),
-            {"i": adset_id, "c": campaign_id, "n": f"ANTI_ADS_{suffix}"},
-        )
-        await conn.execute(
-            text("INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name) VALUES (:i, :a, :f, :n)"),
-            {"i": ad1_id, "a": adset_id, "f": f"AD1_{suffix}", "n": f"AD1_{suffix}"},
-        )
-        await conn.execute(
-            text("INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name) VALUES (:i, :a, :f, :n)"),
-            {"i": ad2_id, "a": adset_id, "f": f"AD2_{suffix}", "n": f"AD2_{suffix}"},
-        )
-        # ad1: 5 кумулятивных циклов 50→250, latest=250
-        for n, s in enumerate([50, 100, 150, 200, 250], start=1):
-            await conn.execute(
-                text(
-                    "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, leads, "
-                    "registrations, deposits) VALUES (gen_random_uuid(), :a, "
-                    "NOW() - make_interval(hours => :h), :s, :l, 3, 1)"
-                ),
-                {"a": ad1_id, "h": 6 - n, "s": Decimal(str(s)), "l": n * 2},
-            )
-        # ad2: 5 кумулятивных циклов 20→100, latest=100
-        for n, s in enumerate([20, 40, 60, 80, 100], start=1):
-            await conn.execute(
-                text(
-                    "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, leads, "
-                    "registrations, deposits) VALUES (gen_random_uuid(), :a, "
-                    "NOW() - make_interval(hours => :h), :s, :l, 2, 1)"
-                ),
-                {"a": ad2_id, "h": 6 - n, "s": Decimal(str(s)), "l": n},
-            )
-
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/offers/compare", params={"days": 1})
-
-    assert resp.status_code == 200
-    rows = resp.json()
-    row = next((r for r in rows if r["offer_code"] == f"ANTI_{suffix}"), None)
-    assert row is not None, f"Оффер ANTI_{suffix} не найден в compare-ответе"
-
-    # latest ad1=250 + latest ad2=100 = 350, не naive SUM 1050
-    assert Decimal(row["spend"]) == Decimal("350.00"), (
-        f"compare spend={row['spend']}, ожидалось 350 (latest per-ad), "
-        "не 1050 (naive SUM 5 циклов × 2 ad)"
-    )
-    # leads: ad1 latest-цикл (h=1) → leads=10, ad2 latest-цикл (h=1) → leads=5 → итого 15
-    assert row["leads"] == 15, f"leads={row['leads']}, ожидалось 15"
-    # cost_per_lead: 350/15 ≈ 23.33
-    expected_cpl = (Decimal("350") / Decimal("15")).quantize(Decimal("0.01"))
-    actual_cpl = Decimal(str(row["cost_per_lead"])).quantize(Decimal("0.01"))
-    assert actual_cpl == expected_cpl, f"cost_per_lead={actual_cpl}, ожидалось {expected_cpl}"
-
-
-# days=200 превышает максимум 90, должен вернуть 422.
-@pytest.mark.asyncio
-async def test_compare_days_out_of_range(pg_engine, fake_redis_client, clean_offers):
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/offers/compare", params={"days": 200})
-    assert resp.status_code == 422
-
-
 # ─────────────────────── POST /offers ───────────────────────
 
 
@@ -293,8 +132,8 @@ async def test_create_offer_happy_path(pg_engine, fake_redis_client, clean_offer
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     body = {
         "code": "TST_NEW",
-        "name": "Test New",
         "vertical": "casino",
+        "is_active": False,
         "ad_account_ids": ["111222333"],
     }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -305,7 +144,7 @@ async def test_create_offer_happy_path(pg_engine, fake_redis_client, clean_offer
     assert data["code"] == "TST_NEW"
     assert data["name"] == "TST_NEW"  # бэк пишет name=code (поле «Название» убрано)
     assert data["vertical"] == "casino"
-    assert data["is_active"] is True
+    assert data["is_active"] is False
     assert data["id"] is not None
     assert data["ad_account_ids"] == ["111222333"]
 
@@ -325,7 +164,7 @@ async def test_create_offer_duplicate_code_returns_409(pg_engine, fake_redis_cli
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post(
             "/api/offers",
-            json={"code": "DUP_CODE", "name": "Duplicate", "ad_account_ids": ["111"]},
+            json={"code": "DUP_CODE", "ad_account_ids": ["111"]},
         )
 
     assert resp.status_code == 409
@@ -368,14 +207,31 @@ async def test_create_offer_invalid_code_lowercase_returns_422(
 ):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.post("/api/offers", json={"code": "lowercase_code", "name": "Bad"})
+        resp = await ac.post(
+            "/api/offers",
+            json={"code": "lowercase_code", "ad_account_ids": ["111"]},
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("name", "country_code", "use_vision_creator", "notes"))
+async def test_create_offer_rejects_retired_fields(
+    pg_engine, fake_redis_client, clean_offers, field: str
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/offers",
+            json={"code": "STRICT", "ad_account_ids": ["111"], field: "legacy"},
+        )
     assert resp.status_code == 422
 
 
 # ─────────────────────── PUT /offers/{id} ───────────────────────
 
 
-# Успешное обновление оффера: name и vertical меняются.
+# Успешное обновление изменяемого поля.
 @pytest.mark.asyncio
 async def test_update_offer_happy_path(pg_engine, fake_redis_client, clean_offers):
     async with pg_engine.begin() as conn:
@@ -386,7 +242,7 @@ async def test_update_offer_happy_path(pg_engine, fake_redis_client, clean_offer
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.put(
             f"/api/offers/{offer_id}",
-            json={"name": "Updated Name", "vertical": "betting"},
+            json={"vertical": "betting"},
         )
 
     assert resp.status_code == 200
@@ -402,14 +258,16 @@ async def test_update_offer_not_found(pg_engine, fake_redis_client, clean_offers
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     fake_id = uuid.uuid4()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.put(f"/api/offers/{fake_id}", json={"name": "Ghost"})
+        resp = await ac.put(f"/api/offers/{fake_id}", json={"vertical": "betting"})
     assert resp.status_code == 404
 
 
-# code в теле PUT игнорируется: оффер возвращается с оригинальным кодом.
+# Immutable/retired identity fields are rejected instead of silently ignored.
 @pytest.mark.asyncio
-async def test_update_offer_code_is_ignored(pg_engine, fake_redis_client, clean_offers):
-    """code immutable — передача нового кода не должна его изменить."""
+@pytest.mark.parametrize("field", ("code", "name", "country_code", "use_vision_creator", "notes"))
+async def test_update_offer_rejects_immutable_or_retired_fields(
+    pg_engine, fake_redis_client, clean_offers, field: str
+):
     async with pg_engine.begin() as conn:
         ids = await _seed_offers(conn, [{"code": "ORIG_CODE"}])
     offer_id = ids[0]
@@ -418,14 +276,18 @@ async def test_update_offer_code_is_ignored(pg_engine, fake_redis_client, clean_
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.put(
             f"/api/offers/{offer_id}",
-            json={"code": "NEW_CODE", "name": "Name changed"},
+            json={field: "legacy"},
         )
 
-    assert resp.status_code == 200
-    data = resp.json()
-    # code должен остаться прежним
-    assert data["code"] == "ORIG_CODE"
-    assert data["name"] == "ORIG_CODE"  # PUT не обновляет name — всегда = code
+    assert resp.status_code == 422
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT code, name FROM offers WHERE id = :id"), {"id": offer_id}
+            )
+        ).one()
+    assert row.code == "ORIG_CODE"
+    assert row.name == "ORIG_CODE"
 
 
 # ─────────────────────── DELETE /offers/{id} ───────────────────────
@@ -452,12 +314,12 @@ async def test_delete_offer_soft_deletes(pg_engine, fake_redis_client, clean_off
         assert row.scalar_one() is False
 
 
-# DELETE уже-inactive оффера → 404 (не идемпотентно, по документации).
+# Повторная деактивация уже-inactive оффера остаётся идемпотентной.
 @pytest.mark.asyncio
-async def test_delete_offer_already_inactive_returns_404(
+async def test_deactivate_offer_already_inactive_returns_204(
     pg_engine, fake_redis_client, clean_offers
 ):
-    """Повторный delete или delete inactive → 404 (не 204 повторно)."""
+    """Повторный DELETE подтверждает целевое inactive-состояние."""
     async with pg_engine.begin() as conn:
         ids = await _seed_offers(conn, [{"code": "ALREADY_DEL", "is_active": False}])
     offer_id = ids[0]
@@ -465,7 +327,7 @@ async def test_delete_offer_already_inactive_returns_404(
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.delete(f"/api/offers/{offer_id}")
-    assert resp.status_code == 404
+    assert resp.status_code == 204
 
 
 # ─────────────────────── GET /offers/{id}/rules ───────────────────────
@@ -502,6 +364,7 @@ async def test_upsert_offer_rules_happy_path(pg_engine, fake_redis_client, clean
 
     body = {
         "cpa_threshold": "15.00",
+        "currency": "USD",
         "frequency_threshold": "3.00",
     }
 
@@ -512,13 +375,89 @@ async def test_upsert_offer_rules_happy_path(pg_engine, fake_redis_client, clean
     assert resp.status_code == 200
     data = resp.json()
     assert Decimal(data["cpa_threshold"]) == Decimal("15.00")
+    assert data["currency"] == "USD"
     assert Decimal(data["frequency_threshold"]) == Decimal("3.00")
 
     # Повторный upsert (обновление) тоже работает
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp2 = await ac.put(f"/api/offers/{offer_id}/rules", json={"cpa_threshold": "20.00"})
+        resp2 = await ac.put(
+            f"/api/offers/{offer_id}/rules",
+            json={"cpa_threshold": "20.00", "currency": "USD"},
+        )
     assert resp2.status_code == 200
     assert Decimal(resp2.json()["cpa_threshold"]) == Decimal("20.00")
+
+
+@pytest.mark.asyncio
+async def test_upsert_offer_rules_round_trips_large_kwd_exactly(
+    pg_engine,
+    fake_redis_client,
+    clean_offers,
+) -> None:
+    async with pg_engine.begin() as conn:
+        offer_id = (await _seed_offers(conn, [{"code": "KWD_EXACT"}]))[0]
+    cpa = "9007199254740.123"
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.put(
+            f"/api/offers/{offer_id}/rules",
+            json={"cpa_threshold": cpa, "currency": "KWD"},
+        )
+        persisted = await ac.get(f"/api/offers/{offer_id}/rules")
+
+    assert response.status_code == 200
+    assert persisted.status_code == 200
+    assert Decimal(response.json()["cpa_threshold"]) == Decimal(cpa)
+    assert Decimal(persisted.json()["cpa_threshold"]) == Decimal(cpa)
+    assert persisted.json()["currency"] == "KWD"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("currency", "cpa"),
+    [
+        ("JPY", "1000"),
+        ("KWD", "3.125"),
+        ("KWD", "9007199254740.123"),
+    ],
+)
+async def test_rule_preview_keeps_exact_decimal_query_string(
+    pg_engine,
+    fake_redis_client,
+    currency: str,
+    cpa: str,
+) -> None:
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.get(
+            "/api/offers/rules/preview",
+            params={
+                "cpa": cpa,
+                "currency": currency,
+                "stop_percent_of_rule": "80",
+                "warning_percent_of_stop": "80",
+            },
+        )
+
+    assert response.status_code == 200
+    assert Decimal(response.json()["cpa"]) == Decimal(cpa)
+    assert response.json()["currency"] == currency
+
+
+@pytest.mark.asyncio
+async def test_rule_preview_rejects_jpy_fraction(
+    pg_engine,
+    fake_redis_client,
+) -> None:
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.get(
+            "/api/offers/rules/preview",
+            params={"cpa": "1000.1", "currency": "JPY"},
+        )
+
+    assert response.status_code == 422
 
 
 # Отрицательный порог → 422 (Pydantic-валидация ge=0).

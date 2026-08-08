@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Unit-тесты AI-резюме дайджеста (2b) и «пульса кабинета» (2c) — без БД и сети."""
+"""Unit-тесты «пульса кабинета» — без БД и сети."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,24 +11,11 @@ import pytest
 from apps.digest_scheduler.main import (
     _due_pulse_slot,
     parse_pulse_slots,
-    pulse_sent_key,
     run_pulse_tick,
 )
-from core.ai_assistant.digest_summary import summarize_digest
 from core.ai_assistant.pulse import PulseSignals, build_pulse
-from core.telegram.digest_builder import DigestPayload
 
 _NOW = datetime(2026, 7, 15, 16, 30, tzinfo=timezone.utc)
-
-
-def _payload() -> DigestPayload:
-    return DigestPayload(
-        window_start_utc=datetime(2026, 7, 14, 9, 0, tzinfo=timezone.utc),
-        window_end_utc=datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc),
-        alerts_warning_count=2,
-        alerts_stop_count=1,
-        total_spend_window_usd=Decimal("12.50"),
-    )
 
 
 def _ai(text: str | None = "Вывод: день спокойный.") -> MagicMock:
@@ -39,34 +25,6 @@ def _ai(text: str | None = "Вывод: день спокойный.") -> MagicM
     resp.text = text
     client.chat = AsyncMock(return_value=resp)
     return client
-
-
-# Резюме: happy path — AI вернул текст, он и отдаётся
-@pytest.mark.asyncio
-async def test_summary_happy_path() -> None:
-    with patch("core.ai_assistant.digest_summary.get_ai_client", return_value=_ai()):
-        assert await summarize_digest(_payload()) == "Вывод: день спокойный."
-
-
-# Резюме: AI-провайдеры не настроены → None, дайджест уходит как раньше
-@pytest.mark.asyncio
-async def test_summary_none_when_ai_unavailable() -> None:
-    client = MagicMock()
-    client.is_available = False
-    with patch("core.ai_assistant.digest_summary.get_ai_client", return_value=client):
-        assert await summarize_digest(_payload()) is None
-
-
-# Резюме: кэш в Redis — второй вызов за день не дёргает AI
-@pytest.mark.asyncio
-async def test_summary_cache_hit_skips_ai() -> None:
-    redis = MagicMock()
-    redis.get = AsyncMock(return_value="кэшированный вывод")
-    ai = _ai()
-    with patch("core.ai_assistant.digest_summary.get_ai_client", return_value=ai):
-        result = await summarize_digest(_payload(), redis_client=redis)
-    assert result == "кэшированный вывод"
-    ai.chat.assert_not_awaited()
 
 
 # Слоты: парсинг строки конфига терпим к мусору и сортирует
@@ -89,11 +47,6 @@ def test_due_pulse_slot_window() -> None:
 def test_due_pulse_slot_none_before_first() -> None:
     early = datetime(2026, 7, 15, 8, 0, tzinfo=timezone.utc)
     assert _due_pulse_slot(early, [(12, 0), (16, 0)]) is None
-
-
-# Ключ дедупа содержит дату и слот
-def test_pulse_sent_key_format() -> None:
-    assert pulse_sent_key(_NOW, (16, 0)) == "pulse:sent:2026-07-15:1600"
 
 
 # Пульс: сигналов нет → None ещё до обращения к AI
@@ -184,80 +137,74 @@ async def test_pulse_tick_disabled_by_default() -> None:
     with patch("apps.digest_scheduler.main.get_settings", return_value=_pulse_env(enabled=False)):
         status = await run_pulse_tick(
             engine=MagicMock(),
-            redis_client=MagicMock(),
-            tg_client_factory=MagicMock(),
             now=_NOW,
         )
     assert status == "disabled"
 
 
-# run_pulse_tick: сигналов нет → слот закрывается молча, сообщение не шлётся
+# run_pulse_tick: сигналов нет → notification event не создаётся.
 @pytest.mark.asyncio
-async def test_pulse_tick_quiet_marks_slot() -> None:
-    redis = MagicMock()
-    redis.get = AsyncMock(return_value=None)
-    redis.set = AsyncMock()
-    cfg = MagicMock()
-    cfg.bot_token = "token"
-    factory = MagicMock()
+async def test_pulse_tick_quiet_creates_no_notification() -> None:
     with (
         patch("apps.digest_scheduler.main.get_settings", return_value=_pulse_env()),
-        patch("apps.digest_scheduler.main.load_telegram_config", new=AsyncMock(return_value=cfg)),
         patch(
-            "apps.digest_scheduler.main.load_active_recipients",
-            new=AsyncMock(return_value=[MagicMock(chat_id=1)]),
+            "apps.digest_scheduler.main._notification_exists",
+            new=AsyncMock(return_value=False),
         ),
-        patch("apps.digest_scheduler.main.build_pulse", new=AsyncMock(return_value=None)),
+        patch(
+            "apps.digest_scheduler.main.collect_pulse_signals",
+            new=AsyncMock(return_value=None),
+        ),
     ):
-        status = await run_pulse_tick(
-            engine=MagicMock(), redis_client=redis, tg_client_factory=factory, now=_NOW
-        )
+        status = await run_pulse_tick(engine=MagicMock(), now=_NOW)
     assert status == "quiet"
-    redis.set.assert_awaited()  # слот закрыт
-    factory.assert_not_called()  # TG-клиент даже не создавался
 
 
-# run_pulse_tick: сигналы есть → отчёт уходит получателям, слот закрывается
+# run_pulse_tick: сигналы есть → событие фиксируется в PostgreSQL-outbox
 @pytest.mark.asyncio
 async def test_pulse_tick_sends_report() -> None:
-    redis = MagicMock()
-    redis.get = AsyncMock(return_value=None)
-    redis.set = AsyncMock()
-    cfg = MagicMock()
-    cfg.bot_token = "token"
-    tg = MagicMock()
-    tg.send_message = AsyncMock()
-    tg.close = AsyncMock()
+    signals = PulseSignals(
+        window_start_utc=_NOW,
+        window_end_utc=_NOW,
+        stop_count=2,
+        warning_count=1,
+        failed_tasks_count=0,
+        top_stops=[("CR2_CR002", "CR2", ["cpr_stop"])],
+    )
+    enqueue = AsyncMock(return_value=MagicMock(was_created=True))
     with (
         patch("apps.digest_scheduler.main.get_settings", return_value=_pulse_env()),
-        patch("apps.digest_scheduler.main.load_telegram_config", new=AsyncMock(return_value=cfg)),
         patch(
-            "apps.digest_scheduler.main.load_active_recipients",
-            new=AsyncMock(return_value=[MagicMock(chat_id=1)]),
+            "apps.digest_scheduler.main._notification_exists",
+            new=AsyncMock(return_value=False),
         ),
         patch(
-            "apps.digest_scheduler.main.build_pulse",
-            new=AsyncMock(return_value="📟 <b>Пульс кабинета</b>\n2 стопа"),
+            "apps.digest_scheduler.main.collect_pulse_signals",
+            new=AsyncMock(return_value=signals),
         ),
+        patch("apps.digest_scheduler.main.enqueue_notification", new=enqueue),
     ):
         status = await run_pulse_tick(
             engine=MagicMock(),
-            redis_client=redis,
-            tg_client_factory=MagicMock(return_value=tg),
             now=_NOW,
         )
-    assert status == "sent"
-    assert "Пульс" in tg.send_message.call_args.kwargs["text"]
-    redis.set.assert_awaited()
+    assert status == "queued"
+    spec = enqueue.await_args.args[1]
+    assert spec.event_type == "operator_pulse"
+    assert spec.facts.title == "Пульс кабинета"
+    assert "Остановлено 2" in spec.facts.summary
+    assert spec.scheduled_at == _NOW + timedelta(minutes=5)
 
 
-# run_pulse_tick: повторный тик того же слота — дедуп по Redis-ключу
+# run_pulse_tick: повторный тик того же слота — дедуп по PostgreSQL
 @pytest.mark.asyncio
 async def test_pulse_tick_already_sent() -> None:
-    redis = MagicMock()
-    redis.get = AsyncMock(return_value="1")
-    with patch("apps.digest_scheduler.main.get_settings", return_value=_pulse_env()):
-        status = await run_pulse_tick(
-            engine=MagicMock(), redis_client=redis, tg_client_factory=MagicMock(), now=_NOW
-        )
+    with (
+        patch("apps.digest_scheduler.main.get_settings", return_value=_pulse_env()),
+        patch(
+            "apps.digest_scheduler.main._notification_exists",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        status = await run_pulse_tick(engine=MagicMock(), now=_NOW)
     assert status == "already_sent"

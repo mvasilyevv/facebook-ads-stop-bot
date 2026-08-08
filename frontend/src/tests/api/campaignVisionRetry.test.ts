@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ApiError } from "@/lib/api/client";
+import { GeneratedApiError } from "@fb/operator-api";
 import {
   shouldRetryVisionMetadata,
   visionMetadataRetryDelay,
@@ -8,11 +8,11 @@ import {
 
 describe("campaign Vision metadata retry", () => {
   it("повторяет только транзиентный 503 и не больше трёх раз", () => {
-    const unavailable = new ApiError("Vision недоступен", 503, null);
+    const unavailable = new GeneratedApiError(503, null);
     expect(shouldRetryVisionMetadata(0, unavailable)).toBe(true);
     expect(shouldRetryVisionMetadata(2, unavailable)).toBe(true);
     expect(shouldRetryVisionMetadata(3, unavailable)).toBe(false);
-    expect(shouldRetryVisionMetadata(0, new ApiError("нет доступа", 422, null))).toBe(false);
+    expect(shouldRetryVisionMetadata(0, new GeneratedApiError(422, null))).toBe(false);
     expect(shouldRetryVisionMetadata(0, new Error("network"))).toBe(false);
   });
 

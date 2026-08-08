@@ -118,5 +118,36 @@ def test_installer_syncs_secret_before_caddy_validation() -> None:
     sync_position = installer.index('python3 "$PROJECT_DIR/scripts/sync-caddy-env.py"')
     validate_position = installer.index("caddy validate --config")
     assert sync_position < validate_position
-    assert 'readonly SHARED_ENV_FILE="$ROOT_DIR/shared/.env"' in installer
+    assert (
+        'readonly SHARED_ENV_FILE="${APP_ENV_OVERRIDE:-$ROOT_DIR/shared/active-app.env}"'
+        in installer
+    )
     assert "stat -c '%a' \"$SHARED_ENV_FILE\"" in installer
+
+
+def test_scoped_sync_keeps_the_other_release_credential(tmp_path) -> None:
+    module = _load_module()
+    source = tmp_path / "candidate.env"
+    target = tmp_path / "caddy.env"
+    source.write_text(
+        "API_KEY=new-api\n"
+        "DESKTOP_KASM_SERVICE_USER=new-user\n"
+        "DESKTOP_KASM_SERVICE_PASSWORD=new-password\n"
+    )
+    target.write_text(
+        "PANEL_BASIC_AUTH_USER=panel\n"
+        "PANEL_BASIC_AUTH_HASH=hash\n"
+        "API_KEY=old-api\n"
+        "DESKTOP_KASM_SERVICE_AUTH_B64=b2xkOmRlc2t0b3A=\n"
+    )
+    target.chmod(0o600)
+
+    module.sync_caddy_env(source, target, scope="api")
+    api_only = target.read_text()
+    assert "API_KEY=new-api" in api_only
+    assert "DESKTOP_KASM_SERVICE_AUTH_B64=b2xkOmRlc2t0b3A=" in api_only
+
+    module.sync_caddy_env(source, target, scope="desktop")
+    desktop = target.read_text()
+    assert "API_KEY=new-api" in desktop
+    assert "DESKTOP_KASM_SERVICE_AUTH_B64=bmV3LXVzZXI6bmV3LXBhc3N3b3Jk" in desktop

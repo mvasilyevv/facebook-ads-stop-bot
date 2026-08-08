@@ -32,7 +32,15 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from core.dashboard.cabinet_spend import cabinet_day_start_utc, current_day_spend
+from core.dashboard.cabinet_spend import (
+    cabinet_day_start_utc,
+    current_day_spend,
+    current_day_spend_for_account,
+)
+
+UTC_ACCOUNT_ID = "910000000001"
+UTC0_ACCOUNT_ID = "910000000002"
+UTC10_ACCOUNT_ID = "910000000003"
 
 
 async def _seed_ad(
@@ -47,6 +55,9 @@ async def _seed_ad(
     campaign_id = uuid.uuid4()
     adset_id = uuid.uuid4()
     ad_id = uuid.uuid4()
+    fb_campaign_id = f"{campaign_id.int % 10**18:018d}"
+    fb_adset_id = f"{adset_id.int % 10**18:018d}"
+    fb_ad_id = f"{ad_id.int % 10**18:018d}"
 
     await conn.execute(
         text("INSERT INTO offers (id, code, name) VALUES (:i, :c, :n)"),
@@ -54,33 +65,83 @@ async def _seed_ad(
     )
     await conn.execute(
         text(
-            "INSERT INTO fb_campaigns (id, campaign_name, offer_id, ad_account_id) "
-            "VALUES (:i, :n, :o, :a)"
+            "INSERT INTO fb_campaigns "
+            "(id, fb_campaign_id, campaign_name, offer_id, ad_account_id) "
+            "VALUES (:i, :fb_id, :n, :o, :a)"
         ),
-        {"i": campaign_id, "n": f"CDS_CMP_{code_suffix}", "o": offer_id, "a": ad_account_id},
+        {
+            "i": campaign_id,
+            "fb_id": fb_campaign_id,
+            "n": f"CDS_CMP_{code_suffix}",
+            "o": offer_id,
+            "a": ad_account_id,
+        },
     )
     await conn.execute(
-        text("INSERT INTO fb_adsets (id, campaign_id, adset_name) VALUES (:i, :c, :n)"),
-        {"i": adset_id, "c": campaign_id, "n": f"CDS_ADS_{code_suffix}"},
+        text(
+            "INSERT INTO fb_adsets (id, campaign_id, fb_adset_id, adset_name) "
+            "VALUES (:i, :c, :fb_id, :n)"
+        ),
+        {
+            "i": adset_id,
+            "c": campaign_id,
+            "fb_id": fb_adset_id,
+            "n": f"CDS_ADS_{code_suffix}",
+        },
     )
     await conn.execute(
         text(
             "INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name, is_active, last_seen_at) "
             "VALUES (:i, :a, :f, :n, true, NOW())"
         ),
-        {"i": ad_id, "a": adset_id, "f": f"cds_{ad_suffix}", "n": f"CDS_AD_{ad_suffix}"},
+        {"i": ad_id, "a": adset_id, "f": fb_ad_id, "n": f"CDS_AD_{ad_suffix}"},
     )
-    return {"offer_id": offer_id, "campaign_id": campaign_id, "ad_id": ad_id}
+    stored = (
+        await conn.execute(
+            text(
+                """
+                SELECT c.fb_campaign_id, c.ad_account_id, s.fb_adset_id, a.fb_ad_id
+                FROM fb_ads AS a
+                JOIN fb_adsets AS s ON s.id = a.adset_id
+                JOIN fb_campaigns AS c ON c.id = s.campaign_id
+                WHERE a.id = :ad_id
+                """
+            ),
+            {"ad_id": ad_id},
+        )
+    ).one()
+    assert stored == (fb_campaign_id, ad_account_id, fb_adset_id, fb_ad_id)
+    assert all(
+        value.isdigit() for value in (fb_campaign_id, fb_adset_id, fb_ad_id) if value is not None
+    )
+    assert ad_account_id is None or ad_account_id.isdigit()
+    return {
+        "offer_id": offer_id,
+        "campaign_id": campaign_id,
+        "ad_id": ad_id,
+        "ad_account_id": ad_account_id,
+        "fb_campaign_id": fb_campaign_id,
+        "fb_adset_id": fb_adset_id,
+        "fb_ad_id": fb_ad_id,
+    }
 
 
-async def _insert_metric_at(conn, *, ad_id: uuid.UUID, cycle_ts: datetime, spend: Decimal) -> None:
+async def _insert_metric_at(
+    conn,
+    *,
+    ad_id: uuid.UUID,
+    cycle_ts: datetime,
+    spend: Decimal,
+    currency: str | None = None,
+) -> None:
     """Вставляет один кумулятивный snapshot с явным (Python-стороны) cycle_ts."""
     await conn.execute(
         text(
-            "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, leads, deposits) "
-            "VALUES (gen_random_uuid(), :a, :ts, :s, 0, 0)"
+            "INSERT INTO ad_metrics "
+            "(id, ad_id, cycle_ts, currency, spend, leads, deposits) "
+            "VALUES (gen_random_uuid(), :a, :ts, :currency, :s, 0, 0)"
         ),
-        {"a": ad_id, "ts": cycle_ts, "s": spend},
+        {"a": ad_id, "ts": cycle_ts, "currency": currency, "s": spend},
     )
 
 
@@ -122,10 +183,10 @@ async def test_current_day_spend_takes_latest_not_sum(
 
     async with pg_engine.begin() as conn:
         ad1 = await _seed_ad(
-            conn, code_suffix="LATEST1", ad_suffix="latest1", ad_account_id="acc_utc"
+            conn, code_suffix="LATEST1", ad_suffix="latest1", ad_account_id=UTC_ACCOUNT_ID
         )
         ad2 = await _seed_ad(
-            conn, code_suffix="LATEST2", ad_suffix="latest2", ad_account_id="acc_utc"
+            conn, code_suffix="LATEST2", ad_suffix="latest2", ad_account_id=UTC_ACCOUNT_ID
         )
 
         for i, spend in enumerate([20, 40, 60, 80, 100]):
@@ -139,7 +200,7 @@ async def test_current_day_spend_takes_latest_not_sum(
 
     total = await current_day_spend(
         pg_engine,
-        tz_map={"acc_utc": 0.0},
+        tz_map={UTC_ACCOUNT_ID: 0.0},
         default_offset=0.0,
         now=now,
     )
@@ -162,7 +223,7 @@ async def test_current_day_spend_excludes_prev_day_tail(
 
     async with pg_engine.begin() as conn:
         ad = await _seed_ad(
-            conn, code_suffix="PREVDAY", ad_suffix="prevday", ad_account_id="acc_utc"
+            conn, code_suffix="PREVDAY", ad_suffix="prevday", ad_account_id=UTC_ACCOUNT_ID
         )
         # Снимок ДО границы (вчерашний остаток кумулятивной серии, ещё не обнулился)
         await _insert_metric_at(
@@ -171,7 +232,7 @@ async def test_current_day_spend_excludes_prev_day_tail(
 
     total = await current_day_spend(
         pg_engine,
-        tz_map={"acc_utc": 0.0},
+        tz_map={UTC_ACCOUNT_ID: 0.0},
         default_offset=0.0,
         now=now,
     )
@@ -197,10 +258,10 @@ async def test_current_day_spend_per_account_boundary(
 
     async with pg_engine.begin() as conn:
         ad_a = await _seed_ad(
-            conn, code_suffix="ACCTA", ad_suffix="accta", ad_account_id="acc_a_utc0"
+            conn, code_suffix="ACCTA", ad_suffix="accta", ad_account_id=UTC0_ACCOUNT_ID
         )
         ad_b = await _seed_ad(
-            conn, code_suffix="ACCTB", ad_suffix="acctb", ad_account_id="acc_b_utc10"
+            conn, code_suffix="ACCTB", ad_suffix="acctb", ad_account_id=UTC10_ACCOUNT_ID
         )
 
         # Кабинет A (offset 0): один снимок сразу после его полуночи → latest=50.
@@ -227,7 +288,7 @@ async def test_current_day_spend_per_account_boundary(
 
     total = await current_day_spend(
         pg_engine,
-        tz_map={"acc_a_utc0": 0.0, "acc_b_utc10": 10.0},
+        tz_map={UTC0_ACCOUNT_ID: 0.0, UTC10_ACCOUNT_ID: 10.0},
         default_offset=0.0,
         now=now,
     )
@@ -238,8 +299,66 @@ async def test_current_day_spend_per_account_boundary(
     )
 
 
+@pytest.mark.asyncio
+async def test_account_spend_preserves_exponent_and_rejects_mixed_currency(
+    pg_engine: AsyncEngine,
+    clean_cabinet_spend,
+) -> None:
+    now = datetime.now(UTC)
+    boundary = cabinet_day_start_utc(0.0, now)
+    async with pg_engine.begin() as conn:
+        ad_bhd = await _seed_ad(
+            conn,
+            code_suffix="BHD",
+            ad_suffix="bhd",
+            ad_account_id=UTC_ACCOUNT_ID,
+        )
+        await _insert_metric_at(
+            conn,
+            ad_id=ad_bhd["ad_id"],
+            cycle_ts=boundary + timedelta(minutes=10),
+            currency="BHD",
+            spend=Decimal("1.001"),
+        )
+
+    total = await current_day_spend_for_account(
+        pg_engine,
+        account_id=UTC_ACCOUNT_ID,
+        currency="BHD",
+        cabinet_day_start=boundary,
+    )
+    assert total == Decimal("1.001")
+
+    async with pg_engine.begin() as conn:
+        ad_mixed = await _seed_ad(
+            conn,
+            code_suffix="MIXED",
+            ad_suffix="mixed",
+            ad_account_id=UTC_ACCOUNT_ID,
+        )
+        await _insert_metric_at(
+            conn,
+            ad_id=ad_mixed["ad_id"],
+            cycle_ts=boundary + timedelta(minutes=11),
+            currency="EUR",
+            spend=Decimal("2.000"),
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="unknown or mixed currency evidence",
+    ):
+        await current_day_spend_for_account(
+            pg_engine,
+            account_id=UTC_ACCOUNT_ID,
+            currency="BHD",
+            cabinet_day_start=boundary,
+        )
+
+
 __all__ = [
     "test_current_day_spend_takes_latest_not_sum",
     "test_current_day_spend_excludes_prev_day_tail",
     "test_current_day_spend_per_account_boundary",
+    "test_account_spend_preserves_exponent_and_rejects_mixed_currency",
 ]

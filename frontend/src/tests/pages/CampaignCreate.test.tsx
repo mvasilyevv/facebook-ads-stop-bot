@@ -24,7 +24,10 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-router")>();
   return {
     ...actual,
-    createFileRoute: () => ({ component: (c: unknown) => c }),
+    createFileRoute:
+      () =>
+      <T,>(options: T): T =>
+        options,
     Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
       <a href={to}>{children}</a>
     ),
@@ -42,7 +45,6 @@ vi.mock("@/lib/api/campaigns", () => ({
         act_id: "act_123",
         page_id: "p456",
         pixel_id: "px789",
-        tz_offset: 3,
         offer_code: "GH_CR2",
         byer_tag: "MV",
         objective: "OUTCOME_SALES",
@@ -67,17 +69,22 @@ vi.mock("@/lib/api/campaigns", () => ({
     mutate: vi.fn(),
     mutateAsync: vi.fn().mockResolvedValue({
       offer_code: "GH_CR2",
-      launch_state: "campaign_paused",
+      creation_policy: "all_paused",
       copies_per_concept: 3,
       campaign_count: 1,
       adset_count: 3,
       ad_count: 6,
+      start_date: "2099-07-30",
+      start_time: "2099-07-30T00:00:00Z",
+      timezone_name: "Etc/UTC",
+      currency: "USD",
+      account_context_observed_at: "2026-07-29T08:30:00Z",
       campaigns: [
         {
           key: "image1",
           name: "MV | GH_CR2 | Static | adset.pro | 2026-06-23",
           status: "PAUSED",
-          adsets: [{ name: "adset-1", status: "ACTIVE", ad_count: 2 }],
+          adsets: [{ name: "adset-1", status: "PAUSED", ad_count: 2 }],
         },
       ],
     }),
@@ -102,6 +109,16 @@ vi.mock("@/lib/api/campaigns", () => ({
     data: {
       data: [
         {
+          id: "run-queued",
+          preset_id: null,
+          status: "queued",
+          offer_code: "GH_PENDING",
+          idempotency_key: "campaign:GH_PENDING:2026-06-22:queued",
+          error: null,
+          created_at: "2026-06-22T10:30:00Z",
+          updated_at: "2026-06-22T10:30:00Z",
+        },
+        {
           id: "run-1",
           preset_id: null,
           status: "succeeded",
@@ -122,7 +139,7 @@ vi.mock("@/lib/api/campaigns", () => ({
           updated_at: "2026-06-21T09:01:00Z",
         },
       ],
-      total: 2,
+      total: 3,
     },
     isLoading: false,
     isError: false,
@@ -132,20 +149,17 @@ vi.mock("@/lib/api/campaigns", () => ({
   useRunDetail: () => ({
     data: null,
     isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
   }),
-  useCloneRun: () => ({
-    mutateAsync: vi.fn().mockResolvedValue({ run_id: "run-clone", task_id: null, status: "queued", idempotency_key: "" }),
+  useAbortCampaignRun: () => ({
+    mutateAsync: vi.fn(),
     isPending: false,
   }),
-  useCancelRun: () => ({
-    mutateAsync: vi.fn().mockResolvedValue({ id: "run-1", status: "cancelled" }),
+  useResumeCampaignRun: () => ({
+    mutateAsync: vi.fn(),
     isPending: false,
-  }),
-  useCleanupRun: () => ({
-    mutateAsync: vi.fn().mockResolvedValue({ run_id: "run-2", meta_ids: {}, detail: "Нет объектов" }),
-    mutate: vi.fn(),
-    isPending: false,
-    data: null,
   }),
   uploadConcepts: vi.fn().mockResolvedValue({
     upload_id: "abc123",
@@ -156,12 +170,44 @@ vi.mock("@/lib/api/campaigns", () => ({
     added_refs: ["test.jpg"],
     total_bytes: 1024,
   }),
-  useAdAccountTimezone: () => ({
-    mutate: vi.fn(),
+  useAdAccountContext: () => ({
+    mutate: vi.fn(
+      (
+        _actId: string,
+        opts?: {
+          onSuccess?: (data: {
+            account_id: string;
+            state: "ready";
+            timezone_name: string;
+            currency: string;
+            currency_exponent: number;
+            observed_at: string;
+            next_start_date: string;
+            issue: null;
+          }) => void;
+        },
+      ) => {
+        opts?.onSuccess?.({
+          account_id: "123",
+          state: "ready",
+          timezone_name: "Etc/UTC",
+          currency: "USD",
+          currency_exponent: 2,
+          observed_at: "2026-07-29T08:30:00Z",
+          next_start_date: "2099-07-30",
+          issue: null,
+        });
+      },
+    ),
     mutateAsync: vi.fn().mockResolvedValue({
-      tz_offset_hours: 0,
-      tz_offset_str: "+00:00",
+      account_id: "123",
+      state: "ready",
       timezone_name: "Etc/UTC",
+      currency: "USD",
+      currency_exponent: 2,
+      observed_at: "2026-07-29T08:30:00Z",
+      next_start_date: "2099-07-30",
+      issue: null,
     }),
     isPending: false,
     isError: false,
@@ -192,7 +238,6 @@ vi.mock("@/lib/api/campaigns", () => ({
     failed: "Ошибка",
     cancelled: "Отменено",
   },
-  CANCELLABLE_RUN_STATUSES: ["queued", "uniquifying", "uploading"],
   TERMINAL_RUN_STATUSES: ["succeeded", "failed", "cancelled"],
 }));
 
@@ -211,6 +256,8 @@ vi.mock("@/lib/api/offers", () => ({
         pixel_id: "px555",
         ad_account_ids: ["111222"],
         countries: ["br", "de"],
+        cpa_threshold: "5.00",
+        currency: "USD",
       },
     ],
     isLoading: false,
@@ -231,14 +278,25 @@ vi.mock("@/components/ui/Toast", () => ({
 // ─── Импорты после моков ───────────────────────────────────────────────────────
 
 import { WizardStep1Start } from "@/components/domain/campaigns/WizardStep1Start";
-import { WizardStep2Identity, validateIdentity } from "@/components/domain/campaigns/WizardStep2Identity";
+import {
+  WizardStep2Identity,
+  validateIdentity,
+} from "@/components/domain/campaigns/WizardStep2Identity";
 import { validateGoal } from "@/components/domain/campaigns/WizardStep3Goal";
-import { WizardStep4Structure, validateStructure } from "@/components/domain/campaigns/WizardStep4Structure";
-import { WizardStep5Creatives, validateCreatives } from "@/components/domain/campaigns/WizardStep5Creatives";
+import {
+  WizardStep4Structure,
+  validateStructure,
+} from "@/components/domain/campaigns/WizardStep4Structure";
+import {
+  WizardStep5Creatives,
+  validateCreatives,
+} from "@/components/domain/campaigns/WizardStep5Creatives";
+import { WizardStep6Preview } from "@/components/domain/campaigns/WizardStep6Preview";
 import { CampaignRunsHistory } from "@/components/domain/campaigns/CampaignRunsHistory";
+import { CampaignCreatePage } from "@/routes/campaigns/create";
 import { useWizardStore } from "@/stores/campaignWizard";
 import type { WizardIdentity, WizardGoal, WizardCreatives } from "@/stores/campaignWizard";
-import { uploadConcepts, type PresetOut } from "@/lib/api/campaigns";
+import { uploadConcepts, type CampaignConfig, type PresetOut } from "@/lib/api/campaigns";
 
 // ─── Хелперы ──────────────────────────────────────────────────────────────────
 
@@ -254,8 +312,12 @@ const DEFAULT_IDENTITY: WizardIdentity = {
   act_id: "act_123",
   page_id: "456",
   pixel_id: "789",
-  tz_offset: 0,
-  timezone_name: "",
+  account_context_state: "ready",
+  timezone_name: "Etc/UTC",
+  currency: "USD",
+  currency_exponent: 2,
+  account_context_observed_at: "2026-07-29T08:30:00Z",
+  account_context_issue: null,
   offer_code: "GH_CR2",
   byer_tag: "MV",
 };
@@ -267,11 +329,10 @@ const DEFAULT_GOAL: WizardGoal = {
   destination_link: "https://tracker.example.com",
   cta: "PLAY_GAME",
   text_optimizations: "OPT_OUT",
-  // Дата старта — всегда в будущем (валидация отклоняет прошлое), вычисляем динамически.
-  start_date: new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10),
+  start_date: "2099-07-30",
   budget_level: "campaign",
-  daily_budget_cents: 20000,
-  bid_amount_cents: 500, // $5 целевой CPA (обязателен)
+  daily_budget: "200.00",
+  bid_amount: "5.00",
   bid_strategy: "COST_CAP",
   countries: ["US", "BR"],
   age_min: 21,
@@ -286,16 +347,10 @@ const DEFAULT_GOAL: WizardGoal = {
 // ─── ШАГ 1: WizardStep1Start ──────────────────────────────────────────────────
 
 describe("WizardStep1Start", () => {
-  // Рендерит три варианта: новый, пресет, клон
-  it("рендерит 3 карточки-опции", () => {
-    render(
-      wrap(
-        <WizardStep1Start mode="new" onChange={vi.fn()} />,
-      ),
-    );
+  it("рендерит 2 карточки-опции", () => {
+    render(wrap(<WizardStep1Start mode="new" onChange={vi.fn()} />));
     expect(screen.getByText("Новый залив")).toBeInTheDocument();
     expect(screen.getByText("Из пресета")).toBeInTheDocument();
-    expect(screen.getByText("Клон запуска")).toBeInTheDocument();
   });
 
   // Клик на "Из пресета" вызывает onChange с mode=preset
@@ -304,21 +359,13 @@ describe("WizardStep1Start", () => {
     const onChange = vi.fn();
     render(wrap(<WizardStep1Start mode="new" onChange={onChange} />));
     await user.click(screen.getByText("Из пресета"));
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "preset" }),
-    );
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ mode: "preset" }));
   });
 
   // При mode=preset отображается список пресетов
   it("mode=preset показывает select с пресетом", () => {
     render(wrap(<WizardStep1Start mode="preset" onChange={vi.fn()} />));
     expect(screen.getByText("Test Preset (GH_CR2)")).toBeInTheDocument();
-  });
-
-  // При mode=clone отображается input для run_id
-  it("mode=clone показывает поле Run ID", () => {
-    render(wrap(<WizardStep1Start mode="clone" onChange={vi.fn()} />));
-    expect(screen.getByPlaceholderText(/UUID запуска/)).toBeInTheDocument();
   });
 
   // По умолчанию активна карточка "Новый залив" (aria-pressed=true)
@@ -335,8 +382,17 @@ describe("validateIdentity", () => {
   // Пустые поля дают ошибки для всех обязательных
   it("пустые поля → ошибки для act_id, page_id, pixel_id, offer_code", () => {
     const empty: WizardIdentity = {
-      act_id: "", page_id: "", pixel_id: "", tz_offset: 0, timezone_name: "",
-      offer_code: "", byer_tag: "",
+      act_id: "",
+      page_id: "",
+      pixel_id: "",
+      account_context_state: "unavailable",
+      timezone_name: "",
+      currency: "",
+      currency_exponent: null,
+      account_context_observed_at: null,
+      account_context_issue: null,
+      offer_code: "",
+      byer_tag: "",
     };
     const errs = validateIdentity(empty);
     expect(errs.act_id).toBeTruthy();
@@ -345,16 +401,15 @@ describe("validateIdentity", () => {
     expect(errs.offer_code).toBeTruthy();
   });
 
-  // Заполненные обязательные поля + подтверждённая TZ → нет ошибок
+  // Заполненные обязательные поля + fresh durable context → нет ошибок
   it("заполненные поля → нет ошибок", () => {
-    const errs = validateIdentity({ ...DEFAULT_IDENTITY, timezone_name: "Europe/Moscow" });
+    const errs = validateIdentity(DEFAULT_IDENTITY);
     expect(Object.keys(errs)).toHaveLength(0);
   });
 
-  // Деньги: без подтверждённой TZ (timezone_name пусто) — ошибка, дальше не пускаем.
-  it("без подтверждённой TZ → ошибка tz_offset", () => {
-    const errs = validateIdentity({ ...DEFAULT_IDENTITY, timezone_name: "" });
-    expect(errs.tz_offset).toBeTruthy();
+  it("stale context блокирует переход", () => {
+    const errs = validateIdentity({ ...DEFAULT_IDENTITY, account_context_state: "stale" });
+    expect(errs.account_context_state).toBeTruthy();
   });
 
   // byer_tag опционален — без него нет ошибки
@@ -369,14 +424,7 @@ describe("validateIdentity", () => {
 describe("WizardStep2Identity render", () => {
   // Поля заполнены из values
   it("отображает переданные значения", () => {
-    render(
-      wrap(
-        <WizardStep2Identity
-          values={DEFAULT_IDENTITY}
-          onChange={vi.fn()}
-        />,
-      ),
-    );
+    render(wrap(<WizardStep2Identity values={DEFAULT_IDENTITY} onChange={vi.fn()} />));
     expect(screen.getByDisplayValue("act_123")).toBeInTheDocument();
     expect(screen.getByDisplayValue("GH_CR2")).toBeInTheDocument();
   });
@@ -399,11 +447,7 @@ describe("WizardStep2Identity render", () => {
   // с опцией "{name} — {id}" (а не свободным Input).
   it("страницы подтянулись → рендерится Select с опцией страницы", async () => {
     const user = userEvent.setup();
-    render(
-      wrap(
-        <WizardStep2Identity values={DEFAULT_IDENTITY} onChange={vi.fn()} />,
-      ),
-    );
+    render(wrap(<WizardStep2Identity values={DEFAULT_IDENTITY} onChange={vi.fn()} />));
     // blur по Ad Account ID запускает фетч страниц (мок зовёт onSuccess синхронно).
     const actInput = screen.getByDisplayValue("act_123");
     await user.click(actInput);
@@ -444,9 +488,7 @@ describe("WizardStep2Identity render", () => {
     expect(lastIdentity.act_id).toBe("111222");
     expect(lastIdentity.pixel_id).toBe("px555");
     // countries (ISO-2 upper) ушли в goal.
-    expect(onGoalChange).toHaveBeenCalledWith(
-      expect.objectContaining({ countries: ["BR", "DE"] }),
-    );
+    expect(onGoalChange).toHaveBeenCalledWith(expect.objectContaining({ countries: ["BR", "DE"] }));
   });
 });
 
@@ -455,37 +497,34 @@ describe("WizardStep2Identity render", () => {
 describe("validateGoal", () => {
   // Пустая destination_link → ошибка
   it("пустой destination_link → ошибка", () => {
-    const errs = validateGoal({ ...DEFAULT_GOAL, destination_link: "" });
+    const errs = validateGoal({ ...DEFAULT_GOAL, destination_link: "" }, 2);
     expect(errs.destination_link).toBeTruthy();
   });
 
-  // Слишком маленький бюджет → ошибка
-  it("бюджет < $1 → ошибка", () => {
-    const errs = validateGoal({ ...DEFAULT_GOAL, daily_budget_cents: 50 });
-    expect(errs.daily_budget_cents).toBeTruthy();
+  it("нулевой бюджет → ошибка", () => {
+    const errs = validateGoal({ ...DEFAULT_GOAL, daily_budget: "0.00" }, 2);
+    expect(errs.daily_budget).toBeTruthy();
   });
 
-  // Слишком большой бюджет → ошибка (hard-cap $100k)
-  it("бюджет > $100k → ошибка", () => {
-    const errs = validateGoal({ ...DEFAULT_GOAL, daily_budget_cents: 10_001_000 });
-    expect(errs.daily_budget_cents).toBeTruthy();
+  it("бюджет выше hard cap → ошибка", () => {
+    const errs = validateGoal({ ...DEFAULT_GOAL, daily_budget: "100000.01" }, 2);
+    expect(errs.daily_budget).toBeTruthy();
   });
 
   // Нет стран → ошибка
   it("пустые countries → ошибка", () => {
-    const errs = validateGoal({ ...DEFAULT_GOAL, countries: [] });
+    const errs = validateGoal({ ...DEFAULT_GOAL, countries: [] }, 2);
     expect(errs.countries).toBeTruthy();
   });
 
-  // Целевой CPA не задан (0) → ошибка (COST_CAP требует bid_amount)
-  it("bid_amount_cents = 0 → ошибка целевого CPA", () => {
-    const errs = validateGoal({ ...DEFAULT_GOAL, bid_amount_cents: 0 });
-    expect(errs.bid_amount_cents).toBeTruthy();
+  it("пустой bid_amount → ошибка целевого CPA", () => {
+    const errs = validateGoal({ ...DEFAULT_GOAL, bid_amount: "" }, 2);
+    expect(errs.bid_amount).toBeTruthy();
   });
 
   // Корректные данные → нет ошибок
   it("корректные данные → нет ошибок", () => {
-    const errs = validateGoal(DEFAULT_GOAL);
+    const errs = validateGoal(DEFAULT_GOAL, 2);
     expect(Object.keys(errs)).toHaveLength(0);
   });
 });
@@ -500,19 +539,13 @@ describe("validateStructure", () => {
 
   // adset_count < 1 → ошибка
   it("adset_count=0 → ошибка", () => {
-    const err = validateStructure([
-      { key: "image1", adset_count: 0, concept_refs: [] },
-    ]);
+    const err = validateStructure([{ key: "image1", adset_count: 0, concept_refs: [] }]);
     expect(err).toBeTruthy();
   });
 
   // Корректная структура → null
   it("корректная структура → null", () => {
-    expect(
-      validateStructure([
-        { key: "image1", adset_count: 3, concept_refs: [] },
-      ]),
-    ).toBeNull();
+    expect(validateStructure([{ key: "image1", adset_count: 3, concept_refs: [] }])).toBeNull();
   });
 });
 
@@ -531,9 +564,7 @@ describe("WizardStep4Structure", () => {
     const onChange = vi.fn();
     render(wrap(<WizardStep4Structure campaigns={[]} onChange={onChange} />));
     await user.click(screen.getByRole("button", { name: "Кампания" }));
-    expect(onChange).toHaveBeenCalledWith([
-      expect.objectContaining({ adset_count: 3 }),
-    ]);
+    expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ adset_count: 3 })]);
   });
 
   // Кнопка удалить уменьшает список
@@ -575,7 +606,15 @@ describe("validateCreatives", () => {
   it("концепты без upload_id → ошибка", () => {
     const c: WizardCreatives = {
       upload_id: null,
-      concepts: [{ ref: "a.jpg", original_name: "a.jpg", size_bytes: 100, content_type: "image/jpeg", campaign_keys: [] }],
+      concepts: [
+        {
+          ref: "a.jpg",
+          original_name: "a.jpg",
+          size_bytes: 100,
+          content_type: "image/jpeg",
+          campaign_keys: [],
+        },
+      ],
       copies_per_concept: null,
     };
     expect(validateCreatives(c)).toBeTruthy();
@@ -585,7 +624,15 @@ describe("validateCreatives", () => {
   it("концепты с upload_id → null", () => {
     const c: WizardCreatives = {
       upload_id: "abc",
-      concepts: [{ ref: "a.jpg", original_name: "a.jpg", size_bytes: 100, content_type: "image/jpeg", campaign_keys: [] }],
+      concepts: [
+        {
+          ref: "a.jpg",
+          original_name: "a.jpg",
+          size_bytes: 100,
+          content_type: "image/jpeg",
+          campaign_keys: [],
+        },
+      ],
       copies_per_concept: null,
     };
     expect(validateCreatives(c)).toBeNull();
@@ -604,13 +651,7 @@ describe("WizardStep5Creatives", () => {
   // Dropzone рендерится с текстом-подсказкой
   it("dropzone содержит подсказку по загрузке", () => {
     render(
-      wrap(
-        <WizardStep5Creatives
-          values={emptyCreatives}
-          campaigns={[]}
-          onChange={vi.fn()}
-        />,
-      ),
+      wrap(<WizardStep5Creatives values={emptyCreatives} campaigns={[]} onChange={vi.fn()} />),
     );
     expect(screen.getByText(/Перетащите файлы/)).toBeInTheDocument();
   });
@@ -717,7 +758,13 @@ describe("WizardStep5Creatives", () => {
     const c: WizardCreatives = {
       upload_id: "abc",
       concepts: [
-        { ref: "photo.jpg", original_name: "photo.jpg", size_bytes: 1024, content_type: "image/jpeg", campaign_keys: [] },
+        {
+          ref: "photo.jpg",
+          original_name: "photo.jpg",
+          size_bytes: 1024,
+          content_type: "image/jpeg",
+          campaign_keys: [],
+        },
       ],
       copies_per_concept: null,
     };
@@ -735,7 +782,13 @@ describe("WizardStep5Creatives", () => {
     return {
       upload_id: "abc",
       concepts: [
-        { ref: "a.jpg", original_name: "a.jpg", size_bytes: 100, content_type: "image/jpeg", campaign_keys: keys },
+        {
+          ref: "a.jpg",
+          original_name: "a.jpg",
+          size_bytes: 100,
+          content_type: "image/jpeg",
+          campaign_keys: keys,
+        },
       ],
       copies_per_concept: null,
     };
@@ -744,8 +797,20 @@ describe("WizardStep5Creatives", () => {
     return {
       upload_id: "abc",
       concepts: [
-        { ref: "a.jpg", original_name: "a.jpg", size_bytes: 100, content_type: "image/jpeg", campaign_keys: k1 },
-        { ref: "b.jpg", original_name: "b.jpg", size_bytes: 100, content_type: "image/jpeg", campaign_keys: k2 },
+        {
+          ref: "a.jpg",
+          original_name: "a.jpg",
+          size_bytes: 100,
+          content_type: "image/jpeg",
+          campaign_keys: k1,
+        },
+        {
+          ref: "b.jpg",
+          original_name: "b.jpg",
+          size_bytes: 100,
+          content_type: "image/jpeg",
+          campaign_keys: k2,
+        },
       ],
       copies_per_concept: null,
     };
@@ -753,7 +818,15 @@ describe("WizardStep5Creatives", () => {
 
   // Концепт, привязанный к обеим кампаниям, виден в каждой колонке
   it("концепт в обеих кампаниях виден в обеих колонках", () => {
-    render(wrap(<WizardStep5Creatives values={oneConcept(["c1", "c2"])} campaigns={twoCampaigns} onChange={vi.fn()} />));
+    render(
+      wrap(
+        <WizardStep5Creatives
+          values={oneConcept(["c1", "c2"])}
+          campaigns={twoCampaigns}
+          onChange={vi.fn()}
+        />,
+      ),
+    );
     expect(screen.getAllByText("a.jpg")).toHaveLength(2);
   });
 
@@ -761,7 +834,15 @@ describe("WizardStep5Creatives", () => {
   it("убрать из одной кампании оставляет концепт в другой", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(wrap(<WizardStep5Creatives values={oneConcept(["c1", "c2"])} campaigns={twoCampaigns} onChange={onChange} />));
+    render(
+      wrap(
+        <WizardStep5Creatives
+          values={oneConcept(["c1", "c2"])}
+          campaigns={twoCampaigns}
+          onChange={onChange}
+        />,
+      ),
+    );
     await user.click(screen.getByRole("button", { name: "Убрать a.jpg из c1" }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -774,7 +855,15 @@ describe("WizardStep5Creatives", () => {
   it("убрать из последней кампании отправляет концепт в пул", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(wrap(<WizardStep5Creatives values={oneConcept(["c1"])} campaigns={twoCampaigns} onChange={onChange} />));
+    render(
+      wrap(
+        <WizardStep5Creatives
+          values={oneConcept(["c1"])}
+          campaigns={twoCampaigns}
+          onChange={onChange}
+        />,
+      ),
+    );
     await user.click(screen.getByRole("button", { name: "Убрать a.jpg из c1" }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -787,7 +876,15 @@ describe("WizardStep5Creatives", () => {
   it("чип кампании в пуле добавляет концепт в кампанию", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(wrap(<WizardStep5Creatives values={oneConcept([])} campaigns={twoCampaigns} onChange={onChange} />));
+    render(
+      wrap(
+        <WizardStep5Creatives
+          values={oneConcept([])}
+          campaigns={twoCampaigns}
+          onChange={onChange}
+        />,
+      ),
+    );
     await user.click(screen.getByRole("button", { name: "Добавить a.jpg в c2" }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -800,7 +897,15 @@ describe("WizardStep5Creatives", () => {
   it("«Поровну» распределяет концепты по одной кампании", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(wrap(<WizardStep5Creatives values={twoConcepts(["c1", "c2"], ["c1", "c2"])} campaigns={twoCampaigns} onChange={onChange} />));
+    render(
+      wrap(
+        <WizardStep5Creatives
+          values={twoConcepts(["c1", "c2"], ["c1", "c2"])}
+          campaigns={twoCampaigns}
+          onChange={onChange}
+        />,
+      ),
+    );
     await user.click(screen.getByRole("button", { name: "Поровну" }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -816,7 +921,15 @@ describe("WizardStep5Creatives", () => {
   it("«В каждую» назначает все концепты во все кампании", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(wrap(<WizardStep5Creatives values={twoConcepts(["c1"], [])} campaigns={twoCampaigns} onChange={onChange} />));
+    render(
+      wrap(
+        <WizardStep5Creatives
+          values={twoConcepts(["c1"], [])}
+          campaigns={twoCampaigns}
+          onChange={onChange}
+        />,
+      ),
+    );
     await user.click(screen.getByRole("button", { name: "В каждую" }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -832,7 +945,15 @@ describe("WizardStep5Creatives", () => {
   it("«Очистить» снимает все назначения", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(wrap(<WizardStep5Creatives values={twoConcepts(["c1", "c2"], ["c1"])} campaigns={twoCampaigns} onChange={onChange} />));
+    render(
+      wrap(
+        <WizardStep5Creatives
+          values={twoConcepts(["c1", "c2"], ["c1"])}
+          campaigns={twoCampaigns}
+          onChange={onChange}
+        />,
+      ),
+    );
     await user.click(screen.getByRole("button", { name: "Очистить" }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -845,6 +966,22 @@ describe("WizardStep5Creatives", () => {
   });
 });
 
+describe("WizardStep6Preview", () => {
+  it("показывает неизменяемый all-paused контракт без selector", () => {
+    const config = {
+      campaigns: [{ key: "image1", adset_count: 1, concept_refs: ["a.jpg"] }],
+    } as unknown as CampaignConfig;
+
+    render(
+      wrap(<WizardStep6Preview config={config} preview={{ plan: null }} onChange={vi.fn()} />),
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Всё создаётся на паузе");
+    expect(screen.getByText(/останутся PAUSED/)).toBeInTheDocument();
+    expect(screen.queryByText("Кампания PAUSED, дети активны")).not.toBeInTheDocument();
+  });
+});
+
 // ─── История запусков ─────────────────────────────────────────────────────────
 
 describe("CampaignRunsHistory", () => {
@@ -853,6 +990,8 @@ describe("CampaignRunsHistory", () => {
     render(wrap(<CampaignRunsHistory />));
     expect(screen.getByText("GH_CR2")).toBeInTheDocument();
     expect(screen.getByText("DRC_CR")).toBeInTheDocument();
+    expect(screen.getByTestId("campaign-runs-desktop-header")).toHaveClass("hidden", "md:grid");
+    expect(screen.getAllByTestId("campaign-run-card")[0]).toHaveClass("flex", "md:grid");
   });
 
   // Статус "Готово" для succeeded — может быть несколько (option + строка)
@@ -870,11 +1009,45 @@ describe("CampaignRunsHistory", () => {
     expect(screen.getByText("Meta API timeout")).toBeInTheDocument();
   });
 
-  // Кнопки действий (копировать) присутствуют
-  it("кнопки клона/отмены видны", () => {
+  it("доступны только допустимые действия запуска", () => {
     render(wrap(<CampaignRunsHistory />));
-    const cloneButtons = screen.getAllByTitle("Клонировать");
-    expect(cloneButtons.length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /отменить запуск/i })).toBeNull();
+    expect(screen.queryByText("Отменить до начала создания")).toBeNull();
+    expect(screen.queryByTitle("Cleanup Meta-объектов")).not.toBeInTheDocument();
+  });
+});
+
+describe("CampaignCreatePage responsive policy", () => {
+  it("renders action-first run history instead of the creation wizard on mobile", () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === "(max-width: 767px)",
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+
+    try {
+      render(wrap(<CampaignCreatePage />));
+
+      expect(screen.getByRole("heading", { name: "Запуски кампаний" })).toBeInTheDocument();
+      expect(screen.getByText("Создание доступно на desktop")).toBeVisible();
+      expect(screen.getByText("GH_PENDING")).toBeInTheDocument();
+      expect(screen.queryByText("Черновик сохраняется автоматически")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Создать" })).toBeNull();
+    } finally {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
   });
 });
 
@@ -886,7 +1059,6 @@ const PRESET_WITH_URL_TAGS: PresetOut = {
   act_id: "act_999",
   page_id: "pg1",
   pixel_id: "px1",
-  tz_offset: 2,
   offer_code: "TEST_OFF",
   byer_tag: "AB",
   objective: "OUTCOME_SALES",
@@ -905,6 +1077,26 @@ const PRESET_WITH_URL_TAGS: PresetOut = {
 };
 
 describe("useWizardStore", () => {
+  const seedBuildableDraft = () => {
+    const store = useWizardStore.getState();
+    store.setIdentity(DEFAULT_IDENTITY);
+    store.setGoal(DEFAULT_GOAL);
+    store.setStructure({ campaigns: [{ key: "c1", adset_count: 1, concept_refs: [] }] });
+    store.setCreatives({
+      upload_id: "abc123",
+      concepts: [
+        {
+          ref: "a.jpg",
+          original_name: "a.jpg",
+          size_bytes: 100,
+          content_type: "image/jpeg",
+          campaign_keys: ["c1"],
+        },
+      ],
+      copies_per_concept: null,
+    });
+  };
+
   beforeEach(() => {
     // Сброс store перед каждым тестом
     useWizardStore.getState().reset();
@@ -945,7 +1137,9 @@ describe("useWizardStore", () => {
     act(() => useWizardStore.getState().setIdentity({ offer_code: "DRC_CR" }));
 
     expect(useWizardStore.getState().updatedAt).not.toBeNull();
-    const persisted = JSON.parse(window.localStorage.getItem("fb-agent-campaign-draft") ?? "{}") as {
+    const persisted = JSON.parse(
+      window.localStorage.getItem("fb-agent-campaign-draft") ?? "{}",
+    ) as {
       state?: { identity?: { offer_code?: string }; updatedAt?: string | null };
     };
     expect(persisted.state?.identity?.offer_code).toBe("DRC_CR");
@@ -954,31 +1148,48 @@ describe("useWizardStore", () => {
 
   // applyPreset заполняет identity из пресета
   it("applyPreset заполняет identity из пресета", () => {
+    act(seedBuildableDraft);
     act(() => useWizardStore.getState().applyPreset(PRESET_WITH_URL_TAGS));
     const { identity } = useWizardStore.getState();
     expect(identity.act_id).toBe("act_999");
     expect(identity.offer_code).toBe("TEST_OFF");
+    expect(identity.account_context_state).toBe("unavailable");
+    act(() =>
+      useWizardStore.getState().setIdentity({
+        account_context_state: "ready",
+        timezone_name: "Europe/Paris",
+        currency: "EUR",
+        currency_exponent: 2,
+        account_context_observed_at: "2026-07-29T08:30:00Z",
+      }),
+    );
     expect(useWizardStore.getState().buildConfig().url_tags).toBe("sub2={{ad.id}}");
   });
 
-  it.each(["new", "clone"] as const)(
-    "не переносит url_tags пресета после переключения в режим %s",
-    (mode) => {
-      act(() => useWizardStore.getState().applyPreset(PRESET_WITH_URL_TAGS));
-      expect(useWizardStore.getState().buildConfig().url_tags).toBe("sub2={{ad.id}}");
+  it("не переносит url_tags пресета после переключения в новый режим", () => {
+    act(seedBuildableDraft);
+    act(() => useWizardStore.getState().applyPreset(PRESET_WITH_URL_TAGS));
+    act(() =>
+      useWizardStore.getState().setIdentity({
+        account_context_state: "ready",
+        timezone_name: "Europe/Paris",
+        currency: "EUR",
+        currency_exponent: 2,
+        account_context_observed_at: "2026-07-29T08:30:00Z",
+      }),
+    );
+    expect(useWizardStore.getState().buildConfig().url_tags).toBe("sub2={{ad.id}}");
 
-      act(() =>
-        useWizardStore.getState().setStart({
-          mode,
-          preset_id: null,
-          clone_run_id: mode === "clone" ? "run-1" : null,
-        }),
-      );
+    act(() =>
+      useWizardStore.getState().setStart({
+        mode: "new",
+        preset_id: null,
+      }),
+    );
 
-      expect(useWizardStore.getState().loadedPreset).toBeNull();
-      expect(useWizardStore.getState().buildConfig().url_tags).toBeUndefined();
-    },
-  );
+    expect(useWizardStore.getState().loadedPreset).toBeNull();
+    expect(useWizardStore.getState().buildConfig().url_tags).toBeUndefined();
+  });
 
   // reset сбрасывает store в initial state
   it("reset сбрасывает store", () => {
@@ -1001,25 +1212,56 @@ describe("useWizardStore", () => {
       store.setStructure({
         campaigns: [{ key: "image1", adset_count: 3, concept_refs: [] }],
       });
-      store.setCreatives({ upload_id: "up123", concepts: [], copies_per_concept: null });
-      store.setPreview({ launch_state: "campaign_paused", plan: null });
+      store.setCreatives({
+        upload_id: "up123",
+        concepts: [
+          {
+            ref: "a.jpg",
+            original_name: "a.jpg",
+            size_bytes: 100,
+            content_type: "image/jpeg",
+            campaign_keys: ["image1"],
+          },
+        ],
+        copies_per_concept: null,
+      });
+      store.setPreview({ plan: null });
     });
     const config = useWizardStore.getState().buildConfig();
     expect(config.act_id).toBe("act_123");
     expect(config.offer_code).toBe("GH_CR2");
-    expect(config.launch_state).toBe("campaign_paused");
+    expect(config).not.toHaveProperty("launch_state");
     expect(config.campaigns).toHaveLength(1);
     expect(config.creo_root).toBe("up123");
-    expect(config.daily_budget_cents).toBe(20000);
-    // Целевой CPA (bid_amount) доходит до config для builder (COST_CAP)
-    expect(config.bid_amount_cents).toBe(500);
+    expect(config.daily_budget).toBe("200.00");
+    expect(config.bid_amount).toBe("5.00");
+    expect(config).not.toHaveProperty("timezone_name");
+    expect(config).not.toHaveProperty("currency");
     expect(config.bid_strategy).toBe("COST_CAP");
   });
 
-  // launch_state default = campaign_paused
-  it("дефолт launch_state = campaign_paused", () => {
+  it("не отправляет изменяемый launch_state", () => {
+    act(seedBuildableDraft);
     const config = useWizardStore.getState().buildConfig();
-    expect(config.launch_state).toBe("campaign_paused");
+    expect(config).not.toHaveProperty("launch_state");
+  });
+
+  it("buildConfig fail-closed без upload и распределения", () => {
+    expect(() => useWizardStore.getState().buildConfig()).toThrow(
+      "Сначала загрузите и распределите креативы",
+    );
+
+    act(() => {
+      const store = useWizardStore.getState();
+      store.setIdentity(DEFAULT_IDENTITY);
+      store.setStructure({ campaigns: [{ key: "c1", adset_count: 1, concept_refs: [] }] });
+      store.setCreatives({
+        upload_id: "abc123",
+        concepts: [],
+        copies_per_concept: null,
+      });
+    });
+    expect(() => useWizardStore.getState().buildConfig()).toThrow("не назначен ни один креатив");
   });
 });
 
@@ -1028,7 +1270,15 @@ describe("useWizardStore", () => {
 describe("RUN_STATUS_LABELS", () => {
   it("все статусы имеют русские лейблы", async () => {
     const { RUN_STATUS_LABELS } = await import("@/lib/api/campaigns");
-    const statuses = ["queued", "uniquifying", "uploading", "creating", "succeeded", "failed", "cancelled"];
+    const statuses = [
+      "queued",
+      "uniquifying",
+      "uploading",
+      "creating",
+      "succeeded",
+      "failed",
+      "cancelled",
+    ];
     for (const s of statuses) {
       expect(RUN_STATUS_LABELS[s as keyof typeof RUN_STATUS_LABELS]).toBeTruthy();
     }

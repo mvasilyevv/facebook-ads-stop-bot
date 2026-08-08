@@ -1,10 +1,10 @@
-// H-7 (BA-4): per-session мьютекс сериализует операции над общей primaryPage,
-// чтобы scan page.reload и mutation page.evaluate(fetch) не пересекались.
+// Operations on one concrete page serialize; scan and control roles are
+// deliberately independent so scan reload cannot delay a money mutation.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { withPageLock, _resetPageLocks } from './page-lock.js';
+import { withPageLock, withPageRoleLock, _resetPageLocks } from './page-lock.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -38,6 +38,55 @@ describe('withPageLock (H-7 per-session mutex)', () => {
     assert.equal(events[1], 'B:start');
     assert.equal(events[2], 'B:end');
     assert.equal(events[3], 'A:end');
+  });
+
+  it('scan и control одного кабинета не блокируют друг друга', async () => {
+    _resetPageLocks();
+    const events: string[] = [];
+    await Promise.all([
+      withPageRoleLock('s1', 'scan', '123', async () => {
+        events.push('scan:start');
+        await sleep(30);
+        events.push('scan:end');
+      }),
+      withPageRoleLock('s1', 'control', '123', async () => {
+        events.push('control:start');
+        await sleep(5);
+        events.push('control:end');
+      }),
+    ]);
+    assert.deepEqual(events, ['scan:start', 'control:start', 'control:end', 'scan:end']);
+  });
+
+  it('interactive upload и control mutation одного кабинета не блокируют друг друга', async () => {
+    _resetPageLocks();
+    const events: string[] = [];
+    await Promise.all([
+      withPageRoleLock('s1', 'interactive', '123', async () => {
+        events.push('upload:start');
+        await sleep(30);
+        events.push('upload:end');
+      }),
+      withPageRoleLock('s1', 'control', '123', async () => {
+        events.push('pause:start');
+        await sleep(5);
+        events.push('pause:end');
+      }),
+    ]);
+    assert.deepEqual(events, ['upload:start', 'pause:start', 'pause:end', 'upload:end']);
+  });
+
+  it('две control-операции одного кабинета остаются сериализованы', async () => {
+    _resetPageLocks();
+    const events: string[] = [];
+    const op = (tag: string, ms: number) =>
+      withPageRoleLock('s1', 'control', '123', async () => {
+        events.push(`${tag}:start`);
+        await sleep(ms);
+        events.push(`${tag}:end`);
+      });
+    await Promise.all([op('pause', 20), op('activate', 1)]);
+    assert.deepEqual(events, ['pause:start', 'pause:end', 'activate:start', 'activate:end']);
   });
 
   it('ошибка одной операции НЕ ломает очередь сессии', async () => {

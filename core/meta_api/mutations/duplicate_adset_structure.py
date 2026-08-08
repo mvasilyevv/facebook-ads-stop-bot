@@ -17,41 +17,32 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 
-from core.meta_api.client import MetaApiClient
+from core.adset_duplicates.plan_integrity import (
+    DUPLICATE_ADSET_STRUCTURE_KIND,
+    duplicate_execution_plan_digest_matches,
+)
+from core.meta_api.budget_limits import checked_daily_budget_minor_units
+from core.meta_api.client import (
+    DUPLICATE_PROVE_AD_FIELDS,
+    DUPLICATE_PROVE_ADSET_FIELDS,
+    DUPLICATE_PROVE_CAMPAIGN_FIELDS,
+    DUPLICATE_SOURCE_AD_FIELDS,
+    DUPLICATE_SOURCE_ADSET_FIELDS,
+    DUPLICATE_SOURCE_CAMPAIGN_FIELDS,
+    DUPLICATE_VERIFY_AD_FIELDS,
+    MetaApiClient,
+)
+from core.meta_api.identity import graph_ad_account_id
 from core.meta_api.mutations.base import MutationValidationError, require_numeric_id, success_result
-from core.meta_api.mutations.set_adset_budget import MAX_DAILY_BUDGET_CENTS
 from core.meta_api.schemas import MetaMutationPayload
 
 logger = logging.getLogger(__name__)
 
-_CAMPAIGN_FIELDS = (
-    "id,account_id,name,objective,special_ad_categories,special_ad_category_country,"
-    "buying_type,bid_strategy,status,daily_budget"
-)
-_ADSET_FIELDS = (
-    "id,account_id,campaign_id,name,status,effective_status,daily_budget,start_time,"
-    "billing_event,optimization_goal,bid_strategy,bid_amount,targeting,promoted_object,"
-    "attribution_spec,destination_type,pacing_type"
-)
-_SOURCE_AD_FIELDS = "id,account_id,campaign_id,adset_id,name,status,creative{id}"
-_VERIFY_AD_FIELDS = "id,adset_id,status,effective_status,creative{id}"
-_RECOVERY_STALE_SECONDS = max(
-    1,
-    int(os.environ.get("RECONCILER_STUCK_TIMEOUT_MIN", "30")) * 60,
-)
-_RECONCILER_POLL_SECONDS = max(1, int(os.environ.get("RECONCILER_INTERVAL_SEC", "30")))
-_RECOVERY_SAFETY_MARGIN_SECONDS = 60
-_START_TIME_GUARD = timedelta(
-    seconds=(_RECOVERY_STALE_SECONDS + _RECONCILER_POLL_SECONDS + _RECOVERY_SAFETY_MARGIN_SECONDS)
-)
-_START_TIME_GUARD_MINUTES = math.ceil(_START_TIME_GUARD.total_seconds() / 60)
 _MAX_SELECTED_ADS = 10
 _MAX_CREATED_ADS = 50
 
@@ -84,7 +75,9 @@ class _Plan:
     campaign_count: int
     adsets_per_campaign: int
     budget_level: str
-    daily_budget_cents: int
+    currency: str
+    currency_exponent: int
+    daily_budget_minor_units: int
     start_time: str
     start_at: datetime
     campaign_names: tuple[str, ...]
@@ -101,7 +94,7 @@ class _SourceAd:
 class DuplicateAdsetStructureHandler:
     """Create N paused campaigns, M shallow ad-set copies, and selected ads."""
 
-    mutation_kind: ClassVar[str] = "duplicate_adset_structure"
+    mutation_kind: ClassVar[str] = DUPLICATE_ADSET_STRUCTURE_KIND
 
     async def execute(
         self,
@@ -116,7 +109,6 @@ class DuplicateAdsetStructureHandler:
         )
 
         created: dict[str, list[str]] = {"campaigns": [], "adsets": [], "ads": []}
-        activated: dict[str, list[str]] = {"campaigns": [], "adsets": [], "ads": []}
         graph_responses: list[dict[str, Any]] = []
         target_adsets: list[tuple[str, str]] = []
         target_ads: dict[str, list[tuple[str, _SourceAd]]] = {}
@@ -134,13 +126,32 @@ class DuplicateAdsetStructureHandler:
                 )
                 graph_responses.append(campaign_response)
                 campaign_id = self._extract_created_id(campaign_response, "campaign")
+                self._require_fresh_created_id(
+                    campaign_id,
+                    "campaign",
+                    plan,
+                    source_ads,
+                    created,
+                )
+                campaign_proof = await client.execute_graph_call(
+                    ad_account_id=payload.ad_account_id,
+                    method="GET",
+                    endpoint=f"/{campaign_id}",
+                    query_params={"fields": DUPLICATE_PROVE_CAMPAIGN_FIELDS},
+                )
+                self._verify_created_campaign_candidate(
+                    campaign_proof,
+                    source_campaign,
+                    plan,
+                    campaign_id,
+                    campaign_index,
+                )
                 created["campaigns"].append(campaign_id)
                 await self._emit_progress(
                     progress_callback,
                     phase="creating",
                     step=f"campaign_created[{campaign_index}]",
                     created=created,
-                    activated=activated,
                 )
 
                 for adset_index in range(plan.adsets_per_campaign):
@@ -160,6 +171,25 @@ class DuplicateAdsetStructureHandler:
                     )
                     graph_responses.append(copy_response)
                     adset_id = self._extract_created_id(copy_response, "adset")
+                    self._require_fresh_created_id(
+                        adset_id,
+                        "adset",
+                        plan,
+                        source_ads,
+                        created,
+                    )
+                    adset_proof = await client.execute_graph_call(
+                        ad_account_id=payload.ad_account_id,
+                        method="GET",
+                        endpoint=f"/{adset_id}",
+                        query_params={"fields": DUPLICATE_PROVE_ADSET_FIELDS},
+                    )
+                    self._verify_copied_adset_candidate(
+                        adset_proof,
+                        plan,
+                        adset_id,
+                        campaign_id,
+                    )
                     created["adsets"].append(adset_id)
                     target_adsets.append((adset_id, campaign_id))
                     target_ads[adset_id] = []
@@ -168,7 +198,6 @@ class DuplicateAdsetStructureHandler:
                         phase="creating",
                         step=f"adset_created[{campaign_index},{adset_index}]",
                         created=created,
-                        activated=activated,
                     )
 
                     current_step = f"configure_adset[{campaign_index},{adset_index}]"
@@ -204,6 +233,27 @@ class DuplicateAdsetStructureHandler:
                         )
                         graph_responses.append(ad_response)
                         ad_id = self._extract_created_id(ad_response, "ad")
+                        self._require_fresh_created_id(
+                            ad_id,
+                            "ad",
+                            plan,
+                            source_ads,
+                            created,
+                        )
+                        ad_proof = await client.execute_graph_call(
+                            ad_account_id=payload.ad_account_id,
+                            method="GET",
+                            endpoint=f"/{ad_id}",
+                            query_params={"fields": DUPLICATE_PROVE_AD_FIELDS},
+                        )
+                        self._verify_created_ad_candidate(
+                            ad_proof,
+                            plan,
+                            ad_id,
+                            campaign_id,
+                            adset_id,
+                            source_ad,
+                        )
                         created["ads"].append(ad_id)
                         target_ads[adset_id].append((ad_id, source_ad))
                         await self._emit_progress(
@@ -211,7 +261,6 @@ class DuplicateAdsetStructureHandler:
                             phase="creating",
                             step=(f"ad_created[{campaign_index},{adset_index},{source_ad.ad_id}]"),
                             created=created,
-                            activated=activated,
                         )
 
             current_step = "verify_paused_structure"
@@ -220,7 +269,6 @@ class DuplicateAdsetStructureHandler:
                 phase="verifying_paused",
                 step=current_step,
                 created=created,
-                activated=activated,
             )
             await self._verify_structure(
                 client,
@@ -230,74 +278,11 @@ class DuplicateAdsetStructureHandler:
                 target_adsets,
                 target_ads,
             )
-            # Validation also ran before the first Graph write, but a large 3-2-1
-            # plan can take time to create. Re-check at the actual activation
-            # boundary so a crash always has enough time to be detected and PAUSED
-            # before Meta reaches the scheduled start_time.
-            current_step = "activation_headroom"
-            self._require_activation_headroom(plan)
             await self._emit_progress(
                 progress_callback,
                 phase="verified_paused",
                 step="verify_paused_structure_complete",
                 created=created,
-                activated=activated,
-            )
-
-            # Activation is intentionally staged. Campaigns and selected ads are
-            # activated first; ad sets are the final spend gate.
-            # Persist this boundary before the first ACTIVE request. If the worker
-            # dies after Meta commits but before returning the response, the stale
-            # recovery path still knows every object that must be paused.
-            await self._emit_progress(
-                progress_callback,
-                phase="activating",
-                step="activation_started",
-                created=created,
-                activated=activated,
-            )
-            for campaign_id in created["campaigns"]:
-                current_step = f"activate_campaign[{campaign_id}]"
-                response = await self._set_status(client, payload, campaign_id, "ACTIVE")
-                self._require_write_success(response, current_step)
-                activated["campaigns"].append(campaign_id)
-                await self._emit_progress(
-                    progress_callback,
-                    phase="activating",
-                    step=current_step,
-                    created=created,
-                    activated=activated,
-                )
-            for ad_id in created["ads"]:
-                current_step = f"activate_ad[{ad_id}]"
-                response = await self._set_status(client, payload, ad_id, "ACTIVE")
-                self._require_write_success(response, current_step)
-                activated["ads"].append(ad_id)
-                await self._emit_progress(
-                    progress_callback,
-                    phase="activating",
-                    step=current_step,
-                    created=created,
-                    activated=activated,
-                )
-            for adset_id in created["adsets"]:
-                current_step = f"activate_adset[{adset_id}]"
-                response = await self._set_status(client, payload, adset_id, "ACTIVE")
-                self._require_write_success(response, current_step)
-                activated["adsets"].append(adset_id)
-                await self._emit_progress(
-                    progress_callback,
-                    phase="activating",
-                    step=current_step,
-                    created=created,
-                    activated=activated,
-                )
-            await self._emit_progress(
-                progress_callback,
-                phase="activated",
-                step="activation_complete",
-                created=created,
-                activated=activated,
             )
         except asyncio.CancelledError:
             # asyncio cancellation is a BaseException and bypasses the normal
@@ -311,7 +296,6 @@ class DuplicateAdsetStructureHandler:
                     phase="cancelled_cleanup",
                     step=current_step,
                     created=created,
-                    activated=activated,
                     cleanup_failures=cleanup_failures,
                 )
             except Exception:  # noqa: BLE001 — cancellation must still propagate
@@ -325,7 +309,6 @@ class DuplicateAdsetStructureHandler:
                     phase="failed_cleanup",
                     step=current_step,
                     created=created,
-                    activated=activated,
                     cleanup_failures=cleanup_failures,
                 )
             except Exception:  # noqa: BLE001 — preserve the original mutation failure
@@ -355,6 +338,7 @@ class DuplicateAdsetStructureHandler:
                 "adset_count": len(created["adsets"]),
                 "ad_count": len(created["ads"]),
                 "budget_level": plan.budget_level,
+                "creation_policy": "all_paused",
             },
         )
 
@@ -365,18 +349,16 @@ class DuplicateAdsetStructureHandler:
         phase: str,
         step: str,
         created: dict[str, list[str]],
-        activated: dict[str, list[str]],
         cleanup_failures: list[dict[str, str]] | None = None,
     ) -> None:
         if callback is None:
             return
         checkpoint: dict[str, Any] = {
             "checkpoint_type": "duplicate_adset_structure",
-            "checkpoint_version": 1,
+            "checkpoint_version": 2,
             "phase": phase,
             "step": step,
             "created_ids": {key: list(created[key]) for key in ("campaigns", "adsets", "ads")},
-            "activated_ids": {key: list(activated[key]) for key in ("campaigns", "adsets", "ads")},
             "checkpointed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         }
         if cleanup_failures is not None:
@@ -401,10 +383,13 @@ class DuplicateAdsetStructureHandler:
     @classmethod
     def created_ids_from_checkpoint(cls, checkpoint: dict[str, Any]) -> dict[str, list[str]]:
         """Validate persisted recovery input before issuing any Graph writes."""
-        if checkpoint.get("checkpoint_type") != cls.mutation_kind:
+        if (
+            checkpoint.get("checkpoint_type") != cls.mutation_kind
+            or checkpoint.get("checkpoint_version") != 2
+        ):
             raise MutationValidationError("invalid duplicate recovery checkpoint type")
         raw = checkpoint.get("created_ids")
-        if not isinstance(raw, dict):
+        if not isinstance(raw, dict) or set(raw) != {"campaigns", "adsets", "ads"}:
             raise MutationValidationError("duplicate recovery checkpoint has no created_ids")
         limits = {"campaigns": 5, "adsets": 50, "ads": _MAX_CREATED_ADS}
         created: dict[str, list[str]] = {}
@@ -415,6 +400,13 @@ class DuplicateAdsetStructureHandler:
             created[key] = [require_numeric_id(value, f"recovery {key}") for value in values]
             if len(set(created[key])) != len(created[key]):
                 raise MutationValidationError(f"duplicate ids in recovery {key}")
+        bucket_sets = {key: set(values) for key, values in created.items()}
+        if (
+            bucket_sets["campaigns"] & bucket_sets["adsets"]
+            or bucket_sets["campaigns"] & bucket_sets["ads"]
+            or bucket_sets["adsets"] & bucket_sets["ads"]
+        ):
+            raise MutationValidationError("duplicate recovery checkpoint buckets overlap")
         if not any(created.values()):
             raise MutationValidationError("duplicate recovery checkpoint is empty")
         return created
@@ -426,18 +418,264 @@ class DuplicateAdsetStructureHandler:
         checkpoint: dict[str, Any],
     ) -> tuple[dict[str, list[str]], list[dict[str, str]]]:
         """PAUSE every checkpointed object; safe to call repeatedly."""
+        plan = self._validate_plan(payload, require_future_start=False)
         created = self.created_ids_from_checkpoint(checkpoint)
+        self._validate_checkpoint_against_plan(created, plan)
+        await self._verify_recovery_objects(client, payload, plan, created)
         failures = await self._pause_created(client, payload, created)
         return created, failures
 
+    @staticmethod
+    def _validate_checkpoint_against_plan(
+        created: dict[str, list[str]],
+        plan: _Plan,
+    ) -> None:
+        source_ids = {
+            plan.source_campaign_id,
+            plan.source_adset_id,
+            *plan.selected_ad_ids,
+        }
+        if source_ids & {object_id for values in created.values() for object_id in values}:
+            raise MutationValidationError("duplicate recovery checkpoint collides with source ids")
+        expected_adsets = plan.campaign_count * plan.adsets_per_campaign
+        expected_ads = expected_adsets * len(plan.selected_ad_ids)
+        if (
+            len(created["campaigns"]) > plan.campaign_count
+            or len(created["adsets"]) > expected_adsets
+            or len(created["ads"]) > expected_ads
+        ):
+            raise MutationValidationError("duplicate recovery checkpoint exceeds task cardinality")
+        for adset_index in range(len(created["adsets"])):
+            if adset_index // plan.adsets_per_campaign >= len(created["campaigns"]):
+                raise MutationValidationError(
+                    "duplicate recovery adset has no checkpointed campaign parent"
+                )
+        for ad_index in range(len(created["ads"])):
+            if ad_index // len(plan.selected_ad_ids) >= len(created["adsets"]):
+                raise MutationValidationError(
+                    "duplicate recovery ad has no checkpointed adset parent"
+                )
+
+    async def _verify_recovery_objects(
+        self,
+        client: MetaApiClient,
+        payload: MetaMutationPayload,
+        plan: _Plan,
+        created: dict[str, list[str]],
+    ) -> None:
+        for campaign_index, campaign_id in enumerate(created["campaigns"]):
+            row = await client.execute_graph_call(
+                ad_account_id=payload.ad_account_id,
+                method="GET",
+                endpoint=f"/{campaign_id}",
+                query_params={"fields": DUPLICATE_PROVE_CAMPAIGN_FIELDS},
+            )
+            self._require_exact_response_keys(
+                row,
+                required={"id", "account_id", "name", "objective", "status"},
+                optional={"daily_budget"},
+                label=f"recovery campaign {campaign_id}",
+            )
+            self._require_object_id(row, campaign_id, f"recovery campaign {campaign_id}")
+            self._require_account(row, plan, f"recovery campaign {campaign_id}")
+            if (
+                row.get("name") != plan.campaign_names[campaign_index]
+                or not isinstance(row.get("objective"), str)
+                or not row["objective"].strip()
+            ):
+                raise MutationValidationError(
+                    f"recovery campaign {campaign_id}: type/name mismatch"
+                )
+
+        for adset_index, adset_id in enumerate(created["adsets"]):
+            campaign_id = created["campaigns"][adset_index // plan.adsets_per_campaign]
+            row = await client.execute_graph_call(
+                ad_account_id=payload.ad_account_id,
+                method="GET",
+                endpoint=f"/{adset_id}",
+                query_params={"fields": DUPLICATE_PROVE_ADSET_FIELDS},
+            )
+            self._require_exact_response_keys(
+                row,
+                required={"id", "account_id", "campaign_id", "status"},
+                label=f"recovery adset {adset_id}",
+            )
+            self._require_object_id(row, adset_id, f"recovery adset {adset_id}")
+            self._require_account(row, plan, f"recovery adset {adset_id}")
+            if row.get("campaign_id") != campaign_id:
+                raise MutationValidationError(f"recovery adset {adset_id}: parent mismatch")
+
+        for ad_index, ad_id in enumerate(created["ads"]):
+            adset_index = ad_index // len(plan.selected_ad_ids)
+            adset_id = created["adsets"][adset_index]
+            campaign_id = created["campaigns"][adset_index // plan.adsets_per_campaign]
+            row = await client.execute_graph_call(
+                ad_account_id=payload.ad_account_id,
+                method="GET",
+                endpoint=f"/{ad_id}",
+                query_params={"fields": DUPLICATE_PROVE_AD_FIELDS},
+            )
+            self._require_exact_response_keys(
+                row,
+                required={
+                    "id",
+                    "account_id",
+                    "campaign_id",
+                    "adset_id",
+                    "name",
+                    "status",
+                    "creative",
+                },
+                label=f"recovery ad {ad_id}",
+            )
+            self._require_object_id(row, ad_id, f"recovery ad {ad_id}")
+            self._require_account(row, plan, f"recovery ad {ad_id}")
+            creative = row.get("creative")
+            if (
+                row.get("campaign_id") != campaign_id
+                or row.get("adset_id") != adset_id
+                or not isinstance(row.get("name"), str)
+                or not row["name"].strip()
+                or not isinstance(creative, dict)
+                or set(creative) != {"id"}
+            ):
+                raise MutationValidationError(f"recovery ad {ad_id}: type/parent mismatch")
+            require_numeric_id(creative.get("id"), f"recovery ad {ad_id} creative.id")
+
+    @staticmethod
+    def _require_exact_response_keys(
+        row: dict[str, Any],
+        *,
+        required: set[str],
+        optional: set[str] | None = None,
+        label: str,
+    ) -> None:
+        if not isinstance(row, dict):
+            raise MutationValidationError(f"{label}: Graph returned a non-object")
+        optional_keys = optional or set()
+        keys = set(row)
+        if not required.issubset(keys) or not keys.issubset(required | optional_keys):
+            raise MutationValidationError(f"{label}: Graph response schema mismatch")
+
     @classmethod
-    def _validate_plan(cls, payload: MetaMutationPayload) -> _Plan:
-        params = payload.params or {}
+    def _verify_created_campaign_candidate(
+        cls,
+        row: dict[str, Any],
+        source_campaign: dict[str, Any],
+        plan: _Plan,
+        campaign_id: str,
+        campaign_index: int,
+    ) -> None:
+        label = f"created campaign {campaign_id}"
+        cls._require_exact_response_keys(
+            row,
+            required={"id", "account_id", "name", "objective", "status"},
+            optional={"daily_budget"},
+            label=label,
+        )
+        cls._require_object_id(row, campaign_id, label)
+        cls._require_account(row, plan, label)
+        cls._require_paused(row, label)
+        if row.get("name") != plan.campaign_names[campaign_index] or row.get(
+            "objective"
+        ) != source_campaign.get("objective"):
+            raise MutationValidationError(f"{label}: type/name mismatch")
+        budget = row.get("daily_budget")
+        if plan.budget_level == "CBO":
+            cls._require_budget(row, plan.daily_budget_minor_units, label)
+        elif budget not in (None, "", 0, "0"):
+            raise MutationValidationError(f"{label}: unexpected campaign budget")
+
+    @classmethod
+    def _verify_copied_adset_candidate(
+        cls,
+        row: dict[str, Any],
+        plan: _Plan,
+        adset_id: str,
+        campaign_id: str,
+    ) -> None:
+        label = f"copied adset {adset_id}"
+        cls._require_exact_response_keys(
+            row,
+            required={"id", "account_id", "campaign_id", "status"},
+            label=label,
+        )
+        cls._require_object_id(row, adset_id, label)
+        cls._require_account(row, plan, label)
+        cls._require_paused(row, label)
+        if row.get("campaign_id") != campaign_id:
+            raise MutationValidationError(f"{label}: parent mismatch")
+
+    @classmethod
+    def _verify_created_ad_candidate(
+        cls,
+        row: dict[str, Any],
+        plan: _Plan,
+        ad_id: str,
+        campaign_id: str,
+        adset_id: str,
+        source_ad: _SourceAd,
+    ) -> None:
+        label = f"created ad {ad_id}"
+        cls._require_exact_response_keys(
+            row,
+            required={
+                "id",
+                "account_id",
+                "campaign_id",
+                "adset_id",
+                "name",
+                "status",
+                "creative",
+            },
+            label=label,
+        )
+        cls._require_object_id(row, ad_id, label)
+        cls._require_account(row, plan, label)
+        cls._require_paused(row, label)
+        creative = row.get("creative")
+        if (
+            row.get("campaign_id") != campaign_id
+            or row.get("adset_id") != adset_id
+            or row.get("name") != source_ad.name
+            or not isinstance(creative, dict)
+            or set(creative) != {"id"}
+            or creative.get("id") != source_ad.creative_id
+        ):
+            raise MutationValidationError(f"{label}: type/parent mismatch")
+
+    @classmethod
+    def _validate_plan(
+        cls,
+        payload: MetaMutationPayload,
+        *,
+        require_future_start: bool = True,
+    ) -> _Plan:
+        params = payload.params
+        if not isinstance(params, dict):
+            raise MutationValidationError("params: expected an object")
+        try:
+            digest_matches = duplicate_execution_plan_digest_matches(
+                mutation_kind=payload.mutation_kind,
+                target_id=payload.target_id,
+                params=params,
+                ad_account_id=payload.ad_account_id,
+                plan_digest=params.get("plan_digest"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise MutationValidationError(
+                "plan_digest: malformed or does not match execution plan"
+            ) from exc
+        if not digest_matches:
+            raise MutationValidationError("plan_digest: malformed or does not match execution plan")
+
         account_id = cls._validate_account_id(payload.ad_account_id)
         source_campaign_id = require_numeric_id(
             params.get("source_campaign_id"), "source_campaign_id"
         )
         source_adset_id = require_numeric_id(params.get("source_adset_id"), "source_adset_id")
+        if payload.target_id != source_adset_id:
+            raise MutationValidationError("target_id must match source_adset_id")
         selected_ad_ids = cls._validate_ids(params.get("selected_ad_ids"), "selected_ad_ids")
         if len(selected_ad_ids) > _MAX_SELECTED_ADS:
             raise MutationValidationError(
@@ -461,15 +699,24 @@ class DuplicateAdsetStructureHandler:
         if budget_level not in {"ABO", "CBO"}:
             raise MutationValidationError("budget_level: expected ABO or CBO")
 
-        daily_budget_cents = params.get("daily_budget_cents")
-        if isinstance(daily_budget_cents, bool) or not isinstance(daily_budget_cents, int):
-            raise MutationValidationError("daily_budget_cents: expected a positive integer")
-        if not 1 <= daily_budget_cents <= MAX_DAILY_BUDGET_CENTS:
-            raise MutationValidationError(
-                f"daily_budget_cents: expected 1..{MAX_DAILY_BUDGET_CENTS}"
+        try:
+            (
+                currency,
+                currency_exponent,
+                _daily_budget,
+                daily_budget_minor_units,
+            ) = checked_daily_budget_minor_units(
+                params.get("daily_budget"),
+                currency=params.get("currency"),
+                currency_exponent=params.get("currency_exponent"),
             )
+        except ValueError as exc:
+            raise MutationValidationError(f"daily_budget: {exc}") from exc
 
-        start_time, start_at = cls._validate_start_time(params.get("start_time"))
+        start_time, start_at = cls._validate_start_time(
+            params.get("start_time"),
+            require_future=require_future_start,
+        )
         campaign_names = cls._validate_names(
             params.get("campaign_names"), "campaign_names", campaign_count
         )
@@ -484,7 +731,9 @@ class DuplicateAdsetStructureHandler:
             campaign_count=campaign_count,
             adsets_per_campaign=adsets_per_campaign,
             budget_level=budget_level,
-            daily_budget_cents=daily_budget_cents,
+            currency=currency,
+            currency_exponent=currency_exponent,
+            daily_budget_minor_units=daily_budget_minor_units,
             start_time=start_time,
             start_at=start_at,
             campaign_names=campaign_names,
@@ -501,13 +750,13 @@ class DuplicateAdsetStructureHandler:
             ad_account_id=payload.ad_account_id,
             method="GET",
             endpoint=f"/{plan.source_campaign_id}",
-            query_params={"fields": _CAMPAIGN_FIELDS},
+            query_params={"fields": DUPLICATE_SOURCE_CAMPAIGN_FIELDS},
         )
         adset = await client.execute_graph_call(
             ad_account_id=payload.ad_account_id,
             method="GET",
             endpoint=f"/{plan.source_adset_id}",
-            query_params={"fields": _ADSET_FIELDS},
+            query_params={"fields": DUPLICATE_SOURCE_ADSET_FIELDS},
         )
         self._require_object_id(campaign, plan.source_campaign_id, "source campaign")
         self._require_object_id(adset, plan.source_adset_id, "source adset")
@@ -524,7 +773,7 @@ class DuplicateAdsetStructureHandler:
                 ad_account_id=payload.ad_account_id,
                 method="GET",
                 endpoint=f"/{ad_id}",
-                query_params={"fields": _SOURCE_AD_FIELDS},
+                query_params={"fields": DUPLICATE_SOURCE_AD_FIELDS},
             )
             self._require_object_id(source, ad_id, "selected ad")
             self._require_account(source, plan, f"selected ad {ad_id}")
@@ -563,7 +812,7 @@ class DuplicateAdsetStructureHandler:
             if source.get(key) not in (None, "", []):
                 body[key] = source[key]
         if plan.budget_level == "CBO":
-            body["daily_budget"] = plan.daily_budget_cents
+            body["daily_budget"] = plan.daily_budget_minor_units
         return body
 
     @staticmethod
@@ -574,7 +823,7 @@ class DuplicateAdsetStructureHandler:
             "start_time": plan.start_time,
         }
         if plan.budget_level == "ABO":
-            body["daily_budget"] = plan.daily_budget_cents
+            body["daily_budget"] = plan.daily_budget_minor_units
         return body
 
     async def _verify_structure(
@@ -605,7 +854,11 @@ class DuplicateAdsetStructureHandler:
             self._require_object_id(row, campaign_id, "created campaign")
             self._require_paused(row, f"campaign {campaign_id}")
             if plan.budget_level == "CBO":
-                self._require_budget(row, plan.daily_budget_cents, f"campaign {campaign_id}")
+                self._require_budget(
+                    row,
+                    plan.daily_budget_minor_units,
+                    f"campaign {campaign_id}",
+                )
 
         for adset_id, campaign_id in target_adsets:
             row = await client.execute_graph_call(
@@ -621,7 +874,11 @@ class DuplicateAdsetStructureHandler:
             if str(row.get("campaign_id") or "") != campaign_id:
                 raise RuntimeError(f"adset {adset_id}: target campaign mismatch")
             if plan.budget_level == "ABO":
-                self._require_budget(row, plan.daily_budget_cents, f"adset {adset_id}")
+                self._require_budget(
+                    row,
+                    plan.daily_budget_minor_units,
+                    f"adset {adset_id}",
+                )
                 if self._as_int(row.get("lifetime_budget"), default=0) != 0:
                     raise RuntimeError(f"adset {adset_id}: ABO target retained lifetime_budget")
             elif any(
@@ -636,7 +893,7 @@ class DuplicateAdsetStructureHandler:
                 ad_account_id=payload.ad_account_id,
                 method="GET",
                 endpoint=f"/{adset_id}/ads",
-                query_params={"fields": _VERIFY_AD_FIELDS, "limit": "100"},
+                query_params={"fields": DUPLICATE_VERIFY_AD_FIELDS, "limit": "100"},
             )
             rows = ads_response.get("data") if isinstance(ads_response, dict) else None
             if not isinstance(rows, list):
@@ -700,25 +957,39 @@ class DuplicateAdsetStructureHandler:
 
     @staticmethod
     def _extract_created_id(response: dict[str, Any], object_type: str) -> str:
-        keys = {
-            "campaign": ("id", "campaign_id", "copied_campaign_id"),
-            "adset": ("copied_adset_id", "adset_id", "id"),
-            "ad": ("id", "ad_id"),
+        key = {
+            "campaign": "id",
+            "adset": "copied_adset_id",
+            "ad": "id",
         }[object_type]
-        candidates: list[dict[str, Any]] = [response]
-        data = response.get("data") if isinstance(response, dict) else None
-        if isinstance(data, list):
-            candidates.extend(item for item in data if isinstance(item, dict))
-        elif isinstance(data, dict):
-            candidates.append(data)
-        for item in candidates:
-            for key in keys:
-                value = item.get(key)
-                if isinstance(value, str) and value.isdigit():
-                    return value
-                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                    return str(value)
-        raise RuntimeError(f"{object_type} creation response has no numeric id: {response!r}")
+        if not isinstance(response, dict) or set(response) != {key}:
+            raise RuntimeError(f"{object_type} creation response schema is not exact: {response!r}")
+        value = response.get(key)
+        if not isinstance(value, str) or not value.isdigit() or int(value) <= 0:
+            raise RuntimeError(
+                f"{object_type} creation response has no positive string id: {response!r}"
+            )
+        return value
+
+    @staticmethod
+    def _require_fresh_created_id(
+        object_id: str,
+        object_type: str,
+        plan: _Plan,
+        source_ads: tuple[_SourceAd, ...],
+        created: dict[str, list[str]],
+    ) -> None:
+        source_ids = {
+            plan.source_campaign_id,
+            plan.source_adset_id,
+            *plan.selected_ad_ids,
+            *(source_ad.creative_id for source_ad in source_ads),
+        }
+        created_ids = {created_id for object_ids in created.values() for created_id in object_ids}
+        if object_id in source_ids or object_id in created_ids:
+            raise RuntimeError(
+                f"{object_type} creation response id collides with source or created provenance"
+            )
 
     @staticmethod
     def _require_write_success(response: dict[str, Any], step: str) -> None:
@@ -760,13 +1031,11 @@ class DuplicateAdsetStructureHandler:
             return default
 
     @staticmethod
-    def _validate_account_id(value: str | None) -> str:
-        if not isinstance(value, str):
-            raise MutationValidationError("ad_account_id is required")
-        cleaned = value.strip()
-        if not cleaned.startswith("act_") or not cleaned.removeprefix("act_").isdigit():
-            raise MutationValidationError("ad_account_id must be act_<numeric id>")
-        return cleaned
+    def _validate_account_id(value: str) -> str:
+        try:
+            return graph_ad_account_id(value)
+        except ValueError as exc:
+            raise MutationValidationError(str(exc)) from exc
 
     @staticmethod
     def _validate_ids(value: Any, field_name: str) -> tuple[str, ...]:
@@ -825,7 +1094,12 @@ class DuplicateAdsetStructureHandler:
         return datetime.now(UTC)
 
     @classmethod
-    def _validate_start_time(cls, value: Any) -> tuple[str, datetime]:
+    def _validate_start_time(
+        cls,
+        value: Any,
+        *,
+        require_future: bool = True,
+    ) -> tuple[str, datetime]:
         if not isinstance(value, str) or not value.strip():
             raise MutationValidationError("start_time: expected ISO-8601 UTC string")
         cleaned = value.strip()
@@ -837,20 +1111,9 @@ class DuplicateAdsetStructureHandler:
         if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
             raise MutationValidationError("start_time: timezone must be UTC")
         parsed_utc = parsed.astimezone(UTC)
-        if parsed_utc <= cls._utcnow() + _START_TIME_GUARD:
-            raise MutationValidationError(
-                "start_time: must be at least "
-                f"{_START_TIME_GUARD_MINUTES} minutes in the future for crash recovery"
-            )
+        if require_future and parsed_utc <= cls._utcnow():
+            raise MutationValidationError("start_time: must be in the future")
         return cleaned, parsed_utc
-
-    @classmethod
-    def _require_activation_headroom(cls, plan: _Plan) -> None:
-        if plan.start_at <= cls._utcnow() + _START_TIME_GUARD:
-            raise RuntimeError(
-                "activation aborted: start_time no longer leaves the required "
-                f"{_START_TIME_GUARD_MINUTES}-minute crash-recovery window"
-            )
 
     @staticmethod
     def _parse_graph_time(value: Any) -> datetime | None:

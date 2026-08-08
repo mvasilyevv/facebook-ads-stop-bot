@@ -42,8 +42,8 @@ class MetaApiServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.ExecuteGraphCall = channel.unary_unary(
-            "/fb_agent.meta_api.v1.MetaApiService/ExecuteGraphCall",
+        self.ExecuteGraphCallV5 = channel.unary_unary(
+            "/fb_agent.meta_api.v1.MetaApiService/ExecuteGraphCallV5",
             request_serializer=v1_dot_meta__api__pb2.ExecuteGraphCallRequest.SerializeToString,
             response_deserializer=v1_dot_meta__api__pb2.ExecuteGraphCallResponse.FromString,
             _registered_method=True,
@@ -78,13 +78,15 @@ class MetaApiServiceServicer(object):
     page.evaluate(fetch(...)) — запрос идёт из того же session-context, что и DOM-парсинг.
     """
 
-    def ExecuteGraphCall(self, request, context):
+    def ExecuteGraphCallV5(self, request, context):
         """Универсальный wrapper. Исполняет произвольный Graph API endpoint
         изнутри активной браузерной сессии Ads Manager.
 
         Path формат: "/me", "/act_XXX/insights", "/{ad_id}", "/{campaign_id}/copies" и т.д.
         Параметры в query_params, тело в body_json.
         access_token подставляется автоматически из page source.
+        The v5 suffix is intentional: a v5 client must receive UNIMPLEMENTED from
+        every pre-v5 server, including for read-only calls.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
@@ -122,8 +124,8 @@ class MetaApiServiceServicer(object):
 
 def add_MetaApiServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-        "ExecuteGraphCall": grpc.unary_unary_rpc_method_handler(
-            servicer.ExecuteGraphCall,
+        "ExecuteGraphCallV5": grpc.unary_unary_rpc_method_handler(
+            servicer.ExecuteGraphCallV5,
             request_deserializer=v1_dot_meta__api__pb2.ExecuteGraphCallRequest.FromString,
             response_serializer=v1_dot_meta__api__pb2.ExecuteGraphCallResponse.SerializeToString,
         ),
@@ -164,7 +166,7 @@ class MetaApiService(object):
     """
 
     @staticmethod
-    def ExecuteGraphCall(
+    def ExecuteGraphCallV5(
         request,
         target,
         options=(),
@@ -179,7 +181,7 @@ class MetaApiService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            "/fb_agent.meta_api.v1.MetaApiService/ExecuteGraphCall",
+            "/fb_agent.meta_api.v1.MetaApiService/ExecuteGraphCallV5",
             v1_dot_meta__api__pb2.ExecuteGraphCallRequest.SerializeToString,
             v1_dot_meta__api__pb2.ExecuteGraphCallResponse.FromString,
             options,

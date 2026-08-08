@@ -15,6 +15,10 @@ from typing import Any, ClassVar
 from sqlalchemy import text
 
 from core.ai_assistant.tools.base import RiskLevel, ToolContext, ToolError
+from core.ai_assistant.tools.meta._currency import (
+    fetch_account_currency,
+    format_major_money,
+)
 from core.meta_api.errors import MetaApiError
 from core.meta_api.insights.fetcher import InsightsFetcher
 from core.meta_api.schemas import MetaInsightsRequest
@@ -91,33 +95,29 @@ class GetOfferPerformanceTool:
         if not rows:
             return f"Нет insights по офферу {offer_code} за {date_preset}."
 
+        currency = await fetch_account_currency(client, ad_account_id)
         total_spend = sum((r.spend for r in rows), start=Decimal("0"))
         total_impr = sum(r.impressions for r in rows)
         total_clicks = sum(r.clicks for r in rows)
         leads = sum(r.actions.get("lead", 0) for r in rows)
         registrations = sum(r.actions.get("complete_registration", 0) for r in rows)
-        deposits = sum(
-            r.actions.get("offsite_conversion.custom.deposit", 0) or r.actions.get("purchase", 0)
-            for r in rows
-        )
-
         cpl = (total_spend / leads) if leads else None
         cpr = (total_spend / registrations) if registrations else None
         ctr_total = (Decimal(total_clicks) / Decimal(total_impr)) if total_impr else None
 
-        cpl_str = f"${cpl:.2f}" if cpl is not None else "—"
-        cpr_str = f"${cpr:.2f}" if cpr is not None else "—"
+        cpl_str = format_major_money(cpl, currency)
+        cpr_str = format_major_money(cpr, currency)
         ctr_str = f"{ctr_total:.2%}" if ctr_total is not None else "—"
 
         lines = [
             f"Оффер {offer_code} ({row[1]} / {row[2] or 'без вертикали'}) — {date_preset}",
+            f"Валюта: {currency.code if currency else 'не подтверждена'}",
             f"Объявлений: {len(rows)}",
-            f"Spend: ${total_spend:.2f}",
+            f"Spend: {format_major_money(total_spend, currency)}",
             f"Impr: {total_impr}",
             f"Clicks: {total_clicks} (CTR={ctr_str})",
             f"Leads: {leads} (CPL={cpl_str})",
             f"Registrations: {registrations} (CPR={cpr_str})",
-            f"Deposits: {deposits}",
             f"Match: campaign.name CONTAIN {offer_code!r} (filtering={json.dumps(list(req.filtering))[:100]})",
         ]
         return "\n".join(lines)

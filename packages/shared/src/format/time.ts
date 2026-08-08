@@ -1,6 +1,6 @@
 /**
- * Временные форматтеры. Все UTC-pinned (timeZone: "UTC").
- * Бэкенд хранит всё в UTC — показываем без локального сдвига.
+ * Временные форматтеры. UTC используется по умолчанию; кабинетные значения
+ * форматируются только с явно переданным IANA timezone.
  * Все функции безопасны к null/undefined/невалидным ISO → "—".
  *
  * Портировано из frontend/src/lib/utils/format.ts (эталон).
@@ -10,7 +10,9 @@
  * Относительное время (возраст метки) по-русски: "сейчас", "5 мин", "2 ч", "3 дн".
  * При очень старых датах (>30 дней) переходит в formatDateTime.
  */
-export function formatRelativeTime(iso: string | Date | null | undefined): string {
+export function formatRelativeTime(
+  iso: string | Date | null | undefined,
+): string {
   if (!iso) return "—";
   const date = typeof iso === "string" ? new Date(iso) : iso;
   if (Number.isNaN(date.getTime())) return "—";
@@ -42,6 +44,70 @@ export function formatDateTime(iso: string | Date | null | undefined): string {
   const date = typeof iso === "string" ? new Date(iso) : iso;
   if (Number.isNaN(date.getTime())) return "—";
   return date.toISOString().slice(0, 16).replace("T", " ");
+}
+
+/**
+ * Timestamp in the server-declared IANA timezone. Operator surfaces must use
+ * this instead of the browser timezone: the cabinet day is authoritative.
+ */
+export function formatZonedDateTime(
+  iso: string | Date | null | undefined,
+  timeZone: string,
+): string {
+  const date = parseDate(iso);
+  if (!date) return "—";
+  try {
+    return new Intl.DateTimeFormat("ru-RU", {
+      timeZone,
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(date);
+  } catch {
+    return "—";
+  }
+}
+
+/** Time-of-day in the server-declared IANA timezone. */
+export function formatZonedTime(
+  iso: string | Date | null | undefined,
+  timeZone: string,
+): string {
+  const date = parseDate(iso);
+  if (!date) return "—";
+  try {
+    return new Intl.DateTimeFormat("ru-RU", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(date);
+  } catch {
+    return "—";
+  }
+}
+
+export type TimezoneEvidenceState = "single" | "mixed" | "unknown";
+
+/** Human-readable evidence label that never turns mixed/unknown into UTC. */
+export function timezoneEvidenceLabel(
+  timeZone: string | null | undefined,
+  state: TimezoneEvidenceState,
+): string {
+  if (state === "single" && timeZone) return timeZone;
+  if (state === "mixed") {
+    return "Несколько часовых поясов · границы по каждому кабинету";
+  }
+  return "Не подтверждён";
+}
+
+function parseDate(iso: string | Date | null | undefined): Date | null {
+  if (!iso) return null;
+  const date = typeof iso === "string" ? new Date(iso) : iso;
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 /**

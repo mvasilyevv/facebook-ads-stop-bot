@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic desktop-aware browser/CDP recovery
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+AccuracySec=10s
+Persistent=false
+Unit=fb-agent-desktop-heal.service
+
+[Install]
+WantedBy=timers.target

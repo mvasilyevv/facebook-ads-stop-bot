@@ -2,15 +2,12 @@
  * ObserverTab — настройки наблюдателя.
  *
  * Тоглы (сканирование / auto-enable reco) — авто-сейв через точечный PATCH.
- * Справа — карточка ДЕЙСТВИЯ (перезапуск observer).
- *
- * Owner Campaign Tag и отслеживаемые кампании вынесены на страницу «Кампании»
- * (блок 01 OPERATE). Статус observer'а и список воркеров — в табе Health.
- * «Сканировать сейчас» — на главной Панели (тут дубль убран).
+ * Owner Campaign Tag и отслеживаемые кампании находятся в разделе «Реклама».
+ * Состояние источников и воркеров — в «Система → Источники и воркеры»,
+ * а ручной запуск сканирования — на странице «Сейчас».
  */
 
 import { useState, useEffect, type FC } from "react";
-import { RefreshCw } from "lucide-react";
 import { Switch } from "@/components/ui/Switch";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -21,7 +18,6 @@ import {
   useUpdateObserverSettings,
   useToggleScanning,
   useToggleAutoEnable,
-  useRestartObserver,
   useAutoEnableExclusions,
   useRemoveAutoEnableExclusion,
 } from "@/lib/api/settings";
@@ -44,15 +40,15 @@ function Field({ label, hint, children }: FieldProps) {
         gap: 16,
         alignItems: "center",
         padding: "12px 0",
-        borderBottom: "1px solid var(--hairline)",
+        borderBottom: "1px solid var(--color-hairline)",
       }}
     >
       <div>
-        <div className="text-[13px]" style={{ color: "var(--bg-10)" }}>
+        <div className="text-[13px]" style={{ color: "var(--color-bg-10)" }}>
           {label}
         </div>
         {hint && (
-          <div className="text-[11px] mt-0.5" style={{ color: "var(--bg-8)" }}>
+          <div className="text-[12px] mt-0.5" style={{ color: "var(--color-bg-8)" }}>
             {hint}
           </div>
         )}
@@ -65,11 +61,10 @@ function Field({ label, hint, children }: FieldProps) {
 // ─── Основной компонент ───────────────────────────────────────────────────────
 
 export const ObserverTab: FC = () => {
-  const { data, isLoading, error, refetch } = useObserverSettings();
+  const { data, isLoading, error } = useObserverSettings();
   const updateMut = useUpdateObserverSettings();
   const toggleScanningMut = useToggleScanning();
   const toggleAutoEnableMut = useToggleAutoEnable();
-  const restartMut = useRestartObserver();
   const exclusionsQ = useAutoEnableExclusions();
   const removeExclusion = useRemoveAutoEnableExclusion();
 
@@ -95,7 +90,7 @@ export const ObserverTab: FC = () => {
   }
 
   if (error) {
-    return <ErrorState error={error} onRetry={() => void refetch()} />;
+    return <ErrorState error={error} onRetry={() => void 0} />;
   }
 
   // Тоглы — точечный PATCH (scanning/auto-enable), не partial PUT (иначе 422).
@@ -117,24 +112,15 @@ export const ObserverTab: FC = () => {
     }
   };
 
-  const handleRestart = async () => {
-    try {
-      await restartMut.mutateAsync();
-      toast.success("Сигнал перезапуска observer отправлен");
-    } catch (e) {
-      toast.error("Ошибка перезапуска", e instanceof Error ? e.message : String(e));
-    }
-  };
-
   // updateMut оставлен на будущее (PUT с полным body); сейчас тоглы идут через PATCH.
   void updateMut;
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(260px,2fr)]">
+    <div className="grid gap-8">
       {/* ── Левая колонка: параметры ── */}
       <div>
         <div
-          className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8"
+          className="font-display text-[12px] tracking-[0.12em] uppercase text-bg-8"
           style={{ marginBottom: 8, display: "inline-block" }}
         >
           МОНИТОРИНГ · ПАРАМЕТРЫ
@@ -162,40 +148,14 @@ export const ObserverTab: FC = () => {
         </Field>
       </div>
 
-      {/* ── Правая колонка: действия ── */}
-      <div>
-        <div
-          className="bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)]"
-          style={{ padding: "var(--s-5)" }}
-        >
-          <div
-            className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8"
-            style={{ marginBottom: 14 }}
-          >
-            ДЕЙСТВИЯ
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
-            <Button
-              variant="secondary"
-              leftIcon={<RefreshCw size={14} />}
-              onClick={() => void handleRestart()}
-              loading={restartMut.isPending}
-              style={{ justifyContent: "flex-start" }}
-            >
-              Перезапустить мониторинг
-            </Button>
-          </div>
-        </div>
-      </div>
-      <section className="lg:col-span-2 border-t border-[var(--hairline)] pt-6">
-        <div className="font-display text-[10px] uppercase tracking-[0.1em] text-bg-8">
+      <section className="border-t border-[var(--color-hairline)] pt-6">
+        <div className="font-display text-[12px] uppercase tracking-[0.1em] text-bg-8">
           Исключения auto-enable
         </div>
-        <p className="mt-1 text-[11px] text-bg-8">
+        <p className="mt-1 text-[12px] text-bg-8">
           Рекомендации для этих объявлений остаются видимыми, но автоматически не исполняются.
         </p>
-        <div className="mt-4 overflow-hidden rounded-[var(--radius-2)] border border-[var(--hairline)]">
+        <div className="mt-4 overflow-hidden rounded-[var(--radius-2)] border border-[var(--color-hairline)]">
           {exclusionsQ.isLoading ? (
             <div className="p-3">
               <Skeleton height={34} className="w-full" />
@@ -204,13 +164,13 @@ export const ObserverTab: FC = () => {
             exclusionsQ.data.map((item) => (
               <div
                 key={item.fb_ad_id}
-                className="flex items-center justify-between gap-4 border-b border-[var(--hairline)] px-4 py-3 last:border-0"
+                className="flex items-center justify-between gap-4 border-b border-[var(--color-hairline)] px-4 py-3 last:border-0"
               >
                 <div className="min-w-0">
                   <div className="truncate text-[12px] text-bg-11">
                     {item.ad_name || item.fb_ad_id}
                   </div>
-                  <div className="mt-0.5 font-display text-[10px] text-bg-7">
+                  <div className="mt-0.5 font-display text-[12px] text-bg-8">
                     {item.fb_ad_id}
                     {item.reason ? ` · ${item.reason}` : ""}
                   </div>
@@ -226,7 +186,7 @@ export const ObserverTab: FC = () => {
               </div>
             ))
           ) : (
-            <div className="px-4 py-6 text-center text-[11px] text-bg-7">Исключений нет</div>
+            <div className="px-4 py-6 text-center text-[12px] text-bg-8">Исключений нет</div>
           )}
         </div>
       </section>

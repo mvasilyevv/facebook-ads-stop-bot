@@ -1,156 +1,124 @@
-/**
- * Тест SettingsPage: toggle скана, отображение секций.
- */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import type { ObserverConfig } from "@fb/shared";
+import type { ComponentType } from "react";
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import type { TelegramSettings } from "@fb/shared";
 
-// Мок роутера
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => ({ component: (c: unknown) => c }),
+  createFileRoute: () => (options: { component: ComponentType }) => options,
   useNavigate: () => vi.fn(),
-  Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
-    <a href={to}>{children}</a>
-  ),
 }));
 
-// Мок TG
 vi.mock("@/lib/tg", () => ({
-  haptic: { impact: vi.fn(), notify: vi.fn(), selection: vi.fn() },
-  tgConfirm: vi.fn().mockResolvedValue(true),
+  haptic: { selection: vi.fn() },
 }));
 
-// Мок MiniHeader
 vi.mock("@/components/layout/MiniHeader", () => ({
   MiniHeader: ({ title }: { title: string }) => <header>{title}</header>,
 }));
 
-const MOCK_OBSERVER: ObserverConfig = {
-  is_scanning_enabled: true,
-  auto_enable_recommendations: false,
-  default_interval_seconds: 60,
-  owner_campaign_tag: null,
-};
-
-const MOCK_TELEGRAM: TelegramSettings = {
+const telegram: TelegramSettings = {
   is_authorized: true,
-  poller_status: "ONLINE",
   bot_username: "fb_stop_bot",
   auth_deep_link: null,
   activation_command: null,
   auth_invite_expires_at: null,
-  chat_id: null,
   web_app_url: "https://t.me/fb_stop_bot/app",
 };
 
-const mockUseObserverSettings = vi.fn();
-const mockUseToggleScanning = vi.fn();
-const mockUseTriggerScan = vi.fn();
 const mockUseTelegramSettings = vi.fn();
+const mockUseTelegramNotificationDiagnostics = vi.fn();
 const mockUseVisionSettings = vi.fn();
 
 vi.mock("@/lib/api", () => ({
-  useObserverSettings: () => mockUseObserverSettings(),
-  useToggleScanning: () => mockUseToggleScanning(),
-  useTriggerScan: () => mockUseTriggerScan(),
   useTelegramSettings: () => mockUseTelegramSettings(),
+  useTelegramNotificationDiagnostics: () =>
+    mockUseTelegramNotificationDiagnostics(),
   useVisionSettings: () => mockUseVisionSettings(),
 }));
 
-import SettingsTestWrapper from "./Settings.test.helper";
+import { Route } from "@/routes/settings/index";
 
-describe("SettingsPage", () => {
-  const mutateAsync = vi.fn().mockResolvedValue({});
+const SettingsPage = (Route as unknown as { component: ComponentType })
+  .component;
 
+describe("TMA settings route", () => {
   beforeEach(() => {
-    mutateAsync.mockClear();
-    mockUseObserverSettings.mockReturnValue({
-      data: MOCK_OBSERVER,
-      isLoading: false,
-      isError: false,
-      refetch: vi.fn(),
-    });
-    mockUseToggleScanning.mockReturnValue({ mutateAsync, isPending: false });
-    mockUseTriggerScan.mockReturnValue({
-      mutateAsync: vi.fn().mockResolvedValue({}),
-      isPending: false,
-    });
+    vi.clearAllMocks();
     mockUseTelegramSettings.mockReturnValue({
-      data: MOCK_TELEGRAM,
+      data: telegram,
       isLoading: false,
       isError: false,
+      error: null,
       refetch: vi.fn(),
+    });
+    mockUseTelegramNotificationDiagnostics.mockReturnValue({
+      data: {
+        as_of: "2026-07-21T10:00:00Z",
+        webhook_state: "configured",
+        gateway_state: "configured",
+        outbox_state: "idle",
+        last_webhook_update_at: null,
+        inbox_counts: {},
+        delivery_counts: {},
+        command_reply_counts: {},
+        oldest_pending_at: null,
+        active_recipients: 1,
+        enabled_recipients: 1,
+        auth_incident_active: false,
+        recent_errors: [],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
     });
     mockUseVisionSettings.mockReturnValue({
       data: {
         has_token: true,
         profile_id: "profile-123",
-        cdp_ready: true,
-        cdp_port: 9222,
-        auto_restart_on_missing_cdp: true,
-        runtime_status: "ready",
-        runtime_status_message: null,
+        channel_status: "READY",
+        channel_message: null,
       },
       isLoading: false,
       isError: false,
+      error: null,
       refetch: vi.fn(),
     });
   });
 
-  // Observer-секция показывает toggle
-  it("показывает секцию Observer с переключателем", () => {
-    render(<SettingsTestWrapper />);
-    expect(screen.getByText("Сканирование")).toBeInTheDocument();
-  });
+  it("renders the real action-first route and read-only diagnostics", () => {
+    render(<SettingsPage />);
 
-  // Toggle в позиции "включён" при is_scanning_enabled=true
-  it("Switch включён при is_scanning_enabled=true", () => {
-    render(<SettingsTestWrapper />);
-    const checkbox = screen.getByRole("switch") as HTMLInputElement;
-    expect(checkbox.checked).toBe(true);
-  });
-
-  // Клик по toggle вызывает useToggleScanning с enabled=false
-  it("клик по Switch вызывает toggleScanning с enabled=false", async () => {
-    render(<SettingsTestWrapper />);
-    const checkbox = screen.getByRole("switch");
-    fireEvent.click(checkbox);
-    await waitFor(() => {
-      expect(mutateAsync).toHaveBeenCalledWith({ enabled: false });
-    });
-  });
-
-  // Telegram-секция показывает имя бота
-  it("показывает username бота из Telegram-настроек", () => {
-    render(<SettingsTestWrapper />);
+    expect(screen.getByText("Ещё")).toBeInTheDocument();
     expect(screen.getByText("@fb_stop_bot")).toBeInTheDocument();
-  });
-
-  // Vision-секция показывает profile_id
-  it("показывает profile_id из Vision-настроек", () => {
-    render(<SettingsTestWrapper />);
+    expect(screen.getByText("Webhook")).toBeInTheDocument();
+    expect(screen.getByText("Gateway")).toBeInTheDocument();
+    expect(screen.getByText("Outbox")).toBeInTheDocument();
     expect(screen.getByText("profile-123")).toBeInTheDocument();
   });
 
-  // Ссылки навигации к вторичным экранам («Ещё»)
-  it("показывает кнопки навигации на /health, /scripts, /offers", () => {
-    render(<SettingsTestWrapper />);
-    expect(screen.getByText("Здоровье воркеров")).toBeInTheDocument();
-    expect(screen.getByText("Скрипты кампаний")).toBeInTheDocument();
-    expect(screen.getByText("Офферы")).toBeInTheDocument();
+  it("keeps rare configuration desktop-first", () => {
+    render(<SettingsPage />);
+
+    expect(screen.getByText(/редкие настройки/i)).toBeInTheDocument();
+    expect(screen.queryByText("Owner Campaign Tag")).not.toBeInTheDocument();
+    expect(screen.queryByText("Автостарт кабинета")).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
-  // При toggle=false начальный state
-  it("Switch выключен при is_scanning_enabled=false", () => {
-    mockUseObserverSettings.mockReturnValue({
-      data: { ...MOCK_OBSERVER, is_scanning_enabled: false },
-      isLoading: false,
-      isError: false,
-      refetch: vi.fn(),
-    });
-    render(<SettingsTestWrapper />);
-    const checkbox = screen.getByRole("switch") as HTMLInputElement;
-    expect(checkbox.checked).toBe(false);
+  it("links only to supported secondary screens", () => {
+    render(<SettingsPage />);
+
+    for (const label of [
+      "Рабочий стол",
+      "Аналитика",
+      "Источники и воркеры",
+      "Запуски кампаний",
+      "Офферы",
+    ]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    expect(screen.queryByText("Скрипты кампаний")).not.toBeInTheDocument();
   });
+
 });

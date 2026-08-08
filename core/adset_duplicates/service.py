@@ -1,27 +1,38 @@
 # -*- coding: utf-8 -*-
 """Изолированный backend-контур быстрого дублирования adset.
 
-Preview читает локальный каталог, точные metadata кабинета через read-only Meta GET
-и Redis. Meta-записи появляются лишь после явного запуска из защищённой веб-панели.
+Preview читает локальный каталог и точные metadata кабинета через read-only Meta
+GET. Непрозрачный capability token, канонический план и его запуск принадлежат
+PostgreSQL; Meta-записи появляются лишь после явного запуска из защищённой панели.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import math
 import secrets
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from core.meta_api.mutations.set_adset_budget import MAX_DAILY_BUDGET_CENTS
+from core.adset_duplicates.plan_integrity import (
+    DUPLICATE_ADSET_STRUCTURE_KIND,
+    canonical_duplicate_execution_payload,
+    duplicate_execution_plan_digest,
+    duplicate_execution_plan_digest_matches,
+)
+from core.meta_api.account_tz import validated_timezone_name
+from core.meta_api.budget_limits import checked_daily_budget_minor_units
+from core.meta_api.identity import require_ad_account_id
+from core.money import UnsupportedCurrencyExponentError, currency_exponent
 from core.observer.queries import campaign_matches_owner, parse_owner_tags
-from core.tasks.queue import DRAFT_TTL_SECONDS, create_task
+from core.tasks.queue import create_task
 
 PREVIEW_TTL_SECONDS = 15 * 60
 MAX_CAMPAIGN_COUNT = 5
@@ -30,14 +41,15 @@ MAX_SELECTED_ADS = 10
 MAX_TOTAL_ADS = 50
 MAX_NAME_LENGTH = 400
 
-_PREVIEW_KEY_PREFIX = "adset_duplicate:preview:"
-_TASK_KIND = "duplicate_adset_structure"
+_TASK_KIND = DUPLICATE_ADSET_STRUCTURE_KIND
 _TASK_TYPE = "meta_api_mutation"
-_REQUESTED_BY = "api:adset_duplicate"
+_PREVIEW_TOKEN_BYTES = 32
+_PREVIEW_TOKEN_LENGTH = 43
+_MAX_PRINCIPAL_LENGTH = 64
 
 
 class AdsetDuplicateError(ValueError):
-    """Ожидаемая ошибка preview/draft с безопасным текстом для HTTP detail."""
+    """Ожидаемая ошибка preview/launch с безопасным текстом для HTTP detail."""
 
     def __init__(self, message: str, *, status_code: int = 422) -> None:
         super().__init__(message)
@@ -63,7 +75,7 @@ class DuplicateSource:
     source_ad_name: str
     ads: tuple[SourceAd, ...]
     selected_ad_ids: tuple[str, ...]
-    source_daily_budget_cents: int | None
+    source_daily_budget_minor_units: int | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -71,6 +83,7 @@ class AccountMetadata:
     id: str
     name: str
     currency: str
+    currency_exponent: int
     timezone_name: str
     timezone_offset_hours: float
 
@@ -78,9 +91,11 @@ class AccountMetadata:
 @dataclass(slots=True, frozen=True)
 class StoredDuplicatePreview:
     preview: dict[str, Any]
-    task_params: dict[str, Any]
-    plan_digest: str
-    idempotency_token: str
+    task_payload: dict[str, Any]
+    plan_digest: bytes
+    idempotency_key: str
+    principal: str
+    expires_at: datetime
     consumed_task_id: int | None = None
 
 
@@ -127,24 +142,33 @@ def validate_structure_caps(
 def calculate_budget(
     *,
     budget_level: Literal["ABO", "CBO"],
-    daily_budget_cents: int,
+    daily_budget: object,
     campaign_count: int,
     total_adsets: int,
     currency: str,
-) -> dict[str, Any]:
+    currency_exponent: int,
+) -> tuple[dict[str, Any], int]:
     """Считает суммарный дневной бюджет: CBO per campaign, ABO per adset."""
-    if (
-        isinstance(daily_budget_cents, bool)
-        or not 1 <= daily_budget_cents <= MAX_DAILY_BUDGET_CENTS
-    ):
-        raise AdsetDuplicateError(f"daily_budget_cents должен быть 1..{MAX_DAILY_BUDGET_CENTS}")
+    try:
+        code, exponent, unit_amount, unit_minor_units = checked_daily_budget_minor_units(
+            daily_budget,
+            currency=currency,
+            currency_exponent=currency_exponent,
+        )
+    except ValueError as exc:
+        raise AdsetDuplicateError(str(exc)) from exc
     units = campaign_count if budget_level == "CBO" else total_adsets
-    return {
-        "level": budget_level,
-        "unit_daily_budget_cents": daily_budget_cents,
-        "total_daily_budget_cents": units * daily_budget_cents,
-        "currency": currency,
-    }
+    total_amount = unit_amount * units
+    return (
+        {
+            "level": budget_level,
+            "unit_daily_budget": f"{unit_amount:.{exponent}f}",
+            "total_daily_budget": f"{total_amount:.{exponent}f}",
+            "currency": code,
+            "currency_exponent": exponent,
+        },
+        unit_minor_units,
+    )
 
 
 def build_schedule(
@@ -157,18 +181,13 @@ def build_schedule(
     """Полночь кабинета + точный UTC start_time для Meta."""
     if not math.isfinite(timezone_offset_hours) or not -23 <= timezone_offset_hours <= 23:
         raise AdsetDuplicateError("Некорректный timezone offset кабинета", status_code=503)
-    fallback_minutes = round(timezone_offset_hours * 60)
-    sign = "+" if fallback_minutes >= 0 else "-"
-    fallback_hours, fallback_remainder = divmod(abs(fallback_minutes), 60)
-    fallback_offset_label = f"{sign}{fallback_hours:02d}:{fallback_remainder:02d}"
-    display_timezone = timezone_name.strip()
-    try:
-        zone = ZoneInfo(display_timezone) if display_timezone else None
-    except ZoneInfoNotFoundError:
-        zone = None
-    if zone is None:
-        display_timezone = f"UTC{fallback_offset_label}"
-        zone = timezone(timedelta(hours=timezone_offset_hours), name=display_timezone)
+    display_timezone = validated_timezone_name(timezone_name)
+    if display_timezone is None:
+        raise AdsetDuplicateError(
+            "Meta не вернула валидный IANA timezone_name кабинета",
+            status_code=503,
+        )
+    zone = ZoneInfo(display_timezone)
 
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
@@ -223,7 +242,7 @@ def generate_names(
     return {"campaigns": campaign_names, "adsets": adset_names}
 
 
-def _optional_cents(value: Any) -> int | None:
+def _optional_minor_units(value: Any) -> int | None:
     try:
         parsed = int(value)
     except (TypeError, ValueError):
@@ -303,7 +322,7 @@ async def load_duplicate_source(
         source_ad_name=str(source[1] or ""),
         ads=ads,
         selected_ad_ids=tuple(selected_ad_ids),
-        source_daily_budget_cents=_optional_cents(source[5]),
+        source_daily_budget_minor_units=_optional_minor_units(source[5]),
     )
 
 
@@ -318,15 +337,21 @@ async def resolve_duplicate_source_hierarchy(
     hierarchy. Conflicts with locally known IDs fail closed.
     """
 
-    local_account_id = source.account_id.removeprefix("act_").strip()
-    if local_account_id.isdigit() and source.campaign_id.isdigit() and source.adset_id.isdigit():
+    try:
+        local_account_id = require_ad_account_id(source.account_id)
+    except ValueError as exc:
+        raise AdsetDuplicateError(
+            "Каталог не содержит explicit ad_account_id исходного объявления",
+            status_code=409,
+        ) from exc
+    if source.campaign_id.isdigit() and source.adset_id.isdigit():
         return source
 
     response = await client.execute_graph_call(
         method="GET",
         endpoint=f"/{source.source_ad_id}",
         query_params={"fields": "id,account_id,campaign_id,adset_id"},
-        ad_account_id=local_account_id if local_account_id.isdigit() else None,
+        ad_account_id=local_account_id,
     )
     returned_source_id = str(response.get("id") or "").strip()
     if returned_source_id != source.source_ad_id:
@@ -380,6 +405,13 @@ async def fetch_account_metadata(client: Any, account_id: str) -> AccountMetadat
     if not currency:
         raise AdsetDuplicateError("Meta не вернула currency кабинета", status_code=503)
     try:
+        exponent = currency_exponent(currency)
+    except UnsupportedCurrencyExponentError as exc:
+        raise AdsetDuplicateError(
+            "Meta вернула currency без проверенного minor-unit exponent",
+            status_code=503,
+        ) from exc
+    try:
         raw_offset = response["timezone_offset_hours_utc"]
         if isinstance(raw_offset, bool):
             raise TypeError("bool timezone offset")
@@ -388,11 +420,17 @@ async def fetch_account_metadata(client: Any, account_id: str) -> AccountMetadat
         raise AdsetDuplicateError(
             "Meta не вернула timezone offset кабинета", status_code=503
         ) from exc
-    timezone_name = str(response.get("timezone_name") or "").strip()
+    timezone_name = validated_timezone_name(response.get("timezone_name"))
+    if timezone_name is None:
+        raise AdsetDuplicateError(
+            "Meta не вернула валидный IANA timezone_name кабинета",
+            status_code=503,
+        )
     return AccountMetadata(
         id=f"act_{expected_numeric}",
         name=str(response.get("name") or account_id).strip() or account_id,
         currency=currency,
+        currency_exponent=exponent,
         timezone_name=timezone_name,
         timezone_offset_hours=offset,
     )
@@ -405,7 +443,7 @@ def build_duplicate_preview(
     campaign_count: int,
     adsets_per_campaign: int,
     budget_level: Literal["ABO", "CBO"],
-    daily_budget_cents: int,
+    daily_budget: object,
     requested_start_date: date | None,
     campaign_name_base: str | None,
     adset_name_base: str | None,
@@ -466,12 +504,13 @@ def build_duplicate_preview(
         adsets_per_campaign=adsets_per_campaign,
         start_date=start_date,
     )
-    budget = calculate_budget(
+    budget, daily_budget_minor_units = calculate_budget(
         budget_level=budget_level,
-        daily_budget_cents=daily_budget_cents,
+        daily_budget=daily_budget,
         campaign_count=campaign_count,
         total_adsets=total_adsets,
         currency=account.currency,
+        currency_exponent=account.currency_exponent,
     )
     warnings = [
         "Создание начнётся только после явного подтверждения в web-preview.",
@@ -481,7 +520,10 @@ def build_duplicate_preview(
             f"Owner-tag {owner_tags[0]!r} добавлен в имена новых кампаний "
             "для сохранения owner-scope."
         )
-    if source.source_daily_budget_cents not in (None, daily_budget_cents):
+    if source.source_daily_budget_minor_units not in (
+        None,
+        daily_budget_minor_units,
+    ):
         warnings.append("Выбранный дневной бюджет отличается от бюджета исходного adset.")
     preview = {
         "source": {
@@ -489,6 +531,7 @@ def build_duplicate_preview(
                 "id": account.id,
                 "name": account.name,
                 "currency": account.currency,
+                "currency_exponent": account.currency_exponent,
             },
             "campaign": {"id": source.campaign_id, "name": source.campaign_name},
             "adset": {"id": source.adset_id, "name": source.adset_name},
@@ -523,7 +566,9 @@ def build_duplicate_preview(
         "campaign_count": campaign_count,
         "adsets_per_campaign": adsets_per_campaign,
         "budget_level": budget_level,
-        "daily_budget_cents": daily_budget_cents,
+        "daily_budget": budget["unit_daily_budget"],
+        "currency": budget["currency"],
+        "currency_exponent": budget["currency_exponent"],
         "start_time": schedule["start_time_utc"],
         "campaign_names": names["campaigns"],
         "adset_names": names["adsets"],
@@ -533,174 +578,463 @@ def build_duplicate_preview(
     return preview, task_params
 
 
-def _digest_task_params(task_params: dict[str, Any]) -> str:
-    canonical = json.dumps(task_params, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _validated_principal(principal: str) -> str:
+    normalized = str(principal).strip()
+    if not normalized or len(normalized) > _MAX_PRINCIPAL_LENGTH:
+        raise AdsetDuplicateError("Недопустимый operator principal", status_code=403)
+    return normalized
+
+
+def _new_preview_token() -> tuple[str, bytes]:
+    token_bytes = secrets.token_bytes(_PREVIEW_TOKEN_BYTES)
+    token = base64.urlsafe_b64encode(token_bytes).rstrip(b"=").decode("ascii")
+    if len(token) != _PREVIEW_TOKEN_LENGTH:  # pragma: no cover - invariant of 32 bytes
+        raise RuntimeError("unexpected duplicate preview token length")
+    return token, hashlib.sha256(token_bytes).digest()
+
+
+def _preview_token_digest(preview_token: str) -> bytes:
+    """Decode one canonical 32-byte Base64URL token and return its SHA-256."""
+    try:
+        encoded = preview_token.encode("ascii")
+        if len(encoded) != _PREVIEW_TOKEN_LENGTH:
+            raise ValueError("invalid token length")
+        token_bytes = base64.b64decode(
+            encoded + b"=",
+            altchars=b"-_",
+            validate=True,
+        )
+        canonical = base64.urlsafe_b64encode(token_bytes).rstrip(b"=")
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise AdsetDuplicateError("Preview истёк или не найден", status_code=410) from exc
+    if len(token_bytes) != _PREVIEW_TOKEN_BYTES or not secrets.compare_digest(
+        canonical,
+        encoded,
+    ):
+        raise AdsetDuplicateError("Preview истёк или не найден", status_code=410)
+    return hashlib.sha256(token_bytes).digest()
+
+
+def _idempotency_key(*, principal: str, token: str) -> str:
+    identity = hashlib.sha256(
+        principal.encode("utf-8") + b"\x00" + token.encode("utf-8")
+    ).hexdigest()
+    return f"meta:duplicate-adset:{identity}"
+
+
+def _execution_task_payload(
+    *,
+    preview: dict[str, Any],
+    task_params: dict[str, Any],
+) -> dict[str, Any]:
+    """Full immutable execution payload before embedding its own digest."""
+    try:
+        source_account = preview["source"]["account"]["id"]
+        source_adset_id = str(task_params["source_adset_id"])
+    except (KeyError, TypeError) as exc:
+        raise AdsetDuplicateError("Preview повреждён; создай новый", status_code=410) from exc
+    if not source_adset_id.isdigit():
+        raise AdsetDuplicateError("Preview повреждён; создай новый", status_code=410)
+    try:
+        ad_account_id = require_ad_account_id(source_account)
+    except ValueError as exc:
+        raise AdsetDuplicateError("Preview повреждён; создай новый", status_code=410) from exc
+    try:
+        return canonical_duplicate_execution_payload(
+            mutation_kind=_TASK_KIND,
+            target_id=source_adset_id,
+            params=task_params,
+            ad_account_id=ad_account_id,
+        )
+    except (TypeError, ValueError) as exc:
+        raise AdsetDuplicateError("Preview повреждён; создай новый", status_code=410) from exc
+
+
+def _ready_task_payload(
+    *,
+    preview: dict[str, Any],
+    task_params: dict[str, Any],
+) -> tuple[dict[str, Any], bytes]:
+    payload = _execution_task_payload(
+        preview=preview,
+        task_params=task_params,
+    )
+    plan_digest = duplicate_execution_plan_digest(**payload)
+    payload["params"] = {
+        **task_params,
+        "plan_digest": plan_digest.hex(),
+    }
+    return payload, plan_digest
+
+
+def _task_payload(stored: StoredDuplicatePreview) -> dict[str, Any]:
+    return json.loads(_canonical_json(stored.task_payload))
+
+
+def _validate_task_payload(
+    payload: object,
+    *,
+    stored: StoredDuplicatePreview,
+) -> None:
+    if not isinstance(payload, dict):
+        raise AdsetDuplicateError(
+            "idempotency_key связан с повреждённой задачей",
+            status_code=409,
+        )
+    if payload != stored.task_payload:
+        raise AdsetDuplicateError(
+            "idempotency_token уже использован для другого плана",
+            status_code=409,
+        )
+
+
+def _validate_stored_task_payload(
+    task_payload: dict[str, Any],
+    *,
+    plan_digest: bytes,
+) -> None:
+    params = task_payload.get("params")
+    if (
+        task_payload.get("mutation_kind") != _TASK_KIND
+        or not isinstance(params, dict)
+        or not str(task_payload.get("target_id") or "").isdigit()
+        or params.get("source_adset_id") != task_payload.get("target_id")
+    ):
+        raise AdsetDuplicateError("Preview повреждён; создай новый", status_code=410)
+    try:
+        canonical_account_id = require_ad_account_id(task_payload.get("ad_account_id"))
+    except ValueError as exc:
+        raise AdsetDuplicateError("Preview повреждён; создай новый", status_code=410) from exc
+    if canonical_account_id != task_payload.get("ad_account_id"):
+        raise AdsetDuplicateError("Preview повреждён; создай новый", status_code=410)
+
+    try:
+        expected_digest = duplicate_execution_plan_digest(
+            mutation_kind=str(task_payload.get("mutation_kind") or ""),
+            target_id=str(task_payload.get("target_id") or ""),
+            params=params,
+            ad_account_id=task_payload.get("ad_account_id"),
+        )
+        embedded_digest_matches = duplicate_execution_plan_digest_matches(
+            mutation_kind=str(task_payload.get("mutation_kind") or ""),
+            target_id=str(task_payload.get("target_id") or ""),
+            params=params,
+            ad_account_id=task_payload.get("ad_account_id"),
+            plan_digest=params.get("plan_digest"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise AdsetDuplicateError("Preview повреждён; создай новый", status_code=410) from exc
+    if (
+        not embedded_digest_matches
+        or len(plan_digest) != 32
+        or not secrets.compare_digest(expected_digest, plan_digest)
+    ):
+        raise AdsetDuplicateError("Preview повреждён; создай новый", status_code=410)
 
 
 async def save_stored_preview(
-    redis: Any,
+    engine: AsyncEngine,
     *,
     preview: dict[str, Any],
     task_params: dict[str, Any],
     idempotency_token: str,
-    now: datetime | None = None,
+    principal: str,
 ) -> dict[str, Any]:
-    """Сохраняет непрозрачный preview-token в Redis ровно на 15 минут."""
-    current = (now or datetime.now(UTC)).astimezone(UTC)
-    preview_token = secrets.token_urlsafe(32)
-    plan_digest = _digest_task_params(task_params)
-    expires_at = current + timedelta(seconds=PREVIEW_TTL_SECONDS)
-    public_preview = {
-        "preview_token": preview_token,
-        **preview,
-        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
-    }
-    stored = StoredDuplicatePreview(
-        preview=public_preview,
+    """Persist an opaque capability; PostgreSQL's clock owns its exact expiry."""
+    normalized_principal = _validated_principal(principal)
+    task_payload, plan_digest = _ready_task_payload(
+        preview=preview,
         task_params=task_params,
-        plan_digest=plan_digest,
-        idempotency_token=idempotency_token,
-        consumed_task_id=None,
     )
-    await redis.set(
-        f"{_PREVIEW_KEY_PREFIX}{preview_token}",
-        json.dumps(
-            {
-                "preview": stored.preview,
-                "task_params": stored.task_params,
-                "plan_digest": stored.plan_digest,
-                "idempotency_token": stored.idempotency_token,
-                "consumed_task_id": stored.consumed_task_id,
-            },
-            separators=(",", ":"),
-        ),
-        ex=PREVIEW_TTL_SECONDS,
+    idempotency_key = _idempotency_key(
+        principal=normalized_principal,
+        token=idempotency_token,
     )
-    return public_preview
+
+    async with engine.begin() as conn:
+        for _attempt in range(3):
+            preview_token, token_digest = _new_preview_token()
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO adset_duplicate_previews (
+                            token_digest,
+                            principal,
+                            preview,
+                            task_payload,
+                            plan_digest,
+                            idempotency_key,
+                            expires_at
+                        )
+                        VALUES (
+                            :token_digest,
+                            :principal,
+                            CAST(:preview AS JSONB),
+                            CAST(:task_payload AS JSONB),
+                            :plan_digest,
+                            :idempotency_key,
+                            clock_timestamp()
+                                + CAST(:ttl_seconds AS integer) * INTERVAL '1 second'
+                        )
+                        ON CONFLICT (token_digest) DO NOTHING
+                        RETURNING expires_at
+                        """
+                    ),
+                    {
+                        "token_digest": token_digest,
+                        "principal": normalized_principal,
+                        "preview": _canonical_json(preview).decode("utf-8"),
+                        "task_payload": _canonical_json(task_payload).decode("utf-8"),
+                        "plan_digest": plan_digest,
+                        "idempotency_key": idempotency_key,
+                        "ttl_seconds": PREVIEW_TTL_SECONDS,
+                    },
+                )
+            ).first()
+            if row is not None:
+                expires_at = row[0]
+                return {
+                    "preview_token": preview_token,
+                    **preview,
+                    "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+                }
+    raise AdsetDuplicateError("Не удалось сохранить preview", status_code=503)
 
 
-async def load_stored_preview(redis: Any, preview_token: str) -> StoredDuplicatePreview:
-    """Читает подписанный сервером план; клиент не может подменить money-поля."""
-    raw = await redis.get(f"{_PREVIEW_KEY_PREFIX}{preview_token}")
-    if raw is None:
-        raise AdsetDuplicateError("Preview истёк или не найден", status_code=410)
+def _stored_from_row(
+    row: Any,
+    *,
+    principal: str,
+    allow_consumed_expired: bool,
+    db_now: datetime | None = None,
+) -> StoredDuplicatePreview:
     try:
-        data = json.loads(raw)
-        stored = StoredDuplicatePreview(
-            preview=dict(data["preview"]),
-            task_params=dict(data["task_params"]),
-            plan_digest=str(data["plan_digest"]),
-            idempotency_token=str(data["idempotency_token"]),
-            consumed_task_id=(
-                int(data["consumed_task_id"]) if data.get("consumed_task_id") is not None else None
-            ),
+        row_principal = str(row.principal)
+        normalized_principal = _validated_principal(principal)
+        if not secrets.compare_digest(
+            row_principal.encode("utf-8"),
+            normalized_principal.encode("utf-8"),
+        ):
+            raise AdsetDuplicateError("Preview принадлежит другому оператору", status_code=403)
+        preview = row.preview if isinstance(row.preview, dict) else json.loads(row.preview)
+        task_payload = (
+            row.task_payload if isinstance(row.task_payload, dict) else json.loads(row.task_payload)
         )
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        stored = StoredDuplicatePreview(
+            preview=dict(preview),
+            task_payload=dict(task_payload),
+            plan_digest=bytes(row.plan_digest),
+            idempotency_key=str(row.idempotency_key),
+            principal=row_principal,
+            expires_at=row.expires_at,
+            consumed_task_id=int(row.task_id) if row.task_id is not None else None,
+        )
+        observed_db_now = db_now if db_now is not None else row.db_now
+        if not isinstance(observed_db_now, datetime):
+            raise TypeError("invalid database timestamp")
+    except AdsetDuplicateError:
+        raise
+    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise AdsetDuplicateError("Preview повреждён; создай новый", status_code=410) from exc
-    if _digest_task_params(stored.task_params) != stored.plan_digest:
-        raise AdsetDuplicateError("Preview повреждён; создай новый", status_code=410)
+    _validate_stored_task_payload(
+        stored.task_payload,
+        plan_digest=stored.plan_digest,
+    )
+    if observed_db_now >= stored.expires_at and not (
+        allow_consumed_expired and stored.consumed_task_id is not None
+    ):
+        raise AdsetDuplicateError("Preview истёк или не найден", status_code=410)
     return stored
 
 
-async def mark_preview_consumed(
-    redis: Any,
-    *,
-    preview_token: str,
-    stored: StoredDuplicatePreview,
-    task_id: int,
-) -> None:
-    """Оставляет token как consumed mapping до исходного TTL для double-submit."""
-    key = f"{_PREVIEW_KEY_PREFIX}{preview_token}"
-    ttl = int(await redis.ttl(key))
-    if ttl <= 0:
-        return
-    await redis.set(
-        key,
-        json.dumps(
-            {
-                "preview": stored.preview,
-                "task_params": stored.task_params,
-                "plan_digest": stored.plan_digest,
-                "idempotency_token": stored.idempotency_token,
-                "consumed_task_id": int(task_id),
-            },
-            separators=(",", ":"),
-        ),
-        ex=ttl,
-    )
-
-
-def _idempotency_key(token: str) -> str:
-    return f"meta:duplicate-adset:{token}"[:128]
-
-
-async def create_duplicate_draft(
+async def load_stored_preview(
     engine: AsyncEngine,
+    preview_token: str,
     *,
-    stored: StoredDuplicatePreview,
-) -> tuple[int, bool]:
-    """Создаёт необратимый meta draft с max_attempts=1; повтор возвращает тот же id."""
-    payload = {
-        "mutation_kind": _TASK_KIND,
-        "target_id": stored.task_params["source_adset_id"],
-        "params": {**stored.task_params, "plan_digest": stored.plan_digest},
-        "ad_account_id": stored.preview["source"]["account"]["id"],
-    }
-    key = _idempotency_key(stored.idempotency_token)
-    task_id = await create_task(
-        engine,
-        task_type=_TASK_TYPE,
-        status="draft",
-        idempotency_key=key,
-        payload=payload,
-        requested_by=_REQUESTED_BY,
-        max_attempts=1,
-    )
-    if task_id is not None:
-        return task_id, True
-
+    principal: str,
+) -> StoredDuplicatePreview:
+    """Read a server-owned plan for diagnostics without consuming it."""
+    token_digest = _preview_token_digest(preview_token)
     async with engine.connect() as conn:
         row = (
             await conn.execute(
                 text(
                     """
-                    SELECT id, payload
-                    FROM task_queue
-                    WHERE idempotency_key = :key
-                      AND task_type = 'meta_api_mutation'
+                    SELECT principal, preview, task_payload, plan_digest,
+                           idempotency_key, expires_at, task_id,
+                           clock_timestamp() AS db_now
+                    FROM adset_duplicate_previews
+                    WHERE token_digest = :token_digest
                     """
                 ),
-                {"key": key},
+                {"token_digest": token_digest},
             )
         ).first()
     if row is None:
-        raise AdsetDuplicateError("Не удалось создать DRAFT", status_code=409)
-    existing_payload = row[1] if isinstance(row[1], dict) else json.loads(row[1])
-    existing_digest = (existing_payload.get("params") or {}).get("plan_digest")
-    if existing_digest != stored.plan_digest:
-        raise AdsetDuplicateError(
-            "idempotency_token уже использован для другого плана", status_code=409
+        raise AdsetDuplicateError("Preview истёк или не найден", status_code=410)
+    return _stored_from_row(
+        row,
+        principal=principal,
+        allow_consumed_expired=True,
+    )
+
+
+async def create_duplicate_task(
+    engine: AsyncEngine,
+    *,
+    preview_token: str,
+    principal: str,
+) -> tuple[int, bool]:
+    """Atomically consume a preview and queue exactly one irreversible task."""
+    token_digest = _preview_token_digest(preview_token)
+    normalized_principal = _validated_principal(principal)
+    async with engine.begin() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT principal, preview, task_payload, plan_digest,
+                           idempotency_key, expires_at, task_id
+                    FROM adset_duplicate_previews
+                    WHERE token_digest = :token_digest
+                    FOR UPDATE
+                    """
+                ),
+                {"token_digest": token_digest},
+            )
+        ).first()
+        if row is None:
+            raise AdsetDuplicateError("Preview истёк или не найден", status_code=410)
+        # Expiry is observed only after the authority row lock is acquired.
+        # A request that arrived before expiry but waited behind another
+        # transaction must not consume the capability after its deadline.
+        locked_db_now = await conn.scalar(text("SELECT clock_timestamp()"))
+        stored = _stored_from_row(
+            row,
+            principal=normalized_principal,
+            allow_consumed_expired=True,
+            db_now=locked_db_now,
         )
-    return int(row[0]), False
+        payload = _task_payload(stored)
+
+        if stored.consumed_task_id is not None:
+            existing = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT payload
+                        FROM task_queue
+                        WHERE id = :task_id
+                          AND task_type = 'meta_api_mutation'
+                        """
+                    ),
+                    {"task_id": stored.consumed_task_id},
+                )
+            ).first()
+            if existing is None:
+                raise AdsetDuplicateError(
+                    "Preview связан с отсутствующей задачей",
+                    status_code=409,
+                )
+            existing_payload = (
+                existing[0] if isinstance(existing[0], dict) else json.loads(existing[0])
+            )
+            _validate_task_payload(existing_payload, stored=stored)
+            return stored.consumed_task_id, False
+
+        task_id = await create_task(
+            engine,
+            task_type=_TASK_TYPE,
+            status="pending",
+            idempotency_key=stored.idempotency_key,
+            payload=payload,
+            requested_by=stored.principal,
+            max_attempts=1,
+            connection=conn,
+        )
+        created = task_id is not None
+        if task_id is None:
+            existing = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT id, payload
+                        FROM task_queue
+                        WHERE idempotency_key = :idempotency_key
+                          AND task_type = 'meta_api_mutation'
+                        """
+                    ),
+                    {"idempotency_key": stored.idempotency_key},
+                )
+            ).first()
+            if existing is None:
+                raise AdsetDuplicateError("Не удалось создать задачу", status_code=409)
+            existing_payload = (
+                existing[1] if isinstance(existing[1], dict) else json.loads(existing[1])
+            )
+            _validate_task_payload(existing_payload, stored=stored)
+            task_id = int(existing[0])
+
+        consumed = (
+            await conn.execute(
+                text(
+                    """
+                    UPDATE adset_duplicate_previews
+                    SET task_id = :task_id,
+                        consumed_at = clock_timestamp()
+                    WHERE token_digest = :token_digest
+                      AND task_id IS NULL
+                    RETURNING task_id
+                    """
+                ),
+                {
+                    "task_id": task_id,
+                    "token_digest": token_digest,
+                },
+            )
+        ).first()
+        if consumed is None or int(consumed[0]) != int(task_id):
+            raise AdsetDuplicateError("Не удалось зафиксировать запуск", status_code=409)
+        return int(task_id), created
 
 
-async def get_duplicate_task(engine: AsyncEngine, task_id: int) -> DuplicateTask | None:
-    """Загружает только задачу duplicate_adset_structure, не чужой task_queue row."""
+async def get_duplicate_task(
+    engine: AsyncEngine,
+    task_id: int,
+    *,
+    principal: str,
+) -> DuplicateTask | None:
+    """Load only one duplicate task backed by this exact operator principal."""
+    normalized_principal = _validated_principal(principal)
     async with engine.connect() as conn:
         row = (
             await conn.execute(
                 text(
                     """
-                    SELECT id, status, payload, result, attempt_count, max_attempts,
-                           last_error, created_at, updated_at, completed_at
-                    FROM task_queue
-                    WHERE id = :task_id
-                      AND task_type = 'meta_api_mutation'
-                      AND payload->>'mutation_kind' = 'duplicate_adset_structure'
+                    SELECT task.id, task.status, task.payload, task.result,
+                           task.attempt_count, task.max_attempts, task.last_error,
+                           task.created_at, task.updated_at, task.completed_at
+                    FROM task_queue AS task
+                    WHERE task.id = :task_id
+                      AND task.task_type = 'meta_api_mutation'
+                      AND task.payload->>'mutation_kind' = 'duplicate_adset_structure'
+                      AND task.requested_by = :principal
                     """
                 ),
-                {"task_id": int(task_id)},
+                {
+                    "task_id": int(task_id),
+                    "principal": normalized_principal,
+                },
             )
         ).first()
     if row is None:
@@ -747,14 +1081,7 @@ def serialize_duplicate_task(task: DuplicateTask) -> dict[str, Any]:
             "message": default_message,
         }
 
-    if task.status == "draft":
-        progress = {
-            "phase": "awaiting_confirmation",
-            "completed": 0,
-            "total": total,
-            "message": "Безопасный черновик ожидает повторного запуска из веб-панели",
-        }
-    elif task.status in {"pending", "retrying"}:
+    if task.status in {"pending", "retrying"}:
         if recovery_requested:
             progress = checkpoint_progress(
                 default_message="Crash-recovery: повторная постановка созданных объектов на PAUSED"
@@ -804,16 +1131,12 @@ def serialize_duplicate_task(task: DuplicateTask) -> dict[str, Any]:
     else:
         progress = None
 
-    expires_at = None
-    if task.status == "draft":
-        expires_at = (task.created_at + timedelta(seconds=DRAFT_TTL_SECONDS)).isoformat()
     return {
         "task_id": task.id,
         "status": task.status,
         "progress": progress,
         "created_meta_ids": created_meta_ids,
         "error": task.last_error,
-        "expires_at": expires_at,
     }
 
 
@@ -830,13 +1153,12 @@ __all__ = [
     "build_duplicate_preview",
     "build_schedule",
     "calculate_budget",
-    "create_duplicate_draft",
+    "create_duplicate_task",
     "fetch_account_metadata",
     "generate_names",
     "get_duplicate_task",
     "load_duplicate_source",
     "load_stored_preview",
-    "mark_preview_consumed",
     "resolve_duplicate_source_hierarchy",
     "save_stored_preview",
     "serialize_duplicate_task",

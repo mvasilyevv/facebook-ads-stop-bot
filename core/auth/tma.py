@@ -52,7 +52,13 @@ def validate_init_data(
     return d
 
 
-def issue_session_token(telegram_user_id: str, ttl_seconds: int, secret: str) -> str:
+def issue_session_token(
+    telegram_user_id: str,
+    ttl_seconds: int,
+    secret: str,
+    *,
+    bot_generation: int,
+) -> str:
     """Выдаёт подписанный сессионный токен для пользователя Telegram.
 
     Использует itsdangerous URLSafeTimedSerializer.
@@ -60,7 +66,12 @@ def issue_session_token(telegram_user_id: str, ttl_seconds: int, secret: str) ->
     from itsdangerous import URLSafeTimedSerializer  # type: ignore[import-not-found]
 
     serializer = URLSafeTimedSerializer(secret, salt="fb-agent-tma")
-    payload = {"telegram_user_id": telegram_user_id}
+    if bot_generation <= 0:
+        raise ValueError("bot_generation must be positive")
+    payload = {
+        "telegram_user_id": telegram_user_id,
+        "bot_generation": int(bot_generation),
+    }
     return serializer.dumps(payload)
 
 

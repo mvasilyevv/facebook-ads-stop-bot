@@ -29,7 +29,7 @@
 мин.деп и средний чек, популярные игры, локальные регуляторы/культура, что крутят конкуренты.
 Выход → `geo.yaml` (`market_profile` / `production_profile`, поля по `_schema.md`) + KB-ноутбук
 гео (подхватит `make kb-sync`). Автоматизирует ручной web-research SOP §R0.5/R8. Острую
-gambling-копию через Claude НЕ генерим (см. `creative-analytics.md §3`) — только факты/структуру.
+gambling-копию через Claude НЕ генерим — только факты/структуру.
 
 ## Связанное
 - Рынок гео — `market-profile/<GEO>.md`. Генерация — `creative-gen.md`. Полный цикл — `SOP.md`.

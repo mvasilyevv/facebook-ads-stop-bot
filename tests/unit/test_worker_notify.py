@@ -1,131 +1,81 @@
-# -*- coding: utf-8 -*-
-"""Unit-тесты worker_notify: best-effort DM owner'ам с dedup ПОСЛЕ отправки."""
-
 from __future__ import annotations
 
-from types import SimpleNamespace
+import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
 
-import core.telegram.worker_notify as wn
-from core.telegram.service import Recipient
+import core.telegram.worker_notify as worker_notify
+from core.telegram.notifications import EnqueuedNotification
 
 
-def _owner(chat_id=111):
-    return Recipient(chat_id=chat_id, telegram_user_id=1, username="u", role="owner")
-
-
-def _cfg():
-    return SimpleNamespace(bot_token="T", chat_id=None)
-
-
-@pytest.fixture(autouse=True)
-def _clear_client_cache():
-    wn._reset_client_cache()
-    yield
-    wn._reset_client_cache()
-
-
-# Нет owner-получателей → no-op, возвращает False, dedup не ставится
 @pytest.mark.asyncio
-async def test_no_recipients_returns_false(monkeypatch):
-    monkeypatch.setattr(wn, "load_telegram_config", AsyncMock(return_value=_cfg()))
-    monkeypatch.setattr(wn, "load_owner_recipients", AsyncMock(return_value=[]))
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
-    sent = await wn.notify_owners(
-        object(), redis, category="x", text="t", dedup_key="k", dedup_ttl_seconds=60
+async def test_owner_notification_uses_durable_owner_audience(monkeypatch) -> None:
+    enqueue = AsyncMock(
+        return_value=EnqueuedNotification(event_id=uuid.uuid4(), delivery_count=1, was_created=True)
     )
-    assert sent is False
-    redis.set.assert_not_awaited()
-
-
-# Успех доставки → True, dedup ставится ПОСЛЕ отправки (SET с nx+ex)
-@pytest.mark.asyncio
-async def test_success_sets_dedup_after_send(monkeypatch):
-    monkeypatch.setattr(wn, "load_telegram_config", AsyncMock(return_value=_cfg()))
-    monkeypatch.setattr(wn, "load_owner_recipients", AsyncMock(return_value=[_owner()]))
-    client = AsyncMock()
-    monkeypatch.setattr(wn, "_client_for_token", lambda tok: client)
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
-    sent = await wn.notify_owners(
-        object(), redis, category="x", text="t", dedup_key="k", dedup_ttl_seconds=60
-    )
-    assert sent is True
-    client.send_message.assert_awaited_once()
-    assert client.send_message.await_args.kwargs["chat_id"] == "111"
-    redis.set.assert_awaited_once()
-    assert redis.set.await_args.kwargs.get("nx") is True
-    assert redis.set.await_args.kwargs.get("ex") == 60
-
-
-# Money-draft из web должен доставлять тем же owner'ам inline-кнопки подтверждения.
-@pytest.mark.asyncio
-async def test_reply_markup_forwarded_to_every_owner(monkeypatch):
-    monkeypatch.setattr(wn, "load_telegram_config", AsyncMock(return_value=_cfg()))
-    monkeypatch.setattr(
-        wn,
-        "load_owner_recipients",
-        AsyncMock(return_value=[_owner(111), _owner(222)]),
-    )
-    client = AsyncMock()
-    monkeypatch.setattr(wn, "_client_for_token", lambda tok: client)
-    keyboard = {"inline_keyboard": [[{"text": "OK", "callback_data": "dr_ok:7"}]]}
-
-    sent = await wn.notify_owners(
+    monkeypatch.setattr(worker_notify, "enqueue_notification", enqueue)
+    accepted = await worker_notify.notify_owners(
         object(),
-        None,
-        category="draft",
-        text="preview",
-        reply_markup=keyboard,
+        event_type="money_action_failed",
+        severity="critical",
+        title="Отключение не подтверждено",
+        summary="Нужна проверка",
+        dedupe_key="money:task:7",
     )
 
-    assert sent is True
-    assert client.send_message.await_count == 2
-    assert all(
-        call.kwargs["reply_markup"] == keyboard for call in client.send_message.await_args_list
-    )
+    assert accepted is True
+    spec = enqueue.await_args.args[1]
+    assert spec.audience == "owners"
+    assert spec.severity == "critical"
+    assert spec.facts.title == "Отключение не подтверждено"
+    assert spec.facts.summary == "Нужна проверка"
 
 
-# Отправка упала → dedup НЕ ставится (чтобы ретрайнуть позже), возвращает False
 @pytest.mark.asyncio
-async def test_send_failure_keeps_dedup_unset(monkeypatch):
-    monkeypatch.setattr(wn, "load_telegram_config", AsyncMock(return_value=_cfg()))
-    monkeypatch.setattr(wn, "load_owner_recipients", AsyncMock(return_value=[_owner()]))
-    client = AsyncMock()
-    client.send_message = AsyncMock(side_effect=RuntimeError("tg down"))
-    monkeypatch.setattr(wn, "_client_for_token", lambda tok: client)
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
-    sent = await wn.notify_owners(
-        object(), redis, category="x", text="t", dedup_key="k", dedup_ttl_seconds=60
+async def test_typed_worker_card_cannot_mint_an_unverified_action(monkeypatch) -> None:
+    enqueue = AsyncMock(
+        return_value=EnqueuedNotification(event_id=uuid.uuid4(), delivery_count=1, was_created=True)
     )
-    assert sent is False
-    redis.set.assert_not_awaited()
+    monkeypatch.setattr(worker_notify, "enqueue_notification", enqueue)
 
-
-# dedup уже стоит → ранний выход, отправки нет
-@pytest.mark.asyncio
-async def test_dedup_already_set_skips(monkeypatch):
-    monkeypatch.setattr(wn, "load_telegram_config", AsyncMock(return_value=_cfg()))
-    lor = AsyncMock(return_value=[_owner()])
-    monkeypatch.setattr(wn, "load_owner_recipients", lor)
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value="1")
-    sent = await wn.notify_owners(
-        object(), redis, category="x", text="t", dedup_key="k", dedup_ttl_seconds=60
+    accepted = await worker_notify.notify_owners(
+        object(),
+        event_type="draft",
+        severity="warning",
+        title="Preview",
+        scheduled_at=datetime(2026, 7, 22, tzinfo=UTC),
     )
-    assert sent is False
-    lor.assert_not_awaited()
+
+    assert accepted is True
+    spec = enqueue.await_args.args[1]
+    assert spec.actions == []
 
 
-# Нет токена в конфиге → no-op False (не падает)
 @pytest.mark.asyncio
-async def test_no_token_returns_false(monkeypatch):
-    monkeypatch.setattr(wn, "load_telegram_config", AsyncMock(return_value=None))
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
-    sent = await wn.notify_owners(object(), redis, category="x", text="t")
-    assert sent is False
+async def test_outbox_failure_is_reported_without_direct_fallback(monkeypatch) -> None:
+    enqueue = AsyncMock(side_effect=RuntimeError("postgres unavailable"))
+    monkeypatch.setattr(worker_notify, "enqueue_notification", enqueue)
+
+    accepted = await worker_notify.notify_owners(
+        object(),
+        event_type="money_action_failed",
+        severity="critical",
+        title="Failure",
+    )
+
+    assert accepted is False
+
+
+@pytest.mark.asyncio
+async def test_recurring_incident_rejects_noncritical_severity() -> None:
+    with pytest.raises(ValueError, match="must be critical"):
+        await worker_notify.notify_recurring_incident(
+            object(),
+            incident_key="worker:test",
+            audience="owners",
+            event_type="test_warning",
+            severity="warning",
+            title="Not critical",
+        )

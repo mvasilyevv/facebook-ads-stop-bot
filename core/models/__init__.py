@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Доменно-разнесённые ORM-модели.
 
-35 таблиц в Postgres + 3 namespace в Redis (см. DB_REDESIGN.md).
+Таблицы PostgreSQL регистрируются здесь для Alembic и тестовой схемы.
 
 При импорте этого пакета все ORM-классы регистрируются в Base.metadata,
 что нужно для Alembic autogenerate и для create_all/drop_all в тестах.
@@ -9,15 +9,7 @@
 
 from __future__ import annotations
 
-from core.models.ad_library import (
-    AdLibraryAd,
-    AdLibraryMedia,
-    AdLibraryReport,
-    AdLibraryScan,
-    AdLibrarySnapshot,
-    AdLibraryTier,
-    AdLibraryWinnerArchive,
-)
+from core.models.auth import PanelLoginTicket, PanelOidcAttempt, PanelSessionRecord
 from core.models.base import (
     Base,
     BigIntPrimaryKey,
@@ -38,23 +30,21 @@ from core.models.catalog import (
     FbCampaign,
     Offer,
     OfferRule,
-    OfferRuleStat,
 )
-from core.models.creator import CreatorPlan
 from core.models.meta_api import (
+    BrowserChannelReadiness,
+    MetaAccountSnapshot,
     MetaApiAuditLog,
-    MetaApiObservation,
-    MetaApiWebhookEvent,
+    MetaShadowSpendState,
 )
 from core.models.observer import (
     AdAlertState,
     AdAutoEnableDisabled,
-    AdDepositCorrection,
     AdMetrics,
     AlertEvent,
-    CabinetDayArchive,
     ScanRun,
 )
+from core.models.operator import OperatorRevisionEvent
 from core.models.settings import (
     AdsetProCredentials,
     ObserverConfig,
@@ -62,17 +52,29 @@ from core.models.settings import (
     TelegramConfig,
     VisionConfig,
 )
-from core.models.tasks import EnableRecommendation, TaskQueue
+from core.models.tasks import (
+    AdsetDuplicatePreview,
+    BrowserOperationLease,
+    CommandIdempotencyReceipt,
+    EnableRecommendation,
+    TaskQueue,
+)
 from core.models.telegram import (
+    Incident,
+    NotificationDelivery,
+    NotificationEvent,
+    TelegramActionToken,
+    TelegramCommandReply,
     TelegramInvite,
-    TelegramMessageRef,
+    TelegramMessageSlot,
+    TelegramNavigationToken,
     TelegramRecipient,
+    TelegramRecipientPreference,
+    TelegramUpdateInbox,
 )
 from core.models.trackers import (
     AdsetProPostbackEvent,
-    TrackerAggregate,
     TrackerClickState,
-    TrackerPostback,
 )
 
 __all__ = [
@@ -83,6 +85,10 @@ __all__ = [
     "SingletonMixin",
     "Timestamp",
     "UUIDPrimaryKey",
+    # auth
+    "PanelLoginTicket",
+    "PanelOidcAttempt",
+    "PanelSessionRecord",
     # campaigns
     "CampaignCreative",
     "CampaignPreset",
@@ -100,39 +106,38 @@ __all__ = [
     "FbCampaign",
     "Offer",
     "OfferRule",
-    "OfferRuleStat",
     # observer
     "AdAlertState",
     "AdAutoEnableDisabled",
-    "AdDepositCorrection",
     "AdMetrics",
     "AlertEvent",
-    "CabinetDayArchive",
     "ScanRun",
+    # operator
+    "OperatorRevisionEvent",
     # tasks
+    "AdsetDuplicatePreview",
+    "BrowserOperationLease",
+    "CommandIdempotencyReceipt",
     "EnableRecommendation",
     "TaskQueue",
     # telegram
+    "Incident",
+    "NotificationDelivery",
+    "NotificationEvent",
+    "TelegramActionToken",
+    "TelegramCommandReply",
     "TelegramInvite",
-    "TelegramMessageRef",
+    "TelegramMessageSlot",
+    "TelegramNavigationToken",
     "TelegramRecipient",
-    # creator
-    "CreatorPlan",
-    # ad_library
-    "AdLibraryAd",
-    "AdLibraryMedia",
-    "AdLibraryReport",
-    "AdLibraryScan",
-    "AdLibrarySnapshot",
-    "AdLibraryTier",
-    "AdLibraryWinnerArchive",
+    "TelegramRecipientPreference",
+    "TelegramUpdateInbox",
     # meta_api
+    "BrowserChannelReadiness",
+    "MetaAccountSnapshot",
     "MetaApiAuditLog",
-    "MetaApiObservation",
-    "MetaApiWebhookEvent",
+    "MetaShadowSpendState",
     # trackers
     "AdsetProPostbackEvent",
-    "TrackerAggregate",
     "TrackerClickState",
-    "TrackerPostback",
 ]

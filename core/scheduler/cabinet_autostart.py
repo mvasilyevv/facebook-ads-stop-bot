@@ -15,7 +15,6 @@
 
 Pure-хелперы (без I/O):
 - is_in_autostart_window — catch-up окно от HH:MM до конца суток UTC (как digest).
-- autostart_done_key — Redis-ключ дедупа за день (cabinet:autostart:YYYY-MM-DD).
 """
 
 from __future__ import annotations
@@ -40,11 +39,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "minute_utc": 0,
 }
 
-# Redis-ключ дедупа: 26 часов с запасом перекрывают окно следующего дня.
-AUTOSTART_DONE_TTL_SECONDS = 26 * 3600
-AUTOSTART_DONE_KEY_PREFIX = "cabinet:autostart:"
-
-
 # ====================== pure helpers ======================
 
 
@@ -52,10 +46,8 @@ def is_in_autostart_window(now: datetime, hour_utc: int, minute_utc: int) -> boo
     """True если now попадает в [HH:MM ; конец суток UTC).
 
     Catch-up семантика (как у digest_scheduler.is_in_send_window): окно открыто
-    от планового времени до конца суток. Защита от повторного срабатывания —
-    Redis-ключ ``cabinet:autostart:YYYY-MM-DD``, не само окно. Если воркер упал
-    в HH:MM+2мин и поднялся через час — автостарт всё равно отработает (ключа
-    ещё нет). На следующие сутки ключ сменится (новая дата) и окно откроется снова.
+    от планового времени до конца суток. Защита от повтора живёт в
+    канонической PostgreSQL ``task_queue``.
     """
     if now.tzinfo is None:
         raise ValueError("now должен быть timezone-aware")
@@ -64,14 +56,6 @@ def is_in_autostart_window(now: datetime, hour_utc: int, minute_utc: int) -> boo
     current_minutes = now_utc.hour * 60 + now_utc.minute
     # 24*60 = 1440 — следующие сутки уже не «сегодняшний» автостарт.
     return target_minutes <= current_minutes < 24 * 60
-
-
-def autostart_done_key(now: datetime) -> str:
-    """Redis-ключ дедупа автостарта за сегодняшний день (UTC)."""
-    if now.tzinfo is None:
-        raise ValueError("now должен быть timezone-aware")
-    now_utc = now.astimezone(timezone.utc)
-    return f"{AUTOSTART_DONE_KEY_PREFIX}{now_utc.strftime('%Y-%m-%d')}"
 
 
 def _normalize_config(raw: dict[str, Any] | None) -> dict[str, Any]:
@@ -131,11 +115,8 @@ async def write_autostart_config(engine: AsyncEngine, config: dict[str, Any]) ->
 
 
 __all__ = [
-    "AUTOSTART_DONE_KEY_PREFIX",
-    "AUTOSTART_DONE_TTL_SECONDS",
     "CONFIG_KEY",
     "DEFAULT_CONFIG",
-    "autostart_done_key",
     "is_in_autostart_window",
     "read_autostart_config",
     "write_autostart_config",

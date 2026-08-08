@@ -4,7 +4,7 @@
 Сшивка двух доменов: `core/observer/pipeline.py` создаёт alert_state=stop_sent
 и пишет outbox-запись (task_type='meta_api_mutation', mutation_kind='pause_ad').
 После этого `apps/meta_api_worker.process_one_task` подхватывает её через
-claim_pending_task и доводит до task_queue.status='succeeded'.
+dedicated money-lane claim и доводит до task_queue.status='succeeded'.
 
 Покрывает:
 1. Полный жизненный цикл одного STOP-инцидента.
@@ -17,6 +17,7 @@ claim_pending_task и доводит до task_queue.status='succeeded'.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock
@@ -26,10 +27,16 @@ import pytest_asyncio
 from sqlalchemy import text
 
 import apps.meta_api_worker.main as worker_main
+import core.observer.pipeline as observer_pipeline
 from apps.meta_api_worker.main import process_one_task
-from core.meta_api.queue import claim_pending_task
+from core.meta_api.queue import claim_browser_ready_mutation_task
 from core.observer.pipeline import process_scan_rows
 from core.scanner.models import ScannedAdRow
+
+pytestmark = pytest.mark.usefixtures(
+    "known_test_cabinet_timezones",
+    "fresh_browser_readiness",
+)
 
 
 @pytest_asyncio.fixture
@@ -71,7 +78,10 @@ async def offer_e2e(pg_engine, clean_e2e_tables):
             {"i": offer_id, "c": code, "n": f"E2E offer {code}"},
         )
         await conn.execute(
-            text("INSERT INTO offer_rules (offer_id, cpa_threshold) VALUES (:oid, :cpa)"),
+            text(
+                "INSERT INTO offer_rules (offer_id, cpa_threshold, currency) "
+                "VALUES (:oid, :cpa, 'USD')"
+            ),
             {"oid": offer_id, "cpa": Decimal("10.00")},
         )
     return {"offer_id": offer_id, "code": code}
@@ -85,6 +95,8 @@ def _stop_row(*, code: str, fb_ad_id: str) -> ScannedAdRow:
     """
     return ScannedAdRow(
         fb_ad_id=fb_ad_id,
+        campaign_id=f"9{fb_ad_id}",
+        adset_id=f"8{fb_ad_id}",
         campaign_name=f"{code} | KE | MV | promo",
         adset_name="EQ_KE",
         ad_name="Aviator001",
@@ -112,11 +124,11 @@ async def test_full_cycle_observer_to_disable_success(
     offer_e2e,
     monkeypatch,
 ) -> None:
-    fb_ad_id = f"230011{uuid.uuid4().hex[:6]}"
+    fb_ad_id = f"230011{uuid.uuid4().int % 1_000_000:06d}"
     row = _stop_row(code=offer_e2e["code"], fb_ad_id=fb_ad_id)
 
     # Шаг 1: observer pipeline отрабатывает scan-цикл
-    result = await process_scan_rows(pg_engine, rows=[row], scan_id=999)
+    result = await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=999)
     assert result.rows_with_offer == 1
     # FSM должен сразу попасть в stop_sent (fast-stop по spend без deposits)
     assert result.alerts_stop >= 1
@@ -166,7 +178,7 @@ async def test_full_cycle_observer_to_disable_success(
 
     monkeypatch.setattr(worker_main, "dispatch_mutation", _fake_dispatch)
 
-    claim = await claim_pending_task(pg_engine)
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
     assert not claim.queue_empty
     assert claim.task is not None
     assert claim.task.id == initial_task_id
@@ -202,15 +214,15 @@ async def test_idempotency_repeated_scan_does_not_duplicate_disable(
     pg_engine,
     offer_e2e,
 ) -> None:
-    fb_ad_id = f"230012{uuid.uuid4().hex[:6]}"
+    fb_ad_id = f"230012{uuid.uuid4().int % 1_000_000:06d}"
     row = _stop_row(code=offer_e2e["code"], fb_ad_id=fb_ad_id)
 
     # Первый scan-цикл — создаёт STOP + pause_ad mutation task
-    await process_scan_rows(pg_engine, rows=[row], scan_id=1)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1)
     # Второй scan-цикл с теми же данными — FSM stop_sent → stop_sent без emit
-    await process_scan_rows(pg_engine, rows=[row], scan_id=2)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=2)
     # Третий — на всякий случай ещё раз
-    await process_scan_rows(pg_engine, rows=[row], scan_id=3)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=3)
 
     async with pg_engine.connect() as conn:
         n_tasks = (
@@ -242,24 +254,28 @@ async def test_after_disable_succeeds_no_new_task_on_same_incident(
     offer_e2e,
     monkeypatch,
 ) -> None:
-    fb_ad_id = f"230013{uuid.uuid4().hex[:6]}"
+    fb_ad_id = f"230013{uuid.uuid4().int % 1_000_000:06d}"
     row = _stop_row(code=offer_e2e["code"], fb_ad_id=fb_ad_id)
 
     # Полный цикл: scan → outbox → meta_api_worker succeeded
-    await process_scan_rows(pg_engine, rows=[row], scan_id=10)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=10)
 
     async def _fake_dispatch(client, payload):
-        return {"success": True, "graph_response": {"ok": True}}
+        return {
+            "success": True,
+            "graph_response": {"ok": True},
+            "modified_ids": [str(payload.target_id)],
+        }
 
     monkeypatch.setattr(worker_main, "dispatch_mutation", _fake_dispatch)
 
-    claim = await claim_pending_task(pg_engine)
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
     assert claim.task is not None
     await process_one_task(pg_engine, claim.task, client=AsyncMock())
 
     # Повторный scan: FSM stop_sent → stop_sent без emit,
     # open_state_token тот же → idempotency_key совпадёт → ON CONFLICT DO NOTHING.
-    await process_scan_rows(pg_engine, rows=[row], scan_id=11)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=11)
 
     async with pg_engine.connect() as conn:
         statuses = [
@@ -284,12 +300,13 @@ async def test_after_disable_succeeds_no_new_task_on_same_incident(
 async def test_recovery_after_stop_resets_fsm_no_new_alert(
     pg_engine,
     offer_e2e,
+    monkeypatch,
 ) -> None:
-    fb_ad_id = f"230014{uuid.uuid4().hex[:6]}"
+    fb_ad_id = f"230014{uuid.uuid4().int % 1_000_000:06d}"
     stop_row = _stop_row(code=offer_e2e["code"], fb_ad_id=fb_ad_id)
 
     # Сначала STOP
-    await process_scan_rows(pg_engine, rows=[stop_row], scan_id=20)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[stop_row], scan_id=20)
 
     # Депозиты теперь ТОЛЬКО из AdSet.pro. Каждый подтверждённый депозит — это
     # registration + FTD одного click_id; одиночный raw FTD восстановление не даёт.
@@ -311,9 +328,20 @@ async def test_recovery_after_stop_resets_fsm_no_new_alert(
             {"fb": fb_ad_id, "c1": f"{fb_ad_id}-d1", "c2": f"{fb_ad_id}-d2"},
         )
 
+    class HostClockFiveMinutesBehind(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - timedelta(minutes=5)
+
+    # Regression: a lagging Python host must not exclude committed
+    # PostgreSQL-timestamped deposits from the recovery scan.
+    monkeypatch.setattr(observer_pipeline, "datetime", HostClockFiveMinutesBehind)
+
     # Полная воронка + депозиты от AdSet.pro — никаких stop/warning-правил не должно сработать
     good_row = ScannedAdRow(
         fb_ad_id=fb_ad_id,
+        campaign_id=stop_row.campaign_id,
+        adset_id=stop_row.adset_id,
         campaign_name=stop_row.campaign_name,
         adset_name=stop_row.adset_name,
         ad_name=stop_row.ad_name,
@@ -325,7 +353,7 @@ async def test_recovery_after_stop_resets_fsm_no_new_alert(
         cpc=Decimal("0.05"),
         ctr=Decimal("3.0"),
     )
-    await process_scan_rows(pg_engine, rows=[good_row], scan_id=21)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[good_row], scan_id=21)
 
     async with pg_engine.connect() as conn:
         state = (

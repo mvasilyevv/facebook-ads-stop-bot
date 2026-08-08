@@ -37,7 +37,6 @@ _NO_STORE = {
 async def _resolve_launch_identity(
     request: Request,
     engine: DepEngine,
-    redis: DepRedis,
     settings: DepSettings,
     *,
     require_origin: bool = True,
@@ -60,7 +59,7 @@ async def _resolve_launch_identity(
     if not provided_key or not secrets.compare_digest(provided_key, expected_key):
         raise HTTPException(status_code=401, detail="Требуется корректный X-API-Key")
 
-    resolved = await resolve_panel_session(request, engine, redis, settings)
+    resolved = await resolve_panel_session(request, engine, settings)
     if resolved is None:
         raise HTTPException(status_code=401, detail="Требуется вход через Telegram")
     _, session = resolved
@@ -85,12 +84,11 @@ async def list_desktop_transports(
     request: Request,
     response: Response,
     engine: DepEngine,
-    redis: DepRedis,
     settings: DepSettings,
 ) -> DesktopTransportsResponse:
     """Return owner-visible transport choices without issuing a ticket."""
     response.headers.update(_NO_STORE)
-    await _resolve_launch_identity(request, engine, redis, settings, require_origin=False)
+    await _resolve_launch_identity(request, engine, settings, require_origin=False)
     return DesktopTransportsResponse(active="kasm", available=["kasm"])
 
 
@@ -114,7 +112,7 @@ async def launch_desktop(
     """Issue one single-use desktop URL. The request intentionally has no body."""
     response.headers.update(_NO_STORE)
     public_origin, expected_hostname = _desktop_origin(settings)
-    telegram_user_id, source = await _resolve_launch_identity(request, engine, redis, settings)
+    telegram_user_id, source = await _resolve_launch_identity(request, engine, settings)
     try:
         ticket, grant = await create_desktop_ticket(
             redis,

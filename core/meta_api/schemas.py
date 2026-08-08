@@ -15,20 +15,15 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from core.meta_api.identity import require_ad_account_id
+
 # Допустимые типы mutations — должны совпадать с handlers в meta_api_worker.
 MUTATION_KINDS: frozenset[str] = frozenset(
     {
         "pause_ad",
         "activate_ad",
-        "pause_campaign",
-        "activate_campaign",
-        "set_adset_budget",
-        "duplicate_campaign",
         "duplicate_adset_structure",
         "bulk_status_change",
-        "create_campaign",
-        "custom_audience",
-        "set_ad_creative",
     }
 )
 
@@ -40,8 +35,6 @@ MUTATION_KINDS: frozenset[str] = frozenset(
 # Единый источник правды — здесь; импортируется воркером и reconciler'ом.
 IRREVERSIBLE_MUTATION_KINDS: frozenset[str] = frozenset(
     {
-        "create_campaign",
-        "duplicate_campaign",
         "duplicate_adset_structure",
     }
 )
@@ -145,8 +138,12 @@ class MetaMutationPayload:
 
     mutation_kind: str  # один из MUTATION_KINDS
     target_id: str  # ad_id | adset_id | campaign_id (что меняем)
+    ad_account_id: str  # explicit numeric account id; never inferred from a browser tab
     params: dict[str, Any] = field(default_factory=dict)
-    ad_account_id: str | None = None  # для аудита и rate-limit монитора
+    currency: str | None = None
+    cabinet_timezone: str | None = None
+    account_context_observed_at: str | None = None
+    account_context_issues: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.mutation_kind not in MUTATION_KINDS:
@@ -154,6 +151,11 @@ class MetaMutationPayload:
                 f"Неизвестный mutation_kind: {self.mutation_kind!r}. "
                 f"Допустимо: {sorted(MUTATION_KINDS)}"
             )
+        object.__setattr__(
+            self,
+            "ad_account_id",
+            require_ad_account_id(self.ad_account_id),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -161,13 +163,33 @@ class MetaMutationPayload:
             "target_id": self.target_id,
             "params": dict(self.params),
             "ad_account_id": self.ad_account_id,
+            "account_id": self.ad_account_id,
+            "currency": self.currency,
+            "cabinet_timezone": self.cabinet_timezone,
+            "account_context_observed_at": self.account_context_observed_at,
+            "account_context_issues": list(self.account_context_issues),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MetaMutationPayload:
+        account_id = data.get("ad_account_id") or data.get("account_id")
+        if account_id is None:
+            raise KeyError("ad_account_id")
         return cls(
             mutation_kind=str(data["mutation_kind"]),
             target_id=str(data["target_id"]),
+            ad_account_id=account_id,
             params=dict(data.get("params") or {}),
-            ad_account_id=data.get("ad_account_id"),
+            currency=str(data["currency"]) if data.get("currency") else None,
+            cabinet_timezone=(
+                str(data["cabinet_timezone"]) if data.get("cabinet_timezone") else None
+            ),
+            account_context_observed_at=(
+                str(data["account_context_observed_at"])
+                if data.get("account_context_observed_at")
+                else None
+            ),
+            account_context_issues=tuple(
+                str(issue) for issue in (data.get("account_context_issues") or [])
+            ),
         )

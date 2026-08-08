@@ -1,9 +1,9 @@
 /**
  * Design tokens — ЕДИНЫЙ ИСТОЧНИК для веба и mini app.
- * Соответствует docs/frontend_design.md §1 и handoff-макетам docs/frontend_mockups/.
+ * Соответствует актуальному контракту в docs/frontend_design.md.
  *
- * CSS-зеркало — ./tokens.css (@theme для Tailwind 4). Инвариант-тест (Phase 1A)
- * проверяет, что значения здесь побитно совпадают с :root в tokens.css.
+ * CSS-зеркало — ./tokens.css (@theme для Tailwind 4). Инвариант-тест проверяет,
+ * что весь public namespace совпадает с :root и Tailwind theme.
  *
  * Dark-only. Острые углы (radius 0 по умолчанию). Accent — warm off-white.
  */
@@ -18,7 +18,7 @@ export const colors = {
   bg5: "#2c2c33",
   bg6: "#38383f",
   bg7: "#4a4a52",
-  bg8: "#7a7a84",
+  bg8: "#888892",
   bg9: "#92929c",
   bg10: "#a8a8b0",
   bg11: "#e4e4e7",
@@ -41,6 +41,8 @@ export const colors = {
   dangerBg: "#2a1414",
   info: "#60a5fa",
   infoBg: "#0f1f33",
+  hairline: "rgba(255, 255, 255, 0.07)",
+  hairlineStrong: "rgba(255, 255, 255, 0.1)",
 } as const;
 
 /** FSM-state цвета, привязанные к alert_state (lowercase canon).
@@ -65,10 +67,10 @@ export const fontSizes = {
   title1: 32,
   title2: 22,
   title3: 16,
-  body: 14,
-  bodySm: 13,
+  body: 16,
+  bodySm: 14,
   caption: 12,
-  micro: 10,
+  micro: 12,
 } as const;
 
 /** Spacing — 4px baseline (§1.3). */
@@ -104,7 +106,7 @@ export const motion = {
   durSlow: "400ms",
 } as const;
 
-/** Layout — viewport ≥1280 (§1.8). */
+/** Responsive shell layout (§1.8). */
 export const layout = {
   sidebarWidth: 240,
   sidebarWidthCollapsed: 64,

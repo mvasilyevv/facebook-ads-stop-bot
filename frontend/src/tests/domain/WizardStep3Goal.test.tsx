@@ -1,12 +1,5 @@
-/**
- * Тесты WizardStep3Goal.
- *
- * Покрываем:
- *   - url_tags-инпут отсутствует в разметке (HIGH mislabel-fix)
- *   - SOP-подсказка присутствует вместо инпута
- *   - validateGoal не требует url_tags
- */
-import { describe, it, expect } from "vitest";
+/** Campaign budget UI and exact currency-precision validation. */
+import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { WizardStep3Goal, validateGoal } from "@/components/domain/campaigns/WizardStep3Goal";
 import type { WizardGoal } from "@/stores/campaignWizard";
@@ -18,11 +11,10 @@ const BASE_VALUES: WizardGoal = {
   destination_link: "https://trk.example.com",
   cta: "PLAY_GAME",
   text_optimizations: "OPT_OUT",
-  // Дата старта — всегда в будущем (валидация отклоняет прошлое), вычисляем динамически.
-  start_date: new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10),
+  start_date: "2099-07-30",
   budget_level: "campaign",
-  daily_budget_cents: 20000,
-  bid_amount_cents: 500, // $5 целевой CPA (обязателен для COST_CAP)
+  daily_budget: "200.00",
+  bid_amount: "5.00",
   bid_strategy: "COST_CAP",
   countries: ["GH"],
   age_min: 21,
@@ -34,105 +26,109 @@ const BASE_VALUES: WizardGoal = {
   ad_text_primary: "",
 };
 
-describe("WizardStep3Goal — дневной бюджет без дефолта", () => {
-  // Бюджет=0 → поле пустое с placeholder «Введите сумму», а не «0».
-  it("пустой бюджет (0) показывает placeholder, не «0»", () => {
-    render(<WizardStep3Goal values={{ ...BASE_VALUES, daily_budget_cents: 0 }} onChange={() => {}} />);
-    const input = screen.getByPlaceholderText("Введите сумму");
-    expect(input).toHaveValue("");
+function renderGoal(values: WizardGoal = BASE_VALUES) {
+  return render(
+    <WizardStep3Goal
+      values={values}
+      onChange={() => {}}
+      currency="GHS"
+      currencyExponent={2}
+    />,
+  );
+}
+
+describe("WizardStep3Goal — currency-aware major units", () => {
+  it("пустой бюджет показывает placeholder, не подставляет ноль", () => {
+    renderGoal({ ...BASE_VALUES, daily_budget: "" });
+
+    expect(screen.getByPlaceholderText("Введите сумму")).toHaveValue("");
   });
 
-  // Заданный бюджет отображается в долларах.
-  it("ненулевой бюджет показывает значение в долларах", () => {
-    render(<WizardStep3Goal values={{ ...BASE_VALUES, daily_budget_cents: 20000 }} onChange={() => {}} />);
-    expect(screen.getByPlaceholderText("Введите сумму")).toHaveValue("200");
-  });
-});
+  it("показывает exact decimal string и код валюты кабинета", () => {
+    renderGoal();
 
-describe("WizardStep3Goal — url_tags инпут убран", () => {
-  it("не содержит редактируемого поля 'URL Tags (sub2…sub7)'", () => {
-    render(<WizardStep3Goal values={BASE_VALUES} onChange={() => {}} />);
-    // Поле ввода с таким placeholder не должно присутствовать
-    const urlTagsInput = document.querySelector('input[placeholder*="sub2"]');
-    expect(urlTagsInput).toBeNull();
-  });
-
-  it("не содержит label 'URL Tags (sub2…sub7)' в виде поля ввода", () => {
-    render(<WizardStep3Goal values={BASE_VALUES} onChange={() => {}} />);
-    // input с aria-label или label, содержащим sub2…sub7, не должно быть
-    const allInputs = document.querySelectorAll("input");
-    const urlTagsInputs = Array.from(allInputs).filter((el) =>
-      (el.getAttribute("placeholder") ?? "").includes("sub2"),
-    );
-    expect(urlTagsInputs).toHaveLength(0);
-  });
-
-  it("содержит подсказку о SOP-трекинге вместо инпута", () => {
-    render(<WizardStep3Goal values={BASE_VALUES} onChange={() => {}} />);
-    // Проверяем что есть текст про SOP или автоматический трекинг
-    const sopText = screen.getByText(/трекинг по SOP|вычисляет автоматически/i);
-    expect(sopText).toBeTruthy();
+    expect(screen.getByPlaceholderText("Введите сумму")).toHaveValue("200.00");
+    expect(screen.getByLabelText(/Целевой CPA \(GHS\)/i)).toHaveValue("5.00");
+    expect(document.body.textContent).not.toContain("$");
   });
 });
 
-describe("WizardStep3Goal — инварианты зашиты, CPA вводится", () => {
-  // Дропдаунов Objective/Optimization Goal больше нет — инварианты read-only
-  it("не содержит редактируемого дропдауна Objective", () => {
-    render(<WizardStep3Goal values={BASE_VALUES} onChange={() => {}} />);
+describe("WizardStep3Goal — url_tags input удалён", () => {
+  it("показывает SOP-подсказку без редактируемого sub2-поля", () => {
+    renderGoal();
+
+    expect(document.querySelector('input[placeholder*="sub2"]')).toBeNull();
+    expect(screen.getByText(/трекинг по SOP|вычисляет автоматически/i)).toBeInTheDocument();
+  });
+});
+
+describe("WizardStep3Goal — SOP-инварианты", () => {
+  it("не содержит редактируемых Objective, Optimization Goal и Bid Strategy", () => {
+    renderGoal();
+
     expect(screen.queryByLabelText(/^Objective$/i)).toBeNull();
     expect(screen.queryByLabelText(/Optimization Goal/i)).toBeNull();
     expect(screen.queryByLabelText(/Bid Strategy/i)).toBeNull();
-  });
-
-  // Read-only блок «Зашито по SOP» показывает инварианты как текст
-  it("показывает read-only инварианты SOP (Cost cap, IMPRESSIONS)", () => {
-    render(<WizardStep3Goal values={BASE_VALUES} onChange={() => {}} />);
     expect(screen.getByText("Cost cap")).toBeInTheDocument();
     expect(screen.getByText("IMPRESSIONS")).toBeInTheDocument();
-    expect(screen.getByText("OFFSITE_CONVERSIONS")).toBeInTheDocument();
-  });
-
-  // Поле «Целевой CPA, $» присутствует и отражает значение из стора (центы → $)
-  it("содержит поле «Целевой CPA, $» со значением из bid_amount_cents", () => {
-    render(<WizardStep3Goal values={BASE_VALUES} onChange={() => {}} />);
-    const cpa = screen.getByLabelText(/Целевой CPA/i) as HTMLInputElement;
-    expect(cpa).toBeInTheDocument();
-    expect(cpa.value).toBe("5"); // 500 центов = $5
   });
 });
 
-describe("validateGoal — не требует url_tags", () => {
-  it("валидный конфиг без url_tags → нет ошибок", () => {
-    const errors = validateGoal(BASE_VALUES);
-    expect(Object.keys(errors)).toHaveLength(0);
+describe("validateGoal — exact exponent contract", () => {
+  it("валидный двухзнаковый конфиг проходит", () => {
+    expect(validateGoal(BASE_VALUES, 2)).toEqual({});
   });
 
-  it("пустой destination_link → ошибка", () => {
-    const errors = validateGoal({ ...BASE_VALUES, destination_link: "" });
+  it("unknown exponent блокирует денежные поля", () => {
+    const errors = validateGoal(BASE_VALUES, null);
+
+    expect(errors.daily_budget).toMatch(/валютный контекст/i);
+    expect(errors.bid_amount).toMatch(/валютный контекст/i);
+  });
+
+  it("JPY отклоняет ненулевую дробную часть", () => {
+    const errors = validateGoal(
+      { ...BASE_VALUES, daily_budget: "200.5", bid_amount: "5.1" },
+      0,
+    );
+
+    expect(errors.daily_budget).toMatch(/целые/i);
+    expect(errors.bid_amount).toMatch(/целые/i);
+  });
+
+  it("JPY принимает trailing zero без потери точности", () => {
+    expect(
+      validateGoal({ ...BASE_VALUES, daily_budget: "200.0", bid_amount: "5.000" }, 0),
+    ).toEqual({});
+  });
+
+  it("трёхзнаковая валюта принимает 1.234 и отклоняет 1.2341", () => {
+    expect(
+      validateGoal({ ...BASE_VALUES, daily_budget: "200.000", bid_amount: "1.234" }, 3),
+    ).toEqual({});
+    expect(
+      validateGoal({ ...BASE_VALUES, daily_budget: "200.000", bid_amount: "1.2341" }, 3)
+        .bid_amount,
+    ).toMatch(/не более 3/i);
+  });
+
+  it("отклоняет значения выше hard cap без float conversion", () => {
+    const errors = validateGoal({ ...BASE_VALUES, daily_budget: "100000.01" }, 2);
+
+    expect(errors.daily_budget).toMatch(/максимум/i);
+  });
+
+  it("пустой destination и countries остаются явными ошибками", () => {
+    const errors = validateGoal(
+      { ...BASE_VALUES, destination_link: "", countries: [] },
+      2,
+    );
+
     expect(errors.destination_link).toBeTruthy();
-  });
-
-  it("слишком маленький бюджет < $1 → ошибка", () => {
-    const errors = validateGoal({ ...BASE_VALUES, daily_budget_cents: 50 });
-    expect(errors.daily_budget_cents).toBeTruthy();
-  });
-
-  it("пустые страны → ошибка", () => {
-    const errors = validateGoal({ ...BASE_VALUES, countries: [] });
     expect(errors.countries).toBeTruthy();
   });
 
-  // M6: дата старта в прошлом → ошибка (Meta отклонила бы залив невнятно на шаге 7).
-  it("дата старта в прошлом → ошибка", () => {
-    const past = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    const errors = validateGoal({ ...BASE_VALUES, start_date: past });
-    expect(errors.start_date).toBeTruthy();
-  });
-
-  // Сегодняшняя дата — валидна (граница не должна отсекать «сегодня»).
-  it("дата старта сегодня → без ошибки", () => {
-    const today = new Date().toISOString().slice(0, 10);
-    const errors = validateGoal({ ...BASE_VALUES, start_date: today });
-    expect(errors.start_date).toBeUndefined();
+  it("пустая дата разрешена: сервер выберет следующий локальный день кабинета", () => {
+    expect(validateGoal({ ...BASE_VALUES, start_date: "" }, 2).start_date).toBeUndefined();
   });
 });

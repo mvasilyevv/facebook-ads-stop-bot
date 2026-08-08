@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils/cn";
-import type { HistoryTimelineItem } from "@fb/shared";
+import type { components } from "@fb/shared/api/generated";
 
 const STAGE_DOT_COLOR: Record<string, string> = {
   warning: "var(--fsm-warning)",
@@ -18,6 +18,7 @@ const STAGE_DOT_COLOR: Record<string, string> = {
 const SUCCESS_STATUSES = new Set(["SUCCEEDED", "SUCCESS", "DONE", "COMPLETED"]);
 const FAILURE_STATUSES = new Set(["FAILED", "ERROR", "DEAD"]);
 
+type HistoryTimelineItem = components["schemas"]["OperatorEventItem"];
 type HistoryFilter = "all" | "alerts" | "actions" | "errors";
 
 interface DisplayEvent {
@@ -28,9 +29,9 @@ interface DisplayEvent {
 
 function stageDotColor(item: DisplayEvent): string {
   if (item.result && FAILURE_STATUSES.has(item.result.task_status?.toUpperCase() ?? "")) {
-    return "var(--danger)";
+    return "var(--color-danger)";
   }
-  return (item.primary.stage && STAGE_DOT_COLOR[item.primary.stage]) ?? "var(--bg-9)";
+  return (item.primary.stage && STAGE_DOT_COLOR[item.primary.stage]) ?? "var(--color-bg-9)";
 }
 
 function isSuccess(status: string | null | undefined): boolean {
@@ -54,7 +55,8 @@ function displayTitle(item: DisplayEvent): string {
   const name = primary.ad_name ?? primary.fb_ad_id ?? "Объявление";
 
   if (primary.event_type === "alert") {
-    const stage = primary.stage === "stop" ? "стоп" : primary.stage === "warning" ? "предупреждение" : "алерт";
+    const stage =
+      primary.stage === "stop" ? "стоп" : primary.stage === "warning" ? "предупреждение" : "алерт";
     if (!result) return `${name}: ${stage} по правилу`;
 
     const seconds = Math.max(
@@ -98,7 +100,10 @@ function relatedEvents(items: HistoryTimelineItem[]): DisplayEvent[] {
 
   for (const task of tasks) {
     if (!usedTasks.has(task)) {
-      display.push({ primary: task, key: `task-${task.ts}-${task.fb_ad_id ?? task.task_type ?? ""}` });
+      display.push({
+        primary: task,
+        key: `task-${task.ts}-${task.fb_ad_id ?? task.task_type ?? ""}`,
+      });
     }
   }
 
@@ -107,12 +112,14 @@ function relatedEvents(items: HistoryTimelineItem[]): DisplayEvent[] {
   );
 }
 
-function formatDayLabel(day: string): string {
+function formatDayLabel(day: string, timeZone: string): string {
   try {
     const date = new Date(`${day}T12:00:00Z`);
     const today = new Date();
-    const todayStr = today.toISOString().slice(0, 10);
-    const yesterdayStr = new Date(today.getTime() - 86_400_000).toISOString().slice(0, 10);
+    const todayStr = zonedDateKey(today.toISOString(), timeZone);
+    const yesterday = new Date(`${todayStr}T12:00:00Z`);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
     const formatted = date.toLocaleDateString("ru-RU", {
       day: "numeric",
       month: "long",
@@ -127,12 +134,12 @@ function formatDayLabel(day: string): string {
   }
 }
 
-function formatEventTime(ts: string): string {
+function formatEventTime(ts: string, timeZone: string): string {
   try {
     return new Date(ts).toLocaleTimeString("ru-RU", {
       hour: "2-digit",
       minute: "2-digit",
-      timeZone: "UTC",
+      timeZone,
     });
   } catch {
     return ts.slice(11, 16);
@@ -148,9 +155,11 @@ function matchesFilter(item: DisplayEvent, filter: HistoryFilter): boolean {
 
 function EventRow({
   item,
+  timeZone,
   onAlertClick,
 }: {
   item: DisplayEvent;
+  timeZone: string;
   onAlertClick?: (item: HistoryTimelineItem) => void;
 }) {
   const alert = item.primary.event_type === "alert" ? item.primary : null;
@@ -158,9 +167,9 @@ function EventRow({
   const title = displayTitle(item);
 
   return (
-    <div className="grid min-h-[52px] grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-3 border-b border-[var(--hairline)] px-4 py-2 sm:px-5">
+    <div className="grid min-h-[52px] grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-3 border-b border-[var(--color-hairline)] px-4 py-2 sm:px-5">
       <span className="min-w-11 font-display text-[12px] tabular-nums text-bg-9">
-        {formatEventTime(item.primary.ts)}
+        {formatEventTime(item.primary.ts, timeZone)}
       </span>
       <span
         aria-hidden="true"
@@ -168,7 +177,7 @@ function EventRow({
         style={{ background: stageDotColor(item) }}
       />
       <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
-        <span className="truncate font-display text-[12px] text-bg-11" title={title}>
+        <span className="truncate text-[14px] font-medium text-bg-11" title={title}>
           {title}
         </span>
         {ruleCodes.length > 0 ? <RulePill code={ruleCodes[0]!} /> : null}
@@ -177,7 +186,7 @@ function EventRow({
         <button
           type="button"
           onClick={() => onAlertClick(alert)}
-          className="inline-flex min-h-7 items-center rounded-[var(--radius-1)] px-2 font-display text-[11px] text-accent transition-colors hover:bg-bg-3 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+          className="inline-flex min-h-11 items-center rounded-[var(--radius-1)] px-3 font-display text-[12px] text-accent transition-colors hover:bg-bg-3 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
           aria-label={`Подробнее о событии ${title}`}
         >
           Подробнее
@@ -195,6 +204,7 @@ interface HistoryTimelineProps {
   error: unknown;
   onRetry?: () => void;
   onAlertClick?: (item: HistoryTimelineItem) => void;
+  timeZone?: string;
 }
 
 export const HistoryTimeline: FC<HistoryTimelineProps> = ({
@@ -203,6 +213,7 @@ export const HistoryTimeline: FC<HistoryTimelineProps> = ({
   error,
   onRetry,
   onAlertClick,
+  timeZone = "UTC",
 }) => {
   if (isLoading) {
     return (
@@ -223,14 +234,22 @@ export const HistoryTimeline: FC<HistoryTimelineProps> = ({
       />
     );
   }
-  return <GroupedTimeline items={items} onAlertClick={onAlertClick} />;
+  return (
+    <GroupedTimeline
+      items={items}
+      timeZone={timeZone}
+      onAlertClick={onAlertClick}
+    />
+  );
 };
 
 function GroupedTimeline({
   items,
+  timeZone,
   onAlertClick,
 }: {
   items: HistoryTimelineItem[];
+  timeZone: string;
   onAlertClick?: (item: HistoryTimelineItem) => void;
 }) {
   const [filter, setFilter] = useState<HistoryFilter>("all");
@@ -256,17 +275,17 @@ function GroupedTimeline({
   const grouped = useMemo(() => {
     const map = new Map<string, DisplayEvent[]>();
     for (const item of filtered) {
-      const day = item.primary.ts.slice(0, 10);
+      const day = zonedDateKey(item.primary.ts, timeZone);
       map.set(day, [...(map.get(day) ?? []), item]);
     }
     return map;
-  }, [filtered]);
+  }, [filtered, timeZone]);
 
   const days = [...grouped.keys()].sort((a, b) => b.localeCompare(a));
 
   return (
-    <div className="overflow-hidden rounded-[var(--radius-3)] border border-[var(--hairline)] bg-bg-1">
-      <div className="flex flex-col gap-3 border-b border-[var(--hairline)] p-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="overflow-hidden rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1">
+      <div className="flex flex-col gap-3 border-b border-[var(--color-hairline)] p-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap gap-1" role="group" aria-label="Фильтр истории">
           {(
             [
@@ -282,8 +301,10 @@ function GroupedTimeline({
               aria-pressed={filter === value}
               onClick={() => setFilter(value)}
               className={cn(
-                "min-h-7 rounded-[var(--radius-1)] px-2.5 text-[11px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
-                filter === value ? "bg-accent text-bg-0" : "text-bg-10 hover:bg-bg-3 hover:text-bg-11",
+                "min-h-11 rounded-[var(--radius-1)] px-3 text-[12px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
+                filter === value
+                  ? "bg-accent text-bg-0"
+                  : "text-bg-10 hover:bg-bg-3 hover:text-bg-11",
               )}
             >
               {label}
@@ -301,7 +322,7 @@ function GroupedTimeline({
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Объявление или правило"
-            className="h-8 w-full rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 pl-8 pr-3 text-[12px] text-bg-11 placeholder:text-bg-9 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+            className="h-11 w-full rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 pl-8 pr-3 text-[12px] text-bg-11 placeholder:text-bg-9 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
           />
         </label>
       </div>
@@ -310,18 +331,41 @@ function GroupedTimeline({
         <EmptyState title="Ничего не найдено" description="Измените фильтр или поисковый запрос." />
       ) : (
         days.map((day) => (
-          <section key={day} aria-label={formatDayLabel(day)}>
-            <div className="border-b border-[var(--hairline)] px-5 pb-2 pt-3">
-              <span className="font-display text-[10px] uppercase tracking-[0.12em] text-bg-9">
-                {formatDayLabel(day)}
+          <section key={day} aria-label={formatDayLabel(day, timeZone)}>
+            <div className="border-b border-[var(--color-hairline)] px-5 pb-2 pt-3">
+              <span className="font-display text-[12px] uppercase tracking-[0.12em] text-bg-9">
+                {formatDayLabel(day, timeZone)}
               </span>
             </div>
             {(grouped.get(day) ?? []).map((item) => (
-              <EventRow key={item.key} item={item} onAlertClick={onAlertClick} />
+              <EventRow
+                key={item.key}
+                item={item}
+                timeZone={timeZone}
+                onAlertClick={onAlertClick}
+              />
             ))}
           </section>
         ))
       )}
     </div>
   );
+}
+
+function zonedDateKey(value: string, timeZone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      timeZone,
+    }).formatToParts(new Date(value));
+    const lookup = new Map(parts.map((part) => [part.type, part.value]));
+    const year = lookup.get("year");
+    const month = lookup.get("month");
+    const day = lookup.get("day");
+    return year && month && day ? `${year}-${month}-${day}` : value.slice(0, 10);
+  } catch {
+    return value.slice(0, 10);
+  }
 }

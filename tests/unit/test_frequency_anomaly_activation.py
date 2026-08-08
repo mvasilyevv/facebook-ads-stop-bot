@@ -12,7 +12,7 @@ import uuid
 from decimal import Decimal
 
 from core.domain import AlertStage
-from core.observer.pipeline import build_rule_context
+from core.observer.pipeline import build_rule_context as _build_rule_context
 from core.observer.queries import OfferRules
 from core.rules.evaluator import evaluate_stop_rules
 from core.scanner.models import ScannedAdRow
@@ -24,7 +24,19 @@ def _offer(*, frequency_threshold: Decimal | None, cpa: Decimal = Decimal("3")) 
         code="TST",
         name="test offer",
         cpa_threshold=cpa,
+        currency="USD",
         frequency_threshold=frequency_threshold,
+        stop_percent_of_rule=Decimal("80"),
+        warning_percent_of_stop=Decimal("80"),
+    )
+
+
+def build_rule_context(offer: OfferRules, **kwargs):
+    return _build_rule_context(
+        offer,
+        account_currency="USD",
+        currency_exponent=2,
+        **kwargs,
     )
 
 

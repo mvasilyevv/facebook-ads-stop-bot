@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 
 from core.domain import AlertStage
+from core.money import (
+    currency_quantum,
+    require_currency_exponent,
+    require_exact_currency_amount,
+)
 
 # ── Базовые проценты стоп-правил (ФИКСИРОВАНЫ, НЕ настраиваются через UI/конфиг) ──
 # Это сами правила: какая граница (в % от CPA или штуках) считается стопом для каждой
@@ -76,6 +81,8 @@ class RuleEvaluation:
 class RuleContext:
     """Контекст правил для одного оффера."""
 
+    currency: str
+    currency_exponent: int
     cpa_amount: Decimal
     warning_percent_of_stop: Decimal
     stop_percent_of_base: Decimal = Decimal("80")
@@ -150,21 +157,35 @@ class RuleContext:
     cpr_base_stop_threshold: Decimal = field(init=False)
     cpr_stop_threshold: Decimal = field(init=False)
     cpr_warning_threshold: Decimal = field(init=False)
+    money_quantum: Decimal = field(init=False)
 
     def __post_init__(self) -> None:
         """Предвычисляет денежные пороги один раз при создании контекста."""
-        _step = Decimal("0.01")
+        currency, exponent = require_currency_exponent(
+            self.currency,
+            self.currency_exponent,
+        )
+        cpa_amount = require_exact_currency_amount(
+            self.cpa_amount,
+            currency=currency,
+            exponent=exponent,
+            field="cpa_amount",
+            allow_zero=False,
+        )
+        step = currency_quantum(currency, exponent)
+        object.__setattr__(self, "currency", currency)
+        object.__setattr__(self, "currency_exponent", exponent)
+        object.__setattr__(self, "cpa_amount", cpa_amount)
+        object.__setattr__(self, "money_quantum", step)
 
         def _base(percent: Decimal) -> Decimal:
-            return (self.cpa_amount * percent / Decimal("100")).quantize(
-                _step, rounding=ROUND_HALF_UP
-            )
+            return (cpa_amount * percent / Decimal("100")).quantize(step, rounding=ROUND_HALF_UP)
 
         def _stop(base: Decimal, pct_of_base: Decimal) -> Decimal:
-            return (base * pct_of_base / Decimal("100")).quantize(_step, rounding=ROUND_HALF_UP)
+            return (base * pct_of_base / Decimal("100")).quantize(step, rounding=ROUND_HALF_UP)
 
         def _warn(stop: Decimal, warn_pct: Decimal) -> Decimal:
-            return (stop * warn_pct / Decimal("100")).quantize(_step, rounding=ROUND_HALF_UP)
+            return (stop * warn_pct / Decimal("100")).quantize(step, rounding=ROUND_HALF_UP)
 
         cpc_base = _base(self.cpc_percent_stop)
         cpc_stop = _stop(cpc_base, self.effective_cpc_stop_percent_of_base)

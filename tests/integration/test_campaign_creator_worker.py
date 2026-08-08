@@ -28,9 +28,24 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
-from apps.campaign_creator_worker import claim_campaign_task
+from apps.campaign_creator_worker import (
+    claim_campaign_task,
+    finalize_run_cancelled,
+    finalize_run_failed,
+    finalize_run_succeeded,
+)
 from apps.campaign_creator_worker.main import process_one_task
-from core.meta_api.errors import PermanentError, SessionUnavailableError
+from core.meta_api.browser_readiness import (
+    BrowserReadinessObservation,
+    load_vision_readiness_identity,
+    persist_browser_readiness,
+)
+from core.meta_api.errors import (
+    BrowserReadinessRejectedError,
+    PermanentError,
+    SessionUnavailableError,
+)
+from core.tasks.queue import create_task
 
 # ---------------------- конфиг-снимок ----------------------
 
@@ -38,7 +53,14 @@ from core.meta_api.errors import PermanentError, SessionUnavailableError
 def _run_config() -> dict:
     """Минимальный валидный снимок CampaignConfig для одного блока с 1 adset."""
     return {
-        "account": {"act_id": "123456789", "page_id": "111", "pixel_id": "222"},
+        "account": {
+            "act_id": "123456789",
+            "page_id": "111",
+            "pixel_id": "222",
+            "timezone_name": "Africa/Accra",
+            "currency": "USD",
+            "account_context_observed_at": "2026-07-29T08:30:00Z",
+        },
         "offer_code": "GH_CR",
         "destination_link": "https://example.shop/x",
         "start_date": "2026-06-18",
@@ -46,15 +68,18 @@ def _run_config() -> dict:
         "targeting": {"countries": ["GH"]},
         "budget": {
             "level": "campaign",
-            "daily_cents": 5000,
+            "currency": "USD",
+            "daily_amount": "50.00",
             "bid_strategy": "COST_CAP",
-            "bid_amount_cents": 150,
+            "bid_amount": "1.50",
         },
         "campaigns": [
             {
                 "key": "static",
                 "name": "{byer} | {offer} | static | adset.pro | {date}",
-                "kind": "image",
+                # The reviewed campaign contract has one source of truth for
+                # cardinality: explicit media-store references, never a glob.
+                "concept_refs": ["c0.jpg", "c1.jpg"],
                 "adsets": [
                     {
                         "name": "{byer} | {offer} | static | s1 | {date}",
@@ -127,15 +152,84 @@ def _patch_concepts(monkeypatch):
 @pytest_asyncio.fixture
 async def clean_campaigns(pg_engine):
     """Чистит campaign_run + campaign_create задачи до и после теста."""
+    readiness_writer = uuid.uuid4()
 
     async def _truncate():
         async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM notification_events
+                    WHERE incident_id IN (
+                        SELECT incident.id
+                        FROM incidents AS incident
+                        JOIN campaign_run AS run
+                          ON incident.resource_type = 'campaign_run'
+                         AND incident.resource_id = CAST(run.id AS TEXT)
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM incidents
+                    WHERE resource_type = 'campaign_run'
+                      AND resource_id IN (SELECT CAST(id AS TEXT) FROM campaign_run)
+                    """
+                )
+            )
             await conn.execute(text("DELETE FROM task_queue WHERE task_type = 'campaign_create'"))
             await conn.execute(text("DELETE FROM campaign_run"))
 
     await _truncate()
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO vision_config (
+                  x_token_encrypted,
+                  profile_id,
+                  singleton_key
+                )
+                VALUES (
+                  'synthetic-campaign-test-token',
+                  'campaign-test-profile',
+                  'default'
+                )
+                ON CONFLICT (singleton_key) DO UPDATE
+                SET profile_id = EXCLUDED.profile_id,
+                    updated_at = clock_timestamp()
+                """
+            )
+        )
+    identity = await load_vision_readiness_identity(pg_engine)
+    assert identity is not None
+    assert await persist_browser_readiness(
+        pg_engine,
+        identity=identity,
+        observation=BrowserReadinessObservation(
+            state="ready",
+            reason_code="ready",
+            observed_contract_version=5,
+            observed_profile_id=identity.profile_id,
+            observed_session_id="campaign-test-session",
+        ),
+        writer_instance=readiness_writer,
+        ttl_seconds=30,
+    )
     yield
     await _truncate()
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                DELETE FROM browser_channel_readiness
+                WHERE writer_instance = :writer_instance
+                """
+            ),
+            {"writer_instance": readiness_writer},
+        )
 
 
 async def _seed_run(pg_engine, config: dict, idem: str) -> str:
@@ -154,20 +248,15 @@ async def _seed_run(pg_engine, config: dict, idem: str) -> str:
 
 async def _seed_task(pg_engine, run_id: str, idem: str) -> int:
     """Создаёт task_queue(campaign_create, pending) → возвращает id."""
-    async with pg_engine.begin() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    "INSERT INTO task_queue "
-                    "(task_type, status, idempotency_key, payload, attempt_count, "
-                    " max_attempts, requested_by) "
-                    "VALUES ('campaign_create', 'pending', :ik, CAST(:pl AS JSONB), 0, 5, 'test') "
-                    "RETURNING id"
-                ),
-                {"ik": idem, "pl": json.dumps({"run_id": run_id})},
-            )
-        ).first()
-    return int(row[0])
+    task_id = await create_task(
+        pg_engine,
+        task_type="campaign_create",
+        idempotency_key=idem,
+        payload={"run_id": run_id},
+        requested_by="test",
+    )
+    assert task_id is not None
+    return task_id
 
 
 # ---------------------- тесты ----------------------
@@ -260,7 +349,10 @@ async def test_worker_fail_on_campaign_post_no_retry(pg_engine, clean_campaigns)
     async with pg_engine.connect() as conn:
         task = (
             await conn.execute(
-                text("SELECT status, attempt_count FROM task_queue WHERE id = :tid"),
+                text(
+                    "SELECT status, attempt_count, external_started_at, result "
+                    "FROM task_queue WHERE id = :tid"
+                ),
                 {"tid": task_id},
             )
         ).first()
@@ -271,7 +363,72 @@ async def test_worker_fail_on_campaign_post_no_retry(pg_engine, clean_campaigns)
         ).scalar()
     # POST campaign инициирован → ack-lost → failed без retry (НЕ retrying).
     assert task.status == "failed"
+    assert task.external_started_at is not None
+    result = task.result if isinstance(task.result, dict) else json.loads(task.result)
+    assert result["outcome"] == "UNKNOWN"
+    assert result["manual_review_required"] is True
     assert run_status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_worker_presend_readiness_rejection_requeues_without_attempt_burn(
+    pg_engine,
+    clean_campaigns,
+):
+    idem = f"idem-{uuid.uuid4().hex[:8]}"
+    run_id = await _seed_run(pg_engine, _run_config(), idem)
+    task_id = await _seed_task(pg_engine, run_id, idem)
+
+    claim = await claim_campaign_task(pg_engine)
+    assert claim.task is not None
+    assert claim.task.browser_readiness_generation is not None
+    client = _FakeClient(
+        fail_on="/campaigns",
+        error=BrowserReadinessRejectedError("local circuit open before browser dispatch"),
+    )
+    await process_one_task(
+        pg_engine,
+        claim.task,
+        client=client,
+        uploader=_FakeUploader(),
+    )
+
+    async with pg_engine.connect() as conn:
+        task = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT status, attempt_count, external_started_at
+                    FROM task_queue
+                    WHERE id = :task_id
+                    """
+                ),
+                {"task_id": task_id},
+            )
+        ).one()
+        run = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT status, progress
+                    FROM campaign_run
+                    WHERE id = :run_id
+                    """
+                ),
+                {"run_id": run_id},
+            )
+        ).one()
+
+    assert client.calls == ["/act_123456789/campaigns"]
+    assert task.status == "retrying"
+    assert task.attempt_count == 0
+    assert task.external_started_at is None
+    assert run.status == "queued"
+    progress = run.progress if isinstance(run.progress, dict) else json.loads(run.progress)
+    assert progress == {
+        "stage": "queued",
+        "reason": "browser_readiness_rejected",
+    }
 
 
 # Transient ДО инициации POST campaign (нет концептов на блок) НЕ должен задеть деньги:
@@ -347,7 +504,10 @@ async def test_worker_transient_pre_post_resets_run_to_queued(
         ).scalar()
         task = (
             await conn.execute(
-                text("SELECT status, attempt_count FROM task_queue WHERE id = :tid"),
+                text(
+                    "SELECT status, attempt_count, external_started_at "
+                    "FROM task_queue WHERE id = :tid"
+                ),
                 {"tid": task_id},
             )
         ).first()
@@ -355,11 +515,12 @@ async def test_worker_transient_pre_post_resets_run_to_queued(
     assert run_status == "queued"
     assert task.status == "retrying"
     assert task.attempt_count == 1
+    assert task.external_started_at is None
 
     # Повторный claim той же задачи (после backoff) — переисполняем, теперь успешно.
     async with pg_engine.begin() as conn:
         await conn.execute(
-            text("UPDATE task_queue SET next_retry_at = NOW() - INTERVAL '1 second' WHERE id=:tid"),
+            text("UPDATE task_queue SET available_at = NOW() - INTERVAL '1 second' WHERE id=:tid"),
             {"tid": task_id},
         )
     claim2 = await claim_campaign_task(pg_engine)
@@ -461,14 +622,207 @@ async def test_set_run_status_expect_guard(pg_engine, clean_campaigns):
 
     idem = f"idem-{uuid.uuid4().hex[:8]}"
     run_id = await _seed_run(pg_engine, _run_config(), idem)  # status=queued
+    task_id = await _seed_task(pg_engine, run_id, f"{idem}-task")
+    claim = await claim_campaign_task(pg_engine)
+    assert claim.task is not None and claim.task.id == task_id
 
     # queued→uniquifying проходит (статус совпал с expect).
-    assert await set_run_status(pg_engine, run_id, "uniquifying", expect="queued") is True
+    assert (
+        await set_run_status(
+            pg_engine,
+            run_id,
+            "uniquifying",
+            task=claim.task,
+            expect="queued",
+        )
+        is True
+    )
     # Повторный expect='queued' уже НЕ проходит (статус uniquifying) — возврат False.
-    assert await set_run_status(pg_engine, run_id, "creating", expect="queued") is False
+    assert (
+        await set_run_status(
+            pg_engine,
+            run_id,
+            "creating",
+            task=claim.task,
+            expect="queued",
+        )
+        is False
+    )
     async with pg_engine.connect() as conn:
         st = (
             await conn.execute(text("SELECT status FROM campaign_run WHERE id = :r"), {"r": run_id})
         ).scalar()
     # Статус не изменён неудавшимся переходом.
     assert st == "uniquifying"
+
+
+@pytest.mark.asyncio
+async def test_campaign_unknown_without_ids_commits_incident_with_task(
+    pg_engine,
+    clean_campaigns,
+) -> None:
+    idem = f"unknown-incident-{uuid.uuid4().hex[:8]}"
+    run_id = await _seed_run(pg_engine, _run_config(), idem)
+    task_id = await _seed_task(pg_engine, run_id, f"{idem}-task")
+    claim = await claim_campaign_task(pg_engine)
+    assert claim.task is not None and claim.task.id == task_id
+
+    applied = await finalize_run_failed(
+        pg_engine,
+        run_id,
+        task=claim.task,
+        error="Meta response lost after external boundary",
+        task_result={
+            "outcome": "UNKNOWN",
+            "reconcile_required": True,
+            "reason": "external_result_ambiguous",
+        },
+    )
+
+    assert applied is True
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT task.status AS task_status,
+                           incident.status AS incident_status,
+                           incident.correlation_id,
+                           COUNT(event.id) AS event_count
+                    FROM task_queue AS task
+                    JOIN incidents AS incident
+                      ON incident.incident_key = :incident_key
+                    JOIN notification_events AS event
+                      ON event.incident_id = incident.id
+                    WHERE task.id = :task_id
+                    GROUP BY task.status, incident.status,
+                             incident.correlation_id, task.correlation_id
+                    HAVING incident.correlation_id = task.correlation_id
+                    """
+                ),
+                {
+                    "task_id": task_id,
+                    "incident_key": f"campaign-create:{run_id}:unknown",
+                },
+            )
+        ).one()
+    assert row.task_status == "failed"
+    assert row.incident_status == "open"
+    assert row.event_count == 1
+
+
+@pytest.mark.asyncio
+async def test_campaign_unknown_projection_failure_rolls_back_task_and_run(
+    pg_engine,
+    clean_campaigns,
+    monkeypatch,
+) -> None:
+    import core.telegram.worker_notify as worker_notify
+
+    idem = f"unknown-rollback-{uuid.uuid4().hex[:8]}"
+    run_id = await _seed_run(pg_engine, _run_config(), idem)
+    task_id = await _seed_task(pg_engine, run_id, f"{idem}-task")
+    claim = await claim_campaign_task(pg_engine)
+    assert claim.task is not None and claim.task.id == task_id
+
+    async def fail_projection(*_args, **_kwargs):
+        raise RuntimeError("simulated campaign incident boundary crash")
+
+    monkeypatch.setattr(
+        worker_notify,
+        "notify_recurring_incident_in_transaction",
+        fail_projection,
+    )
+    with pytest.raises(RuntimeError, match="campaign incident boundary"):
+        await finalize_run_failed(
+            pg_engine,
+            run_id,
+            task=claim.task,
+            error="ambiguous",
+            task_result={"outcome": "UNKNOWN", "reconcile_required": True},
+        )
+
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT run.status AS run_status, task.status AS task_status
+                    FROM campaign_run AS run
+                    JOIN task_queue AS task
+                      ON task.payload->>'run_id' = CAST(run.id AS TEXT)
+                    WHERE run.id = :run_id
+                    """
+                ),
+                {"run_id": run_id},
+            )
+        ).one()
+        incident_count = await conn.scalar(
+            text("SELECT COUNT(*) FROM incidents WHERE incident_key = :incident_key"),
+            {"incident_key": f"campaign-create:{run_id}:unknown"},
+        )
+    assert row.run_status == "queued"
+    assert row.task_status == "running"
+    assert incident_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["succeeded", "failed", "cancelled"])
+async def test_expired_campaign_lease_cannot_finalize_run_or_task(
+    pg_engine,
+    clean_campaigns,
+    terminal: str,
+) -> None:
+    idem = f"expired-fence-{terminal}-{uuid.uuid4().hex[:8]}"
+    run_id = await _seed_run(pg_engine, _run_config(), idem)
+    task_id = await _seed_task(pg_engine, run_id, f"{idem}-task")
+    claim = await claim_campaign_task(pg_engine)
+    assert claim.task is not None and claim.task.id == task_id
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE task_queue SET lease_expires_at = NOW() - INTERVAL '1 second' "
+                "WHERE id = :task_id"
+            ),
+            {"task_id": task_id},
+        )
+
+    if terminal == "succeeded":
+        applied = await finalize_run_succeeded(
+            pg_engine,
+            run_id,
+            task=claim.task,
+            created_meta_ids={"campaigns": ["meta-1"]},
+            progress={"stage": "succeeded"},
+        )
+    elif terminal == "failed":
+        applied = await finalize_run_failed(
+            pg_engine,
+            run_id,
+            task=claim.task,
+            error="ambiguous",
+            task_result={"outcome": "UNKNOWN", "reconcile_required": True},
+        )
+    else:
+        applied = await finalize_run_cancelled(
+            pg_engine,
+            run_id,
+            task=claim.task,
+            reason="operator cancel",
+        )
+
+    assert applied is False
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT r.status AS run_status, t.status AS task_status "
+                    "FROM campaign_run r JOIN task_queue t "
+                    "ON t.payload->>'run_id' = r.id::text "
+                    "WHERE r.id = :run_id"
+                ),
+                {"run_id": run_id},
+            )
+        ).one()
+    assert row.run_status == "queued"
+    assert row.task_status == "running"

@@ -1,14 +1,8 @@
-# Полный стек FB Stop Bot для 24/7 Linux-хоста.
+# Local-only, fail-closed development contour.
 #
-# Сетевая топология production-сервера:
-#   - Vision anti-detect браузер работает в отдельном webtop-контейнере в общей
-#     fb_agent_default сети.
-#   - Node.js browser-agent разделяет network namespace контейнера vision-webtop,
-#     поэтому Vision API и динамический CDP доступны ему по 127.0.0.1.
-#   - Postgres/Redis — в Docker, bind 127.0.0.1 (наружу не торчат).
-#   - Python-воркеры/API ходят до gRPC browser-agent по DNS-имени vision-webtop
-#     внутри общей Docker-сети. Host-loopback здесь не используется: опубликованный
-#     127.0.0.1:50051 намеренно недоступен из соседних контейнеров.
+# This root Compose file intentionally contains no browser, observer, scheduler,
+# campaign or Meta mutation service. Production topology lives exclusively in
+# deploy/compose/ and is operated by the platform release scripts.
 
 x-default-logging: &default-logging
   driver: json-file
@@ -16,8 +10,7 @@ x-default-logging: &default-logging
     max-size: "20m"
     max-file: "5"
 
-# Общие настройки всех Python-воркеров (образ из Dockerfile.workers).
-x-worker-common: &worker-common
+x-local-worker: &local-worker
   build:
     context: .
     dockerfile: docker/Dockerfile.workers
@@ -27,47 +20,33 @@ x-worker-common: &worker-common
   restart: unless-stopped
   init: true
   logging: *default-logging
-  # Потолок памяти против утечки одного воркера (idle ~60MB, запас 6×).
   mem_limit: 384m
-  # OOM-приоритет: не-money воркеры (cleanup/digest/creator/…) под нож раньше Vision/БД.
-  # observer/meta_api переопределяют на отрицательный (защищены ниже).
-  oom_score_adj: 200
-  env_file: .env
-  # Внутри docker-сети до БД/Redis ходим по service-имени, а не по host-портам .env.
-  # Эти значения переопределяют POSTGRES_HOST/REDIS_* из .env (которые указывают на
-  # host-проброс 127.0.0.1:5433 / :6380 для запуска вне Docker).
-  environment: &worker-env
+  env_file:
+    - path: .env
+      required: false
+  environment: &local-worker-env
+    FB_AGENT_PROFILE: local
     POSTGRES_HOST: postgres
     POSTGRES_PORT: "5432"
     REDIS_URL: redis://redis:6379/0
     REDIS_HOST: redis
     REDIS_PORT: "6379"
-    BROWSER_AGENT_HOST: vision-webtop
-    BROWSER_AGENT_GRPC_HOST: vision-webtop
-    BROWSER_AGENT_GRPC_PORT: "50051"
-  extra_hosts:
-    - "host.docker.internal:host-gateway"
   depends_on:
     postgres:
-      condition: service_healthy
-    redis:
       condition: service_healthy
     migrate:
       condition: service_completed_successfully
 
 services:
-  # ====================== инфраструктура ======================
   postgres:
     image: postgres:16
     restart: unless-stopped
     logging: *default-logging
-    # БД — самый защищённый от OOM-killer (money-конфиг + история).
     mem_limit: 1g
-    oom_score_adj: -700
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-fb_stop_bot}
+      POSTGRES_DB: ${POSTGRES_DB:-fb_stop_bot_dev}
       POSTGRES_USER: ${POSTGRES_USER:-fb_stop_bot}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fb_stop_bot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fb_stop_bot_local}
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
@@ -83,7 +62,6 @@ services:
     restart: unless-stopped
     logging: *default-logging
     mem_limit: 256m
-    oom_score_adj: -500
     command: redis-server --appendonly yes
     ports:
       - "127.0.0.1:6380:6379"
@@ -95,9 +73,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # ====================== миграции (one-shot) ======================
-  # Применяет Alembic upgrade head до старта воркеров/API. Все они ждут
-  # service_completed_successfully этого сервиса.
   migrate:
     build:
       context: .
@@ -106,20 +81,19 @@ services:
         BASE_IMAGE: ${IMAGE_REPOSITORY:-fb-stop-bot}/python-base:${IMAGE_TAG:-latest}
     image: ${IMAGE_REPOSITORY:-fb-stop-bot}/workers:${IMAGE_TAG:-latest}
     logging: *default-logging
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
+      FB_AGENT_PROFILE: local
       WORKER_TYPE: migrate
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     restart: "no"
 
-  # ====================== API ======================
   api:
     build:
       context: .
@@ -131,231 +105,36 @@ services:
     init: true
     logging: *default-logging
     mem_limit: 512m
-    oom_score_adj: -200
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
+      FB_AGENT_PROFILE: local
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       REDIS_URL: redis://redis:6379/0
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-      BROWSER_AGENT_HOST: vision-webtop
-      BROWSER_AGENT_GRPC_HOST: vision-webtop
-      BROWSER_AGENT_GRPC_PORT: "50051"
-      # Корень загрузки концептов кампаний. ОБЩИЙ named-volume с campaign_creator:
-      # api пишет файлы сюда (POST /tools/campaigns/upload), воркер читает их по тому же
-      # пути ({CAMPAIGN_UPLOAD_ROOT}/{upload_id}/{ref}) — иначе залив не найдёт концепты.
-      CAMPAIGN_UPLOAD_ROOT: /var/lib/fb_agent/campaign_uploads
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:8100:8100"
-    volumes:
-      - campaign_uploads:/var/lib/fb_agent/campaign_uploads
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
 
-  # ====================== browser-agent (рядом с Vision) ======================
-  # Разделяет network namespace внешнего vision-webtop: Vision API и выданный им
-  # динамический CDP-порт остаются на loopback этого namespace. gRPC слушает на всех
-  # интерфейсах namespace и доступен другим сервисам как vision-webtop:50051; host bind
-  # 127.0.0.1:50051 остаётся только для безопасной локальной диагностики.
-  browser-agent:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.browser-agent
-    image: ${IMAGE_REPOSITORY:-fb-stop-bot}/browser-agent:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    init: true
-    logging: *default-logging
-    env_file: .env
+  telegram_delivery_worker:
+    <<: *local-worker
     environment:
-      REDIS_URL: redis://redis:6379/0
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-    network_mode: "container:vision-webtop"
-    profiles: ["agent"]
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "const n=require('net').connect(50051,'127.0.0.1');n.on('connect',()=>{n.end();process.exit(0)});n.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),3000)",
-        ]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
+      <<: *local-worker-env
+      WORKER_TYPE: telegram_delivery
 
-  # ====================== фронтенды ======================
-  # profile "web": фронтенды (веб-панель + Telegram Mini App). Не нужны для работы
-  # бота (управление через TG), поднимаются по запросу: `docker compose --profile web up`.
-  frontend:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.frontend
-      args:
-        VITE_API_BASE: /api
-    image: ${IMAGE_REPOSITORY:-fb-stop-bot}/frontend:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    logging: *default-logging
-    profiles: ["web"]
-    ports:
-      - "127.0.0.1:8080:80"
-    depends_on:
-      - api
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  mini-app:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.mini-app
-      args:
-        VITE_API_BASE: /api
-    image: ${IMAGE_REPOSITORY:-fb-stop-bot}/mini-app:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    logging: *default-logging
-    profiles: ["web"]
-    ports:
-      - "127.0.0.1:8081:80"
-    depends_on:
-      - api
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/tma/"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  # ====================== 13 Python-воркеров ======================
-  observer:
-    <<: *worker-common
-    # money-воркер: защищён от OOM-killer (override общего +200).
-    oom_score_adj: -400
-    # дать активному скан-циклу/мутации завершиться до SIGKILL при рестарте/деплое.
-    stop_grace_period: 60s
+  telegram_update_worker:
+    <<: *local-worker
     environment:
-      <<: *worker-env
-      WORKER_TYPE: observer
-
-  telegram_poller:
-    <<: *worker-common
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: telegram_poller
-
-  cleanup:
-    <<: *worker-common
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: cleanup
-
-  reconciler:
-    <<: *worker-common
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: reconciler
-
-  meta_api:
-    <<: *worker-common
-    # money-воркер (авто-стоп через Marketing API): защищён от OOM-killer.
-    oom_score_adj: -400
-    # дать активной Graph-мутации (pause_ad) завершиться до SIGKILL при деплое.
-    stop_grace_period: 60s
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: meta_api
-
-  health_watchdog:
-    <<: *worker-common
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: health_watchdog
-    # «Сторож без сторожа» (инцидент 01.07): docker не рестартует unhealthy сам,
-    # поэтому после 3 подряд протухших собственных heartbeat'ов (TTL 60с) убиваем
-    # PID 1 — restart: unless-stopped поднимет контейнер заново. Счётчик фейлов
-    # в /tmp сбрасывается при успехе (одиночная икота Redis не рестартует воркер).
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "if python -c \"import os,sys,redis; sys.exit(0 if redis.Redis.from_url(os.environ.get('REDIS_URL','redis://redis:6379/0'), socket_connect_timeout=5, socket_timeout=5).get('worker:heartbeat:health_watchdog') else 1)\"; then rm -f /tmp/hc_fail_count; exit 0; fi; n=$$(( $$(cat /tmp/hc_fail_count 2>/dev/null || echo 0) + 1 )); echo $$n > /tmp/hc_fail_count; if [ $$n -ge 3 ]; then kill 1; fi; exit 1",
-        ]
-      interval: 60s
-      timeout: 15s
-      retries: 3
-      start_period: 180s
-
-  enable_recommendation:
-    <<: *worker-common
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: enable_recommendation
-
-  digest_scheduler:
-    <<: *worker-common
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: digest_scheduler
-
-  cabinet_scheduler:
-    <<: *worker-common
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: cabinet_scheduler
-
-  tracker_aggregator:
-    <<: *worker-common
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: tracker_aggregator
-
-  creator_worker:
-    <<: *worker-common
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: creator_worker
-
-  creator_recorder:
-    <<: *worker-common
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: creator_recorder
-
-  campaign_creator:
-    <<: *worker-common
-    # Залив FB-кампаний из UI (uniquify→upload→create через Marketing API). Создание
-    # объектов необратимо — даём активному заливу завершиться до SIGKILL при деплое.
-    stop_grace_period: 60s
-    environment:
-      <<: *worker-env
-      WORKER_TYPE: campaign_creator
-      # Тот же корень, что у api: воркер читает концепты, загруженные API, по этому пути.
-      CAMPAIGN_UPLOAD_ROOT: /var/lib/fb_agent/campaign_uploads
-    # Общий с api том концептов (api пишет upload, воркер читает на заливе).
-    volumes:
-      - campaign_uploads:/var/lib/fb_agent/campaign_uploads
+      <<: *local-worker-env
+      WORKER_TYPE: telegram_updates
 
 volumes:
   pgdata:
   redisdata:
-  campaign_uploads:
-
-networks:
-  default:
-    name: fb_agent_default
-    external: true

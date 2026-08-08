@@ -19,11 +19,7 @@ interface CreativeUploadZoneProps {
   allCampaignKeys: string[];
   /** Текущий серверный набор: повторная загрузка дополняет его, не создаёт новый. */
   uploadId: string | null;
-  onUploaded: (
-    uploadId: string,
-    serverConcepts: UploadedConcept[],
-    addedRefs: string[],
-  ) => void;
+  onUploaded: (uploadId: string, serverConcepts: UploadedConcept[], addedRefs: string[]) => void;
 }
 
 export const CreativeUploadZone: FC<CreativeUploadZoneProps> = ({
@@ -86,14 +82,17 @@ export const CreativeUploadZone: FC<CreativeUploadZoneProps> = ({
           "border-2 border-dashed rounded-[var(--radius-3)] p-8 text-center transition-all duration-[120ms] cursor-pointer",
           isDragOver
             ? "border-accent bg-accent-bg"
-            : "border-[var(--hairline-strong)] bg-bg-2 hover:border-accent hover:bg-accent-bg/50",
+            : "border-[var(--color-hairline-strong)] bg-bg-2 hover:border-accent hover:bg-accent-bg/50",
         )}
         onClick={() => inputRef.current?.click()}
         role="button"
         aria-label="Загрузить концепты"
         tabIndex={0}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") inputRef.current?.click();
+          if (e.key === "Enter" || e.key === " ") {
+            if (e.key === " ") e.preventDefault();
+            inputRef.current?.click();
+          }
         }}
       >
         <input
@@ -104,6 +103,7 @@ export const CreativeUploadZone: FC<CreativeUploadZoneProps> = ({
           className="sr-only"
           onChange={handleInputChange}
           aria-hidden="true"
+          tabIndex={-1}
         />
         {uploading ? (
           <div className="flex flex-col items-center gap-2">
@@ -117,7 +117,7 @@ export const CreativeUploadZone: FC<CreativeUploadZoneProps> = ({
               Перетащите файлы или{" "}
               <span className="text-accent underline underline-offset-2">нажмите для выбора</span>
             </span>
-            <span className="text-[11px] text-bg-8">
+            <span className="text-[12px] text-bg-8">
               Можно добавлять несколькими загрузками · JPG, PNG, MP4, MOV · до 500 МБ и 50 файлов
             </span>
           </div>

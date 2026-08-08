@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-"""meta_api_worker — outbox-исполнитель Marketing API mutations.
+"""Исполнитель типизированных Marketing API-команд из PostgreSQL task queue.
 
-См. META_INTEGRATION_PLAN.md § 4.6 и Этап 2/Этап 5.
-Сейчас (Этап 2) — скелет: claim → mark_failed("not implemented yet").
-Этап 5 заменит execute_mutation на реальную диспетчеризацию через MetaApiClient.
+Worker соблюдает lane, lease, fencing token, абсолютный deadline и фиксирует
+только ``CONFIRMED | REJECTED | UNKNOWN`` через единый lifecycle команд.
 """

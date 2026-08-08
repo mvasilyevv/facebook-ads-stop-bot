@@ -67,7 +67,10 @@ class InsightsFetcher:
                 page_params["after"] = next_after
 
             response = await self._client.execute_graph_call(
-                method="GET", endpoint=endpoint, query_params=page_params
+                method="GET",
+                endpoint=endpoint,
+                query_params=page_params,
+                ad_account_id=req.ad_account_id,
             )
             data = response.get("data") or []
             for item in data:

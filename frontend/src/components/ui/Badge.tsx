@@ -1,7 +1,8 @@
 /**
- * Badge — FSM-state pills.
- * Спека: .badge height 22px, padding 0 10px, dot 6px, border-radius 9999px.
- * Использовать с alertStateToBadgeVariant / taskStatusToBadgeVariant из @fb/shared.
+ * Badge — presentational status pills.
+ * Минимальный служебный текст — 12px; высота сохраняет свободное вертикальное дыхание.
+ * Domain states arrive from strict typed operator view-models; Badge never
+ * guesses how to normalize an unknown state.
  */
 import { type HTMLAttributes } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
@@ -18,27 +19,26 @@ const badgeStyles = cva(
     variants: {
       variant: {
         // FSM alert_state
-        normal:   "bg-bg-2 border-bg-6 text-bg-10",
-        warning:  "bg-warning-bg border-[rgba(212,168,88,0.3)] text-warning",
-        stop:     "bg-danger-bg border-[rgba(199,98,92,0.3)] text-danger",
-        claimed:  "bg-info-bg border-[rgba(122,160,180,0.3)] text-info",
-        disabled: "bg-bg-2 border-bg-5 text-bg-8",
+        normal: "bg-bg-2 border-bg-6 text-bg-10",
+        warning: "bg-warning-bg border-[rgba(212,168,88,0.3)] text-warning",
+        stop: "bg-danger-bg border-[rgba(199,98,92,0.3)] text-danger",
+        claimed: "bg-info-bg border-[rgba(122,160,180,0.3)] text-info",
+        disabled: "bg-bg-2 border-bg-5 text-bg-9",
         // Дополнительные
-        success:  "bg-success-bg border-[rgba(126,180,122,0.3)] text-success",
-        info:     "bg-info-bg border-[rgba(122,160,180,0.3)] text-info",
-        neutral:  "bg-bg-3 border-bg-6 text-bg-10",
+        success: "bg-success-bg border-[rgba(126,180,122,0.3)] text-success",
+        info: "bg-info-bg border-[rgba(122,160,180,0.3)] text-info",
+        neutral: "bg-bg-3 border-bg-6 text-bg-10",
         // Task statuses
-        pending:   "bg-bg-3 border-bg-6 text-bg-9",
-        running:   "bg-info-bg border-[rgba(122,160,180,0.3)] text-info",
-        done:      "bg-success-bg border-[rgba(126,180,122,0.3)] text-success",
-        failed:    "bg-danger-bg border-[rgba(199,98,92,0.3)] text-danger",
-        retrying:  "bg-warning-bg border-[rgba(212,168,88,0.3)] text-warning",
-        cancelled: "bg-bg-2 border-bg-5 text-bg-8",
-        draft:     "bg-accent-bg border-[rgba(245,241,232,0.2)] text-accent",
+        pending: "bg-bg-3 border-bg-6 text-bg-9",
+        running: "bg-info-bg border-[rgba(122,160,180,0.3)] text-info",
+        done: "bg-success-bg border-[rgba(126,180,122,0.3)] text-success",
+        failed: "bg-danger-bg border-[rgba(199,98,92,0.3)] text-danger",
+        retrying: "bg-warning-bg border-[rgba(212,168,88,0.3)] text-warning",
+        cancelled: "bg-bg-2 border-bg-5 text-bg-9",
       },
       size: {
-        sm: "h-[18px] px-2 text-[9px]",
-        md: "h-[22px] px-2.5 text-[10px]",
+        sm: "h-6 px-2 text-[12px]",
+        md: "h-7 px-2.5 text-[12px]",
       },
     },
     defaultVariants: {
@@ -51,21 +51,20 @@ const badgeStyles = cva(
 const dotStyles = cva("rounded-full shrink-0", {
   variants: {
     variant: {
-      normal:    "bg-bg-9",
-      warning:   "bg-warning",
-      stop:      "bg-danger",
-      claimed:   "bg-info",
-      disabled:  "bg-bg-7",
-      success:   "bg-success",
-      info:      "bg-info",
-      neutral:   "bg-bg-7",
-      pending:   "bg-bg-8",
-      running:   "bg-info",
-      done:      "bg-success",
-      failed:    "bg-danger",
-      retrying:  "bg-warning",
-      cancelled: "bg-bg-7",
-      draft:     "bg-accent",
+      normal: "bg-bg-9",
+      warning: "bg-warning",
+      stop: "bg-danger",
+      claimed: "bg-info",
+      disabled: "bg-bg-8",
+      success: "bg-success",
+      info: "bg-info",
+      neutral: "bg-bg-8",
+      pending: "bg-bg-8",
+      running: "bg-info",
+      done: "bg-success",
+      failed: "bg-danger",
+      retrying: "bg-warning",
+      cancelled: "bg-bg-8",
     },
   },
   defaultVariants: { variant: "neutral" },
@@ -74,28 +73,17 @@ const dotStyles = cva("rounded-full shrink-0", {
 export type BadgeVariant = NonNullable<VariantProps<typeof badgeStyles>["variant"]>;
 
 export interface BadgeProps
-  extends HTMLAttributes<HTMLSpanElement>,
-    VariantProps<typeof badgeStyles> {
+  extends HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeStyles> {
   /** Показывать точку-статус (default true). */
   withDot?: boolean;
 }
 
-export function Badge({
-  children,
-  variant,
-  size,
-  withDot = true,
-  className,
-  ...rest
-}: BadgeProps) {
+export function Badge({ children, variant, size, withDot = true, className, ...rest }: BadgeProps) {
   return (
     <span className={cn(badgeStyles({ variant, size }), className)} {...rest}>
       {withDot ? (
         // dot 6×6px согласно спеке
-        <span
-          aria-hidden="true"
-          className={cn(dotStyles({ variant }), "size-1.5")}
-        />
+        <span aria-hidden="true" className={cn(dotStyles({ variant }), "size-1.5")} />
       ) : null}
       {children}
     </span>

@@ -20,7 +20,14 @@ from core.campaign_builder.config import (
 
 def _account() -> Account:
     """Минимальный валидный кабинет."""
-    return Account(act_id="123456789", page_id="111", pixel_id="222")
+    return Account(
+        act_id="123456789",
+        page_id="111",
+        pixel_id="222",
+        timezone_name="America/New_York",
+        currency="USD",
+        account_context_observed_at="2026-06-17T12:00:00+00:00",
+    )
 
 
 def _block(key: str, n_adsets: int, refs: list[str]) -> CampaignBlock:
@@ -40,7 +47,7 @@ def _config(**overrides) -> CampaignConfig:
         offer_code="GH",
         destination_link="https://example.shop/x",
         start_date="2026-06-25",
-        budget=Budget(daily_cents=300, bid_amount_cents=500),
+        budget=Budget(currency="USD", daily_amount="3.00", bid_amount="5.00"),
         targeting=Targeting(countries=["GH"]),
         campaigns=[_block("c1", 1, ["a.jpg"])],
     )
@@ -55,7 +62,7 @@ def test_code_start_offsets_codes():
         offer_code="GH",
         code_start=10,
     )
-    spec = build_campaign_spec(cfg, concept_counts={"c1": 1})
+    spec = build_campaign_spec(cfg)
     assert spec.campaigns[0].adsets[0].ads[0].code == "GH_CR010"
 
 

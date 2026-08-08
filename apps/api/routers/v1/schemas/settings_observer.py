@@ -1,22 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Pydantic-схемы для роутера settings_observer (GET/PUT/PATCH /settings/observer).
-
-Поля WARNING-параметров (*_percent_of_stop и т.п.) перенесены в OfferRule (per-offer).
-Возвращаем null для этих полей, чтобы фронт получал стабильный shape.
-"""
+"""Pydantic-схемы для GET/PUT/PATCH /settings/observer."""
 
 from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class ObserverSettingsResponse(BaseModel):
-    """Ответ на GET /settings/observer.
-
-    Поля, которые раньше были в глобальном observer_config, но теперь
-    хранятся per-offer в OfferRule, возвращаются как null для совместимости
-    с текущим фронтом.
-    """
+    """Текущая конфигурация observer без удалённых legacy-порогов."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -27,12 +22,6 @@ class ObserverSettingsResponse(BaseModel):
     owner_campaign_tag: str | None = None
     # Allowlist кампаний для am-режима (#3): фильтр am_tabular по campaign.id. Пусто — без фильтра.
     campaign_ids: list[str] = Field(default_factory=list)
-
-    # Поля, перенесённые в OfferRule: возвращаем null для стабильного shape.
-    warning_percent_of_stop: None = None
-    cpc_warning_percent: None = None
-    cpl_warning_percent: None = None
-    cpr_warning_percent: None = None
 
 
 class ObserverSettingsPutRequest(BaseModel):
@@ -90,6 +79,28 @@ class AutoEnableToggleRequest(BaseModel):
     enabled: bool
 
 
+class AutoEnableExclusionResponse(BaseModel):
+    """One ad excluded from automatic re-enable."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    fb_ad_id: str
+    internal_id: uuid.UUID
+    ad_name: str | None = None
+    disabled_at: datetime
+    reason: str | None = None
+
+
+class AutoEnableExclusionCreate(BaseModel):
+    """Optional operator reason for excluding an ad from automatic re-enable."""
+
+    reason: str | None = Field(
+        None,
+        max_length=64,
+        description="Причина исключения из авто-включения",
+    )
+
+
 class CampaignAllowlistRequest(BaseModel):
     """Тело PATCH /settings/observer/campaigns — allowlist кампаний для am-режима (#3)."""
 
@@ -102,7 +113,9 @@ class CampaignAllowlistRequest(BaseModel):
 class ScanNowResponse(BaseModel):
     """Ответ на POST /settings/observer/scan-now."""
 
-    status: str
+    status: Literal["queued"]
+    task_id: int
+    correlation_id: uuid.UUID
 
 
 class CampaignOption(BaseModel):

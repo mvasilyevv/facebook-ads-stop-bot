@@ -53,6 +53,10 @@ class TemporaryError(MetaApiError):
     """Временная ошибка — стоит retry."""
 
 
+class AmbiguousResultError(TemporaryError):
+    """The external request may have committed but its response was lost."""
+
+
 class PermanentError(MetaApiError):
     """Постоянная ошибка — retry бесполезен (mark_failed сразу)."""
 
@@ -107,28 +111,24 @@ class SessionUnavailableError(TemporaryError):
     """
 
 
-class NothingCommittedError(TemporaryError):
-    """Мутация ДОКАЗУЕМО не создала объектов в Meta — retry безопасен даже для
-    необратимых kinds (M-2, аудит 2026-07-12).
-
-    Бросается handler'ами (например create_campaign), когда все sub-провалы —
-    явные Graph-ошибки (code>0: Meta обработала запрос и отклонила) и все
-    транзиентные. Worker трактует наравне с SessionUnavailableError: requeue
-    вместо _fail_irreversible.
-    """
+class BrowserReadinessRejectedError(SessionUnavailableError):
+    """Exact live v5/profile/session check rejected before the controlled RPC."""
 
 
 # Маппинг Graph code → класс исключения. Default — PermanentError.
 _CODE_MAP: dict[int, type[MetaApiError]] = {
     # Отрицательные коды — ВНУТРЕННИЕ сигналы browser-agent (реальные Graph-коды
-    # положительные). Все транзиентные → Temporary/requeue, иначе авто-стоп бросается
-    # с 1-й попытки при любом блипе Vision-сессии (money-баг: pause_ad навсегда failed).
+    # положительные). Все транзиентные, но только доказанный pre-send
+    # сбой можно слепо повторять; mid-flight потери требуют UNKNOWN/reconcile.
     #   -1 TokenNotFound (EAA-токен ещё не в DOM свежей вкладки) — прогреется;
     #   -2 NetworkError (Failed to fetch / Timeout fetch внутри page.evaluate) — сетевой блип;
     #   -3 page-evaluate error — page/сессия в переходном состоянии.
     -1: SessionUnavailableError,
-    -2: TemporaryError,
-    -3: SessionUnavailableError,
+    -2: AmbiguousResultError,
+    # A page/context can disappear after fetch reached Meta but before
+    # page.evaluate returned the response.  Unlike token-not-found (-1), this is
+    # not proof of a pre-send failure and must never enter the blind-retry path.
+    -3: AmbiguousResultError,
     1: PermanentError,
     2: TemporaryError,
     4: RateLimitedError,

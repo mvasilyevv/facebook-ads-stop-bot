@@ -7,7 +7,7 @@ allowBuilds:
   esbuild: true
 
 # pnpm 10+ читает onlyBuiltDependencies отсюда (раньше было в package.json "pnpm",
-# которое pnpm 11 игнорирует → причина purge-промпта и зависания run.sh).
+# которое pnpm 11 игнорирует → причина интерактивного purge-промпта в bootstrap).
 onlyBuiltDependencies:
   - esbuild
   - "@tailwindcss/oxide"

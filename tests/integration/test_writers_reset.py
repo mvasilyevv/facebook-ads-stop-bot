@@ -44,7 +44,9 @@ async def ad_with_state(pg_engine):
             {"i": offer_id, "c": f"RST_{suffix}", "n": f"Reset offer {suffix}"},
         )
         await conn.execute(
-            text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
+            text(
+                "INSERT INTO fb_campaigns (id, campaign_name, offer_id, ad_account_id) VALUES (:i, :n, :o, '123')"
+            ),
             {"i": campaign_id, "n": f"CMP_{suffix}", "o": offer_id},
         )
         await conn.execute(

@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
 
 
 @dataclass(slots=True, frozen=True)
@@ -74,25 +77,50 @@ async def defer_auto_stop_for_fresh_snapshot(
     *,
     task_id: int,
     delay_seconds: int = 15,
+    lease_owner: uuid.UUID | None = None,
+    lease_token: int | None = None,
 ) -> bool:
     """Return a claimed auto-stop to retry without consuming a failure attempt."""
+    if lease_owner is None or lease_token is None or int(lease_token) <= 0:
+        return False
     async with engine.begin() as conn:
         result = await conn.execute(
             text(
                 """
                 UPDATE task_queue
                 SET status = 'retrying',
-                    next_retry_at = now() + make_interval(secs => :delay_seconds),
+                    available_at = now() + make_interval(secs => :delay_seconds),
+                    deadline_at = now() + make_interval(secs => :delay_seconds + 30),
                     external_started_at = NULL,
                     last_error = 'stale_meta_snapshot: observer refresh requested',
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
                     updated_at = now()
                 WHERE id = :task_id
                   AND status = 'running'
                   AND external_started_at IS NULL
+                  AND lease_owner = :lease_owner AND lease_token = :lease_token
+                  AND lease_expires_at > clock_timestamp()
                 """
             ),
-            {"task_id": task_id, "delay_seconds": max(int(delay_seconds), 1)},
+            {
+                "task_id": task_id,
+                "delay_seconds": max(int(delay_seconds), 1),
+                "lease_owner": lease_owner,
+                "lease_token": lease_token,
+            },
         )
+        if result.rowcount:
+            await enqueue_observer_scan(
+                engine,
+                requested_by="meta_api_worker",
+                reason="auto_stop_requires_fresh_meta",
+                idempotency_key=observer_scan_idempotency_key(
+                    "auto-stop-refresh",
+                    str(task_id),
+                ),
+                connection=conn,
+            )
     return bool(result.rowcount)
 
 

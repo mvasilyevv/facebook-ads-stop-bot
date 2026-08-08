@@ -33,7 +33,7 @@ export function Card({
   return (
     <div
       className={cn(
-        "border border-[var(--hairline)] rounded-[var(--radius-3)]",
+        "border border-[var(--color-hairline)] rounded-[var(--radius-3)]",
         nested ? "bg-bg-2" : "bg-bg-1",
         padded ? "p-6" : "p-0",
         className,
@@ -44,7 +44,7 @@ export function Card({
         <div className={cn("flex items-baseline justify-between", padded ? "mb-5" : "p-6 pb-0")}>
           <div>
             {eyebrow ? (
-              <div className="text-[10px] font-display tracking-[0.14em] uppercase text-bg-8 mb-1.5">
+              <div className="text-[12px] font-display tracking-[0.14em] uppercase text-bg-9 mb-1.5">
                 {eyebrow}
               </div>
             ) : null}
@@ -57,7 +57,7 @@ export function Card({
           {action ? (
             <div>{action}</div>
           ) : meta ? (
-            <span className="text-[11px] font-display text-bg-9 tracking-wider">{meta}</span>
+            <span className="text-[12px] font-display text-bg-9 tracking-wider">{meta}</span>
           ) : null}
         </div>
       )}

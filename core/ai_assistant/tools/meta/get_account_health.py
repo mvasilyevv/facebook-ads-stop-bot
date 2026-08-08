@@ -11,6 +11,11 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from core.ai_assistant.tools.base import RiskLevel, ToolContext, ToolError
+from core.ai_assistant.tools.meta._currency import (
+    currency_evidence,
+    format_major_money,
+    format_minor_money,
+)
 from core.meta_api.errors import MetaApiError
 from core.meta_api.insights.fetcher import InsightsFetcher
 
@@ -64,9 +69,11 @@ class GetAccountHealthTool:
             lines = [f"Доступные ad accounts ({len(accounts)}):"]
             for acc in accounts:
                 status = _ACCOUNT_STATUS.get(int(acc.get("account_status") or 0), "UNKNOWN")
+                listed_currency = currency_evidence(acc.get("currency"))
                 lines.append(
                     f"- {acc.get('id')} «{acc.get('name', '?')}» "
-                    f"status={status} currency={acc.get('currency', '?')}"
+                    f"status={status} "
+                    f"currency={listed_currency.code if listed_currency else 'unknown'}"
                 )
             return "\n".join(lines)
 
@@ -83,6 +90,7 @@ class GetAccountHealthTool:
                         "spend_cap,disable_reason,timezone_name"
                     ),
                 },
+                ad_account_id=ad_account_id,
             )
         except MetaApiError as exc:
             raise ToolError(f"Marketing API: {exc}") from exc
@@ -97,7 +105,7 @@ class GetAccountHealthTool:
 
         status = _ACCOUNT_STATUS.get(int(account.get("account_status") or 0), "UNKNOWN")
         disable_reason = account.get("disable_reason")
-        currency = account.get("currency", "?")
+        currency = currency_evidence(account.get("currency"))
         amount_spent = account.get("amount_spent", "?")
         balance = account.get("balance", "?")
         spend_cap = account.get("spend_cap")
@@ -105,18 +113,19 @@ class GetAccountHealthTool:
         lines = [
             f"Кабинет {ad_account_id} «{account.get('name', '?')}»",
             f"Статус: {status} (raw={account.get('account_status')})",
-            f"Валюта: {currency}",
-            f"Spent (lifetime): {amount_spent}",
-            f"Balance: {balance}",
-            f"Spend cap: {spend_cap or '—'}",
+            f"Валюта: {currency.code if currency else 'не подтверждена'}",
+            f"Spent (lifetime): {format_minor_money(amount_spent, currency)}",
+            f"Balance: {format_minor_money(balance, currency)}",
+            f"Spend cap: {format_minor_money(spend_cap, currency)}",
             f"Timezone: {account.get('timezone_name', '?')}",
         ]
         if disable_reason:
             lines.append(f"⚠️ disable_reason: {disable_reason}")
         if insights_row:
-            cpc_str = f"${insights_row.cpc:.2f}" if insights_row.cpc is not None else "—"
+            cpc_str = format_major_money(insights_row.cpc, currency)
             lines.append(
-                f"Today: spend=${insights_row.spend:.2f} impr={insights_row.impressions} "
+                f"Today: spend={format_major_money(insights_row.spend, currency)} "
+                f"impr={insights_row.impressions} "
                 f"clicks={insights_row.clicks} cpc={cpc_str}"
             )
         else:

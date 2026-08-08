@@ -31,13 +31,14 @@ export function ChatMessageList() {
       )}
       {pending ? (
         <div
-          className="flex items-center gap-1 self-start px-3 py-2 border border-[var(--hairline)] bg-bg-2 rounded-[var(--radius-2)]"
+          role="status"
+          className="flex items-center gap-1 self-start px-3 py-2 border border-[var(--color-hairline)] bg-bg-2 rounded-[var(--radius-2)]"
           aria-label="Ассистент думает"
         >
           <span className="size-1.5 rounded-full bg-bg-8 animate-pulse" />
           <span className="size-1.5 rounded-full bg-bg-8 animate-pulse [animation-delay:150ms]" />
           <span className="size-1.5 rounded-full bg-bg-8 animate-pulse [animation-delay:300ms]" />
-          <span className="text-[11px] text-bg-9 ml-1 font-display">думает…</span>
+          <span className="text-[12px] text-bg-9 ml-1 font-display">думает…</span>
         </div>
       ) : null}
     </div>

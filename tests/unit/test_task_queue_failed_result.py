@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from core.meta_api.queue import mark_task_failed
 from core.tasks.queue import mark_failed
+
+_LEASE_OWNER = uuid.UUID("00000000-0000-0000-0000-000000000042")
+_LEASE_TOKEN = 3
 
 
 def _engine(*, rowcount: int = 1):
@@ -33,11 +37,19 @@ async def test_mark_failed_atomically_writes_structured_result() -> None:
         "cleanup_failures": [],
     }
 
-    applied = await mark_failed(engine, task_id=42, error="partial", result=partial)
+    applied = await mark_failed(
+        engine,
+        task_id=42,
+        error="partial",
+        result=partial,
+        lease_owner=_LEASE_OWNER,
+        lease_token=_LEASE_TOKEN,
+    )
 
     assert applied is True
-    statement = str(connection.execute.await_args.args[0])
-    params = connection.execute.await_args.args[1]
+    update_call = connection.execute.await_args_list[0]
+    statement = str(update_call.args[0])
+    params = update_call.args[1]
     assert "SET status = 'failed'" in statement
     assert "result = COALESCE(CAST(:res AS JSONB), result)" in statement
     assert "WHERE id = :id AND status = 'running'" in statement
@@ -48,12 +60,29 @@ async def test_mark_failed_atomically_writes_structured_result() -> None:
 async def test_mark_failed_without_result_preserves_existing_json() -> None:
     engine, connection = _engine()
 
-    await mark_failed(engine, task_id=7, error="legacy caller")
+    await mark_failed(
+        engine,
+        task_id=7,
+        error="fenced caller",
+        lease_owner=_LEASE_OWNER,
+        lease_token=_LEASE_TOKEN,
+    )
 
-    statement = str(connection.execute.await_args.args[0])
-    params = connection.execute.await_args.args[1]
+    update_call = connection.execute.await_args_list[0]
+    statement = str(update_call.args[0])
+    params = update_call.args[1]
     assert "result = COALESCE(CAST(:res AS JSONB), result)" in statement
     assert params["res"] is None
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_without_fence_fails_closed_without_sql() -> None:
+    engine, connection = _engine()
+
+    applied = await mark_failed(engine, task_id=7, error="unfenced")
+
+    assert applied is False
+    connection.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio

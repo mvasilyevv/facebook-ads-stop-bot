@@ -16,7 +16,7 @@ from core.models.base import Base, CreatedAtOnly, UUIDPrimaryKey
 class AdAutoEnableDisabled(UUIDPrimaryKey, CreatedAtOnly, Base):
     """Метка «не включать это объявление автоматически» (против авто-recovery).
 
-    Постоянная: ставится через POST /dashboard/auto-enable-disabled/{fb_ad_id},
+    Постоянная: ставится через POST /settings/observer/auto-enable-exclusions/{fb_ad_id},
     снимается ТОЛЬКО вручную через DELETE. enable_recommendation_worker использует
     таблицу как статичный NOT IN фильтр.
 

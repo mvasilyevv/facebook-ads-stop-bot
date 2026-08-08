@@ -3,8 +3,8 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentType } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchJson, impact, notify, openLink } = vi.hoisted(() => ({
-  fetchJson: vi.fn(),
+const { post, impact, notify, openLink } = vi.hoisted(() => ({
+  post: vi.fn(),
   openLink: vi.fn(),
   impact: vi.fn(),
   notify: vi.fn(),
@@ -14,7 +14,7 @@ vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => options,
 }));
 
-vi.mock("@/lib/api", () => ({ fetchJson }));
+vi.mock("@/lib/auth", () => ({ tmaFetchApi: { POST: post } }));
 vi.mock("@/lib/tg", () => ({
   haptic: { impact, notify },
   openLink,
@@ -26,7 +26,7 @@ const RemoteDesktopPage = (Route as unknown as { component: ComponentType }).com
 
 describe("Mini App RemoteDesktopPage", () => {
   beforeEach(() => {
-    fetchJson.mockReset();
+    post.mockReset();
     openLink.mockReset();
     impact.mockReset();
     notify.mockReset();
@@ -34,16 +34,15 @@ describe("Mini App RemoteDesktopPage", () => {
 
   it("получает Bearer launch через общий API-клиент и открывает URL через Telegram", async () => {
     const user = userEvent.setup();
-    fetchJson.mockResolvedValue({
-      url: "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
-      expires_at: "2026-07-17T12:00:00Z",
-      transport: "kasm",
+    post.mockResolvedValue({
+      data: { url: "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use", expires_at: "2026-07-17T12:00:00Z", transport: "kasm" },
+      response: { ok: true },
     });
     render(<RemoteDesktopPage />);
 
     await user.click(screen.getByRole("button", { name: "Подключиться" }));
 
-    expect(fetchJson).toHaveBeenCalledWith("/desktop/launch", { method: "POST" });
+    expect(post).toHaveBeenCalledWith("/api/desktop/launch");
     expect(openLink).toHaveBeenCalledWith(
       "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
     );
@@ -54,7 +53,7 @@ describe("Mini App RemoteDesktopPage", () => {
 
   it("показывает понятную ошибку и оставляет одну кнопку повтора", async () => {
     const user = userEvent.setup();
-    fetchJson.mockRejectedValue(new Error("Доступ к рабочему столу запрещён."));
+    post.mockRejectedValue(new Error("Доступ к рабочему столу запрещён."));
     render(<RemoteDesktopPage />);
 
     await user.click(screen.getByRole("button", { name: "Подключиться" }));
@@ -66,10 +65,9 @@ describe("Mini App RemoteDesktopPage", () => {
 
   it("не передаёт Telegram URL с чужого origin", async () => {
     const user = userEvent.setup();
-    fetchJson.mockResolvedValue({
-      url: "https://evil.example/desktop-auth/redeem?ticket=stolen",
-      expires_at: "2026-07-17T12:00:00Z",
-      transport: "kasm",
+    post.mockResolvedValue({
+      data: { url: "https://evil.example/desktop-auth/redeem?ticket=stolen", expires_at: "2026-07-17T12:00:00Z", transport: "kasm" },
+      response: { ok: true },
     });
     render(<RemoteDesktopPage />);
 

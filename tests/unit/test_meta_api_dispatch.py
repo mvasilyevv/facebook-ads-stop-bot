@@ -33,10 +33,12 @@ def test_each_handler_declares_its_kind() -> None:
 # dispatch_mutation для известного kind вызывает execute этого handler'а.
 @pytest.mark.asyncio
 async def test_dispatch_calls_correct_handler_for_known_kind() -> None:
-    fake_response = {"id": "23847001"}
+    fake_response = {"success": True}
     client = AsyncMock()
     client.execute_graph_call = AsyncMock(return_value=fake_response)
-    payload = MetaMutationPayload(mutation_kind="pause_ad", target_id="23847001")
+    payload = MetaMutationPayload(
+        ad_account_id="123", mutation_kind="pause_ad", target_id="23847001"
+    )
 
     result = await dispatch_mutation(client, payload)
 
@@ -59,7 +61,7 @@ async def test_dispatch_unknown_kind_raises_not_implemented(monkeypatch) -> None
 
     client = AsyncMock()
     bad_payload = MetaMutationPayload.from_dict(
-        {"mutation_kind": "fake_kind", "target_id": "23847001"}
+        {"mutation_kind": "fake_kind", "target_id": "23847001", "ad_account_id": "123"}
     )
 
     with pytest.raises(NotImplementedError, match="fake_kind"):

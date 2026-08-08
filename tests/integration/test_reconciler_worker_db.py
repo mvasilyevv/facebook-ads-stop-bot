@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import text
 
-from apps.reconciler_worker.worker import cancel_old_drafts, reconcile_stuck_running
+from apps.reconciler_worker.worker import reconcile_stuck_running
 
 
 # Проверка: зависшая 'running' с старым updated_at переводится в 'retrying'
@@ -25,9 +25,12 @@ async def test_reconcile_stuck_running(pg_engine) -> None:
                 text(
                     """
                     INSERT INTO task_queue
-                        (task_type, status, idempotency_key, payload, requested_by, created_at, updated_at)
+                        (task_type, status, idempotency_key, payload, requested_by,
+                         lane, created_at, updated_at)
                     VALUES
-                        ('disable', 'running', :k, CAST('{}' AS JSONB), 'test', :ts, :ts)
+                        ('observer_scan', 'running', :k,
+                         CAST('{"source":"test"}' AS JSONB), 'test', 'interactive',
+                         :ts, :ts)
                     """
                 ),
                 {"k": stuck_key, "ts": old_ts},
@@ -52,45 +55,4 @@ async def test_reconcile_stuck_running(pg_engine) -> None:
             await conn.execute(
                 text("DELETE FROM task_queue WHERE idempotency_key = :k"),
                 {"k": stuck_key},
-            )
-
-
-# Проверка: старый draft (>24h) → cancelled
-@pytest.mark.asyncio
-async def test_cancel_old_drafts(pg_engine) -> None:
-    engine = pg_engine
-    old_draft_key = f"test_reconciler_draft_{uuid.uuid4().hex[:8]}"
-    try:
-        old_ts = datetime.now(timezone.utc) - timedelta(hours=30)
-        async with engine.begin() as conn:
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO task_queue
-                        (task_type, status, idempotency_key, payload, requested_by, created_at, updated_at)
-                    VALUES
-                        ('meta_api_mutation', 'draft', :k, CAST('{}' AS JSONB), 'ai_draft', :ts, :ts)
-                    """
-                ),
-                {"k": old_draft_key, "ts": old_ts},
-            )
-
-        cancelled = await cancel_old_drafts(engine)
-        assert cancelled >= 1
-
-        async with engine.connect() as conn:
-            status = (
-                await conn.execute(
-                    text("SELECT status FROM task_queue WHERE idempotency_key = :k"),
-                    {"k": old_draft_key},
-                )
-            ).first()
-            assert status is not None
-            assert status[0] == "cancelled"
-    finally:
-        # engine закроет pg_engine-фикстура
-        async with engine.begin() as conn:
-            await conn.execute(
-                text("DELETE FROM task_queue WHERE idempotency_key = :k"),
-                {"k": old_draft_key},
             )

@@ -11,7 +11,6 @@ from core.meta_api.adapters import (
     merge_insights_and_ad,
     meta_api_ad_row_to_scanned_row,
     meta_insights_row_from_dict,
-    meta_observation_payload,
 )
 from core.meta_api.schemas import MetaApiAdRow
 
@@ -120,6 +119,8 @@ def test_meta_api_ad_row_to_scanned_row_basic() -> None:
     )
     scanned = meta_api_ad_row_to_scanned_row(api, resolved_offer_code="DRC_CR2")
     assert scanned.fb_ad_id == "ad_1"
+    assert scanned.campaign_id == "cmp"
+    assert scanned.adset_id == "as"
     assert scanned.delivery_status == "Active"  # маппинг ACTIVE → Active
     assert scanned.spend == Decimal("20")
     assert scanned.leads == 4
@@ -152,39 +153,9 @@ def test_to_scanned_row_no_zero_division() -> None:
         actions={},
     )
     scanned = meta_api_ad_row_to_scanned_row(api)
+    assert scanned.campaign_id == ""
+    assert scanned.adset_id == ""
     assert scanned.cost_per_lead is None
     assert scanned.cost_per_registration is None
     assert scanned.cost_per_landing_page_view is None
     assert scanned.delivery_status == "Paused"
-
-
-# Payload для UPSERT в meta_api_observation содержит все требуемые ключи.
-def test_meta_observation_payload_shape() -> None:
-    api = MetaApiAdRow(
-        fb_ad_id="ad_x",
-        fb_campaign_id="c",
-        fb_adset_id="a",
-        ad_account_id="act_77",
-        name="N",
-        campaign_name="C",
-        adset_name="A",
-        effective_status="ACTIVE",
-        configured_status="ACTIVE",
-        spend=Decimal("1.50"),
-        impressions=300,
-        clicks=20,
-        cpc=Decimal("0.075"),
-        ctr=Decimal("6.67"),
-        cpm=Decimal("5.00"),
-        reach=200,
-        frequency=Decimal("1.5"),
-        actions={"lead": 2},
-    )
-    payload = meta_observation_payload(api)
-    assert payload["account_id"] == "act_77"
-    assert payload["meta_ad_status"] == "ACTIVE"
-    assert payload["effective_status"] == "ACTIVE"
-    metrics = payload["api_metrics"]
-    assert metrics["spend"] == "1.50"
-    assert metrics["impressions"] == 300
-    assert metrics["actions"] == {"lead": 2}

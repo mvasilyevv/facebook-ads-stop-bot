@@ -1,91 +1,41 @@
 # -*- coding: utf-8 -*-
 """Центральный диспетчер Telegram update → доменный handler.
 
-Принимает `update` от long-polling, парсит команду / callback_query, делегирует
-обработку модулям `onboarding.py`, `spy.py`, `bulk.py`, `alerts.py`, `creator.py`.
-`redis` опционален: пробрасывается в creator-команды для pubsub publish.
-`redis_client` (data-Redis) + `meta_api_client` — зависимости AI-ассистента
-(/ai + свободный текст в личке owner'а, см. ai_chat.py). Draft-кнопки
-dr_ok/dr_cancel обслуживают и ручные /pause /resume, и черновики ассистента.
+Принимает durable webhook update, парсит команду / callback_query и делегирует
+только синхронным либо транзакционно-долговечным обработчикам.
+Telegram AI execution is intentionally disabled: durable inbox rows are never
+marked processed before detached work finishes. Only opaque action callbacks
+are recognized; raw target/task identifiers have no route.
 """
 
 from __future__ import annotations
 
 import logging
 import shlex
-from typing import TYPE_CHECKING, Any
+import uuid
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.telegram import format as fmt
-from core.telegram.client import TelegramBotClient
+from core.telegram.action_tokens import is_claimed_action_recovery
 from core.telegram.handlers._send import send_text
-from core.telegram.handlers.ai_chat import spawn_ai_chat
-from core.telegram.handlers.alerts import (
-    handle_dis_callback,
-    handle_enable_reco_callback,
-)
-from core.telegram.handlers.autostart import handle_autostart
-from core.telegram.handlers.bulk import handle_bulk_toggle
-from core.telegram.handlers.creator import (
-    handle_list_plans,
-    handle_plan_run_callback,
-    handle_record_plan,
-    handle_stop_record,
-)
-from core.telegram.handlers.draft_confirm import handle_draft_callback
+from core.telegram.handlers.alerts import handle_action_callback
 from core.telegram.handlers.onboarding import handle_help, handle_start
-from core.telegram.handlers.spy import handle_spy
+from core.telegram.handlers.protocol import TelegramUpdateClient
 from core.telegram.service import find_recipient
 
-if TYPE_CHECKING:  # pragma: no cover
-    from core.pubsub import RedisPubSub
-
 logger = logging.getLogger(__name__)
-
-
-_LEGACY_COMMANDS: frozenset[str] = frozenset(
-    {
-        "ads",
-        "offers",
-        "rules",
-        "scripts",
-        "status",
-        "digest",
-        "set",
-        "app",
-        "disabled",
-        "settings",
-    }
-)
-
-# Owner-ACL: money-действия, доступные только role='owner'.
-# Callback-кнопки под алертами/планами (трогают кабинет или боевой браузер).
-# dr_ok (подтверждение money-черновика /pause /resume) — тоже owner-only (H-2):
-# не-owner может СОЗДАТЬ черновик, но ИСПОЛНИТЬ его (approve → pending →
-# meta_api_worker тратит деньги) вправе только владелец кабинета.
-# dr_cancel тоже owner-only: отмена creator-scoped и разрешена только пока запись
-# остаётся draft. Поздняя кнопка не может скрыть уже запущенную money-мутацию.
-_OWNER_ONLY_CALLBACKS: frozenset[str] = frozenset({"dis", "ereco", "plan", "dr_ok", "dr_cancel"})
-# Команды (autostart с аргументами проверяется отдельно — write-путь).
-# /ai — owner-only: ассистент умеет создавать money-черновики (request_*).
-_OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
-    {"pause", "resume", "record_plan", "stop_record", "ai"}
-)
 
 
 async def _dispatch_callback_query(
     *,
     engine: AsyncEngine,
-    client: TelegramBotClient,
+    client: TelegramUpdateClient,
     cq: dict[str, Any],
-    redis_client: Any | None = None,
+    bot_generation: int,
 ) -> None:
-    """Обработка нажатия inline-кнопки (под алертами или draft-превью /pause).
-
-    callback_data: '<action>:<arg1>[:<arg2>]'
-        action ∈ {'dis', 'ereco', 'dr_ok', 'dr_cancel', 'plan'}.
-    """
+    """Handle a recipient-bound opaque callback from a durable incident card."""
     cq_id = str(cq.get("id", ""))
     data = str(cq.get("data") or "")
     from_user = cq.get("from") or {}
@@ -93,6 +43,12 @@ async def _dispatch_callback_query(
     username = from_user.get("username") or str(user_id)
     chat_data = (cq.get("message") or {}).get("chat") or {}
     chat_id = int(chat_data.get("id", 0))
+    if chat_data.get("type") != "private":
+        try:
+            await client.answer_callback_query(cq_id, text="Действие доступно только в личке")
+        except Exception:
+            pass
+        return
 
     parts = data.split(":", 2)
     if len(parts) < 2:
@@ -104,77 +60,44 @@ async def _dispatch_callback_query(
 
     action = parts[0]
 
+    internal_token_id: uuid.UUID | None = None
+    if action == "a":
+        internal_value = cq.get("_fb_action_token_id")
+        if internal_value is not None:
+            try:
+                internal_token_id = uuid.UUID(str(internal_value))
+            except ValueError:
+                internal_token_id = None
+
     # Access control: только активный recipient может жать кнопки
     recipient = await find_recipient(engine, chat_id=chat_id, telegram_user_id=user_id)
-    if not recipient:
+    claimed_recovery = False
+    if recipient is None and action == "a" and internal_token_id is not None:
+        claimed_recovery = await is_claimed_action_recovery(
+            engine,
+            token_id=internal_token_id,
+            chat_id=chat_id,
+            telegram_user_id=user_id,
+            claim_key=cq_id,
+        )
+    if recipient is None and not claimed_recovery:
         try:
             await client.answer_callback_query(cq_id, text="Доступа нет")
         except Exception:
             pass
         return
 
-    # Owner-ACL: money-кнопки (отключение/включение/запуск плана, подтверждение
-    # money-черновика dr_ok/dr_cancel) доступны только role='owner'.
-    if action in _OWNER_ONLY_CALLBACKS and not recipient.is_owner():
-        logger.warning(
-            "ACL отказ (callback): action=%s chat_id=%s role=%s", action, chat_id, recipient.role
-        )
-        try:
-            await client.answer_callback_query(cq_id, text="⛔ Только владелец кабинета")
-        except Exception:
-            pass
-        return
-
-    # Draft-подтверждение (под /pause /resume превью)
-    if action in ("dr_ok", "dr_cancel"):
-        message_id = (cq.get("message") or {}).get("message_id")
-        await handle_draft_callback(
+    if action == "a":
+        await handle_action_callback(
             engine=engine,
             client=client,
             cq_id=cq_id,
-            action=action,
-            task_id_raw=parts[1],
-            username=str(username),
+            raw_token=None if internal_token_id is not None else parts[1],
+            token_id=internal_token_id,
             chat_id=chat_id,
-            message_id=int(message_id) if message_id else None,
-        )
-        return
-
-    # Creator plan run callback
-    if action == "plan":
-        await handle_plan_run_callback(
-            callback_query=cq,
-            engine=engine,
-            client=client,
-        )
-        return
-
-    target_id = parts[1]
-    token = parts[2] if len(parts) >= 3 else ""
-
-    if action == "dis":
-        await handle_dis_callback(
-            engine=engine,
-            client=client,
-            cq_id=cq_id,
-            fb_ad_id=target_id,
-            token=token,
+            telegram_user_id=user_id,
             username=str(username),
-        )
-        return
-
-    # action == "snz" (snooze) убран (решение владельца): старые snz-кнопки под уже
-    # отправленными алертами просто проигнорируются (no-op), не падают.
-
-    if action == "ereco":
-        await handle_enable_reco_callback(
-            engine=engine,
-            client=client,
-            cq_id=cq_id,
-            recommendation_id=target_id,
-            username=str(username),
-            chat_id=chat_id,
-            redis_client=redis_client,
+            bot_generation=bot_generation,
         )
         return
 
@@ -187,17 +110,18 @@ async def _dispatch_callback_query(
 async def handle_update(
     *,
     engine: AsyncEngine,
-    client: TelegramBotClient,
+    client: TelegramUpdateClient,
     update: dict[str, Any],
-    redis: RedisPubSub | None = None,
-    redis_client: Any | None = None,
-    meta_api_client: Any | None = None,
+    bot_generation: int,
 ) -> None:
     """Обработка одного update от Telegram."""
     # Inline-кнопки под алертами
     if "callback_query" in update:
         await _dispatch_callback_query(
-            engine=engine, client=client, cq=update["callback_query"], redis_client=redis_client
+            engine=engine,
+            client=client,
+            cq=update["callback_query"],
+            bot_generation=bot_generation,
         )
         return
 
@@ -209,7 +133,8 @@ async def handle_update(
     chat_id = int(chat.get("id", 0))
     chat_type = chat.get("type")
     message_id = int(msg.get("message_id", 0))
-    thread_id = msg.get("message_thread_id")
+    if chat_type != "private":
+        return
 
     user = msg.get("from") or {}
     user_id = int(user.get("id", 0))
@@ -222,12 +147,10 @@ async def handle_update(
     if not text_raw:
         return
 
-    # Свободный текст (не /-команда): в личке owner'а — вопрос AI-ассистенту,
-    # везде остальное — молчаливый игнор (как раньше). Ошибка проверки доступа
-    # тоже молчание: свободный текст не должен ронять поллер/спамить отказами.
+    # Свободный текст в owner DM получает синхронный детерминированный ответ.
+    # Detached AI work is forbidden here: otherwise the durable inbox would be
+    # committed before the actual response/task completed.
     if not text_raw.startswith("/"):
-        if chat_type != "private":
-            return
         try:
             recipient = await find_recipient(engine, chat_id=chat_id, telegram_user_id=user_id)
         except Exception:  # noqa: BLE001
@@ -235,25 +158,18 @@ async def handle_update(
             return
         if not recipient or not recipient.is_owner():
             return
-        # Фоновым таском (H-1): AI-цикл длится до минут, поллер не должен ставить
-        # money-кнопки следующих updates в очередь за ответом ассистента.
-        spawn_ai_chat(
-            engine=engine,
-            client=client,
+        await send_text(
+            client,
             chat_id=chat_id,
-            message_id=message_id,
-            thread_id=thread_id,
-            username=username,
-            args_text=text_raw,
-            redis_client=redis_client,
-            meta_api_client=meta_api_client,
+            text="AI-ассистент доступен в веб-интерфейсе. Telegram оставлен для коротких incident-карточек и действий.",
+            reply_to_message_id=message_id,
         )
         return
 
     # Парсим команду + аргументы
     parts = text_raw.split(maxsplit=1)
     cmd = parts[0].lower().lstrip("/")
-    # Убираем @botname суффикс (например /spy@my_bot)
+    # Убираем @botname суффикс (например /help@my_bot)
     if "@" in cmd:
         cmd = cmd.split("@", 1)[0]
     args_text = parts[1] if len(parts) > 1 else ""
@@ -268,9 +184,7 @@ async def handle_update(
             engine=engine,
             client=client,
             chat_id=chat_id,
-            chat_type=chat_type,
             message_id=message_id,
-            thread_id=thread_id,
             user_id=user_id,
             username=username,
             display_name=display_name,
@@ -290,147 +204,11 @@ async def handle_update(
         )
         return
 
-    # Owner-ACL: money-команды (трогают кабинет / боевой браузер) — только role='owner'.
-    # autostart с аргументами = запись расписания (money); без аргументов = чтение (любому).
-    needs_owner = cmd in _OWNER_ONLY_COMMANDS or (cmd == "autostart" and bool(args_text.strip()))
-    if needs_owner and not recipient.is_owner():
-        logger.warning(
-            "ACL отказ (команда): cmd=%s chat_id=%s role=%s",
-            cmd,
-            chat_id,
-            getattr(recipient, "role", None),
-        )
-        await send_text(
-            client,
-            chat_id=chat_id,
-            text="⛔ Только владелец кабинета может выполнить это действие.",
-            reply_to_message_id=message_id,
-            message_thread_id=thread_id,
-        )
-        return
-
-    if cmd == "ai":
-        # Фоновым таском (H-1) — см. комментарий у free-text ветки выше.
-        spawn_ai_chat(
-            engine=engine,
-            client=client,
-            chat_id=chat_id,
-            message_id=message_id,
-            thread_id=thread_id,
-            username=username,
-            args_text=args_text,
-            redis_client=redis_client,
-            meta_api_client=meta_api_client,
-        )
-        return
-
     if cmd == "help":
         await handle_help(
             client=client,
             chat_id=chat_id,
             message_id=message_id,
-            thread_id=thread_id,
-        )
-        return
-
-    if cmd == "spy":
-        await handle_spy(
-            engine=engine,
-            client=client,
-            chat_id=chat_id,
-            message_id=message_id,
-            thread_id=thread_id,
-            user_id=user_id,
-            username=username,
-            args_text=args_text,
-        )
-        return
-
-    if cmd in ("pause", "resume"):
-        await handle_bulk_toggle(
-            engine=engine,
-            client=client,
-            chat_id=chat_id,
-            message_id=message_id,
-            thread_id=thread_id,
-            username=username,
-            command=cmd,
-            args_text=args_text,
-        )
-        return
-
-    if cmd == "autostart":
-        await handle_autostart(
-            engine=engine,
-            client=client,
-            chat_id=chat_id,
-            message_id=message_id,
-            thread_id=thread_id,
-            args_text=args_text,
-        )
-        return
-
-    if cmd == "record_plan":
-        if redis is None:
-            await send_text(
-                client,
-                chat_id=chat_id,
-                text="❌ Redis недоступен — команда не работает.",
-                reply_to_message_id=message_id,
-                message_thread_id=thread_id,
-            )
-            return
-        await handle_record_plan(
-            engine=engine,
-            client=client,
-            redis=redis,
-            chat_id=chat_id,
-            message_id=message_id,
-            thread_id=thread_id,
-            args_text=args_text,
-        )
-        return
-
-    if cmd == "stop_record":
-        if redis is None:
-            await send_text(
-                client,
-                chat_id=chat_id,
-                text="❌ Redis недоступен — команда не работает.",
-                reply_to_message_id=message_id,
-                message_thread_id=thread_id,
-            )
-            return
-        await handle_stop_record(
-            engine=engine,
-            client=client,
-            redis=redis,
-            chat_id=chat_id,
-            message_id=message_id,
-            thread_id=thread_id,
-        )
-        return
-
-    if cmd == "plans":
-        await handle_list_plans(
-            engine=engine,
-            client=client,
-            chat_id=chat_id,
-            thread_id=thread_id,
-        )
-        return
-
-    # Legacy команды — заглушка
-    if cmd in _LEGACY_COMMANDS:
-        await send_text(
-            client,
-            chat_id=chat_id,
-            text=(
-                f"{fmt.code('/' + cmd)} в процессе миграции под новую схему БД. "
-                "Пока доступны: /spy, /help."
-            ),
-            reply_to_message_id=message_id,
-            message_thread_id=thread_id,
         )
         return
 
@@ -440,7 +218,6 @@ async def handle_update(
         chat_id=chat_id,
         text=f"Неизвестная команда {fmt.code('/' + cmd)}. /help — список доступных.",
         reply_to_message_id=message_id,
-        message_thread_id=thread_id,
     )
 
 

@@ -6,16 +6,56 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from core.enable_reco.alert import EnableRecoRenderInput, render_enable_reco_alert
 from core.enable_reco.analyzer import (
     MetricSnapshot,
     OfferThresholds,
-    RecommendationDecision,
-    should_recommend,
 )
-from core.observer.enable_grace import EnableGrace, _parse_grace, grace_is_active
+from core.enable_reco.analyzer import (
+    should_recommend as _should_recommend,
+)
+from core.observer.enable_grace import (
+    EnableGrace as _EnableGrace,
+)
+from core.observer.enable_grace import (
+    grace_is_active as _grace_is_active,
+)
 
 _NOW = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+_DAY_START = _NOW.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def should_recommend(**kwargs):
+    return _should_recommend(
+        account_currency="USD",
+        currency_exponent=2,
+        **kwargs,
+    )
+
+
+def EnableGrace(**kwargs):
+    return _EnableGrace(
+        currency="USD",
+        currency_exponent=2,
+        **kwargs,
+    )
+
+
+def grace_is_active(grace, **kwargs):
+    return _grace_is_active(
+        grace,
+        currency="USD",
+        currency_exponent=2,
+        **kwargs,
+    )
+
+
+def _confirmed_offer(cpa: Decimal) -> OfferThresholds:
+    return OfferThresholds(
+        cpa_threshold=cpa,
+        currency="USD",
+        stop_percent_of_rule=Decimal("80"),
+        warning_percent_of_stop=Decimal("80"),
+    )
 
 
 def _snap(
@@ -39,7 +79,7 @@ def _decide(metrics: list[MetricSnapshot]):
         snoozed_until=None,
         now=_NOW,
         metrics=metrics,
-        offer=OfferThresholds(cpa_threshold=Decimal("3.00")),
+        offer=_confirmed_offer(Decimal("3.00")),
     )
 
 
@@ -55,9 +95,8 @@ def test_curator_low_impressions_good_ctr_holds() -> None:
     assert "показов мало" in decision.reasons[0]
 
 
-# Ревью M-1: у оффера нет cpa_threshold → денежный кап grace берётся из фолбэка,
-# безлимитного «держать час на любые деньги» не существует
-def test_curator_fallback_spend_cap_without_cpa() -> None:
+# Без CPA curator не имеет права выдумывать денежный кап или рекомендовать enable.
+def test_curator_without_cpa_fails_closed() -> None:
     decision = should_recommend(
         alert_state="disabled",
         snoozed_until=None,
@@ -65,8 +104,10 @@ def test_curator_fallback_spend_cap_without_cpa() -> None:
         metrics=[_snap(impressions=108, ctr="3.7")],
         offer=OfferThresholds(cpa_threshold=None),
     )
-    assert decision.hold_until_cpl is True
-    assert decision.snapshot["grace_spend_cap"] == "10.00"
+    assert decision.recommend is False
+    assert decision.hold_until_cpl is False
+    assert "CPA" in (decision.skip_reason or "")
+    assert "grace_spend_cap" not in decision.snapshot
 
 
 # Мало показов, но CTR плохой — кейс куратора НЕ срабатывает
@@ -97,7 +138,7 @@ def test_curator_branch_can_be_disabled_for_unsafe_candidate() -> None:
         snoozed_until=None,
         now=_NOW,
         metrics=[_snap(impressions=108, ctr="3.7", spend="50.00")],
-        offer=OfferThresholds(cpa_threshold=Decimal("3.00")),
+        offer=_confirmed_offer(Decimal("3.00")),
         allow_curator=False,
     )
     assert decision.recommend is False
@@ -106,70 +147,110 @@ def test_curator_branch_can_be_disabled_for_unsafe_candidate() -> None:
 
 # grace_is_active: истёкшее время → False, даже если спенд мал
 def test_grace_expired_by_time() -> None:
-    g = EnableGrace(until=_NOW - timedelta(seconds=1), spend_cap=Decimal("3"))
-    assert grace_is_active(g, now=_NOW, spend=Decimal("0.1")) is False
+    grace = EnableGrace(
+        until=_NOW - timedelta(seconds=1),
+        spend_cap=Decimal("3"),
+        baseline_spend=Decimal("0.5"),
+        cabinet_day_start=_DAY_START,
+    )
+    assert (
+        grace_is_active(
+            grace,
+            now=_NOW,
+            spend=Decimal("1"),
+            cabinet_day_start=_DAY_START,
+        )
+        is False
+    )
 
 
 # grace_is_active: спенд-кап достигнут → False, дальше судит цена лида
 def test_grace_expired_by_spend_cap() -> None:
-    g = EnableGrace(until=_NOW + timedelta(hours=1), spend_cap=Decimal("3"))
-    assert grace_is_active(g, now=_NOW, spend=Decimal("3.00")) is False
+    grace = EnableGrace(
+        until=_NOW + timedelta(hours=1),
+        spend_cap=Decimal("3"),
+        baseline_spend=Decimal("0.5"),
+        cabinet_day_start=_DAY_START,
+    )
+    assert (
+        grace_is_active(
+            grace,
+            now=_NOW,
+            spend=Decimal("3.00"),
+            cabinet_day_start=_DAY_START,
+        )
+        is False
+    )
 
 
 # grace_is_active: время не вышло и спенд ниже капа → True
 def test_grace_active() -> None:
-    g = EnableGrace(until=_NOW + timedelta(hours=1), spend_cap=Decimal("3"))
-    assert grace_is_active(g, now=_NOW, spend=Decimal("1.50")) is True
-
-
-# grace_is_active: без спенд-капа действует только время; spend=None не роняет
-def test_grace_no_cap_and_no_spend() -> None:
-    g = EnableGrace(until=_NOW + timedelta(hours=1), spend_cap=None)
-    assert grace_is_active(g, now=_NOW, spend=None) is True
-
-
-# Битый JSON-маркер в Redis → None (правила действуют как обычно, не падаем)
-def test_parse_grace_garbage() -> None:
-    assert _parse_grace("не json") is None
-    assert _parse_grace('{"нет": "until"}') is None
-
-
-# Денежный cap должен быть конечным и строго положительным; иначе marker fail-safe отклоняем.
-def test_parse_grace_rejects_non_finite_and_non_positive_cap() -> None:
-    until = "2026-07-15T13:00:00+00:00"
-    for cap in ("NaN", "Infinity", "-Infinity", "0", "-1"):
-        assert _parse_grace(f'{{"until":"{until}","spend_cap":"{cap}"}}') is None
-
-
-def test_parse_grace_accepts_positive_finite_cap() -> None:
-    grace = _parse_grace('{"until":"2026-07-15T13:00:00+00:00","spend_cap":"3.00"}')
-    assert grace is not None
-    assert grace.spend_cap == Decimal("3.00")
-
-
-# Рендер hold-рекомендации: заголовок про цену лида, кнопка ereco на месте
-def test_render_hold_recommendation() -> None:
-    decision = RecommendationDecision(
-        recommend=True,
-        level="warning",
-        hold_until_cpl=True,
-        reasons=("показов мало (108 < 500) при хорошем CTR (3.7% ≥ 3.0%)",),
-        snapshot={"hold_until_cpl": True, "grace_spend_cap": "3.00"},
+    grace = EnableGrace(
+        until=_NOW + timedelta(hours=1),
+        spend_cap=Decimal("3"),
+        baseline_spend=Decimal("0.5"),
+        cabinet_day_start=_DAY_START,
     )
-    text, markup = render_enable_reco_alert(
-        EnableRecoRenderInput(
-            recommendation_id="00000000-0000-0000-0000-000000000003",
-            fb_ad_id="2300112233",
-            ad_name="CR2_CR002",
-            campaign_name="CR2 | DRC | MV",
-            adset_name="EQ",
-            offer_code="GH_CR2",
-            decision=decision,
+    assert (
+        grace_is_active(
+            grace,
+            now=_NOW,
+            spend=Decimal("1.50"),
+            cabinet_day_start=_DAY_START,
         )
+        is True
     )
-    assert "держать до цены лида" in text
-    assert "1×CPA" in text
-    buttons = [b for row in markup["inline_keyboard"] for b in row]
-    assert any(
-        b.get("callback_data") == "ereco:00000000-0000-0000-0000-000000000003" for b in buttons
+
+
+def test_grace_missing_spend_fails_closed() -> None:
+    grace = EnableGrace(
+        until=_NOW + timedelta(hours=1),
+        spend_cap=Decimal("3"),
+        baseline_spend=Decimal("0.5"),
+        cabinet_day_start=_DAY_START,
+    )
+    assert (
+        grace_is_active(
+            grace,
+            now=_NOW,
+            spend=None,
+            cabinet_day_start=_DAY_START,
+        )
+        is False
+    )
+
+
+def test_grace_cumulative_reset_fails_closed() -> None:
+    grace = EnableGrace(
+        until=_NOW + timedelta(hours=1),
+        spend_cap=Decimal("3"),
+        baseline_spend=Decimal("0.5"),
+        cabinet_day_start=_DAY_START,
+    )
+    assert (
+        grace_is_active(
+            grace,
+            now=_NOW,
+            spend=Decimal("0.49"),
+            cabinet_day_start=_DAY_START,
+        )
+        is False
+    )
+
+
+def test_grace_from_previous_cabinet_day_fails_closed() -> None:
+    grace = EnableGrace(
+        until=_NOW + timedelta(hours=1),
+        spend_cap=Decimal("3"),
+        baseline_spend=Decimal("0.5"),
+        cabinet_day_start=_DAY_START - timedelta(days=1),
+    )
+    assert (
+        grace_is_active(
+            grace,
+            now=_NOW,
+            spend=Decimal("1"),
+            cabinet_day_start=_DAY_START,
+        )
+        is False
     )

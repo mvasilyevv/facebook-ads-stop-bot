@@ -1,0 +1,1674 @@
+"""Versioned operator snapshot, ads and command lifecycle endpoints."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import uuid
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from fastapi import APIRouter, Header, Query, Request, Response, status
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+
+from apps.api.deps import DepEngine, DepSettings
+from apps.api.routers.v1.schemas.operator import (
+    ApiProblem,
+    DataState,
+    OperatorActionItem,
+    OperatorActionsData,
+    OperatorActionsResponse,
+    OperatorAdCommandRequest,
+    OperatorAdsResponse,
+    OperatorAttentionAction,
+    OperatorAttentionData,
+    OperatorAttentionItem,
+    OperatorAttentionTarget,
+    OperatorCommandResponse,
+    OperatorEconomyData,
+    OperatorEconomyTotals,
+    OperatorEventItem,
+    OperatorFunnelData,
+    OperatorFunnelStage,
+    OperatorIncidentAckResponse,
+    OperatorIncidentDetailResponse,
+    OperatorIssue,
+    OperatorScopeEvidence,
+    OperatorSection,
+    OperatorSeverity,
+    OperatorSnapshot,
+    OperatorSnapshotMeta,
+    OperatorSpendPoint,
+    OperatorSystemData,
+    OperatorWorkerState,
+)
+from apps.api.utils.status_mapper import to_frontend_task_status
+from core.analytics import DEFAULT_ANALYTICS_WINDOW
+from core.analytics.performance import (
+    aggregate_performance,
+    fetch_live_budget_points,
+    fetch_performance_rows,
+    fetch_source_quality,
+)
+from core.commands.service import (
+    CommandConflictError,
+    CommandNotFoundError,
+    CommandPreconditionError,
+    CommandService,
+    principal_scoped_idempotency_key,
+)
+from core.dashboard import stats_queries as stats_queries
+from core.incidents.service import (
+    IncidentNotAcknowledgeableError,
+    IncidentNotFoundError,
+    acknowledge_incident,
+)
+from core.meta_api.account_tz import (
+    AccountCurrencyResolution,
+    CabinetDayResolution,
+    cabinet_day_end_for_timezone,
+    resolve_account_currencies,
+    resolve_cabinet_days,
+)
+from core.observer.accounts import resolve_scan_account_ids
+from core.operator.queries import (
+    fetch_operator_actions,
+    fetch_operator_ads,
+    fetch_operator_events,
+    fetch_operator_incident,
+    fetch_operator_incidents,
+    fetch_operator_revision,
+    fetch_operator_scan_state,
+)
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/operator", tags=["operator"])
+
+_MONEY = Decimal("0.01")
+_PROBLEM_RESPONSES = {
+    401: {"model": ApiProblem, "description": "Authentication failed"},
+    403: {"model": ApiProblem, "description": "Permission denied"},
+    404: {"model": ApiProblem, "description": "Resource not found"},
+    409: {"model": ApiProblem, "description": "Command lifecycle conflict"},
+    412: {"model": ApiProblem, "description": "Ad projection changed before enqueue"},
+    422: {"model": ApiProblem, "description": "Request validation failed"},
+    503: {"model": ApiProblem, "description": "Operator source unavailable"},
+}
+_COMMAND_RESPONSES = {
+    200: {
+        "model": OperatorCommandResponse,
+        "description": "Existing command lifecycle state",
+    },
+    **_PROBLEM_RESPONSES,
+}
+_EVENTS_MAX_RANGE_DAYS = 90
+
+
+def _problem(*, status_code: int, code: str, message: str, correlation_id: str) -> JSONResponse:
+    problem = ApiProblem(
+        code=code,
+        message=message,
+        correlation_id=correlation_id,
+        field_errors=None,
+    )
+    return JSONResponse(status_code=status_code, content=problem.model_dump(mode="json"))
+
+
+def _age(now: datetime, value: datetime | None) -> int | None:
+    return max(0, int((now - value).total_seconds())) if value else None
+
+
+def _scope_evidence(
+    *,
+    cabinet_days: CabinetDayResolution,
+    currencies: AccountCurrencyResolution,
+    display_timezone: str,
+) -> OperatorScopeEvidence:
+    return OperatorScopeEvidence(
+        account_ids=list(cabinet_days.account_ids),
+        display_timezone=display_timezone,
+        cabinet_timezone=cabinet_days.cabinet_timezone,
+        cabinet_timezone_state=cabinet_days.timezone_state,
+        missing_timezone_account_ids=list(cabinet_days.missing_account_ids),
+        currency=currencies.currency,
+        currency_state=currencies.state,
+        missing_currency_account_ids=list(currencies.missing_account_ids),
+        currency_observed_at=currencies.observed_at,
+    )
+
+
+def _currency_issue(currencies: AccountCurrencyResolution) -> OperatorIssue | None:
+    if currencies.state == "single":
+        return None
+    if currencies.state == "mixed":
+        return OperatorIssue(
+            code="currency_mixed",
+            title="В выборке несколько валют",
+            detail="Денежные суммы и производные метрики скрыты; выберите один кабинет.",
+            severity=OperatorSeverity.UNKNOWN,
+            correlation_id=None,
+        )
+    missing = ", ".join(f"act_{value}" for value in currencies.missing_account_ids)
+    return OperatorIssue(
+        code="currency_unknown",
+        title="Валюта кабинета не подтверждена",
+        detail=(
+            f"Нет подтверждённой валюты для: {missing}."
+            if missing
+            else "Не найден кабинет с подтверждённой валютой."
+        ),
+        severity=OperatorSeverity.UNKNOWN,
+        correlation_id=None,
+    )
+
+
+def _fail_closed_snapshot_money(
+    *,
+    economy: OperatorSection[OperatorEconomyData],
+    funnel: OperatorSection[OperatorFunnelData],
+    currencies: AccountCurrencyResolution,
+) -> tuple[OperatorSection[OperatorEconomyData], OperatorSection[OperatorFunnelData]]:
+    issue = _currency_issue(currencies)
+    if issue is None:
+        return economy, funnel
+    economy_issues = [*economy.issues, issue]
+    if economy.data is not None:
+        economy_data = OperatorEconomyData(
+            totals=OperatorEconomyTotals(
+                spend=None,
+                base=None,
+                stop=None,
+                base_delta=None,
+            ),
+            series=[
+                OperatorSpendPoint(at=point.at, actual=None, base=None, stop=None)
+                for point in economy.data.series
+            ],
+        )
+    else:
+        economy_data = None
+    funnel_data = (
+        OperatorFunnelData(
+            stages=[stage.model_copy(update={"cost": None}) for stage in funnel.data.stages]
+        )
+        if funnel.data is not None
+        else None
+    )
+    return (
+        economy.model_copy(
+            update={
+                "state": DataState.PARTIAL if economy_data is not None else DataState.UNAVAILABLE,
+                "issues": economy_issues,
+                "data": economy_data,
+            }
+        ),
+        funnel.model_copy(
+            update={
+                "state": DataState.PARTIAL if funnel_data is not None else DataState.UNAVAILABLE,
+                "issues": [*funnel.issues, issue],
+                "data": funnel_data,
+            }
+        ),
+    )
+
+
+def _money(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(Decimal(str(value)).quantize(_MONEY, rounding=ROUND_HALF_UP))
+
+
+def _ratio(numerator: int | None, denominator: int | None) -> str | None:
+    if numerator is None or denominator is None or denominator <= 0:
+        return None
+    return str(
+        (Decimal(numerator) * Decimal("100") / Decimal(denominator)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+    )
+
+
+def _cost(spend: str | None, count: int | None) -> str | None:
+    if spend is None or count is None or count <= 0:
+        return None
+    return _money(Decimal(spend) / Decimal(count))
+
+
+def _operator_events_window(
+    period: Literal["today", "7d", "30d", "custom"],
+    from_date: date | None,
+    to_date: date | None,
+) -> tuple[datetime, datetime]:
+    now = datetime.now(UTC)
+    if period == "today":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0), now
+    if period in {"7d", "30d"}:
+        return now - timedelta(days=7 if period == "7d" else 30), now
+    if from_date is None or to_date is None:
+        raise ValueError("Для своего периода нужны from_date и to_date")
+    if to_date < from_date:
+        raise ValueError("to_date должен быть >= from_date")
+    if (to_date - from_date).days + 1 > _EVENTS_MAX_RANGE_DAYS:
+        raise ValueError(f"Диапазон не может превышать {_EVENTS_MAX_RANGE_DAYS} дней")
+    return (
+        datetime.combine(from_date, time.min, tzinfo=UTC),
+        datetime.combine(to_date + timedelta(days=1), time.min, tzinfo=UTC),
+    )
+
+
+def _ads_section_state(
+    *,
+    meta_as_of: datetime | None,
+    meta_freshness: int | None,
+    meta_status: str | None,
+    row_state: str,
+    total: int,
+    timezone_known: bool,
+    tracker_available: bool,
+) -> DataState:
+    """Derive the collection state without hiding degraded rows or sources."""
+    if meta_as_of is None or row_state == DataState.UNAVAILABLE:
+        return DataState.UNAVAILABLE
+    if row_state == DataState.PARTIAL:
+        return DataState.PARTIAL
+    if not timezone_known or not tracker_available:
+        return DataState.PARTIAL
+    if meta_status == "degraded" and (meta_freshness is None or meta_freshness <= 60):
+        return DataState.PARTIAL
+    if row_state == DataState.STALE or (meta_freshness is not None and meta_freshness > 60):
+        return DataState.STALE
+    if total == 0:
+        return DataState.EMPTY
+    return DataState.READY
+
+
+async def _window(
+    engine: Any,
+    name: Literal["today", "24h", "7d", "30d"],
+    *,
+    account_id: str | None = None,
+    now: datetime | None = None,
+) -> tuple[
+    datetime,
+    datetime,
+    bool,
+    dict[str, datetime] | None,
+    CabinetDayResolution,
+]:
+    observed_now = now or datetime.now(UTC)
+    cabinet_days = await resolve_cabinet_days(
+        engine,
+        account_ids=[account_id] if account_id else None,
+        now=observed_now,
+    )
+    if name == "today":
+        fallback = observed_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = min(cabinet_days.query_boundaries.values(), default=fallback)
+        return start, observed_now, True, cabinet_days.query_boundaries, cabinet_days
+    duration = (
+        timedelta(hours=24)
+        if name == "24h"
+        else timedelta(days=30)
+        if name == "30d"
+        else DEFAULT_ANALYTICS_WINDOW
+    )
+    start = observed_now - duration
+    return start, observed_now, False, None, cabinet_days
+
+
+async def _account_meta(engine: Any, account_id: str | None) -> dict[str, str | None]:
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT ad_account_id, COUNT(*) AS campaign_count
+                    FROM fb_campaigns
+                    WHERE (:account_id IS NULL OR ad_account_id = :account_id)
+                      AND ad_account_id IS NOT NULL
+                    GROUP BY ad_account_id
+                    ORDER BY campaign_count DESC, ad_account_id
+                    LIMIT 1
+                    """
+                ),
+                {"account_id": account_id.removeprefix("act_") if account_id else None},
+            )
+        ).first()
+    if row is None:
+        return {"id": account_id.removeprefix("act_") if account_id else None, "name": None}
+    resolved = str(row.ad_account_id)
+    return {"id": resolved, "name": f"act_{resolved}"}
+
+
+async def _analytics_sections(
+    *,
+    engine: Any,
+    account_id: str | None,
+    window_name: Literal["today", "24h", "7d", "30d"],
+    now: datetime,
+) -> tuple[
+    OperatorSection[OperatorEconomyData],
+    OperatorSection[OperatorFunnelData],
+    bool,
+    datetime,
+    datetime,
+    CabinetDayResolution,
+]:
+    from_dt, to_dt, is_live, boundaries, cabinet_days = await _window(
+        engine,
+        window_name,
+        account_id=account_id,
+        now=now,
+    )
+    sources = await fetch_source_quality(
+        engine,
+        from_dt=from_dt,
+        to_dt=to_dt,
+        cabinet_days=cabinet_days,
+        account_id=account_id,
+    )
+    rows_task = fetch_performance_rows(
+        engine,
+        from_dt=from_dt,
+        to_dt=to_dt,
+        is_live=is_live,
+        level="campaign",
+        parent_id=None,
+        account_id=account_id,
+        offer_id=None,
+        campaign_id=None,
+        search=None,
+        cabinet_boundaries=boundaries,
+        tracker_available=sources["tracker"]["status"] == "good",
+    )
+    if is_live:
+        series_task = fetch_live_budget_points(
+            engine,
+            from_dt=from_dt,
+            to_dt=to_dt,
+            account_id=account_id,
+            offer_id=None,
+            campaign_id=None,
+            cabinet_boundaries=boundaries,
+        )
+    else:
+        series_task = stats_queries.fetch_daily_series(
+            engine,
+            from_dt=from_dt,
+            to_dt=to_dt,
+            account_id=account_id,
+        )
+    raw_rows, raw_series = await asyncio.gather(rows_task, series_task)
+    aggregate = aggregate_performance(
+        raw_rows,
+        level="campaign",
+        is_live=is_live,
+        sort="spend",
+        direction="desc",
+        page=1,
+        page_size=50,
+    )
+    totals = aggregate["totals"]
+    aggregate_quality = aggregate["_quality"]
+    meta_source = sources["meta"]
+    tracker_source = sources["tracker"]
+    meta_as_of = meta_source.get("last_event_at")
+    tracker_as_of = tracker_source.get("last_event_at")
+    meta_age = _age(now, meta_as_of)
+    tracker_age = _age(now, tracker_as_of)
+    tracker_status = tracker_source.get("status")
+    tracker_available = tracker_status == "good" and tracker_as_of is not None
+
+    economy_issues: list[OperatorIssue] = []
+    economy_points: list[OperatorSpendPoint] = []
+    final_base: str | None = None
+    final_stop: str | None = None
+    if not cabinet_days.timezone_known:
+        missing = ", ".join(f"act_{value}" for value in cabinet_days.missing_account_ids)
+        economy_issues.append(
+            OperatorIssue(
+                code="cabinet_timezone_unknown",
+                title="Границы суток кабинета являются оценочными",
+                detail=(
+                    f"Нет валидного IANA timezone для: {missing}."
+                    if missing
+                    else "Не найден активный кабинет с подтверждённым IANA timezone."
+                ),
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    if aggregate_quality["has_partial_rows"]:
+        economy_issues.append(
+            OperatorIssue(
+                code="performance_projection_partial",
+                title="Расход подтверждён не для всех строк",
+                detail="Неполные Meta-снимки оставлены unknown и не заменены нулями.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    if is_live:
+        for point in raw_series:
+            incomplete_budget = int(point.get("unavailable_ads") or 0) > 0
+            economy_points.append(
+                OperatorSpendPoint(
+                    at=point["ts"],
+                    actual=_money(point.get("actual")),
+                    base=None if incomplete_budget else _money(point.get("base")),
+                    stop=None if incomplete_budget else _money(point.get("stop")),
+                )
+            )
+        if economy_points:
+            last = economy_points[-1]
+            final_base, final_stop = last.base, last.stop
+        if any(point.base is None for point in economy_points):
+            economy_issues.append(
+                OperatorIssue(
+                    code="budget_threshold_partial",
+                    title="Пороги рассчитаны не для всех объявлений",
+                    detail="У части объявлений не задан оффер или CPA.",
+                    severity=OperatorSeverity.WARNING,
+                    correlation_id=None,
+                )
+            )
+    else:
+        economy_points = [
+            OperatorSpendPoint(
+                at=point["day"],
+                actual=_money(point.get("spend")),
+                base=None,
+                stop=None,
+            )
+            for point in raw_series
+        ]
+        economy_issues.append(
+            OperatorIssue(
+                code="historical_budget_not_applicable",
+                title="Base/stop доступны только за текущие сутки кабинета",
+                detail=None,
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+
+    spend = _money(totals.get("spend")) if meta_as_of else None
+    base_delta = (
+        _money(Decimal(spend) - Decimal(final_base))
+        if spend is not None and final_base is not None
+        else None
+    )
+    economy_data = OperatorEconomyData(
+        totals=OperatorEconomyTotals(
+            spend=spend,
+            base=final_base,
+            stop=final_stop,
+            base_delta=base_delta,
+        ),
+        series=economy_points,
+    )
+    if meta_as_of is None:
+        economy_state = DataState.UNAVAILABLE
+        economy_data_value = None
+        economy_issues.append(
+            OperatorIssue(
+                code="meta_snapshot_missing",
+                title="Нет подтверждённого снимка Meta",
+                detail=None,
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    elif meta_age is not None and meta_age > 60:
+        economy_state = DataState.STALE
+        economy_data_value = economy_data
+        economy_issues.append(
+            OperatorIssue(
+                code="meta_snapshot_stale",
+                title="Снимок Meta устарел",
+                detail=f"Возраст снимка: {meta_age} с.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    elif economy_issues:
+        economy_state = DataState.PARTIAL
+        economy_data_value = economy_data
+    else:
+        economy_state = DataState.READY
+        economy_data_value = economy_data
+
+    clicks_raw = totals.get("clicks")
+    registrations_raw = totals.get("registrations")
+    ftd_raw = totals.get("ftds")
+    confirmed_raw = totals.get("confirmed_deposits")
+    clicks = int(clicks_raw) if meta_as_of and clicks_raw is not None else None
+    registrations = (
+        int(registrations_raw) if tracker_available and registrations_raw is not None else None
+    )
+    ftd = int(ftd_raw) if tracker_available and ftd_raw is not None else None
+    confirmed = int(confirmed_raw) if tracker_available and confirmed_raw is not None else None
+    funnel = OperatorFunnelData(
+        stages=[
+            OperatorFunnelStage(
+                key="clicks",
+                label="Клики",
+                count=clicks,
+                conversion=None,
+                cost=_cost(spend, clicks),
+            ),
+            OperatorFunnelStage(
+                key="registrations",
+                label="Регистрации",
+                count=registrations,
+                conversion=_ratio(registrations, clicks),
+                cost=_cost(spend, registrations),
+            ),
+            OperatorFunnelStage(
+                key="ftd",
+                label="FTD",
+                count=ftd,
+                conversion=_ratio(ftd, registrations),
+                cost=_cost(spend, ftd),
+            ),
+            OperatorFunnelStage(
+                key="confirmed_deposits",
+                label="Подтверждённые депозиты",
+                count=confirmed,
+                conversion=_ratio(confirmed, ftd),
+                cost=_cost(spend, confirmed),
+            ),
+        ]
+    )
+    funnel_issues: list[OperatorIssue] = []
+    if aggregate_quality["has_partial_rows"]:
+        funnel_issues.append(
+            OperatorIssue(
+                code="funnel_projection_partial",
+                title="Воронка подтверждена не для всех строк",
+                detail="Пропущенные значения оставлены unknown и не заменены нулями.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    if not cabinet_days.timezone_known:
+        funnel_issues.append(
+            OperatorIssue(
+                code="cabinet_timezone_unknown",
+                title="Воронка рассчитана по оценочным границам суток",
+                detail="До подтверждения IANA timezone значения не считаются точными.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    if tracker_status == "degraded":
+        funnel_issues.append(
+            OperatorIssue(
+                code="tracker_source_degraded",
+                title="Данные трекера неполные или устарели",
+                detail=tracker_source.get("note"),
+                severity=OperatorSeverity.WARNING,
+                correlation_id=None,
+            )
+        )
+    if meta_as_of is None:
+        funnel_state = DataState.UNAVAILABLE
+        funnel_value = None
+    elif (meta_age is not None and meta_age > 60) or tracker_status == "degraded":
+        funnel_state = DataState.STALE
+        funnel_value = funnel
+        funnel_issues.append(
+            OperatorIssue(
+                code="funnel_source_stale",
+                title="Один из источников воронки устарел",
+                detail=(
+                    f"Meta: {meta_age if meta_age is not None else 'unknown'} с; "
+                    f"tracker: {tracker_age if tracker_age is not None else 'unknown'} с."
+                ),
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    elif not tracker_available:
+        funnel_state = DataState.PARTIAL
+        funnel_value = funnel
+        funnel_issues.append(
+            OperatorIssue(
+                code="tracker_freshness_unknown",
+                title="Конверсии не подтверждены трекером",
+                detail="Clicks доступны из Meta; registrations, FTD и deposits оставлены unknown.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    elif funnel_issues:
+        funnel_state = DataState.PARTIAL
+        funnel_value = funnel
+    else:
+        funnel_state = DataState.READY
+        funnel_value = funnel
+
+    return (
+        OperatorSection(
+            state=economy_state,
+            as_of=meta_as_of,
+            freshness_seconds=meta_age,
+            sources=["meta", "offer_rules"],
+            issues=economy_issues,
+            data=economy_data_value,
+        ),
+        OperatorSection(
+            state=funnel_state,
+            as_of=min([value for value in (meta_as_of, tracker_as_of) if value], default=None),
+            freshness_seconds=max(
+                [
+                    age
+                    for age in (_age(now, meta_as_of), _age(now, tracker_as_of))
+                    if age is not None
+                ],
+                default=None,
+            ),
+            sources=["meta", "adsetpro"],
+            issues=funnel_issues,
+            data=funnel_value,
+        ),
+        tracker_available,
+        from_dt,
+        to_dt,
+        cabinet_days,
+    )
+
+
+async def _system_section(*, engine: Any, now: datetime) -> OperatorSection[OperatorSystemData]:
+    scan = await fetch_operator_scan_state(engine)
+    expected_accounts = await resolve_scan_account_ids(engine)
+    issues: list[OperatorIssue] = []
+    workers: list[OperatorWorkerState] = []
+    for actor in scan.get("actors", []):
+        account_id = str(actor.get("ad_account_id") or "unknown")
+        activities = [
+            value
+            for key in ("last_progress_at", "last_snapshot_at")
+            if isinstance((value := actor.get(key)), datetime)
+        ]
+        last_activity = max(activities, default=None)
+        activity_age = _age(now, last_activity)
+        error = actor.get("error")
+        stage = str(actor.get("stage") or "unknown")
+        lease_expires_at = actor.get("lease_expires_at")
+        has_expired_active_lease = (
+            actor.get("owner_instance") is not None
+            and isinstance(lease_expires_at, datetime)
+            and lease_expires_at <= now
+        )
+        if error or has_expired_active_lease:
+            severity = OperatorSeverity.CRITICAL
+            status = "failed"
+        elif activity_age is None:
+            severity = OperatorSeverity.UNKNOWN
+            status = "unknown"
+        elif activity_age > 60:
+            severity = OperatorSeverity.CRITICAL
+            status = "stale"
+        elif stage in {"timeout", "error"}:
+            severity = OperatorSeverity.CRITICAL
+            status = "failed"
+        elif stage == "scanning":
+            severity = OperatorSeverity.WARNING
+            status = "running"
+        else:
+            severity = OperatorSeverity.OK
+            status = "online"
+        workers.append(
+            OperatorWorkerState(
+                id=f"observer:{account_id}",
+                label=f"Observer · {account_id}",
+                severity=severity,
+                status=status,
+                last_activity_at=last_activity,
+            )
+        )
+        if error:
+            issues.append(
+                OperatorIssue(
+                    code="cabinet_actor_error",
+                    title=f"Cabinet {account_id}: scan actor завершился с ошибкой",
+                    detail=str(error),
+                    severity=OperatorSeverity.CRITICAL,
+                    correlation_id=None,
+                )
+            )
+        elif has_expired_active_lease:
+            issues.append(
+                OperatorIssue(
+                    code="cabinet_actor_lease_expired",
+                    title=f"Cabinet {account_id}: lease истёк во время работы",
+                    detail=stage,
+                    severity=OperatorSeverity.CRITICAL,
+                    correlation_id=None,
+                )
+            )
+        elif activity_age is None or activity_age > 60:
+            issues.append(
+                OperatorIssue(
+                    code="cabinet_actor_stale",
+                    title=f"Cabinet {account_id}: actor не обновляет состояние",
+                    detail=None if activity_age is None else f"Возраст: {activity_age} с.",
+                    severity=OperatorSeverity.UNKNOWN,
+                    correlation_id=None,
+                )
+            )
+
+    known_accounts = {worker.id.removeprefix("observer:") for worker in workers}
+    for account_id in sorted(set(expected_accounts) - known_accounts):
+        workers.append(
+            OperatorWorkerState(
+                id=f"observer:{account_id}",
+                label=f"Observer · {account_id}",
+                severity=OperatorSeverity.UNKNOWN,
+                status="unknown",
+                last_activity_at=None,
+            )
+        )
+        issues.append(
+            OperatorIssue(
+                code="cabinet_runtime_missing",
+                title=f"Cabinet {account_id}: actor ещё не подтверждён",
+                detail="В PostgreSQL нет runtime snapshot для настроенного кабинета.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+
+    if not workers:
+        issues.append(
+            OperatorIssue(
+                code="cabinet_runtime_missing",
+                title="Состояние cabinet actors ещё не подтверждено",
+                detail="PostgreSQL пока не содержит ни одного cabinet_runtime snapshot.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    if scan.get("enabled") is True and not expected_accounts:
+        issues.append(
+            OperatorIssue(
+                code="scan_accounts_missing",
+                title="Нет настроенных кабинетов для scan",
+                detail="Добавьте числовой ad account в активный оффер.",
+                severity=OperatorSeverity.CRITICAL,
+                correlation_id=None,
+            )
+        )
+
+    last_scan = scan.get("last_scan_at")
+    scan_age = _age(now, last_scan)
+    critical_workers = [
+        worker for worker in workers if worker.severity == OperatorSeverity.CRITICAL
+    ]
+    warning_workers = [worker for worker in workers if worker.severity == OperatorSeverity.WARNING]
+    unknown_workers = [worker for worker in workers if worker.severity == OperatorSeverity.UNKNOWN]
+    critical_issues = [issue for issue in issues if issue.severity == OperatorSeverity.CRITICAL]
+    if scan.get("enabled") is False:
+        severity = OperatorSeverity.CRITICAL
+        issues.append(
+            OperatorIssue(
+                code="monitoring_disabled",
+                title="Автоматический мониторинг выключен",
+                detail=None,
+                severity=OperatorSeverity.CRITICAL,
+                correlation_id=None,
+            )
+        )
+    elif critical_workers or critical_issues:
+        severity = OperatorSeverity.CRITICAL
+    elif scan.get("enabled") is None:
+        severity = OperatorSeverity.UNKNOWN
+        issues.append(
+            OperatorIssue(
+                code="monitoring_state_unknown",
+                title="Состояние автоматического мониторинга неизвестно",
+                detail="PostgreSQL не подтвердил, включён ли scan.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    elif scan.get("last_scan_outcome") in {"error", "partial"}:
+        severity = OperatorSeverity.WARNING
+        issues.append(
+            OperatorIssue(
+                code="last_scan_degraded",
+                title="Последний scan не подтвердил полный снимок",
+                detail=str(scan.get("last_scan_outcome")),
+                severity=OperatorSeverity.WARNING,
+                correlation_id=None,
+            )
+        )
+    elif warning_workers or (scan_age is not None and scan_age > 60):
+        severity = OperatorSeverity.WARNING
+    elif unknown_workers or last_scan is None:
+        severity = OperatorSeverity.UNKNOWN
+    else:
+        severity = OperatorSeverity.OK
+
+    if last_scan is None:
+        state = DataState.UNAVAILABLE
+    elif scan_age is not None and scan_age > 60:
+        state = DataState.STALE
+        issues.append(
+            OperatorIssue(
+                code="scan_snapshot_stale",
+                title="Scan snapshot устарел",
+                detail=f"Возраст: {scan_age} с.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    elif issues:
+        state = DataState.PARTIAL
+    elif scan.get("last_scan_outcome") == "empty":
+        state = DataState.EMPTY
+    else:
+        state = DataState.READY
+    return OperatorSection(
+        state=state,
+        as_of=last_scan,
+        freshness_seconds=scan_age,
+        sources=["postgresql", "cabinet_runtime"],
+        issues=issues,
+        data=OperatorSystemData(
+            severity=severity,
+            monitoring_enabled=scan.get("enabled"),
+            last_scan_at=last_scan,
+            next_scan_at=scan.get("next_scan_at"),
+            workers=workers,
+        ),
+    )
+
+
+def _incident_attention_item(incident: dict[str, Any]) -> OperatorAttentionItem:
+    resource_type = str(incident.get("resource_type") or "system")
+    kind = (
+        "ad"
+        if resource_type in {"ad", "fb_ad"}
+        else "campaign"
+        if resource_type == "campaign"
+        else "account"
+        if resource_type == "account"
+        else "system"
+    )
+    return OperatorAttentionItem(
+        id=str(incident["id"]),
+        kind="incident",
+        severity=incident["severity"],
+        title=str(incident["title"]),
+        summary=str(incident.get("summary") or incident["title"]),
+        reason=str(incident.get("status") or "open"),
+        occurred_at=incident["opened_at"],
+        target=OperatorAttentionTarget(
+            kind=kind,
+            id=str(incident.get("resource_id")) if incident.get("resource_id") else None,
+            label=str(incident.get("resource_label")) if incident.get("resource_label") else None,
+        ),
+        action=OperatorAttentionAction(label="Открыть", href=f"/incidents/{incident['id']}"),
+    )
+
+
+def _attention_section(
+    *,
+    incidents: list[dict[str, Any]],
+    actions: list[dict[str, Any]],
+    system: OperatorSection[OperatorSystemData],
+    now: datetime,
+) -> OperatorSection[OperatorAttentionData]:
+    items = [_incident_attention_item(incident) for incident in incidents]
+    for action in actions:
+        if action["state"] not in {"failed", "unknown", "running"}:
+            continue
+        severity = (
+            "critical"
+            if action["state"] in {"failed", "unknown"} and action["kind"] in {"pause", "activate"}
+            else "warning"
+        )
+        items.append(
+            OperatorAttentionItem(
+                id=f"task:{action['id']}",
+                kind="action",
+                severity=severity,
+                title=action["title"],
+                summary=f"{action['public_id']} · {action['state']}",
+                reason=action.get("reason"),
+                occurred_at=action["updated_at"],
+                target=OperatorAttentionTarget(
+                    kind="ad" if action["kind"] in {"pause", "activate"} else "system",
+                    id=None,
+                    label=action.get("target_label"),
+                ),
+                action=OperatorAttentionAction(label="Открыть", href=f"/actions/{action['id']}"),
+            )
+        )
+    for issue in system.issues:
+        if issue.severity == OperatorSeverity.OK:
+            continue
+        items.append(
+            OperatorAttentionItem(
+                id=f"source:{issue.code}",
+                kind="source",
+                severity=issue.severity,
+                title=issue.title,
+                summary=issue.detail or "Откройте диагностику источников.",
+                reason=issue.code,
+                occurred_at=system.as_of or now,
+                target=OperatorAttentionTarget(kind="system", id=None, label="Система"),
+                action=OperatorAttentionAction(label="Диагностика", href="/system/sources"),
+            )
+        )
+    rank = {"critical": 0, "warning": 1, "unknown": 2, "ok": 3}
+    items.sort(key=lambda item: (rank[item.severity], -item.occurred_at.timestamp(), item.id))
+    if system.state in {DataState.PARTIAL, DataState.STALE, DataState.UNAVAILABLE}:
+        state = DataState.PARTIAL
+    else:
+        state = DataState.READY if items else DataState.EMPTY
+    return OperatorSection(
+        state=state,
+        as_of=max((item.occurred_at for item in items), default=system.as_of),
+        freshness_seconds=system.freshness_seconds,
+        sources=["incidents", "task_queue", "worker_telemetry"],
+        issues=[],
+        data=OperatorAttentionData(items=items[:50]),
+    )
+
+
+@router.get(
+    "/events",
+    response_model=list[OperatorEventItem],
+    responses=_PROBLEM_RESPONSES,
+)
+async def get_operator_events(
+    engine: DepEngine,
+    period: Literal["today", "7d", "30d", "custom"] = Query(default="30d"),
+    from_date: date | None = Query(default=None),
+    to_date: date | None = Query(default=None),
+    campaign_id: uuid.UUID | None = Query(default=None),
+    fb_ad_id: str | None = Query(default=None, max_length=64),
+    stage: str | None = Query(default=None, pattern="^(warning|stop)$"),
+    task_status: str | None = Query(
+        default=None,
+        pattern="^(SUCCEEDED|FAILED|CANCELLED|succeeded|failed|cancelled)$",
+    ),
+    search: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> list[OperatorEventItem] | JSONResponse:
+    """Return the bounded alert and terminal-action feed used by Analytics."""
+    correlation_id = str(uuid.uuid4())
+    try:
+        from_dt, to_dt = _operator_events_window(period, from_date, to_date)
+    except ValueError as exc:
+        return _problem(
+            status_code=422,
+            code="invalid_events_window",
+            message=str(exc),
+            correlation_id=correlation_id,
+        )
+    try:
+        rows = await fetch_operator_events(
+            engine,
+            from_dt=from_dt,
+            to_dt=to_dt,
+            limit=limit,
+            campaign_uuid=campaign_id,
+            fb_ad_id=fb_ad_id,
+            stage=stage,
+            task_status=task_status,
+            search=search,
+        )
+    except Exception as exc:  # noqa: BLE001 - public contract must fail closed
+        logger.error("operator events unavailable: %s", type(exc).__name__)
+        return _problem(
+            status_code=503,
+            code="operator_events_unavailable",
+            message="Лента событий временно недоступна",
+            correlation_id=correlation_id,
+        )
+
+    events: list[OperatorEventItem] = []
+    for row in rows:
+        rule_codes: list[str] | None = None
+        if row.rule_codes_raw:
+            try:
+                parsed = json.loads(row.rule_codes_raw)
+            except (TypeError, json.JSONDecodeError):
+                parsed = []
+            rule_codes = [str(code) for code in parsed] if isinstance(parsed, list) else []
+        public_task_status: str | None = None
+        if row.task_status:
+            try:
+                public_task_status = to_frontend_task_status(row.task_status)
+            except ValueError:
+                public_task_status = str(row.task_status).upper()
+        events.append(
+            OperatorEventItem(
+                event_type=row.event_type,
+                ts=row.ts,
+                fb_ad_id=row.fb_ad_id,
+                ad_name=row.ad_name,
+                campaign_id=row.campaign_id,
+                campaign_name=row.campaign_name,
+                stage=row.stage,
+                rule_codes=rule_codes,
+                task_type=row.task_type,
+                task_status=public_task_status,
+            )
+        )
+    return events
+
+
+@router.get(
+    "/snapshot",
+    response_model=OperatorSnapshot,
+    responses=_PROBLEM_RESPONSES,
+)
+async def get_operator_snapshot(
+    engine: DepEngine,
+    settings: DepSettings,
+    account_id: str | None = Query(default=None, max_length=64),
+    window: Literal["today", "24h", "7d", "30d"] = Query(default="today"),
+    timezone: str | None = Query(default=None, min_length=1, max_length=64),
+) -> OperatorSnapshot | JSONResponse:
+    correlation_id = str(uuid.uuid4())
+    timezone_name = timezone or settings.app_timezone
+    try:
+        ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return _problem(
+            status_code=422,
+            code="invalid_timezone",
+            message="Неизвестный IANA timezone",
+            correlation_id=correlation_id,
+        )
+    now = datetime.now(UTC)
+    try:
+        analytics_task = _analytics_sections(
+            engine=engine,
+            account_id=account_id,
+            window_name=window,
+            now=now,
+        )
+        system_task = _system_section(engine=engine, now=now)
+        actions_task = fetch_operator_actions(engine, limit=20)
+        incidents_task = fetch_operator_incidents(engine, account_id=account_id, limit=50)
+        revision_task = fetch_operator_revision(engine)
+        account_task = _account_meta(engine, account_id)
+        currency_task = resolve_account_currencies(
+            engine,
+            account_ids=[account_id] if account_id else None,
+        )
+        (
+            (economy, funnel, _tracker_available, from_dt, to_dt, cabinet_days),
+            system,
+            (
+                action_rows,
+                _next_cursor,
+                actions_as_of,
+            ),
+            incidents,
+            (sequence, revision),
+            account,
+            currencies,
+        ) = await asyncio.gather(
+            analytics_task,
+            system_task,
+            actions_task,
+            incidents_task,
+            revision_task,
+            account_task,
+            currency_task,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("operator snapshot failed correlation_id=%s", correlation_id)
+        return _problem(
+            status_code=503,
+            code="operator_snapshot_unavailable",
+            message="Операторский снимок временно недоступен",
+            correlation_id=correlation_id,
+        )
+    economy, funnel = _fail_closed_snapshot_money(
+        economy=economy,
+        funnel=funnel,
+        currencies=currencies,
+    )
+    action_items = [OperatorActionItem.model_validate(item) for item in action_rows]
+    actions = OperatorSection(
+        state=DataState.READY if action_items else DataState.EMPTY,
+        as_of=actions_as_of or now,
+        freshness_seconds=_age(now, actions_as_of) if actions_as_of else 0,
+        sources=["task_queue"],
+        issues=[],
+        data=OperatorActionsData(items=action_items),
+    )
+    attention = _attention_section(
+        incidents=incidents,
+        actions=action_rows,
+        system=system,
+        now=now,
+    )
+    cabinet_end = to_dt
+    if window == "today":
+        if cabinet_days.cabinet_timezone is not None:
+            cabinet_end = cabinet_day_end_for_timezone(cabinet_days.cabinet_timezone, now)
+        else:
+            cabinet_end = from_dt + timedelta(days=1)
+    return OperatorSnapshot(
+        meta=OperatorSnapshotMeta(
+            revision=revision,
+            sequence=sequence,
+            generated_at=now,
+            timezone=timezone_name,
+            cabinet_timezone=cabinet_days.cabinet_timezone,
+            cabinet_timezone_known=cabinet_days.timezone_known,
+            cabinet_timezone_state=cabinet_days.timezone_state,
+            missing_timezone_account_ids=list(cabinet_days.missing_account_ids),
+            currency=currencies.currency,
+            currency_state=currencies.state,
+            missing_currency_account_ids=list(currencies.missing_account_ids),
+            currency_observed_at=currencies.observed_at,
+            window=window,
+            account=account,
+            cabinet_day={"starts_at": from_dt, "ends_at": cabinet_end},
+        ),
+        attention=attention,
+        economy=economy,
+        funnel=funnel,
+        actions=actions,
+        system=system,
+    )
+
+
+@router.get(
+    "/actions",
+    response_model=OperatorActionsResponse,
+    responses=_PROBLEM_RESPONSES,
+)
+async def get_operator_actions(
+    engine: DepEngine,
+    settings: DepSettings,
+    limit: int = Query(default=30, ge=1, le=100),
+    before_id: int | None = Query(default=None, ge=1),
+    state: list[str] = Query(default_factory=list),
+) -> OperatorActionsResponse | JSONResponse:
+    now = datetime.now(UTC)
+    correlation_id = str(uuid.uuid4())
+    try:
+        (
+            (items, next_cursor, as_of),
+            cabinet_days,
+            currencies,
+        ) = await asyncio.gather(
+            fetch_operator_actions(
+                engine,
+                limit=limit,
+                before_id=before_id,
+                states=tuple(state),
+            ),
+            resolve_cabinet_days(engine),
+            resolve_account_currencies(engine),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("operator actions failed correlation_id=%s", correlation_id)
+        return _problem(
+            status_code=503,
+            code="operator_actions_unavailable",
+            message="История действий временно недоступна",
+            correlation_id=correlation_id,
+        )
+    return OperatorActionsResponse(
+        state=DataState.READY if items else DataState.EMPTY,
+        as_of=as_of or now,
+        freshness_seconds=_age(now, as_of) if as_of else 0,
+        sources=["postgresql"],
+        issues=[],
+        scope=_scope_evidence(
+            cabinet_days=cabinet_days,
+            currencies=currencies,
+            display_timezone=settings.app_timezone,
+        ),
+        items=[OperatorActionItem.model_validate(item) for item in items],
+        next_cursor=next_cursor,
+    )
+
+
+@router.get(
+    "/ads",
+    response_model=OperatorAdsResponse,
+    responses=_PROBLEM_RESPONSES,
+)
+async def get_operator_ads(
+    engine: DepEngine,
+    settings: DepSettings,
+    account_id: str | None = Query(default=None, max_length=64),
+    search: str | None = Query(default=None, max_length=200),
+    delivery_status: str | None = Query(default=None, max_length=64),
+    severity: Literal["ok", "warning", "critical", "unknown"] | None = Query(default=None),
+    sort: Literal["name", "spend", "clicks", "registrations", "ftd", "updated"] = Query(
+        default="updated"
+    ),
+    direction: Literal["asc", "desc"] = Query(default="desc"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=10, le=200),
+) -> OperatorAdsResponse | JSONResponse:
+    now = datetime.now(UTC)
+    correlation_id = str(uuid.uuid4())
+    try:
+        from_dt, to_dt, _, _, cabinet_days = await _window(
+            engine,
+            "today",
+            account_id=account_id,
+            now=now,
+        )
+        sources = await fetch_source_quality(
+            engine,
+            from_dt=from_dt,
+            to_dt=to_dt,
+            cabinet_days=cabinet_days,
+            account_id=account_id,
+        )
+        currencies = await resolve_account_currencies(
+            engine,
+            account_ids=list(cabinet_days.account_ids),
+        )
+        if sort == "spend" and currencies.state != "single":
+            return _problem(
+                status_code=422,
+                code="money_sort_requires_single_currency",
+                message="Для сортировки по расходу выберите кабинет с подтверждённой валютой",
+                correlation_id=correlation_id,
+            )
+        meta_source = sources["meta"]
+        meta_as_of = meta_source.get("last_event_at")
+        tracker_available = sources["tracker"].get("status") == "good"
+        payload = await fetch_operator_ads(
+            engine,
+            from_dt=from_dt,
+            to_dt=to_dt,
+            account_id=account_id,
+            search=search,
+            delivery_status=delivery_status,
+            severity=severity,
+            sort=sort,
+            direction=direction,
+            page=page,
+            page_size=page_size,
+            tracker_available=tracker_available,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("operator ads failed correlation_id=%s", correlation_id)
+        return _problem(
+            status_code=503,
+            code="operator_ads_unavailable",
+            message="Список объявлений временно недоступен",
+            correlation_id=correlation_id,
+        )
+    as_of = payload["as_of"] or (meta_as_of if payload["total"] == 0 else None)
+    freshness = _age(now, as_of)
+    meta_freshness = _age(now, meta_as_of)
+    issues: list[OperatorIssue] = []
+    state_value = _ads_section_state(
+        meta_as_of=meta_as_of,
+        meta_freshness=meta_freshness,
+        meta_status=meta_source.get("status"),
+        row_state=payload["row_state"],
+        total=payload["total"],
+        timezone_known=cabinet_days.timezone_known,
+        tracker_available=tracker_available,
+    )
+    if payload["row_state"] == DataState.UNAVAILABLE:
+        issues.append(
+            OperatorIssue(
+                code="ad_metrics_unavailable",
+                title="Метрики объявлений не подтверждены",
+                detail="Для всех строк в выборке отсутствует снимок Meta.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    elif payload["row_state"] == DataState.PARTIAL:
+        issues.append(
+            OperatorIssue(
+                code="ad_metrics_partial",
+                title="Метрики доступны не для всех объявлений",
+                detail="В выборке есть устаревшие строки или строки без снимка Meta.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    elif payload["row_state"] == DataState.STALE:
+        issues.append(
+            OperatorIssue(
+                code="ad_metrics_stale",
+                title="Снимки объявлений устарели",
+                detail="Ни одна строка в выборке не обновлялась за последние 60 секунд.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    if meta_freshness is not None and meta_freshness > 60:
+        issues.append(
+            OperatorIssue(
+                code="meta_source_stale",
+                title="Источник Meta устарел",
+                detail=f"Возраст последнего снимка: {meta_freshness} с.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    if not cabinet_days.timezone_known:
+        issues.append(
+            OperatorIssue(
+                code="cabinet_timezone_unknown",
+                title="Spend рассчитан по оценочной границе суток",
+                detail="До подтверждения IANA timezone значения не считаются точными.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    if not tracker_available:
+        issues.append(
+            OperatorIssue(
+                code="tracker_freshness_unknown",
+                title="Конверсии в строках оставлены unknown",
+                detail=None,
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    currency_issue = _currency_issue(currencies)
+    if currency_issue is not None:
+        issues.append(currency_issue)
+        if payload["rows"]:
+            state_value = DataState.PARTIAL
+            for row in payload["rows"]:
+                row["data_state"] = DataState.PARTIAL
+                metrics = row["metrics"]
+                metrics["spend"] = None
+                metrics["cpc"] = None
+                metrics["cost_per_registration"] = None
+    return OperatorAdsResponse(
+        state=state_value,
+        as_of=as_of,
+        freshness_seconds=freshness,
+        sources=["meta", "adsetpro"],
+        issues=issues,
+        scope=_scope_evidence(
+            cabinet_days=cabinet_days,
+            currencies=currencies,
+            display_timezone=settings.app_timezone,
+        ),
+        rows=payload["rows"],
+        page=page,
+        page_size=page_size,
+        total=payload["total"],
+        pages=payload["pages"],
+    )
+
+
+async def _enqueue_operator_command(
+    *,
+    action: Literal["pause_ad", "activate_ad"],
+    ad_id: str,
+    engine: Any,
+    idempotency_key: str,
+    requested_by: str,
+    response: Response,
+    precondition: OperatorAdCommandRequest,
+) -> OperatorCommandResponse | JSONResponse:
+    correlation_id = str(uuid.uuid4())
+    try:
+        scoped_idempotency_key = principal_scoped_idempotency_key(
+            principal=requested_by,
+            client_key=idempotency_key,
+        )
+        receipt = await CommandService(engine).enqueue_ad_action(
+            action_kind=action,
+            fb_ad_id=ad_id,
+            requested_by=requested_by,
+            idempotency_key=scoped_idempotency_key,
+            expected_delivery_status=precondition.expected_delivery_status,
+            expected_as_of=precondition.expected_as_of,
+        )
+    except CommandNotFoundError:
+        return _problem(
+            status_code=404,
+            code="ad_not_found",
+            message="Объявление не найдено",
+            correlation_id=correlation_id,
+        )
+    except CommandConflictError:
+        return _problem(
+            status_code=409,
+            code="idempotency_conflict",
+            message="Idempotency-Key уже связан с другим действием",
+            correlation_id=correlation_id,
+        )
+    except CommandPreconditionError:
+        return _problem(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            code="command_precondition_failed",
+            message="Данные объявления изменились. Обновите карточку и повторите действие.",
+            correlation_id=correlation_id,
+        )
+    except ValueError as exc:
+        return _problem(
+            status_code=422,
+            code="invalid_command",
+            message=str(exc),
+            correlation_id=correlation_id,
+        )
+    response.status_code = (
+        status.HTTP_202_ACCEPTED if receipt.state == "queued" else status.HTTP_200_OK
+    )
+    return OperatorCommandResponse(
+        task_id=receipt.task_id,
+        public_id=f"#{receipt.task_id}",
+        state=receipt.state,
+        created=receipt.created,
+        correlation_id=str(receipt.correlation_id),
+    )
+
+
+@router.post(
+    "/ads/{ad_id}/pause",
+    response_model=OperatorCommandResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=_COMMAND_RESPONSES,
+)
+async def pause_operator_ad(
+    ad_id: str,
+    body: OperatorAdCommandRequest,
+    engine: DepEngine,
+    response: Response,
+    request: Request,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    requested_by: str = Header(default="operator:web", alias="X-Operator-Principal", max_length=64),
+) -> OperatorCommandResponse | JSONResponse:
+    return await _enqueue_operator_command(
+        action="pause_ad",
+        ad_id=ad_id,
+        engine=engine,
+        idempotency_key=idempotency_key,
+        requested_by=getattr(request.state, "operator_principal", requested_by),
+        response=response,
+        precondition=body,
+    )
+
+
+@router.post(
+    "/ads/{ad_id}/activate",
+    response_model=OperatorCommandResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=_COMMAND_RESPONSES,
+)
+async def activate_operator_ad(
+    ad_id: str,
+    body: OperatorAdCommandRequest,
+    engine: DepEngine,
+    response: Response,
+    request: Request,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    requested_by: str = Header(default="operator:web", alias="X-Operator-Principal", max_length=64),
+) -> OperatorCommandResponse | JSONResponse:
+    return await _enqueue_operator_command(
+        action="activate_ad",
+        ad_id=ad_id,
+        engine=engine,
+        idempotency_key=idempotency_key,
+        requested_by=getattr(request.state, "operator_principal", requested_by),
+        response=response,
+        precondition=body,
+    )
+
+
+@router.get(
+    "/incidents/{incident_id}",
+    response_model=OperatorIncidentDetailResponse,
+    responses=_PROBLEM_RESPONSES,
+)
+async def get_operator_incident(
+    incident_id: uuid.UUID,
+    engine: DepEngine,
+    settings: DepSettings,
+) -> OperatorIncidentDetailResponse | JSONResponse:
+    correlation_id = str(uuid.uuid4())
+    now = datetime.now(UTC)
+    try:
+        incident = await fetch_operator_incident(engine, incident_id=incident_id)
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "operator incident detail failed correlation_id=%s",
+            correlation_id,
+        )
+        return _problem(
+            status_code=503,
+            code="incident_detail_unavailable",
+            message="Инцидент временно недоступен",
+            correlation_id=correlation_id,
+        )
+    if incident is None:
+        return _problem(
+            status_code=404,
+            code="incident_not_found",
+            message="Инцидент не найден",
+            correlation_id=correlation_id,
+        )
+
+    account_id = str(incident.get("ad_account_id") or "").strip()
+    timezone_name = settings.app_timezone
+    timezone_known = True
+    issues: list[OperatorIssue] = []
+    if account_id:
+        try:
+            cabinet_days = await resolve_cabinet_days(
+                engine,
+                account_ids=[account_id],
+                now=now,
+            )
+        except Exception:  # noqa: BLE001
+            cabinet_days = None
+        persisted_timezone = (
+            cabinet_days.timezone_names.get(account_id.removeprefix("act_"))
+            if cabinet_days is not None
+            else None
+        )
+        if persisted_timezone:
+            timezone_name = persisted_timezone
+        else:
+            timezone_name = "UTC"
+            timezone_known = False
+            issues.append(
+                OperatorIssue(
+                    code="cabinet_timezone_unknown",
+                    title="Часовой пояс кабинета не подтверждён",
+                    detail="Время показано в UTC; денежные действия остаются fail-closed.",
+                    severity=OperatorSeverity.UNKNOWN,
+                    correlation_id=correlation_id,
+                )
+            )
+
+    status_value = str(incident.get("status") or "")
+    if status_value not in {"open", "acknowledged", "executing", "resolved", "failed"}:
+        return _problem(
+            status_code=503,
+            code="incident_status_invalid",
+            message="Состояние инцидента не подтверждено",
+            correlation_id=correlation_id,
+        )
+    return OperatorIncidentDetailResponse(
+        state=DataState.READY if timezone_known else DataState.PARTIAL,
+        as_of=now,
+        freshness_seconds=0,
+        sources=["incidents", "meta_account_snapshot"],
+        issues=issues,
+        timezone=timezone_name,
+        timezone_known=timezone_known,
+        status=status_value,  # type: ignore[arg-type]
+        incident=_incident_attention_item(incident),
+    )
+
+
+@router.post(
+    "/incidents/{incident_id}/ack",
+    response_model=OperatorIncidentAckResponse,
+    responses=_PROBLEM_RESPONSES,
+)
+async def acknowledge_operator_incident(
+    incident_id: uuid.UUID,
+    engine: DepEngine,
+    request: Request,
+    acknowledged_by: str = Header(
+        default="operator:web", alias="X-Operator-Principal", max_length=128
+    ),
+) -> OperatorIncidentAckResponse | JSONResponse:
+    correlation_id = uuid.uuid4()
+    try:
+        acknowledgement = await acknowledge_incident(
+            engine,
+            incident_id=incident_id,
+            acknowledged_by=getattr(request.state, "operator_principal", acknowledged_by),
+        )
+    except IncidentNotFoundError:
+        return _problem(
+            status_code=404,
+            code="incident_not_found",
+            message="Инцидент не найден",
+            correlation_id=str(correlation_id),
+        )
+    except IncidentNotAcknowledgeableError as exc:
+        return _problem(
+            status_code=409,
+            code="incident_not_acknowledgeable",
+            message=f"Инцидент уже находится в состоянии {exc.status}",
+            correlation_id=str(correlation_id),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "operator incident ack failed correlation_id=%s",
+            correlation_id,
+        )
+        return _problem(
+            status_code=503,
+            code="incident_ack_unavailable",
+            message="Подтверждение инцидента временно недоступно",
+            correlation_id=str(correlation_id),
+        )
+    return OperatorIncidentAckResponse(
+        incident_id=str(incident_id),
+        status="acknowledged",
+        acknowledged_at=acknowledgement.acknowledged_at,
+        correlation_id=str(acknowledgement.correlation_id),
+    )
+
+
+__all__ = ["router"]

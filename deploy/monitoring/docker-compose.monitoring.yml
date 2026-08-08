@@ -3,9 +3,12 @@
 # Состав:
 #   node-exporter — метрики хоста (CPU, RAM, диск, uptime, сеть, load).
 #   cadvisor      — метрики по каждому docker-контейнеру (CPU/RAM/restarts).
-#   prometheus    — сбор метрик (node-exporter + cadvisor + наш api /metrics), retention 15d/2GB.
+#   prometheus    — metrics + rules + remote-write receiver, retention 15d/2GB.
 #   loki          — хранилище логов (retention 7d).
-#   promtail      — сбор docker-логов всех контейнеров → loki (поиск ошибок в Grafana).
+#   alloy         — Docker logs + OTLP ingest; replaces end-of-life Promtail.
+#   tempo         — trace storage (retention 7d).
+#   alertmanager  — alert grouping/inhibition/routing.
+#   blackbox      — public liveness/readiness probes.
 #   grafana       — дашборды (provisioning datasource + дашборд "Server Overview").
 #
 # Запуск:   cd /opt/fb-agent/current/deploy/monitoring && docker compose -f docker-compose.monitoring.yml up -d
@@ -25,21 +28,23 @@ x-logging: &logging
 
 services:
   node-exporter:
-    image: prom/node-exporter:v1.8.2
+    image: ${NODE_EXPORTER_IMAGE:?set NODE_EXPORTER_IMAGE to image@sha256}
     restart: unless-stopped
     command:
       - '--path.rootfs=/host'
       - '--path.procfs=/host/proc'
       - '--path.sysfs=/host/sys'
+      - '--collector.textfile.directory=/var/lib/node_exporter/textfile_collector'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|var/lib/docker)($$|/)'
     pid: host
     volumes:
       - /:/host:ro,rslave
+      - /var/lib/node_exporter/textfile_collector:/var/lib/node_exporter/textfile_collector:ro
     networks: [monitoring]
     logging: *logging
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    image: ${CADVISOR_IMAGE:?set CADVISOR_IMAGE to image@sha256}
     restart: unless-stopped
     privileged: true
     devices:
@@ -54,7 +59,7 @@ services:
     logging: *logging
 
   prometheus:
-    image: prom/prometheus:v2.54.1
+    image: ${PROMETHEUS_IMAGE:?set PROMETHEUS_IMAGE to image@sha256}
     restart: unless-stopped
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -62,41 +67,99 @@ services:
       - '--storage.tsdb.retention.time=15d'
       - '--storage.tsdb.retention.size=2GB'
       - '--web.enable-lifecycle'
+      - '--web.enable-remote-write-receiver'
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - ./prometheus/targets:/etc/prometheus/targets:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - prometheus_data:/prometheus
-    networks: [monitoring, fbagent]
+    ports:
+      - "${MONITORING_INGEST_BIND_ADDRESS:-127.0.0.1}:9090:9090"
+    networks: [monitoring]
     logging: *logging
 
   loki:
-    image: grafana/loki:2.9.8
+    image: ${LOKI_IMAGE:?set LOKI_IMAGE to image@sha256}
     restart: unless-stopped
     command: -config.file=/etc/loki/loki-config.yml
     volumes:
       - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki_data:/loki
+    ports:
+      - "${MONITORING_INGEST_BIND_ADDRESS:-127.0.0.1}:3100:3100"
     networks: [monitoring]
     logging: *logging
 
-  promtail:
-    image: grafana/promtail:2.9.8
+  alloy:
+    image: ${ALLOY_IMAGE:?set ALLOY_IMAGE to image@sha256}
     restart: unless-stopped
-    command: -config.file=/etc/promtail/promtail-config.yml
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    environment:
+      NODE_NAME: ${NODE_NAME:-fb-agent-monitoring}
+      LOKI_WRITE_URL: http://loki:3100/loki/api/v1/push
+      TEMPO_OTLP_HTTP_URL: http://tempo:4318
     volumes:
-      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./alloy/central.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    ports:
+      - "${MONITORING_INGEST_BIND_ADDRESS:-127.0.0.1}:4317:4317"
+      - "${MONITORING_INGEST_BIND_ADDRESS:-127.0.0.1}:4318:4318"
+      - "127.0.0.1:12345:12345"
     networks: [monitoring]
     logging: *logging
     depends_on:
       - loki
+      - tempo
+    security_opt:
+      - no-new-privileges:true
+
+  tempo:
+    image: ${TEMPO_IMAGE:?set TEMPO_IMAGE to image@sha256}
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    volumes:
+      - ./tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo_data:/var/tempo
+    networks: [monitoring]
+    logging: *logging
+
+  alertmanager:
+    image: ${ALERTMANAGER_IMAGE:?set ALERTMANAGER_IMAGE to image@sha256}
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--enable-feature=utf8-strict-mode'
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ${ALERTMANAGER_WEBHOOK_TOKEN_FILE:?set ALERTMANAGER_WEBHOOK_TOKEN_FILE}:/run/secrets/alertmanager_webhook_token:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    networks: [monitoring]
+    logging: *logging
+
+  blackbox-exporter:
+    image: ${BLACKBOX_IMAGE:?set BLACKBOX_IMAGE to image@sha256}
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    networks: [monitoring]
+    logging: *logging
 
   grafana:
-    image: grafana/grafana:11.2.0
+    image: ${GRAFANA_IMAGE:?set GRAFANA_IMAGE to image@sha256}
     restart: unless-stopped
     # env_file прокидывает GF_SECURITY_ADMIN_PASSWORD / GF_SERVER_ROOT_URL прямо в
     # контейнер (нативные имена Grafana) — без интерполяции ${} из .env проекта.
-    env_file: .env.monitoring
+    env_file: ${MONITORING_ENV_FILE:-.env.monitoring}
     environment:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
@@ -112,15 +175,16 @@ services:
     depends_on:
       - prometheus
       - loki
+      - tempo
+      - alertmanager
 
 networks:
   monitoring:
-  # Внешняя сеть основного стека — чтобы prometheus скрейпил api:8100/metrics по имени.
-  fbagent:
-    external: true
-    name: fb_agent_default
 
 volumes:
   prometheus_data:
   loki_data:
   grafana_data:
+  alloy_data:
+  tempo_data:
+  alertmanager_data:

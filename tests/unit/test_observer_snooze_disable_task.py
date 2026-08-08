@@ -2,8 +2,8 @@
 """Unit: снуз глушит TG-алерт, но НЕ авто-стоп (MID-2, money).
 
 Проверяем _process_one_row (pipeline) с замоканным I/O:
-  - заснуженный ад при STOP всё равно создаёт disable-задачу (maybe_create_disable_task
-    вызван), но alert не эмитится (apply_fsm_transition получил emit_alert=False);
+  - заснуженный ад при STOP всё равно создаёт disable-задачу в той же транзакции,
+    но alert не эмитится (apply_fsm_transition получил emit_alert=False);
   - для контраста: НЕ заснуженный ад при STOP и создаёт задачу, и эмитит алерт.
 
 Снуз задуман «не спамить алертами по активному инциденту», а не «выключить авто-стоп».
@@ -47,7 +47,10 @@ def _offer() -> OfferRules:
         code="CR2",
         name="Test Offer",
         cpa_threshold=Decimal("10"),
+        currency="USD",
         frequency_threshold=None,
+        stop_percent_of_rule=Decimal("80"),
+        warning_percent_of_stop=Decimal("80"),
     )
 
 
@@ -75,17 +78,27 @@ def _patch_io(monkeypatch, *, captured: dict) -> None:
         return uuid.uuid4()
 
     async def _insert_metrics(*args, **kwargs):
+        captured["metrics_currency"] = kwargs["currency"]
         return True
 
     # evaluator даёт один STOP-хит независимо от метрик — сценарий фиксирован.
     def _evaluate(row, ctx):
         return _stop_eval()
 
-    async def _apply_fsm(engine, *, ad_id, transition, metrics_snapshot, scan_id):
+    async def _apply_fsm(
+        engine,
+        *,
+        ad_id,
+        transition,
+        metrics_snapshot,
+        scan_id,
+        fb_ad_id,
+        ad_account_id=None,
+        currency,
+    ):
         captured["apply_transition"] = transition
-
-    async def _create_task(engine, *, transition, fb_ad_id, open_token, ad_account_id=None):
         captured["create_called"] = transition.create_disable_task
+        captured["currency"] = currency
         return 777 if transition.create_disable_task else None
 
     monkeypatch.setattr(pl, "campaign_matches_owner", _match_owner)
@@ -94,7 +107,6 @@ def _patch_io(monkeypatch, *, captured: dict) -> None:
     monkeypatch.setattr(pl, "insert_metrics", _insert_metrics)
     monkeypatch.setattr(pl, "evaluate_stop_rules", _evaluate)
     monkeypatch.setattr(pl, "apply_fsm_transition", _apply_fsm)
-    monkeypatch.setattr(pl, "maybe_create_disable_task", _create_task)
 
 
 # Заснуженный ад в stop_sent при STOP: disable-задача СОЗДАЁТСЯ, но алерт НЕ шлётся.
@@ -116,16 +128,21 @@ async def test_snoozed_ad_stop_still_creates_disable_task(monkeypatch) -> None:
     result = CycleResult()
     await _process_one_row(
         None,
+        ad_account_id="123",
+        account_currency="USD",
+        account_currency_exponent=2,
         row=_row(),
         offers=[_offer()],
         states={"9001": snapshot},
         external_deposits={},
         scan_id=1,
         cycle_ts=cycle_ts,
+        cabinet_day_start=cycle_ts.replace(hour=0, minute=0, second=0, microsecond=0),
         result=result,
     )
 
     assert captured["create_called"] is True, "Заснуженный ад при STOP обязан ставить pause-задачу"
+    assert captured["metrics_currency"] == "USD"
     assert result.disable_tasks_created == 1
     # Алерт подавлен снузом — apply_fsm получил transition без emit.
     assert captured["apply_transition"].emit_alert is False
@@ -149,19 +166,56 @@ async def test_not_snoozed_ad_stop_creates_task_and_emits(monkeypatch) -> None:
     result = CycleResult()
     await _process_one_row(
         None,
+        ad_account_id="123",
+        account_currency="USD",
+        account_currency_exponent=2,
         row=_row(),
         offers=[_offer()],
         states={"9001": snapshot},
         external_deposits={},
         scan_id=1,
         cycle_ts=cycle_ts,
+        cabinet_day_start=cycle_ts.replace(hour=0, minute=0, second=0, microsecond=0),
         result=result,
     )
 
     assert captured["create_called"] is True
+    assert captured["metrics_currency"] == "USD"
     assert result.disable_tasks_created == 1
     assert captured["apply_transition"].emit_alert is True  # алерт шлём (не заснужен)
     assert result.alerts_stop == 1
+
+
+async def test_metrics_persistence_failure_blocks_fsm_and_money_task(monkeypatch) -> None:
+    """A row without a durable metric snapshot must never drive auto-pause."""
+    cycle_ts = datetime(2026, 7, 2, 12, 0, 0, tzinfo=timezone.utc)
+    captured: dict = {}
+    _patch_io(monkeypatch, captured=captured)
+
+    monkeypatch.setattr(pl, "insert_metrics", _return_false)
+
+    with pytest.raises(RuntimeError, match="ad_metrics_insert_failed"):
+        await _process_one_row(
+            None,
+            ad_account_id="123",
+            account_currency="USD",
+            account_currency_exponent=2,
+            row=_row(),
+            offers=[_offer()],
+            states={},
+            external_deposits={},
+            scan_id=1,
+            cycle_ts=cycle_ts,
+            cabinet_day_start=cycle_ts.replace(hour=0, minute=0, second=0, microsecond=0),
+            result=CycleResult(),
+        )
+
+    assert "apply_transition" not in captured
+    assert "create_called" not in captured
+
+
+async def _return_false(*_args, **_kwargs) -> bool:
+    return False
 
 
 # Sanity: RuleEvaluation.stop_rule_codes отдаёт коды хитов — контракт для decide.

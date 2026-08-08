@@ -116,7 +116,7 @@ async def creative_uniquify(
             creatives=creatives,
         )
     except CreativeValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="Креативы не прошли валидацию") from exc
 
     duration_ms = int((time.monotonic() - t0) * 1000)
 
@@ -148,8 +148,11 @@ async def open_creative_folder(
         # CreativeFolderOpenError содержит 2 варианта: не найдена → 404, вне корня → 403
         msg = str(exc)
         if "только папки внутри" in msg or "только внутри" in msg:
-            raise HTTPException(status_code=403, detail=msg) from exc
-        raise HTTPException(status_code=404, detail=msg) from exc
+            raise HTTPException(
+                status_code=403,
+                detail="Разрешены только папки внутри корня креативов",
+            ) from exc
+        raise HTTPException(status_code=404, detail="Папка с креативами не найдена") from exc
 
     return {}
 
@@ -202,7 +205,10 @@ async def build_campaign_plan(
     try:
         folder = await inspect_creative_folder(body.folder_name)
     except CampaignCreativeValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail="Папка с креативами не прошла валидацию",
+        ) from exc
 
     config = CampaignScriptConfig(
         offer_code=body.offer_code,
@@ -215,7 +221,7 @@ async def build_campaign_plan(
     try:
         plan = build_campaign_script_plan(folder=folder, config=config)
     except CampaignScriptPlanError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="Не удалось построить план кампании") from exc
 
     # Конвертируем dataclass в Pydantic-схему
     return CampaignScriptPlanOut(

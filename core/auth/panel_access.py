@@ -8,12 +8,15 @@ import hashlib
 import json
 import secrets
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 TELEGRAM_ISSUER = "https://oauth.telegram.org"
 TELEGRAM_AUTH_URL = f"{TELEGRAM_ISSUER}/auth"
@@ -21,9 +24,7 @@ TELEGRAM_TOKEN_URL = f"{TELEGRAM_ISSUER}/token"
 TELEGRAM_JWKS_URL = f"{TELEGRAM_ISSUER}/.well-known/jwks.json"
 PANEL_SESSION_COOKIE = "__Secure-adpulse_panel_session_v1"
 
-_STATE_PREFIX = "panel_auth:v1:oidc_state:"
-_TICKET_PREFIX = "panel_auth:v1:ticket:"
-_SESSION_PREFIX = "panel_auth:v1:session:"
+_MAX_OPAQUE_TOKEN_LENGTH = 256
 
 
 class PanelAuthError(ValueError):
@@ -57,13 +58,12 @@ class PanelSession:
     source: str
     issued_at: int
     expires_at: int
-    owner_checked_at: int
 
 
 def safe_return_to(value: str | None) -> str:
     """Allow only same-origin relative application paths."""
     candidate = (value or "").strip()
-    if not candidate.startswith("/") or candidate.startswith("//"):
+    if not candidate.startswith("/") or candidate.startswith("//") or len(candidate) > 2048:
         return "/"
     try:
         parsed = urlsplit(candidate)
@@ -85,8 +85,22 @@ def _b64url_decode(value: str) -> bytes:
         raise PanelAuthError("Некорректный Telegram ID token") from exc
 
 
-def _digest_key(prefix: str, token: str) -> str:
-    return f"{prefix}{hashlib.sha256(token.encode('utf-8')).hexdigest()}"
+def _digest_token(token: str) -> bytes:
+    return hashlib.sha256(token.encode("utf-8")).digest()
+
+
+def _valid_opaque_token(token: str | None) -> bool:
+    return bool(token) and len(token or "") <= _MAX_OPAQUE_TOKEN_LENGTH
+
+
+def _at_epoch(epoch: int | None = None) -> datetime:
+    if epoch is None:
+        return datetime.now(timezone.utc)
+    return datetime.fromtimestamp(int(epoch), tz=timezone.utc)
+
+
+def _epoch(value: datetime) -> int:
+    return int(value.timestamp())
 
 
 def create_oidc_authorization(
@@ -117,34 +131,74 @@ def create_oidc_authorization(
     return state, f"{TELEGRAM_AUTH_URL}?{urlencode(params)}", attempt
 
 
-async def save_oidc_attempt(redis: Any, state: str, attempt: OidcAttempt, ttl: int) -> None:
-    if not state or ttl <= 0:
+async def save_oidc_attempt(
+    engine: AsyncEngine,
+    state: str,
+    attempt: OidcAttempt,
+    ttl: int,
+    *,
+    now: int | None = None,
+) -> None:
+    if not _valid_opaque_token(state) or ttl <= 0:
         raise PanelAuthError("Некорректный Telegram Login state")
-    created = await redis.set(
-        f"{_STATE_PREFIX}{state}",
-        json.dumps(asdict(attempt), separators=(",", ":")),
-        ex=ttl,
-        nx=True,
-    )
-    if not created:
+    current = _at_epoch(now)
+    async with engine.begin() as conn:
+        created = await conn.execute(
+            text(
+                """
+                INSERT INTO panel_oidc_attempts
+                    (state_digest, nonce, code_verifier, return_to, created_at, expires_at)
+                VALUES
+                    (:digest, :nonce, :code_verifier, :return_to,
+                     :created_at, :expires_at)
+                ON CONFLICT (state_digest) DO NOTHING
+                """
+            ),
+            {
+                "digest": _digest_token(state),
+                "nonce": attempt.nonce,
+                "code_verifier": attempt.code_verifier,
+                "return_to": safe_return_to(attempt.return_to),
+                "created_at": current,
+                "expires_at": datetime.fromtimestamp(
+                    int(current.timestamp()) + ttl, tz=timezone.utc
+                ),
+            },
+        )
+    if (created.rowcount or 0) != 1:
         raise PanelAuthError("Не удалось создать Telegram Login")
 
 
-async def consume_oidc_attempt(redis: Any, state: str) -> OidcAttempt:
-    if not state:
+async def consume_oidc_attempt(
+    engine: AsyncEngine, state: str, *, now: int | None = None
+) -> OidcAttempt:
+    if not _valid_opaque_token(state):
         raise PanelAuthError("Telegram Login state отсутствует")
-    raw = await redis.getdel(f"{_STATE_PREFIX}{state}")
-    if not raw:
-        raise PanelAuthError("Telegram Login истёк или уже был использован")
-    try:
-        payload = json.loads(raw)
-        return OidcAttempt(
-            nonce=str(payload["nonce"]),
-            code_verifier=str(payload["code_verifier"]),
-            return_to=safe_return_to(payload.get("return_to")),
+    async with engine.begin() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        """
+                    DELETE FROM panel_oidc_attempts
+                    WHERE state_digest = :digest
+                      AND expires_at > :now
+                    RETURNING nonce, code_verifier, return_to
+                    """
+                    ),
+                    {"digest": _digest_token(state), "now": _at_epoch(now)},
+                )
+            )
+            .mappings()
+            .first()
         )
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise PanelAuthError("Повреждён Telegram Login state") from exc
+    if row is None:
+        raise PanelAuthError("Telegram Login истёк или уже был использован")
+    return OidcAttempt(
+        nonce=str(row["nonce"]),
+        code_verifier=str(row["code_verifier"]),
+        return_to=safe_return_to(row["return_to"]),
+    )
 
 
 def _select_rsa_key(jwks: dict[str, Any], kid: str) -> rsa.RSAPublicKey:
@@ -225,7 +279,7 @@ def verify_telegram_id_token(
 
 
 async def create_panel_ticket(
-    redis: Any,
+    engine: AsyncEngine,
     *,
     telegram_user_id: int,
     source: str,
@@ -234,7 +288,7 @@ async def create_panel_ticket(
     now: int | None = None,
 ) -> tuple[str, PanelTicket]:
     current = int(time.time()) if now is None else int(now)
-    if telegram_user_id <= 0 or not source or ttl <= 0:
+    if telegram_user_id <= 0 or not source or len(source) > 32 or ttl <= 0:
         raise PanelAuthError("Нельзя создать login ticket")
     ticket = secrets.token_urlsafe(48)
     grant = PanelTicket(
@@ -244,42 +298,69 @@ async def create_panel_ticket(
         issued_at=current,
         expires_at=current + ttl,
     )
-    created = await redis.set(
-        _digest_key(_TICKET_PREFIX, ticket),
-        json.dumps(asdict(grant), separators=(",", ":")),
-        ex=ttl,
-        nx=True,
-    )
-    if not created:
+    async with engine.begin() as conn:
+        created = await conn.execute(
+            text(
+                """
+                INSERT INTO panel_login_tickets
+                    (ticket_digest, telegram_user_id, source, return_to,
+                     issued_at, expires_at)
+                VALUES
+                    (:digest, :telegram_user_id, :source, :return_to,
+                     :issued_at, :expires_at)
+                ON CONFLICT (ticket_digest) DO NOTHING
+                """
+            ),
+            {
+                "digest": _digest_token(ticket),
+                "telegram_user_id": grant.telegram_user_id,
+                "source": grant.source,
+                "return_to": grant.return_to,
+                "issued_at": _at_epoch(grant.issued_at),
+                "expires_at": _at_epoch(grant.expires_at),
+            },
+        )
+    if (created.rowcount or 0) != 1:
         raise PanelAuthError("Не удалось создать login ticket")
     return ticket, grant
 
 
-async def consume_panel_ticket(redis: Any, ticket: str, *, now: int | None = None) -> PanelTicket:
-    if not ticket:
+async def consume_panel_ticket(
+    engine: AsyncEngine, ticket: str, *, now: int | None = None
+) -> PanelTicket:
+    if not _valid_opaque_token(ticket):
         raise PanelAuthError("Login ticket отсутствует")
-    raw = await redis.getdel(_digest_key(_TICKET_PREFIX, ticket))
-    if not raw:
-        raise PanelAuthError("Login ticket истёк или уже был использован")
-    try:
-        payload = json.loads(raw)
-        grant = PanelTicket(
-            telegram_user_id=int(payload["telegram_user_id"]),
-            source=str(payload["source"]),
-            return_to=safe_return_to(payload.get("return_to")),
-            issued_at=int(payload["issued_at"]),
-            expires_at=int(payload["expires_at"]),
+    async with engine.begin() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        """
+                    DELETE FROM panel_login_tickets
+                    WHERE ticket_digest = :digest
+                      AND expires_at > :now
+                    RETURNING telegram_user_id, source, return_to, issued_at, expires_at
+                    """
+                    ),
+                    {"digest": _digest_token(ticket), "now": _at_epoch(now)},
+                )
+            )
+            .mappings()
+            .first()
         )
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise PanelAuthError("Повреждён login ticket") from exc
-    current = int(time.time()) if now is None else int(now)
-    if grant.telegram_user_id <= 0 or not grant.source or grant.expires_at <= current:
-        raise PanelAuthError("Login ticket истёк или невалиден")
-    return grant
+    if row is None:
+        raise PanelAuthError("Login ticket истёк или уже был использован")
+    return PanelTicket(
+        telegram_user_id=int(row["telegram_user_id"]),
+        source=str(row["source"]),
+        return_to=safe_return_to(row["return_to"]),
+        issued_at=_epoch(row["issued_at"]),
+        expires_at=_epoch(row["expires_at"]),
+    )
 
 
 async def create_panel_session(
-    redis: Any,
+    engine: AsyncEngine,
     *,
     telegram_user_id: int,
     role: str,
@@ -288,7 +369,7 @@ async def create_panel_session(
     now: int | None = None,
 ) -> tuple[str, PanelSession]:
     current = int(time.time()) if now is None else int(now)
-    if telegram_user_id <= 0 or role != "owner" or not source or ttl <= 0:
+    if telegram_user_id <= 0 or role != "owner" or not source or len(source) > 32 or ttl <= 0:
         raise PanelAuthError("Нельзя создать owner-сессию")
     token = secrets.token_urlsafe(48)
     session = PanelSession(
@@ -297,68 +378,139 @@ async def create_panel_session(
         source=source,
         issued_at=current,
         expires_at=current + ttl,
-        owner_checked_at=current,
     )
-    created = await redis.set(
-        _digest_key(_SESSION_PREFIX, token),
-        json.dumps(asdict(session), separators=(",", ":")),
-        ex=ttl,
-        nx=True,
-    )
-    if not created:
+    async with engine.begin() as conn:
+        created = await conn.execute(
+            text(
+                """
+                INSERT INTO panel_sessions
+                    (token_digest, telegram_user_id, role, source,
+                     issued_at, expires_at)
+                VALUES
+                    (:digest, :telegram_user_id, :role, :source,
+                     :issued_at, :expires_at)
+                ON CONFLICT (token_digest) DO NOTHING
+                """
+            ),
+            {
+                "digest": _digest_token(token),
+                "telegram_user_id": session.telegram_user_id,
+                "role": session.role,
+                "source": session.source,
+                "issued_at": _at_epoch(session.issued_at),
+                "expires_at": _at_epoch(session.expires_at),
+            },
+        )
+    if (created.rowcount or 0) != 1:
         raise PanelAuthError("Не удалось создать owner-сессию")
     return token, session
 
 
 async def load_panel_session(
-    redis: Any, token: str | None, *, now: int | None = None
+    engine: AsyncEngine, token: str | None, *, now: int | None = None
 ) -> PanelSession | None:
-    if not token:
+    if not _valid_opaque_token(token):
         return None
-    key = _digest_key(_SESSION_PREFIX, token)
-    raw = await redis.get(key)
-    if not raw:
-        return None
-    try:
-        payload = json.loads(raw)
-        session = PanelSession(
-            telegram_user_id=int(payload["telegram_user_id"]),
-            role=str(payload["role"]),
-            source=str(payload["source"]),
-            issued_at=int(payload["issued_at"]),
-            expires_at=int(payload["expires_at"]),
-            owner_checked_at=int(payload["owner_checked_at"]),
+    current = _at_epoch(now)
+    async with engine.begin() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        """
+                    SELECT session.telegram_user_id, session.role, session.source,
+                           session.issued_at, session.expires_at
+                    FROM panel_sessions AS session
+                    JOIN telegram_recipients AS recipient
+                      ON recipient.telegram_user_id = session.telegram_user_id
+                     AND recipient.role = 'owner'
+                     AND recipient.revoked_at IS NULL
+                    WHERE session.token_digest = :digest
+                      AND session.expires_at > :now
+                      AND session.role = 'owner'
+                      AND session.telegram_user_id > 0
+                    """
+                    ),
+                    {"digest": _digest_token(token or ""), "now": current},
+                )
+            )
+            .mappings()
+            .first()
         )
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        await redis.delete(key)
+        if row is None:
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM panel_sessions AS session
+                    WHERE session.token_digest = :digest
+                      AND (
+                          session.expires_at <= :now
+                          OR NOT EXISTS (
+                              SELECT 1
+                              FROM telegram_recipients AS recipient
+                              WHERE recipient.telegram_user_id = session.telegram_user_id
+                                AND recipient.role = 'owner'
+                                AND recipient.revoked_at IS NULL
+                          )
+                      )
+                    """
+                ),
+                {"digest": _digest_token(token or ""), "now": current},
+            )
+    if row is None:
         return None
-    current = int(time.time()) if now is None else int(now)
-    if session.role != "owner" or session.telegram_user_id <= 0 or session.expires_at <= current:
-        await redis.delete(key)
-        return None
-    return session
-
-
-async def mark_owner_checked(
-    redis: Any, token: str, session: PanelSession, now: int
-) -> PanelSession | None:
-    """Refresh a role check without resurrecting a concurrently logged-out session."""
-    updated = PanelSession(**{**asdict(session), "owner_checked_at": int(now)})
-    remaining = updated.expires_at - int(now)
-    if remaining <= 0:
-        return None
-    refreshed = await redis.set(
-        _digest_key(_SESSION_PREFIX, token),
-        json.dumps(asdict(updated), separators=(",", ":")),
-        ex=remaining,
-        xx=True,
+    return PanelSession(
+        telegram_user_id=int(row["telegram_user_id"]),
+        role=str(row["role"]),
+        source=str(row["source"]),
+        issued_at=_epoch(row["issued_at"]),
+        expires_at=_epoch(row["expires_at"]),
     )
-    return updated if refreshed else None
 
 
-async def delete_panel_session(redis: Any, token: str | None) -> None:
-    if token:
-        await redis.delete(_digest_key(_SESSION_PREFIX, token))
+async def delete_panel_session(engine: AsyncEngine, token: str | None) -> None:
+    if not _valid_opaque_token(token):
+        return
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM panel_sessions WHERE token_digest = :digest"),
+            {"digest": _digest_token(token or "")},
+        )
+
+
+async def cleanup_expired_panel_auth_records(
+    engine: AsyncEngine,
+    *,
+    batch_size: int = 1000,
+    now: int | None = None,
+) -> dict[str, int]:
+    """Bound expiry cleanup so auth traffic never performs an unbounded delete."""
+    if batch_size <= 0 or batch_size > 10_000:
+        raise ValueError("batch_size must be between 1 and 10000")
+    current = _at_epoch(now)
+    deleted: dict[str, int] = {}
+    for table_name in ("panel_oidc_attempts", "panel_login_tickets", "panel_sessions"):
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    f"""
+                    WITH expired AS (
+                        SELECT ctid
+                        FROM {table_name}
+                        WHERE expires_at <= :now
+                        ORDER BY expires_at
+                        LIMIT :batch_size
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    DELETE FROM {table_name} AS record
+                    USING expired
+                    WHERE record.ctid = expired.ctid
+                    """
+                ),
+                {"now": current, "batch_size": batch_size},
+            )
+        deleted[table_name] = result.rowcount or 0
+    return deleted
 
 
 __all__ = [
@@ -370,6 +522,7 @@ __all__ = [
     "PanelSession",
     "PanelTicket",
     "TelegramSigningKeyNotFound",
+    "cleanup_expired_panel_auth_records",
     "consume_oidc_attempt",
     "consume_panel_ticket",
     "create_oidc_authorization",
@@ -377,7 +530,6 @@ __all__ = [
     "create_panel_ticket",
     "delete_panel_session",
     "load_panel_session",
-    "mark_owner_checked",
     "safe_return_to",
     "save_oidc_attempt",
     "verify_telegram_id_token",

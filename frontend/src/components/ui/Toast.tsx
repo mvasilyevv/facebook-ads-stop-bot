@@ -12,47 +12,12 @@
  */
 import * as RadixToast from "@radix-ui/react-toast";
 import { CheckCircle2, AlertCircle, Info, AlertTriangle, X } from "lucide-react";
-import { create } from "zustand";
 import { type ReactNode, useEffect } from "react";
 import { cn } from "@/lib/utils/cn";
+import { useToastStore, type ToastItem, type ToastVariant } from "./toastStore";
 
-export type ToastVariant = "success" | "error" | "info" | "warning";
-
-interface ToastItem {
-  id: string;
-  title: ReactNode;
-  description?: ReactNode;
-  variant: ToastVariant;
-  /** 0 = не закрывается автоматически. */
-  duration: number;
-}
-
-interface ToastStore {
-  toasts: ToastItem[];
-  add: (toast: Omit<ToastItem, "id">) => void;
-  remove: (id: string) => void;
-}
-
-const useToastStore = create<ToastStore>((set) => ({
-  toasts: [],
-  add: (t) => {
-    const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    set((s) => ({ toasts: [...s.toasts, { ...t, id }] }));
-  },
-  remove: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
-}));
-
-/** Программный API тостов. */
-export const toast = {
-  success: (title: ReactNode, description?: ReactNode) =>
-    useToastStore.getState().add({ title, description, variant: "success", duration: 4000 }),
-  info: (title: ReactNode, description?: ReactNode) =>
-    useToastStore.getState().add({ title, description, variant: "info", duration: 4000 }),
-  warning: (title: ReactNode, description?: ReactNode) =>
-    useToastStore.getState().add({ title, description, variant: "warning", duration: 8000 }),
-  error: (title: ReactNode, description?: ReactNode) =>
-    useToastStore.getState().add({ title, description, variant: "error", duration: 0 }),
-};
+export { toast } from "./toastStore";
+export type { ToastItem, ToastVariant } from "./toastStore";
 
 const ICONS: Record<ToastVariant, ReactNode> = {
   success: <CheckCircle2 size={16} className="text-success" aria-hidden="true" />,
@@ -115,7 +80,7 @@ function ToastItemView({ item, onClose }: { item: ToastItem; onClose: () => void
       </div>
       <RadixToast.Close
         aria-label="Закрыть"
-        className="text-bg-9 hover:text-bg-11 transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        className="-my-3 -mr-3 inline-flex size-11 shrink-0 items-center justify-center rounded-[var(--radius-2)] text-bg-9 transition-colors hover:bg-bg-3 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <X size={14} aria-hidden="true" />
       </RadixToast.Close>

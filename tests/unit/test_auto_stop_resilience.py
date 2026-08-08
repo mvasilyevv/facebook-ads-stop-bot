@@ -12,11 +12,11 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-import core.meta_api.queue as mq
 from core.observer import writers
 from core.observer.state_machine import FsmTransition
 
@@ -34,23 +34,32 @@ def _stop_transition() -> FsmTransition:
 # Авто-стоп создаёт pause_ad с _AUTO_STOP_MAX_ATTEMPTS (не дефолтные 5) — переживает outage
 @pytest.mark.asyncio
 async def test_auto_stop_uses_bumped_max_attempts(monkeypatch) -> None:
-    spy = AsyncMock(return_value=777)
-    # writers импортирует create_mutation_task внутри функции из core.meta_api.queue —
-    # патчим источник, а не атрибут writers.
-    monkeypatch.setattr(mq, "create_mutation_task", spy)
+    correlation_id = uuid.uuid4()
+    spy = AsyncMock(
+        return_value=SimpleNamespace(task_id=777, created=True, correlation_id=uuid.uuid4())
+    )
+    monkeypatch.setattr(
+        writers,
+        "CommandService",
+        lambda _engine: SimpleNamespace(enqueue_ad_action=spy),
+    )
 
     task_id = await writers.maybe_create_disable_task(
         engine=object(),
         transition=_stop_transition(),
         fb_ad_id="230011223344",
         open_token=None,
+        correlation_id=correlation_id,
     )
 
     assert task_id == 777
     spy.assert_awaited_once()
     kwargs = spy.await_args.kwargs
     assert kwargs["requested_by"] == "bot_auto_stop"
-    assert kwargs["status"] == "pending"
+    assert kwargs["action_kind"] == "pause_ad"
+    assert kwargs["fb_ad_id"] == "230011223344"
+    assert kwargs["idempotency_key"].startswith("auto:pause_ad:230011223344:")
+    assert kwargs["correlation_id"] == correlation_id
     # Ключевой инвариант money-safety: лимит ретраев поднят над дефолтом 5.
     assert kwargs["max_attempts"] == writers._AUTO_STOP_MAX_ATTEMPTS
     assert writers._AUTO_STOP_MAX_ATTEMPTS > 5
@@ -62,7 +71,7 @@ async def test_auto_stop_uses_bumped_max_attempts(monkeypatch) -> None:
 def test_auto_stop_max_attempts_covers_one_hour() -> None:
     n = writers._AUTO_STOP_MAX_ATTEMPTS
     assert n == 15, f"Ожидается 15 (~1ч), получено {n}; менять только осознанно"
-    # Суммарная задержка: _calc_next_retry(i+1) для i=0..n-2
+    # Суммарная задержка: _calc_retry_available_at(i+1) для i=0..n-2
     # = min(30*2^1,300) + ... + min(30*2^(n-1),300)
     total_wait = sum(min(30 * (2 ** (i + 1)), 300) for i in range(n - 1))
     assert 3600 <= total_wait <= 4200, (
@@ -74,8 +83,12 @@ def test_auto_stop_max_attempts_covers_one_hour() -> None:
 # Без стоп-решения (create_disable_task=False) задача не создаётся вовсе
 @pytest.mark.asyncio
 async def test_no_task_when_transition_has_no_disable(monkeypatch) -> None:
-    spy = AsyncMock(return_value=1)
-    monkeypatch.setattr(mq, "create_mutation_task", spy)
+    spy = AsyncMock(return_value=SimpleNamespace(task_id=1))
+    monkeypatch.setattr(
+        writers,
+        "CommandService",
+        lambda _engine: SimpleNamespace(enqueue_ad_action=spy),
+    )
 
     transition = FsmTransition(
         new_state="warning_sent",

@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """Автоуникализация концептов и распределение вариантов по adset'ам.
 
-Раздел 3 дизайна (`docs/superpowers/specs/2026-06-22-campaign-creation-service-design.md`):
-
     Вход: K концептов (фото/видео) + N adset'ов + copies_per_concept (default = N).
     для каждого концепта C:
         variants = uniquify(C, copies=N)   # seed = hash(concept_id, i) → детерминированно

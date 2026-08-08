@@ -45,7 +45,7 @@ export function ChatMessageItem({ message }: ChatMessageItemProps) {
         role="status"
         className="px-3 py-2 border-l-2 border-l-accent bg-bg-2 text-[12.5px] text-bg-11 leading-[1.4]"
       >
-        <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-1">
+        <div className="font-display text-[12px] tracking-[0.12em] uppercase text-bg-8 mb-1">
           📟 Пульс кабинета
         </div>
         {renderContent(message.content)}
@@ -65,20 +65,20 @@ export function ChatMessageItem({ message }: ChatMessageItemProps) {
         className={cn(
           "px-3 py-2 text-[13px] leading-[1.45] border rounded-[var(--radius-2)]",
           isUser
-            ? "bg-bg-3 border-[var(--hairline-strong)] text-bg-11"
-            : "bg-bg-2 border-[var(--hairline)] text-bg-11",
+            ? "bg-bg-3 border-[var(--color-hairline-strong)] text-bg-11"
+            : "bg-bg-2 border-[var(--color-hairline)] text-bg-11",
         )}
       >
         {renderContent(message.content)}
       </div>
       {!isUser && message.toolCalls && message.toolCalls.length > 0 ? (
-        <div className="text-[10.5px] text-bg-8 font-display px-1">
+        <div className="text-[12px] text-bg-8 font-display px-1">
           проверил:{" "}
           {message.toolCalls.map((tool, idx) => (
             <span key={`${tool.name}_${idx}`}>
               {idx > 0 ? ", " : ""}
               <span
-                className={cn(tool.error && "line-through text-bg-7")}
+                className={cn(tool.error && "line-through text-bg-8")}
                 title={tool.error ?? undefined}
               >
                 {tool.name}

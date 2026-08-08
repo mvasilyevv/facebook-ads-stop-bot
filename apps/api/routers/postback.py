@@ -9,12 +9,12 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from apps.api.deps import get_engine, get_settings
+from apps.api.deps import get_engine
 from core.adset_pro.credentials import resolve_adsetpro_postback_secret
 from core.adset_pro.ingest import (
     canonical_event_type,
@@ -22,8 +22,8 @@ from core.adset_pro.ingest import (
     provider_event_id_from_raw,
 )
 from core.adset_pro.schemas import PostbackEvent
-from core.config import Settings, reveal_secret
-from core.metrics import TRACKER_POSTBACK_EVENTS
+from core.metrics import ADSETPRO_POSTBACK_EVENTS
+from core.money import validated_currency_code
 from core.pubsub import CHANNEL_TRACKER_WAKEUP
 
 logger = logging.getLogger(__name__)
@@ -35,13 +35,9 @@ _UNSUPPORTED_STATUSES = frozenset({"decline", "declined", "rejected", "trash", "
 async def _authorize(
     *,
     provided: str | None,
-    settings: Settings,
     engine: AsyncEngine,
 ) -> None:
-    expected = await resolve_adsetpro_postback_secret(
-        engine,
-        fallback=reveal_secret(settings.adsetpro_postback_secret),
-    )
+    expected = await resolve_adsetpro_postback_secret(engine)
     if not expected:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -78,6 +74,18 @@ def _parse_occurred_at(value: Any, *, fallback: datetime) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
+def _parse_optional_revenue(value: Any) -> Decimal | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        revenue = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="invalid revenue") from exc
+    if not revenue.is_finite():
+        raise HTTPException(status_code=422, detail="invalid revenue")
+    return revenue
+
+
 def _normalize(
     payload: dict[str, Any], *, received_at: datetime
 ) -> tuple[PostbackEvent | None, str]:
@@ -98,11 +106,7 @@ def _normalize(
     if event_type == "redeposit" and not provider_event_id:
         return None, "redeposit_without_provider_event_id"
 
-    revenue_raw = _first(payload, "revenue", "payout", "amount")
-    try:
-        revenue = Decimal(str(revenue_raw or "0"))
-    except (InvalidOperation, ValueError) as exc:
-        raise HTTPException(status_code=422, detail="invalid revenue") from exc
+    revenue = _parse_optional_revenue(_first(payload, "revenue", "payout", "amount"))
 
     sanitized = dict(payload)
     for key in ("token", "secret", "postback_secret"):
@@ -113,7 +117,7 @@ def _normalize(
         fb_ad_id=str(direct_ad_id).strip() if direct_ad_id not in (None, "") else None,
         event_type=event_type,
         revenue=revenue,
-        currency=str(_first(payload, "currency") or "USD").upper(),
+        currency=validated_currency_code(_first(payload, "currency")),
         received_at=received_at,
         occurred_at=_parse_occurred_at(
             _first(payload, "occurred_at", "event_time", "created_at", "timestamp"),
@@ -137,7 +141,7 @@ def _provider_aliases() -> tuple[str, ...]:
 
 
 async def _record(redis: Redis | None, outcome: str) -> None:
-    TRACKER_POSTBACK_EVENTS.labels(outcome=outcome).inc()
+    ADSETPRO_POSTBACK_EVENTS.labels(outcome=outcome).inc()
     if redis is None:
         return
     try:
@@ -193,11 +197,10 @@ async def _handle(
 async def receive_adsetpro_get(
     request: Request,
     token: str | None = Query(default=None),
-    settings: Settings = Depends(get_settings),
     engine: AsyncEngine = Depends(get_engine),
 ) -> JSONResponse:
     """AdSet.pro-compatible GET endpoint. The raw URL is never logged here."""
-    await _authorize(provided=token, settings=settings, engine=engine)
+    await _authorize(provided=token, engine=engine)
     return await _handle(
         payload=dict(request.query_params),
         engine=engine,
@@ -206,21 +209,4 @@ async def receive_adsetpro_get(
     )
 
 
-@router.post("/adsetpro", summary="Receive legacy POST AdSet.pro postback")
-async def receive_adsetpro_postback(
-    request: Request,
-    body: dict[str, Any] = Body(...),
-    x_postback_secret: str | None = Header(default=None, alias="X-Postback-Secret"),
-    settings: Settings = Depends(get_settings),
-    engine: AsyncEngine = Depends(get_engine),
-) -> JSONResponse:
-    await _authorize(provided=x_postback_secret, settings=settings, engine=engine)
-    return await _handle(
-        payload=body,
-        engine=engine,
-        redis=getattr(request.app.state, "redis", None),
-        accepted_status=202,
-    )
-
-
-__all__ = ["receive_adsetpro_get", "receive_adsetpro_postback", "router"]
+__all__ = ["receive_adsetpro_get", "router"]

@@ -36,6 +36,12 @@ def test_create_normalizes_countries_upper_dedup() -> None:
 def test_create_empty_countries_defaults_to_empty_list() -> None:
     body = OfferCreateIn(code="GH_CR2", ad_account_ids=["123"])
     assert body.countries == []
+    assert body.is_active is True
+
+
+def test_create_accepts_explicit_inactive_state() -> None:
+    body = OfferCreateIn(code="GH_CR2", ad_account_ids=["123"], is_active=False)
+    assert body.is_active is False
 
 
 # Невалидный код страны (не ISO-2) → ValueError при валидации.
@@ -62,6 +68,26 @@ def test_update_countries_normalized() -> None:
     assert body.countries == ["BR", "US"]
 
 
+@pytest.mark.parametrize(
+    "retired_field",
+    ("name", "country_code", "use_vision_creator", "notes"),
+)
+def test_create_rejects_retired_or_ignored_fields(retired_field: str) -> None:
+    with pytest.raises(ValueError):
+        OfferCreateIn.model_validate(
+            {"code": "GH_CR2", "ad_account_ids": ["123"], retired_field: "legacy"}
+        )
+
+
+@pytest.mark.parametrize(
+    "retired_field",
+    ("code", "name", "country_code", "use_vision_creator", "notes"),
+)
+def test_update_rejects_immutable_or_retired_fields(retired_field: str) -> None:
+    with pytest.raises(ValueError):
+        OfferUpdateIn.model_validate({retired_field: "legacy"})
+
+
 # ─────────────────────── OfferOut: pixel_id + ad_account_ids + countries ───────────────────────
 
 
@@ -85,6 +111,9 @@ def test_offer_out_contains_offer_fields() -> None:
     assert out.ad_account_ids == ["123", "456"]
     assert out.countries == ["DE", "KE"]
     assert not hasattr(out, "default_page_id")
+    assert not hasattr(out, "country_code")
+    assert not hasattr(out, "use_vision_creator")
+    assert not hasattr(out, "notes")
 
 
 # OfferOut с пустым/отсутствующим countries даёт [] (стабильный shape).
@@ -185,6 +214,7 @@ def _canonical_row(**overrides: Any) -> dict[str, Any]:
         "ad_account_ids": ["123"],
         "countries": ["DE", "KE"],
         "cpa_threshold": None,
+        "currency": "USD",
         "created_at": now,
         "updated_at": now,
     }
@@ -202,11 +232,12 @@ def _client(captured: dict[str, Any], row: dict[str, Any]) -> TestClient:
 # POST /offers персистит countries (upper) и отдаёт их в ответе.
 def test_post_persists_and_returns_countries() -> None:
     captured: dict[str, Any] = {}
-    client = _client(captured, _canonical_row())
+    client = _client(captured, _canonical_row(is_active=False))
     resp = client.post(
         "/api/offers",
         json={
             "code": "GH_CR2",
+            "is_active": False,
             "ad_account_ids": ["123"],
             "countries": ["de", "ke"],
         },
@@ -217,6 +248,7 @@ def test_post_persists_and_returns_countries() -> None:
     assert "default_page_id" not in body
     # В values insert попали нормализованные countries.
     assert captured.get("countries") == ["DE", "KE"]
+    assert captured.get("is_active") is False
     assert "default_page_id" not in captured
 
 

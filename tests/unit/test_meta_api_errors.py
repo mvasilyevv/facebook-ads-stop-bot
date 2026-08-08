@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from core.meta_api.errors import (
+    AmbiguousResultError,
     LoginRequiredError,
     NotFoundError,
     PermanentError,
@@ -101,11 +102,15 @@ def test_code_minus2_network_temporary() -> None:
     assert not isinstance(exc, PermanentError)
 
 
-# code -3 page-evaluate — переходное состояние page/сессии → Temporary (SessionUnavailable).
-def test_code_minus3_page_evaluate_temporary() -> None:
+# code -3 page-evaluate may happen after fetch/commit, so it is ambiguous rather
+# than proven pre-send SessionUnavailable.  This distinction prevents blind
+# retries of budget/create/duplicate operations.
+def test_code_minus3_page_evaluate_is_ambiguous() -> None:
     exc = classify_graph_error(-3, None, "page.evaluate failed")
-    assert isinstance(exc, SessionUnavailableError)
+    assert isinstance(exc, AmbiguousResultError)
+    assert not isinstance(exc, SessionUnavailableError)
     assert isinstance(exc, TemporaryError)
+    assert exc.code == -3
 
 
 # code -1 TokenNotFound → SessionUnavailableError (Temporary) — токен ещё не в DOM.

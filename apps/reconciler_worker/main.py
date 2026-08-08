@@ -8,45 +8,39 @@ import logging
 import os
 import signal
 
-import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from apps.reconciler_worker.worker import run_once
 from core.db import WORKER_ENGINE_KWARGS
+from core.tasks.queue import refresh_task_queue_metrics
+from core.worker_metrics import mark_worker_heartbeat, start_worker_metrics_server
 
 logger = logging.getLogger("reconciler_worker")
 
-# Heartbeat — имя ДОЛЖНО совпадать с EXPECTED_WORKERS в health_watchdog.
 WORKER_NAME = "reconciler"
-HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
-HEARTBEAT_TTL_SECONDS = 60
+_METRICS_INTERVAL_SECONDS = 15.0
 
 _INTERVAL_SEC = int(os.environ.get("RECONCILER_INTERVAL_SEC", "30"))
 
 
-def _get_redis_url() -> str:
-    return os.environ.get("REDIS_URL", "redis://localhost:6380/0")
-
-
-async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
-    """Периодически пишет worker:heartbeat:reconciler с TTL 60s.
-
-    Параллельный таск — не блокирует основной цикл reconciliation.
-    """
-    interval = HEARTBEAT_TTL_SECONDS / 2
+async def metrics_loop(stop: asyncio.Event, engine=None) -> None:
+    """Refresh process and durable queue Prometheus metrics."""
     while not stop.is_set():
+        mark_worker_heartbeat(WORKER_NAME)
+        if engine is not None:
+            try:
+                await refresh_task_queue_metrics(engine)
+            except Exception:  # noqa: BLE001
+                logger.exception("reconciler metrics: failed to refresh queue metrics")
         try:
-            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
-        except Exception:  # noqa: BLE001
-            logger.exception("reconciler heartbeat: ошибка записи в Redis")
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=interval)
+            await asyncio.wait_for(stop.wait(), timeout=_METRICS_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
             pass
 
 
 async def main_loop(database_url: str) -> None:
     engine = create_async_engine(database_url, **WORKER_ENGINE_KWARGS)
+    start_worker_metrics_server(WORKER_NAME)
     stop_event = asyncio.Event()
 
     def _handle_sigterm() -> None:
@@ -60,14 +54,7 @@ async def main_loop(database_url: str) -> None:
         except (NotImplementedError, ValueError):
             pass
 
-    # Запускаем heartbeat параллельно с основным циклом.
-    hb_redis: redis_asyncio.Redis | None = None
-    hb_task: asyncio.Task | None = None
-    try:
-        hb_redis = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
-        hb_task = asyncio.create_task(heartbeat_loop(hb_redis, stop_event))
-    except Exception:
-        logger.warning("reconciler_worker: не удалось запустить heartbeat")
+    metrics_task = asyncio.create_task(metrics_loop(stop_event, engine=engine))
 
     try:
         while not stop_event.is_set():
@@ -81,19 +68,12 @@ async def main_loop(database_url: str) -> None:
             except asyncio.TimeoutError:
                 pass
     finally:
-        # Останавливаем heartbeat-таск.
         stop_event.set()
-        if hb_task is not None:
-            hb_task.cancel()
-            try:
-                await hb_task
-            except asyncio.CancelledError:
-                pass
-        if hb_redis is not None:
-            try:
-                await hb_redis.aclose()
-            except Exception:
-                pass
+        metrics_task.cancel()
+        try:
+            await metrics_task
+        except asyncio.CancelledError:
+            pass
         await engine.dispose()
         logger.info("reconciler_worker остановлен.")
 

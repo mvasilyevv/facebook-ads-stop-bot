@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """Примитивы сериализации значений из БД в JSON-дружелюбный формат.
 
-Дублировались дословно в dashboard_performance.py, dashboard_timeseries.py и
-core/dashboard/snapshot.py (_decimal_to_str). Вынесены сюда как единый источник.
+Единый источник преобразований NUMERIC для действующих API-контрактов.
 
 Decimal сериализуется как str — стабильно и без потери точности (float-кодек
 Pydantic для NUMERIC роняет точность либо требует отдельной настройки).

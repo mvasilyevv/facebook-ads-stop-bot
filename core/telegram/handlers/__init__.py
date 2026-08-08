@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Доменные обработчики Telegram-команд и callbacks.
+"""Active durable webhook handlers.
 
 router — handle_update диспатчит обновления по доменам:
 - onboarding: /start, /help
-- spy: /spy (Ad Library pipeline)
-- bulk: /pause /resume + draft_confirm: dr_ok / dr_cancel
-- alerts: callbacks под алертами (dis / ereco)
+- autostart: owner-scoped schedule configuration
+- alerts: recipient-bound opaque incident/action callbacks
 """
 
 from __future__ import annotations

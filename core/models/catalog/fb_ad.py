@@ -18,7 +18,6 @@ class FbAd(UUIDPrimaryKey, Timestamp, Base):
 
     fb_ad_id — Meta numeric ID, UNIQUE (не partial, всегда NOT NULL).
     adset_id — ON DELETE CASCADE: при удалении adset все ads удаляются.
-    creative_hash — для дедупа креативов; partial индекс только при NOT NULL.
     Самая горячая таблица — на неё ссылаются alert_state, metrics, alert_events и др.
     """
 
@@ -31,11 +30,6 @@ class FbAd(UUIDPrimaryKey, Timestamp, Base):
             "ix_fb_ads_active",
             "id",
             postgresql_where=text("is_active = true"),
-        ),
-        Index(
-            "ix_fb_ads_creative_hash",
-            "creative_hash",
-            postgresql_where=text("creative_hash IS NOT NULL"),
         ),
     )
 
@@ -51,10 +45,6 @@ class FbAd(UUIDPrimaryKey, Timestamp, Base):
     ad_name: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
-    )
-    creative_hash: Mapped[str | None] = mapped_column(
-        String(64),
-        nullable=True,
     )
     # Волна 1: превью креатива из Graph (creative.thumbnail_url / image_url).
     # Обновляется upsert'ом на каждом скане — URL Meta истекает (~30 дней).

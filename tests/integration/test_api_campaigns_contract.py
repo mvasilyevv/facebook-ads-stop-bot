@@ -2,11 +2,11 @@
 """Контракт-тесты роутера campaigns_create — РОВНО та форма, что шлёт фронт.
 
 CRIT-2: фронты (web `campaignWizard.buildConfig`, mini-визард) шлют ПЛОСКИЙ конфиг
-(`act_id`/`daily_budget_cents`/`countries` на верхнем уровне), а доменный CampaignConfig
+(`act_id`/`daily_budget`/`countries` на верхнем уровне), а доменный CampaignConfig
 вложенный. До фикса каждый validate/launch падал 422. Тут проверяем, что плоская форма
 проходит 200 и корректно конвертируется во вложенный CampaignConfig.
 
-HIGH-4: два launch с одним idempotency_key → один run_id (ON CONFLICT DO NOTHING),
+HIGH-4: два launch с одним серверным idempotency_key → один run_id (ON CONFLICT DO NOTHING),
 НЕ 500 и НЕ дубль залива (=без двойного открута бюджета).
 
 НЕ гонять на боевой :5433 — нужен изолированный <POSTGRES_DB>_test (фикстура pg_engine).
@@ -49,14 +49,64 @@ async def clean_campaigns(pg_engine, tmp_path, monkeypatch):
     (upload_dir / "b.jpg").write_bytes(b"b")
     monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(tmp_path))
 
-    async def _truncate():
+    async def _truncate(*, seed_account_context: bool):
         async with pg_engine.begin() as conn:
             await conn.execute(text("DELETE FROM task_queue WHERE task_type = 'campaign_create'"))
+            await conn.execute(text("DELETE FROM campaign_creative"))
+            await conn.execute(text("DELETE FROM offer_creative_seq"))
             await conn.execute(text("DELETE FROM campaign_run"))
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM offer_rules
+                    WHERE offer_id IN (
+                        SELECT id FROM offers WHERE code = 'CTX_MISMATCH'
+                    )
+                    """
+                )
+            )
+            await conn.execute(text("DELETE FROM offers WHERE code = 'CTX_MISMATCH'"))
+            await conn.execute(text("DELETE FROM meta_account_snapshot WHERE account_id = '123'"))
+            if seed_account_context:
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO meta_account_snapshot(
+                            account_id,
+                            timezone_name,
+                            currency,
+                            currency_observed_at
+                        )
+                        VALUES ('123', 'America/New_York', 'USD', clock_timestamp())
+                        """
+                    )
+                )
 
-    await _truncate()
+    await _truncate(seed_account_context=True)
     yield
-    await _truncate()
+    await _truncate(seed_account_context=False)
+
+
+async def _campaign_write_counts(pg_engine) -> tuple[int, int, int, int]:
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM campaign_run) AS runs,
+                        (
+                            SELECT COUNT(*)
+                            FROM task_queue
+                            WHERE task_type = 'campaign_create'
+                        ) AS tasks,
+                        (SELECT COUNT(*) FROM campaign_creative) AS creatives,
+                        (SELECT COUNT(*) FROM offer_creative_seq) AS ledgers
+                    """
+                )
+            )
+        ).one()
+    return row.runs, row.tasks, row.creatives, row.ledgers
 
 
 def _flat_config() -> dict:
@@ -68,13 +118,12 @@ def _flat_config() -> dict:
         "act_id": "123",
         "page_id": "100",
         "pixel_id": "200",
-        "tz_offset": -7,
         "offer_code": "GH_CR",
         "byer_tag": "MV",
         "destination_link": "https://example.com",
-        "start_date": "2026-07-01",
+        "start_date": "2099-07-01",
         "budget_level": "campaign",
-        "daily_budget_cents": 20000,
+        "daily_budget": "200.00",
         "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
         "countries": ["DE"],
         "age_min": 18,
@@ -83,12 +132,9 @@ def _flat_config() -> dict:
         "click_through_days": 1,
         "view_through_days": 1,
         "ad_text": {"mode": "text", "primary": "играй"},
-        "campaigns": [
-            {"key": "static", "kind": "image", "adset_count": 2, "concept_refs": ["a.jpg", "b.jpg"]}
-        ],
+        "campaigns": [{"key": "static", "adset_count": 2, "concept_refs": ["a.jpg", "b.jpg"]}],
         "copies_per_concept": None,
         "creo_root": "abc123",
-        "launch_state": "campaign_paused",
         "url_tags": "sub2=MV",
     }
 
@@ -107,11 +153,20 @@ async def test_validate_accepts_flat_frontend_config(pg_engine, fake_redis_clien
     assert plan["offer_code"] == "GH_CR"
     assert plan["campaign_count"] == 1
     assert plan["adset_count"] == 2
-    # concept_counts=2 (a.jpg,b.jpg) × 2 adset = 4 ads (раскладка K×N).
+    # Два фактических concept_refs × 2 adset = 4 ads (раскладка K×N).
     assert plan["ad_count"] == 4
-    assert plan["launch_state"] == "campaign_paused"
+    assert plan["creation_policy"] == "all_paused"
+    assert all(campaign["status"] == "PAUSED" for campaign in plan["campaigns"])
+    assert all(
+        adset["status"] == "PAUSED"
+        for campaign in plan["campaigns"]
+        for adset in campaign["adsets"]
+    )
     # Нейминг кампании несёт оффер.
     assert "GH_CR" in plan["campaigns"][0]["name"]
+    assert plan["start_time"] == "2099-07-01T00:00:00-04:00"
+    assert plan["timezone_name"] == "America/New_York"
+    assert plan["currency"] == "USD"
     # validate не создал ни одного run.
     async with pg_engine.connect() as conn:
         cnt = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
@@ -123,7 +178,7 @@ async def test_validate_accepts_flat_frontend_config(pg_engine, fake_redis_clien
 async def test_validate_flat_budget_over_cap_422(pg_engine, fake_redis_client, clean_campaigns):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     cfg = _flat_config()
-    cfg["daily_budget_cents"] = 100_000_00 + 1
+    cfg["daily_budget"] = "100000.01"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/tools/campaigns/validate", json={"config": cfg})
     assert resp.status_code == 422
@@ -144,8 +199,8 @@ async def test_stale_concept_ref_rejected_before_enqueue(
 
     assert preview.status_code == 422
     assert launch.status_code == 422
-    assert "шаг 5" in preview.json()["detail"]
-    assert "шаг 5" in launch.json()["detail"]
+    assert preview.json()["message"] == "Невалидный конфиг кампании"
+    assert launch.json()["message"] == "Невалидный конфиг кампании"
     async with pg_engine.connect() as conn:
         runs = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
         tasks = (
@@ -155,6 +210,122 @@ async def test_stale_concept_ref_rejected_before_enqueue(
         ).scalar()
     assert runs == 0
     assert tasks == 0
+
+
+@pytest.mark.asyncio
+async def test_missing_account_context_rejected_before_any_campaign_write(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    async with pg_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM meta_account_snapshot WHERE account_id = '123'"))
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": _flat_config()},
+        )
+
+    assert response.status_code == 422
+    assert await _campaign_write_counts(pg_engine) == (0, 0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_stale_account_context_rejected_before_any_campaign_write(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE meta_account_snapshot
+                SET currency_observed_at = clock_timestamp() - interval '25 hours'
+                WHERE account_id = '123'
+                """
+            )
+        )
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": _flat_config()},
+        )
+
+    assert response.status_code == 409
+    assert await _campaign_write_counts(pg_engine) == (0, 0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_client_cannot_forge_account_timezone_or_currency(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    config = _flat_config()
+    config.update(
+        {
+            "timezone_name": "Pacific/Kiritimati",
+            "currency": "JPY",
+            "currency_exponent": 0,
+            "account_context_observed_at": "2099-01-01T00:00:00Z",
+        }
+    )
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": config},
+        )
+
+    assert response.status_code == 422
+    assert await _campaign_write_counts(pg_engine) == (0, 0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_offer_currency_mismatch_rejected_before_any_campaign_write(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    async with pg_engine.begin() as conn:
+        offer_id = (
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO offers(code, name, ad_account_ids)
+                    VALUES ('CTX_MISMATCH', 'Context mismatch test', ARRAY['123'])
+                    RETURNING id
+                    """
+                )
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                """
+                INSERT INTO offer_rules(offer_id, cpa_threshold, currency)
+                VALUES (:offer_id, 3.00, 'EUR')
+                """
+            ),
+            {"offer_id": offer_id},
+        )
+
+    config = _flat_config()
+    config["offer_code"] = "CTX_MISMATCH"
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": config},
+        )
+
+    assert response.status_code == 409
+    assert await _campaign_write_counts(pg_engine) == (0, 0, 0, 0)
 
 
 # ─────────────────────────── launch (плоская форма) ───────────────────────────
@@ -182,8 +353,11 @@ async def test_launch_accepts_flat_and_converts(pg_engine, fake_redis_client, cl
         ).first()
     cfg = row.config
     assert cfg["account"]["act_id"] == "123"
-    assert cfg["account"]["tz_offset"] == "-07:00"
-    assert cfg["budget"]["daily_cents"] == 20000
+    assert cfg["account"]["timezone_name"] == "America/New_York"
+    assert cfg["account"]["currency"] == "USD"
+    assert cfg["account"]["account_context_observed_at"] is not None
+    assert cfg["budget"]["daily_amount"] == "200.00"
+    assert cfg["budget"]["currency"] == "USD"
     # +AQ применяется через computed geo_countries (исполнитель добавит AQ к Meta);
     # в снимке countries сырой, проверяем что add_antarctica включён и DE на месте.
     assert cfg["targeting"]["countries"] == ["DE"]
@@ -218,28 +392,26 @@ async def test_launch_idempotent_same_key_one_run(pg_engine, fake_redis_client, 
     assert tasks == 1
 
 
-# launch принимает явный concept_counts в теле (симметрия с validate) → 201, один run.
-# Проводка K в launch не ломает залив: спека сверяется с той же раскладкой, что показал validate.
+# Второй источник количества концептов запрещён: только concept_refs определяет план.
 @pytest.mark.asyncio
-async def test_launch_accepts_concept_counts_in_body(pg_engine, fake_redis_client, clean_campaigns):
+async def test_launch_rejects_concept_counts_in_body(pg_engine, fake_redis_client, clean_campaigns):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     body = {"config": _flat_config(), "concept_counts": {"static": 3}}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/tools/campaigns/launch", json=body)
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["status"] == "queued"
+    assert resp.status_code == 422, resp.text
     async with pg_engine.connect() as conn:
         runs = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
-    assert runs == 1
+    assert runs == 0
 
 
-# HIGH-4: явный одинаковый idempotency_key с РАЗНЫМ конфигом → тот же run (ключ — истина).
+# Клиент не может навязать idempotency_key и склеить разные money-конфиги.
 @pytest.mark.asyncio
-async def test_launch_explicit_key_dedup(pg_engine, fake_redis_client, clean_campaigns):
+async def test_launch_rejects_client_idempotency_key(pg_engine, fake_redis_client, clean_campaigns):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     cfg1 = _flat_config()
     cfg2 = _flat_config()
-    cfg2["daily_budget_cents"] = 30000  # другой конфиг, но тот же явный ключ
+    cfg2["daily_budget"] = "300.00"  # другой конфиг, но тот же явный ключ
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         first = await ac.post(
             "/api/tools/campaigns/launch",
@@ -249,10 +421,9 @@ async def test_launch_explicit_key_dedup(pg_engine, fake_redis_client, clean_cam
             "/api/tools/campaigns/launch",
             json={"config": cfg2, "idempotency_key": "manual:fixed:key"},
         )
-    assert first.status_code == 201
-    assert second.status_code == 201
-    assert first.json()["run_id"] == second.json()["run_id"]
+    assert first.status_code == 422
+    assert second.status_code == 422
 
     async with pg_engine.connect() as conn:
         runs = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
-    assert runs == 1
+    assert runs == 0

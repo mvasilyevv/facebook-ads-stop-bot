@@ -6,10 +6,10 @@ import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { Kbd } from "@/components/ui/Kbd";
 import { Pill, FilterPill, Chip } from "@/components/ui/Pill";
-import { Input, SearchInput } from "@/components/ui/Input";
+import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Switch } from "@/components/ui/Switch";
-import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Card } from "@/components/ui/Card";
@@ -50,11 +50,6 @@ describe("Input", () => {
     expect(screen.getByRole("textbox")).toBeInTheDocument();
   });
 
-  it("SearchInput рендерится", () => {
-    render(<SearchInput placeholder="Поиск..." />);
-    expect(screen.getByRole("searchbox")).toBeInTheDocument();
-  });
-
   it("error message рендерится с role=alert", () => {
     render(<Input errorMessage="Обязательное поле" />);
     expect(screen.getByRole("alert")).toBeInTheDocument();
@@ -64,7 +59,12 @@ describe("Input", () => {
 describe("Select", () => {
   it("рендерится с опциями", () => {
     render(
-      <Select options={[{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }]} />,
+      <Select
+        options={[
+          { value: "a", label: "Alpha" },
+          { value: "b", label: "Beta" },
+        ]}
+      />,
     );
     expect(screen.getByRole("combobox")).toBeInTheDocument();
     expect(screen.getByText("Alpha")).toBeInTheDocument();
@@ -89,10 +89,6 @@ describe("Skeleton", () => {
     expect(screen.getByRole("status")).toBeInTheDocument();
   });
 
-  it("SkeletonRows рендерит N строк", () => {
-    render(<SkeletonRows count={3} />);
-    expect(screen.getAllByRole("status")).toHaveLength(3);
-  });
 });
 
 describe("EmptyState", () => {
@@ -124,7 +120,11 @@ describe("Card", () => {
   });
 
   it("рендерится с eyebrow и title", () => {
-    render(<Card eyebrow="01 / OVERVIEW" title="Активные">body</Card>);
+    render(
+      <Card eyebrow="01 / OVERVIEW" title="Активные">
+        body
+      </Card>,
+    );
     expect(screen.getByText("Активные")).toBeInTheDocument();
     expect(screen.getByText("01 / OVERVIEW")).toBeInTheDocument();
   });

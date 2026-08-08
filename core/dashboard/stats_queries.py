@@ -1,31 +1,19 @@
-# -*- coding: utf-8 -*-
-"""SQL-слой «Статистики залива» (/api/stats/*).
+"""Historical daily series for the operator snapshot.
 
-Meta-метрики (`ad_metrics`) — КУМУЛЯТИВНЫЕ снимки за сутки кабинета: любая
-агрегация идёт через CTE-хелперы core/dashboard/metric_aggregation.py
-(latest-per-ad / latest-per-ad-per-day), naive SUM запрещён (CRIT-1).
-Трекер (`tracker_aggregate`) — уже дневной агрегат per (ad × country × day,
-UTC-день), читается простым SUM/GROUP BY.
-
-Все функции — тонкий async-доступ к БД без Pydantic/FastAPI: роутер
-apps/api/routers/v1/stats.py маппит результат в схемы, производные считает
-core/dashboard/stats_derived.py.
+Meta metrics are cumulative within a cabinet day, so each daily bucket first
+selects the latest row per ad and only then aggregates. Naive SUM is forbidden.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from core.dashboard.metric_aggregation import (
-    latest_per_ad_per_day_cte,
-    latest_per_ad_window_cte,
-)
+from core.dashboard.metric_aggregation import latest_per_ad_per_day_cte
 
-# Метрики воронки Meta — единый список для тоталов/серий (см. stats_derived.FUNNEL_METRICS).
 _METRIC_COLUMNS: tuple[str, ...] = (
     "spend",
     "impressions",
@@ -35,126 +23,33 @@ _METRIC_COLUMNS: tuple[str, ...] = (
     "deposits",
 )
 
-# SUM-список для внешнего SELECT поверх latest-CTE: spend — Decimal, счётчики — int.
 _SUM_SELECT = """
-            COALESCE(SUM(spend), 0)              AS spend,
-            COALESCE(SUM(impressions), 0)::bigint AS impressions,
-            COALESCE(SUM(clicks), 0)::bigint      AS clicks,
-            COALESCE(SUM(leads), 0)::bigint       AS leads,
-            COALESCE(SUM(registrations), 0)::bigint AS registrations,
-            COALESCE(SUM(deposits), 0)::bigint    AS deposits
+            CASE WHEN COUNT(*) FILTER (WHERE spend IS NULL) = 0
+                 THEN SUM(spend) END AS spend,
+            CASE WHEN COUNT(*) FILTER (WHERE impressions IS NULL) = 0
+                 THEN SUM(impressions)::bigint END AS impressions,
+            CASE WHEN COUNT(*) FILTER (WHERE clicks IS NULL) = 0
+                 THEN SUM(clicks)::bigint END AS clicks,
+            CASE WHEN COUNT(*) FILTER (WHERE leads IS NULL) = 0
+                 THEN SUM(leads)::bigint END AS leads,
+            CASE WHEN COUNT(*) FILTER (WHERE registrations IS NULL) = 0
+                 THEN SUM(registrations)::bigint END AS registrations,
+            CASE WHEN COUNT(*) FILTER (WHERE deposits IS NULL) = 0
+                 THEN SUM(deposits)::bigint END AS deposits
 """
-
-# Разрезы breakdown «за сегодня»: ключ/лейбл группировки.
-BREAKDOWN_GROUPS: dict[str, dict[str, str]] = {
-    "offer": {
-        "key": "COALESCE(o.code, 'без оффера')",
-        "label": "COALESCE(o.name, o.code, 'Без оффера')",
-    },
-    "campaign": {
-        "key": "COALESCE(c.fb_campaign_id, c.id::text)",
-        "label": "COALESCE(c.campaign_name, '—')",
-    },
-}
-
-
-async def dominant_cabinet_day_start(engine: AsyncEngine, redis: Any) -> datetime:
-    """Начало текущих суток ДОМИНИРУЮЩЕГО кабинета в UTC.
-
-    Тот же паттерн, что `_dominant_cabinet_day_start` в dashboard_timeseries:
-    глобальное окно «сегодня» — одно; для мульти-кабинета берём оффсет первого
-    известного кабинета (для одно-кабинетного кейса — точно), фолбэк — UTC-полночь.
-    Ограничение мульти-TZ осознанное и задокументированное.
-    """
-    from core.dashboard.cabinet_spend import cabinet_day_start_utc
-    from core.meta_api.account_tz import (
-        DEFAULT_OFFSET_HOURS,
-        active_account_ids,
-        load_offset_map,
-    )
-
-    account_ids = await active_account_ids(engine)
-    tz_map = await load_offset_map(redis, account_ids) if account_ids else {}
-    offset = next(iter(tz_map.values()), DEFAULT_OFFSET_HOURS)
-    return cabinet_day_start_utc(offset, datetime.now(UTC))
-
-
-async def fetch_window_totals(
-    engine: AsyncEngine, *, from_dt: datetime, to_dt: datetime
-) -> dict[str, Any]:
-    """Тоталы воронки за окно ОДНИХ суток кабинета (latest-per-ad → SUM).
-
-    Окно обязано лежать внутри одних суток кабинета (from_dt = cabinet_day_start),
-    иначе теряются дневные итоги до посуточного reset'а — для многодневных окон
-    используй fetch_period_totals.
-    """
-    sql = f"""
-        WITH {latest_per_ad_window_cte(cte_alias="latest_per_ad", columns=_METRIC_COLUMNS)}
-        SELECT {_SUM_SELECT}
-        FROM latest_per_ad
-    """
-    async with engine.connect() as conn:
-        row = (await conn.execute(text(sql), {"from_dt": from_dt, "to_dt": to_dt})).one()
-    return dict(row._mapping)
-
-
-async def fetch_hourly_snapshot_rows(
-    engine: AsyncEngine, *, from_dt: datetime, to_dt: datetime
-) -> list[dict[str, Any]]:
-    """Последние снимки на (час × ad) за окно — сырьё для честных дельт.
-
-    Дельты «сколько в этот час» считает stats_derived.hourly_deltas (LAG per-ad
-    в Python): объём мал (объявления × 24 часа), а формула живёт в одном месте
-    и покрыта unit-тестами без БД.
-    """
-    cte = latest_per_ad_window_cte(
-        cte_alias="per_hour_ad",
-        columns=_METRIC_COLUMNS,
-        extra_select=", date_trunc('hour', m.cycle_ts) AS bucket_ts",
-        bucket_expr="date_trunc('hour', m.cycle_ts)",
-    )
-    sql = f"""
-        WITH {cte}
-        SELECT ad_id, bucket_ts, spend, impressions, clicks, leads, registrations, deposits
-        FROM per_hour_ad
-        ORDER BY bucket_ts ASC
-    """
-    async with engine.connect() as conn:
-        rows = (await conn.execute(text(sql), {"from_dt": from_dt, "to_dt": to_dt})).fetchall()
-    return [dict(r._mapping) for r in rows]
-
-
-async def fetch_period_totals(
-    engine: AsyncEngine, *, from_dt: datetime, to_dt: datetime
-) -> dict[str, Any]:
-    """Тоталы воронки за многодневный период (latest-per-ad-PER-DAY → SUM).
-
-    Дневные итоги складываются через посуточные сбросы кумулятива —
-    эталон: core/dashboard/history_queries.fetch_summary_metrics.
-    """
-    sql = f"""
-        WITH {latest_per_ad_per_day_cte(cte_alias="per_ad_day", columns=_METRIC_COLUMNS)}
-        SELECT {_SUM_SELECT}
-        FROM per_ad_day
-    """
-    async with engine.connect() as conn:
-        row = (await conn.execute(text(sql), {"from_dt": from_dt, "to_dt": to_dt})).one()
-    return dict(row._mapping)
 
 
 async def fetch_daily_series(
-    engine: AsyncEngine, *, from_dt: datetime, to_dt: datetime
+    engine: AsyncEngine,
+    *,
+    from_dt: datetime,
+    to_dt: datetime,
+    account_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Подневная серия воронки за период: latest-per-ad-per-day → SUM GROUP BY day.
-
-    Дельты не нужны: latest-снимок дня и есть дневной итог объявления.
-    День — календарный UTC (`date_trunc('day', cycle_ts)`), как во всей
-    history-аналитике; расхождение с сутками кабинета задокументировано.
-    """
+    """Return latest-per-ad-per-cabinet-day totals grouped by persisted day."""
     cte = latest_per_ad_per_day_cte(
         cte_alias="per_ad_day",
         columns=_METRIC_COLUMNS,
-        extra_select=", date_trunc('day', m.cycle_ts) AS day_bucket",
     )
     sql = f"""
         WITH {cte}
@@ -163,207 +58,23 @@ async def fetch_daily_series(
             {_SUM_SELECT},
             COUNT(DISTINCT ad_id)::int AS active_ads
         FROM per_ad_day
+        WHERE (:account_id IS NULL OR ad_account_id = :account_id)
         GROUP BY day_bucket
         ORDER BY day_bucket ASC
     """
+    canonical_account_id = account_id.removeprefix("act_") if account_id else None
     async with engine.connect() as conn:
-        rows = (await conn.execute(text(sql), {"from_dt": from_dt, "to_dt": to_dt})).fetchall()
-    return [dict(r._mapping) for r in rows]
-
-
-async def fetch_tracker_totals(
-    engine: AsyncEngine, *, day_from: date, day_to: date
-) -> dict[str, Any]:
-    """Тоталы трекера (AdSet.pro) за диапазон UTC-дней. Не кумулятив — простой SUM."""
-    sql = """
-        SELECT
-            COALESCE(SUM(installs), 0)::int      AS installs,
-            COALESCE(SUM(registrations), 0)::int AS registrations,
-            COALESCE(SUM(ftds), 0)::int          AS ftds,
-            COALESCE(SUM(deposits), 0)::int      AS deposits,
-            COALESCE(SUM(confirmed_deposits), 0)::int AS confirmed_deposits,
-            COALESCE(SUM(redeposits), 0)::int    AS redeposits,
-            COALESCE(SUM(revenue), 0)            AS revenue
-        FROM tracker_aggregate
-        WHERE day BETWEEN :day_from AND :day_to
-    """
-    async with engine.connect() as conn:
-        row = (await conn.execute(text(sql), {"day_from": day_from, "day_to": day_to})).one()
-    return dict(row._mapping)
-
-
-async def fetch_tracker_daily(
-    engine: AsyncEngine, *, day_from: date, day_to: date
-) -> list[dict[str, Any]]:
-    """Подневная серия трекера за диапазон UTC-дней."""
-    sql = """
-        SELECT
-            day,
-            COALESCE(SUM(installs), 0)::int      AS installs,
-            COALESCE(SUM(registrations), 0)::int AS registrations,
-            COALESCE(SUM(ftds), 0)::int          AS ftds,
-            COALESCE(SUM(deposits), 0)::int      AS deposits,
-            COALESCE(SUM(confirmed_deposits), 0)::int AS confirmed_deposits,
-            COALESCE(SUM(redeposits), 0)::int    AS redeposits,
-            COALESCE(SUM(revenue), 0)            AS revenue
-        FROM tracker_aggregate
-        WHERE day BETWEEN :day_from AND :day_to
-        GROUP BY day
-        ORDER BY day ASC
-    """
-    async with engine.connect() as conn:
-        rows = (await conn.execute(text(sql), {"day_from": day_from, "day_to": day_to})).fetchall()
-    return [dict(r._mapping) for r in rows]
-
-
-async def fetch_tracker_live_telemetry(
-    engine: AsyncEngine, *, day_from: date, day_to: date
-) -> dict[str, Any]:
-    """Live click-projection totals and durable-queue quality signals."""
-    from datetime import datetime, time, timezone
-
-    from_ts = datetime.combine(day_from, time.min, tzinfo=timezone.utc)
-    to_ts = datetime.combine(day_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
-    sql = """
-        WITH live AS (
-            SELECT
-                COUNT(*) FILTER (WHERE registration_at >= :from_ts AND registration_at < :to_ts)
-                    ::int AS registrations,
-                COUNT(*) FILTER (WHERE ftd_at >= :from_ts AND ftd_at < :to_ts)::int AS ftds,
-                COUNT(*) FILTER (
-                    WHERE confirmed_deposit_at >= :from_ts AND confirmed_deposit_at < :to_ts
-                )::int AS confirmed_deposits,
-                COALESCE(SUM(ftd_revenue) FILTER (
-                    WHERE confirmed_deposit = TRUE
-                      AND ftd_at >= :from_ts AND ftd_at < :to_ts
-                ), 0) AS ftd_revenue
-            FROM tracker_click_state
-        ),
-        event_diag AS (
-            SELECT
-                COUNT(*) FILTER (
-                    WHERE event_type = 'redeposit' AND is_duplicate = FALSE
-                )::int AS redeposits,
-                percentile_cont(0.95) WITHIN GROUP (
-                    ORDER BY EXTRACT(EPOCH FROM (processed_at - received_at)) * 1000
-                ) FILTER (
-                    WHERE processed_at IS NOT NULL AND is_duplicate = FALSE
-                ) AS processing_lag_ms
-            FROM adsetpro_postback_events
-            WHERE received_at >= :from_ts AND received_at < :to_ts
-        ),
-        global_diag AS (
-            SELECT
-                (SELECT COUNT(*)::int
-                 FROM adsetpro_postback_events
-                 WHERE fb_ad_fk IS NULL
-                   AND processed_at IS NULL
-                   AND is_duplicate = FALSE) AS unmatched_events,
-                (SELECT received_at
-                 FROM adsetpro_postback_events
-                 ORDER BY received_at DESC
-                 LIMIT 1) AS last_event_at
-        ),
-        queue_diag AS (
-            SELECT COUNT(*)::int AS backlog
-            FROM task_queue
-            WHERE task_type = 'tracker_event_process'
-              AND status IN ('pending', 'retrying', 'running')
-        ),
-        materialized AS (
-            SELECT
-                COALESCE(SUM(registrations), 0)::int AS registrations,
-                COALESCE(SUM(confirmed_deposits), 0)::int AS confirmed_deposits
-            FROM tracker_aggregate
-            WHERE day BETWEEN :day_from AND :day_to
-        ),
-        provider_audit AS (
-            SELECT COALESCE((
-                SELECT (value->>'drift_after')::int
-                FROM system_config
-                WHERE key = 'tracker_provider_reconciliation'
-            ), 0)::int AS reconciliation_drift
-        )
-        SELECT live.*, event_diag.*, global_diag.*, queue_diag.backlog,
-               provider_audit.reconciliation_drift,
-               ABS(live.registrations - materialized.registrations)
-                 + ABS(live.confirmed_deposits - materialized.confirmed_deposits)
-                 AS materialization_drift
-        FROM live
-        CROSS JOIN event_diag
-        CROSS JOIN global_diag
-        CROSS JOIN queue_diag
-        CROSS JOIN materialized
-        CROSS JOIN provider_audit
-    """
-    async with engine.connect() as conn:
-        row = (
+        rows = (
             await conn.execute(
                 text(sql),
                 {
-                    "from_ts": from_ts,
-                    "to_ts": to_ts,
-                    "day_from": day_from,
-                    "day_to": day_to,
+                    "from_dt": from_dt,
+                    "to_dt": to_dt,
+                    "account_id": canonical_account_id,
                 },
             )
-        ).one()
-    return dict(row._mapping)
-
-
-async def fetch_breakdown(
-    engine: AsyncEngine,
-    *,
-    from_dt: datetime,
-    to_dt: datetime,
-    group: str,
-    limit: int = 20,
-) -> list[dict[str, Any]]:
-    """Разрез «за сегодня» по офферу/кампании поверх того же latest-per-ad CTE.
-
-    group ∈ BREAKDOWN_GROUPS (валидируется в роутере). Окно — одни сутки кабинета
-    (как fetch_window_totals). Сортировка по spend DESC.
-    """
-    exprs = BREAKDOWN_GROUPS[group]
-    cte = latest_per_ad_window_cte(
-        cte_alias="latest_per_ad",
-        columns=("spend", "clicks", "leads", "registrations", "deposits"),
-    )
-    sql = f"""
-        WITH {cte}
-        SELECT
-            {exprs["key"]}   AS key,
-            {exprs["label"]} AS label,
-            COALESCE(SUM(l.spend), 0)               AS spend,
-            COALESCE(SUM(l.clicks), 0)::bigint      AS clicks,
-            COALESCE(SUM(l.leads), 0)::bigint       AS leads,
-            COALESCE(SUM(l.registrations), 0)::bigint AS registrations,
-            COALESCE(SUM(l.deposits), 0)::bigint    AS deposits
-        FROM latest_per_ad l
-        JOIN fb_ads a        ON a.id = l.ad_id
-        JOIN fb_adsets s     ON s.id = a.adset_id
-        JOIN fb_campaigns c  ON c.id = s.campaign_id
-        LEFT JOIN offers o   ON o.id = c.offer_id
-        GROUP BY {exprs["key"]}, {exprs["label"]}
-        ORDER BY COALESCE(SUM(l.spend), 0) DESC
-        LIMIT :lim
-    """
-    async with engine.connect() as conn:
-        rows = (
-            await conn.execute(text(sql), {"from_dt": from_dt, "to_dt": to_dt, "lim": limit})
         ).fetchall()
-    return [dict(r._mapping) for r in rows]
+    return [dict(row._mapping) for row in rows]
 
 
-__all__ = [
-    "BREAKDOWN_GROUPS",
-    "dominant_cabinet_day_start",
-    "fetch_breakdown",
-    "fetch_daily_series",
-    "fetch_hourly_snapshot_rows",
-    "fetch_period_totals",
-    "fetch_tracker_daily",
-    "fetch_tracker_live_telemetry",
-    "fetch_tracker_totals",
-    "fetch_window_totals",
-]
+__all__ = ["fetch_daily_series"]

@@ -1,0 +1,19 @@
+[Unit]
+Description=FB Agent independent browser control plane
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=FB_AGENT_ROOT=/opt/fb-agent
+ExecStartPre=/usr/local/libexec/fb-agent-release-verifier/current/verified-release-exec.py --state desktop --entrypoint scripts/wait-for-vision-container.sh --
+ExecStart=/usr/local/libexec/fb-agent-release-verifier/current/verified-release-exec.py --state desktop --entrypoint scripts/platform-desktop-compose.sh -- up
+ExecReload=/usr/local/libexec/fb-agent-release-verifier/current/verified-release-exec.py --state desktop --entrypoint scripts/platform-desktop-compose.sh -- restart
+ExecStop=/usr/local/libexec/fb-agent-release-verifier/current/verified-release-exec.py --state desktop --entrypoint scripts/platform-desktop-compose.sh -- stop
+TimeoutStartSec=15min
+TimeoutStopSec=5min
+
+[Install]
+WantedBy=multi-user.target

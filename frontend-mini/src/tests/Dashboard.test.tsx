@@ -1,154 +1,268 @@
-/**
- * Тест Dashboard: рендер РЕАЛЬНОГО компонента DashboardPage (routes/index.tsx)
- * поверх мокнутого @tanstack/react-router и @/lib/api — паттерн StatsPage
- * (именованный экспорт компонента, без отдельного test.helper.tsx).
- *
- * MID-23 аудита 02.07: добавлен isError-рендер (недоступный batch → видимое
- * состояние ошибки, не пустой экран) — этого сценария раньше не было.
- */
-import { describe, it, expect, vi } from "vitest";
+import type { ComponentType, ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
-import type { ComponentType } from "react";
-import type { DashboardBatch } from "@fb/shared";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { makeOperatorSnapshot } from "@fb/shared/operator/testFixture";
+
+const mockUseOperatorSnapshot = vi.fn();
+const mockScan = vi.fn();
+const mockNavigate = vi.fn();
+const mockUseOperatorRealtimeStatus = vi.fn(() => "connected");
+const { mockHapticNotify } = vi.hoisted(() => ({
+  mockHapticNotify: vi.fn(),
+}));
 
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => (opts: { component: unknown }) => ({ options: opts, component: opts.component }),
-  useNavigate: () => vi.fn(),
-  useRouter: () => ({ navigate: vi.fn() }),
-  useLocation: () => ({ pathname: "/" }),
+  createFileRoute: () => (options: { component: ComponentType }) => options,
+  useNavigate: () => mockNavigate,
+  Link: ({
+    children,
+    to,
+    params,
+    ...props
+  }: {
+    children: ReactNode;
+    to: string;
+    params?: Record<string, string>;
+  }) => (
+    <a href={to.replace("$actionId", params?.actionId ?? "")} {...props}>
+      {children}
+    </a>
+  ),
+}));
+
+vi.mock("@/lib/operatorApi", () => ({
+  useOperatorSnapshot: (...args: unknown[]) => mockUseOperatorSnapshot(...args),
+  useOperatorScanNow: () => ({ mutateAsync: mockScan, isPending: false }),
+  operatorProblemMessage: (error: unknown) =>
+    error instanceof Error ? error.message : "Ошибка",
+}));
+
+vi.mock("@fb/operator-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@fb/operator-api")>()),
+  useOperatorRealtimeStatus: () => mockUseOperatorRealtimeStatus(),
 }));
 
 vi.mock("@/lib/tg", () => ({
-  haptic: { impact: vi.fn(), notify: vi.fn(), selection: vi.fn() },
-  tgConfirm: vi.fn().mockResolvedValue(true),
-  tgAlert: vi.fn().mockResolvedValue(undefined),
-  initTheme: vi.fn(),
-  getInitData: () => "",
-  registerBackButton: vi.fn(() => () => {}),
-  hideBackButton: vi.fn(),
-}));
-
-// Мок-данные: используем реальный тип DashboardBatch из @fb/shared.
-// recent_incidents — Record<string, unknown>[] (так как API-схема использует unknown).
-const MOCK_BATCH: DashboardBatch = {
-  stats: {
-    total_ads_monitored: 42,
-    ads_in_stop: 3,
-    ads_in_warning: 7,
-    ads_in_disabled: 12,
-    ads_in_normal: 20,
-    ads_in_claimed: 0,
-    active_incidents: 3,
-    observer_status: "running",
-    last_scan_at: new Date().toISOString(),
-    last_scan_outcome: null,
-    scans_today: 48,
-    scans_today_with_errors: 0,
-    pending_disable_tasks: 1,
-    pending_enable_tasks: 0,
-    failed_tasks_24h: 0,
-  },
-  recent_incidents: [
-    {
-      fb_ad_id: "ad123",
-      ad_name: "Test Ad Stop",
-      alert_state: "stop_sent",
-      stop_rule_codes: ["spend_no_event"],
-      warning_rule_codes: [],
-    } as unknown as Record<string, unknown>,
-  ],
-  recent_disable_tasks: [],
-  recent_alerts: [],
-  enable_recommendations_pending: [],
-};
-
-const mockUseDashboardBatch = vi.fn();
-
-vi.mock("@/lib/api", () => ({
-  useDashboardBatch: (...args: unknown[]) => mockUseDashboardBatch(...args),
-  useObserverSettings: () => ({
-    data: { is_scanning_enabled: true, default_interval_seconds: 60 },
-  }),
-  useObserverStatus: () => ({ data: undefined, isLoading: false, isError: false }),
-  useToggleScanning: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useTriggerScan: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useSpendSeries: () => ({ data: [] }),
-  useStatsToday: () => ({ data: undefined, isLoading: false }),
+  haptic: { impact: vi.fn(), notify: mockHapticNotify, selection: vi.fn() },
+  tgAlert: vi.fn(),
 }));
 
 import { Route } from "@/routes/index";
+import { readResolvedNavigation } from "@/lib/transientNavigation";
 
-const DashboardPage = (Route as unknown as { component: ComponentType }).component;
+const Dashboard = (Route as unknown as { component: ComponentType }).component;
 
-describe("DashboardPage", () => {
-  beforeEachSetup();
-
-  function beforeEachSetup() {
-    // Дефолт — happy path; переопределяется точечно в isError-тесте.
-    mockUseDashboardBatch.mockReturnValue({
-      data: MOCK_BATCH,
+describe("TMA operator dashboard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.sessionStorage.clear();
+    mockUseOperatorRealtimeStatus.mockReturnValue("connected");
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: makeOperatorSnapshot(),
       isLoading: false,
       isError: false,
       error: null,
       refetch: vi.fn(),
     });
-  }
-
-  // KPI-плитки отображают числа (42 встречается дважды: hero-число + KPI «ВСЕГО»)
-  it("показывает KPI: 42 активных, 3 стоп", () => {
-    mockUseDashboardBatch.mockReturnValue({
-      data: MOCK_BATCH,
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-    render(<DashboardPage />);
-    expect(screen.getAllByText("42").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("3").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("7").length).toBeGreaterThan(0);
   });
 
-  // Активный сигнал отображается в списке
-  it("показывает инцидент 'Test Ad Stop'", () => {
-    mockUseDashboardBatch.mockReturnValue({
-      data: MOCK_BATCH,
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
+  it("opens attention targets through opaque TMA navigation", async () => {
+    render(<Dashboard />);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Открыть объявление" }),
+    );
+
+    expect(readResolvedNavigation()).toEqual({
+      target_kind: "ad",
+      target_id: "ad-1",
     });
-    render(<DashboardPage />);
-    expect(screen.getByText("Test Ad Stop")).toBeInTheDocument();
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/open" });
+    expect(window.location.href).not.toContain("ad-1");
   });
 
-  // Кнопка "Сканировать сейчас" есть (aria-label на кнопке, RefreshCw-иконка)
-  it("показывает кнопку 'Сканировать сейчас'", () => {
-    mockUseDashboardBatch.mockReturnValue({
-      data: MOCK_BATCH,
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    });
-    render(<DashboardPage />);
+  it("uses 44px native controls for chart touch and keyboard points", async () => {
+    render(<Dashboard />);
+    const chartPoints = screen
+      .getAllByRole("button")
+      .filter((button) => button.getAttribute("aria-label")?.includes("Факт"));
+    const point = chartPoints.find((button) =>
+      button.querySelector("[data-actual-marker]"),
+    );
+    const unknownActualPoint = chartPoints.find((button) =>
+      button.getAttribute("aria-label")?.includes("Факт —"),
+    );
+
+    expect(point).toBeDefined();
+    expect(point).toHaveClass("size-11");
+    expect(unknownActualPoint).toBeDefined();
+    expect(
+      unknownActualPoint?.querySelector("[data-actual-marker]"),
+    ).toBeNull();
+    expect(
+      screen.getByRole("list", { name: "Обозначения графика" }),
+    ).toHaveTextContent("ФактБазаStop");
+    expect(document.querySelector("[data-current-time-marker]")).not.toBeNull();
+    expect(
+      document.querySelector("[data-current-time-label]"),
+    ).toHaveTextContent("Сейчас");
+    await userEvent.click(point!);
+    expect(screen.getByRole("status")).toHaveTextContent(/факт/i);
+  });
+
+  it("renders action-first sections and the corrected scan control", () => {
+    render(<Dashboard />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Контроль",
+    );
+    expect(screen.getByText("Требует внимания")).toBeInTheDocument();
+    expect(screen.getByText("CPL выше базы")).toBeInTheDocument();
+    expect(screen.getByLabelText("Внимание")).toBeInTheDocument();
+    expect(screen.getByText("Внимание")).toBeInTheDocument();
     expect(screen.getByLabelText("Сканировать сейчас")).toBeInTheDocument();
+    expect(screen.getByText(/Стоимость USD.*0\.44/)).toBeInTheDocument();
+    expect(screen.getByText(/Стоимость USD.*3\.68/)).toBeInTheDocument();
   });
 
-  // MID-23: недоступность batch (ошибка сети/сервера) → видимое error-состояние,
-  // не пустой/белый экран. Владелец должен понять, что данные не загрузились.
-  it("при ошибке batch показывает видимое состояние ошибки, а не пустой экран", () => {
-    mockUseDashboardBatch.mockReturnValue({
+  it("keeps the 202 scan receipt and links to the queued action lifecycle", async () => {
+    mockScan.mockResolvedValue({
+      status: "queued",
+      task_id: 1842,
+      correlation_id: "8b8d0c93-15dc-46b4-8fe0-8da6bec3667f",
+    });
+    render(<Dashboard />);
+
+    await userEvent.click(screen.getByLabelText("Сканировать сейчас"));
+
+    const queued = (
+      await screen.findByText("Сканирование поставлено в очередь")
+    ).closest('[role="status"]');
+    if (!queued) throw new Error("Queued scan status is missing");
+    expect(queued).toHaveTextContent("Сканирование поставлено в очередь");
+    expect(queued).toHaveTextContent("Задача #1842");
+    expect(
+      screen.getByRole("link", { name: "Открыть выполнение" }),
+    ).toHaveAttribute("href", "/actions/1842");
+    expect(mockScan).toHaveBeenCalledWith({});
+    expect(mockHapticNotify).toHaveBeenCalledWith("warning");
+    expect(mockHapticNotify).not.toHaveBeenCalledWith("success");
+  });
+
+  it("labels stale data and does not present it as current", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.economy = {
+      ...snapshot.economy,
+      state: "stale",
+      issues: [
+        {
+          code: "META_STALE",
+          title: "Meta давно не обновлялась",
+          detail: "Показан последний подтверждённый снимок.",
+          severity: "warning",
+          correlation_id: "corr-meta",
+        },
+      ],
+    };
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    render(<Dashboard />);
+    expect(screen.getByText("Meta давно не обновлялась")).toBeInTheDocument();
+    expect(screen.getAllByText(/Устарело/).length).toBeGreaterThan(0);
+  });
+
+  it("never paints degraded money context as a healthy overview", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.system.data!.severity = "ok";
+    snapshot.attention.data!.items = [];
+    snapshot.funnel = { ...snapshot.funnel, state: "partial" };
+    snapshot.meta = {
+      ...snapshot.meta,
+      currency: null,
+      currency_state: "mixed",
+    };
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<Dashboard />);
+
+    expect(
+      screen.getByText("Денежный контекст требует проверки"),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Частично").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Активных рисков нет")).not.toBeInTheDocument();
+  });
+
+  it("neutralizes cached worker health when the system snapshot is stale", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.system = { ...snapshot.system, state: "stale" };
+    snapshot.meta = { ...snapshot.meta, cabinet_timezone_known: false };
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<Dashboard />);
+
+    expect(
+      screen.getByText("Состояние ещё не подтверждено"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Устарело")).toHaveAttribute(
+      "data-tone",
+      "neutral",
+    );
+    for (const label of ["Observer", "Browser agent"]) {
+      const worker = screen.getByText(label).closest("li");
+      expect(worker?.querySelector("[data-severity]")).toHaveAttribute(
+        "data-severity",
+        "unknown",
+      );
+      expect(worker).toHaveTextContent("Состояние не подтверждено");
+    }
+  });
+
+  it("downgrades the complete cached snapshot while realtime is reconnecting", () => {
+    mockUseOperatorRealtimeStatus.mockReturnValue("reconnecting");
+
+    render(<Dashboard />);
+
+    expect(
+      screen.getByText("Состояние ещё не подтверждено"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Активных рисков нет")).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Устарело/).length).toBeGreaterThan(0);
+    for (const label of ["Observer", "Browser agent"]) {
+      const worker = screen.getByText(label).closest("li");
+      expect(worker?.querySelector("[data-severity]")).toHaveAttribute(
+        "data-severity",
+        "unknown",
+      );
+    }
+  });
+
+  it("renders a visible failure instead of legacy dashboard data", () => {
+    mockUseOperatorSnapshot.mockReturnValue({
       data: undefined,
       isLoading: false,
       isError: true,
-      error: new Error("Сеть недоступна"),
+      error: new Error("Snapshot failed"),
       refetch: vi.fn(),
     });
-    render(<DashboardPage />);
-    expect(screen.getByText("Ошибка загрузки")).toBeInTheDocument();
-    expect(screen.getByText("Сеть недоступна")).toBeInTheDocument();
-    // KPI из happy-path не должны просочиться на error-рендере.
-    expect(screen.queryByText("Test Ad Stop")).not.toBeInTheDocument();
+    render(<Dashboard />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Snapshot failed");
   });
 });

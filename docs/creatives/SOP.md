@@ -17,13 +17,13 @@
 | Разведка spy-сервиса | **Tyver** (`app.tyver.io`) — правила фильтров в `playbooks/spy-tyver.md` |
 | Генерация креативов | **syntx.ai → Дизайн** (модель — сейчас **GPT Image 2**, reference-based) |
 | Web-research | поиск в интернете **мультиязычный (вкл. русский)** — рынок, гео-стиль, тренды |
-| Отсев мусора в выдаче | `score_gambling` (`scripts/ad_library_keywords.py`) |
+| Отсев мусора в выдаче | relevance/dedup в `scripts/recon_adlib.py` + ручное QA |
 | Вариации названия слота | `CHICKEN_ROAD_VARIATIONS` и аналоги |
 | Разбор текста объявления | `analyze_creative` (hook/pain/CTA/proof) |
 | Наша статистика (warm) | `get_tracker_stats` (разрезы `sub3`/`sub6`) + `scripts/creative_report.py` |
 | Реестр креативов | `docs/creatives/*.yaml` + `core/creatives/registry.py` |
 | Уникализация | `uniquify_creatives` (3 копии/адсет, выход в `~/Documents/FB_Agent_Creo`) |
-| Залив | `create_campaign` mutation (CBO/url_tags/enhancements — из коробки) |
+| Залив | desktop campaign wizard → durable `campaign_creator_worker` |
 
 **Один изолированный браузер** обслуживает и Ad Library, и syntx — боевой Vision/кабинет
 не трогаем.

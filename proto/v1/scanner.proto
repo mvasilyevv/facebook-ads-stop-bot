@@ -7,9 +7,6 @@ service ScannerService {
   // Стримит один ScanComplete (DOM-парсинг/скролл выпилены).
   rpc RunScanCycle(RunScanCycleRequest) returns (stream ScanCycleEvent);
 
-  // Жёсткая перезагрузка страницы с очисткой кеша (через CDP Network.clearBrowserCache).
-  rpc HardReloadPage(HardReloadPageRequest) returns (HardReloadPageResponse);
-
   // Live-список кампаний по owner_tag (через Graph campaigns edge, МИМО allowlist).
   // Для UI «Кампании для сканирования»: показывает ВСЕ кампании владельца, включая
   // новые, которые ещё не сканировались (allowlist их не пропускал бы в обычный скан).
@@ -17,7 +14,7 @@ service ScannerService {
 }
 
 // Отключение/включение рекламы выполняется ТОЛЬКО через Marketing API
-// (MetaApiService.ExecuteGraphCall → pause_ad/activate_ad). DOM-toggle канал
+// (MetaApiService.ExecuteGraphCallV5 → pause_ad/activate_ad). DOM-toggle канал
 // (ToggleAd/FindToggleCell/ReadToggleState/WaitForToggleConfirmation + Human*-мышь)
 // удалён вместе с реализацией в browser-agent — он промахивался по кнопке/скроллу.
 
@@ -28,9 +25,8 @@ message ListCampaignsRequest {
   optional string page_id = 2;
   // Фильтр по owner-тегу (campaignMatchesOwner). Пусто → все кампании кабинета.
   string owner_tag = 3;
-  // Мульти-кабинет (L10): числовой ID кабинета (без префикса act_), вкладку которого
-  // нужно открыть для резолва кампаний (ensureAdsManagerPage({actId})). Пусто → старое
-  // поведение (текущая primary-вкладка). Симметрично RunScanCycleRequest.ad_account_id.
+  // Явный числовой ID кабинета (без префикса act_), вкладку которого нужно открыть.
+  // Пустое значение отклоняется: список кампаний не выводится из текущей вкладки.
   string ad_account_id = 4;
 }
 
@@ -59,9 +55,9 @@ message RunScanCycleRequest {
   // Owner-tag для am-режима: если campaign_ids пуст, am сам резолвит campaign.id по имени
   // (campaignMatchesOwner) → тянет сразу только свой скоуп, а не весь кабинет. Пусто → все.
   string owner_tag = 9;
-  // Мульти-кабинет (MULTI_CABINET_PLAN.md): числовой ID кабинета (без префикса act_),
-  // который нужно сканировать. browser-agent находит/открывает вкладку этого кабинета
-  // и сверяет act из GraphContext. Пусто → старое поведение (текущая primary-вкладка).
+  // Явный числовой ID кабинета (без префикса act_), который нужно сканировать.
+  // browser-agent находит отдельную scan-page и сверяет act из GraphContext.
+  // Пустое значение отклоняется до скана.
   string ad_account_id = 10;
 }
 
@@ -100,6 +96,11 @@ message ScanComplete {
   // Строк, где все критические метрики (impressions/spend/cpm/cpc/ctr) пустые.
   // Используется для детекции STALE_DATA в observer.
   int32 rows_with_all_metrics_empty = 10;
+  // Версия fail-closed семантики полноты метрик. Revision 1 означает:
+  // missing/invalid spend и обязательные atomic counters входят в partial_row_ids,
+  // а populated malformed action counts не превращаются в подтверждённый ноль.
+  // Старый producer не знает поле и декодируется новым observer как 0 → partial.
+  uint32 metrics_contract_revision = 11;
 }
 
 message PhaseTimings {
@@ -160,18 +161,5 @@ message ScannedAdRow {
   string adset_lifetime_budget = 31;    // lifetime_budget адсета
   string adset_budget_remaining = 32;   // budget_remaining адсета
   string adset_learning_stage = 33;     // learning_stage_info.status (LEARNING/LEARNING_LIMITED/"")
-}
-
-// --- HardReloadPage ---
-
-message HardReloadPageRequest {
-  string session_id = 1;
-  optional string page_id = 2;
-  bool bypass_cache = 3;
-}
-
-message HardReloadPageResponse {
-  bool success = 1;
-  string error_message = 2;
-  int32 reload_ms = 3;
+  string adset_id = 34;                 // канонический Meta adset.id из Graph ads edge
 }

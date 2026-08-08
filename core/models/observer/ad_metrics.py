@@ -12,12 +12,14 @@ from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     Numeric,
     PrimaryKeyConstraint,
+    String,
     UniqueConstraint,
     text,
 )
@@ -48,27 +50,33 @@ class AdMetrics(CreatedAtOnly, Base):
     )
     cycle_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     scan_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
 
     # 18 метрических полей
-    spend: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # ISO 4217 includes reviewed zero-, two- and three-decimal currencies.
+    # Currency-aware consumers reject NULL/mixed evidence instead of guessing.
+    spend: Mapped[Decimal | None] = mapped_column(Numeric(18, 3), nullable=True)
     reach: Mapped[int | None] = mapped_column(Integer, nullable=True)
     impressions: Mapped[int | None] = mapped_column(Integer, nullable=True)
     clicks: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    cpc: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    cpc: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     ctr: Mapped[Decimal | None] = mapped_column(Numeric(7, 4), nullable=True)
-    cost_per_result: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
-    cpm: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    cost_per_result: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    cpm: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     frequency: Mapped[Decimal | None] = mapped_column(Numeric(7, 4), nullable=True)
     leads: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    cost_per_lead: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    cost_per_lead: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     registrations: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    cost_per_registration: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    cost_per_registration: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 6),
+        nullable=True,
+    )
     deposits: Mapped[int | None] = mapped_column(Integer, nullable=True)
     outbound_clicks: Mapped[int | None] = mapped_column(Integer, nullable=True)
     outbound_ctr: Mapped[Decimal | None] = mapped_column(Numeric(7, 4), nullable=True)
     landing_page_views: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost_per_landing_page_view: Mapped[Decimal | None] = mapped_column(
-        Numeric(10, 2), nullable=True
+        Numeric(20, 6), nullable=True
     )
 
     __table_args__ = (
@@ -83,6 +91,10 @@ class AdMetrics(CreatedAtOnly, Base):
             "ix_ad_metrics_scan",
             "scan_id",
             postgresql_where=text("scan_id IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "currency IS NULL OR currency ~ '^[A-Z]{3}$'",
+            name="currency",
         ),
         {"postgresql_partition_by": "RANGE (cycle_ts)"},
     )

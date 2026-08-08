@@ -68,10 +68,40 @@ def test_conversion_row_from_live_mcp_shape() -> None:
     assert row.occurred_at == datetime(2026, 7, 15, 16, 47, 30)
 
 
-# Пустой/невалидный revenue не должен ронять парсинг — становится Decimal(0).
-def test_conversion_row_handles_bad_revenue() -> None:
-    row = ConversionRow.from_api_row({"click_id": "x", "ext_sub8": "1", "revenue": "not-a-number"})
-    assert row.revenue == Decimal(0)
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"click_id": "missing"},
+        {"click_id": "none", "revenue": None},
+        {"click_id": "empty", "revenue": ""},
+        {"click_id": "blank", "revenue": "   "},
+    ],
+)
+def test_conversion_row_preserves_missing_revenue_as_unknown(raw) -> None:
+    row = ConversionRow.from_api_row(raw)
+
+    assert row.revenue is None
+    assert row.issues == ("revenue_missing",)
+
+
+@pytest.mark.parametrize("raw_revenue", ["not-a-number", "NaN", "Infinity", "-Infinity"])
+def test_conversion_row_marks_invalid_revenue_unknown(raw_revenue) -> None:
+    row = ConversionRow.from_api_row(
+        {"click_id": "invalid", "ext_sub8": "1", "revenue": raw_revenue}
+    )
+
+    assert row.revenue is None
+    assert row.issues == ("revenue_invalid",)
+
+
+@pytest.mark.parametrize("raw_revenue", ["0", 0, Decimal("0")])
+def test_conversion_row_preserves_explicit_known_zero(raw_revenue) -> None:
+    row = ConversionRow.from_api_row(
+        {"click_id": "known-zero", "ext_sub8": "1", "revenue": raw_revenue}
+    )
+
+    assert row.revenue == Decimal("0")
+    assert row.issues == ()
 
 
 # Отсутствующий ext_sub8 → fb_ad_id == None (а не "None"-строка).

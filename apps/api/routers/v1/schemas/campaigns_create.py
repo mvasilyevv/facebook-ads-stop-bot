@@ -4,17 +4,17 @@
 Контракт API↔воркер. CampaignConfig переиспользуется из core.campaign_builder
 без форка — единый источник правды по структуре конфига залива.
 
-КОНТРАКТ ФРОНТ↔БЭК (CRIT-2). Фронты (web `campaignWizard.buildConfig`, mini-визард)
-шлют ПЛОСКИЙ конфиг (`act_id`/`daily_budget_cents`/`countries`/… на верхнем уровне).
-Доменный CampaignConfig — ВЛОЖЕННЫЙ (`account`/`budget`/`targeting`/`campaigns[].adsets`).
-`CampaignConfigIn` принимает плоскую форму фронта и в ОДНОМ месте (`to_domain`)
-конвертирует её в доменный CampaignConfig. Вложенную (legacy) форму тоже принимаем
-без конвертации — обратная совместимость со старыми клиентами/тестами.
+КОНТРАКТ ФРОНТ↔БЭК (CRIT-2). Web шлёт единственный плоский конфиг
+(`act_id`/`daily_budget`/`countries`/… на верхнем уровне).
+`CampaignConfigIn` в ОДНОМ месте (`to_domain`) конвертирует его во внутренний
+`CampaignConfig`. Внутренняя вложенная модель никогда не является публичным API.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,20 +32,6 @@ from core.campaign_builder.config import (
 # ────────────────────────────── flat config (контракт фронта) ──────────────────────────────
 
 
-def _tz_offset_to_str(tz_offset: int | str | None) -> str:
-    """Часовой сдвиг кабинета int (часы) → ISO `±HH:00` для start_time.
-
-    Фронт шлёт целое число часов (напр. 0 или -7). Доменный Account ждёт строку
-    `-07:00`. Если уже строка — отдаём как есть (legacy). None → дефолт Account.
-    """
-    if tz_offset is None:
-        return "-07:00"
-    if isinstance(tz_offset, str):
-        return tz_offset
-    sign = "-" if tz_offset < 0 else "+"
-    return f"{sign}{abs(int(tz_offset)):02d}:00"
-
-
 class CampaignStructureIn(BaseModel):
     """Одна кампания в плоской структуре фронта.
 
@@ -55,16 +41,18 @@ class CampaignStructureIn(BaseModel):
     кампании и каждого adset'а. Пустая/None — ничего не добавляется.
     """
 
-    key: str
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(min_length=1, max_length=64)
     label: str | None = None  # произвольная метка кампании (в конец имени)
     adset_count: int = Field(ge=1)
-    concept_refs: list[str] = Field(default_factory=list)
+    concept_refs: list[str] = Field(min_length=1)
 
 
 class AdTextIn(BaseModel):
     """Текст объявления в форме фронта (mode none|text, primary)."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     mode: str = "none"  # none | text (фронт) → none | full (домен)
     primary: str = ""
@@ -78,13 +66,12 @@ class CampaignConfigIn(BaseModel):
     чтобы единый источник правды остался в core.campaign_builder.config.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     # account
     act_id: str
     page_id: str
     pixel_id: str
-    tz_offset: int | str | None = 0
 
     # идентичность залива
     offer_code: str
@@ -103,11 +90,20 @@ class CampaignConfigIn(BaseModel):
 
     # бюджет
     budget_level: str = "campaign"
-    daily_budget_cents: int
+    daily_budget: str = Field(
+        strict=True,
+        pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
+        max_length=32,
+    )
     bid_strategy: str = "COST_CAP"  # SOP: реальные кампании кабинета всегда COST_CAP
-    # Целевой CPA в центах (в UI доллары → центы, как daily_budget_cents). COST_CAP
-    # требует его — доменный Budget досверяет (ValueError → 422 при отсутствии).
-    bid_amount_cents: int | None = None
+    # Major-unit decimal string. Currency and exponent come only from durable
+    # Meta account evidence; the client cannot provide or override either.
+    bid_amount: str | None = Field(
+        default=None,
+        strict=True,
+        pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
+        max_length=32,
+    )
 
     # таргет
     countries: list[str] = Field(default_factory=list)
@@ -120,23 +116,14 @@ class CampaignConfigIn(BaseModel):
     view_through_days: int = 1
 
     # структура / креативы
-    campaigns: list[CampaignStructureIn]
+    campaigns: list[CampaignStructureIn] = Field(min_length=1)
     copies_per_concept: int | None = None
-    creo_root: str | None = None
-    launch_state: str = "campaign_paused"
+    creo_root: str = Field(min_length=1)
 
-    # Опциональный legacy/custom template. Domain builder в любом случае
-    # добавит `sub8={{ad.id}}`, если его нет.
+    # Опциональный custom template. Domain builder в любом случае добавит
+    # `sub8={{ad.id}}`, если его нет.
     url_tags: str | None = None
     naming_template: str | None = None
-
-    def concept_counts(self) -> dict[str, int]:
-        """Число концептов на блок (ключ=block.key) для build_campaign_spec.
-
-        Источник — длина concept_refs каждой кампании. При пустом списке — 0
-        (build_campaign_spec падает раскладкой при необходимости, money-safe).
-        """
-        return {c.key: len(c.concept_refs) for c in self.campaigns}
 
     def _ad_text_domain(self) -> AdText:
         """Конверсия текста: фронтовый mode 'text' → доменный 'full'."""
@@ -178,18 +165,40 @@ class CampaignConfigIn(BaseModel):
             )
         return blocks
 
-    def to_domain(self) -> CampaignConfig:
+    def to_domain(
+        self,
+        *,
+        timezone_name: str,
+        currency: str,
+        account_context_observed_at: datetime,
+        now: datetime | None = None,
+    ) -> CampaignConfig:
         """Единая точка конвертации плоского входа в доменный CampaignConfig.
 
-        Доменная модель досверяет money-инварианты (hard-cap бюджета, формат даты,
-        +AQ) — отсюда 422 на невалидный бюджет/конфиг прилетает из CampaignConfig.
+        Timezone/currency evidence is supplied only by the server-side durable
+        account-context resolver.  ``start_date`` defaults to the next cabinet
+        local day and is validated against that same IANA timezone.
         """
+        observed_now = now or datetime.now(UTC)
+        if observed_now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        local_today = observed_now.astimezone(ZoneInfo(timezone_name)).date()
+        start_date = self.start_date or (local_today + timedelta(days=1)).isoformat()
+        try:
+            parsed_start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError("start_date must be a real YYYY-MM-DD date") from exc
+        if parsed_start_date <= local_today:
+            raise ValueError("start_date must be later than the current cabinet-local day")
+
         fields: dict[str, Any] = {
             "account": Account(
                 act_id=self.act_id,
                 page_id=self.page_id,
                 pixel_id=self.pixel_id,
-                tz_offset=_tz_offset_to_str(self.tz_offset),
+                timezone_name=timezone_name,
+                currency=currency,
+                account_context_observed_at=account_context_observed_at,
             ),
             "offer_code": self.offer_code,
             "objective": self.objective,
@@ -202,9 +211,10 @@ class CampaignConfigIn(BaseModel):
             "text_optimizations": self.text_optimizations,
             "budget": Budget(
                 level=self.budget_level,
-                daily_cents=self.daily_budget_cents,
+                currency=currency,
+                daily_amount=self.daily_budget,
                 bid_strategy=self.bid_strategy,
-                bid_amount_cents=self.bid_amount_cents,
+                bid_amount=self.bid_amount,
             ),
             "targeting": Targeting(
                 countries=self.countries,
@@ -218,37 +228,15 @@ class CampaignConfigIn(BaseModel):
             ),
             "ad_text": self._ad_text_domain(),
             "campaigns": self._campaign_blocks(),
-            "creo_root": self.creo_root or "",
-            "launch_state": self.launch_state,
+            "creo_root": self.creo_root,
+            "start_date": parsed_start_date.isoformat(),
         }
-        # byer_tag/start_date/copies_per_concept опциональны — ставим только при наличии,
-        # иначе доменные дефолты (byer='MV', start_date=today+1).
+        # byer_tag/copies_per_concept опциональны — ставим только при наличии.
         if self.byer_tag:
             fields["byer_tag"] = self.byer_tag
-        if self.start_date:
-            fields["start_date"] = self.start_date
         if self.copies_per_concept is not None:
             fields["copies_per_concept"] = self.copies_per_concept
         return CampaignConfig(**fields)
-
-
-def _coerce_to_domain(value: Any) -> CampaignConfig:
-    """Нормализует вход config в доменный CampaignConfig.
-
-    Плоская форма фронта (`act_id`/`countries` на верхнем уровне) → через
-    CampaignConfigIn.to_domain. Вложенная (legacy: `account`/`targeting`) —
-    напрямую в CampaignConfig (обратная совместимость).
-    """
-    if isinstance(value, CampaignConfig):
-        return value
-    if isinstance(value, CampaignConfigIn):
-        return value.to_domain()
-    if isinstance(value, dict):
-        # Вложенная форма распознаётся по наличию доменных контейнеров.
-        if "account" in value or "targeting" in value:
-            return CampaignConfig.model_validate(value)
-        return CampaignConfigIn.model_validate(value).to_domain()
-    raise TypeError(f"config: ожидался dict/CampaignConfig, получено {type(value)!r}")
 
 
 # ────────────────────────────── presets ──────────────────────────────
@@ -261,7 +249,6 @@ class PresetIn(BaseModel):
     act_id: str = Field(min_length=1, max_length=64)
     page_id: str = Field(min_length=1, max_length=64)
     pixel_id: str = Field(min_length=1, max_length=64)
-    tz_offset: int = 0
     offer_code: str | None = Field(default=None, max_length=64)
     byer_tag: str | None = Field(default=None, max_length=64)
     objective: str = "OUTCOME_SALES"
@@ -287,7 +274,6 @@ class PresetOut(BaseModel):
     act_id: str
     page_id: str
     pixel_id: str
-    tz_offset: int
     offer_code: str | None
     byer_tag: str | None
     objective: str
@@ -333,36 +319,35 @@ class UploadConceptsOut(BaseModel):
 class ValidateIn(BaseModel):
     """Запрос dry-run валидации конфига.
 
-    `config` — каноническая ПЛОСКАЯ форма фронта (`CampaignConfigIn`) ИЛИ вложенный
-    `CampaignConfig` (legacy). OpenAPI документирует обе (anyOf), фронтовые типы
-    генерируются из плоской. `domain_config()`/`concept_counts_map()` нормализуют вход.
+    `config` — единственная каноническая плоская форма фронта (`CampaignConfigIn`).
     """
 
-    config: CampaignConfigIn | CampaignConfig
-    concept_counts: dict[str, int] | None = None
+    model_config = ConfigDict(extra="forbid")
 
-    def domain_config(self) -> CampaignConfig:
-        """Доменный CampaignConfig (плоский вход → to_domain, вложенный — как есть)."""
-        return _coerce_to_domain(self.config)
+    config: CampaignConfigIn
 
-    def concept_counts_map(self) -> dict[str, int] | None:
-        """Число концептов на блок для build_campaign_spec.
-
-        Приоритет: явный `concept_counts` из тела → из плоского входа (len concept_refs).
-        Для вложенной формы None (раскладка по умолчанию 1 концепт/блок).
-        """
-        if self.concept_counts is not None:
-            return self.concept_counts
-        if isinstance(self.config, CampaignConfigIn):
-            return self.config.concept_counts()
-        return None
+    def domain_config(
+        self,
+        *,
+        timezone_name: str,
+        currency: str,
+        account_context_observed_at: datetime,
+        now: datetime | None = None,
+    ) -> CampaignConfig:
+        """Convert the public flat contract to the internal domain model."""
+        return self.config.to_domain(
+            timezone_name=timezone_name,
+            currency=currency,
+            account_context_observed_at=account_context_observed_at,
+            now=now,
+        )
 
 
 class AdsetPlanOut(BaseModel):
     """Сводка по одному adset в плане."""
 
     name: str
-    status: str
+    status: Literal["PAUSED"]
     ad_count: int
 
 
@@ -371,7 +356,7 @@ class CampaignPlanOut(BaseModel):
 
     key: str
     name: str
-    status: str
+    status: Literal["PAUSED"]
     adsets: list[AdsetPlanOut]
 
 
@@ -379,12 +364,17 @@ class ValidatePlanOut(BaseModel):
     """Результат validate: число объектов + нейминг без создания."""
 
     offer_code: str
-    launch_state: str
+    creation_policy: Literal["all_paused"]
     copies_per_concept: int
     campaign_count: int
     adset_count: int
     ad_count: int
     campaigns: list[CampaignPlanOut]
+    start_date: str
+    start_time: str
+    timezone_name: str
+    currency: str
+    account_context_observed_at: datetime
 
 
 # ────────────────────────────── launch ──────────────────────────────
@@ -393,31 +383,29 @@ class ValidatePlanOut(BaseModel):
 class LaunchIn(BaseModel):
     """Запрос запуска залива: конфиг + опц. ссылка на пресет/upload.
 
-    `config` — каноническая ПЛОСКАЯ форма фронта (`CampaignConfigIn`) ИЛИ вложенный
-    `CampaignConfig` (legacy). `domain_config()` нормализует в доменный CampaignConfig.
-    `concept_counts_map()` даёт ту же раскладку K, что показал validate (симметрия превью↔залив).
+    `config` — единственная каноническая плоская форма фронта (`CampaignConfigIn`).
     """
 
-    config: CampaignConfigIn | CampaignConfig
+    model_config = ConfigDict(extra="forbid")
+
+    config: CampaignConfigIn
     preset_id: str | None = None
-    idempotency_key: str | None = Field(default=None, max_length=128)
-    concept_counts: dict[str, int] | None = None
 
-    def domain_config(self) -> CampaignConfig:
-        """Доменный CampaignConfig (единая точка нормализации входа)."""
-        return _coerce_to_domain(self.config)
-
-    def concept_counts_map(self) -> dict[str, int] | None:
-        """Число концептов на блок для build_campaign_spec (как у ValidateIn).
-
-        Приоритет: явный `concept_counts` из тела → из плоского входа (len concept_refs).
-        Для вложенной формы None (раскладка по умолчанию 1 концепт/блок).
-        """
-        if self.concept_counts is not None:
-            return self.concept_counts
-        if isinstance(self.config, CampaignConfigIn):
-            return self.config.concept_counts()
-        return None
+    def domain_config(
+        self,
+        *,
+        timezone_name: str,
+        currency: str,
+        account_context_observed_at: datetime,
+        now: datetime | None = None,
+    ) -> CampaignConfig:
+        """Convert the public flat contract to the internal domain model."""
+        return self.config.to_domain(
+            timezone_name=timezone_name,
+            currency=currency,
+            account_context_observed_at=account_context_observed_at,
+            now=now,
+        )
 
 
 class LaunchOut(BaseModel):
@@ -431,6 +419,32 @@ class LaunchOut(BaseModel):
 
 # ────────────────────────────── runs ──────────────────────────────
 
+CampaignRunStatus = Literal[
+    "queued",
+    "uniquifying",
+    "uploading",
+    "creating",
+    "succeeded",
+    "failed",
+    "cancelled",
+]
+CampaignTaskQueueStatus = Literal[
+    "pending",
+    "retrying",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+]
+CampaignActionState = Literal[
+    "queued",
+    "running",
+    "confirmed",
+    "failed",
+    "cancelled",
+    "unknown",
+]
+
 
 class RunSummaryOut(BaseModel):
     """Краткая карточка запуска для списка."""
@@ -439,7 +453,7 @@ class RunSummaryOut(BaseModel):
 
     id: str
     preset_id: str | None
-    status: str
+    status: CampaignRunStatus
     offer_code: str | None
     idempotency_key: str | None
     error: str | None
@@ -447,14 +461,46 @@ class RunSummaryOut(BaseModel):
     updated_at: str
 
 
+class RunTaskOut(BaseModel):
+    """Latest durable campaign task and its authoritative action lifecycle."""
+
+    id: int
+    state: CampaignActionState
+    queue_status: CampaignTaskQueueStatus
+    outcome: Literal["CONFIRMED", "REJECTED", "UNKNOWN"] | None
+    attempt_count: int = Field(ge=0)
+    max_attempts: int = Field(ge=1)
+    requested_by: str
+    external_started: bool
+    cancel_requested_at: datetime | None
+    deadline_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+    correlation_id: str
+    result: dict[str, Any] | None
+
+
+class RunControlOptionOut(BaseModel):
+    """One control and a stable machine-readable availability reason."""
+
+    available: bool
+    reason: str
+
+
+class RunControlsOut(BaseModel):
+    abort: RunControlOptionOut
+    resume: RunControlOptionOut
+
+
 class RunDetailOut(BaseModel):
-    """Детали запуска: конфиг-снимок + прогресс + Meta-ID + ошибка."""
+    """Details plus the latest task and safe control availability."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     preset_id: str | None
-    status: str
+    status: CampaignRunStatus
     config: dict[str, Any]
     progress: dict[str, Any]
     created_meta_ids: dict[str, Any]
@@ -462,11 +508,18 @@ class RunDetailOut(BaseModel):
     idempotency_key: str | None
     created_at: str
     updated_at: str
+    task: RunTaskOut | None
+    controls: RunControlsOut
 
 
-class CleanupOut(BaseModel):
-    """Результат пометки run на снос Meta-объектов."""
+class RunCommandOut(BaseModel):
+    """Accepted or replayed abort/resume command lifecycle."""
 
+    action: Literal["abort", "resume"]
     run_id: str
-    meta_ids: dict[str, Any]  # созданные id для ручного/задачного сноса
-    detail: str
+    task_id: int
+    state: CampaignActionState
+    run_status: CampaignRunStatus
+    created: bool
+    correlation_id: str
+    reason: str

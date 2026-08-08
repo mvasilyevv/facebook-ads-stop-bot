@@ -61,7 +61,7 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
     <div className="space-y-6">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
+        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 5 · КОНЦЕПТЫ
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
@@ -89,13 +89,13 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
 
       {/* upload_id badge */}
       {values.upload_id && (
-        <div className="text-[11px] text-bg-8">
+        <div className="text-[12px] text-bg-8">
           upload_id: <span className="font-mono text-bg-9">{values.upload_id}</span>
         </div>
       )}
 
       {errors && (
-        <span role="alert" className="text-[11px] text-danger font-display">
+        <span role="alert" className="text-[12px] text-danger font-display">
           {errors}
         </span>
       )}

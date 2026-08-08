@@ -100,7 +100,7 @@ export function CountryMultiSelect({
   return (
     <div className="flex flex-col gap-1.5" ref={rootRef}>
       {label ? (
-        <label htmlFor={id} className="text-[11px] font-display tracking-wider uppercase text-bg-9">
+        <label htmlFor={id} className="text-[12px] font-display tracking-wider uppercase text-bg-9">
           {label}
         </label>
       ) : null}
@@ -112,7 +112,7 @@ export function CountryMultiSelect({
             "flex flex-wrap items-center gap-1.5 px-2 py-1.5 min-h-8",
             "transition-colors duration-[120ms]",
             "focus-within:bg-bg-3 focus-within:border-accent",
-            errorMessage ? "border-danger" : "border-[var(--hairline-strong)]",
+            errorMessage ? "border-danger" : "border-[var(--color-hairline-strong)]",
             disabled && "opacity-40 cursor-not-allowed",
           )}
         >
@@ -157,7 +157,7 @@ export function CountryMultiSelect({
             role="listbox"
             className={cn(
               "absolute z-30 mt-1 w-full max-h-64 overflow-auto",
-              "bg-bg-2 border border-[var(--hairline-strong)] rounded-[var(--radius-2)]",
+              "bg-bg-2 border border-[var(--color-hairline-strong)] rounded-[var(--radius-2)]",
               "shadow-[0_8px_24px_rgba(0,0,0,0.4)] py-1",
             )}
           >
@@ -182,7 +182,7 @@ export function CountryMultiSelect({
                   {opt.flag}
                 </span>
                 <span className="flex-1 min-w-0 truncate">{opt.name}</span>
-                <span className="font-display text-[11px] text-bg-8 tabular-nums">{opt.code}</span>
+                <span className="font-display text-[12px] text-bg-8 tabular-nums">{opt.code}</span>
               </li>
             ))}
           </ul>
@@ -190,12 +190,12 @@ export function CountryMultiSelect({
       </div>
 
       {errorMessage ? (
-        <span id={errorId} role="alert" className="text-[11px] text-danger font-display">
+        <span id={errorId} role="alert" className="text-[12px] text-danger font-display">
           {errorMessage}
         </span>
       ) : null}
       {helpText && !errorMessage ? (
-        <span id={helpId} className="text-[11px] text-bg-9">
+        <span id={helpId} className="text-[12px] text-bg-9">
           {helpText}
         </span>
       ) : null}

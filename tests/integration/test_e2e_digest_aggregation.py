@@ -9,8 +9,8 @@
 
 Цель — убедиться что счётчики дайджеста совпадают с тем, что реально
 произвёл observer + meta_api_worker: ни одной фантомной записи, ни одного
-пропущенного события. _count_disable_tasks считает task_type='meta_api_mutation'
-с mutation_kind='pause_ad' (новый канал) и legacy task_type='disable'.
+пропущенного события. _count_disable_tasks считает единый канал:
+task_type='meta_api_mutation' с mutation_kind='pause_ad'.
 """
 
 from __future__ import annotations
@@ -26,10 +26,15 @@ from sqlalchemy import text
 
 import apps.meta_api_worker.main as worker_main
 from apps.meta_api_worker.main import process_one_task
-from core.meta_api.queue import claim_pending_task
+from core.meta_api.queue import claim_browser_ready_mutation_task
 from core.observer.pipeline import process_scan_rows
 from core.scanner.models import ScannedAdRow
 from core.telegram.digest_builder import build_digest
+
+pytestmark = pytest.mark.usefixtures(
+    "known_test_cabinet_timezones",
+    "fresh_browser_readiness",
+)
 
 
 def _utcnow() -> datetime:
@@ -68,7 +73,10 @@ async def _seed_offer(pg_engine, *, code: str, cpa: Decimal) -> uuid.UUID:
             {"i": offer_id, "c": code, "n": f"Digest E2E {code}"},
         )
         await conn.execute(
-            text("INSERT INTO offer_rules (offer_id, cpa_threshold) VALUES (:o, :cpa)"),
+            text(
+                "INSERT INTO offer_rules (offer_id, cpa_threshold, currency) "
+                "VALUES (:o, :cpa, 'USD')"
+            ),
             {"o": offer_id, "cpa": cpa},
         )
     return offer_id
@@ -78,6 +86,8 @@ def _row(*, code: str, fb_ad_id: str, spend: Decimal, deposits: int) -> ScannedA
     """ScannedAdRow с заданным spend/deposits, остальное безопасно-нейтрально."""
     return ScannedAdRow(
         fb_ad_id=fb_ad_id,
+        campaign_id=f"9{fb_ad_id}",
+        adset_id=f"8{fb_ad_id}",
         campaign_name=f"{code} | KE | promo",
         adset_name="ADS_E2E",
         ad_name=f"AD_{fb_ad_id[-4:]}",
@@ -106,26 +116,32 @@ async def test_digest_aggregates_observer_pipeline_output(
     await _seed_offer(pg_engine, code="DGST_S", cpa=Decimal("10"))
     await _seed_offer(pg_engine, code="DGST_O", cpa=Decimal("10"))
 
-    fb_stop = f"230077{uuid.uuid4().hex[:6]}"
-    fb_ok = f"230088{uuid.uuid4().hex[:6]}"
+    fb_stop = f"230077{uuid.uuid4().int % 1_000_000:06d}"
+    fb_ok = f"230088{uuid.uuid4().int % 1_000_000:06d}"
 
     stop_row = _row(code="DGST_S", fb_ad_id=fb_stop, spend=Decimal("25"), deposits=0)
     ok_row = _row(code="DGST_O", fb_ad_id=fb_ok, spend=Decimal("2"), deposits=2)
 
     # Шаг 1: один scan-цикл → один stop_event + два snapshot'а метрик +
     # одна pause_ad mutation задача (pending) в outbox.
-    result = await process_scan_rows(pg_engine, rows=[stop_row, ok_row], scan_id=100)
+    result = await process_scan_rows(
+        pg_engine, ad_account_id="123", rows=[stop_row, ok_row], scan_id=100
+    )
     assert result.alerts_stop == 1
     assert result.disable_tasks_created == 1
 
     # Шаг 2: meta_api_worker доводит pause_ad mutation до succeeded →
     # попадёт в счётчик disable_tasks_succeeded в digest.
     async def _fake_dispatch(client, p):
-        return {"success": True, "graph_response": {"ok": True}}
+        return {
+            "success": True,
+            "graph_response": {"ok": True},
+            "modified_ids": [str(p.target_id)],
+        }
 
     monkeypatch.setattr(worker_main, "dispatch_mutation", _fake_dispatch)
 
-    claim = await claim_pending_task(pg_engine)
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
     assert not claim.queue_empty
     assert claim.task is not None
 
@@ -152,16 +168,17 @@ async def test_digest_aggregates_observer_pipeline_output(
 
     # Топ-N: оба ad'а с spend > 0, отсортированы desc
     assert len(digest.top_ads_by_spend) == 2
-    spends = [row.spend_usd for row in digest.top_ads_by_spend]
+    spends = [row.spend for row in digest.top_ads_by_spend]
     assert spends == sorted(spends, reverse=True)
     top1 = digest.top_ads_by_spend[0]
-    assert top1.spend_usd == Decimal("25")
+    assert top1.spend == Decimal("25")
+    assert top1.currency == "USD"
     assert top1.fb_ad_id == fb_stop
     # offer_code должен попасть из catalog join
     assert top1.offer_code == "DGST_S"
 
     # Total spend = сумма последних snapshot'ов = 25 + 2 = 27
-    assert digest.total_spend_window_usd == Decimal("27")
+    assert digest.total_spend_window == Decimal("27")
 
 
 # E2E: пустой период — никаких алертов/задач → нули по всем счётчикам
@@ -184,7 +201,7 @@ async def test_digest_empty_window_returns_zeros(
     assert digest.active_offers_count == 0
     assert digest.active_ads_count == 0
     assert digest.top_ads_by_spend == []
-    assert digest.total_spend_window_usd == Decimal("0")
+    assert digest.total_spend_window is None
 
 
 # E2E: окно «вчера» — данные из сегодня в него не попадают (partition pruning).
@@ -195,9 +212,9 @@ async def test_digest_yesterday_window_excludes_today(
 ) -> None:
     # Создаём данные сегодня
     await _seed_offer(pg_engine, code="WINDOW_T", cpa=Decimal("10"))
-    fb_id = f"230066{uuid.uuid4().hex[:6]}"
+    fb_id = f"230066{uuid.uuid4().int % 1_000_000:06d}"
     row = _row(code="WINDOW_T", fb_ad_id=fb_id, spend=Decimal("25"), deposits=0)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=200)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=200)
 
     # Запрашиваем дайджест за окно «вчера» (закончилось вчера в начале дня)
     yesterday_end = _utcnow() - timedelta(hours=24)

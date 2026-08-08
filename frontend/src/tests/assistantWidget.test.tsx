@@ -5,7 +5,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { AssistantWidget } from "@/components/domain/assistant/AssistantWidget";
+import {
+  AssistantPanelFallback,
+  AssistantWidget,
+} from "@/components/domain/assistant/AssistantWidget";
 import { useChatWidget } from "@/stores/chatWidget";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -36,6 +39,7 @@ afterEach(() => {
 
 async function openPanel(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Открыть AI-ассистента" }));
+  await screen.findByRole("dialog", { name: "AI-ассистент" });
 }
 
 describe("AssistantWidget — кнопка и панель", () => {
@@ -44,14 +48,72 @@ describe("AssistantWidget — кнопка и панель", () => {
     const user = userEvent.setup();
     render(<AssistantWidget />);
 
-    expect(screen.getByRole("button", { name: "Открыть AI-ассистента" })).toBeInTheDocument();
+    const trigger = screen.getByRole("button", {
+      name: "Открыть AI-ассистента",
+    });
+    expect(trigger).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "AI-ассистент" })).not.toBeInTheDocument();
 
     await openPanel(user);
     expect(screen.getByRole("dialog", { name: "AI-ассистент" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Закрыть" })).toHaveFocus();
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "AI-ассистент" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("возвращает focus на trigger после закрытия из панели", async () => {
+    const user = userEvent.setup();
+    render(<AssistantWidget />);
+    const trigger = screen.getByRole("button", {
+      name: "Открыть AI-ассистента",
+    });
+
+    await openPanel(user);
+    await user.click(screen.getByRole("button", { name: "Закрыть" }));
+
+    expect(trigger).toHaveFocus();
+  });
+
+  it("держит trigger, fallback и panel выше mobile nav и сохраняет desktop offsets", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<AssistantWidget />);
+
+    const trigger = screen.getByRole("button", {
+      name: "Открыть AI-ассистента",
+    });
+    expect(trigger).toHaveClass(
+      "right-3",
+      "bottom-[calc(68px_+_env(safe-area-inset-bottom,0px))]",
+      "md:right-6",
+      "md:bottom-6",
+    );
+
+    await openPanel(user);
+    const panel = screen.getByRole("dialog", { name: "AI-ассистент" });
+    expect(panel).toHaveClass(
+      "right-3",
+      "bottom-[calc(128px_+_env(safe-area-inset-bottom,0px))]",
+      "max-w-[calc(100vw-1.5rem)]",
+      "h-[min(560px,calc(100dvh_-_140px_-_env(safe-area-inset-bottom,0px)))]",
+      "md:right-6",
+      "md:bottom-20",
+      "md:h-[min(560px,70vh)]",
+    );
+    unmount();
+
+    render(<AssistantPanelFallback />);
+    const fallback = screen.getByRole("status", {
+      name: "Загрузка AI-ассистента",
+    });
+    expect(fallback).toHaveClass(
+      "right-3",
+      "bottom-[calc(128px_+_env(safe-area-inset-bottom,0px))]",
+      "max-w-[calc(100vw-1.5rem)]",
+      "md:right-6",
+      "md:bottom-20",
+    );
   });
 });
 
@@ -118,7 +180,17 @@ describe("AssistantWidget — отправка сообщения", () => {
   it("429 показывает сообщение о лимите в ленте", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ detail: "rate limited" }, 429)),
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            code: "RATE_LIMITED",
+            message: "Лимит запросов",
+            correlation_id: "corr-ai-429",
+            field_errors: null,
+          },
+          429,
+        ),
+      ),
     );
 
     const user = userEvent.setup();
@@ -128,16 +200,24 @@ describe("AssistantWidget — отправка сообщения", () => {
     await user.type(screen.getByLabelText("Сообщение ассистенту"), "вопрос");
     await user.click(screen.getByRole("button", { name: "Отправить сообщение" }));
 
-    expect(
-      await screen.findByText("Лимит запросов исчерпан, попробуй позже"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Лимит запросов исчерпан, попробуй позже")).toBeInTheDocument();
   });
 
-  // 503 (AI не настроен) → в ленте сообщение с текстом detail, не тост.
-  it("503 показывает 'Ассистент недоступен: <detail>' в ленте", async () => {
+  // 503 (AI не настроен) → в ленте сообщение из единого ApiProblem, не тост.
+  it("503 показывает ApiProblem.message в ленте", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ detail: "AI-провайдеры не настроены" }, 503)),
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            code: "AI_UNAVAILABLE",
+            message: "AI-провайдеры не настроены",
+            correlation_id: "corr-ai-503",
+            field_errors: null,
+          },
+          503,
+        ),
+      ),
     );
 
     const user = userEvent.setup();
@@ -219,7 +299,7 @@ describe("AssistantWidget — почасовой пульс", () => {
   it("повторный fetchPulse того же часа не дублирует сообщение", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
+      vi.fn().mockImplementation(() =>
         jsonResponse({
           important: true,
           text: "1 стоп за час: GH_CR2",
@@ -282,8 +362,8 @@ describe("AssistantWidget — пульсы не попадают в тело з�
     await user.click(screen.getByRole("button", { name: "Отправить сообщение" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(options.body as string) as { messages: unknown[] };
+    const [request] = fetchMock.mock.calls[0] as [Request];
+    const body = JSON.parse(await request.text()) as { messages: unknown[] };
     expect(body.messages).toEqual([{ role: "user", content: "привет" }]);
   });
 });

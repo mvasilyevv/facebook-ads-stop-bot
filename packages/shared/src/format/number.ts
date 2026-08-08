@@ -1,22 +1,20 @@
 /**
- * Числовые форматтеры. Синглтоны Intl — создаются один раз, дёшево.
- * Все функции безопасны к null/undefined → возвращают "—".
+ * Shared number formatting.
  *
- * Портировано из frontend/src/lib/utils/format.ts (эталон).
+ * Money always requires an explicit server-confirmed currency. The repository
+ * contract owns its exponent (JPY 0, USD 2, KWD 3); the client never assumes
+ * two decimals or invents USD for an unknown amount.
  */
 
-const SPEND_FORMATTER = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
+import { supportedCurrencyExponent } from "./currencyContract";
 
-/** Один знак после запятой — компактный money-формат для плотных таблиц/панелей. */
-const SPEND1_FORMATTER = new Intl.NumberFormat("en-US", {
-  minimumFractionDigits: 1,
-  maximumFractionDigits: 1,
-});
+export {
+  SUPPORTED_CURRENCY_EXPONENTS,
+  supportedCurrencyExponent,
+} from "./currencyContract";
+
+const MONEY_FORMATTERS = new Map<string, Intl.NumberFormat>();
+const DECIMAL = /^-?\d+(?:\.\d+)?$/;
 
 const COMPACT_FORMATTER = new Intl.NumberFormat("en-US", {
   notation: "compact",
@@ -31,29 +29,66 @@ const PERCENT_FORMATTER = new Intl.NumberFormat("en-US", {
 
 const INT_FORMATTER = new Intl.NumberFormat("en-US");
 
-/**
- * Денежная сумма: $1,234.56.
- * Принимает число или строку (бэк отдаёт spend как строку из Decimal).
- */
-export function formatSpend(value: number | string | null | undefined): string {
+/** Whether the repository has a reviewed exponent for this currency. */
+export function isSupportedCurrencyCode(
+  value: unknown,
+): value is string {
+  return supportedCurrencyExponent(value) !== null;
+}
+
+/** Format a major-unit decimal with its explicit currency code. */
+export function formatSpend(
+  value: number | string | null | undefined,
+  currency: string | null | undefined,
+): string {
   if (value == null || value === "") return "—";
-  const n = typeof value === "string" ? Number.parseFloat(value) : value;
-  if (Number.isNaN(n)) return "—";
-  return SPEND_FORMATTER.format(n);
+  const normalizedCurrency = currency?.trim().toUpperCase() ?? "";
+  const exponent = supportedCurrencyExponent(normalizedCurrency);
+  if (exponent === null) return "—";
+  if (typeof value === "string" && !DECIMAL.test(value)) return "—";
+  if (typeof value === "number" && !Number.isFinite(value)) return "—";
+  try {
+    let formatter = MONEY_FORMATTERS.get(normalizedCurrency);
+    if (!formatter) {
+      formatter = new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: normalizedCurrency,
+        currencyDisplay: "code",
+        minimumFractionDigits: exponent,
+        maximumFractionDigits: exponent,
+      });
+      MONEY_FORMATTERS.set(normalizedCurrency, formatter);
+    }
+    return formatExactNumber(formatter, value);
+  } catch {
+    return "—";
+  }
 }
 
 /**
- * Денежная сумма с ОДНИМ знаком: $1,234.5 — компактный вариант formatSpend()
- * для плотных таблиц/панелей (Ads-таблица, метрики-панель объявления).
- * Единый источник — раньше был локально продублирован в web (money1 в
- * adHelpers.ts), сведено сюда во избежание рассинхрона форматов между
- * web и mini (аудит 02.07, LOW F1).
+ * Format an exact per-unit amount derived from a decimal total and count.
+ *
+ * The quotient is rounded half-away-from-zero at the reviewed currency
+ * exponent using BigInt arithmetic, so funnel costs never pass through Number.
  */
-export function formatSpend1(value: number | string | null | undefined): string {
-  if (value == null || value === "") return "—";
-  const n = typeof value === "string" ? Number.parseFloat(value) : value;
-  if (Number.isNaN(n)) return "—";
-  return "$" + SPEND1_FORMATTER.format(n);
+export function formatSpendPerUnit(
+  total: string | null | undefined,
+  count: number | null | undefined,
+  currency: string | null | undefined,
+): string {
+  if (
+    total == null ||
+    !DECIMAL.test(total) ||
+    !Number.isSafeInteger(count) ||
+    Number(count) <= 0
+  ) {
+    return "—";
+  }
+  const normalizedCurrency = currency?.trim().toUpperCase() ?? "";
+  const exponent = supportedCurrencyExponent(normalizedCurrency);
+  if (exponent === null) return "—";
+  const perUnit = divideDecimalToScale(total, Number(count), exponent);
+  return perUnit === null ? "—" : formatSpend(perUnit, normalizedCurrency);
 }
 
 /** Компактное число: 12.4K, 1.2M. */
@@ -86,4 +121,49 @@ export function formatPercentValue(value: number | string | null | undefined): s
   const n = typeof value === "string" ? Number.parseFloat(value) : value;
   if (Number.isNaN(n)) return "—";
   return `${n.toFixed(1)}%`;
+}
+
+function formatExactNumber(
+  formatter: Intl.NumberFormat,
+  value: number | string,
+): string {
+  // ECMA-402 parses decimal strings as mathematical values instead of first
+  // coercing them to an IEEE-754 Number. TypeScript's ES2022 lib still exposes
+  // the older number|bigint signature, hence the narrow call-site cast.
+  const format = formatter.format as unknown as (
+    candidate: number | string,
+  ) => string;
+  return format(value);
+}
+
+function divideDecimalToScale(
+  value: string,
+  divisor: number,
+  targetScale: number,
+): string | null {
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value);
+  if (!match) return null;
+  const negative = match[1] === "-";
+  const integerDigits = match[2];
+  if (integerDigits === undefined) return null;
+  const fractionDigits = match[3] ?? "";
+  const numerator = BigInt(`${integerDigits}${fractionDigits}`);
+  const sourceScale = 10n ** BigInt(fractionDigits.length);
+  const denominator = BigInt(divisor) * sourceScale;
+  const scaledNumerator = numerator * 10n ** BigInt(targetScale);
+  let quotient = scaledNumerator / denominator;
+  const remainder = scaledNumerator % denominator;
+  if (remainder * 2n >= denominator) quotient += 1n;
+  if (negative && quotient !== 0n) quotient = -quotient;
+  return scaledIntegerToDecimal(quotient, targetScale);
+}
+
+function scaledIntegerToDecimal(value: bigint, scale: number): string {
+  const negative = value < 0n;
+  const absoluteDigits = (negative ? -value : value).toString();
+  if (scale === 0) return `${negative ? "-" : ""}${absoluteDigits}`;
+  const padded = absoluteDigits.padStart(scale + 1, "0");
+  const whole = padded.slice(0, -scale);
+  const fraction = padded.slice(-scale);
+  return `${negative ? "-" : ""}${whole}.${fraction}`;
 }

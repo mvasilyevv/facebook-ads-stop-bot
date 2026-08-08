@@ -1,12 +1,21 @@
-// Тест: buildApiError и apiGetWithCount — базовые контракты HTTP-клиента.
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { describe, it, expect, vi, afterEach } from "vitest";
 import {
-  buildApiError,
-  buildQuery,
   ApiError,
+  invalidApiPayload,
   redirectToLoginOnUnauthorized,
+  shouldRetryApiQuery,
 } from "@/lib/api/client";
+
+describe("generated API payload guard", () => {
+  it("turns structurally invalid JSON into a non-retryable query error", () => {
+    const error = invalidApiPayload("/api/operator/snapshot", { unexpected: true });
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.payload).toEqual({ unexpected: true });
+    expect(shouldRetryApiQuery(0, error)).toBe(false);
+  });
+});
 
 describe("Telegram session expiry redirect", () => {
   afterEach(() => {
@@ -14,7 +23,7 @@ describe("Telegram session expiry redirect", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses the server login URL for API 401", () => {
+  it("uses the same-origin login URL supplied by the server", () => {
     const assign = vi.fn();
     vi.stubGlobal("window", {
       location: {
@@ -25,19 +34,17 @@ describe("Telegram session expiry redirect", () => {
         assign,
       },
     });
-    const response = new Response(JSON.stringify({ detail: "login" }), {
+    const response = new Response(null, {
       status: 401,
       headers: { "X-Auth-Login-Url": "/auth/login?return_to=%2Fcampaigns" },
     });
 
     redirectToLoginOnUnauthorized(response);
 
-    expect(assign).toHaveBeenCalledWith(
-      "https://app.adpulse.su/auth/login?return_to=%2Fcampaigns",
-    );
+    expect(assign).toHaveBeenCalledWith("https://app.adpulse.su/auth/login?return_to=%2Fcampaigns");
   });
 
-  it("ignores a cross-origin login URL", () => {
+  it("rejects a cross-origin login URL", () => {
     const assign = vi.fn();
     vi.stubGlobal("window", {
       location: {
@@ -59,192 +66,26 @@ describe("Telegram session expiry redirect", () => {
   });
 });
 
-// ─── buildApiError ─────────────────────────────────────────────────────────────
-
-describe("buildApiError — разбор FastAPI detail", () => {
-  // Тест: detail — строка → прямо вставляется в message.
-  it("detail = string", async () => {
-    const resp = new Response(JSON.stringify({ detail: "Объявление не найдено" }), {
-      status: 404,
-      headers: { "Content-Type": "application/json" },
-    });
-    const err = await buildApiError(resp);
-    expect(err).toBeInstanceOf(ApiError);
-    expect(err.status).toBe(404);
-    expect(err.message).toContain("Объявление не найдено");
-    expect(err.detail).toBe("Объявление не найдено");
-  });
-
-  // Тест: detail — массив объектов валидации (Pydantic) → msg конкатенируется.
-  it("detail = array[{msg, loc, type}] (Pydantic validation)", async () => {
-    const detail = [
-      { msg: "field required", loc: ["body", "minutes"], type: "missing" },
-      { msg: "value too small", loc: ["body", "limit"], type: "value_error" },
-    ];
-    const resp = new Response(JSON.stringify({ detail }), {
-      status: 422,
-      headers: { "Content-Type": "application/json" },
-    });
-    const err = await buildApiError(resp);
-    expect(err.status).toBe(422);
-    expect(err.message).toContain("field required");
-    expect(err.message).toContain("value too small");
-    expect(Array.isArray(err.detail)).toBe(true);
-  });
-
-  // Тест: detail — объект (не строка, не массив) → JSON.stringify.
-  it("detail = object → JSON.stringify", async () => {
-    const detail = { code: "RATE_LIMITED", retry_after: 60 };
-    const resp = new Response(JSON.stringify({ detail }), {
-      status: 429,
-      headers: { "Content-Type": "application/json" },
-    });
-    const err = await buildApiError(resp);
-    expect(err.status).toBe(429);
-    expect(err.message).toContain("RATE_LIMITED");
-  });
-
-  // Тест: ответ без JSON (plain text) → текст вставляется в message.
-  it("plain text response", async () => {
-    const resp = new Response("Internal Server Error", {
-      status: 500,
-      headers: { "Content-Type": "text/plain" },
-    });
-    const err = await buildApiError(resp);
-    expect(err.status).toBe(500);
-    expect(err.message).toContain("Internal Server Error");
-  });
-
-  // Тест: пустое тело → дефолтное сообщение.
-  it("пустое тело → дефолтное сообщение", async () => {
-    const resp = new Response("", {
-      status: 503,
-      statusText: "Service Unavailable",
-    });
-    const err = await buildApiError(resp);
-    expect(err.status).toBe(503);
-    expect(err.message).toMatch(/503/);
-  });
-});
-
-// ─── buildQuery ────────────────────────────────────────────────────────────────
-
-describe("buildQuery — сборка query-string", () => {
-  // Тест: null/undefined/пустая строка фильтруются.
-  it("фильтрует null/undefined/пустую строку", () => {
-    const qs = buildQuery({ a: null, b: undefined, c: "", d: "ok" });
-    expect(qs).toBe("?d=ok");
-  });
-
-  // Тест: числа и булевые конвертируются в строку.
-  it("числа и булевые → строка", () => {
-    const qs = buildQuery({ limit: 10, include_inactive: true });
-    expect(qs).toContain("limit=10");
-    expect(qs).toContain("include_inactive=true");
-  });
-
-  // Тест: пустой объект → пустая строка.
-  it("пустой объект → пустая строка", () => {
-    expect(buildQuery({})).toBe("");
-    expect(buildQuery(undefined)).toBe("");
-  });
-});
-
-// ─── parseBody — не-JSON успешный ответ (M9) ──────────────────────────────────
-
-describe("parseBody — не-JSON успешный ответ бросает ApiError", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  // Раньше text-тело 200-ответа молча кастовалось в T (каллер получал строку
-  // вместо объекта). Теперь — явная ApiError, а не тихая подмена типа.
-  it("200 OK с text/plain телом → ApiError, а не тихий каст", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response("not json", {
-          status: 200,
-          headers: { "Content-Type": "text/plain" },
-        }),
-      ),
+describe("query retry policy", () => {
+  it("does not retry ApiProblem, invalid payloads or client errors", () => {
+    expect(
+      shouldRetryApiQuery(0, {
+        code: "VALIDATION_ERROR",
+        message: "Некорректный запрос",
+        correlation_id: "corr-422",
+        field_errors: null,
+      }),
+    ).toBe(false);
+    expect(shouldRetryApiQuery(0, new ApiError("Некорректный ответ API: /offers", 502, {}))).toBe(
+      false,
     );
-
-    const { apiGet } = await import("@/lib/api/client");
-    await expect(apiGet("/test")).rejects.toBeInstanceOf(ApiError);
+    expect(shouldRetryApiQuery(0, new ApiError("not found", 404, null))).toBe(false);
   });
 
-  // 204 No Content — особый случай, должен оставаться null (не задет фиксом).
-  it("204 No Content → null, не ApiError", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
-
-    const { apiGet } = await import("@/lib/api/client");
-    const result = await apiGet("/test");
-    expect(result).toBeNull();
-  });
-});
-
-// ─── apiGetWithCount — X-Total-Count парсинг ──────────────────────────────────
-
-describe("apiGetWithCount — парсинг X-Total-Count", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  // Тест: X-Total-Count есть и корректный → total=число.
-  it("возвращает total из X-Total-Count", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify([{ id: "1" }]), {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "X-Total-Count": "42",
-          },
-        }),
-      ),
-    );
-
-    const { apiGetWithCount } = await import("@/lib/api/client");
-    const result = await apiGetWithCount<{ id: string }[]>("/test");
-    expect(result.total).toBe(42);
-    expect(result.data).toHaveLength(1);
-  });
-
-  // Тест: заголовок отсутствует → total=null.
-  it("нет X-Total-Count → total=null", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify([]), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
-
-    const { apiGetWithCount } = await import("@/lib/api/client");
-    const result = await apiGetWithCount<unknown[]>("/test");
-    expect(result.total).toBeNull();
-  });
-
-  // Тест: заголовок пустая строка → total=null.
-  it("X-Total-Count пустая строка → total=null", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify([]), {
-          status: 200,
-          headers: { "Content-Type": "application/json", "X-Total-Count": "" },
-        }),
-      ),
-    );
-
-    const { apiGetWithCount } = await import("@/lib/api/client");
-    const result = await apiGetWithCount<unknown[]>("/test");
-    expect(result.total).toBeNull();
+  it("retries transient failures at most twice", () => {
+    const error = new Error("network down");
+    expect(shouldRetryApiQuery(0, error)).toBe(true);
+    expect(shouldRetryApiQuery(1, error)).toBe(true);
+    expect(shouldRetryApiQuery(2, error)).toBe(false);
   });
 });

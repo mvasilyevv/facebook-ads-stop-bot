@@ -12,6 +12,8 @@ creo_root = upload_id → резолв читает `{upload_root}/{creo_root}/{
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from apps.campaign_creator_worker import resolve_concepts_from_config
@@ -25,7 +27,7 @@ from core.campaign_builder.config import (
 )
 
 
-def _block(key: str, kind: str, concept_refs: list[str], n_adsets: int = 2) -> CampaignBlock:
+def _block(key: str, concept_refs: list[str], n_adsets: int = 2) -> CampaignBlock:
     adsets = [
         AdsetConfig(name=f"{{byer}} | s{i} | {{date}}", dir=f"a{i}", glob="*")
         for i in range(1, n_adsets + 1)
@@ -33,7 +35,6 @@ def _block(key: str, kind: str, concept_refs: list[str], n_adsets: int = 2) -> C
     return CampaignBlock(
         key=key,
         name="{byer} | {offer} | adset.pro | {date}",
-        kind=kind,
         adsets=adsets,
         concept_refs=concept_refs,
     )
@@ -41,13 +42,19 @@ def _block(key: str, kind: str, concept_refs: list[str], n_adsets: int = 2) -> C
 
 def _config(creo_root: str, blocks: list[CampaignBlock]) -> CampaignConfig:
     return CampaignConfig(
-        account=Account(act_id="123456789", page_id="111", pixel_id="222"),
+        account=Account(
+            act_id="123456789",
+            page_id="111",
+            pixel_id="222",
+            timezone_name="America/New_York",
+            currency="USD",
+            account_context_observed_at="2026-06-17T12:00:00+00:00",
+        ),
         offer_code="GH_CR",
         destination_link="https://example.shop/x",
         start_date="2026-06-18",
         creo_root=creo_root,
-        # Дефолт COST_CAP требует bid_amount_cents — ставим явный таргет CPA.
-        budget=Budget(daily_cents=300, bid_amount_cents=500),
+        budget=Budget(currency="USD", daily_amount="3.00", bid_amount="5.00"),
         targeting=Targeting(countries=["GH"]),
         campaigns=blocks,
     )
@@ -64,7 +71,7 @@ def test_resolve_returns_one_concept_per_ref(tmp_path, monkeypatch):
     (media_dir / "b.jpg").write_bytes(b"img-b")
     monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(upload_root))
 
-    cfg = _config(upload_id, [_block("static", "image", ["a.jpg", "b.jpg"])])
+    cfg = _config(upload_id, [_block("static", ["a.jpg", "b.jpg"])])
     out = resolve_concepts_from_config(cfg)
 
     assert list(out.keys()) == ["static"]
@@ -84,7 +91,7 @@ def test_resolve_video_refs_as_path(tmp_path, monkeypatch):
     (media_dir / "clip.mp4").write_bytes(b"\x00\x00")
     monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(upload_root))
 
-    cfg = _config("vid1", [_block("video", "video", ["clip.mp4"])])
+    cfg = _config("vid1", [_block("video", ["clip.mp4"])])
     out = resolve_concepts_from_config(cfg)
 
     concept = out["video"][0]
@@ -103,7 +110,7 @@ def test_resolve_ignores_unassigned_files(tmp_path, monkeypatch):
     (media_dir / "stray.jpg").write_bytes(b"stray")  # не назначен — должен игнорироваться
     monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(upload_root))
 
-    cfg = _config("up", [_block("static", "image", ["a.jpg"])])
+    cfg = _config("up", [_block("static", ["a.jpg"])])
     out = resolve_concepts_from_config(cfg)
 
     assert len(out["static"]) == 1
@@ -116,7 +123,7 @@ def test_resolve_empty_refs_raises(tmp_path, monkeypatch):
     (upload_root / "up").mkdir(parents=True)
     monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(upload_root))
 
-    cfg = _config("up", [_block("static", "image", [])])
+    cfg = _config("up", [_block("static", [])])
     with pytest.raises(ValueError, match="пустой concept_refs"):
         resolve_concepts_from_config(cfg)
 
@@ -127,7 +134,7 @@ def test_resolve_missing_file_raises(tmp_path, monkeypatch):
     (upload_root / "up").mkdir(parents=True)
     monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(upload_root))
 
-    cfg = _config("up", [_block("static", "image", ["ghost.jpg"])])
+    cfg = _config("up", [_block("static", ["ghost.jpg"])])
     with pytest.raises(ValueError, match="не найден"):
         resolve_concepts_from_config(cfg)
 
@@ -141,20 +148,20 @@ def test_resolve_strips_path_traversal(tmp_path, monkeypatch):
     monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(upload_root))
 
     # ref с traversal → Path(ref).name = 'a.jpg', читаем из media_dir.
-    cfg = _config("up", [_block("static", "image", ["../../a.jpg"])])
+    cfg = _config("up", [_block("static", ["../../a.jpg"])])
     out = resolve_concepts_from_config(cfg)
     assert out["static"][0].filename == "a.jpg"
 
 
-# Абсолютный creo_root (legacy/тест) берётся как есть, без префикса upload-root.
-def test_resolve_absolute_creo_root(tmp_path):
+# Worker rejects paths outside the opaque upload-id contract.
+def test_resolve_absolute_creo_root_rejected(tmp_path):
     media_dir = tmp_path / "creo"
     media_dir.mkdir()
     (media_dir / "a.jpg").write_bytes(b"a")
 
-    cfg = _config(str(media_dir), [_block("static", "image", ["a.jpg"])])
-    out = resolve_concepts_from_config(cfg)
-    assert len(out["static"]) == 1
+    cfg = _config(str(media_dir), [_block("static", ["a.jpg"])])
+    with pytest.raises(ValueError, match="upload id"):
+        resolve_concepts_from_config(cfg)
 
 
 # КОНТРАКТ-ТЕСТ preview==залив: число ads из validate (build_campaign_spec с
@@ -179,19 +186,22 @@ def test_validate_ad_count_matches_resolver(tmp_path, monkeypatch):
         "pixel_id": "200",
         "offer_code": "GH_CR",
         "destination_link": "https://example.com",
-        "daily_budget_cents": 20000,
-        "bid_amount_cents": 500,  # дефолт COST_CAP требует таргет CPA
+        "daily_budget": "200.00",
+        "bid_amount": "5.00",
         "countries": ["DE"],
         "creo_root": "up1",
-        "campaigns": [
-            {"key": "static", "kind": "image", "adset_count": 2, "concept_refs": ["a.jpg", "b.jpg"]}
-        ],
+        "campaigns": [{"key": "static", "adset_count": 2, "concept_refs": ["a.jpg", "b.jpg"]}],
     }
     cfg_in = CampaignConfigIn.model_validate(flat)
-    dom = cfg_in.to_domain()
+    dom = cfg_in.to_domain(
+        timezone_name="Europe/Berlin",
+        currency="EUR",
+        account_context_observed_at=datetime.fromisoformat("2026-07-29T12:00:00+00:00"),
+        now=datetime.fromisoformat("2026-07-29T12:00:00+00:00"),
+    )
 
-    # Сторона validate: build_campaign_spec с раскладкой из concept_counts (=len refs).
-    spec = build_campaign_spec(dom, concept_counts=cfg_in.concept_counts())
+    # Сторона validate читает ту же раскладку непосредственно из concept_refs.
+    spec = build_campaign_spec(dom)
     validate_ads = sum(len(a.ads) for block in spec.campaigns for a in block.adsets)
     # K×N = 2 концепта × 2 adset = 4 ads.
     assert validate_ads == 4

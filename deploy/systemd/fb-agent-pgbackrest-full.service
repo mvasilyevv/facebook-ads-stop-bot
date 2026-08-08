@@ -1,0 +1,14 @@
+[Unit]
+Description=FB Agent pgBackRest weekly full backup
+Requires=docker.service
+After=docker.service
+OnFailure=fb-agent-host-operation-failed@pgbackrest_full.service
+
+[Service]
+Type=oneshot
+Environment=FB_AGENT_ROOT=/opt/fb-agent
+Environment=FB_AGENT_STATE_DIR=/opt/fb-agent/shared
+ExecStart=/usr/local/libexec/fb-agent-release-verifier/current/verified-release-exec.py --state app --entrypoint scripts/pgbackrest-admin.sh -- --backup-env /opt/fb-agent/shared/pgbackrest.env --config-file /opt/fb-agent/shared/pgbackrest.conf full
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

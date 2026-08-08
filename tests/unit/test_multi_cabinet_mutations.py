@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit: мульти-кабинет M4 — mutations роутятся во вкладку своего кабинета.
-
-Каждый handler обязан прокинуть payload.ad_account_id в client.execute_graph_call —
-browser-agent исполнит fetch из вкладки этого кабинета. None → legacy primary-вкладка.
-"""
+"""Unit: mutations всегда исполняются через явно заданный кабинет."""
 
 from __future__ import annotations
 
@@ -50,14 +46,11 @@ async def test_activate_ad_routes_to_cabinet() -> None:
     assert client.execute_graph_call.call_args.kwargs["ad_account_id"] == "222"
 
 
-# Без кабинета (legacy/bulk) — ad_account_id=None, исполнение с primary-вкладки.
-@pytest.mark.asyncio
-async def test_pause_ad_without_cabinet_passes_none() -> None:
-    client = _client()
-    payload = MetaMutationPayload(
-        mutation_kind="pause_ad", target_id="123456", params={}, ad_account_id=None
-    )
-
-    await dispatch_mutation(client, payload)
-
-    assert client.execute_graph_call.call_args.kwargs["ad_account_id"] is None
+def test_pause_ad_without_cabinet_is_rejected_before_dispatch() -> None:
+    with pytest.raises(ValueError, match="explicit numeric account id"):
+        MetaMutationPayload(
+            mutation_kind="pause_ad",
+            target_id="123456",
+            params={},
+            ad_account_id=None,  # type: ignore[arg-type]
+        )

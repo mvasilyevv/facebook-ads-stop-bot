@@ -1,19 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Минимальный REST-клиент AdSet.pro (Этап 6 META_INTEGRATION_PLAN).
+"""Типизированный MCP-клиент и durable postback-контур AdSet.pro.
 
 Публичный API:
 - AdsetProClient — async REST-клиент.
 - StatsQueryRequest / StatsQueryResponse / ConversionRow / PostbackEvent — DTO.
 - AdsetProError и потомки — иерархия исключений.
-
-См. META_INTEGRATION_PLAN.md §4.4 (структура канала) и §5 Волна 3 (БД на Этапе 6).
 """
 
-from core.adset_pro.aggregator import AggregationResult, aggregate_postback_events
-from core.adset_pro.builder import AdsetProBuilder, BuildPlan
 from core.adset_pro.client import AdsetProClient
 from core.adset_pro.credentials import (
     AdsetProCredentials,
+    bootstrap_adsetpro_credentials_from_env,
     create_adsetpro_client,
     load_adsetpro_credentials,
     resolve_adsetpro_api_key,
@@ -29,12 +26,6 @@ from core.adset_pro.errors import (
     TemporaryError,
 )
 from core.adset_pro.ingest import IngestResult, ingest_postback
-from core.adset_pro.outgoing import (
-    OutgoingPostback,
-    OutgoingPostbackSender,
-    OutgoingResult,
-    build_postback_url,
-)
 from core.adset_pro.schemas import (
     ConversionRow,
     PostbackEvent,
@@ -43,27 +34,20 @@ from core.adset_pro.schemas import (
 )
 
 __all__ = [
-    "AdsetProBuilder",
     "AdsetProClient",
     "AdsetProCredentials",
-    "BuildPlan",
+    "bootstrap_adsetpro_credentials_from_env",
     "AdsetProError",
-    "AggregationResult",
     "AuthError",
     "ConversionRow",
     "IngestResult",
     "NotFoundError",
-    "OutgoingPostback",
-    "OutgoingPostbackSender",
-    "OutgoingResult",
     "PermanentError",
     "PostbackEvent",
     "RateLimitedError",
     "StatsQueryRequest",
     "StatsQueryResponse",
     "TemporaryError",
-    "aggregate_postback_events",
-    "build_postback_url",
     "create_adsetpro_client",
     "ingest_postback",
     "load_adsetpro_credentials",

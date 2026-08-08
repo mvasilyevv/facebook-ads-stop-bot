@@ -10,50 +10,22 @@
  * GET /offers/rules/preview ТОЧНО совпадает с реальными срабатываниями.
  */
 import { useEffect, useState } from "react";
+import {
+  isOfferCpaValid,
+  isOfferCurrencyValid,
+  type OfferRulesValues,
+} from "@fb/features/offers";
+import { formatSpend } from "@fb/shared/format/number";
 import { Input } from "@/components/ui/Input";
 import { Slider } from "@/components/ui/Slider";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useRulesPreview } from "@/lib/api/offers";
-import type { OfferRules } from "@fb/shared";
-
-// ─── Значения блока ────────────────────────────────────────────────────────────
-
-export interface OfferRulesValues {
-  /** CPA как строка (для number-input). Пусто → правила неактивны (нет авторасчёта). */
-  cpa: string;
-  /** Стоп = N% от базового правила (1–100, дефолт 80). */
-  stop_percent_of_rule: number;
-  /** Warning = M% от стопа (1–100, дефолт 80). */
-  warning_percent_of_stop: number;
-}
-
-export const DEFAULT_OFFER_RULES_VALUES: OfferRulesValues = {
-  cpa: "",
-  stop_percent_of_rule: 80,
-  warning_percent_of_stop: 80,
-};
-
-/** OfferRulesValues → payload для PUT /offers/{id}/rules. cpa пусто → null (снять CPA). */
-export function rulesValuesToPayload(v: OfferRulesValues): Partial<OfferRules> {
-  const cpa = v.cpa.trim();
-  return {
-    cpa_threshold: cpa ? cpa : null,
-    stop_percent_of_rule: String(v.stop_percent_of_rule),
-    warning_percent_of_stop: String(v.warning_percent_of_stop),
-  };
-}
-
-/** OfferRuleOut (с бэка) → OfferRulesValues для формы. NULL/пусто → дефолт 80/80. */
-export function rulesValuesFromOut(rules: OfferRules | null | undefined): OfferRulesValues {
-  if (!rules) return DEFAULT_OFFER_RULES_VALUES;
-  return {
-    cpa: rules.cpa_threshold ?? "",
-    stop_percent_of_rule: rules.stop_percent_of_rule ? Number(rules.stop_percent_of_rule) : 80,
-    warning_percent_of_stop: rules.warning_percent_of_stop
-      ? Number(rules.warning_percent_of_stop)
-      : 80,
-  };
-}
+export {
+  DEFAULT_OFFER_RULES_VALUES,
+  rulesValuesFromOut,
+  rulesValuesToPayload,
+  type OfferRulesValues,
+} from "@fb/features/offers";
 
 interface Props {
   values: OfferRulesValues;
@@ -75,13 +47,14 @@ function useDebounced<T>(value: T, ms: number): T {
 // ─── Компонент ────────────────────────────────────────────────────────────────
 
 export function OfferRulesFields({ values, onChange, disabled }: Props) {
-  const cpaNum = parseFloat(values.cpa);
-  const cpaValid = Number.isFinite(cpaNum) && cpaNum > 0;
+  const cpaValid = isOfferCpaValid(values.cpa);
+  const currencyValid = isOfferCurrencyValid(values.currency);
 
   // Дебаунсим связку cpa/stop/warning → меньше запросов при движении ползунка.
   const debounced = useDebounced(
     {
-      cpa: cpaValid ? cpaNum : null,
+      cpa: cpaValid ? values.cpa.trim() : null,
+      currency: values.currency.trim().toUpperCase(),
       stop: values.stop_percent_of_rule,
       warning: values.warning_percent_of_stop,
     },
@@ -89,6 +62,7 @@ export function OfferRulesFields({ values, onChange, disabled }: Props) {
   );
   const preview = useRulesPreview({
     cpa: debounced.cpa,
+    currency: debounced.currency,
     stop_percent_of_rule: debounced.stop,
     warning_percent_of_stop: debounced.warning,
   });
@@ -96,16 +70,33 @@ export function OfferRulesFields({ values, onChange, disabled }: Props) {
   return (
     <div className="flex flex-col gap-5">
       <Input
+        id="offer-currency"
+        label="Валюта CPA"
+        placeholder="USD"
+        value={values.currency}
+        maxLength={3}
+        onChange={(event) =>
+          onChange({ currency: event.target.value.toUpperCase() })
+        }
+        disabled={disabled}
+        autoCapitalize="characters"
+        autoCorrect="off"
+        helpText="Трёхбуквенный ISO-код валюты рекламного кабинета, например USD, EUR или JPY."
+      />
+      <Input
         id="offer-cpa"
-        type="number"
-        step="any"
-        min="0"
+        type="text"
+        inputMode="decimal"
         label="CPA ставка"
         placeholder="10"
         value={values.cpa}
         onChange={(e) => onChange({ cpa: e.target.value })}
         disabled={disabled}
-        leftIcon={<span className="text-[12px] text-bg-9">$</span>}
+        leftIcon={
+          <span className="text-[12px] text-bg-9">
+            {currencyValid ? values.currency.toUpperCase() : "ISO"}
+          </span>
+        }
         helpText="Целевая цена действия (FTD/депозит). От неё автоматически считаются стоп-пороги."
       />
 
@@ -128,6 +119,7 @@ export function OfferRulesFields({ values, onChange, disabled }: Props) {
         loading={preview.isLoading || preview.isFetching}
         data={preview.data}
         cpaValid={cpaValid}
+        currencyValid={currencyValid}
       />
     </div>
   );
@@ -141,15 +133,22 @@ function RulesPreview({
   loading,
   data,
   cpaValid,
+  currencyValid,
 }: {
   loading: boolean;
   data: PreviewData | undefined;
   cpaValid: boolean;
+  currencyValid: boolean;
 }) {
-  if (!cpaValid) {
+  if (!cpaValid || !currencyValid) {
     return (
-      <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] text-[12px] text-bg-9" style={{ padding: "var(--s-4)" }}>
-        Укажите CPA — покажу, при какой цене сработают стоп и warning по каждой метрике.
+      <div
+        className="border border-[var(--color-hairline)] rounded-[var(--radius-2)] text-[12px] text-bg-9"
+        style={{ padding: "var(--space-4)" }}
+      >
+        {!currencyValid
+          ? "Укажите валюту CPA трёхбуквенным ISO-кодом."
+          : "Укажите CPA — покажу, при какой цене сработают стоп и warning по каждой метрике."}
       </div>
     );
   }
@@ -159,15 +158,18 @@ function RulesPreview({
   if (!data) return null;
 
   return (
-    <div className="border border-[var(--hairline)] rounded-[var(--radius-2)]" style={{ padding: "var(--s-4)" }}>
-      <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-3">
+    <div
+      className="border border-[var(--color-hairline)] rounded-[var(--radius-2)]"
+      style={{ padding: "var(--space-4)" }}
+    >
+      <div className="font-display text-[12px] tracking-[0.12em] uppercase text-bg-8 mb-3">
         ПРИ КАКОЙ ЦЕНЕ СРАБОТАЕТ
       </div>
 
       {/* Денежные правила: CPC / CPL / CPR */}
       <table className="w-full text-[12.5px]">
         <thead>
-          <tr className="text-bg-8 font-display text-[10px] tracking-wider uppercase">
+          <tr className="text-bg-8 font-display text-[12px] tracking-wider uppercase">
             <th className="text-left font-normal pb-1.5">Метрика</th>
             <th className="text-right font-normal pb-1.5">Warning</th>
             <th className="text-right font-normal pb-1.5">Стоп</th>
@@ -175,12 +177,14 @@ function RulesPreview({
         </thead>
         <tbody>
           {data.cost_rules.map((r) => (
-            <tr key={r.rule} className="border-t border-[var(--hairline)]">
+            <tr key={r.rule} className="border-t border-[var(--color-hairline)]">
               <td className="py-1.5 text-bg-10">{r.label}</td>
               <td className="py-1.5 text-right font-display tabular-nums text-warning">
-                ${r.warning}
+                {formatSpend(r.warning, data.currency)}
               </td>
-              <td className="py-1.5 text-right font-display tabular-nums text-danger">${r.stop}</td>
+              <td className="py-1.5 text-right font-display tabular-nums text-danger">
+                {formatSpend(r.stop, data.currency)}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -188,21 +192,22 @@ function RulesPreview({
 
       {/* Диапазоны расхода без/с депозитом */}
       {data.spend_ranges.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-[var(--hairline)] flex flex-col gap-1.5">
+        <div className="mt-3 pt-3 border-t border-[var(--color-hairline)] flex flex-col gap-1.5">
           {data.spend_ranges.map((s) => (
             <div key={s.rule} className="flex items-center justify-between text-[12px]">
               <span className="text-bg-10">{s.label}</span>
               <span className="font-display tabular-nums text-bg-11">
-                ${s.stop_from}–${s.stop_to}
+                {formatSpend(s.stop_from, data.currency)}–
+                {formatSpend(s.stop_to, data.currency)}
               </span>
             </div>
           ))}
         </div>
       )}
 
-      <div className="mt-3 text-[11px] text-bg-8">
-        {data.regs_no_dep_stop_count} регистраций без депозитов → стоп. Базовые проценты правил
-        (CPC 2% / CPL 10% / CPR 20% от CPA) фиксированы.
+      <div className="mt-3 text-[12px] text-bg-8">
+        {data.regs_no_dep_stop_count} регистраций без депозитов → стоп. Базовые проценты правил (CPC
+        2% / CPL 10% / CPR 20% от CPA) фиксированы.
       </div>
     </div>
   );

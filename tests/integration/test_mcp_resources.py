@@ -2,9 +2,8 @@
 """Integration: MCP server list_resources / read_resource.
 
 Покрывает:
-- list_resources возвращает 4 URI (offers, recent-alerts, workers-health, schema-overview).
+- list_resources возвращает 3 URI (offers, recent-alerts, schema-overview).
 - read_resource(offers) — JSON со списком из БД, включает seeded offer.
-- read_resource(workers-health) — JSON со status'ами из fake_redis (alive/missing).
 - read_resource(schema-overview) — Markdown со списком зарегистрированных tools.
 - read_resource неизвестного URI — ошибка (исключение).
 """
@@ -26,7 +25,6 @@ from apps.mcp_server.resources import (
     URI_OFFERS,
     URI_RECENT_ALERTS,
     URI_SCHEMA_OVERVIEW,
-    URI_WORKERS_HEALTH,
 )
 
 
@@ -71,9 +69,9 @@ async def _read_resource(app, uri: str) -> list:
     return list(server_result.root.contents)
 
 
-# list_resources: ровно 4 ресурса с ожидаемыми URI.
+# list_resources: durable read-only resources only.
 @pytest.mark.asyncio
-async def test_list_resources_returns_four_uris(
+async def test_list_resources_returns_three_uris(
     pg_engine: AsyncEngine,
     fake_redis_client,
 ) -> None:
@@ -87,7 +85,6 @@ async def test_list_resources_returns_four_uris(
     expected = {
         URI_OFFERS,
         URI_RECENT_ALERTS,
-        URI_WORKERS_HEALTH,
         URI_SCHEMA_OVERVIEW,
     }
     assert expected.issubset(uris), f"ожидаем {expected}, получили {uris}"
@@ -115,35 +112,6 @@ async def test_read_resource_offers_returns_seeded_code(
     assert seeded_offer in codes
 
 
-# read_resource workers-health — отличает alive от missing.
-@pytest.mark.asyncio
-async def test_read_resource_workers_health_alive_vs_missing(
-    pg_engine: AsyncEngine,
-    fake_redis_client,
-) -> None:
-    mgr = MCPContextManager()
-    mgr.engine = pg_engine
-    mgr.redis_client = fake_redis_client
-    app = build_server(mgr)
-
-    # Прокинем heartbeat для observer, остальные оставим без ключей.
-    await fake_redis_client.set(
-        "worker:heartbeat:observer",
-        json.dumps({"ts": "2026-05-27T12:00:00Z", "iteration": 42}),
-        ex=60,
-    )
-
-    contents = await _read_resource(app, URI_WORKERS_HEALTH)
-    assert contents[0].mimeType == "application/json"
-    payload = json.loads(contents[0].text)
-    statuses = {item["worker"]: item["status"] for item in payload["items"]}
-    assert statuses.get("observer") == "alive"
-    # cabinet_scheduler (money-критичный, из канонического списка) не писал → missing.
-    assert statuses.get("cabinet_scheduler") == "missing"
-    # Фантомные disable/enable удалены из системы — их НЕТ в отчёте вовсе.
-    assert "disable" not in statuses and "enable" not in statuses
-
-
 # read_resource schema-overview — Markdown содержит хоть один реально зарегистрированный tool.
 @pytest.mark.asyncio
 async def test_read_resource_schema_overview_lists_tools(
@@ -161,8 +129,10 @@ async def test_read_resource_schema_overview_lists_tools(
     assert "FB Stop Bot" in body
     # get_active_offers — стабильный READ_ONLY tool, должен быть упомянут.
     assert "get_active_offers" in body
-    # DRAFT секция должна включать хотя бы один request_*.
-    assert "request_" in body
+    # MCP was deliberately reduced to diagnostics and creative assistance.
+    # Money mutations and their former draft/request helpers must not return.
+    assert "request_" not in body
+    assert "DRAFT" not in body
 
 
 # read_resource recent-alerts — JSON-структура, count может быть 0.

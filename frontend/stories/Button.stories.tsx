@@ -61,10 +61,18 @@ export const IconOnly: Story = {
 export const Sizes: Story = {
   render: () => (
     <div className="flex items-center gap-3">
-      <Button variant="secondary" size="xs">XS</Button>
-      <Button variant="secondary" size="sm">SM</Button>
-      <Button variant="secondary" size="md">MD</Button>
-      <Button variant="secondary" size="lg">LG</Button>
+      <Button variant="secondary" size="xs">
+        XS
+      </Button>
+      <Button variant="secondary" size="sm">
+        SM
+      </Button>
+      <Button variant="secondary" size="md">
+        MD
+      </Button>
+      <Button variant="secondary" size="lg">
+        LG
+      </Button>
     </div>
   ),
 };
@@ -73,7 +81,9 @@ export const AllVariants: Story = {
   render: () => (
     <div className="flex flex-wrap gap-3">
       {(["primary", "secondary", "danger", "ghost", "ghost-danger"] as const).map((v) => (
-        <Button key={v} variant={v}>{v}</Button>
+        <Button key={v} variant={v}>
+          {v}
+        </Button>
       ))}
     </div>
   ),

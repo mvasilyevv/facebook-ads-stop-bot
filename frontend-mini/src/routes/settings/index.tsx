@@ -3,52 +3,28 @@
  * Канон: MiniHeader (eyebrowNum) → РАЗДЕЛЫ → OBSERVER → TELEGRAM → VISION.
  */
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
 import {
   ChevronRight,
   Heart,
-  FileCode,
   FileText,
-  RefreshCw,
   BarChart3,
   MonitorUp,
+  ListChecks,
 } from "lucide-react";
 import {
-  useObserverSettings,
-  useToggleScanning,
-  useTriggerScan,
   useTelegramSettings,
+  useTelegramNotificationDiagnostics,
   useVisionSettings,
-  useCabinetAutostart,
-  fetchJson,
-  QK,
 } from "@/lib/api";
-import { useQueryClient } from "@tanstack/react-query";
 import { haptic } from "@/lib/tg";
 import { MiniHeader } from "@/components/layout/MiniHeader";
 import { Eyebrow } from "@/components/data";
-import { Badge, Button, Skeleton, ErrorState, Switch, Input } from "@/components/ui";
+import { Badge, Skeleton, ErrorState } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
 export const Route = createFileRoute("/settings/")({
   component: SettingsPage,
 });
-
-// ─── Toast ────────────────────────────────────────────────────────────────
-
-interface ToastState {
-  text: string;
-  ok: boolean;
-}
-
-function useToast() {
-  const [toast, setToast] = useState<ToastState | null>(null);
-  const show = (text: string, ok = true) => {
-    setToast({ text, ok });
-    setTimeout(() => setToast(null), 3000);
-  };
-  return { toast, show };
-}
 
 // ─── Field-строка: label + control, border-b ─────────────────────────────
 
@@ -64,12 +40,14 @@ function FieldRow({ label, hint, children, noBorder = false }: FieldRowProps) {
     <div
       className={cn(
         "flex items-center justify-between gap-3 min-h-[44px] py-2.5",
-        !noBorder && "border-b border-[var(--hairline)]",
+        !noBorder && "border-b border-[var(--color-hairline)]",
       )}
     >
       <div className="min-w-0">
         <p className="text-[13px] text-bg-11 leading-tight">{label}</p>
-        {hint && <p className="text-[11px] text-bg-8 mt-0.5 leading-tight">{hint}</p>}
+        {hint && (
+          <p className="text-[12px] text-bg-8 mt-0.5 leading-tight">{hint}</p>
+        )}
       </div>
       <div className="shrink-0">{children}</div>
     </div>
@@ -90,7 +68,9 @@ function Section({ eyebrow, num, children }: SectionProps) {
       <Eyebrow num={num} className="mb-2.5 flex">
         {eyebrow}
       </Eyebrow>
-      <div className="border border-[var(--hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)]">{children}</div>
+      <div className="border border-[var(--color-hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)]">
+        {children}
+      </div>
     </section>
   );
 }
@@ -112,151 +92,25 @@ function NavRow({ icon, label, onClick, noBorder = false }: NavRowProps) {
       className={cn(
         "w-full flex items-center gap-3 min-h-[44px] py-2.5 text-left",
         "active:bg-bg-2 transition-colors",
-        !noBorder && "border-b border-[var(--hairline)]",
+        !noBorder && "border-b border-[var(--color-hairline)]",
       )}
     >
       <span className="text-bg-9 shrink-0">{icon}</span>
       <span className="flex-1 text-[14px] text-bg-11">{label}</span>
-      <ChevronRight size={16} strokeWidth={1.5} className="text-bg-7 shrink-0" />
+      <ChevronRight
+        size={16}
+        strokeWidth={1.5}
+        className="shrink-0 text-bg-8"
+      />
     </button>
-  );
-}
-
-// ─── Секция OBSERVER ──────────────────────────────────────────────────────
-
-function ObserverSection({ showToast }: { showToast: (t: string, ok?: boolean) => void }) {
-  const { data, isLoading, isError, refetch } = useObserverSettings();
-  const toggleScanning = useToggleScanning();
-  const triggerScan = useTriggerScan();
-  const qc = useQueryClient();
-
-  const [ownerTag, setOwnerTag] = useState<string>("");
-
-  useEffect(() => {
-    if (data) {
-      setOwnerTag(data.owner_campaign_tag ?? "");
-    }
-  }, [data]);
-
-  if (isLoading) {
-    return (
-      <Section eyebrow="OBSERVER" num="06">
-        <div className="py-2 space-y-3">
-          <Skeleton className="h-11 w-full" />
-          <Skeleton className="h-11 w-full" />
-        </div>
-      </Section>
-    );
-  }
-
-  if (isError || !data) {
-    return (
-      <Section eyebrow="OBSERVER" num="06">
-        <ErrorState message="Не удалось загрузить настройки" onRetry={() => void refetch()} />
-      </Section>
-    );
-  }
-
-  const cfg = data;
-
-  const handleToggle = async () => {
-    haptic.impact("medium");
-    try {
-      await toggleScanning.mutateAsync({ enabled: !cfg.is_scanning_enabled });
-      haptic.notify("success");
-      showToast(cfg.is_scanning_enabled ? "Сканирование отключено" : "Сканирование включено");
-    } catch (e: unknown) {
-      haptic.notify("error");
-      showToast((e as Error).message ?? "Ошибка", false);
-    }
-  };
-
-  const handleScanNow = async () => {
-    haptic.impact("medium");
-    try {
-      await triggerScan.mutateAsync();
-      haptic.notify("success");
-      showToast("Сканирование запущено");
-    } catch (e: unknown) {
-      haptic.notify("error");
-      showToast((e as Error).message ?? "Ошибка", false);
-    }
-  };
-
-  const handleSaveTag = async () => {
-    haptic.impact("light");
-    try {
-      // Точечный PATCH: full-PUT из кэша молча откатывал is_scanning_enabled (аудит C-1).
-      await fetchJson("/settings/observer/owner-tag", {
-        method: "PATCH",
-        body: JSON.stringify({
-          owner_campaign_tag: ownerTag.trim() || null,
-        }),
-      });
-      void qc.invalidateQueries({ queryKey: QK.observerSettings });
-      haptic.notify("success");
-      showToast("Тег сохранён");
-    } catch (e: unknown) {
-      haptic.notify("error");
-      showToast((e as Error).message ?? "Ошибка сохранения", false);
-    }
-  };
-
-  return (
-    <Section eyebrow="OBSERVER" num="06">
-      <FieldRow label="Сканирование" hint="Observer периодически сканирует объявления">
-        <Switch
-          checked={cfg.is_scanning_enabled}
-          onChange={() => void handleToggle()}
-          disabled={toggleScanning.isPending}
-        />
-      </FieldRow>
-
-      <FieldRow label="Owner Campaign Tag" hint="Пусто — все кампании; несколько через запятую" noBorder>
-        <div className="flex items-center gap-2">
-          <Input
-            aria-label="Owner Campaign Tag"
-            placeholder="MV,ABC"
-            value={ownerTag}
-            onChange={(e) => setOwnerTag(e.target.value)}
-            className="w-[120px] min-h-[36px] text-[13px]"
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => void handleSaveTag()}
-            className="shrink-0"
-          >
-            Сохр.
-          </Button>
-        </div>
-      </FieldRow>
-
-      <div className="py-3">
-        <Button
-          variant="secondary"
-          fullWidth
-          onClick={() => void handleScanNow()}
-          disabled={triggerScan.isPending}
-          loading={triggerScan.isPending}
-          aria-label="Сканировать сейчас"
-        >
-          <RefreshCw
-            size={15}
-            strokeWidth={1.6}
-            className={cn("shrink-0", triggerScan.isPending && "animate-spin")}
-          />
-          Сканировать сейчас
-        </Button>
-      </div>
-    </Section>
   );
 }
 
 // ─── Секция TELEGRAM ──────────────────────────────────────────────────────
 
 function TelegramSection() {
-  const { data, isLoading, isError, refetch } = useTelegramSettings();
+  const { data, isLoading, isError, error, refetch } = useTelegramSettings();
+  const diagnosticsQuery = useTelegramNotificationDiagnostics();
 
   if (isLoading) {
     return (
@@ -272,29 +126,110 @@ function TelegramSection() {
   if (isError) {
     return (
       <Section eyebrow="TELEGRAM" num="07">
-        <ErrorState message="Не удалось загрузить" onRetry={() => void refetch()} />
+        <ErrorState message={String(error)} onRetry={() => void refetch()} />
       </Section>
     );
   }
 
-  const authVariant = data?.is_authorized ? "done" : "neutral";
-  const pollerVariant = data?.poller_status === "ONLINE" ? "running" : "neutral";
+  const diagnostics = diagnosticsQuery.data;
+  const activeOutbox = diagnostics
+    ? [
+        diagnostics.inbox_counts,
+        diagnostics.delivery_counts,
+        diagnostics.command_reply_counts,
+      ].reduce(
+        (total, counts) =>
+          total +
+          (counts.pending ?? 0) +
+          (counts.retry ?? 0) +
+          (counts.leased ?? 0),
+        0,
+      )
+    : null;
+  const failedOutbox = diagnostics
+    ? [
+        diagnostics.inbox_counts,
+        diagnostics.delivery_counts,
+        diagnostics.command_reply_counts,
+      ].reduce(
+        (total, counts) => total + (counts.dead ?? 0) + (counts.unknown ?? 0),
+        0,
+      )
+    : null;
 
   return (
     <Section eyebrow="TELEGRAM" num="07">
-      <FieldRow label="Авторизация">
-        <Badge variant={authVariant}>{data?.is_authorized ? "Активен" : "Не настроен"}</Badge>
+      <FieldRow label="Токен">
+        <Badge variant="neutral">
+          {data?.is_authorized ? "Настроен" : "Не настроен"}
+        </Badge>
       </FieldRow>
 
       {data?.bot_username ? (
         <FieldRow label="Бот">
-          <span className="font-mono text-[12px] text-bg-10">@{data.bot_username}</span>
+          <span className="font-mono text-[12px] text-bg-10">
+            @{data.bot_username}
+          </span>
         </FieldRow>
       ) : null}
 
-      <FieldRow label="Poller" noBorder>
-        <Badge variant={data?.poller_status ? pollerVariant : "neutral"}>
-          {data?.poller_status ?? "—"}
+      <FieldRow label="Webhook">
+        <Badge
+          variant={
+            diagnostics?.webhook_state === "unconfigured"
+              ? "warning"
+              : "neutral"
+          }
+        >
+          {diagnosticsQuery.isError
+            ? "Недоступен"
+            : diagnostics?.webhook_state === "configured"
+              ? "Настроен"
+              : diagnostics?.webhook_state === "unconfigured"
+                ? "Не настроен"
+                : "Проверка…"}
+        </Badge>
+      </FieldRow>
+
+      <FieldRow label="Gateway">
+        <Badge
+          variant={
+            diagnostics?.gateway_state === "auth_error" ? "failed" : "neutral"
+          }
+        >
+          {diagnosticsQuery.isError
+            ? "Недоступен"
+            : diagnostics?.gateway_state === "configured"
+              ? "Настроен"
+              : diagnostics?.gateway_state === "auth_error"
+                ? "Ошибка авторизации"
+                : diagnostics?.gateway_state === "unconfigured"
+                  ? "Не настроен"
+                  : "Проверка…"}
+        </Badge>
+      </FieldRow>
+
+      <FieldRow label="Outbox" noBorder>
+        <Badge
+          variant={
+            diagnostics?.outbox_state === "degraded"
+              ? "failed"
+              : diagnostics?.outbox_state === "active"
+                ? "warning"
+                : diagnostics?.outbox_state === "idle"
+                  ? "done"
+                  : "neutral"
+          }
+        >
+          {diagnosticsQuery.isError
+            ? "Недоступен"
+            : diagnostics?.outbox_state === "degraded"
+              ? `${failedOutbox ?? 0} ошибок`
+              : diagnostics?.outbox_state === "active"
+                ? `${activeOutbox ?? 0} в работе`
+                : diagnostics?.outbox_state === "idle"
+                  ? "Очередь пуста"
+                  : "Проверка…"}
         </Badge>
       </FieldRow>
     </Section>
@@ -304,7 +239,7 @@ function TelegramSection() {
 // ─── Секция VISION ────────────────────────────────────────────────────────
 
 function VisionSection() {
-  const { data, isLoading, isError, refetch } = useVisionSettings();
+  const { data, isLoading, isError, error, refetch } = useVisionSettings();
 
   if (isLoading) {
     return (
@@ -319,21 +254,32 @@ function VisionSection() {
   if (isError) {
     return (
       <Section eyebrow="VISION" num="08">
-        <ErrorState message="Не удалось загрузить" onRetry={() => void refetch()} />
+        <ErrorState message={String(error)} onRetry={() => void refetch()} />
       </Section>
     );
   }
 
-  const statusVariant = data?.cdp_ready ? "running" : data?.has_token ? "warning" : "neutral";
-  const statusLabel = data?.cdp_ready
-    ? "CDP готов"
-    : data?.has_token
-      ? "Токен есть"
-      : "Не настроен";
+  const statusVariant =
+    data?.channel_status === "READY"
+      ? "running"
+      : data?.channel_status === "DEGRADED" ||
+          data?.channel_status === "UNAVAILABLE"
+        ? "warning"
+        : "neutral";
+  const statusLabel =
+    data?.channel_status === "READY"
+      ? "Канал готов"
+      : data?.channel_status === "DEGRADED"
+        ? "Канал деградирован"
+        : data?.channel_status === "UNAVAILABLE"
+          ? "Канал недоступен"
+          : data?.has_token
+            ? "Статус не подтверждён"
+            : "Не настроен";
 
   return (
     <Section eyebrow="VISION" num="08">
-      <FieldRow label="Статус CDP">
+      <FieldRow label="Browser channel">
         <Badge variant={statusVariant}>{statusLabel}</Badge>
       </FieldRow>
 
@@ -345,111 +291,9 @@ function VisionSection() {
         </FieldRow>
       ) : (
         <FieldRow label="Profile ID" noBorder>
-          <span className="text-[12px] text-bg-7">—</span>
+          <span className="text-[12px] text-bg-8">—</span>
         </FieldRow>
       )}
-    </Section>
-  );
-}
-
-// ─── Секция АВТОСТАРТ КАБИНЕТА ─────────────────────────────────────────────
-
-const pad2 = (n: number) => String(n).padStart(2, "0");
-
-function CabinetAutostartSection({
-  showToast,
-}: {
-  showToast: (t: string, ok?: boolean) => void;
-}) {
-  const { data, isLoading, isError, refetch } = useCabinetAutostart();
-  const qc = useQueryClient();
-  const [enabled, setEnabled] = useState(false);
-  const [time, setTime] = useState("06:00");
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (data) {
-      setEnabled(data.enabled);
-      setTime(`${pad2(data.hour_utc)}:${pad2(data.minute_utc)}`);
-    }
-  }, [data]);
-
-  if (isLoading) {
-    return (
-      <Section eyebrow="АВТОСТАРТ КАБИНЕТА" num="09">
-        <div className="py-2 space-y-3">
-          <Skeleton className="h-11 w-full" />
-          <Skeleton className="h-11 w-full" />
-        </div>
-      </Section>
-    );
-  }
-  if (isError || !data) {
-    return (
-      <Section eyebrow="АВТОСТАРТ КАБИНЕТА" num="09">
-        <ErrorState message="Не удалось загрузить" onRetry={() => void refetch()} />
-      </Section>
-    );
-  }
-
-  const handleSave = async () => {
-    const [hh, mm] = time.split(":");
-    const hour = Number(hh);
-    const minute = Number(mm);
-    if (
-      !Number.isInteger(hour) ||
-      hour < 0 ||
-      hour > 23 ||
-      !Number.isInteger(minute) ||
-      minute < 0 ||
-      minute > 59
-    ) {
-      showToast("Время: формат ЧЧ:ММ (UTC)", false);
-      return;
-    }
-    haptic.impact("light");
-    setSaving(true);
-    try {
-      await fetchJson("/tma/cabinet-autostart", {
-        method: "PUT",
-        body: JSON.stringify({ enabled, hour_utc: hour, minute_utc: minute }),
-      });
-      void qc.invalidateQueries({ queryKey: QK.cabinetAutostart });
-      haptic.notify("success");
-      showToast("Автостарт сохранён");
-    } catch (e: unknown) {
-      haptic.notify("error");
-      showToast((e as Error).message ?? "Ошибка сохранения", false);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Section eyebrow="АВТОСТАРТ КАБИНЕТА" num="09">
-      <FieldRow label="Включить" hint="В заданное время (UTC) включит отслеживаемые кампании">
-        <Switch checked={enabled} onChange={() => setEnabled((v) => !v)} />
-      </FieldRow>
-
-      <FieldRow label="Время (UTC)" hint="Час запуска расписания" noBorder>
-        <Input
-          type="time"
-          aria-label="Время автостарта (UTC)"
-          value={time}
-          onChange={(e) => setTime(e.target.value)}
-          className="w-[110px] min-h-[36px] text-[13px]"
-        />
-      </FieldRow>
-
-      <p className="text-[11px] text-bg-8 pt-1 pb-1">
-        Включаются кампании из «Отслеживаемые кампании» (настраиваются на десктопе).
-      </p>
-
-      <div className="py-3">
-        <Button variant="primary" fullWidth onClick={() => void handleSave()} loading={saving}>
-          Сохранить
-        </Button>
-      </div>
     </Section>
   );
 }
@@ -458,7 +302,6 @@ function CabinetAutostartSection({
 
 function SettingsPage() {
   const navigate = useNavigate();
-  const { toast, show: showToast } = useToast();
 
   const navTo = (to: string) => {
     haptic.selection();
@@ -469,8 +312,8 @@ function SettingsPage() {
     <div className="flex flex-col min-h-full pb-20">
       <MiniHeader
         eyebrowNum="05"
-        eyebrow="SYSTEM · КОНФИГУРАЦИЯ"
-        title="Настройки"
+        eyebrow="СИСТЕМА · МОБИЛЬНЫЙ ДОСТУП"
+        title="Ещё"
       />
 
       <div className="flex flex-col gap-5 p-4">
@@ -479,7 +322,7 @@ function SettingsPage() {
           <Eyebrow num="05" className="mb-2.5 flex">
             РАЗДЕЛЫ
           </Eyebrow>
-          <div className="border border-[var(--hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)]">
+          <div className="border border-[var(--color-hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)]">
             <NavRow
               icon={<MonitorUp size={16} strokeWidth={1.5} />}
               label="Рабочий стол"
@@ -487,18 +330,18 @@ function SettingsPage() {
             />
             <NavRow
               icon={<BarChart3 size={16} strokeWidth={1.5} />}
-              label="Статистика дня"
-              onClick={() => navTo("/stats")}
+              label="Аналитика"
+              onClick={() => navTo("/analytics")}
             />
             <NavRow
               icon={<Heart size={16} strokeWidth={1.5} />}
-              label="Здоровье воркеров"
-              onClick={() => navTo("/health")}
+              label="Источники и воркеры"
+              onClick={() => navTo("/system/sources")}
             />
             <NavRow
-              icon={<FileCode size={16} strokeWidth={1.5} />}
-              label="Скрипты кампаний"
-              onClick={() => navTo("/scripts")}
+              icon={<ListChecks size={16} strokeWidth={1.5} />}
+              label="Запуски кампаний"
+              onClick={() => navTo("/campaigns")}
             />
             <NavRow
               icon={<FileText size={16} strokeWidth={1.5} />}
@@ -509,28 +352,15 @@ function SettingsPage() {
           </div>
         </section>
 
-        {/* ── Конфигурационные секции ── */}
-        <ObserverSection showToast={showToast} />
+        <p className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-4 text-[14px] leading-5 text-bg-9">
+          Здесь доступны диагностика и оперативные экраны. Редкие настройки
+          сканирования, кабинетов и расписаний изменяются в web-панели.
+        </p>
+
+        {/* Read-only diagnostics. Configuration remains desktop-first. */}
         <TelegramSection />
         <VisionSection />
-        <CabinetAutostartSection showToast={showToast} />
       </div>
-
-      {/* Toast */}
-      {toast && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={cn(
-            "fixed bottom-[80px] left-4 right-4 max-w-[440px] mx-auto z-50 px-4 py-3 text-[13px] border rounded-[var(--radius-2)]",
-            toast.ok
-              ? "bg-success-bg text-success border-success"
-              : "bg-danger-bg text-danger border-danger",
-          )}
-        >
-          {toast.text}
-        </div>
-      )}
     </div>
   );
 }

@@ -22,6 +22,8 @@ def _candidate() -> worker.CandidateRow:
         snoozed_until=None,
         offer_code="CR2",
         cpa_threshold=None,
+        ad_account_id="123",
+        offer_currency="USD",
         open_state_token=uuid.uuid4(),
         delivery_status="OFF",
     )
@@ -57,10 +59,13 @@ async def test_auto_enable_executes_only_ok_with_master_switch(
             worker, "load_auto_enable_recommendations", AsyncMock(return_value=auto_enabled)
         ),
         patch.object(worker, "fetch_candidates", AsyncMock(return_value=[_candidate()])),
+        patch.object(
+            worker,
+            "resolve_account_currencies",
+            AsyncMock(return_value=MagicMock(currencies={"123": "USD"})),
+        ),
         patch.object(worker, "fetch_metrics_since", AsyncMock(return_value=[])),
-        patch.object(worker, "is_recently_recommended", AsyncMock(return_value=False)),
         patch.object(worker, "insert_recommendation", AsyncMock(return_value=uuid.uuid4())),
-        patch.object(worker, "mark_recommended", AsyncMock(return_value=True)),
         patch.object(
             worker,
             "should_recommend",
@@ -71,12 +76,10 @@ async def test_auto_enable_executes_only_ok_with_master_switch(
             ),
         ),
         patch.object(worker, "promote_enable_recommendation", promote),
-        patch.object(worker, "send_alert", send),
+        patch.object(worker, "enqueue_recommendation_notification", send),
     ):
         counts = await worker.run_once(
             MagicMock(),
-            redis_client=AsyncMock(),
-            tg_client=AsyncMock(),
             now=datetime(2026, 7, 17, 12, tzinfo=UTC),
         )
 

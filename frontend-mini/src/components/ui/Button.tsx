@@ -13,7 +13,7 @@ const VARIANT_STYLES: Record<ButtonVariant, string> = {
   primary:
     "bg-[var(--color-accent)] text-[#0a0a0b] font-semibold hover:bg-[var(--color-accent-muted)] active:opacity-80",
   secondary:
-    "border border-[var(--hairline-strong)] text-[var(--color-bg-11)] hover:border-[var(--color-bg-7)] active:opacity-80",
+    "border border-[var(--color-hairline-strong)] text-[var(--color-bg-11)] hover:border-[var(--color-bg-7)] active:opacity-80",
   ghost:
     "text-[var(--color-bg-10)] hover:text-[var(--color-bg-11)] hover:bg-[var(--color-bg-3)] active:opacity-80",
   danger:
@@ -21,7 +21,7 @@ const VARIANT_STYLES: Record<ButtonVariant, string> = {
 };
 
 const SIZE_STYLES: Record<ButtonSize, string> = {
-  sm: "min-h-[36px] px-3 text-[12px]",
+  sm: "min-h-[44px] px-3 text-[13px]",
   md: "min-h-[44px] px-4 text-[14px]",
   lg: "min-h-[52px] px-6 text-[15px]",
 };
@@ -48,6 +48,8 @@ export function Button({
     <button
       {...rest}
       disabled={isDisabled}
+      aria-busy={loading || undefined}
+      data-loading={loading || undefined}
       className={cn(
         // базовые стили
         "inline-flex items-center justify-center gap-2",

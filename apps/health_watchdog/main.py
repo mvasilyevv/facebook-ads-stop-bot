@@ -1,16 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Health Watchdog main loop.
+"""Money-safety watchdog for Meta probes, auto-stop and reporting shadow.
 
-Раз в CHECK_INTERVAL_SECONDS:
-- читает Redis-ключи ``worker:heartbeat:<name>`` для каждого имени из EXPECTED_WORKERS;
-  отсутствие ключа (TTL истёк) → шлёт алерт в Telegram (с дедупом 1 ч/воркер).
-- читает JSON ``observer:runtime``; если ключа нет или ``updated_at`` старше
-  OBSERVER_STALE_AFTER_SECONDS → отдельный алерт ``observer worker stale``.
-- (money-критично) проверяет канал авто-стопа: застрявшие задачи pause_ad/bot_auto_stop
-  и рассинхрон FSM=stop_sent ↔ delivery_status=ACTIVE → CRITICAL-алерт в ops-топик
-  (см. check_autostop_channel; нужен доступ к Postgres через engine).
-
-Сам watchdog пишет ``worker:heartbeat:health_watchdog`` TTL 60s.
+All decision evidence, incident state and recovery predicates live in
+PostgreSQL.  Process liveness is exported only through Prometheus.
 
 Graceful shutdown по SIGTERM/SIGINT.
 """
@@ -18,26 +10,38 @@ Graceful shutdown по SIGTERM/SIGINT.
 from __future__ import annotations
 
 import asyncio
-import html
 import json
 import logging
+import math
 import os
 import signal
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
-import redis.asyncio as redis_asyncio
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
+from core.campaign_builder.money import (
+    UnsupportedCampaignCurrencyError,
+    campaign_currency_exponent,
+    minor_units_to_major_amount,
+    nonnegative_major_amount_to_minor_units,
+)
 from core.db import WORKER_ENGINE_KWARGS
+from core.meta_api.autostop_alert import AUTOSTOP_CHANNEL_INCIDENT_KEY
+from core.meta_api.browser_readiness import (
+    BROWSER_READINESS_DEFAULT_TTL_SECONDS,
+    probe_and_publish_browser_readiness,
+)
+from core.meta_api.client import BROWSER_CONTRACT_VERSION
 from core.meta_api.shadow_spend import (
-    DEFAULT_BILLING_MIN_DELTA_CENTS as _SHADOW_DEFAULT_BILLING_MIN,
+    DEFAULT_BILLING_MIN_DELTA_MINOR as _SHADOW_DEFAULT_BILLING_MIN,
 )
 from core.meta_api.shadow_spend import (
-    DEFAULT_REPORTED_MAX_DELTA_CENTS as _SHADOW_DEFAULT_REPORTED_MAX,
+    DEFAULT_REPORTED_MAX_DELTA_MINOR as _SHADOW_DEFAULT_REPORTED_MAX,
 )
 from core.meta_api.shadow_spend import (
     DEFAULT_WINDOW_SECONDS as _SHADOW_DEFAULT_WINDOW,
@@ -47,42 +51,62 @@ from core.meta_api.shadow_spend import (
     ShadowVerdict,
     detect_shadow,
 )
-from core.pubsub import CHANNEL_HEALTH_UPDATED
-from core.telegram.worker_notify import notify_recipients
+from core.models.settings.vision_config import VisionConfig
+from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
+from core.tasks.browser_fence import (
+    BrowserFenceLeaseLost,
+    BrowserOperationBlocked,
+    BrowserOperationFence,
+)
+from core.telegram.worker_notify import (
+    notify_recurring_incident,
+    notify_recurring_incident_in_transaction,
+    resolve_recurring_incident,
+    resolve_recurring_incident_in_transaction,
+)
+from core.worker_metrics import mark_worker_heartbeat
 
 logger = logging.getLogger("health_watchdog")
 
 WORKER_NAME = "health_watchdog"
-HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
-HEARTBEAT_TTL_SECONDS = 60
 
 CHECK_INTERVAL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_INTERVAL_SEC", "60"))
 # Пауза перед перезапуском упавшего цикла (_supervised, инцидент 01.07:
 # gather без защиты — одно исключение молча гасило весь воркер-сторож).
 LOOP_RESTART_DELAY_SECONDS = float(os.environ.get("HEALTH_WATCHDOG_LOOP_RESTART_SEC", "5"))
-ALERT_DEDUP_TTL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_ALERT_TTL_SEC", "3600"))
-OBSERVER_STALE_AFTER_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_OBSERVER_STALE_SEC", "300"))
-# Grace-период перед ПЕРВОЙ проверкой: при совместном старте (supervisord/run.sh)
-# воркеры ещё инициализируются (Redis/БД/browser-agent) и не успели записать первый
-# heartbeat. Без задержки watchdog слал ложный «воркер не дышит» сразу при старте.
+# Grace-период перед browser/Meta probes после совместного старта.
 STARTUP_GRACE_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_STARTUP_GRACE_SEC", "90"))
-# Синхронизировано с воркерами run.sh (= health_details._DEFAULT_EXPECTED_WORKERS).
-# Money-критичные обязаны мониториться: meta_api (канал отключения/включения pause_ad/
-# activate_ad), cabinet_scheduler (автостарт кабинета по расписанию), tracker_aggregator
-# (агрегатор депозитов) — их зависание (heartbeat-stall при живом процессе) не должно
-# пройти без TG-алерта (H4). enable_reco — реальное heartbeat-имя enable_recommendation_worker.
-# health_watchdog себя НЕ мониторит: если он сам мёртв — алертить некому.
-# browser-agent — нативный systemd-сервис на хосте (мост к Vision/каналу авто-стопа),
-# пишет worker:heartbeat:browser-agent (reconnect к Redis починен, resilience-аудит rank 1).
-# Самый хрупкий money-компонент — обязан мониториться.
-DEFAULT_EXPECTED_WORKERS = (
-    "observer,telegram_poller,cleanup,reconciler,meta_api,tracker_aggregator,"
-    "enable_reco,cabinet_scheduler,digest_scheduler,creator,creator_recorder,"
-    "campaign_creator,browser-agent"
+REPORTED_SNAPSHOT_MAX_AGE_SECONDS = int(
+    os.environ.get("HEALTH_WATCHDOG_SNAPSHOT_MAX_AGE_SEC", "300")
 )
 
-OBSERVER_RUNTIME_KEY = "observer:runtime"
-ALERT_DEDUP_PREFIX = "health:alerted:"
+
+def _validated_browser_readiness_schedule(
+    interval_seconds: float,
+    ttl_seconds: int,
+) -> tuple[float, int]:
+    interval = float(interval_seconds)
+    ttl = int(ttl_seconds)
+    if not math.isfinite(interval) or not 1 <= interval < ttl <= 30:
+        raise RuntimeError(
+            "browser readiness cadence must satisfy 1 <= interval_seconds < ttl_seconds <= 30"
+        )
+    return interval, ttl
+
+
+(
+    BROWSER_READINESS_INTERVAL_SECONDS,
+    BROWSER_READINESS_TTL_SECONDS,
+) = _validated_browser_readiness_schedule(
+    float(os.environ.get("HEALTH_WATCHDOG_BROWSER_READINESS_SEC", "2")),
+    int(
+        os.environ.get(
+            "HEALTH_WATCHDOG_BROWSER_READINESS_TTL_SEC",
+            str(BROWSER_READINESS_DEFAULT_TTL_SECONDS),
+        )
+    ),
+)
+_BROWSER_READINESS_WRITER_INSTANCE = uuid.uuid4()
 
 # ====================== канал авто-стопа (money-критичный мониторинг) ======================
 # Инцидент 2026-06-19: канал исполнения авто-стопа (Marketing API через Vision
@@ -94,28 +118,20 @@ ALERT_DEDUP_PREFIX = "health:alerted:"
 #   (2) рассинхрон stop_sent при delivery_status=ACTIVE дольше DESYNC_MIN — money-симптом.
 AUTOSTOP_STUCK_AFTER_MINUTES = int(os.environ.get("HEALTH_WATCHDOG_AUTOSTOP_STUCK_MIN", "15"))
 AUTOSTOP_DESYNC_AFTER_MINUTES = int(os.environ.get("HEALTH_WATCHDOG_AUTOSTOP_DESYNC_MIN", "15"))
-# Максимум объявлений в каждом списке алерта — остальное сворачивается в «… и ещё N»
-# (защита от раздувания TG-сообщения сверх лимита 4096 при массовом отказе).
-AUTOSTOP_ALERT_MAX_ITEMS = 10
-AUTOSTOP_DEDUP_KEY = f"{ALERT_DEDUP_PREFIX}autostop_channel"
 
 # ====================== сетевой probe канала Marketing API (money-критичный) ======================
 # Инцидент 2026-06-19: token-only health давал false-positive «healthy» при мёртвом
 # сетевом канале (Failed to fetch). Watchdog — единственный прободер: раз в
 # META_PROBE_INTERVAL_SECONDS делает реальный GET /me (full_probe) через browser-agent,
-# пишет результат в Redis meta_api:channel:health (его читает health_details), а при
-# отказе канала шлёт CRITICAL-алерт. Проактивно дополняет БД-детектор (check_autostop_channel).
+# при отказе канала фиксирует CRITICAL в durable incident/notification plane.
 META_PROBE_INTERVAL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_META_PROBE_SEC", "300"))
-META_CHANNEL_HEALTH_KEY = "meta_api:channel:health"
-META_CHANNEL_DEDUP_KEY = f"{ALERT_DEDUP_PREFIX}meta_channel"
-# TTL ключа = 2× интервал: если сам прободер (watchdog) мёртв, ключ протухает и
-# health_details показывает UNKNOWN, а не залипший «healthy».
-META_CHANNEL_HEALTH_TTL_SECONDS = META_PROBE_INTERVAL_SECONDS * 2
+META_CHANNEL_INCIDENT_KEY = AUTOSTOP_CHANNEL_INCIDENT_KEY
+AUTOSTOP_BACKLOG_INCIDENT_KEY = "health:autostop_backlog"
 
 # ====================== сторожок «тени отчётности Meta» (money-смежный, alert-only) ======================
 # Замер на проде 03.07 08:31–09:40 UTC: биллинговый счётчик кабинета (amount_spent,
-# lifetime в центах) двигается РАНЬШЕ пер-адной отчётности am_tabular (первый тик 08:38
-# против 08:41, +$1.54 против +$1.25 за час) — биллинг видит «тень» открута, которую
+# lifetime в minor units) двигается РАНЬШЕ пер-адной отчётности am_tabular —
+# биллинг видит «тень» открута, которую
 # пер-адные снимки ещё не показывают. Класс утренних перекрутов (18 минут нулей при
 # реальном откруте). Сторожок ловит «кабинет тратит, отчётность стоит» → CRITICAL
 # владельцу. Alert-only, без авто-паузы (безопасно включён по умолчанию).
@@ -123,107 +139,33 @@ SHADOW_SPEND_WATCH_ENABLED = os.environ.get(
     "SHADOW_SPEND_WATCH_ENABLED", "true"
 ).strip().lower() not in ("0", "false", "no", "off")
 SHADOW_SPEND_INTERVAL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_SHADOW_SPEND_SEC", "30"))
-# Окно среза и пороги детектора (в центах). Дефолты из shadow_spend.py, но env их переопределяет.
+# Окно среза и пороги детектора в minor units подтверждённой валюты.
 SHADOW_WINDOW_SECONDS = int(
     os.environ.get("HEALTH_WATCHDOG_SHADOW_WINDOW_SEC", str(_SHADOW_DEFAULT_WINDOW))
 )
-SHADOW_BILLING_MIN_DELTA_CENTS = int(
-    os.environ.get("HEALTH_WATCHDOG_SHADOW_BILLING_MIN_CENTS", str(_SHADOW_DEFAULT_BILLING_MIN))
+SHADOW_BILLING_MIN_DELTA_MINOR = int(
+    os.environ.get("HEALTH_WATCHDOG_SHADOW_BILLING_MIN_MINOR", str(_SHADOW_DEFAULT_BILLING_MIN))
 )
-SHADOW_REPORTED_MAX_DELTA_CENTS = int(
-    os.environ.get("HEALTH_WATCHDOG_SHADOW_REPORTED_MAX_CENTS", str(_SHADOW_DEFAULT_REPORTED_MAX))
+SHADOW_REPORTED_MAX_DELTA_MINOR = int(
+    os.environ.get("HEALTH_WATCHDOG_SHADOW_REPORTED_MAX_MINOR", str(_SHADOW_DEFAULT_REPORTED_MAX))
 )
-# Redis-лист снимков per-account: meta:shadow:{act}. Обрезаем до ~20 (ltrim), TTL 1ч.
-SHADOW_SAMPLE_LIST_PREFIX = "meta:shadow:"
+# PostgreSQL keeps a bounded per-account JSONB evidence window.  The incident
+# baseline is stored separately in the same row and survives evidence pruning.
 SHADOW_SAMPLE_MAX_LEN = 20
-SHADOW_SAMPLE_TTL_SECONDS = 3600
-SHADOW_DEDUP_PREFIX = f"{ALERT_DEDUP_PREFIX}shadow:"
-# Дедуп алерта: 30 минут (пока проблема жива, не спамим).
-SHADOW_ALERT_DEDUP_TTL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_SHADOW_ALERT_TTL_SEC", "1800"))
-# Активный CRITICAL для веба живёт отдельно от TG-дедупа: отсутствие recipients не
-# должно скрывать money-сигнал из /health/details. На нормализации отчётности ключ
-# удаляется; TTL страхует от вечной плашки при остановленном watchdog.
-SHADOW_CRITICAL_KEY_PREFIX = "health:critical:shadow:"
-SHADOW_CRITICAL_TTL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_SHADOW_CRITICAL_TTL_SEC", "900"))
-# Любое подтверждённое движение billing при стоящей per-ad стороне включает короткий
-# observer burst. Общий billing не используется для auto-pause — только trigger+cadence.
-SHADOW_BURST_KEY = "observer:burst:shadow"
-SHADOW_BURST_TTL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_SHADOW_BURST_TTL_SEC", "120"))
+SHADOW_EVIDENCE_MAX_AGE_SECONDS = 3600
+SHADOW_INCIDENT_KEY_PREFIX = "health:shadow:"
+SHADOW_CURRENCY_INCIDENT_KEY_PREFIX = "health:shadow_currency:"
 
 
 class _MetaProbeClient(Protocol):
     """Минимальный контракт MetaApiClient для probe (для тестируемости)."""
 
-    async def check_health(self, *, full_probe: bool = ...) -> dict[str, Any]: ...
-
-
-# ====================== pure helpers (тестируем напрямую) ======================
-
-
-def parse_expected_workers(env_value: str | None) -> list[str]:
-    """Парсит CSV ``EXPECTED_WORKERS`` → нормализованный список имён.
-
-    Пустые элементы и пробелы отбрасываются. Дубликаты схлопываются с сохранением порядка.
-    """
-    if not env_value:
-        return []
-    seen: set[str] = set()
-    result: list[str] = []
-    for raw in env_value.split(","):
-        name = raw.strip()
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        result.append(name)
-    return result
-
-
-def check_observer_runtime_freshness(
-    payload_json: str | None,
-    *,
-    now: datetime,
-    max_age_seconds: int = OBSERVER_STALE_AFTER_SECONDS,
-) -> tuple[bool, str | None]:
-    """Проверяет свежесть ``observer:runtime``.
-
-    Возвращает ``(is_stale, reason)``. Если ключа нет — stale с reason ``missing``.
-    Если JSON битый — stale с reason ``invalid_json``.
-    Если updated_at старше max_age_seconds — stale с reason вида ``stale (X min)``.
-    Иначе — ``(False, None)``.
-    """
-    if payload_json is None:
-        return True, "missing"
-
-    try:
-        payload = json.loads(payload_json)
-    except (ValueError, TypeError):
-        return True, "invalid_json"
-
-    if not isinstance(payload, dict):
-        return True, "invalid_json"
-
-    updated_raw = payload.get("updated_at")
-    if not isinstance(updated_raw, str) or not updated_raw:
-        return True, "missing_updated_at"
-
-    try:
-        updated_at = datetime.fromisoformat(updated_raw)
-    except ValueError:
-        return True, "invalid_updated_at"
-
-    if updated_at.tzinfo is None:
-        updated_at = updated_at.replace(tzinfo=timezone.utc)
-
-    age_seconds = (now - updated_at).total_seconds()
-    if age_seconds > max_age_seconds:
-        return True, f"stale ({int(age_seconds // 60)} min)"
-
-    return False, None
-
-
-def should_alert(heartbeat_value: str | None, dedup_value: str | None) -> bool:
-    """Алертим, когда heartbeat истёк И дедуп-ключа ещё нет."""
-    return heartbeat_value is None and dedup_value is None
+    async def check_health(
+        self,
+        *,
+        full_probe: bool = ...,
+        expected_profile_id: str | None = ...,
+    ) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -245,50 +187,15 @@ class DesyncedStopAd:
     age_minutes: int  # сколько минут держится рассинхрон (с момента перехода в stop_sent)
 
 
-def build_autostop_channel_alert(
-    stuck_tasks: Sequence[StuckPauseTask],
-    desynced_ads: Sequence[DesyncedStopAd],
-) -> str | None:
-    """Pure: текст CRITICAL-алерта по триггерам отказа канала авто-стопа.
+@dataclass(frozen=True)
+class ShadowObservationDecision:
+    """Persisted shadow detector result for one committed observation."""
 
-    Возвращает None, если оба триггера пусты (канал здоров). Иначе — единое
-    HTML-сообщение: раздел застрявших задач pause_ad и/или раздел рассинхрона
-    stop_sent↔ACTIVE. Длинные списки усекаются до AUTOSTOP_ALERT_MAX_ITEMS с
-    пометкой «… и ещё N» (TG-лимит 4096).
-    """
-    if not stuck_tasks and not desynced_ads:
-        return None
-
-    lines = [
-        "🆘 <b>КРИТИЧНО: канал авто-стопа</b>",
-        "Авто-стоп не доводит объявления до OFF — деньги тратятся.",
-    ]
-
-    if stuck_tasks:
-        lines.append("")
-        lines.append(f"⛔️ Застряли задачи pause_ad (bot_auto_stop): <b>{len(stuck_tasks)}</b>")
-        for task in stuck_tasks[:AUTOSTOP_ALERT_MAX_ITEMS]:
-            err = f", ошибка: {html.escape(task.last_error)}" if task.last_error else ""
-            lines.append(
-                f"   • <code>{html.escape(task.target_id)}</code> — "
-                f"{task.age_minutes} мин, попыток {task.attempt_count}{err}"
-            )
-        if len(stuck_tasks) > AUTOSTOP_ALERT_MAX_ITEMS:
-            lines.append(f"   … и ещё {len(stuck_tasks) - AUTOSTOP_ALERT_MAX_ITEMS}")
-
-    if desynced_ads:
-        lines.append("")
-        lines.append(
-            f"🔌 Рассинхрон (FSM=stop_sent, но delivery_status=ACTIVE): <b>{len(desynced_ads)}</b>"
-        )
-        for ad in desynced_ads[:AUTOSTOP_ALERT_MAX_ITEMS]:
-            lines.append(f"   • <code>{html.escape(ad.fb_ad_id)}</code> — {ad.age_minutes} мин")
-        if len(desynced_ads) > AUTOSTOP_ALERT_MAX_ITEMS:
-            lines.append(f"   … и ещё {len(desynced_ads) - AUTOSTOP_ALERT_MAX_ITEMS}")
-
-    lines.append("")
-    lines.append("Проверь Vision-сессию и meta_api_worker.")
-    return "\n".join(lines)
+    previous_sample: ShadowSample | None
+    verdict: ShadowVerdict | None
+    recovery_confirmed: bool
+    incident_event_committed: bool
+    currency_reset: bool = False
 
 
 # MID X-16: маркер разлогина/чекпоинта из probe-ответа browser-agent (probe_detail/detail).
@@ -302,7 +209,11 @@ def is_login_required_reason(reason: str) -> bool:
     return LOGIN_REQUIRED_MARKER in str(reason).lower()
 
 
-def classify_meta_probe(probe: dict[str, Any]) -> tuple[bool, str]:
+def classify_meta_probe(
+    probe: dict[str, Any],
+    *,
+    expected_profile_id: str,
+) -> tuple[bool, str]:
     """Классифицирует результат check_health(full_probe=True): жив ли канал.
 
     Возвращает ``(is_down, reason)``. Канал мёртв (is_down=True), если probe вернул
@@ -316,6 +227,19 @@ def classify_meta_probe(probe: dict[str, Any]) -> tuple[bool, str]:
     Вызывающий смотрит ``is_login_required_reason(reason)``, чтобы выбрать текст алерта.
     """
     if bool(probe.get("healthy", False)):
+        observed_contract = int(probe.get("browser_contract_version") or 0)
+        if observed_contract != BROWSER_CONTRACT_VERSION:
+            return (
+                True,
+                "browser_contract_incompatible:"
+                f"required={BROWSER_CONTRACT_VERSION},observed={observed_contract}",
+            )
+        live_profile_id = str(probe.get("vision_profile_id") or "").strip()
+        if not expected_profile_id.strip() or live_profile_id != expected_profile_id.strip():
+            return True, "vision_profile_mismatch"
+        if not probe.get("probe_performed") or not probe.get("probe_ok"):
+            detail = str(probe.get("probe_detail") or probe.get("detail") or "not_performed")
+            return True, f"full_probe_unconfirmed:{detail}"
         return False, str(probe.get("probe_detail") or probe.get("detail") or "ok")
 
     if probe.get("probe_performed"):
@@ -325,49 +249,16 @@ def classify_meta_probe(probe: dict[str, Any]) -> tuple[bool, str]:
     return True, str(reason)
 
 
-def build_meta_channel_alert(*, reason: str, detail: str) -> str:
-    """CRITICAL-текст: канал Marketing API (auto-stop) мёртв по проактивному probe.
-
-    Разлогин/чекпоинт (login_required) даёт ОТДЕЛЬНЫЙ текст «нужен ре-логин Vision-профиля»
-    (действие оператора — зайти и залогиниться), отличный от generic network-down.
-    """
-    if is_login_required_reason(reason):
-        return (
-            "🔒 <b>CRITICAL: Vision-профиль разлогинен (probe)</b>\n"
-            f"Реальный GET /me к graph.facebook.com отвергнут: <code>{html.escape(reason)}</code>\n"
-            f"Детали: <code>{html.escape(str(detail)[:200])}</code>\n\n"
-            "⚠️ Money: авто-стоп (pause_ad) не доходит до Meta — объявления тратят бюджет.\n"
-            "Нужен ре-логин Vision-профиля: зайди в Vision и залогинься заново "
-            "(re-login Facebook), затем проверь вкладку Ads Manager."
+async def _load_canonical_vision_profile_id(engine: AsyncEngine) -> str:
+    """Load the operator-selected profile without decrypting unrelated credentials."""
+    async with AsyncSession(engine) as session:
+        profile_id = await session.scalar(
+            select(VisionConfig.profile_id).where(VisionConfig.singleton_key == "default")
         )
-    return (
-        "🛑 <b>CRITICAL: канал Marketing API мёртв (probe)</b>\n"
-        f"Реальный GET /me к graph.facebook.com не прошёл: <code>{html.escape(reason)}</code>\n"
-        f"Детали: <code>{html.escape(str(detail)[:200])}</code>\n\n"
-        "⚠️ Money: авто-стоп (pause_ad) не доходит до Meta — объявления могут тратить бюджет.\n"
-        "Почини Vision-канал (reconnect/restart browser_agent или Vision-профиль) "
-        "или выключи объявления вручную в Ads Manager."
-    )
-
-
-def build_shadow_spend_alert(account_id: str, verdict: ShadowVerdict) -> str:
-    """CRITICAL-текст «тень отчётности Meta»: кабинет тратит, а пер-адная отчётность стоит.
-
-    Биллинг (amount_spent) вырос на billing_delta за окно, пер-адная отчётность
-    практически стоит (reported_delta ≤ допуска). Реальный открут не виден скану →
-    свежая пачка под риском перекрута. Действие оператора — проверить Ads Manager руками.
-    """
-    acct = html.escape(str(account_id))
-    billing_usd = verdict.billing_delta_cents / 100.0
-    reported_usd = verdict.reported_delta_cents / 100.0
-    minutes = max(1, verdict.window_seconds // 60)
-    return (
-        f"⚠️ <b>Тень отчётности Meta (act_{acct})</b>\n"
-        f"Биллинг +${billing_usd:.2f} за {minutes} мин, пер-адная отчётность стоит "
-        f"(Δ +${reported_usd:.2f} ≤ $0.05).\n\n"
-        "Реальный открут не виден скану — свежая пачка под риском перекрута. "
-        "Проверь Ads Manager руками."
-    )
+    normalized = str(profile_id or "").strip()
+    if not normalized:
+        raise RuntimeError("canonical Vision profile is unavailable")
+    return normalized
 
 
 def _has_unreported_billing_movement(
@@ -377,291 +268,118 @@ def _has_unreported_billing_movement(
     """True, когда billing уже вырос, а последний per-ad снимок ещё не сдвинулся."""
     if previous is None or previous.ts >= current.ts:
         return False
+    if previous.currency != current.currency:
+        return False
     return (
-        current.billing_cents > previous.billing_cents
-        and current.reported_cents <= previous.reported_cents
+        current.billing_minor > previous.billing_minor
+        and current.reported_minor <= previous.reported_minor
     )
 
 
+def _shadow_reporting_caught_up(
+    baseline: ShadowSample,
+    current: ShadowSample,
+    *,
+    tolerance_minor: int = SHADOW_REPORTED_MAX_DELTA_MINOR,
+) -> bool:
+    """Return True only when reporting covers billing movement since the incident.
+
+    Merely receiving two timestamps is not recovery: after a process/cache loss
+    that would resolve an active incident while reported spend was still frozen.
+    The durable incident baseline makes the predicate explicit and monotonic.
+    """
+    if current.ts <= baseline.ts:
+        return False
+    if current.currency != baseline.currency:
+        return False
+    billing_delta = current.billing_minor - baseline.billing_minor
+    reported_delta = current.reported_minor - baseline.reported_minor
+    if billing_delta < 0 or reported_delta <= tolerance_minor:
+        return False
+    return reported_delta + tolerance_minor >= billing_delta
+
+
 async def _activate_shadow_burst(
-    redis_client: redis_asyncio.Redis,
+    engine: AsyncEngine,
     *,
     account_id: str,
     sample: ShadowSample,
 ) -> None:
-    """Включить CRITICAL-cadence observer и немедленно разбудить текущий sleep."""
-    payload = {
-        "reason": "shadow_spend",
-        "account_id": account_id,
-        "detected_at": sample.ts.isoformat(),
-    }
+    """Persist one immediate observer scan command for reporting shadow."""
     try:
-        await redis_client.set(
-            SHADOW_BURST_KEY,
-            json.dumps(payload, ensure_ascii=False),
-            ex=SHADOW_BURST_TTL_SECONDS,
-        )
-        await redis_client.publish(
-            "fb_agent:observer:trigger",
-            json.dumps({**payload, "burst_seconds": SHADOW_BURST_TTL_SECONDS}),
-        )
-        logger.warning("shadow: включён observer burst для act_%s", account_id)
-    except Exception:  # noqa: BLE001
-        logger.warning("shadow: не удалось включить observer burst", exc_info=True)
-
-
-async def _publish_critical_changed(
-    redis_client: redis_asyncio.Redis,
-    *,
-    account_id: str,
-    active: bool,
-) -> None:
-    try:
-        await redis_client.publish(
-            CHANNEL_HEALTH_UPDATED,
-            json.dumps(
-                {
-                    "kind": "shadow_spend",
-                    "account_id": account_id,
-                    "active": active,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                },
-                ensure_ascii=False,
+        await enqueue_observer_scan(
+            engine,
+            requested_by="health_watchdog",
+            reason=f"shadow_spend:act_{account_id}",
+            idempotency_key=observer_scan_idempotency_key(
+                "shadow-spend",
+                f"{account_id}:{sample.ts.isoformat()}",
             ),
         )
     except Exception:  # noqa: BLE001
-        logger.warning("shadow: не удалось publish web-critical", exc_info=True)
-
-
-async def _store_shadow_critical(
-    redis_client: redis_asyncio.Redis,
-    *,
-    account_id: str,
-    verdict: ShadowVerdict,
-) -> None:
-    """Сохранить активный CRITICAL для веба независимо от Telegram recipients."""
-    key = f"{SHADOW_CRITICAL_KEY_PREFIX}{account_id}"
-    payload = {
-        "id": f"shadow_spend:{account_id}",
-        "kind": "shadow_spend",
-        "severity": "CRITICAL",
-        "title": "Meta списывает быстрее отчётности",
-        "message": (
-            f"Биллинг act_{account_id} вырос на "
-            f"${verdict.billing_delta_cents / 100:.2f}, а per-ad отчётность — только на "
-            f"${verdict.reported_delta_cents / 100:.2f}. Observer переведён в быстрый режим."
-        ),
-        "account_id": account_id,
-        "detected_at": verdict.newest_ts.isoformat(),
-        "details": {
-            "billing_delta_cents": verdict.billing_delta_cents,
-            "reported_delta_cents": verdict.reported_delta_cents,
-            "window_seconds": verdict.window_seconds,
-        },
-    }
-    try:
-        was_active = bool(await redis_client.get(key))
-        await redis_client.set(
-            key,
-            json.dumps(payload, ensure_ascii=False),
-            ex=SHADOW_CRITICAL_TTL_SECONDS,
+        logger.exception(
+            "shadow: durable observer scan was not enqueued for act_%s",
+            account_id,
         )
-        if not was_active:
-            await _publish_critical_changed(
-                redis_client,
-                account_id=account_id,
-                active=True,
-            )
-    except Exception:  # noqa: BLE001
-        logger.exception("shadow: не удалось сохранить web-critical %s", key)
 
 
-async def _clear_shadow_critical(
-    redis_client: redis_asyncio.Redis,
+# ====================== Durable notification events ======================
+
+
+async def _enqueue_critical_notification(
     *,
-    account_id: str,
-) -> None:
-    key = f"{SHADOW_CRITICAL_KEY_PREFIX}{account_id}"
-    try:
-        removed = await redis_client.delete(key)
-        if removed:
-            await _publish_critical_changed(
-                redis_client,
-                account_id=account_id,
-                active=False,
-            )
-    except Exception:  # noqa: BLE001
-        logger.warning("shadow: не удалось снять web-critical %s", key, exc_info=True)
-
-
-# ====================== Telegram алерты ======================
-
-
-# Живые фоновые таски AI-диагнозов: держим ссылки от GC, чистим по done.
-_ai_diag_tasks: set[asyncio.Task] = set()
-
-
-async def _post_ai_diagnosis(
-    *,
+    incident_key: str,
     engine: AsyncEngine,
-    redis_client: redis_asyncio.Redis,
-    alert_key: str,
-    alert_text: str,
-) -> None:
-    """AI-диагноз к CRITICAL-алерту отдельным сообщением. Best-effort, тихий skip."""
-    try:
-        from core.ai_assistant.diagnostics import diagnose_alert
-
-        diag = await diagnose_alert(alert_key=alert_key, context=alert_text)
-        if not diag:
-            return
-        await notify_recipients(
-            engine,
-            redis_client,
-            category=f"health_watchdog:diag:{alert_key}",
-            text=f"🩺 <b>AI-диагноз</b>\n{diag}",
-        )
-    except Exception:  # noqa: BLE001 — диагноз не money-путь
-        logger.debug("AI-диагноз не доставлен (некритично)", exc_info=True)
-
-
-def _spawn_ai_diagnosis(**kwargs: Any) -> None:
-    """Фоновый таск AI-диагноза (не блокирует цикл сторожка)."""
-    try:
-        task = asyncio.create_task(_post_ai_diagnosis(**kwargs))
-        _ai_diag_tasks.add(task)
-        task.add_done_callback(_ai_diag_tasks.discard)
-    except Exception:  # noqa: BLE001
-        logger.debug("не смог запустить таск AI-диагноза", exc_info=True)
-
-
-async def _maybe_alert_with_dedup(
-    redis_client: redis_asyncio.Redis,
-    *,
-    dedup_key: str,
-    text: str,
-    engine: AsyncEngine,
-    ttl_seconds: int = ALERT_DEDUP_TTL_SECONDS,
+    event_type: str,
+    title: str,
+    summary: str | None = None,
+    lines: Sequence[str] = (),
+    risk: str | None = None,
+    resource_type: str = "system",
+    resource_id: str | None = None,
 ) -> bool:
-    """Сначала отправляет алерт, SET NX ставит ТОЛЬКО при успешной отправке.
+    """Open or refresh one persisted CRITICAL incident generation.
 
-    Порядок: GET(dedup_key) → если стоит, пропускаем; иначе отправка всем recipients
-    через notify_recipients → SET NX EX только при sent=True. Это гарантирует, что при
-    сбое TG ключ не блокирует повторную попытку на TTL (алерт не теряется).
-    ``ttl_seconds`` — окно дедупа (дефолт 1ч; сторожок тени задаёт своё 30 мин).
-    Возвращает True, если алерт был успешно отправлен и дедуп установлен.
+    Every detected condition reaches the durable incident plane. PostgreSQL
+    serializes repeats into one active generation and one editable message card.
     """
-    # Дедуп-проверка: уже алертили в этом окне?
-    try:
-        if await redis_client.get(dedup_key):
-            # Явный след: без него успешная отправка и подавление неотличимы от
-            # зависания (расследование 01.07 приняло тихий дедуп/успех за провал).
-            logger.info("алерт %s подавлен дедупом (уже отправлен в этом окне)", dedup_key)
-            return False
-    except Exception:  # noqa: BLE001
-        logger.exception("ошибка чтения дедуп-ключа %s", dedup_key)
-
-    # Рассылаем всем активным recipients (без forum-топика)
-    sent = await notify_recipients(
+    accepted = await notify_recurring_incident(
         engine,
-        redis_client,
-        category=f"health_watchdog:{dedup_key}",
-        text=text,
+        incident_key=incident_key,
+        audience="all",
+        event_type=event_type,
+        severity="critical",
+        title=title,
+        summary=summary,
+        lines=lines,
+        risk=risk,
+        resource_type=resource_type,
+        resource_id=resource_id,
     )
-    if not sent:
-        return False
+    if accepted:
+        logger.info("critical incident %s принят durable plane", incident_key)
+    return accepted
 
-    logger.info("алерт %s отправлен активным recipients", dedup_key)
-    # Ставим дедуп только после успешной доставки
-    try:
-        await redis_client.set(dedup_key, "1", ex=ttl_seconds, nx=True)
-    except Exception:  # noqa: BLE001
-        logger.exception("ошибка SET дедуп-ключа %s", dedup_key)
 
-    # 🩺 AI-диагноз причины — фоновым таском ПОСЛЕ доставки алерта: сам алерт
-    # уже ушёл, диагноз догоняет отдельным сообщением. Кулдаун — внутри
-    # diagnose_alert (ai_diagnostics_cooldown_seconds), спама не будет.
-    _spawn_ai_diagnosis(
-        engine=engine, redis_client=redis_client, alert_key=dedup_key, alert_text=text
+async def _resolve_critical_notification(
+    *,
+    incident_key: str,
+    engine: AsyncEngine,
+    summary: str,
+) -> bool:
+    """Resolve only from a confirmed healthy observation; unknown is a no-op."""
+    resolved = await resolve_recurring_incident(
+        engine,
+        incident_key=incident_key,
+        audience="all",
+        summary=summary,
     )
-    return True
+    if resolved:
+        logger.info("critical incident %s подтверждённо восстановлен", incident_key)
+    return resolved
 
 
 # ====================== проверки ======================
-
-
-async def check_worker_heartbeats(
-    redis_client: redis_asyncio.Redis,
-    *,
-    expected_workers: list[str],
-    engine: AsyncEngine,
-) -> int:
-    """Для каждого ожидаемого воркера проверяет heartbeat. Возвращает число алертов."""
-    alerted = 0
-    for name in expected_workers:
-        hb_key = f"worker:heartbeat:{name}"
-        dedup_key = f"{ALERT_DEDUP_PREFIX}{name}"
-        try:
-            hb_value = await redis_client.get(hb_key)
-        except Exception:  # noqa: BLE001
-            logger.exception("ошибка GET %s", hb_key)
-            continue
-
-        if hb_value is not None:
-            continue
-
-        try:
-            dedup_value = await redis_client.get(dedup_key)
-        except Exception:  # noqa: BLE001
-            logger.exception("ошибка GET %s", dedup_key)
-            continue
-
-        if not should_alert(hb_value, dedup_value):
-            continue
-
-        text = (
-            f"🚨 <b>Health Watchdog</b>\n"
-            f"Воркер <b>{html.escape(name)}</b> не дышит более "
-            f"{HEARTBEAT_TTL_SECONDS // 60} мин — heartbeat истёк."
-        )
-        sent = await _maybe_alert_with_dedup(
-            redis_client,
-            dedup_key=dedup_key,
-            text=text,
-            engine=engine,
-        )
-        if sent:
-            alerted += 1
-    return alerted
-
-
-async def check_observer_runtime(
-    redis_client: redis_asyncio.Redis,
-    *,
-    engine: AsyncEngine,
-) -> bool:
-    """Проверяет ``observer:runtime``. Возвращает True, если алерт был отправлен."""
-    dedup_key = f"{ALERT_DEDUP_PREFIX}observer_runtime"
-    try:
-        payload_json = await redis_client.get(OBSERVER_RUNTIME_KEY)
-    except Exception:  # noqa: BLE001
-        logger.exception("ошибка GET %s", OBSERVER_RUNTIME_KEY)
-        return False
-
-    is_stale, reason = check_observer_runtime_freshness(
-        payload_json,
-        now=datetime.now(timezone.utc),
-    )
-    if not is_stale:
-        return False
-
-    text = f"🚨 <b>Health Watchdog</b>\nobserver:runtime устарел: {html.escape(reason)}."
-    return await _maybe_alert_with_dedup(
-        redis_client,
-        dedup_key=dedup_key,
-        text=text,
-        engine=engine,
-    )
 
 
 _STUCK_PAUSE_TASKS_SQL = text(
@@ -733,7 +451,6 @@ async def query_desynced_stop_ads(engine: AsyncEngine, *, minutes: int) -> list[
 
 async def check_autostop_channel(
     engine: AsyncEngine,
-    redis_client: redis_asyncio.Redis,
     *,
     stuck_after_minutes: int = AUTOSTOP_STUCK_AFTER_MINUTES,
     desync_after_minutes: int = AUTOSTOP_DESYNC_AFTER_MINUTES,
@@ -742,7 +459,7 @@ async def check_autostop_channel(
 
     Money-критично: при отказе канала исполнения авто-стопа (инцидент 2026-06-19)
     объявления остаются крутиться при FSM=stop_sent. Шлёт CRITICAL всем активным
-    recipients (без forum-топика) с дедупом (раз в час, пока проблема жива).
+    recipients через PostgreSQL incident plane; повторные тики обновляют одну generation.
     """
     try:
         stuck = await query_stuck_pause_tasks(engine, minutes=stuck_after_minutes)
@@ -751,35 +468,44 @@ async def check_autostop_channel(
         logger.exception("ошибка проверки канала авто-стопа")
         return False
 
-    alert_text = build_autostop_channel_alert(stuck, desynced)
-    if alert_text is None:
+    if not stuck and not desynced:
+        await _resolve_critical_notification(
+            incident_key=AUTOSTOP_BACKLOG_INCIDENT_KEY,
+            engine=engine,
+            summary="Очередь авто-стопа и фактические статусы снова согласованы.",
+        )
         return False
 
     logger.error("канал авто-стопа деградировал: stuck=%d desync=%d", len(stuck), len(desynced))
-    return await _maybe_alert_with_dedup(
-        redis_client,
-        dedup_key=AUTOSTOP_DEDUP_KEY,
-        text=alert_text,
+    targets = [task.target_id for task in stuck[:2]]
+    targets.extend(ad.fb_ad_id for ad in desynced[: 2 - len(targets)])
+    return await _enqueue_critical_notification(
+        incident_key=AUTOSTOP_BACKLOG_INCIDENT_KEY,
         engine=engine,
+        event_type="autostop_backlog_degraded",
+        title="Канал авто-стопа не доводит стоп до OFF",
+        summary=f"Застряло: {len(stuck)} · активно после stop: {len(desynced)}",
+        risk="Объявления могут продолжать тратить бюджет",
+        lines=[
+            *(f"Цель: {target}" for target in targets),
+            "Проверь Vision, meta_api_worker и отключи вручную",
+        ],
+        resource_type="meta_channel",
+        resource_id="auto_stop",
     )
 
 
 async def check_meta_api_channel(
     meta_client: _MetaProbeClient,
-    redis_client: redis_asyncio.Redis,
     *,
     engine: AsyncEngine,
-    now: datetime | None = None,
 ) -> bool:
     """Проактивный probe канала Marketing API. Возвращает True, если алерт отправлен.
 
-    Единственный прободер: делает реальный GET /me (full_probe) через browser-agent,
-    пишет снимок в Redis ``meta_api:channel:health`` (его читает health_details), при
-    отказе канала шлёт CRITICAL с дедупом, при восстановлении снимает дедуп (re-arm).
+    Единственный прободер: делает реальный GET /me (full_probe) через browser-agent
+    и при отказе канала фиксирует CRITICAL в PostgreSQL outbox.
     Best-effort: исключения check_health трактуются как «канал мёртв».
     """
-    now = now or datetime.now(UTC)
-
     # Сканирование выключено (намеренно) → observer не держит постоянную browser-agent
     # сессию, и «сессия не найдена» это НЕ отказ канала, а ожидаемое состояние. Не шлём
     # ложный CRITICAL (money-спам). Логика совпадает с observer: config None / false → пауза.
@@ -789,40 +515,37 @@ async def check_meta_api_channel(
         obs_config = await load_observer_config(engine)
         scanning_on = bool(obs_config and obs_config.get("is_scanning_enabled"))
     except Exception:  # noqa: BLE001
-        # Ошибка чтения конфига — ведём себя как раньше (проверяем канал, можем алертить).
-        scanning_on = True
+        logger.exception("meta probe: observer_config недоступен — probe пропущен")
+        return False
 
     if not scanning_on:
         # След намеренного пропуска: после 11:24 01.07 probe молчал «по дизайну»,
         # и тишина в логах выглядела как зависание воркера.
         logger.info("meta probe: сканирование выключено — канал авто-стопа не проверяется")
-        payload = {
-            # None = probe намеренно не выполнялся. False зарезервирован для
-            # подтверждённого отказа, иначе health_details показывал DEGRADED на паузе.
-            "healthy": None,
-            "probe_performed": False,
-            "probe_ok": False,
-            "probe_status_code": 0,
-            "probe_duration_ms": 0,
-            "detail": "сканирование выключено — канал авто-стопа не проверяется",
-            "probe_detail": "scanning_disabled",
-            "reason": "сканирование выключено",
-            "checked_at": now.isoformat(),
-        }
-        try:
-            await redis_client.set(
-                META_CHANNEL_HEALTH_KEY,
-                json.dumps(payload, ensure_ascii=False),
-                ex=META_CHANNEL_HEALTH_TTL_SECONDS,
-            )
-            # Снимаем дедуп: при включении сканирования + реальном отказе снова дадим алерт.
-            await redis_client.delete(META_CHANNEL_DEDUP_KEY)
-        except Exception:  # noqa: BLE001
-            logger.exception("meta probe: запись статуса при выключенном сканировании")
         return False
 
+    expected_profile_id = ""
     try:
-        probe = await meta_client.check_health(full_probe=True)
+        async with BrowserOperationFence(
+            engine,
+            operation_kind="health_meta_probe",
+            target="full_probe",
+        ) as fence:
+            # Vision settings updates take the exclusive side of this same
+            # fence. Read the canonical identity only after the shared lease
+            # is held so A→B cannot race into a false mismatch incident.
+            expected_profile_id = await _load_canonical_vision_profile_id(engine)
+            probe = await meta_client.check_health(
+                full_probe=True,
+                expected_profile_id=expected_profile_id,
+            )
+            await fence.assert_held()
+    except BrowserOperationBlocked:
+        logger.info("meta probe: Vision maintenance active — probe deferred")
+        return False
+    except BrowserFenceLeaseLost:
+        logger.warning("meta probe: browser-operation fence lost — probe discarded")
+        return False
     except Exception as exc:  # noqa: BLE001
         logger.exception("meta probe: check_health бросил исключение")
         probe = {
@@ -835,44 +558,44 @@ async def check_meta_api_channel(
             "probe_detail": "probe_exception",
         }
 
-    is_down, reason = classify_meta_probe(probe)
-
-    payload = {
-        "healthy": bool(probe.get("healthy", False)),
-        "probe_performed": bool(probe.get("probe_performed", False)),
-        "probe_ok": bool(probe.get("probe_ok", False)),
-        "probe_status_code": int(probe.get("probe_status_code", 0) or 0),
-        "probe_duration_ms": int(probe.get("probe_duration_ms", 0) or 0),
-        "detail": str(probe.get("detail", "")),
-        "probe_detail": str(probe.get("probe_detail", "")),
-        "reason": reason,
-        "checked_at": now.isoformat(),
-    }
-    try:
-        await redis_client.set(
-            META_CHANNEL_HEALTH_KEY,
-            json.dumps(payload, ensure_ascii=False),
-            ex=META_CHANNEL_HEALTH_TTL_SECONDS,
-        )
-    except Exception:  # noqa: BLE001
-        logger.exception("meta probe: не удалось записать %s", META_CHANNEL_HEALTH_KEY)
+    is_down, reason = classify_meta_probe(
+        probe,
+        expected_profile_id=expected_profile_id,
+    )
 
     if not is_down:
         # INFO-след каждого healthy-прохода: тишина в логах ≠ живой probe (урок 01.07).
         logger.info("meta probe: канал жив (%s)", reason)
-        # Канал жив → снимаем дедуп, чтобы будущий отказ снова дал алерт (re-arm).
-        try:
-            await redis_client.delete(META_CHANNEL_DEDUP_KEY)
-        except Exception:  # noqa: BLE001
-            logger.exception("meta probe: не удалось снять дедуп")
+        await _resolve_critical_notification(
+            incident_key=META_CHANNEL_INCIDENT_KEY,
+            engine=engine,
+            summary="Проверочный запрос к Meta снова подтверждён.",
+        )
         return False
 
     logger.error("канал Marketing API мёртв (probe): %s", reason)
-    return await _maybe_alert_with_dedup(
-        redis_client,
-        dedup_key=META_CHANNEL_DEDUP_KEY,
-        text=build_meta_channel_alert(reason=reason, detail=str(probe.get("detail", ""))),
+    login_required = is_login_required_reason(reason)
+    return await _enqueue_critical_notification(
+        incident_key=META_CHANNEL_INCIDENT_KEY,
         engine=engine,
+        event_type="meta_channel_unavailable",
+        title=(
+            "Vision-профиль требует повторного входа"
+            if login_required
+            else "Канал Marketing API недоступен"
+        ),
+        summary="Проверочный запрос к Meta не подтверждён",
+        risk="Авто-стоп может не дойти до Meta",
+        lines=[
+            (
+                "Войди в Facebook в Vision-профиле"
+                if login_required
+                else "Проверь browser-agent и Vision-профиль"
+            ),
+            "При риске расхода отключи объявления вручную",
+        ],
+        resource_type="meta_channel",
+        resource_id="auto_stop",
     )
 
 
@@ -880,18 +603,16 @@ async def check_meta_api_channel(
 
 
 async def _is_reported_side_live(
-    redis_client: redis_asyncio.Redis,
     engine: AsyncEngine,
     *,
+    account_ids: Sequence[str],
     now: datetime,
 ) -> bool:
     """Гейт сторожка: reported-сторона (пер-адная отчётность) реально работает.
 
-    Работаем ТОЛЬКО когда сканирование включено И ``observer:runtime`` свежий. Иначе
-    пер-адная отчётность стоит ПО ОПРЕДЕЛЕНИЮ (скан не крутится) → сравнение с биллингом
-    даст сплошные ложные «тени». Тот же паттерн, что meta_probe_loop проверяет
-    scanning_disabled. Ошибку чтения конфига трактуем как «не работаем» (консервативно —
-    сторожок alert-only, лишний пропуск дешевле ложного money-CRITICAL).
+    Работаем ТОЛЬКО когда сканирование включено и все зарегистрированные cabinet actors
+    имеют свежий подтверждённый snapshot в PostgreSQL. Ошибку чтения трактуем как
+    «не работаем»: лишний пропуск alert-only сторожка безопаснее ложного CRITICAL.
     """
     try:
         from core.observer.queries import load_observer_config
@@ -905,22 +626,56 @@ async def _is_reported_side_live(
     if not scanning_on:
         return False
 
-    try:
-        payload_json = await redis_client.get(OBSERVER_RUNTIME_KEY)
-    except Exception:  # noqa: BLE001
-        logger.warning("shadow: не удалось прочитать observer:runtime — тик пропущен")
+    normalized_accounts = sorted(
+        {
+            str(account_id).removeprefix("act_").strip()
+            for account_id in account_ids
+            if str(account_id).removeprefix("act_").strip()
+        }
+    )
+    if not normalized_accounts:
         return False
+    fresh_after = now - timedelta(seconds=REPORTED_SNAPSHOT_MAX_AGE_SECONDS)
+    try:
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        WITH active_accounts AS (
+                            SELECT UNNEST(CAST(:account_ids AS TEXT[])) AS ad_account_id
+                        )
+                        SELECT COUNT(*) AS actor_count,
+                               COALESCE(
+                                   BOOL_AND(
+                                       runtime.last_snapshot_at IS NOT NULL
+                                       AND runtime.last_snapshot_at >= :fresh_after
+                                   ),
+                                   FALSE
+                               ) AS all_fresh
+                        FROM active_accounts AS active
+                        LEFT JOIN cabinet_runtime AS runtime
+                          ON runtime.ad_account_id = active.ad_account_id
+                        """
+                    ),
+                    {
+                        "account_ids": normalized_accounts,
+                        "fresh_after": fresh_after,
+                    },
+                )
+            ).one()
+    except Exception:  # noqa: BLE001
+        logger.warning("shadow: не удалось прочитать cabinet_runtime — тик пропущен")
+        return False
+    return int(row.actor_count or 0) > 0 and bool(row.all_fresh)
 
-    is_stale, _reason = check_observer_runtime_freshness(payload_json, now=now)
-    return not is_stale
 
-
-async def _fetch_billing_cents(meta_client: Any, account_id: str) -> int | None:
-    """GET act_{id}?fields=amount_spent через Vision-сессию → lifetime-спенд в центах.
+async def _fetch_billing_minor(meta_client: Any, account_id: str) -> int | None:
+    """Read Meta lifetime spend as the currency's integer minor unit.
 
     None при ошибке Graph-вызова / отсутствии поля (тик пропускается, канал probe
-    мониторит канал отдельно). amount_spent Meta отдаёт строкой в минимальных единицах
-    валюты (центах) — как есть, без конвертации.
+    мониторит канал отдельно). ``amount_spent`` is already returned in the
+    account currency's smallest unit and is never rescaled here.
     """
     acct = (account_id or "").removeprefix("act_")
     if not acct:
@@ -935,205 +690,498 @@ async def _fetch_billing_cents(meta_client: Any, account_id: str) -> int | None:
     if raw is None:
         return None
     try:
-        return int(str(raw))
+        amount = int(str(raw))
     except (TypeError, ValueError):
         return None
+    return amount if amount >= 0 else None
 
 
-async def _load_shadow_samples(
-    redis_client: redis_asyncio.Redis, account_id: str
-) -> list[ShadowSample]:
-    """Читает накопленные снимки из Redis-листа meta:shadow:{act}. Битые записи пропускает."""
-    key = f"{SHADOW_SAMPLE_LIST_PREFIX}{account_id}"
-    try:
-        raw_items = await redis_client.lrange(key, 0, SHADOW_SAMPLE_MAX_LEN - 1)
-    except Exception:  # noqa: BLE001
-        logger.warning("shadow: не удалось прочитать список %s", key)
+async def _database_now(engine: AsyncEngine) -> datetime:
+    """Use PostgreSQL time for persisted leases, freshness and cabinet-day evidence."""
+    async with engine.connect() as conn:
+        observed_at = (await conn.execute(text("SELECT NOW()"))).scalar_one()
+    if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
+        raise RuntimeError("PostgreSQL returned an invalid timezone-aware clock value")
+    return observed_at.astimezone(UTC)
+
+
+def _decode_shadow_samples(raw: object) -> list[ShadowSample]:
+    """Decode the bounded PostgreSQL evidence list; malformed entries are ignored."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(raw, list):
         return []
     samples: list[ShadowSample] = []
-    for raw in raw_items or []:
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
         try:
-            data = json.loads(raw)
+            observed_at = datetime.fromisoformat(str(item["ts"]))
+            if observed_at.tzinfo is None:
+                continue
+            currency = str(item["currency"])
+            campaign_currency_exponent(currency)
+            billing_minor = int(item["billing_minor"])
+            reported_minor = int(item["reported_minor"])
+            if billing_minor < 0 or reported_minor < 0:
+                continue
             samples.append(
                 ShadowSample(
-                    ts=datetime.fromisoformat(str(data["ts"])),
-                    billing_cents=int(data["billing_cents"]),
-                    reported_cents=int(data["reported_cents"]),
+                    ts=observed_at.astimezone(UTC),
+                    currency=currency,
+                    billing_minor=billing_minor,
+                    reported_minor=reported_minor,
                 )
             )
-        except (ValueError, KeyError, TypeError):
+        except (UnsupportedCampaignCurrencyError, ValueError, KeyError, TypeError):
             continue
     return samples
 
 
-async def _push_shadow_sample(
-    redis_client: redis_asyncio.Redis, account_id: str, sample: ShadowSample
-) -> None:
-    """Кладёт снимок в голову Redis-листа, обрезает до SHADOW_SAMPLE_MAX_LEN, ставит TTL."""
-    key = f"{SHADOW_SAMPLE_LIST_PREFIX}{account_id}"
-    payload = json.dumps(
-        {
-            "ts": sample.ts.isoformat(),
-            "billing_cents": sample.billing_cents,
-            "reported_cents": sample.reported_cents,
-        },
+def _encode_shadow_samples(samples: Sequence[ShadowSample]) -> str:
+    return json.dumps(
+        [
+            {
+                "ts": sample.ts.astimezone(UTC).isoformat(),
+                "currency": sample.currency,
+                "billing_minor": sample.billing_minor,
+                "reported_minor": sample.reported_minor,
+            }
+            for sample in samples
+        ],
         ensure_ascii=False,
+        separators=(",", ":"),
     )
-    try:
-        await redis_client.lpush(key, payload)
-        await redis_client.ltrim(key, 0, SHADOW_SAMPLE_MAX_LEN - 1)
-        await redis_client.expire(key, SHADOW_SAMPLE_TTL_SECONDS)
-    except Exception:  # noqa: BLE001
-        logger.warning("shadow: не удалось записать снимок в %s", key)
+
+
+async def _record_shadow_observation(
+    engine: AsyncEngine,
+    *,
+    account_id: str,
+    sample: ShadowSample,
+    cabinet_day_start: datetime,
+) -> ShadowObservationDecision:
+    """Commit one sample and evaluate detection/recovery under a row lock.
+
+    The bounded samples accelerate the rolling detector.  The separate incident
+    baseline is never pruned and therefore remains valid across process restarts
+    until an atomic incident recovery clears it.
+    """
+    if sample.ts.tzinfo is None:
+        raise ValueError("shadow sample timestamp must be timezone-aware")
+    if cabinet_day_start.tzinfo is None:
+        raise ValueError("cabinet_day_start must be timezone-aware")
+    campaign_currency_exponent(sample.currency)
+    if sample.billing_minor < 0 or sample.reported_minor < 0:
+        raise ValueError("shadow counters must be non-negative minor units")
+    normalized = ShadowSample(
+        ts=sample.ts.astimezone(UTC),
+        currency=sample.currency,
+        billing_minor=sample.billing_minor,
+        reported_minor=sample.reported_minor,
+    )
+    normalized_day_start = cabinet_day_start.astimezone(UTC)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO meta_shadow_spend_state
+                    (account_id, currency, samples, cabinet_day_start, last_observed_at)
+                VALUES (
+                    :account_id, :currency, '[]'::jsonb,
+                    :cabinet_day_start, :observed_at
+                )
+                ON CONFLICT (account_id) DO NOTHING
+                """
+            ),
+            {
+                "account_id": account_id,
+                "currency": normalized.currency,
+                "cabinet_day_start": normalized_day_start,
+                "observed_at": normalized.ts,
+            },
+        )
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        """
+                    SELECT currency,
+                           samples,
+                           cabinet_day_start,
+                           incident_baseline_at,
+                           incident_baseline_billing_minor,
+                           incident_baseline_reported_minor,
+                           recovery_candidate_at,
+                           last_observed_at
+                    FROM meta_shadow_spend_state
+                    WHERE account_id = :account_id
+                    FOR UPDATE
+                    """
+                    ),
+                    {"account_id": account_id},
+                )
+            )
+            .mappings()
+            .one()
+        )
+
+        baseline: ShadowSample | None = None
+        baseline_at = row["incident_baseline_at"]
+        baseline_billing = row["incident_baseline_billing_minor"]
+        baseline_reported = row["incident_baseline_reported_minor"]
+        persisted_currency = str(row["currency"])
+        if (
+            baseline_at is not None
+            and baseline_billing is not None
+            and baseline_reported is not None
+        ):
+            baseline = ShadowSample(
+                ts=baseline_at,
+                currency=persisted_currency,
+                billing_minor=int(baseline_billing),
+                reported_minor=int(baseline_reported),
+            )
+
+        day_changed = row["cabinet_day_start"] != normalized_day_start
+        currency_changed = persisted_currency != normalized.currency
+        context_reset = day_changed or currency_changed
+        existing = [] if context_reset else _decode_shadow_samples(row["samples"])
+        if currency_changed:
+            baseline = None
+        elif day_changed and baseline is not None:
+            # Reported spend is current-day while billing is lifetime.  Rebase
+            # an active episode atomically at midnight instead of comparing values
+            # across two cabinet days or falsely declaring recovery.
+            baseline = normalized
+        previous_sample = max(
+            (item for item in existing if item.ts < normalized.ts),
+            key=lambda item: item.ts,
+            default=None,
+        )
+        by_timestamp = {item.ts: item for item in existing}
+        by_timestamp[normalized.ts] = normalized
+        ordered = sorted(by_timestamp.values(), key=lambda item: item.ts)
+        newest = ordered[-1]
+        cutoff = newest.ts - timedelta(seconds=SHADOW_EVIDENCE_MAX_AGE_SECONDS)
+        ordered = [item for item in ordered if item.ts >= cutoff][-SHADOW_SAMPLE_MAX_LEN:]
+        verdict = detect_shadow(
+            ordered,
+            window_seconds=SHADOW_WINDOW_SECONDS,
+            billing_min_delta_minor=SHADOW_BILLING_MIN_DELTA_MINOR,
+            reported_max_delta_minor=SHADOW_REPORTED_MAX_DELTA_MINOR,
+        )
+
+        if baseline is None and verdict is not None:
+            baseline = next(item for item in ordered if item.ts == verdict.oldest_ts)
+
+        candidate_at = None if context_reset else row["recovery_candidate_at"]
+        recovery_confirmed = False
+        if verdict is not None:
+            candidate_at = None
+        elif baseline is not None and _shadow_reporting_caught_up(baseline, newest):
+            if candidate_at is not None and candidate_at < newest.ts:
+                recovery_confirmed = True
+            else:
+                candidate_at = newest.ts
+        else:
+            candidate_at = None
+
+        incident_event_committed = False
+        incident_key = f"{SHADOW_INCIDENT_KEY_PREFIX}{account_id}"
+        if currency_changed:
+            incident_event_committed = await resolve_recurring_incident_in_transaction(
+                conn,
+                incident_key=incident_key,
+                audience="all",
+                summary=(
+                    f"act_{account_id}: валюта изменилась с "
+                    f"{persisted_currency} на {normalized.currency}; "
+                    "наблюдение начато заново."
+                ),
+            )
+            baseline = None
+            candidate_at = None
+        elif verdict is not None:
+            billing_amount = minor_units_to_major_amount(
+                verdict.billing_delta_minor,
+                currency=verdict.currency,
+            )
+            reported_amount = minor_units_to_major_amount(
+                verdict.reported_delta_minor,
+                currency=verdict.currency,
+            )
+            incident_event_committed = await notify_recurring_incident_in_transaction(
+                conn,
+                incident_key=incident_key,
+                audience="all",
+                event_type="meta_reporting_shadow",
+                severity="critical",
+                title=f"Тень отчётности · act_{account_id}",
+                summary=(
+                    f"Биллинг +{billing_amount} {verdict.currency} · "
+                    f"отчётность +{reported_amount} {verdict.currency}"
+                ),
+                lines=["Проверь Ads Manager вручную"],
+                risk="Реальный открут не виден скану",
+                resource_type="ad_account",
+                resource_id=account_id,
+            )
+        elif recovery_confirmed:
+            incident_event_committed = await resolve_recurring_incident_in_transaction(
+                conn,
+                incident_key=incident_key,
+                audience="all",
+                summary=f"act_{account_id}: отчётность подтверждённо догнала биллинг.",
+            )
+            baseline = None
+            candidate_at = None
+
+        await conn.execute(
+            text(
+                """
+                UPDATE meta_shadow_spend_state
+                SET samples = CAST(:samples AS jsonb),
+                    currency = :currency,
+                    cabinet_day_start = :cabinet_day_start,
+                    incident_baseline_at = :baseline_at,
+                    incident_baseline_billing_minor = :baseline_billing,
+                    incident_baseline_reported_minor = :baseline_reported,
+                    recovery_candidate_at = :candidate_at,
+                    last_observed_at = GREATEST(last_observed_at, :last_observed_at),
+                    updated_at = NOW()
+                WHERE account_id = :account_id
+                """
+            ),
+            {
+                "account_id": account_id,
+                "currency": normalized.currency,
+                "samples": _encode_shadow_samples(ordered),
+                "cabinet_day_start": normalized_day_start,
+                "baseline_at": baseline.ts if baseline is not None else None,
+                "baseline_billing": baseline.billing_minor if baseline is not None else None,
+                "baseline_reported": baseline.reported_minor if baseline is not None else None,
+                "candidate_at": candidate_at,
+                "last_observed_at": newest.ts,
+            },
+        )
+    return ShadowObservationDecision(
+        previous_sample=previous_sample,
+        verdict=verdict,
+        recovery_confirmed=recovery_confirmed,
+        incident_event_committed=incident_event_committed,
+        currency_reset=currency_changed,
+    )
 
 
 async def _check_shadow_for_account(
     meta_client: Any,
-    redis_client: redis_asyncio.Redis,
     engine: AsyncEngine,
     *,
     account_id: str,
-    tz_map: dict[str, float],
-    default_offset: float,
+    currency: str,
+    cabinet_day_start: datetime,
     now: datetime,
 ) -> bool:
     """Один тик сторожка для одного кабинета. Возвращает True, если алерт отправлен.
 
-    Шаги: (а) биллинг act_{id}?fields=amount_spent → центы; (б) пер-адная отчётность
-    current_day_spend ×100 → центы; (в) сэмпл в Redis-лист; (г) detect_shadow по
-    накопленным; при вердикте — deduped-алерт (SET NX EX, re-arm при недоставке).
+    Шаги: (а) биллинг act_{id}?fields=amount_spent → minor units; (б) пер-адная
+    отчётность конвертируется по явному exponent валюты; (в) атомарно сохраняем evidence;
+    (г) при вердикте открываем persisted recurring incident.
     """
-    from core.dashboard.cabinet_spend import current_day_spend
+    from core.dashboard.cabinet_spend import current_day_spend_for_account
 
     # (а) биллинг кабинета. Ошибка Graph-вызова → warning-лог, тик пропущен (probe и так
     # мониторит канал отдельно). LoginRequired/TokenInvalid НЕ дублируем алертом — зона probe.
     try:
-        billing_cents = await _fetch_billing_cents(meta_client, account_id)
+        async with BrowserOperationFence(
+            engine,
+            operation_kind="shadow_billing_read",
+            target=account_id,
+        ) as fence:
+            billing_minor = await _fetch_billing_minor(meta_client, account_id)
+            await fence.assert_held()
+    except BrowserOperationBlocked:
+        logger.info(
+            "shadow: Vision maintenance active — act_%s пропущен",
+            account_id,
+        )
+        return False
+    except BrowserFenceLeaseLost:
+        logger.warning(
+            "shadow: browser-operation fence lost — act_%s discarded",
+            account_id,
+        )
+        return False
     except Exception as exc:  # noqa: BLE001
         logger.warning("shadow: биллинг act_%s не получен: %s", account_id, exc)
         return False
-    if billing_cents is None:
+    if billing_minor is None:
         logger.warning("shadow: биллинг act_%s пуст (нет amount_spent)", account_id)
         return False
 
-    # (б) пер-адная отчётность текущих суток кабинета → центы.
+    # (б) пер-адная отчётность текущих суток кабинета → exact minor units.
     try:
-        reported_usd = await current_day_spend(
+        reported_major = await current_day_spend_for_account(
             engine,
-            tz_map={account_id: tz_map.get(account_id, default_offset)},
-            default_offset=default_offset,
-            now=now,
+            account_id=account_id,
+            currency=currency,
+            cabinet_day_start=cabinet_day_start,
         )
-        reported_cents = int(reported_usd * 100)
+        reported_minor = nonnegative_major_amount_to_minor_units(
+            format(reported_major, "f"),
+            currency=currency,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("shadow: пер-адная отчётность act_%s не посчитана: %s", account_id, exc)
         return False
 
-    # (в) сэмпл в Redis-лист. Сравнение с непосредственно предыдущим тиком включает
-    # быстрый observer burst ещё до накопления полного CRITICAL-порога 25¢.
-    previous_samples = await _load_shadow_samples(redis_client, account_id)
-    previous_sample = max(previous_samples, key=lambda item: item.ts, default=None)
-    sample = ShadowSample(ts=now, billing_cents=billing_cents, reported_cents=reported_cents)
-    await _push_shadow_sample(redis_client, account_id, sample)
-    if _has_unreported_billing_movement(previous_sample, sample):
+    # (в) durable evidence. Если commit/read не удался, исключение поднимется к
+    # per-account supervisor: неизвестность никогда не превращается в recovery.
+    sample = ShadowSample(
+        ts=now,
+        currency=currency,
+        billing_minor=billing_minor,
+        reported_minor=reported_minor,
+    )
+    decision = await _record_shadow_observation(
+        engine,
+        account_id=account_id,
+        sample=sample,
+        cabinet_day_start=cabinet_day_start,
+    )
+    burst_activated = _has_unreported_billing_movement(decision.previous_sample, sample)
+    if burst_activated:
         await _activate_shadow_burst(
-            redis_client,
+            engine,
             account_id=account_id,
             sample=sample,
         )
 
-    # (г) детект по накопленным.
-    samples = await _load_shadow_samples(redis_client, account_id)
-    dedup_key = f"{SHADOW_DEDUP_PREFIX}{account_id}"
-    verdict = detect_shadow(
-        samples,
-        window_seconds=SHADOW_WINDOW_SECONDS,
-        billing_min_delta_cents=SHADOW_BILLING_MIN_DELTA_CENTS,
-        reported_max_delta_cents=SHADOW_REPORTED_MAX_DELTA_CENTS,
-    )
+    # (г) detector/recovery уже вычислены под row lock по committed evidence.
+    verdict = decision.verdict
     if verdict is None:
-        # Тени нет → снимаем дедуп (re-arm): следующая тень снова даст алерт.
-        try:
-            await redis_client.delete(dedup_key)
-        except Exception:  # noqa: BLE001
-            logger.warning("shadow: не удалось снять дедуп %s", dedup_key)
-        # На первом сэмпле данных недостаточно — не гасим ещё живой web-critical.
-        # Начиная со второй точки отсутствие вердикта означает нормализацию/малую дельту.
-        if len(samples) >= 2:
-            await _clear_shadow_critical(redis_client, account_id=account_id)
+        if decision.recovery_confirmed and decision.incident_event_committed:
+            logger.info(
+                "critical incident %s%s подтверждённо восстановлен",
+                SHADOW_INCIDENT_KEY_PREFIX,
+                account_id,
+            )
         return False
 
     logger.error(
-        "shadow: тень отчётности act_%s — биллинг +%d¢, отчётность +%d¢ за %dс",
+        "shadow: тень отчётности act_%s — billing +%s %s, reporting +%s %s за %dс",
         account_id,
-        verdict.billing_delta_cents,
-        verdict.reported_delta_cents,
+        minor_units_to_major_amount(
+            verdict.billing_delta_minor,
+            currency=verdict.currency,
+        ),
+        verdict.currency,
+        minor_units_to_major_amount(
+            verdict.reported_delta_minor,
+            currency=verdict.currency,
+        ),
+        verdict.currency,
         verdict.window_seconds,
     )
     # Полный CRITICAL обязан держать быстрый режим даже если reported сдвинулся на
-    # допустимые 1–5¢ и ранний exact-zero trigger на этом тике не сработал.
-    await _activate_shadow_burst(
-        redis_client,
-        account_id=account_id,
-        sample=sample,
-    )
-    # Web-critical сохраняется ДО попытки Telegram-доставки. Если owner ещё не сделал
-    # /start или TG недоступен, Dashboard всё равно покажет money-сигнал.
-    await _store_shadow_critical(
-        redis_client,
-        account_id=account_id,
-        verdict=verdict,
-    )
-    return await _maybe_alert_with_dedup(
-        redis_client,
-        dedup_key=dedup_key,
-        text=build_shadow_spend_alert(account_id, verdict),
-        engine=engine,
-        ttl_seconds=SHADOW_ALERT_DEDUP_TTL_SECONDS,
-    )
+    # допустимое малое движение и ранний exact-zero trigger на этом тике не сработал.
+    if not burst_activated:
+        await _activate_shadow_burst(
+            engine,
+            account_id=account_id,
+            sample=sample,
+        )
+    return decision.incident_event_committed
 
 
 async def check_shadow_spend(
     meta_client: Any,
-    redis_client: redis_asyncio.Redis,
     *,
     engine: AsyncEngine,
     now: datetime | None = None,
 ) -> bool:
     """Один прогон сторожка по всем активным кабинетам. Возвращает True, если был алерт.
 
-    Гейт: работает только когда сканирование включено И observer:runtime свежий (иначе
-    reported-сторона стоит по определению → ложные тени). Graph-ошибки на конкретном
-    кабинете не валят остальные (best-effort per-account).
+    Гейт: работает только когда сканирование включено и cabinet_runtime подтверждает
+    свежие snapshots. Graph-ошибки на конкретном кабинете не валят остальные.
     """
-    now = now or datetime.now(UTC)
-
-    if not await _is_reported_side_live(redis_client, engine, now=now):
-        logger.info("shadow: сканирование выключено/observer стоит — тик пропущен")
-        return False
+    now = now or await _database_now(engine)
 
     from core.meta_api.account_tz import (
-        DEFAULT_OFFSET_HOURS,
         active_account_ids,
-        load_offset_map,
+        resolve_account_currencies,
+        resolve_cabinet_days,
     )
 
     account_ids = await active_account_ids(engine)
     if not account_ids:
         return False
-    tz_map = await load_offset_map(redis_client, account_ids)
-    default_offset = next(iter(tz_map.values()), DEFAULT_OFFSET_HOURS)
+    if not await _is_reported_side_live(engine, account_ids=account_ids, now=now):
+        logger.info("shadow: сканирование выключено/observer стоит — тик пропущен")
+        return False
+    cabinet_days = await resolve_cabinet_days(engine, account_ids=account_ids, now=now)
+    currencies = await resolve_account_currencies(
+        engine,
+        account_ids=account_ids,
+        now=now,
+    )
 
     alerted = False
     for account_id in account_ids:
+        canonical_account_id = str(account_id).removeprefix("act_")
+        currency = currencies.currencies.get(canonical_account_id)
+        currency_issue: str | None = None
+        if currency is None:
+            currency_issue = "Валюта Meta отсутствует, устарела или невалидна"
+        else:
+            try:
+                campaign_currency_exponent(currency)
+            except UnsupportedCampaignCurrencyError:
+                currency_issue = (
+                    f"Для {currency} не подтверждён exponent минимальной денежной единицы"
+                )
+        currency_incident_key = f"{SHADOW_CURRENCY_INCIDENT_KEY_PREFIX}{canonical_account_id}"
+        if currency_issue is not None:
+            currency_alerted = await notify_recurring_incident(
+                engine,
+                incident_key=currency_incident_key,
+                audience="all",
+                event_type="meta_reporting_shadow_currency_unknown",
+                severity="critical",
+                title=f"Тень отчётности недоступна · act_{canonical_account_id}",
+                summary=currency_issue,
+                lines=["Денежные значения скрыты; сравнение не выполняется"],
+                risk="Watchdog не может сравнить billing и reporting",
+                resource_type="ad_account",
+                resource_id=canonical_account_id,
+            )
+            alerted = alerted or currency_alerted
+            continue
+        await resolve_recurring_incident(
+            engine,
+            incident_key=currency_incident_key,
+            audience="all",
+            summary=(
+                f"act_{canonical_account_id}: валюта {currency} и exponent снова подтверждены."
+            ),
+        )
+        if canonical_account_id in cabinet_days.missing_account_ids:
+            logger.warning(
+                "shadow: act_%s пропущен — IANA timezone не подтверждена в PostgreSQL",
+                canonical_account_id,
+            )
+            continue
         try:
             sent = await _check_shadow_for_account(
                 meta_client,
-                redis_client,
                 engine,
-                account_id=account_id,
-                tz_map=tz_map,
-                default_offset=default_offset,
+                account_id=canonical_account_id,
+                currency=currency,
+                cabinet_day_start=cabinet_days.query_boundaries[canonical_account_id],
                 now=now,
             )
             alerted = alerted or sent
@@ -1142,92 +1190,56 @@ async def check_shadow_spend(
     return alerted
 
 
-async def _publish_health_updated(
-    redis_client: redis_asyncio.Redis,
-    *,
-    expected_workers: list[str],
-) -> None:
-    """Best-effort publish сводки здоровья воркеров в fb_agent:health:updated."""
-    offline: list[str] = []
-    for name in expected_workers:
-        hb_key = f"worker:heartbeat:{name}"
-        try:
-            val = await redis_client.get(hb_key)
-            if val is None:
-                offline.append(name)
-        except Exception:
-            offline.append(name)
-
-    if len(offline) == 0:
-        overall = "HEALTHY"
-    elif len(offline) < len(expected_workers):
-        overall = "DEGRADED"
-    else:
-        overall = "CRITICAL"
-
-    try:
-        payload = json.dumps(
-            {
-                "overall": overall,
-                "offline": offline,
-                "timestamp": datetime.now(UTC).isoformat(),
-            },
-            ensure_ascii=False,
-        )
-        await redis_client.publish(CHANNEL_HEALTH_UPDATED, payload)
-    except Exception:
-        logger.warning("health_watchdog: не удалось publish в %s", CHANNEL_HEALTH_UPDATED)
-
-
-async def run_one_check(
-    redis_client: redis_asyncio.Redis,
-    *,
-    expected_workers: list[str],
-    engine: AsyncEngine,
-) -> None:
-    """Один прогон: heartbeat'ы + observer:runtime + канал авто-стопа + publish health:updated."""
-    await check_worker_heartbeats(
-        redis_client,
-        expected_workers=expected_workers,
-        engine=engine,
-    )
-    await check_observer_runtime(
-        redis_client,
-        engine=engine,
-    )
-    await check_autostop_channel(engine, redis_client)
-    # Публикуем сводку health в Redis-канал (best-effort)
-    await _publish_health_updated(redis_client, expected_workers=expected_workers)
+async def run_one_check(*, engine: AsyncEngine) -> None:
+    """Run the durable auto-stop channel check once."""
+    await check_autostop_channel(engine)
 
 
 # ====================== loops ======================
 
 
-async def heartbeat_loop(redis_client: redis_asyncio.Redis, stop: asyncio.Event) -> None:
-    """Периодически обновляет worker:heartbeat:health_watchdog."""
-    interval = HEARTBEAT_TTL_SECONDS / 2
+async def metrics_loop(stop: asyncio.Event) -> None:
+    """Refresh process metrics without publishing a second liveness authority."""
+    interval = 15.0
     while not stop.is_set():
-        try:
-            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
-        except Exception:  # noqa: BLE001
-            logger.exception("heartbeat: ошибка записи в Redis")
+        mark_worker_heartbeat(WORKER_NAME)
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
             pass
 
 
-async def check_loop(
-    redis_client: redis_asyncio.Redis,
+async def browser_readiness_loop(
+    meta_client: _MetaProbeClient,
     *,
-    expected_workers: list[str],
+    stop: asyncio.Event,
+    engine: AsyncEngine,
+    interval: float = BROWSER_READINESS_INTERVAL_SECONDS,
+    ttl_seconds: int = BROWSER_READINESS_TTL_SECONDS,
+) -> None:
+    """Continuously publish bounded v5/profile evidence for task scheduling."""
+    while not stop.is_set():
+        await probe_and_publish_browser_readiness(
+            engine,
+            meta_client,
+            writer_instance=_BROWSER_READINESS_WRITER_INSTANCE,
+            ttl_seconds=ttl_seconds,
+        )
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=max(0.1, interval))
+        except asyncio.TimeoutError:
+            pass
+
+
+async def check_loop(
+    *,
     stop: asyncio.Event,
     engine: AsyncEngine,
 ) -> None:
     """Главный цикл проверок раз в CHECK_INTERVAL_SECONDS.
 
-    Перед ПЕРВОЙ проверкой выжидает STARTUP_GRACE_SECONDS — даёт воркерам стартовать
-    и записать первый heartbeat (иначе ложный «не дышит» при совместном старте).
+    Перед первой проверкой выжидает STARTUP_GRACE_SECONDS, чтобы дать control plane
+    завершить совместный старт.
     """
     # Grace при старте, прерываемый shutdown'ом.
     try:
@@ -1237,11 +1249,7 @@ async def check_loop(
 
     while not stop.is_set():
         try:
-            await run_one_check(
-                redis_client,
-                expected_workers=expected_workers,
-                engine=engine,
-            )
+            await run_one_check(engine=engine)
         except Exception:  # noqa: BLE001
             logger.exception("ошибка в цикле проверок")
         try:
@@ -1252,7 +1260,6 @@ async def check_loop(
 
 async def meta_probe_loop(
     meta_client: _MetaProbeClient,
-    redis_client: redis_asyncio.Redis,
     *,
     stop: asyncio.Event,
     engine: AsyncEngine,
@@ -1271,11 +1278,7 @@ async def meta_probe_loop(
 
     while not stop.is_set():
         try:
-            await check_meta_api_channel(
-                meta_client,
-                redis_client,
-                engine=engine,
-            )
+            await check_meta_api_channel(meta_client, engine=engine)
         except Exception:  # noqa: BLE001
             logger.exception("ошибка в meta_probe_loop")
         try:
@@ -1286,7 +1289,6 @@ async def meta_probe_loop(
 
 async def shadow_spend_loop(
     meta_client: Any,
-    redis_client: redis_asyncio.Redis,
     *,
     stop: asyncio.Event,
     engine: AsyncEngine,
@@ -1297,7 +1299,7 @@ async def shadow_spend_loop(
     Ловит money-класс перекрута: биллинг кабинета (amount_spent) растёт, а пер-адная
     отчётность (am_tabular → current_day_spend) стоит → реальный открут не виден скану.
     Гейт check_shadow_spend работает только при включённом сканировании и свежем
-    observer:runtime. Перед первой проверкой выжидает STARTUP_GRACE_SECONDS.
+    cabinet_runtime snapshot. Перед первой проверкой выжидает STARTUP_GRACE_SECONDS.
     Best-effort: ошибки не валят цикл.
     """
     try:
@@ -1307,7 +1309,7 @@ async def shadow_spend_loop(
 
     while not stop.is_set():
         try:
-            await check_shadow_spend(meta_client, redis_client, engine=engine)
+            await check_shadow_spend(meta_client, engine=engine)
         except Exception:  # noqa: BLE001
             logger.exception("ошибка в shadow_spend_loop")
         try:
@@ -1352,22 +1354,11 @@ def _get_database_url() -> str:
     return get_settings().database_url
 
 
-def _get_redis_url() -> str:
-    return os.environ.get("REDIS_URL", "redis://localhost:6380/0")
-
-
 async def main_loop(database_url: str | None = None) -> None:
     from core.meta_api.client import MetaApiClient
 
     db_url = database_url or _get_database_url()
     engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
-    redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
-
-    expected_workers = parse_expected_workers(
-        os.environ.get("EXPECTED_WORKERS", DEFAULT_EXPECTED_WORKERS)
-    )
-    if not expected_workers:
-        logger.warning("EXPECTED_WORKERS пуст — heartbeat-проверки не выполняются")
 
     # MetaApiClient для сетевого probe канала auto-stop (eager-init: gRPC-канал ленивый,
     # старт не блокирует; недоступность browser-agent probe-цикл трактует как «канал мёртв»).
@@ -1385,21 +1376,24 @@ async def main_loop(database_url: str | None = None) -> None:
         except (NotImplementedError, RuntimeError):
             pass
 
-    logger.info(
-        "health_watchdog запущен (workers=%s, interval=%ss)",
-        expected_workers,
-        CHECK_INTERVAL_SECONDS,
-    )
+    logger.info("health_watchdog запущен (interval=%ss)", CHECK_INTERVAL_SECONDS)
     try:
         # Каждый цикл под _supervised + return_exceptions: упавший цикл
         # перезапускается, а не гасит воркер молча (инцидент 01.07).
         loops = [
-            _supervised("heartbeat_loop", lambda: heartbeat_loop(redis_client, stop), stop),
+            _supervised("metrics_loop", lambda: metrics_loop(stop), stop),
+            _supervised(
+                "browser_readiness_loop",
+                lambda: browser_readiness_loop(
+                    meta_client,
+                    stop=stop,
+                    engine=engine,
+                ),
+                stop,
+            ),
             _supervised(
                 "check_loop",
                 lambda: check_loop(
-                    redis_client,
-                    expected_workers=expected_workers,
                     stop=stop,
                     engine=engine,
                 ),
@@ -1409,7 +1403,6 @@ async def main_loop(database_url: str | None = None) -> None:
                 "meta_probe_loop",
                 lambda: meta_probe_loop(
                     meta_client,
-                    redis_client,
                     stop=stop,
                     engine=engine,
                 ),
@@ -1423,7 +1416,6 @@ async def main_loop(database_url: str | None = None) -> None:
                     "shadow_spend_loop",
                     lambda: shadow_spend_loop(
                         meta_client,
-                        redis_client,
                         stop=stop,
                         engine=engine,
                     ),
@@ -1438,9 +1430,5 @@ async def main_loop(database_url: str | None = None) -> None:
             await meta_client.close()
         except Exception:  # noqa: BLE001
             logger.exception("ошибка закрытия MetaApiClient")
-        try:
-            await redis_client.aclose()
-        except Exception:  # noqa: BLE001
-            logger.exception("ошибка закрытия Redis-клиента")
         await engine.dispose()
         logger.info("health_watchdog остановлен")

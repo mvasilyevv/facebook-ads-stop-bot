@@ -1,6 +1,5 @@
 /**
  * Drawer — right-side slide-in.
- * Спека: ads.html .drawer — 640px, overlay blur(2px), header/body/footer.
  * Esc закрывает, focus-trap через Radix Dialog.Content.
  * Width: 480px (default) / 640px (timeline drill-down).
  */
@@ -39,10 +38,10 @@ export function Drawer({
         {/* Overlay — scrim без blur (канон: depth через 1px border, не тени/blur) */}
         <Dialog.Overlay className="fixed inset-0 bg-[rgba(10,10,11,0.66)] z-[50] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
         <Dialog.Content
-          style={{ width: `${width}px` }}
+          style={{ width: "100%", maxWidth: `${width}px` }}
           className={cn(
             "fixed top-0 right-0 bottom-0 z-[51]",
-            "bg-bg-1 border-l border-[var(--hairline)] rounded-l-[var(--radius-3)] overflow-hidden",
+            "bg-bg-1 border-l border-[var(--color-hairline)] rounded-l-[var(--radius-3)] overflow-hidden",
             "flex flex-col",
             "focus:outline-none",
             // Slide-in анимация
@@ -61,10 +60,10 @@ export function Drawer({
           )}
 
           {/* Header */}
-          <div className="flex items-start justify-between border-b border-[var(--hairline)] px-8 py-6 gap-4 shrink-0">
+          <div className="flex shrink-0 items-start justify-between gap-4 border-b border-[var(--color-hairline)] px-4 py-5 sm:px-8 sm:py-6">
             <div className="flex-1 min-w-0">
               {eyebrow ? (
-                <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-2">
+                <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-2">
                   {eyebrow}
                 </div>
               ) : null}
@@ -74,7 +73,7 @@ export function Drawer({
                 </Dialog.Title>
               ) : null}
               {description ? (
-                <Dialog.Description className="text-[11px] font-display text-bg-9 tracking-[0.02em]">
+                <Dialog.Description className="text-[12px] font-display text-bg-9 tracking-[0.02em]">
                   {description}
                 </Dialog.Description>
               ) : null}
@@ -83,8 +82,8 @@ export function Drawer({
             <Dialog.Close
               aria-label="Закрыть"
               className={cn(
-                "size-8 shrink-0 inline-flex items-center justify-center rounded-[var(--radius-2)]",
-                "bg-transparent border border-[var(--hairline-strong)] text-bg-10",
+                "size-11 shrink-0 inline-flex items-center justify-center rounded-[var(--radius-2)]",
+                "bg-transparent border border-[var(--color-hairline-strong)] text-bg-10",
                 "hover:bg-bg-2 transition-colors duration-[120ms]",
                 "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
               )}
@@ -94,13 +93,11 @@ export function Drawer({
           </div>
 
           {/* Body — прокручиваемая зона */}
-          <div className="flex-1 overflow-y-auto px-8 py-6">
-            {children}
-          </div>
+          <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-6">{children}</div>
 
           {/* Footer — если задан */}
           {footer ? (
-            <div className="shrink-0 border-t border-[var(--hairline)] px-8 py-4 bg-bg-1 flex items-center justify-between gap-3">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--color-hairline)] bg-bg-1 px-4 py-4 sm:px-8">
               {footer}
             </div>
           ) : null}

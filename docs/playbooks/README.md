@@ -46,13 +46,18 @@ AdSet.pro». Знание живёт в ОДНОМ месте, накаплив�
 ## Запуск сессии
 - **Пайплайн целиком (новый оффер/гео):** team-режим по `team-protocol.md` — lead раскладывает задачи с зависимостями, спавнит teammates (`syntx`/`adsetpro`/`fb`/`qa`), каждый handoff через qa-гейт.
 - **Креатив/залив (разовое):** вызови нужного агента (`syntx` / `video` / `adsetpro` / `fb`) — он сам прочитает свой playbook. Или вручную: этот README → нужный playbook → `market-profile/<GEO>` → `offer-profiling`. Методология цикла — `docs/creatives/SOP.md`; находки/винеры — `docs/creative_kb.md`.
-- **Стек для залива:** `./run.sh --no-tunnel` (детали — `campaign-launch.md` § подъём стека).
+- **Локальная проверка operator/TG-контуров:** только
+  `FB_AGENT_PROFILE=local ./scripts/run-local.sh`; этот contour намеренно не
+  содержит browser/Meta/money workers и не предназначен для залива.
+- **Залив и production runtime:** только human-controlled safety-first platform
+  contour из `DEPLOYMENT.md` и `deploy/compose/`.
 - **git:** коммитим сами, когда работа дошла до логической точки (фиксы, новые инструменты, обновления доки) — **без ожидания явной просьбы**. НЕ коммитим секреты (`.env`, `*.key`, токены, `data/`, конфиги с ключами). Push и необратимое в проде (залив/unpause/массовые операции, ввод кредов) — подтверждать заранее.
 
 ## Где что ещё (не дублируем)
 - `CLAUDE.md` — архитектура кодовой базы.
-- `META_INTEGRATION_PLAN.md` — интеграция Marketing API.
-- `DB_REDESIGN.md` — схема БД.
+- `DEPLOYMENT.md` и `deploy/bluegreen/README.md` — production topology и release contract.
+- `core/models/` + `migrations/` — фактический контракт схемы БД.
+- OpenAPI + generated clients — фактический контракт backend/frontend.
 - `docs/creatives/SOP.md` — полный цикл креативов (фазы 0-4, методология). Playbooks =
   операционные выжимки «как делать руками/командами», SOP = методология цикла.
 

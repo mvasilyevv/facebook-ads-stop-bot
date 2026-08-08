@@ -1,6 +1,7 @@
 @import "tailwindcss";
 /* Единый источник токенов (@fb/shared). Относительный путь — надёжный резолв в CSS-пайплайне. */
 @import "../../../packages/shared/src/tokens/tokens.css";
+@import "../../../packages/operator-ui/src/styles.css";
 
 html,
 body,
@@ -19,9 +20,18 @@ body {
   font-feature-settings: "ss01", "cv11";
 }
 
+* {
+  box-sizing: border-box;
+}
+
+:focus-visible {
+  scroll-margin-top: 72px;
+  scroll-margin-bottom: 88px;
+}
+
 /* Grain overlay — editorial atmosphere (opacity 0.02) */
 body::before {
-  content: '';
+  content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
@@ -32,10 +42,60 @@ body::before {
 
 /* WorkerPulse анимация */
 @keyframes pulse-dot {
-  0%, 100% { box-shadow: 0 0 0 0 var(--pulse-glow, rgba(126, 180, 122, 0.4)); }
-  50%       { box-shadow: 0 0 0 6px rgba(0, 0, 0, 0); }
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--pulse-glow, rgba(126, 180, 122, 0.4));
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(0, 0, 0, 0);
+  }
 }
 
 .pulse-dot {
   animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.operator-ad-severity {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+  color: var(--color-bg-9);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.operator-ad-severity[data-severity="ok"] {
+  color: var(--color-success);
+}
+.operator-ad-severity[data-severity="warning"] {
+  color: var(--color-warning);
+}
+.operator-ad-severity[data-severity="critical"] {
+  color: var(--color-danger);
+}
+.operator-ad-severity[data-severity="unknown"] {
+  color: var(--color-bg-8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid CanvasText !important;
+    outline-offset: 2px !important;
+  }
 }

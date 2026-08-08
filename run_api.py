@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Entrypoint для FastAPI (run.sh / supervisord).
+"""Container-compatible entrypoint для FastAPI.
 
-Стартует uvicorn на 0.0.0.0:${API_PORT:-8100} — единый порт с run.sh,
-docker-compose, Vite proxy и k8s service.
+Стартует uvicorn на 0.0.0.0:${API_PORT:-8100}.
 """
 
 from __future__ import annotations

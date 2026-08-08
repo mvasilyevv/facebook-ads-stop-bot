@@ -18,6 +18,14 @@ class ExecuteGraphCallRequest(_message.Message):
         "body_json",
         "timeout_ms",
         "ad_account_id",
+        "vision_profile_id",
+        "authorized_caller",
+        "task_id",
+        "lease_owner",
+        "lease_token",
+        "capability_expires_at",
+        "capability_nonce",
+        "capability_signature",
     )
     class QueryParamsEntry(_message.Message):
         __slots__ = ("key", "value")
@@ -34,6 +42,14 @@ class ExecuteGraphCallRequest(_message.Message):
     BODY_JSON_FIELD_NUMBER: _ClassVar[int]
     TIMEOUT_MS_FIELD_NUMBER: _ClassVar[int]
     AD_ACCOUNT_ID_FIELD_NUMBER: _ClassVar[int]
+    VISION_PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    AUTHORIZED_CALLER_FIELD_NUMBER: _ClassVar[int]
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    LEASE_OWNER_FIELD_NUMBER: _ClassVar[int]
+    LEASE_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITY_EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITY_NONCE_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITY_SIGNATURE_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     method: str
     endpoint: str
@@ -41,6 +57,14 @@ class ExecuteGraphCallRequest(_message.Message):
     body_json: str
     timeout_ms: int
     ad_account_id: str
+    vision_profile_id: str
+    authorized_caller: str
+    task_id: int
+    lease_owner: str
+    lease_token: int
+    capability_expires_at: int
+    capability_nonce: str
+    capability_signature: str
     def __init__(
         self,
         session_id: _Optional[str] = ...,
@@ -50,6 +74,14 @@ class ExecuteGraphCallRequest(_message.Message):
         body_json: _Optional[str] = ...,
         timeout_ms: _Optional[int] = ...,
         ad_account_id: _Optional[str] = ...,
+        vision_profile_id: _Optional[str] = ...,
+        authorized_caller: _Optional[str] = ...,
+        task_id: _Optional[int] = ...,
+        lease_owner: _Optional[str] = ...,
+        lease_token: _Optional[int] = ...,
+        capability_expires_at: _Optional[int] = ...,
+        capability_nonce: _Optional[str] = ...,
+        capability_signature: _Optional[str] = ...,
     ) -> None: ...
 
 class ExecuteGraphCallResponse(_message.Message):
@@ -92,12 +124,19 @@ class GraphApiError(_message.Message):
     ) -> None: ...
 
 class CheckMetaApiHealthRequest(_message.Message):
-    __slots__ = ("session_id", "full_probe")
+    __slots__ = ("session_id", "full_probe", "expected_vision_profile_id")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     FULL_PROBE_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_VISION_PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     full_probe: bool
-    def __init__(self, session_id: _Optional[str] = ..., full_probe: bool = ...) -> None: ...
+    expected_vision_profile_id: str
+    def __init__(
+        self,
+        session_id: _Optional[str] = ...,
+        full_probe: bool = ...,
+        expected_vision_profile_id: _Optional[str] = ...,
+    ) -> None: ...
 
 class CheckMetaApiHealthResponse(_message.Message):
     __slots__ = (
@@ -111,6 +150,9 @@ class CheckMetaApiHealthResponse(_message.Message):
         "probe_status_code",
         "probe_duration_ms",
         "probe_detail",
+        "browser_contract_version",
+        "session_id",
+        "vision_profile_id",
     )
     HEALTHY_FIELD_NUMBER: _ClassVar[int]
     CURRENT_URL_FIELD_NUMBER: _ClassVar[int]
@@ -122,6 +164,9 @@ class CheckMetaApiHealthResponse(_message.Message):
     PROBE_STATUS_CODE_FIELD_NUMBER: _ClassVar[int]
     PROBE_DURATION_MS_FIELD_NUMBER: _ClassVar[int]
     PROBE_DETAIL_FIELD_NUMBER: _ClassVar[int]
+    BROWSER_CONTRACT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    VISION_PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
     healthy: bool
     current_url: str
     token_present: bool
@@ -132,6 +177,9 @@ class CheckMetaApiHealthResponse(_message.Message):
     probe_status_code: int
     probe_duration_ms: int
     probe_detail: str
+    browser_contract_version: int
+    session_id: str
+    vision_profile_id: str
     def __init__(
         self,
         healthy: bool = ...,
@@ -144,6 +192,9 @@ class CheckMetaApiHealthResponse(_message.Message):
         probe_status_code: _Optional[int] = ...,
         probe_duration_ms: _Optional[int] = ...,
         probe_detail: _Optional[str] = ...,
+        browser_contract_version: _Optional[int] = ...,
+        session_id: _Optional[str] = ...,
+        vision_profile_id: _Optional[str] = ...,
     ) -> None: ...
 
 class UploadImageRequest(_message.Message):
@@ -153,23 +204,41 @@ class UploadImageRequest(_message.Message):
         "filename",
         "content_type",
         "file_bytes",
-        "image_url",
-        "name",
+        "vision_profile_id",
+        "authorized_caller",
+        "task_id",
+        "lease_owner",
+        "lease_token",
+        "capability_expires_at",
+        "capability_nonce",
+        "capability_signature",
     )
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     AD_ACCOUNT_ID_FIELD_NUMBER: _ClassVar[int]
     FILENAME_FIELD_NUMBER: _ClassVar[int]
     CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
     FILE_BYTES_FIELD_NUMBER: _ClassVar[int]
-    IMAGE_URL_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
+    VISION_PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    AUTHORIZED_CALLER_FIELD_NUMBER: _ClassVar[int]
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    LEASE_OWNER_FIELD_NUMBER: _ClassVar[int]
+    LEASE_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITY_EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITY_NONCE_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITY_SIGNATURE_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     ad_account_id: str
     filename: str
     content_type: str
     file_bytes: bytes
-    image_url: str
-    name: str
+    vision_profile_id: str
+    authorized_caller: str
+    task_id: int
+    lease_owner: str
+    lease_token: int
+    capability_expires_at: int
+    capability_nonce: str
+    capability_signature: str
     def __init__(
         self,
         session_id: _Optional[str] = ...,
@@ -177,8 +246,14 @@ class UploadImageRequest(_message.Message):
         filename: _Optional[str] = ...,
         content_type: _Optional[str] = ...,
         file_bytes: _Optional[bytes] = ...,
-        image_url: _Optional[str] = ...,
-        name: _Optional[str] = ...,
+        vision_profile_id: _Optional[str] = ...,
+        authorized_caller: _Optional[str] = ...,
+        task_id: _Optional[int] = ...,
+        lease_owner: _Optional[str] = ...,
+        lease_token: _Optional[int] = ...,
+        capability_expires_at: _Optional[int] = ...,
+        capability_nonce: _Optional[str] = ...,
+        capability_signature: _Optional[str] = ...,
     ) -> None: ...
 
 class UploadImageResponse(_message.Message):
@@ -212,6 +287,14 @@ class UploadVideoChunk(_message.Message):
         "chunk_index",
         "is_last_chunk",
         "is_init",
+        "vision_profile_id",
+        "authorized_caller",
+        "task_id",
+        "lease_owner",
+        "lease_token",
+        "capability_expires_at",
+        "capability_nonce",
+        "capability_signature",
     )
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     AD_ACCOUNT_ID_FIELD_NUMBER: _ClassVar[int]
@@ -221,6 +304,14 @@ class UploadVideoChunk(_message.Message):
     CHUNK_INDEX_FIELD_NUMBER: _ClassVar[int]
     IS_LAST_CHUNK_FIELD_NUMBER: _ClassVar[int]
     IS_INIT_FIELD_NUMBER: _ClassVar[int]
+    VISION_PROFILE_ID_FIELD_NUMBER: _ClassVar[int]
+    AUTHORIZED_CALLER_FIELD_NUMBER: _ClassVar[int]
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    LEASE_OWNER_FIELD_NUMBER: _ClassVar[int]
+    LEASE_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITY_EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITY_NONCE_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITY_SIGNATURE_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     ad_account_id: str
     filename: str
@@ -229,6 +320,14 @@ class UploadVideoChunk(_message.Message):
     chunk_index: int
     is_last_chunk: bool
     is_init: bool
+    vision_profile_id: str
+    authorized_caller: str
+    task_id: int
+    lease_owner: str
+    lease_token: int
+    capability_expires_at: int
+    capability_nonce: str
+    capability_signature: str
     def __init__(
         self,
         session_id: _Optional[str] = ...,
@@ -239,6 +338,14 @@ class UploadVideoChunk(_message.Message):
         chunk_index: _Optional[int] = ...,
         is_last_chunk: bool = ...,
         is_init: bool = ...,
+        vision_profile_id: _Optional[str] = ...,
+        authorized_caller: _Optional[str] = ...,
+        task_id: _Optional[int] = ...,
+        lease_owner: _Optional[str] = ...,
+        lease_token: _Optional[int] = ...,
+        capability_expires_at: _Optional[int] = ...,
+        capability_nonce: _Optional[str] = ...,
+        capability_signature: _Optional[str] = ...,
     ) -> None: ...
 
 class UploadVideoResponse(_message.Message):

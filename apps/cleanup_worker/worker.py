@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -21,18 +20,16 @@ from apps.cleanup_worker.retention import (
     get_default_policy,
     is_special,
 )
+from core.auth.panel_access import cleanup_expired_panel_auth_records
 
 logger = logging.getLogger(__name__)
 
-# 8 партиционированных таблиц + столбец-партиция + ключ в retention_policy
+# 5 партиционированных таблиц + столбец-партиция + ключ в retention_policy
 _PARTITIONED: list[tuple[str, str, str]] = [
     ("ad_metrics", "cycle_ts", "ad_metrics"),
     ("alert_events", "created_at", "alert_events"),
     ("scan_runs", "started_at", "scan_runs"),
     ("meta_api_audit_log", "created_at", "meta_api_audit_log"),
-    ("meta_api_webhook_event", "received_at", "meta_api_webhook_event"),
-    ("ad_library_snapshot", "scanned_at", "ad_library_snapshot"),
-    ("tracker_postback", "received_at", "tracker_postback"),
     ("adsetpro_postback_events", "received_at", "adsetpro_postback_events"),
 ]
 
@@ -183,7 +180,10 @@ async def _create_month_partition(
 
 
 async def create_next_partition_if_missing(
-    engine: AsyncEngine, *, now: datetime | None = None
+    engine: AsyncEngine,
+    *,
+    now: datetime | None = None,
+    fail_on_error: bool = False,
 ) -> dict[str, int]:
     """Создаёт партиции на текущий + следующий месяц для всех партиционированных таблиц.
 
@@ -192,6 +192,7 @@ async def create_next_partition_if_missing(
     """
     now = now or datetime.now(timezone.utc)
     created: dict[str, int] = {}
+    failures: list[str] = []
 
     months_to_ensure: list[tuple[int, int]] = [(now.year, now.month)]
     if now.month == 12:
@@ -215,7 +216,10 @@ async def create_next_partition_if_missing(
                 logger.exception(
                     "create partition для %s [%s..%s) не удалось: %s", table, fr, to, exc
                 )
+                failures.append(f"{table}[{fr},{to}): {exc}")
         created[table] = count_created
+    if failures and fail_on_error:
+        raise RuntimeError("startup partition preparation failed: " + "; ".join(failures))
     return created
 
 
@@ -250,17 +254,50 @@ async def delete_task_queue_completed(
             )
             deleted_total += result.rowcount or 0
 
-    # Draft cleanup — 24 часа
+    return deleted_total
+
+
+async def delete_expired_browser_operation_leases(engine: AsyncEngine) -> int:
+    """Delete direct-operation rows only after their durable lease has expired."""
     async with engine.begin() as conn:
         result = await conn.execute(
             text(
-                "DELETE FROM task_queue "
-                "WHERE status = 'draft' AND created_at < NOW() - INTERVAL '24 hours'"
+                """
+                DELETE FROM browser_operation_leases
+                WHERE lease_expires_at <= clock_timestamp()
+                """
             )
         )
-        deleted_total += result.rowcount or 0
+        return int(result.rowcount or 0)
 
-    return deleted_total
+
+async def delete_expired_adset_duplicate_previews(engine: AsyncEngine) -> int:
+    """Delete expired unconsumed capabilities; consumed rows follow task retention."""
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                DELETE FROM adset_duplicate_previews
+                WHERE expires_at <= clock_timestamp()
+                  AND task_id IS NULL
+                """
+            )
+        )
+        return int(result.rowcount or 0)
+
+
+async def delete_expired_browser_operation_capabilities(engine: AsyncEngine) -> int:
+    """Delete grants only after their signed expiry can no longer be accepted."""
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                DELETE FROM browser_operation_capability_uses
+                WHERE expires_at <= clock_timestamp()
+                """
+            )
+        )
+        return int(result.rowcount or 0)
 
 
 async def delete_enable_recommendations(
@@ -296,59 +333,31 @@ async def delete_expired_invites(
         return result.rowcount or 0
 
 
-async def delete_old_cabinet_archives(
+async def delete_old_operator_revision_events(
     engine: AsyncEngine, policy: dict[str, str], *, now: datetime | None = None
 ) -> int:
-    retention = policy.get("cabinet_day_archives", "365 days")
+    """Delete old cursor events while always retaining the latest revision.
+
+    Operator reconciliation only reads the monotonic maximum.  Keeping the
+    current maximum makes an empty cursor impossible even when the system has
+    been idle longer than the retention window.
+    """
+    retention = policy.get("operator_revision_events", "7 days")
     if is_special(retention):
         return 0
     cutoff = cutoff_datetime(retention, now=now)
     async with engine.begin() as conn:
-        result = await conn.execute(
-            text("DELETE FROM cabinet_day_archives WHERE started_at < :cutoff"),
-            {"cutoff": cutoff},
-        )
-        return result.rowcount or 0
-
-
-async def delete_old_ad_library_scans(
-    engine: AsyncEngine, policy: dict[str, str], *, now: datetime | None = None
-) -> int:
-    retention = policy.get("ad_library_scan", "14 days")
-    if is_special(retention):
-        return 0
-    cutoff = cutoff_datetime(retention, now=now)
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text("DELETE FROM ad_library_scan WHERE started_at < :cutoff"),
-            {"cutoff": cutoff},
-        )
-        return result.rowcount or 0
-
-
-async def delete_orphan_ad_library_ads(
-    engine: AsyncEngine, policy: dict[str, str], *, now: datetime | None = None
-) -> int:
-    """Удаляет ad_library_ad без свежих snapshot'ов и не в winner_archive."""
-    retention = policy.get("ad_library_ad_orphan", "14 days")
-    if is_special(retention):
-        return 0
-    cutoff = cutoff_datetime(retention, now=now)
-    async with engine.begin() as conn:
-        # Сначала собираем кандидатов чтобы потом удалить связанные media files
         result = await conn.execute(
             text(
                 """
-                DELETE FROM ad_library_ad a
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM ad_library_snapshot s
-                    WHERE s.ad_archive_id = a.ad_archive_id
-                      AND s.scanned_at > :cutoff
+                WITH latest AS (
+                    SELECT MAX(revision) AS revision
+                    FROM operator_revision_events
                 )
-                AND NOT EXISTS (
-                    SELECT 1 FROM ad_library_winner_archive w
-                    WHERE w.ad_archive_id = a.ad_archive_id
-                )
+                DELETE FROM operator_revision_events AS event
+                USING latest
+                WHERE event.created_at < :cutoff
+                  AND event.revision < latest.revision
                 """
             ),
             {"cutoff": cutoff},
@@ -356,27 +365,185 @@ async def delete_orphan_ad_library_ads(
         return result.rowcount or 0
 
 
-def cleanup_orphan_media_files(media_root: Path, db_paths: set[str]) -> int:
-    """Удаляет файлы с диска которых нет в БД (FS-scan).
+async def delete_terminal_notification_control_plane(
+    engine: AsyncEngine,
+    policy: dict[str, str],
+    *,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Bound durable Telegram history without crossing safety boundaries.
 
-    Это синхронная функция (filesystem I/O) — вызывается в потоке.
-    Возвращает количество удалённых файлов.
+    Cleanup is deliberately terminal-state based.  It never removes active
+    incidents, pending/retry/leased deliveries or updates, and notification
+    events remain the dedupe authority until every delivery has been terminal
+    for the configured audit window.
     """
-    if not media_root.exists():
-        return 0
-    deleted = 0
-    for f in media_root.rglob("*"):
-        if not f.is_file():
-            continue
-        rel = str(f)
-        # Все варианты пути в БД — абсолютные и относительные
-        if rel not in db_paths and str(f.relative_to(media_root.parent)) not in db_paths:
-            try:
-                f.unlink()
-                deleted += 1
-            except OSError as exc:
-                logger.warning("Не смог удалить %s: %s", f, exc)
-    return deleted
+    now = now or datetime.now(timezone.utc)
+    keys = {
+        "action_tokens": ("telegram_action_tokens_terminal", "90 days"),
+        "navigation_tokens": ("telegram_navigation_tokens_terminal", "30 days"),
+        "command_replies": ("telegram_command_replies_terminal", "90 days"),
+        "updates": ("telegram_updates_terminal", "90 days"),
+        "incidents": ("incidents_terminal", "365 days"),
+        "events": ("notification_events_terminal", "365 days"),
+    }
+    cutoffs: dict[str, datetime | None] = {}
+    for label, (policy_key, default) in keys.items():
+        retention = policy.get(policy_key, default)
+        cutoffs[label] = None if is_special(retention) else cutoff_datetime(retention, now=now)
+
+    counts = {
+        "telegram_action_tokens": 0,
+        "telegram_navigation_tokens": 0,
+        "telegram_command_replies": 0,
+        "telegram_updates_inbox": 0,
+        "incidents": 0,
+        "notification_events": 0,
+        "notification_deliveries": 0,
+    }
+
+    cutoff = cutoffs["action_tokens"]
+    if cutoff is not None:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    """
+                    DELETE FROM telegram_action_tokens
+                    WHERE GREATEST(
+                              expires_at,
+                              COALESCE(consumed_at, '-infinity'::timestamptz),
+                              COALESCE(revoked_at, '-infinity'::timestamptz)
+                          ) < :cutoff
+                    """
+                ),
+                {"cutoff": cutoff},
+            )
+            counts["telegram_action_tokens"] = int(result.rowcount or 0)
+
+    cutoff = cutoffs["navigation_tokens"]
+    if cutoff is not None:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    """
+                    DELETE FROM telegram_navigation_tokens
+                    WHERE GREATEST(
+                              expires_at,
+                              COALESCE(consumed_at, '-infinity'::timestamptz),
+                              COALESCE(revoked_at, '-infinity'::timestamptz)
+                          ) < :cutoff
+                    """
+                ),
+                {"cutoff": cutoff},
+            )
+            counts["telegram_navigation_tokens"] = int(result.rowcount or 0)
+
+    # Replies are children of inbox rows.  Remove terminal replies first, then
+    # retire only inbox idempotency keys with no remaining reply work.
+    cutoff = cutoffs["command_replies"]
+    if cutoff is not None:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    """
+                    DELETE FROM telegram_command_replies
+                    WHERE state IN ('sent','dead','unknown')
+                      AND completed_at < :cutoff
+                    """
+                ),
+                {"cutoff": cutoff},
+            )
+            counts["telegram_command_replies"] = int(result.rowcount or 0)
+
+    cutoff = cutoffs["updates"]
+    if cutoff is not None:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    """
+                    DELETE FROM telegram_updates_inbox AS inbox
+                    WHERE inbox.state IN ('processed','dead')
+                      AND inbox.processed_at < :cutoff
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM telegram_command_replies reply
+                          WHERE reply.bot_generation = inbox.bot_generation
+                            AND reply.update_id = inbox.update_id
+                      )
+                    """
+                ),
+                {"cutoff": cutoff},
+            )
+            counts["telegram_updates_inbox"] = int(result.rowcount or 0)
+
+    # Deleting terminal incidents first removes their editable message slots
+    # and detaches immutable events through ON DELETE SET NULL.  Active
+    # incidents can therefore never lose their card/event audit trail.
+    cutoff = cutoffs["incidents"]
+    if cutoff is not None:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text(
+                    """
+                    DELETE FROM incidents
+                    WHERE status IN ('resolved','failed')
+                      AND COALESCE(resolved_at, updated_at) < :cutoff
+                    """
+                ),
+                {"cutoff": cutoff},
+            )
+            counts["incidents"] = int(result.rowcount or 0)
+
+    cutoff = cutoffs["events"]
+    if cutoff is not None:
+        async with engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        WITH doomed AS MATERIALIZED (
+                            SELECT event.id
+                            FROM notification_events event
+                            WHERE event.incident_id IS NULL
+                              AND event.created_at < :cutoff
+                              AND NOT EXISTS (
+                                  SELECT 1
+                                  FROM telegram_message_slots slot
+                                  WHERE slot.last_event_id = event.id
+                              )
+                              AND NOT EXISTS (
+                                  SELECT 1
+                                  FROM notification_deliveries delivery
+                                  WHERE delivery.event_id = event.id
+                                    AND (
+                                        delivery.state NOT IN
+                                            ('sent','dead','unknown','superseded')
+                                        OR delivery.completed_at IS NULL
+                                        OR delivery.completed_at >= :cutoff
+                                    )
+                              )
+                        ), delivery_total AS (
+                            SELECT COUNT(*)::bigint AS count
+                            FROM notification_deliveries delivery
+                            JOIN doomed ON doomed.id = delivery.event_id
+                        ), deleted AS (
+                            DELETE FROM notification_events event
+                            USING doomed
+                            WHERE event.id = doomed.id
+                            RETURNING event.id
+                        )
+                        SELECT
+                            (SELECT COUNT(*)::bigint FROM deleted) AS event_count,
+                            (SELECT count FROM delivery_total) AS delivery_count
+                        """
+                    ),
+                    {"cutoff": cutoff},
+                )
+            ).one()
+            counts["notification_events"] = int(row.event_count or 0)
+            counts["notification_deliveries"] = int(row.delivery_count or 0)
+
+    return counts
 
 
 async def write_audit(
@@ -406,7 +573,7 @@ async def write_audit(
         )
 
 
-async def run_once(engine: AsyncEngine, *, media_root: Path | None = None) -> dict[str, Any]:
+async def run_once(engine: AsyncEngine) -> dict[str, Any]:
     """Один прогон cleanup-воркера. Возвращает summary."""
     started_at = datetime.now(timezone.utc)
     logger.info("=== Cleanup worker run started at %s ===", started_at.isoformat())
@@ -415,22 +582,49 @@ async def run_once(engine: AsyncEngine, *, media_root: Path | None = None) -> di
     counts: dict[str, Any] = {}
 
     try:
-        counts["partitions_dropped"] = await drop_old_partitions(engine, policy)
-    except Exception as exc:
-        logger.exception("drop_old_partitions failed: %s", exc)
-        counts["partitions_dropped_error"] = str(exc)
-
-    try:
         counts["partitions_created"] = await create_next_partition_if_missing(engine)
     except Exception as exc:
         logger.exception("create_next_partition_if_missing failed: %s", exc)
         counts["partitions_created_error"] = str(exc)
 
     try:
+        counts["partitions_dropped"] = await drop_old_partitions(engine, policy)
+    except Exception as exc:
+        logger.exception("drop_old_partitions failed: %s", exc)
+        counts["partitions_dropped_error"] = str(exc)
+
+    try:
         counts["task_queue_deleted"] = await delete_task_queue_completed(engine, policy)
     except Exception as exc:
         logger.exception("delete_task_queue_completed failed: %s", exc)
         counts["task_queue_deleted_error"] = str(exc)
+
+    try:
+        counts["adset_duplicate_previews_deleted"] = await delete_expired_adset_duplicate_previews(
+            engine
+        )
+    except Exception as exc:
+        logger.exception("delete_expired_adset_duplicate_previews failed: %s", exc)
+        counts["adset_duplicate_previews_deleted_error"] = str(exc)
+
+    try:
+        counts["browser_operation_leases_deleted"] = await delete_expired_browser_operation_leases(
+            engine
+        )
+    except Exception as exc:
+        logger.exception("delete_expired_browser_operation_leases failed: %s", exc)
+        counts["browser_operation_leases_deleted_error"] = str(exc)
+
+    try:
+        counts[
+            "browser_operation_capabilities_deleted"
+        ] = await delete_expired_browser_operation_capabilities(engine)
+    except Exception as exc:
+        logger.exception(
+            "delete_expired_browser_operation_capabilities failed: %s",
+            exc,
+        )
+        counts["browser_operation_capabilities_deleted_error"] = str(exc)
 
     try:
         counts["enable_recommendations_deleted"] = await delete_enable_recommendations(
@@ -447,42 +641,26 @@ async def run_once(engine: AsyncEngine, *, media_root: Path | None = None) -> di
         counts["telegram_invites_deleted_error"] = str(exc)
 
     try:
-        counts["cabinet_archives_deleted"] = await delete_old_cabinet_archives(engine, policy)
+        counts["operator_revision_events_deleted"] = await delete_old_operator_revision_events(
+            engine, policy
+        )
     except Exception as exc:
-        logger.exception("delete_old_cabinet_archives failed: %s", exc)
-        counts["cabinet_archives_deleted_error"] = str(exc)
+        logger.exception("delete_old_operator_revision_events failed: %s", exc)
+        counts["operator_revision_events_deleted_error"] = str(exc)
 
     try:
-        counts["ad_library_scans_deleted"] = await delete_old_ad_library_scans(engine, policy)
+        counts[
+            "notification_control_plane_deleted"
+        ] = await delete_terminal_notification_control_plane(engine, policy)
     except Exception as exc:
-        logger.exception("delete_old_ad_library_scans failed: %s", exc)
-        counts["ad_library_scans_deleted_error"] = str(exc)
+        logger.exception("delete_terminal_notification_control_plane failed: %s", exc)
+        counts["notification_control_plane_deleted_error"] = str(exc)
 
     try:
-        counts["ad_library_orphan_ads_deleted"] = await delete_orphan_ad_library_ads(engine, policy)
+        counts["panel_auth_expired_deleted"] = await cleanup_expired_panel_auth_records(engine)
     except Exception as exc:
-        logger.exception("delete_orphan_ad_library_ads failed: %s", exc)
-        counts["ad_library_orphan_ads_deleted_error"] = str(exc)
-
-    # Filesystem cleanup для медиа
-    # ruff ASYNC240: pathlib.exists() блокирующий, но вызывается раз в сутки
-    # на boot'е cleanup_worker — приемлемо
-    if media_root is not None and media_root.exists():  # noqa: ASYNC240
-        try:
-            async with engine.connect() as conn:
-                result = await conn.execute(text("SELECT local_path FROM ad_library_media"))
-                db_paths = {row[0] for row in result}
-            # Запуск sync функции в executor
-            import asyncio
-
-            loop = asyncio.get_running_loop()
-            deleted = await loop.run_in_executor(
-                None, cleanup_orphan_media_files, media_root, db_paths
-            )
-            counts["media_files_deleted"] = deleted
-        except Exception as exc:
-            logger.exception("cleanup_orphan_media_files failed: %s", exc)
-            counts["media_files_deleted_error"] = str(exc)
+        logger.exception("cleanup_expired_panel_auth_records failed: %s", exc)
+        counts["panel_auth_expired_deleted_error"] = str(exc)
 
     finished_at = datetime.now(timezone.utc)
     logger.info("=== Cleanup worker run finished at %s ===", finished_at.isoformat())

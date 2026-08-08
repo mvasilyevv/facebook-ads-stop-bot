@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Резолв scan set'а кабинетов для observer (MULTI_CABINET_PLAN.md §2.4).
+"""Резолв явного scan set кабинетов для observer.
 
 Scan set = объединение offers.ad_account_ids всех АКТИВНЫХ офферов:
 кабинет сканируется, если привязан хотя бы к одному активному офферу.
-Пустой scan set — легитимный fallback на старое поведение (скан текущей вкладки),
-решение об этом принимает observer_worker, не эта функция.
+Пустой scan set всегда останавливает цикл fail-closed: текущая вкладка браузера
+никогда не используется как неявная account identity.
 """
 
 from __future__ import annotations
@@ -27,9 +27,8 @@ def allowlist_blocks_scan(single_cabinet: bool, campaign_ids: list[str]) -> bool
     не работает). При мульти-кабе (>1 кабинета) allowlist неприменим (campaign.id не
     уникальны меж кабинетами) → не блокируем, скоупинг через owner_tag.
 
-    Single source: используется и observer'ом (apps/observer_worker), и API-дашбордом
-    (apps/api/.../dashboard_stats) для вычисления `scan_blocked_reason` — чтобы UI-баннер
-    «скан не работает: список кампаний пуст» совпадал с реальным поведением observer.
+    Single source: используется и observer'ом, и operator snapshot при вычислении
+    `scan_blocked_reason`, чтобы UI-причина совпадала с реальным поведением actor.
     """
     return single_cabinet and not campaign_ids
 
@@ -90,8 +89,8 @@ async def load_ad_account_id_for_fb_ad(engine: AsyncEngine, fb_ad_id: str) -> st
     """Кабинет объявления из каталога: fb_ads → fb_adsets → fb_campaigns.ad_account_id.
 
     Для ручных mutation-путей (TG inline, API): observer уже записал привязку при скане.
-    None — каталог ещё без привязки (исторические данные) → mutation уйдёт с
-    legacy primary-вкладки (токен общий, по ad_id сработает корректно).
+    None означает, что каталог не содержит безопасной identity; вызывающий код
+    обязан отклонить money-команду и не ставить её в очередь.
     """
     async with engine.connect() as conn:
         row = (

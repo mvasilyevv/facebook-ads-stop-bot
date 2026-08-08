@@ -100,8 +100,8 @@ class Timestamp:
 class CreatedAtOnly:
     """Mixin: только created_at (для append-only таблиц без UPDATE).
 
-    Применяется к alert_events, scan_runs, meta_api_audit_log, tracker_postback,
-    meta_api_webhook_event — там UPDATE не делается, updated_at — лишний column.
+    Применяется к append-only событиям и аудит-таблицам, где ``updated_at``
+    не отражает реального lifecycle и был бы лишним столбцом.
     """
 
     created_at: Mapped[datetime] = mapped_column(

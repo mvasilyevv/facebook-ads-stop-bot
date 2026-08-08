@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Unified outbox-таблица для всех типов задач (disable/enable/plan_run/meta/ad_library)."""
+"""Unified outbox table for the active operator task types."""
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -18,7 +19,9 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.schema import conv
 
 from core.models.base import Base, BigIntPrimaryKey, Timestamp
 
@@ -26,13 +29,13 @@ from core.models.base import Base, BigIntPrimaryKey, Timestamp
 class TaskQueue(BigIntPrimaryKey, Timestamp, Base):
     """Единая очередь задач со всеми типами.
 
-    task_type ∈ {disable, enable, plan_run, meta_api_mutation, ad_library_scan, campaign_create}
-    status ∈ {draft, pending, running, succeeded, failed, retrying, cancelled}
+    task_type ∈ {meta_api_mutation, observer_scan, campaign_create,
+                 tracker_event_process}
+    status ∈ {pending, running, succeeded, failed, retrying, cancelled}
 
     Retention:
     - succeeded + completed_at < NOW() - 30d → DELETE (cleanup_worker)
     - failed/cancelled + completed_at < NOW() - 90d → DELETE
-    - draft + created_at < NOW() - 24h → DELETE
     """
 
     __tablename__ = "task_queue"
@@ -44,10 +47,9 @@ class TaskQueue(BigIntPrimaryKey, Timestamp, Base):
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("5"))
-    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     requested_by: Mapped[str] = mapped_column(String(64), nullable=False)
-    # TG chat_id инициатора (для owner ACL над DRAFT). NULL если задача создана через MCP/HTTP.
+    # Optional Telegram initiator for operator audit correlation.
     created_by_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Atomic boundary before the first external call. A positive tracker event may
@@ -56,33 +58,82 @@ class TaskQueue(BigIntPrimaryKey, Timestamp, Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    # Safety-first scheduler metadata.  PostgreSQL remains the source of truth:
+    # workers claim rows with SKIP LOCKED, then every state transition is fenced
+    # by ``lease_owner + lease_token``.
+    lane: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+    )
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_owner: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    lease_token: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correlation_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=False,
+        server_default=text("gen_random_uuid()"),
+    )
 
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_task_queue_idempotency_key"),
         CheckConstraint(
-            "task_type IN ('disable', 'enable', 'plan_run', 'meta_api_mutation', "
-            "'ad_library_scan', 'campaign_create', 'tracker_event_process')",
-            name="ck_task_queue_task_type",
+            "task_type IN ('meta_api_mutation', 'observer_scan', "
+            "'campaign_create', 'tracker_event_process')",
+            name=conv("ck_task_queue_task_type"),
         ),
         CheckConstraint(
-            "status IN ('draft', 'pending', 'running', 'succeeded', 'failed', 'retrying', 'cancelled')",
+            "status IN ('pending', 'running', 'succeeded', 'failed', 'retrying', 'cancelled')",
             name="ck_task_queue_status",
+        ),
+        CheckConstraint(
+            "lane IN ('money', 'interactive', 'bulk', 'background')",
+            name=conv("ck_task_queue_lane"),
+        ),
+        CheckConstraint(
+            "task_type <> 'meta_api_mutation' OR "
+            "COALESCE(jsonb_typeof(payload->'ad_account_id') = 'string' "
+            "AND payload->>'ad_account_id' ~ '^[0-9]+$', FALSE)",
+            name=conv("ck_task_queue_meta_account_identity"),
         ),
         Index(
             "ix_task_queue_runnable",
-            "task_type",
-            "next_retry_at",
+            "lane",
+            text("priority DESC"),
+            "available_at",
+            "created_at",
+            "id",
             postgresql_where=text("status IN ('pending', 'retrying')"),
+        ),
+        Index(
+            "ix_task_queue_money_runnable",
+            text("priority DESC"),
+            "available_at",
+            "created_at",
+            "id",
+            postgresql_where=text("lane = 'money' AND status IN ('pending', 'retrying')"),
+        ),
+        Index(
+            "ix_task_queue_lease_expiry",
+            "lease_expires_at",
+            postgresql_where=text("status = 'running'"),
         ),
         Index(
             "ix_task_queue_running",
             "updated_at",
             postgresql_where=text("status = 'running'"),
-        ),
-        Index(
-            "ix_task_queue_draft",
-            "created_at",
-            postgresql_where=text("status = 'draft'"),
         ),
         Index(
             "ix_task_queue_completed",

@@ -5,7 +5,7 @@
 dispatch_mutation. До Этапа 5 здесь была заглушка с NotImplementedError.
 
 Состояние процесса:
-- heartbeat: Redis worker:heartbeat:meta_api TTL 60s
+- metrics: process liveness and queue depth are exported through Prometheus
 - reconcile: делегирован каноническому reconciler_worker (общий по task_type, с bump
   attempt_count) — локальный reconcile-loop убран, чтобы не было двух reconciler'ов
 - idle: spinning poll с asyncio.sleep
@@ -16,11 +16,9 @@ dispatch_mutation. До Этапа 5 здесь была заглушка с Not
 - RateLimitedError / TemporaryError / SessionUnavailableError → requeue_for_retry
 - NotImplementedError (новый mutation_kind без handler) → mark_failed
 - MutationValidationError (осознанная валидационная ошибка в handler'е) → mark_failed
-- CreateCampaignPartialError → mark_failed + лог осиротевших id (нужна ручная чистка)
 - голый ValueError (неожиданный, баг в коде) → requeue (защитный retry, логируется как аномалия)
 - любое другое Exception → requeue (защитный retry на transient)
-- ИСКЛЮЧЕНИЕ для необратимых kinds (create_campaign/duplicate_campaign/
-  duplicate_adset_structure): transient/
+- ИСКЛЮЧЕНИЕ для необратимого duplicate_adset_structure: transient/
   ValueError/Exception → mark_failed (НЕ requeue), т.к. ответ мог потеряться после
   коммита Meta и retry создал бы дубль кампании. См. _IRREVERSIBLE_KINDS.
 """
@@ -28,30 +26,41 @@ dispatch_mutation. До Этапа 5 здесь была заглушка с Not
 from __future__ import annotations
 
 import asyncio
-import html
-import json
 import logging
 import os
 import signal
+import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 
-import redis.asyncio as redis_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from core.adset_duplicates.execution_guard import (
+    DuplicateExecutionReceiptError,
+    authorize_duplicate_execution_boundary,
+)
+from core.adset_duplicates.plan_integrity import DUPLICATE_ADSET_STRUCTURE_KIND
+from core.commands.service import CommandService
 from core.db import WORKER_ENGINE_KWARGS
+from core.deadlines import bind_absolute_deadline
 from core.meta_api.audit import AuditedMetaApiClient
-from core.meta_api.autostop_alert import (
-    maybe_alert_autostop_channel_down,
-    record_autostop_success,
+from core.meta_api.autostop_alert import maybe_alert_autostop_channel_down
+from core.meta_api.bulk import (
+    GuardedAutostartExecution,
+    guarded_autostart_execution_boundary,
+    is_guarded_autostart_activation,
+    locked_autostart_targets,
+    merge_guarded_bulk_result,
+    revalidate_autostart_activation_guards,
 )
 from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import (
+    AmbiguousResultError,
+    BrowserReadinessRejectedError,
     MutationValidationError,
     NotFoundError,
-    NothingCommittedError,
     PermanentError,
     RateLimitedError,
     SessionUnavailableError,
@@ -65,163 +74,348 @@ from core.meta_api.freshness import (
     defer_auto_stop_for_fresh_snapshot,
     load_meta_snapshot_freshness,
 )
-from core.meta_api.fsm_sync import is_deactivating_bulk, sync_fsm_after_mutation
+from core.meta_api.fsm_sync import (
+    is_deactivating_bulk,
+    sync_fsm_after_mutation_in_transaction,
+)
 from core.meta_api.mutations import dispatch_mutation
-from core.meta_api.mutations.create_campaign import CreateCampaignPartialError
+from core.meta_api.mutations._batch_helpers import (
+    build_batch_payload,
+    make_batch_entry,
+    parse_batch_response,
+)
 from core.meta_api.mutations.duplicate_adset_structure import (
     DuplicateAdsetStructureHandler,
     DuplicateAdsetStructurePartialError,
     DuplicateProgressCallback,
 )
-from core.meta_api.mutations.duplicate_campaign import DuplicateCampaignPartialError
 from core.meta_api.ownership import check_mutation_ownership, load_owner_tag
 from core.meta_api.queue import (
     checkpoint_duplicate_progress,
-    claim_pending_task,
+    claim_browser_ready_mutation_task,
     defer_duplicate_recovery,
     mark_task_failed,
     mark_task_succeeded,
+    release_task_after_browser_readiness_rejection,
     requeue_task,
+    requeue_task_proven_not_committed,
 )
 from core.meta_api.schemas import IRREVERSIBLE_MUTATION_KINDS, MetaMutationPayload
+from core.observer.enable_grace import (
+    EnableGraceUnsafeError,
+    PreparedEnableGrace,
+    persist_enable_grace,
+    prepare_enable_grace,
+)
 from core.observer.queries import load_scanning_enabled
-from core.pubsub import CHANNEL_OBSERVER_TRIGGER, CHANNEL_TASK_CHANGED
-from core.tasks.queue import Task, mark_external_call_started, touch_task_running
-from core.telegram.worker_notify import notify_owners
+from core.tasks.queue import (
+    Task,
+    defer_unknown_reconciliation,
+    mark_cancelled,
+    mark_external_call_started,
+    refresh_task_queue_metrics,
+    requeue_unknown_for_reconciliation,
+    resolve_status_reconciliation_not_applied,
+    touch_task_running,
+)
+from core.tasks.wakeup import TaskQueueWakeup
+from core.worker_metrics import mark_worker_heartbeat, start_worker_metrics_server
 
 logger = logging.getLogger("meta_api_worker")
 
-WORKER_NAME = "meta_api"
-HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
-HEARTBEAT_TTL_SECONDS = 60
-IDLE_SLEEP_SECONDS = 5
+# Kept as the worker-level injection point for unit tests and custom runtimes.
+# It now receives an AsyncConnection and always runs inside terminalization.
+sync_fsm_after_mutation = sync_fsm_after_mutation_in_transaction
 
-# MID-10 (аудит 02.07): интервал touch-heartbeat'а долгих mutation. Reconciler метит
-# 'running' старше 30 мин (RECONCILER_STUCK_TIMEOUT_MIN) в 'retrying' по updated_at.
-# Долгий исполнитель (upload видео, медленный Meta) без освежения updated_at был бы
-# украден → дубль/двойной открут. Освежаем каждые 5 мин (<< 30-мин таймаут) через
-# core.tasks.queue.touch_task_running. Env-override для тестов/тюнинга.
-_TASK_TOUCH_INTERVAL_SECONDS = int(os.environ.get("META_API_TASK_TOUCH_INTERVAL_SEC", str(5 * 60)))
+WORKER_NAME = os.environ.get("META_API_WORKER_NAME", "meta_api").strip() or "meta_api"
+IDLE_SLEEP_SECONDS = 1
+_WORKER_INSTANCE_ID = uuid.uuid4()
+_CLAIM_LANES = tuple(
+    lane.strip()
+    for lane in os.environ.get(
+        "META_API_WORKER_LANES",
+        "interactive,bulk,background",
+    ).split(",")
+    if lane.strip()
+)
+_TASK_LEASE_SECONDS = max(30, int(os.environ.get("META_API_LEASE_SECONDS", str(30 * 60))))
+_KNOWN_CLAIM_LANES = frozenset({"money", "interactive", "bulk", "background"})
+
+
+def _resolve_touch_interval(lease_seconds: int, configured: str | None) -> float:
+    """Keep renewal strictly inside the active lease or fail at process boot."""
+    interval = float(configured) if configured else max(1.0, lease_seconds / 3)
+    if interval <= 0 or interval >= lease_seconds:
+        raise RuntimeError(
+            "META_API_TASK_TOUCH_INTERVAL_SEC must be greater than zero and "
+            "strictly less than META_API_LEASE_SECONDS"
+        )
+    return interval
+
+
+def _validate_worker_lane_contract(worker_name: str, lanes: tuple[str, ...]) -> None:
+    """Fail closed before a mutation worker can claim an unsafe lane."""
+    unknown = set(lanes) - _KNOWN_CLAIM_LANES
+    if not lanes or unknown:
+        raise RuntimeError(f"invalid Meta worker lane configuration: {sorted(unknown) or 'empty'}")
+    if worker_name == "autopause":
+        if lanes != ("money",):
+            raise RuntimeError("autopause worker must claim exactly the money lane")
+        return
+    if "money" in lanes:
+        raise RuntimeError("only the autopause worker may claim the money lane")
+
+
+_validate_worker_lane_contract(WORKER_NAME, _CLAIM_LANES)
+_BROWSER_OPERATION_CALLER = "autopause" if WORKER_NAME == "autopause" else "meta_api"
+
+
+def _require_claimed_task(task: Task) -> None:
+    """Reject anything other than the durable, fenced queue claim."""
+    if not isinstance(task, Task):
+        raise TypeError("meta_api_worker requires a claimed Task")
+    if not isinstance(task.lease_owner, uuid.UUID) or isinstance(task.lease_token, bool):
+        raise ValueError("meta_api_worker task has no valid lease fence")
+    if task.lease_token <= 0:
+        raise ValueError("meta_api_worker task has no valid lease fence")
+    if task.external_started_at is not None and not isinstance(task.external_started_at, datetime):
+        raise ValueError("meta_api_worker task has invalid external boundary state")
+
+
+# Lease expiry is the reconciler's canonical abandonment signal. Renew at one
+# third of the lease by default; a stale override fails process boot rather than
+# allowing a live external operation to lose its fence.
+_TASK_TOUCH_INTERVAL_SECONDS = _resolve_touch_interval(
+    _TASK_LEASE_SECONDS,
+    os.environ.get("META_API_TASK_TOUCH_INTERVAL_SEC"),
+)
 
 # requested_by авто-стопа (observer → pause_ad). Совпадает с writers._create_pause_mutation.
 _AUTO_STOP_REQUESTED_BY = "bot_auto_stop"
+_SAFETY_COMPENSATION_AUTOSTART = "autostart_reconciliation"
+_SAFETY_COMPENSATION_ENABLE_GRACE = "activation_without_grace"
 
-# Конфиг CRITICAL-алерта «канал auto-stop мёртв» (см. core/meta_api/autostop_alert.py).
-# Money-сигнал: после N подряд сетевых фейлов pause_ad шлём ОДИН алерт «чини Vision»,
-# а не молча ретраим до 72 попыток (~6ч). Дефолты переопределяются из env.
-_ALERT_THRESHOLD = int(os.environ.get("AUTOSTOP_ALERT_THRESHOLD", "3"))
-_ALERT_WINDOW_SEC = int(os.environ.get("AUTOSTOP_ALERT_WINDOW_SEC", str(30 * 60)))
-_ALERT_DEDUP_SEC = int(os.environ.get("AUTOSTOP_ALERT_DEDUP_SEC", str(30 * 60)))
+
+def _is_safety_compensation(payload: MetaMutationPayload) -> bool:
+    """Return whether PAUSE is backed by a direct post-boundary Meta read.
+
+    These commands deliberately bypass the regular snapshot-freshness gate:
+    they reassert a newer stop decision after reconciliation has already
+    confirmed that the ad is ACTIVE.  Require a reason-specific source task id
+    so an arbitrary bot_auto_stop payload cannot opt itself out of the gate.
+    """
+
+    if payload.mutation_kind != "pause_ad":
+        return False
+    reason = payload.params.get("safety_compensation")
+    if reason == _SAFETY_COMPENSATION_AUTOSTART:
+        source_task_id = payload.params.get("supersedes_autostart_task_id")
+    elif reason == _SAFETY_COMPENSATION_ENABLE_GRACE:
+        source_task_id = payload.params.get("supersedes_activation_task_id")
+    else:
+        return False
+    return (
+        isinstance(source_task_id, int)
+        and not isinstance(source_task_id, bool)
+        and source_task_id > 0
+    )
+
 
 # Per-ad эскалация недоставленной паузы (см. core/meta_api/autostop_alert.py): если конкретная
 # auto-stop pause_ad висит недоставленной дольше N секунд — точечный «выключи вручную» с именем
 # объявления и спендом. Дополняет channel-level CRITICAL. Дефолты переопределяются из env.
 _UNDELIVERED_AFTER_SEC = int(os.environ.get("AUTOSTOP_UNDELIVERED_AFTER_SEC", str(10 * 60)))
-_UNDELIVERED_DEDUP_SEC = int(os.environ.get("AUTOSTOP_UNDELIVERED_DEDUP_SEC", str(60 * 60)))
+_TIMEZONE_REFRESH_SECONDS = max(
+    300,
+    int(os.environ.get("META_ACCOUNT_TIMEZONE_REFRESH_SECONDS", str(6 * 60 * 60))),
+)
+_TIMEZONE_RETRY_SECONDS = max(
+    30,
+    int(os.environ.get("META_ACCOUNT_TIMEZONE_RETRY_SECONDS", "300")),
+)
 
 
 @dataclass(frozen=True)
 class AutostopAlertContext:
     """Параметры CRITICAL-алерта auto-stop, прокинутые из main_loop в process_one_task.
 
-    engine используется для рассылки через notify_recipients (всем активным recipients).
+    engine используется для записи в durable notification outbox.
     """
 
     engine: Any  # AsyncEngine для recipients-рассылки
-    threshold: int = _ALERT_THRESHOLD
-    window_seconds: int = _ALERT_WINDOW_SEC
-    dedup_ttl_seconds: int = _ALERT_DEDUP_SEC
 
 
-async def _publish_task_changed(
-    redis_client: redis_asyncio.Redis | None,
-    *,
-    task_id: int,
-    task_type: str,
-    status: str,
-) -> None:
-    """Best-effort publish изменения статуса задачи в fb_agent:task:changed."""
-    if redis_client is None:
-        return
-    try:
-        payload = json.dumps(
-            {
-                "task_id": task_id,
-                "task_type": task_type,
-                "status": status,
-                "timestamp": datetime.now(UTC).isoformat(),
-            },
-            ensure_ascii=False,
-        )
-        await redis_client.publish(CHANNEL_TASK_CHANGED, payload)
-    except Exception:
-        logger.warning("meta_api_worker: не удалось publish task:changed task_id=%s", task_id)
+class LeaseRenewalError(RuntimeError):
+    """The worker could not prove continued ownership of the running task."""
 
 
-async def _apply_enable_grace_after_success(
+async def _prepare_enable_grace_for_payload(
     engine: AsyncEngine,
-    redis_client: redis_asyncio.Redis | None,
     *,
     payload: MetaMutationPayload,
-) -> None:
-    """Поставить curator grace только после успешного внешнего activate_ad."""
+    require_disabled: bool = True,
+) -> PreparedEnableGrace | None:
+    """Validate a curator hold before crossing the external activation boundary."""
     if payload.mutation_kind != "activate_ad":
-        return
+        return None
     intent = payload.params.get("enable_grace")
-    if not isinstance(intent, dict) or not intent.get("spend_allowance"):
-        return
+    if intent is None:
+        return None
+    if not isinstance(intent, dict) or set(intent) != {"spend_cap"}:
+        raise EnableGraceUnsafeError("enable_grace requires only an absolute spend_cap")
 
-    try:
-        async with engine.connect() as conn:
-            row = (
-                await conn.execute(
-                    text(
-                        """
-                        SELECT am.spend
-                        FROM ad_metrics am
-                        JOIN fb_ads fa ON fa.id = am.ad_id
-                        WHERE fa.fb_ad_id = :fbid
-                        ORDER BY am.cycle_ts DESC
-                        LIMIT 1
-                        """
-                    ),
-                    {"fbid": str(payload.target_id)},
-                )
-            ).first()
-        baseline_spend = row[0] if row and row[0] is not None else "0"
+    from core.config import get_settings
 
-        from core.config import get_settings
-        from core.observer.enable_grace import set_enable_grace
+    return await prepare_enable_grace(
+        engine,
+        fb_ad_id=str(payload.target_id),
+        ad_account_id=payload.ad_account_id,
+        requested_spend_cap=intent["spend_cap"],
+        grace_seconds=get_settings().enable_reco_hold_grace_seconds,
+        require_disabled=require_disabled,
+    )
 
-        ok = await set_enable_grace(
-            redis_client,
+
+async def _mark_confirmed_with_grace(
+    engine: AsyncEngine,
+    task: Task,
+    *,
+    payload: MetaMutationPayload,
+    result: dict[str, Any],
+    prepared_grace: PreparedEnableGrace | None,
+) -> bool:
+    """Atomically commit grace, FSM, task and incident/outbox projections."""
+
+    async def commit_effect(conn) -> None:
+        if prepared_grace is not None:
+            await persist_enable_grace(conn, prepared=prepared_grace)
+        await sync_fsm_after_mutation(conn, payload, result)
+
+    return await mark_task_succeeded(
+        engine,
+        task_id=task.id,
+        result=result,
+        transactional_effect=commit_effect,
+        lease_owner=task.lease_owner,
+        lease_token=task.lease_token,
+    )
+
+
+async def _mark_failed_with_fsm(
+    engine: AsyncEngine,
+    task: Task,
+    *,
+    payload: MetaMutationPayload,
+    error: str,
+    result: dict[str, Any],
+) -> bool:
+    """Atomically terminalize UNKNOWN/partial work with confirmed per-ad FSM."""
+
+    async def commit_effect(conn) -> None:
+        await sync_fsm_after_mutation(conn, payload, result)
+
+    return await mark_task_failed(
+        engine,
+        task_id=task.id,
+        error=error,
+        result=result,
+        transactional_effect=commit_effect,
+        lease_owner=task.lease_owner,
+        lease_token=task.lease_token,
+    )
+
+
+async def _compensate_confirmed_activation_without_grace(
+    engine: AsyncEngine,
+    task: Task,
+    *,
+    payload: MetaMutationPayload,
+    configured_status: str,
+    error: EnableGraceUnsafeError,
+) -> bool:
+    """Atomically expose risk and enqueue PAUSE for ACTIVE-without-grace."""
+    transition_token = uuid.uuid4()
+    base_result = {
+        "outcome": "UNKNOWN",
+        "reconcile_required": False,
+        "reason": "enable_grace_compensation_pending",
+        "external_outcome": "CONFIRMED",
+        "external_status": configured_status,
+        "compensation_action": "pause_ad",
+    }
+
+    async def commit_compensation(conn) -> None:
+        receipt = await CommandService(engine).enqueue_verified_pause_compensation(
             fb_ad_id=str(payload.target_id),
-            grace_seconds=get_settings().enable_reco_hold_grace_seconds,
-            baseline_spend=baseline_spend,
-            spend_allowance=intent.get("spend_allowance"),
+            idempotency_key=f"enable-grace-compensation:{task.id}:{payload.target_id}",
+            reason=_SAFETY_COMPENSATION_ENABLE_GRACE,
+            source_task_id=int(task.id),
+            observed_delivery_status=configured_status,
+            max_attempts=15,
+            connection=conn,
         )
-        if not ok:
-            logger.warning(
-                "enable_grace для %s не поставлен после activation — "
-                "действуют обычные stop-правила",
-                payload.target_id,
-            )
-    except Exception:  # noqa: BLE001 — succeeded mutation не откатываем из-за grace
-        logger.warning(
-            "enable_grace для %s не удалось применить после activation — fail-safe stop",
-            payload.target_id,
-            exc_info=True,
+        await conn.execute(
+            text(
+                """
+                UPDATE ad_alert_state
+                SET alert_state = 'stop_sent',
+                    current_stage = 'stop',
+                    open_state_token = COALESCE(open_state_token, :transition_token),
+                    last_transition_at = NOW(),
+                    updated_at = NOW()
+                WHERE ad_id = (
+                    SELECT id FROM fb_ads WHERE fb_ad_id = :fb_ad_id
+                )
+                  AND alert_state IN ('normal', 'disabled')
+                """
+            ),
+            {
+                "fb_ad_id": str(payload.target_id),
+                "transition_token": transition_token,
+            },
         )
+        await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET result = COALESCE(result, '{}'::jsonb)
+                    || jsonb_build_object(
+                        'compensation_task_id',
+                        CAST(:compensation_task_id AS BIGINT),
+                        'compensation_state',
+                        CAST(:compensation_state AS TEXT)
+                    ),
+                    updated_at = NOW()
+                WHERE id = :task_id
+                  AND status = 'failed'
+                  AND lease_owner = :lease_owner
+                  AND lease_token = :lease_token
+                """
+            ),
+            {
+                "task_id": int(task.id),
+                "compensation_task_id": receipt.task_id,
+                "compensation_state": receipt.state,
+                "lease_owner": task.lease_owner,
+                "lease_token": task.lease_token,
+            },
+        )
+
+    return await mark_task_failed(
+        engine,
+        task_id=task.id,
+        error=f"confirmed activation lacked durable grace; PAUSE queued: {error}",
+        result=base_result,
+        transactional_effect=commit_compensation,
+        lease_owner=task.lease_owner,
+        lease_token=task.lease_token,
+    )
 
 
 def _get_database_url() -> str:
     from core.config import get_settings
 
     return get_settings().database_url
-
-
-def _get_redis_url() -> str:
-    return os.environ.get("REDIS_URL", "redis://localhost:6380/0")
 
 
 def _build_meta_client(engine: AsyncEngine) -> AuditedMetaApiClient:
@@ -256,36 +450,170 @@ async def execute_mutation(
     return await dispatch_mutation(client, payload)
 
 
-async def _touch_loop(engine: AsyncEngine, task_id: int, interval_seconds: float) -> None:
-    """Фоновый touch-таск: пока mutation исполняется, каждые interval_seconds освежает
-    updated_at задачи (MID-10) — защита от кражи reconciler'ом долгой mutation.
-
-    Останавливается через cancel() из _execute_with_touch по завершении mutation.
-    Если touch вернул False (задача уже не 'running' — украдена/закрыта) — цикл выходит,
-    незачем биться о закрытую строку. Ошибки БД проглатываются (touch best-effort, он
-    не должен ронять исполнение mutation).
-    """
+async def _touch_loop(engine: AsyncEngine, task: Task, interval_seconds: float) -> None:
+    """Renew the fenced lease; any uncertainty is a hard control-plane stop."""
     while True:
+        await asyncio.sleep(interval_seconds)
         try:
-            await asyncio.sleep(interval_seconds)
-        except asyncio.CancelledError:
-            raise
-        try:
-            still_running = await touch_task_running(engine, task_id=task_id)
-        except Exception:  # noqa: BLE001 — touch best-effort, не роняем mutation
-            logger.debug("meta_api: touch task id=%s упал (продолжаю)", task_id, exc_info=True)
-            continue
-        if not still_running:
-            logger.debug(
-                "meta_api: touch task id=%s — строка уже не 'running', останавливаю touch-цикл",
-                task_id,
+            still_running = await touch_task_running(
+                engine,
+                task_id=task.id,
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
+                lease_seconds=_TASK_LEASE_SECONDS,
             )
-            return
+        except Exception as exc:
+            raise LeaseRenewalError(
+                f"lease renewal failed for task {task.id}: {type(exc).__name__}"
+            ) from exc
+        if not still_running:
+            raise LeaseRenewalError(f"lease renewal rejected for task {task.id}: fence lost")
+
+
+async def _wait_for_task_control(engine: AsyncEngine, task: Task) -> str:
+    """Poll the DB-authoritative cancellation/deadline while an RPC is active."""
+    while True:
+        await asyncio.sleep(1)
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT cancel_requested_at, deadline_at, status, lease_expires_at
+                        FROM task_queue
+                        WHERE id = :task_id
+                          AND lease_owner = :lease_owner
+                          AND lease_token = :lease_token
+                        """
+                    ),
+                    {
+                        "task_id": task.id,
+                        "lease_owner": task.lease_owner,
+                        "lease_token": task.lease_token,
+                    },
+                )
+            ).first()
+        if row is None or row.status != "running":
+            return "lease_lost"
+        if row.lease_expires_at is None or row.lease_expires_at <= datetime.now(UTC):
+            return "lease_expired"
+        if row.cancel_requested_at is not None:
+            return "cancel_requested"
+        if row.deadline_at is not None and row.deadline_at <= datetime.now(UTC):
+            return "deadline_exceeded"
+
+
+async def _preflight_task_control(engine: AsyncEngine, task: Task) -> str | None:
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT cancel_requested_at, deadline_at, status, lease_expires_at
+                    FROM task_queue
+                    WHERE id = :task_id
+                      AND lease_owner = :lease_owner
+                      AND lease_token = :lease_token
+                    """
+                ),
+                {
+                    "task_id": task.id,
+                    "lease_owner": task.lease_owner,
+                    "lease_token": task.lease_token,
+                },
+            )
+        ).first()
+    if row is None or row.status != "running":
+        return "lease_lost"
+    if row.lease_expires_at is None or row.lease_expires_at <= datetime.now(UTC):
+        return "lease_expired"
+    if row.cancel_requested_at is not None:
+        return "cancel_requested"
+    if row.deadline_at is not None and row.deadline_at <= datetime.now(UTC):
+        return "deadline_exceeded"
+    return None
+
+
+async def _cross_external_mutation_boundary(
+    engine: AsyncEngine,
+    task: Task,
+    payload: MetaMutationPayload,
+) -> bool:
+    """Confirm the live claim, then atomically record an external mutation."""
+    control_reason = await _preflight_task_control(engine, task)
+    if control_reason is not None:
+        if control_reason == "cancel_requested":
+            await mark_cancelled(
+                engine,
+                task_id=task.id,
+                reason="cancelled before external call",
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
+            )
+        else:
+            await mark_task_failed(
+                engine,
+                task_id=task.id,
+                error=f"command rejected before external call: {control_reason}",
+                result={"outcome": "REJECTED", "reason": control_reason},
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
+            )
+        return False
+    if payload.mutation_kind == DUPLICATE_ADSET_STRUCTURE_KIND:
+        recovery_checkpoint = task.result if _is_duplicate_recovery_task(task, payload) else None
+        try:
+            return await authorize_duplicate_execution_boundary(
+                engine,
+                task_id=task.id,
+                task_payload=task.payload,
+                requested_by=task.requested_by,
+                target_lock_key=str(payload.target_id),
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
+                recovery_checkpoint=recovery_checkpoint,
+            )
+        except DuplicateExecutionReceiptError as exc:
+            failure_result: dict[str, Any] = {
+                "outcome": "REJECTED",
+                "reason": "duplicate_plan_integrity",
+            }
+            if recovery_checkpoint is not None:
+                failure_result = {
+                    **recovery_checkpoint,
+                    "outcome": "UNKNOWN",
+                    "reconcile_required": True,
+                    "manual_review_required": True,
+                    "phase": "recovery_checkpoint_invalid",
+                    "recovery_integrity_error": str(exc),
+                }
+            applied = await mark_task_failed(
+                engine,
+                task_id=task.id,
+                error=f"duplicate plan integrity rejected: {exc}",
+                result=failure_result,
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
+            )
+            if not applied:
+                logger.warning(
+                    "meta_api: task id=%s duplicate plan integrity mark_failed lost status race",
+                    task.id,
+                )
+            return False
+
+    return await mark_external_call_started(
+        engine,
+        task_id=task.id,
+        target_lock_key=str(payload.target_id),
+        lease_owner=task.lease_owner,
+        lease_token=task.lease_token,
+    )
 
 
 async def _execute_with_touch(
     engine: AsyncEngine,
-    task_id: int,
+    task: Task,
     payload: MetaMutationPayload,
     *,
     client: MetaApiClient,
@@ -299,33 +627,100 @@ async def _execute_with_touch(
     execute_mutation, фоновый _touch_loop держит updated_at свежим. По завершении
     (успех/исключение) touch-таск отменяется. Исключения mutation пробрасываются как есть.
     """
-    touch_task = asyncio.create_task(_touch_loop(engine, task_id, touch_interval_seconds))
+    touch_task = asyncio.create_task(_touch_loop(engine, task, touch_interval_seconds))
+    control_task = asyncio.create_task(_wait_for_task_control(engine, task))
+    execution_task: asyncio.Task[dict[str, Any]] | None = None
     try:
-        if payload.mutation_kind == "duplicate_adset_structure":
+
+        async def run_mutation() -> dict[str, Any]:
+            if payload.mutation_kind != "duplicate_adset_structure":
+                with bind_absolute_deadline(task.deadline_at):
+                    return await execute_mutation(payload, client=client)
 
             async def persist_progress(checkpoint: dict[str, Any]) -> None:
                 applied = await checkpoint_duplicate_progress(
                     engine,
-                    task_id=task_id,
+                    task_id=task.id,
                     checkpoint=checkpoint,
+                    lease_owner=task.lease_owner,
+                    lease_token=task.lease_token,
                 )
                 if not applied:
                     raise RuntimeError(
                         "duplicate checkpoint rejected: task is no longer the active create run"
                     )
 
-            return await execute_mutation(
-                payload,
-                client=client,
-                progress_callback=persist_progress,
-            )
-        return await execute_mutation(payload, client=client)
-    finally:
-        touch_task.cancel()
+            with bind_absolute_deadline(task.deadline_at):
+                return await execute_mutation(
+                    payload,
+                    client=client,
+                    progress_callback=persist_progress,
+                )
+
+        execution_task = asyncio.create_task(run_mutation())
+        done, _ = await asyncio.wait(
+            {execution_task, control_task, touch_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if touch_task in done:
+            try:
+                touch_task.result()
+                reason = "lease_renewal_stopped"
+            except asyncio.CancelledError:
+                reason = "lease_renewal_cancelled"
+            except Exception as exc:  # noqa: BLE001 — ownership is no longer proven
+                logger.warning(
+                    "meta_api: task id=%s lease renewal failed; cancelling external operation",
+                    task.id,
+                    exc_info=True,
+                )
+                reason = f"lease_renewal_failed:{type(exc).__name__}"
+        elif control_task in done:
+            try:
+                reason = control_task.result()
+            except asyncio.CancelledError:
+                reason = "control_monitor_cancelled"
+            except Exception as exc:  # noqa: BLE001 — losing control is externally ambiguous
+                logger.warning(
+                    "meta_api: task id=%s control monitor failed; cancelling external operation",
+                    task.id,
+                    exc_info=True,
+                )
+                reason = f"control_monitor_failed:{type(exc).__name__}"
+        else:
+            return execution_task.result()
+
+        # Drain the mutation before publishing UNKNOWN/retry.  If the DB control
+        # poller failed and we merely returned, this task would keep sending in
+        # the background after its lease/state had already moved on.
+        execution_task.cancel()
         try:
-            await touch_task
+            await execution_task
         except asyncio.CancelledError:
             pass
+        except Exception:  # noqa: BLE001 — the outcome is UNKNOWN either way
+            logger.debug(
+                "meta_api: task id=%s external operation settled while being cancelled",
+                task.id,
+                exc_info=True,
+            )
+        raise AmbiguousResultError(
+            f"external operation interrupted: {reason}",
+            code=-2,
+            endpoint=str(payload.target_id),
+        )
+    finally:
+        # Also covers cancellation of process_one_task itself while asyncio.wait
+        # is pending.  No external mutation task may outlive its fenced owner.
+        background_tasks = tuple(
+            background_task
+            for background_task in (execution_task, control_task, touch_task)
+            if background_task is not None
+        )
+        for background_task in background_tasks:
+            if not background_task.done():
+                background_task.cancel()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
 
 
 # ====================== классификация ошибок ======================
@@ -369,11 +764,11 @@ async def _fail_irreversible(
     *,
     reason: str,
 ) -> None:
-    """Завершить необратимую mutation как failed (без retry) при transient-ошибке.
+    """Завершить необратимую mutation как UNKNOWN (без retry).
 
     Money-safety: ответ Meta мог потеряться после коммита → повторный вызов создал бы
-    дубль кампании. Помечаем failed с явным error — задача видна в дашборде, оператор
-    проверяет Meta вручную.
+    дубль кампании. Поэтому отсутствие подтверждённого ответа никогда не становится
+    ``REJECTED`` по умолчанию: сохраняем явный UNKNOWN + manual-review contract.
     """
     logger.error(
         "meta_api: task id=%s kind=%s — необратимая mutation, ошибка (%s) возможно ПОСЛЕ "
@@ -387,6 +782,16 @@ async def _fail_irreversible(
         engine,
         task_id=task.id,
         error=f"irreversible_no_retry ({reason}): проверь Meta вручную — возможен дубль: {exc!r}",
+        result={
+            "outcome": "UNKNOWN",
+            "reconcile_required": True,
+            "manual_review_required": True,
+            "operation": payload.mutation_kind,
+            "target_id": str(payload.target_id),
+            "reason": reason,
+        },
+        lease_owner=task.lease_owner,
+        lease_token=task.lease_token,
     )
     if not applied:
         logger.warning(
@@ -397,115 +802,137 @@ async def _fail_irreversible(
 # ====================== асимметричный стоп ======================
 
 # mutation_kind, которые ВЫКЛЮЧАЮТ открут (снижают трату) — разрешены даже на паузе.
-_DEACTIVATING_KINDS = frozenset({"pause_ad", "pause_campaign"})
-
-# Money-мутации остановки рекламы: при финальном провале владелец должен узнать.
-_PAUSE_KINDS = frozenset({"pause_ad", "bulk_status_change"})
+_DEACTIVATING_KINDS = frozenset({"pause_ad"})
 
 
-def is_mutation_success(result: Any) -> bool:
-    """True если результат mutation — логический успех (R3).
+@dataclass(frozen=True)
+class MutationResultAssessment:
+    """Fail-closed interpretation of a mutation handler acknowledgement."""
 
-    Batch-конверт Graph API даёт HTTP 200 без exception, но пер-саб ошибки лежат в теле.
-    Два handler'а возвращают «логический провал» без raise: bulk_status_change при полном
-    отказе Meta (success_result хардкодит success=True, но succeeded==0 & failed>0) и
-    duplicate_campaign при провале copy/rename (явный success=False). Без этой проверки
-    worker метил такие задачи succeeded → money-fail DM не уходил, бюджет тёк.
+    state: Literal["confirmed", "rejected", "partial", "invalid"]
+    reason: str
 
-    Контракт:
-    - не-dict / None → True (handler не вернул структуру — не наша забота, обычный успех);
-    - result['success'] is False → провал;
-    - bulk-форма (есть 'succeeded'/'failed'): succeeded==0 и failed>0 → провал (полный отказ);
-    - иначе → успех (в т.ч. partial bulk с succeeded>0 — он succeeded, но алертит отдельно).
+
+def _is_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def assess_mutation_result(
+    payload: MetaMutationPayload,
+    result: Any,
+) -> MutationResultAssessment:
+    """Validate the full worker/handler boundary before publishing a terminal state.
+
+    An HTTP/gRPC return is not itself success. Every handler must provide an
+    exact boolean acknowledgement and a canonical list of affected IDs. A
+    malformed result is externally ambiguous because the Meta write boundary
+    has already been crossed, so callers must terminalize it as ``UNKNOWN``.
     """
     if not isinstance(result, dict):
-        return True
-    if result.get("success") is False:
-        return False
+        return MutationResultAssessment("invalid", "handler_result_not_object")
+
+    acknowledged = result.get("success")
+    if not isinstance(acknowledged, bool):
+        return MutationResultAssessment("invalid", "handler_success_not_boolean")
+
+    modified_ids = result.get("modified_ids", [])
+    if not isinstance(modified_ids, list) or any(
+        not isinstance(item, str) or not item.strip() for item in modified_ids
+    ):
+        return MutationResultAssessment("invalid", "handler_modified_ids_invalid")
+    if len(set(modified_ids)) != len(modified_ids):
+        return MutationResultAssessment("invalid", "handler_modified_ids_not_unique")
+
+    if payload.mutation_kind != "bulk_status_change" and acknowledged is False:
+        if modified_ids:
+            return MutationResultAssessment(
+                "invalid",
+                "handler_rejection_contains_modified_ids",
+            )
+        return MutationResultAssessment("rejected", "handler_explicit_rejection")
+
+    if payload.mutation_kind in {"pause_ad", "activate_ad"}:
+        if modified_ids != [str(payload.target_id)]:
+            return MutationResultAssessment(
+                "invalid",
+                "status_handler_modified_ids_mismatch",
+            )
+        return MutationResultAssessment("confirmed", "handler_confirmed")
+
+    if payload.mutation_kind != "bulk_status_change":
+        if not modified_ids:
+            return MutationResultAssessment(
+                "invalid",
+                "irreversible_handler_has_no_modified_ids",
+            )
+        return MutationResultAssessment("confirmed", "handler_confirmed")
+
     succeeded = result.get("succeeded")
     failed = result.get("failed")
-    if succeeded is not None and failed is not None:
-        try:
-            if int(succeeded) == 0 and int(failed) > 0:
-                return False
-        except (TypeError, ValueError):
-            return True
-    return True
+    sub_results = result.get("sub_results")
+    if (
+        not _is_nonnegative_int(succeeded)
+        or not _is_nonnegative_int(failed)
+        or not isinstance(sub_results, list)
+    ):
+        return MutationResultAssessment("invalid", "bulk_result_shape_invalid")
+    if succeeded + failed != len(sub_results):
+        return MutationResultAssessment("invalid", "bulk_result_counts_mismatch")
 
+    successful_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for item in sub_results:
+        if not isinstance(item, dict):
+            return MutationResultAssessment("invalid", "bulk_sub_result_not_object")
+        object_id = item.get("id")
+        item_success = item.get("success")
+        if (
+            not isinstance(object_id, str)
+            or not object_id.strip()
+            or object_id in seen_ids
+            or not isinstance(item_success, bool)
+        ):
+            return MutationResultAssessment("invalid", "bulk_sub_result_invalid")
+        seen_ids.add(object_id)
+        if item_success:
+            successful_ids.append(object_id)
 
-def is_partial_bulk_failure(result: Any) -> bool:
-    """True если bulk применился частично (succeeded>0, но failed>0).
-
-    Для partial mark_succeeded остаётся корректным (FSM-sync метит только modified_ids),
-    но владелец должен узнать о недовыключенных объявлениях через money-fail DM.
-    """
-    if not isinstance(result, dict):
-        return False
-    succeeded = result.get("succeeded")
-    failed = result.get("failed")
-    if succeeded is None or failed is None:
-        return False
-    try:
-        return int(succeeded) > 0 and int(failed) > 0
-    except (TypeError, ValueError):
-        return False
+    if len(successful_ids) != succeeded or successful_ids != modified_ids:
+        return MutationResultAssessment("invalid", "bulk_modified_ids_mismatch")
+    if acknowledged is False:
+        if succeeded > 0 and failed > 0:
+            return MutationResultAssessment("partial", "bulk_partially_applied")
+        if succeeded == 0 and failed > 0:
+            return MutationResultAssessment("rejected", "bulk_all_rejected")
+        return MutationResultAssessment("invalid", "bulk_acknowledgement_conflict")
+    if succeeded == 0 and failed > 0:
+        return MutationResultAssessment("rejected", "bulk_all_rejected")
+    if succeeded > 0 and failed > 0:
+        return MutationResultAssessment("partial", "bulk_partially_applied")
+    if succeeded == 0:
+        return MutationResultAssessment("invalid", "bulk_empty_acknowledgement")
+    return MutationResultAssessment("confirmed", "handler_confirmed")
 
 
 def _is_activating_mutation(payload: MetaMutationPayload) -> bool:
     """True если mutation ВКЛЮЧАЕТ/тратит (на паузе сканирования откладывается).
 
     Асимметричный стоп пропускает только ВЫКЛЮЧАЮЩИЕ действия (они снижают риск
-    открута), всё остальное на паузе блокирует. Выключающие: pause_ad/pause_campaign
-    и bulk_status_change с action pause/paused. Всё прочее (activate_*, bulk activate,
-    create_campaign, duplicate_campaign, set_adset_budget, set_ad_creative,
-    custom_audience) — «не выключающее» → True → откладываем (money-safe: на стопе
-    кабинет не трогаем сверх выключения).
+    открута), всё остальное на паузе блокирует. Выключающие: pause_ad и
+    bulk_status_change с action pause/paused. Activate, duplicate and bulk activate
+    откладываются: на стопе кабинет не трогаем сверх выключения.
     """
     kind = payload.mutation_kind
     if kind in _DEACTIVATING_KINDS:
         return False
     if kind == "bulk_status_change":
-        # Обе формы bulk: сокращённая (action=pause) и полная (status=PAUSED).
-        # Выключающий bulk разрешён даже на паузе → не активирующий.
-        return not is_deactivating_bulk(getattr(payload, "params", None) or {})
+        # Canonical action=pause bulk is allowed even while scanning is paused.
+        return not is_deactivating_bulk(payload.params or {})
     return True
 
 
-async def _alert_money_fail(
-    engine,
-    redis_client,
-    *,
-    payload: MetaMutationPayload,
-    requested_by: str,
-    error: str,
-    kind_label: str,
-) -> None:
-    """Финальный провал money-мутации (пауза/bulk-стоп) → DM owner'ам. Best-effort.
-
-    Алертим только денежные действия: pause_ad/bulk_status_change (стоп рекламы).
-    Бюджет, кастомные аудитории, создание — не алертим здесь.
-    """
-    if payload.mutation_kind not in _PAUSE_KINDS:
-        return
-    actor = "Авто-стоп" if requested_by == _AUTO_STOP_REQUESTED_BY else "Пауза"
-    text = (
-        f"❌ <b>{actor} не сработал окончательно</b>\n"
-        f"fb_ad_id=<code>{payload.target_id}</code> ({kind_label})\n"
-        f"Ошибка: {error[:200]}\n"
-        f"Отключи объявление вручную."
-    )
-    await notify_owners(
-        engine,
-        redis_client,
-        category="money_fail",
-        text=text,
-        dedup_key=f"auto_stop_fail:{payload.target_id}",
-        dedup_ttl_seconds=3600,
-    )
-
-
 def _is_duplicate_recovery_task(task: Task, payload: MetaMutationPayload) -> bool:
-    checkpoint = getattr(task, "result", None)
+    checkpoint = task.result
     return (
         payload.mutation_kind == "duplicate_adset_structure"
         and isinstance(checkpoint, dict)
@@ -514,37 +941,15 @@ def _is_duplicate_recovery_task(task: Task, payload: MetaMutationPayload) -> boo
     )
 
 
-async def _notify_duplicate_recovery(
-    engine: AsyncEngine,
-    redis_client: redis_asyncio.Redis | None,
-    *,
-    task_id: int,
-    text: str,
-    suffix: str,
-) -> None:
-    try:
-        await notify_owners(
-            engine,
-            redis_client,
-            category="critical",
-            text=text,
-            dedup_key=f"meta_api:duplicate_adset_structure:recovery:{task_id}:{suffix}",
-            dedup_ttl_seconds=60 * 60,
-        )
-    except Exception:  # noqa: BLE001 — recovery state is already persisted
-        logger.exception("meta_api: duplicate recovery notification failed task=%s", task_id)
-
-
 async def _recover_duplicate_task(
     engine: AsyncEngine,
     task: Task,
     payload: MetaMutationPayload,
     *,
     client: MetaApiClient,
-    redis_client: redis_asyncio.Redis | None,
 ) -> None:
     """Execute a PAUSE-only recovery; never replay the original create plan."""
-    checkpoint = dict(getattr(task, "result", None) or {})
+    checkpoint = dict(task.result or {})
     handler = DuplicateAdsetStructureHandler()
     try:
         created, cleanup_failures = await handler.recover_checkpoint(
@@ -567,19 +972,14 @@ async def _recover_duplicate_task(
             task_id=task.id,
             error=f"duplicate recovery checkpoint invalid: {exc!r}",
             result=invalid_result,
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
         )
-        if applied:
-            await _notify_duplicate_recovery(
-                engine,
-                redis_client,
-                task_id=task.id,
-                suffix="invalid",
-                text=(
-                    "🚨 <b>Crash-recovery дублирования не смог прочитать checkpoint</b>\n"
-                    f"Task: <code>{task.id}</code>\n"
-                    f"Ошибка: <code>{html.escape(repr(exc))}</code>\n"
-                    "Проверь созданные объекты вручную в Ads Manager."
-                ),
+        if not applied:
+            logger.warning(
+                "meta_api: duplicate recovery task=%s invalid-checkpoint "
+                "mark_failed lost status race",
+                task.id,
             )
         return
 
@@ -601,24 +1001,14 @@ async def _recover_duplicate_task(
             error=(
                 f"duplicate crash recovery PAUSE incomplete: cleanup_failures={cleanup_failures!r}"
             ),
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
         )
         if applied:
             logger.error(
                 "meta_api: duplicate recovery task=%s incomplete, PAUSE retry scheduled: %s",
                 task.id,
                 cleanup_failures,
-            )
-            await _notify_duplicate_recovery(
-                engine,
-                redis_client,
-                task_id=task.id,
-                suffix="retrying",
-                text=(
-                    "🚨 <b>Crash-recovery дублирования: PAUSE выполнен не полностью</b>\n"
-                    f"Task: <code>{task.id}</code>\n"
-                    f"Ошибки: <code>{html.escape(repr(cleanup_failures))}</code>\n"
-                    "Recovery будет повторён автоматически; проверь Ads Manager."
-                ),
             )
         return
 
@@ -633,6 +1023,8 @@ async def _recover_duplicate_task(
         task_id=task.id,
         error="duplicate_adset_structure crash recovery completed: all checkpointed IDs PAUSED",
         result=recovered_result,
+        lease_owner=task.lease_owner,
+        lease_token=task.lease_token,
     )
     if not applied:
         logger.warning(
@@ -640,64 +1032,614 @@ async def _recover_duplicate_task(
             task.id,
         )
         return
-    await _publish_task_changed(
-        redis_client,
-        task_id=task.id,
-        task_type=task.task_type,
-        status="failed",
+
+
+_CONFIGURED_META_STATUS_VALUES = frozenset({"ACTIVE", "PAUSED", "DELETED", "ARCHIVED"})
+
+
+async def _reconcile_unknown_bulk_status(
+    engine: AsyncEngine,
+    task: Task,
+    payload: MetaMutationPayload,
+    *,
+    client: MetaApiClient,
+) -> bool:
+    """Resolve an ambiguous batch by one read-only per-ad batch, never resend."""
+    action = str(payload.params.get("action") or "").strip().lower()
+    desired = {
+        "activate": "ACTIVE",
+        "active": "ACTIVE",
+        "pause": "PAUSED",
+        "paused": "PAUSED",
+    }.get(action)
+    stored = task.result if isinstance(task.result, dict) else {}
+    raw_execution_ids = stored.get("bulk_execution_ad_ids")
+    if not isinstance(raw_execution_ids, list):
+        raw_execution_ids = payload.params.get("ad_ids")
+    execution_ids = tuple(
+        sorted(
+            {
+                str(ad_id).strip()
+                for ad_id in (raw_execution_ids if isinstance(raw_execution_ids, list) else [])
+                if str(ad_id).strip()
+            }
+        )
     )
-    await _notify_duplicate_recovery(
+    guard_rejected = (
+        stored.get("bulk_guard_rejected")
+        if isinstance(stored.get("bulk_guard_rejected"), dict)
+        else {}
+    )
+    if desired is None or not execution_ids:
+        await mark_task_failed(
+            engine,
+            task_id=task.id,
+            error="ambiguous bulk status has no valid reconciliation context",
+            result={
+                "outcome": "UNKNOWN",
+                "reconcile_required": False,
+                "per_ad": [],
+                "guard_rejected": guard_rejected,
+            },
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+        )
+        return True
+
+    per_ad: list[dict[str, Any]] = []
+    confirmed_ids: list[str] = []
+    async with locked_autostart_targets(engine, ad_ids=execution_ids) as target_locks:
+        generation_rejections: dict[str, str] = {}
+        if target_locks.busy_ad_id is not None:
+            await defer_unknown_reconciliation(
+                engine,
+                task=task,
+                error=(f"bulk status reconciliation target lock busy: {target_locks.busy_ad_id}"),
+            )
+            return True
+        else:
+            try:
+                entries = [
+                    make_batch_entry(
+                        method="GET",
+                        relative_url=f"{ad_id}?fields=status,effective_status",
+                    )
+                    for ad_id in execution_ids
+                ]
+                with bind_absolute_deadline(task.deadline_at):
+                    response = await client.execute_graph_call(
+                        method="POST",
+                        endpoint="/",
+                        query_params={"batch": build_batch_payload(entries)},
+                        timeout_ms=10_000,
+                        ad_account_id=payload.ad_account_id,
+                    )
+                parsed = parse_batch_response(
+                    response,
+                    expected_count=len(execution_ids),
+                )
+            except Exception as exc:  # noqa: BLE001 — read failure is terminal UNKNOWN
+                parsed = [
+                    {
+                        "index": index,
+                        "success": False,
+                        "code": 0,
+                        "body": None,
+                        "error": type(exc).__name__,
+                    }
+                    for index in range(len(execution_ids))
+                ]
+
+            if is_guarded_autostart_activation(payload):
+                async with target_locks.connection.begin():
+                    current_guards = await revalidate_autostart_activation_guards(
+                        target_locks.connection,
+                        payload=payload,
+                        task_id=int(task.id),
+                    )
+                generation_rejections = dict(current_guards.rejected_by_ad_id)
+
+        compensation_ids: list[str] = []
+        for index, ad_id in enumerate(execution_ids):
+            item = parsed[index] if index < len(parsed) else {}
+            body = item.get("body") if isinstance(item, dict) else None
+            configured_raw = body.get("status") if isinstance(body, dict) else None
+            effective_raw = body.get("effective_status") if isinstance(body, dict) else None
+            configured = configured_raw.strip().upper() if isinstance(configured_raw, str) else None
+            effective = effective_raw.strip().upper() if isinstance(effective_raw, str) else None
+            newer_generation_reason = generation_rejections.get(ad_id)
+            if (
+                item.get("success") is True
+                and configured in _CONFIGURED_META_STATUS_VALUES
+                and configured == desired
+                and newer_generation_reason is None
+            ):
+                confirmed_ids.append(ad_id)
+                per_ad.append(
+                    {
+                        "id": ad_id,
+                        "outcome": "CONFIRMED",
+                        "status": configured,
+                        "effective_status": effective,
+                    }
+                )
+                continue
+
+            if newer_generation_reason is not None:
+                reason = f"superseded_by_newer_generation:{newer_generation_reason}"
+            elif isinstance(item, dict):
+                reason = str(item.get("error") or "desired_configured_status_not_confirmed")
+            else:
+                reason = "missing_reconciliation_result"
+            per_ad.append(
+                {
+                    "id": ad_id,
+                    "outcome": "UNKNOWN",
+                    "status": configured,
+                    "effective_status": effective,
+                    "reason": reason,
+                }
+            )
+            if (
+                desired == "ACTIVE"
+                and configured == "ACTIVE"
+                and newer_generation_reason is not None
+                and (
+                    newer_generation_reason.startswith("fsm_state:")
+                    or ":pause_ad" in newer_generation_reason
+                    or "bulk_status_change:pause" in newer_generation_reason
+                )
+            ):
+                compensation_ids.append(ad_id)
+
+        if compensation_ids and target_locks.busy_ad_id is None:
+            raw_external_deadline = stored.get("bulk_external_deadline_at")
+            not_before = datetime.now(UTC)
+            if isinstance(raw_external_deadline, str):
+                try:
+                    parsed_deadline = datetime.fromisoformat(raw_external_deadline)
+                    if parsed_deadline.tzinfo is None:
+                        parsed_deadline = parsed_deadline.replace(tzinfo=UTC)
+                    not_before = max(not_before, parsed_deadline + timedelta(seconds=5))
+                except ValueError:
+                    logger.error(
+                        "invalid bulk_external_deadline_at task=%s; safety PAUSE stays immediate",
+                        task.id,
+                    )
+            async with target_locks.connection.begin():
+                conn = target_locks.connection
+                command_service = CommandService(engine)
+                for ad_id in sorted(set(compensation_ids)):
+                    receipt = await command_service.enqueue_verified_pause_compensation(
+                        fb_ad_id=ad_id,
+                        idempotency_key=f"autostart-reconcile-pause:{task.id}:{ad_id}",
+                        reason=_SAFETY_COMPENSATION_AUTOSTART,
+                        source_task_id=int(task.id),
+                        observed_delivery_status="ACTIVE",
+                        max_attempts=15,
+                        connection=conn,
+                    )
+                    if receipt.created:
+                        await conn.execute(
+                            text(
+                                """
+                                UPDATE task_queue
+                                SET available_at = GREATEST(available_at, :not_before),
+                                    deadline_at = GREATEST(
+                                        deadline_at,
+                                        :not_before + INTERVAL '30 seconds'
+                                    ),
+                                    updated_at = NOW()
+                                WHERE id = :task_id
+                                  AND status IN ('pending', 'retrying')
+                                """
+                            ),
+                            {
+                                "task_id": receipt.task_id,
+                                "not_before": not_before,
+                            },
+                        )
+                    # The original reconciliation scan must not overtake a
+                    # safety reassertion discovered by read-after-UNKNOWN.
+                    # Extend its durable dependency barrier in the same
+                    # transaction that creates/reuses the compensation task.
+                    await conn.execute(
+                        text(
+                            """
+                            UPDATE task_queue AS scan
+                            SET payload = jsonb_set(
+                                    scan.payload,
+                                    '{dependency_task_ids}',
+                                    (scan.payload->'dependency_task_ids')
+                                        || jsonb_build_array(
+                                            CAST(:compensation_task_id AS BIGINT)
+                                        )
+                                ),
+                                updated_at = NOW()
+                            WHERE scan.task_type = 'observer_scan'
+                              AND scan.status IN ('pending', 'retrying')
+                              AND scan.payload @> '{"dependency_state":"waiting"}'::jsonb
+                              AND scan.payload->'dependency_task_ids'
+                                    @> jsonb_build_array(
+                                        CAST(:source_task_id AS BIGINT)
+                                    )
+                              AND NOT (
+                                  scan.payload->'dependency_task_ids'
+                                    @> jsonb_build_array(
+                                        CAST(:compensation_task_id AS BIGINT)
+                                    )
+                              )
+                            """
+                        ),
+                        {
+                            "source_task_id": int(task.id),
+                            "compensation_task_id": receipt.task_id,
+                        },
+                    )
+
+        unknown_ids = [str(item["id"]) for item in per_ad if item.get("outcome") == "UNKNOWN"]
+        result = {
+            "outcome": "UNKNOWN" if unknown_ids else "CONFIRMED",
+            "reconcile_required": False,
+            "reconciled_after_unknown": True,
+            "desired_status": desired,
+            "modified_ids": confirmed_ids,
+            "confirmed_ids": confirmed_ids,
+            "unknown_ids": unknown_ids,
+            "guard_rejected": dict(sorted(guard_rejected.items())),
+            "generation_rejected": dict(sorted(generation_rejections.items())),
+            "safety_compensation_ids": sorted(set(compensation_ids)),
+            "succeeded": len(confirmed_ids),
+            "failed": len(unknown_ids) + len(guard_rejected),
+            "per_ad": per_ad,
+        }
+        if unknown_ids:
+            await _mark_failed_with_fsm(
+                engine,
+                task,
+                payload=payload,
+                error=(
+                    "ambiguous bulk status remained partially unknown after per-ad "
+                    f"reconciliation: {','.join(unknown_ids)}"
+                ),
+                result=result,
+            )
+        else:
+            await _mark_confirmed_with_grace(
+                engine,
+                task,
+                payload=payload,
+                result=result,
+                prepared_grace=None,
+            )
+    return True
+
+
+async def _reconcile_unknown_status_action(
+    engine: AsyncEngine,
+    task: Task,
+    payload: MetaMutationPayload,
+    *,
+    client: MetaApiClient,
+) -> bool:
+    """Read actual Meta state before any retry after an ambiguous response.
+
+    Returns ``True`` when the task reached a terminal state. ``False`` means the
+    read confirmed that the desired state was not applied, so an idempotent
+    status mutation may be sent once more under the current deadline.
+    """
+    if payload.mutation_kind == "bulk_status_change":
+        return await _reconcile_unknown_bulk_status(
+            engine,
+            task,
+            payload,
+            client=client,
+        )
+    status_kinds = {
+        "pause_ad": "PAUSED",
+        "activate_ad": "ACTIVE",
+    }
+    desired = status_kinds.get(payload.mutation_kind)
+    if desired is None:
+        await mark_task_failed(
+            engine,
+            task_id=task.id,
+            error="ambiguous external result requires manual reconciliation",
+            result={"outcome": "UNKNOWN", "reconcile_required": True},
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+        )
+        return True
+    try:
+        with bind_absolute_deadline(task.deadline_at):
+            observed = await client.execute_graph_call(
+                method="GET",
+                endpoint=f"/{payload.target_id}",
+                query_params={"fields": "effective_status,status"},
+                timeout_ms=10_000,
+                ad_account_id=payload.ad_account_id,
+            )
+    except BrowserReadinessRejectedError as exc:
+        await release_task_after_browser_readiness_rejection(
+            engine,
+            task=task,
+            target_lock_key=str(payload.target_id),
+            error=f"status reconciliation browser readiness rejected: {exc!r}",
+        )
+        return True
+    except (AmbiguousResultError, TemporaryError, SessionUnavailableError) as exc:
+        await requeue_unknown_for_reconciliation(
+            engine,
+            task=task,
+            error=f"status reconciliation unavailable: {exc!r}",
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — result remains genuinely unknown
+        await mark_task_failed(
+            engine,
+            task_id=task.id,
+            error=f"status reconciliation failed: {exc!r}",
+            result={"outcome": "UNKNOWN", "reconcile_required": True},
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+        )
+        return True
+    if not isinstance(observed, dict):
+        await requeue_unknown_for_reconciliation(
+            engine,
+            task=task,
+            error="status reconciliation returned a non-object response",
+        )
+        return True
+
+    raw_configured_status = observed.get("status")
+    raw_effective_status = observed.get("effective_status")
+    if not isinstance(raw_configured_status, str):
+        await requeue_unknown_for_reconciliation(
+            engine,
+            task=task,
+            error="status reconciliation returned a non-string configured status",
+        )
+        return True
+    configured_status = raw_configured_status.strip().upper()
+    if configured_status not in _CONFIGURED_META_STATUS_VALUES:
+        await requeue_unknown_for_reconciliation(
+            engine,
+            task=task,
+            error="status reconciliation returned an unsupported configured status",
+        )
+        return True
+    if raw_effective_status is None:
+        effective_status = ""
+    elif isinstance(raw_effective_status, str):
+        effective_status = raw_effective_status.strip().upper()
+    else:
+        await requeue_unknown_for_reconciliation(
+            engine,
+            task=task,
+            error="status reconciliation returned a non-string effective status",
+        )
+        return True
+    # Meta effective_status is inherited from parent campaign/ad set. It cannot
+    # confirm an ad-level status write: an ACTIVE ad under a PAUSED parent is
+    # effectively paused but will resume spending when that parent activates.
+    actual = configured_status
+    if actual != desired:
+        resolution = await resolve_status_reconciliation_not_applied(
+            engine,
+            task_id=task.id,
+            effective_status=actual,
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+        )
+        if resolution == "cancelled":
+            return True
+        if resolution == "failed":
+            return True
+        # ``running`` means the previous write was proven absent and its
+        # external boundary was atomically cleared.  A normal preflight plus a
+        # new boundary now guards exactly one safe resend.
+        if resolution == "running":
+            # Keep the claimed in-memory snapshot coherent with the atomic DB
+            # transition.  If that one safe resend is itself ambiguous,
+            # requeue_unknown_for_reconciliation must schedule its final
+            # read-only verification instead of mistaking this stale snapshot
+            # for a failed reconciliation read.
+            task.result = {
+                key: value
+                for key, value in (task.result or {}).items()
+                if key not in {"outcome", "reconcile_required"}
+            }
+            task.result.update(
+                {
+                    "reconciled_not_applied": True,
+                    "effective_status": actual,
+                }
+            )
+            task.external_started_at = None
+            return False
+        return True
+    result = {
+        "outcome": "CONFIRMED",
+        "reconciled_after_unknown": True,
+        "status": configured_status,
+        "effective_status": effective_status or None,
+    }
+    try:
+        prepared_grace = await _prepare_enable_grace_for_payload(
+            engine,
+            payload=payload,
+            require_disabled=False,
+        )
+    except EnableGraceUnsafeError as exc:
+        await _compensate_confirmed_activation_without_grace(
+            engine,
+            task,
+            payload=payload,
+            configured_status=configured_status,
+            error=exc,
+        )
+        return True
+    await _mark_confirmed_with_grace(
         engine,
-        redis_client,
-        task_id=task.id,
-        suffix="paused",
-        text=(
-            "🛑 <b>Crash-recovery дублирования завершён</b>\n"
-            f"Task: <code>{task.id}</code>\n"
-            f"Объекты из checkpoint поставлены на PAUSED: "
-            f"<code>{html.escape(repr(created))}</code>\n"
-            "Исходная задача помечена failed без повторного создания."
-        ),
+        task,
+        payload=payload,
+        result=result,
+        prepared_grace=prepared_grace,
     )
+    return True
+
+
+async def _execute_and_finalize_mutation(
+    engine: AsyncEngine,
+    task: Task,
+    payload: MetaMutationPayload,
+    *,
+    client: MetaApiClient,
+    prepared_grace: PreparedEnableGrace | None,
+    guarded_execution: GuardedAutostartExecution | None = None,
+) -> None:
+    """Execute one already-crossed mutation and project its terminal state."""
+    result = await _execute_with_touch(engine, task, payload, client=client)
+    if guarded_execution is not None:
+        result = merge_guarded_bulk_result(result or {}, guarded_execution)
+    assessment = assess_mutation_result(payload, result)
+    if assessment.state == "invalid":
+        failure_result = {
+            "outcome": "UNKNOWN",
+            "reconcile_required": True,
+            "manual_review_required": True,
+            "reason": "handler_contract_violation",
+            "contract_error": assessment.reason,
+            "operation": payload.mutation_kind,
+            "target_id": str(payload.target_id),
+        }
+        applied = await mark_task_failed(
+            engine,
+            task_id=task.id,
+            error=f"mutation handler contract violated: {assessment.reason}",
+            result=failure_result,
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+        )
+        if not applied:
+            logger.warning(
+                "meta_api: task id=%s contract-violation finalization lost fence",
+                task.id,
+            )
+        else:
+            logger.error(
+                "meta_api: task id=%s kind=%s returned an invalid acknowledgement (%s); "
+                "terminal UNKNOWN, manual reconciliation required",
+                task.id,
+                payload.mutation_kind,
+                assessment.reason,
+            )
+        return
+    if assessment.state == "partial":
+        partial_result = {
+            **result,
+            "outcome": "UNKNOWN",
+            "reconcile_required": True,
+            "manual_review_required": True,
+            "reason": assessment.reason,
+        }
+        applied = await _mark_failed_with_fsm(
+            engine,
+            task,
+            payload=payload,
+            error=(
+                "mutation partially applied; terminal UNKNOWN and manual "
+                f"reconciliation required: {result!r}"
+            )[:500],
+            result=partial_result,
+        )
+        if not applied:
+            logger.warning(
+                "meta_api: task id=%s partial finalization lost fence",
+                task.id,
+            )
+        else:
+            logger.error(
+                "meta_api: task id=%s kind=%s applied only partially "
+                "(succeeded=%s failed=%s); terminal UNKNOWN",
+                task.id,
+                payload.mutation_kind,
+                result.get("succeeded"),
+                result.get("failed"),
+            )
+        return
+    if assessment.state == "rejected":
+        err = f"mutation_logical_fail: handler вернул провал без exception result={result!r}"
+        failure_result = {
+            **result,
+            "outcome": "REJECTED",
+            "reason": assessment.reason,
+        }
+        applied = await mark_task_failed(
+            engine,
+            task_id=task.id,
+            error=err[:500],
+            result=failure_result,
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+        )
+        if not applied:
+            logger.warning(
+                "meta_api: task id=%s mark_failed (logical fail) не применился — гонка",
+                task.id,
+            )
+        else:
+            logger.error(
+                "meta_api: task id=%s kind=%s — логический провал mutation (без exception), "
+                "mark_failed. ПРОВЕРЬ вручную! result=%r",
+                task.id,
+                payload.mutation_kind,
+                result,
+            )
+        return
+    result = {**result, "outcome": "CONFIRMED"}
+    applied = await _mark_confirmed_with_grace(
+        engine,
+        task,
+        payload=payload,
+        result=result,
+        prepared_grace=prepared_grace,
+    )
+    if not applied:
+        logger.warning(
+            "meta_api: task id=%s mark_succeeded не применился "
+            "(status != running) — гонка с другим воркером, пропускаю",
+            task.id,
+        )
+        return
+    logger.info("meta_api: task id=%s succeeded", task.id)
 
 
 async def process_one_task(
     engine: AsyncEngine,
     task: Task,
     *,
-    client: MetaApiClient | None = None,
-    redis_client: redis_asyncio.Redis | None = None,
+    client: MetaApiClient,
     alert_ctx: AutostopAlertContext | None = None,
 ) -> None:
-    """Полный жизненный цикл одной задачи.
-
-    client опционален — если None, mutation не исполнится (для тестов с моками).
-    В production main_loop всегда передаёт реальный AuditedMetaApiClient.
-    """
+    """Полный жизненный цикл одной задачи с обязательным Meta client."""
+    _require_claimed_task(task)
     try:
         payload = MetaMutationPayload.from_dict(task.payload)
     except (KeyError, ValueError) as exc:
         logger.error("Невалидный payload в task id=%s: %s", task.id, exc)
-        applied = await mark_task_failed(engine, task_id=task.id, error=f"invalid payload: {exc}")
-        if not applied:
-            logger.warning(
-                "meta_api: task id=%s mark_failed (invalid payload) не применился "
-                "— гонка с другим воркером",
-                task.id,
-            )
-        return
-
-    if client is None:
-        # Защитная ветка для случая когда клиент не подан (старые тесты).
-        # В production main_loop всегда передаёт клиент.
         applied = await mark_task_failed(
             engine,
             task_id=task.id,
-            error="MetaApiClient не доступен в worker (Vision-сессия?)",
+            error=f"invalid payload: {exc}",
+            result={"outcome": "REJECTED", "reason": "invalid_payload"},
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
         )
         if not applied:
             logger.warning(
-                "meta_api: task id=%s mark_failed (no client) не применился "
+                "meta_api: task id=%s mark_failed (invalid payload) не применился "
                 "— гонка с другим воркером",
                 task.id,
             )
@@ -707,14 +1649,40 @@ async def process_one_task(
     # claim. Handle it before scanning/owner gates: PAUSE lowers spend risk and
     # must remain possible even if the source disappeared from the local catalog.
     if _is_duplicate_recovery_task(task, payload):
+        if not await _cross_external_mutation_boundary(engine, task, payload):
+            return
         await _recover_duplicate_task(
             engine,
             task,
             payload,
             client=client,
-            redis_client=redis_client,
         )
         return
+
+    stored_result = task.result
+    if isinstance(stored_result, dict) and stored_result.get("reconcile_required") is True:
+        try:
+            reconciled = await _reconcile_unknown_status_action(
+                engine,
+                task,
+                payload,
+                client=client,
+            )
+        except Exception as exc:  # noqa: BLE001 — keep UNKNOWN durable and retry read-only
+            logger.exception(
+                "meta_api: task id=%s reconciliation lifecycle failed; "
+                "deferring without another external write",
+                task.id,
+            )
+            await defer_unknown_reconciliation(
+                engine,
+                task=task,
+                error=f"reconciliation lifecycle failed: {exc!r}",
+                delay_seconds=5,
+            )
+            return
+        if reconciled:
+            return
 
     # Асимметричный стоп: на паузе сканирования откладываем АКТИВИРУЮЩИЕ mutations
     # (activate/bulk activate/create/duplicate/budget/...), пропуская только
@@ -768,7 +1736,12 @@ async def process_one_task(
                 )
             return
         applied = await mark_task_failed(
-            engine, task_id=task.id, error=f"owner_scoping_reject: {ownership.reason}"
+            engine,
+            task_id=task.id,
+            error=f"owner_scoping_reject: {ownership.reason}",
+            result={"outcome": "REJECTED", "reason": "owner_scoping"},
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
         )
         if applied:
             logger.warning(
@@ -788,16 +1761,21 @@ async def process_one_task(
     # re-check freshness immediately before the external boundary. Manual and
     # bulk operations are intentionally outside this automatic-decision gate.
     if (
-        hasattr(task, "external_started_at")
-        and payload.mutation_kind == "pause_ad"
-        and getattr(task, "requested_by", "") == _AUTO_STOP_REQUESTED_BY
+        payload.mutation_kind == "pause_ad"
+        and task.requested_by == _AUTO_STOP_REQUESTED_BY
+        and not _is_safety_compensation(payload)
     ):
         freshness = await load_meta_snapshot_freshness(
             engine,
             fb_ad_id=str(payload.target_id),
         )
         if not freshness.fresh:
-            deferred = await defer_auto_stop_for_fresh_snapshot(engine, task_id=task.id)
+            deferred = await defer_auto_stop_for_fresh_snapshot(
+                engine,
+                task_id=task.id,
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
+            )
             if deferred:
                 logger.info(
                     "meta_api: auto-stop task id=%s deferred for fresh Meta snapshot "
@@ -806,27 +1784,29 @@ async def process_one_task(
                     freshness.latest_cycle_at,
                     freshness.interval_seconds,
                 )
-                await _publish_task_changed(
-                    redis_client,
-                    task_id=task.id,
-                    task_type=task.task_type,
-                    status="retrying",
-                )
-                if redis_client is not None:
-                    try:
-                        await redis_client.publish(
-                            CHANNEL_OBSERVER_TRIGGER,
-                            json.dumps(
-                                {
-                                    "reason": "auto_stop_requires_fresh_meta",
-                                    "task_id": task.id,
-                                    "fb_ad_id": str(payload.target_id),
-                                }
-                            ),
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.debug("observer freshness trigger publish failed", exc_info=True)
             return
+
+    try:
+        prepared_grace = await _prepare_enable_grace_for_payload(
+            engine,
+            payload=payload,
+        )
+    except EnableGraceUnsafeError as exc:
+        applied = await mark_task_failed(
+            engine,
+            task_id=task.id,
+            error=f"enable_grace_precondition: {exc}",
+            result={"outcome": "REJECTED", "reason": "enable_grace_precondition"},
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+        )
+        if applied:
+            logger.warning(
+                "meta_api: curator activation task id=%s rejected before external call: %s",
+                task.id,
+                exc,
+            )
+        return
 
     logger.info(
         "meta_api: исполняю task id=%s kind=%s target=%s",
@@ -835,185 +1815,81 @@ async def process_one_task(
         payload.target_id,
     )
 
+    external_boundary_crossed = False
     try:
-        # Последняя атомарная граница перед сетевым вызовом. Tracker-worker может
-        # отменить только bot_auto_stop до этого момента и берёт тот же lock по ad.
-        # Если отмена уже победила гонку, внешний вызов не выполняем.
-        # Legacy/test Task-снимки без нового поля поддерживаем до полного rollout
-        # миграции. Production claim_next_task всегда возвращает поле и проходит гейт.
-        if hasattr(task, "external_started_at"):
-            external_started = await mark_external_call_started(
+        if is_guarded_autostart_activation(payload):
+            async with guarded_autostart_execution_boundary(
                 engine,
-                task_id=task.id,
-                target_lock_key=str(payload.target_id),
-            )
-            if not external_started:
-                logger.info(
-                    "meta_api: task id=%s отменена/закрыта до внешнего вызова kind=%s target=%s",
-                    task.id,
-                    payload.mutation_kind,
-                    payload.target_id,
+                task=task,
+                payload=payload,
+            ) as guarded:
+                if guarded.control_reason is not None:
+                    if guarded.control_reason == "cancel_requested":
+                        await mark_cancelled(
+                            engine,
+                            task_id=task.id,
+                            reason="cancelled before guarded external call",
+                            lease_owner=task.lease_owner,
+                            lease_token=task.lease_token,
+                        )
+                    else:
+                        await mark_task_failed(
+                            engine,
+                            task_id=task.id,
+                            error=(
+                                "guarded command rejected before external call: "
+                                f"{guarded.control_reason}"
+                            ),
+                            result={
+                                "outcome": "REJECTED",
+                                "reason": guarded.control_reason,
+                            },
+                            lease_owner=task.lease_owner,
+                            lease_token=task.lease_token,
+                        )
+                    return
+                if not guarded.external_started or guarded.payload is None:
+                    await mark_task_failed(
+                        engine,
+                        task_id=task.id,
+                        error="autostart activation rejected by per-ad execution guards",
+                        result={
+                            "outcome": "REJECTED",
+                            "reason": "activation_guard",
+                            "requested_ids": list(guarded.requested_ad_ids),
+                            "modified_ids": [],
+                            "guard_rejected": dict(sorted(guarded.rejected_by_ad_id.items())),
+                        },
+                        lease_owner=task.lease_owner,
+                        lease_token=task.lease_token,
+                    )
+                    return
+                external_boundary_crossed = True
+                await _execute_and_finalize_mutation(
+                    engine,
+                    task,
+                    guarded.payload,
+                    client=client,
+                    prepared_grace=prepared_grace,
+                    guarded_execution=guarded,
                 )
                 return
 
-        # MID-10: heartbeat-touch долгой mutation. Пока идёт исполнение, фоновый таск
-        # освежает updated_at задачи — иначе reconciler украл бы running >30 мин → дубль.
-        result = await _execute_with_touch(engine, task.id, payload, client=client)
-        # R3: handler мог вернуть «логический провал» БЕЗ exception (Batch HTTP 200,
-        # пер-саб ошибки в теле). bulk_status_change при полном отказе Meta хардкодит
-        # success=True с succeeded==0; duplicate_campaign отдаёт success=False. Без этой
-        # проверки задача метилась succeeded, money-fail DM не уходил, бюджет тёк.
-        if not is_mutation_success(result):
-            err = f"mutation_logical_fail: handler вернул провал без exception result={result!r}"
-            applied = await mark_task_failed(engine, task_id=task.id, error=err[:500])
-            if not applied:
-                logger.warning(
-                    "meta_api: task id=%s mark_failed (logical fail) не применился — гонка",
-                    task.id,
-                )
-            else:
-                logger.error(
-                    "meta_api: task id=%s kind=%s — логический провал mutation (без exception), "
-                    "mark_failed. ПРОВЕРЬ вручную! result=%r",
-                    task.id,
-                    payload.mutation_kind,
-                    result,
-                )
-            # Money-мутация (pause/bulk) провалилась — owner должен узнать (как в except).
-            await _alert_money_fail(
-                engine,
-                redis_client,
-                payload=payload,
-                requested_by=getattr(task, "requested_by", ""),
-                error=err,
-                kind_label=payload.mutation_kind,
-            )
-            return
-        # Curator hold должен появиться ДО terminal status, pubsub и FSM=normal.
-        # Если процесс упадёт сразу после внешнего activate, task останется running:
-        # reconciler повторит идемпотентный activate и восстановит marker. Обратный
-        # порядок оставлял терминальную задачу и активный ad без grace навсегда.
-        await _apply_enable_grace_after_success(
-            engine,
-            redis_client,
-            payload=payload,
-        )
-        applied = await mark_task_succeeded(engine, task_id=task.id, result=result)
-        if not applied:
-            # Race: другой воркер уже закрыл задачу после reconciler-таймаута.
-            # Mutation в Meta мы уже исполнили — повторно не делаем (return).
-            logger.warning(
-                "meta_api: task id=%s mark_succeeded не применился "
-                "(status != running) — гонка с другим воркером, пропускаю",
-                task.id,
-            )
-            return
-        logger.info("meta_api: task id=%s succeeded", task.id)
-        # Publish изменения статуса в Redis-канал (best-effort)
-        await _publish_task_changed(
-            redis_client,
-            task_id=task.id,
-            task_type=task.task_type,
-            status="succeeded",
-        )
-        # FSM-sync: привести ad_alert_state к результату mutation. Идемпотентно и
-        # best-effort (не роняет succeeded-контракт). Закрывает money-пробел —
-        # без этого FSM застревал в stop_sent при auto-stop через API. result прокидываем
-        # для bulk (H2): метим FSM только по реально применённым id (modified_ids).
-        await sync_fsm_after_mutation(engine, payload, result)
-        # R3 partial: bulk применился частично (succeeded>0, failed>0). FSM-sync корректен
-        # (метит только modified_ids), задача succeeded, но часть объявлений НЕ выключилась —
-        # owner должен узнать через money-fail DM, иначе недовыключенные тратят бюджет.
-        if is_partial_bulk_failure(result):
-            logger.warning(
-                "meta_api: task id=%s kind=%s — bulk применился ЧАСТИЧНО "
-                "(succeeded=%s failed=%s), часть объявлений не выключена",
+        if not await _cross_external_mutation_boundary(engine, task, payload):
+            logger.info(
+                "meta_api: task id=%s отменена/закрыта до внешнего вызова kind=%s target=%s",
                 task.id,
                 payload.mutation_kind,
-                result.get("succeeded"),
-                result.get("failed"),
+                payload.target_id,
             )
-            await _alert_money_fail(
-                engine,
-                redis_client,
-                payload=payload,
-                requested_by=getattr(task, "requested_by", ""),
-                error=(
-                    f"bulk частично провалился: succeeded={result.get('succeeded')} "
-                    f"failed={result.get('failed')} — проверь невыключенные вручную"
-                ),
-                kind_label=payload.mutation_kind,
-            )
-        # Канал auto-stop жив (mutation дошла) → сброс счётчика подряд-фейлов и дедупа,
-        # чтобы следующий outage снова мог поднять CRITICAL (re-arm). Best-effort.
-        if redis_client is not None:
-            await record_autostop_success(redis_client)
-        return
-    except CreateCampaignPartialError as exc:
-        # Batch API не атомарен: часть объектов уже создана в Meta.
-        # Логируем осиротевшие id — оператор должен удалить их вручную.
-        logger.error(
-            "meta_api: task id=%s create_campaign partial fail — "
-            "осиротевшие объекты в Meta, нужна ручная чистка! "
-            "created_ids=%s failed_steps=%s",
-            task.id,
-            exc.created_ids,
-            exc.failed_steps,
-        )
-        applied = await mark_task_failed(
+            return
+        external_boundary_crossed = True
+        await _execute_and_finalize_mutation(
             engine,
-            task_id=task.id,
-            error=f"partial_fail: created_ids={exc.created_ids!r} failed={exc.failed_steps!r}",
-        )
-        if not applied:
-            logger.warning(
-                "meta_api: task id=%s mark_failed (partial) не применился "
-                "— гонка с другим воркером",
-                task.id,
-            )
-        # Partial fail create_campaign — не money-стоп, _PAUSE_KINDS проверит.
-        await _alert_money_fail(
-            engine,
-            redis_client,
-            payload=payload,
-            requested_by=getattr(task, "requested_by", ""),
-            error=str(exc),
-            kind_label=payload.mutation_kind,
-        )
-        return
-    except DuplicateCampaignPartialError as exc:
-        # MID-4: copy прошёл, rename упал → копия осиротела в Meta. Метим failed БЕЗ
-        # retry (retry создал бы вторую копию — двойной открут). Логируем осиротевший
-        # id для ручной проверки/переименования. Контракт как у CreateCampaignPartialError.
-        logger.error(
-            "meta_api: task id=%s duplicate_campaign partial fail — "
-            "копия создана и осиротела в Meta, нужна ручная проверка! "
-            "created_ids=%s failed_steps=%s",
-            task.id,
-            exc.created_ids,
-            exc.failed_steps,
-        )
-        applied = await mark_task_failed(
-            engine,
-            task_id=task.id,
-            error=f"duplicate_partial_fail: created_ids={exc.created_ids!r} "
-            f"failed={exc.failed_steps!r}",
-        )
-        if not applied:
-            logger.warning(
-                "meta_api: task id=%s mark_failed (duplicate partial) не применился "
-                "— гонка с другим воркером",
-                task.id,
-            )
-        # duplicate_campaign не в _PAUSE_KINDS — _alert_money_fail сам отфильтрует (no-op),
-        # но зовём единообразно с create_campaign веткой на случай расширения _PAUSE_KINDS.
-        await _alert_money_fail(
-            engine,
-            redis_client,
-            payload=payload,
-            requested_by=getattr(task, "requested_by", ""),
-            error=str(exc),
-            kind_label=payload.mutation_kind,
+            task,
+            payload,
+            client=client,
+            prepared_grace=prepared_grace,
         )
         return
     except DuplicateAdsetStructurePartialError as exc:
@@ -1029,12 +1905,14 @@ async def process_one_task(
             exc.cleanup_failures,
         )
         partial_result = {
+            "outcome": "UNKNOWN",
+            "reconcile_required": True,
+            "manual_review_required": True,
             "checkpoint_type": "duplicate_adset_structure",
-            "checkpoint_version": 1,
+            "checkpoint_version": 2,
             "phase": "recovery_retrying" if exc.cleanup_failures else "failed_cleanup",
             "partial_fail": True,
             "created_ids": exc.created_ids,
-            "activated_ids": {"campaigns": [], "adsets": [], "ads": []},
             "failed_steps": exc.failed_steps,
             "cleanup_failures": exc.cleanup_failures,
             "recovery_requested": bool(exc.cleanup_failures),
@@ -1052,6 +1930,8 @@ async def process_one_task(
                 task_id=task.id,
                 checkpoint=partial_result,
                 error=error,
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
             )
         else:
             applied = await mark_task_failed(
@@ -1059,6 +1939,8 @@ async def process_one_task(
                 task_id=task.id,
                 error=error,
                 result=partial_result,
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
             )
         if not applied:
             logger.warning(
@@ -1066,32 +1948,53 @@ async def process_one_task(
                 "не применился — гонка с другим воркером",
                 task.id,
             )
-        source_campaign_id = str((payload.params or {}).get("source_campaign_id") or "—")
-        source_adset_id = str((payload.params or {}).get("source_adset_id") or "—")
-        await notify_owners(
+        return
+    except AmbiguousResultError as exc:
+        # A timeout/cancellation after external_started_at is never treated as
+        # success or blind failure. Status changes get a read-before-retry pass;
+        # create/duplicate/budget operations stop UNKNOWN for operator review.
+        if payload.mutation_kind in {
+            "pause_ad",
+            "activate_ad",
+            "bulk_status_change",
+        }:
+            await requeue_unknown_for_reconciliation(
+                engine,
+                task=task,
+                error=f"ambiguous external result: {exc!r}",
+            )
+            return
+        await mark_task_failed(
             engine,
-            redis_client,
-            category="critical",
-            text=(
-                "🚨 <b>Дублирование адсетов завершилось частично</b>\n"
-                f"Task: <code>{task.id}</code>\n"
-                f"Source campaign: <code>{html.escape(source_campaign_id)}</code>\n"
-                f"Source adset: <code>{html.escape(source_adset_id)}</code>\n"
-                f"Созданные ID: <code>{html.escape(repr(exc.created_ids))}</code>\n"
-                f"Ошибки cleanup: <code>{html.escape(repr(exc.cleanup_failures))}</code>\n"
-                + (
-                    "PAUSE-only recovery будет повторён автоматически. "
-                    if exc.cleanup_failures
-                    else "Созданные объекты поставлены на PAUSED. "
-                )
-                + "Проверь их вручную в Ads Manager."
-            ),
-            dedup_key=f"meta_api:duplicate_adset_structure:partial:{task.id}",
-            dedup_ttl_seconds=24 * 60 * 60,
+            task_id=task.id,
+            error=f"ambiguous irreversible/non-status result: {exc!r}",
+            result={
+                "outcome": "UNKNOWN",
+                "reconcile_required": True,
+                "manual_review_required": True,
+                "operation": payload.mutation_kind,
+                "target_id": str(payload.target_id),
+                "reason": "ambiguous_result",
+            },
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
         )
         return
     except _PERMANENT_EXCEPTIONS as exc:
-        applied = await mark_task_failed(engine, task_id=task.id, error=repr(exc))
+        failure_result: dict[str, Any] = {
+            "outcome": "REJECTED",
+            "reason": type(exc).__name__,
+        }
+        if isinstance(exc, TokenInvalidError):
+            failure_result["requires_meta_reauth"] = True
+        applied = await mark_task_failed(
+            engine,
+            task_id=task.id,
+            error=repr(exc),
+            result=failure_result,
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+        )
         if not applied:
             logger.warning(
                 "meta_api: task id=%s mark_failed не применился "
@@ -1100,76 +2003,104 @@ async def process_one_task(
             )
         else:
             logger.warning("meta_api: task id=%s → permanent fail: %s", task.id, exc)
-        # Токен истёк — отдельный дедуплицированный алерт «нужен re-login Vision».
-        if isinstance(exc, TokenInvalidError):
-            await notify_owners(
-                engine,
-                redis_client,
-                category="token_invalid",
-                text=(
-                    "⚠️ <b>Marketing API: токен истёк</b>\n"
-                    "Зайди в Vision и обнови токен (re-login Facebook)."
-                ),
-                dedup_key="meta_token_invalid",
-                dedup_ttl_seconds=3600,
-            )
-        # Money-мутация (pause/bulk) финально провалилась — owner должен знать.
-        await _alert_money_fail(
-            engine,
-            redis_client,
-            payload=payload,
-            requested_by=getattr(task, "requested_by", ""),
-            error=repr(exc),
-            kind_label=payload.mutation_kind,
-        )
         return
     except _TEMPORARY_EXCEPTIONS as exc:
         # Необратимые kinds не ретраим: transient мог прилететь после коммита Meta → дубль.
-        # Исключения (M-2, аудит 2026-07-12) — доказуемо безопасные для retry:
-        # - SessionUnavailableError — pre-send семейство (circuit-open, FAILED_PRECONDITION
-        #   browser-agent, EAA-токен не в DOM): запрос в Meta НЕ уходил;
-        # - NothingCommittedError — handler проверил ответ: все sub-провалы явные
-        #   (Meta обработала и отклонила), объекты не созданы.
-        # Раньше блип канала навсегда убивал залив кампании. Сетевые mid-flight ошибки
-        # (-2 Failed to fetch, DEADLINE) остаются TemporaryError → fail_irreversible.
-        if payload.mutation_kind in _IRREVERSIBLE_KINDS and not isinstance(
-            exc, (SessionUnavailableError, NothingCommittedError)
-        ):
+        # SessionUnavailableError is a proven pre-send family (circuit-open,
+        # FAILED_PRECONDITION, browser-agent without a token). Other transient
+        # failures may have crossed the Meta boundary and are never replayed for
+        # an irreversible duplicate operation.
+        readiness_rejected = isinstance(exc, BrowserReadinessRejectedError)
+        known_not_committed = isinstance(exc, SessionUnavailableError)
+        if external_boundary_crossed and not known_not_committed:
+            if payload.mutation_kind in {
+                "pause_ad",
+                "activate_ad",
+                "bulk_status_change",
+            }:
+                await requeue_unknown_for_reconciliation(
+                    engine,
+                    task=task,
+                    error=f"ambiguous temporary error after external boundary: {exc!r}",
+                )
+                # UNKNOWN changes the retry strategy, but it must not suppress the
+                # critical transport-health signal for an automatic money action.
+                # PostgreSQL outbox deduplicates the resulting notification event.
+                if alert_ctx is not None and task.requested_by == _AUTO_STOP_REQUESTED_BY:
+                    await maybe_alert_autostop_channel_down(
+                        exc=exc,
+                        fb_ad_id=payload.target_id,
+                        engine=alert_ctx.engine,
+                    )
+            else:
+                await mark_task_failed(
+                    engine,
+                    task_id=task.id,
+                    error=f"ambiguous temporary error after external boundary: {exc!r}",
+                    result={
+                        "outcome": "UNKNOWN",
+                        "reconcile_required": True,
+                        "manual_review_required": True,
+                        "operation": payload.mutation_kind,
+                        "target_id": str(payload.target_id),
+                        "reason": "temporary_after_external_boundary",
+                    },
+                    lease_owner=task.lease_owner,
+                    lease_token=task.lease_token,
+                )
+            return
+        if payload.mutation_kind in _IRREVERSIBLE_KINDS and not known_not_committed:
             await _fail_irreversible(engine, task, payload, exc, reason="temporary")
             return
-        retried = await requeue_task(engine, task=task, error=repr(exc))
+        if readiness_rejected:
+            pre_send_status = await release_task_after_browser_readiness_rejection(
+                engine,
+                task=task,
+                target_lock_key=str(payload.target_id),
+                error=repr(exc),
+            )
+            retried = pre_send_status == "retrying"
+        elif known_not_committed:
+            pre_send_status = await requeue_task_proven_not_committed(
+                engine,
+                task=task,
+                target_lock_key=str(payload.target_id),
+                error=repr(exc),
+            )
+            retried = pre_send_status == "retrying"
+        else:
+            pre_send_status = None
+            retried = await requeue_task(engine, task=task, error=repr(exc))
         if retried:
             logger.warning("meta_api: task id=%s → retrying (temporary): %s", task.id, exc)
+        elif pre_send_status == "cancelled":
+            logger.info(
+                "meta_api: task id=%s cancelled after proven pre-send reject",
+                task.id,
+            )
         else:
             logger.error("meta_api: task id=%s → exhausted retries (temporary): %s", task.id, exc)
-            # Исчерпаны все попытки → финальный провал money-мутации (pause).
-            await _alert_money_fail(
-                engine,
-                redis_client,
-                payload=payload,
-                requested_by=getattr(task, "requested_by", ""),
-                error=f"exhausted retries: {exc!r}",
-                kind_label=payload.mutation_kind,
-            )
-        # Money-сигнал: auto-stop pause_ad не доходит до Meta из-за мёртвого Vision-канала
-        # (code=-2 Failed to fetch). После N подряд таких фейлов — ОДИН CRITICAL в TG
-        # «чини Vision», а не молчаливый ретрай до 72 попыток. Best-effort.
-        if (
-            redis_client is not None
-            and alert_ctx is not None
-            and getattr(task, "requested_by", "") == _AUTO_STOP_REQUESTED_BY
-        ):
+        # Money-сигнал: auto-stop pause_ad не доходит до Meta из-за мёртвого Vision-канала.
+        # Каждый signal достигает durable outbox; PostgreSQL подавляет дубли.
+        if alert_ctx is not None and task.requested_by == _AUTO_STOP_REQUESTED_BY:
             await maybe_alert_autostop_channel_down(
-                redis_client,
                 exc=exc,
                 fb_ad_id=payload.target_id,
                 engine=alert_ctx.engine,
-                threshold=alert_ctx.threshold,
-                window_seconds=alert_ctx.window_seconds,
-                dedup_ttl_seconds=alert_ctx.dedup_ttl_seconds,
             )
         return
     except ValueError as exc:
+        if external_boundary_crossed and payload.mutation_kind in {
+            "pause_ad",
+            "activate_ad",
+            "bulk_status_change",
+        }:
+            await requeue_unknown_for_reconciliation(
+                engine,
+                task=task,
+                error=f"ambiguous post-call value error: {exc!r}",
+            )
+            return
         # Необратимые kinds: ValueError мог прийти на постобработке УЖЕ успешного ответа
         # (парсинг id/batch-тела) → retry создал бы дубль. Уводим в failed.
         if payload.mutation_kind in _IRREVERSIBLE_KINDS:
@@ -1191,17 +2122,36 @@ async def process_one_task(
                 "meta_api: task id=%s → final fail (unexpected ValueError, retries exhausted)",
                 task.id,
             )
-            # Исчерпаны все попытки → финальный провал money-мутации (pause).
-            await _alert_money_fail(
-                engine,
-                redis_client,
-                payload=payload,
-                requested_by=getattr(task, "requested_by", ""),
-                error=f"exhausted retries (ValueError): {exc!r}",
-                kind_label=payload.mutation_kind,
-            )
         return
     except Exception as exc:  # noqa: BLE001 — защитная сетка на неклассифицированное
+        if external_boundary_crossed:
+            if payload.mutation_kind in {
+                "pause_ad",
+                "activate_ad",
+                "bulk_status_change",
+            }:
+                await requeue_unknown_for_reconciliation(
+                    engine,
+                    task=task,
+                    error=f"ambiguous unclassified post-call error: {exc!r}",
+                )
+            else:
+                await mark_task_failed(
+                    engine,
+                    task_id=task.id,
+                    error=f"ambiguous unclassified post-call error: {exc!r}",
+                    result={
+                        "outcome": "UNKNOWN",
+                        "reconcile_required": True,
+                        "manual_review_required": True,
+                        "operation": payload.mutation_kind,
+                        "target_id": str(payload.target_id),
+                        "reason": "unclassified_after_external_boundary",
+                    },
+                    lease_owner=task.lease_owner,
+                    lease_token=task.lease_token,
+                )
+            return
         # Необратимые kinds: неклассифицированная ошибка после возможного коммита → не ретраим.
         if payload.mutation_kind in _IRREVERSIBLE_KINDS:
             await _fail_irreversible(engine, task, payload, exc, reason="unknown")
@@ -1211,28 +2161,21 @@ async def process_one_task(
             logger.warning("meta_api: task id=%s → retrying (unknown): %s", task.id, exc)
         else:
             logger.error("meta_api: task id=%s → final fail (unknown): %s", task.id, exc)
-            # Исчерпаны все попытки → финальный провал money-мутации (pause).
-            await _alert_money_fail(
-                engine,
-                redis_client,
-                payload=payload,
-                requested_by=getattr(task, "requested_by", ""),
-                error=f"exhausted retries (unknown): {exc!r}",
-                kind_label=payload.mutation_kind,
-            )
 
 
 # ====================== sub-loops ======================
 
 
-async def heartbeat_loop(redis_client: redis_asyncio.Redis, stop: asyncio.Event) -> None:
-    """Периодически обновляет worker:heartbeat:meta_api с TTL 60s."""
-    interval = HEARTBEAT_TTL_SECONDS / 2
+async def metrics_loop(stop: asyncio.Event, engine: AsyncEngine | None = None) -> None:
+    """Refresh Prometheus process and queue metrics."""
+    interval = 15.0
     while not stop.is_set():
-        try:
-            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
-        except Exception:  # noqa: BLE001
-            logger.exception("heartbeat: ошибка записи в Redis")
+        mark_worker_heartbeat(WORKER_NAME)
+        if engine is not None:
+            try:
+                await refresh_task_queue_metrics(engine)
+            except Exception:  # noqa: BLE001
+                logger.debug("task queue metric refresh failed", exc_info=True)
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
@@ -1244,70 +2187,96 @@ async def task_loop(
     stop: asyncio.Event,
     *,
     client: MetaApiClient,
-    redis_client: redis_asyncio.Redis | None = None,
     alert_ctx: AutostopAlertContext | None = None,
+    wakeup: TaskQueueWakeup | None = None,
 ) -> None:
     """Главный цикл claim → execute → mark."""
+    _validate_worker_lane_contract(WORKER_NAME, _CLAIM_LANES)
+    next_timezone_refresh_at = 0.0
     while not stop.is_set():
         try:
-            claim = await claim_pending_task(engine)
+            claim = await claim_browser_ready_mutation_task(
+                engine,
+                lanes=_CLAIM_LANES,
+                worker_id=_WORKER_INSTANCE_ID,
+                lease_seconds=_TASK_LEASE_SECONDS,
+            )
         except Exception:  # noqa: BLE001
-            logger.exception("ошибка claim_pending_task")
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=IDLE_SLEEP_SECONDS)
-            except asyncio.TimeoutError:
-                pass
+            logger.exception("ошибка readiness-gated claim")
+            if wakeup is not None:
+                await wakeup.wait_for_work(stop)
+            else:
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=IDLE_SLEEP_SECONDS)
+                except asyncio.TimeoutError:
+                    pass
             continue
 
         if claim.queue_empty or claim.task is None:
-            # Волна 2/E: на холостом ходу обновляем кэш TZ кабинетов (троттлинг 6ч внутри).
-            # Off auto-stop path — observer не трогаем. Best-effort, ошибки не ронят цикл.
-            if redis_client is not None:
+            # Refresh durable IANA names outside the money path. The schedule is
+            # process-local only; PostgreSQL remains the sole timezone authority.
+            loop_now = asyncio.get_running_loop().time()
+            if loop_now >= next_timezone_refresh_at:
                 try:
-                    from core.meta_api.account_tz import maybe_refresh_account_tz
+                    from core.meta_api.account_tz import refresh_account_timezones
 
-                    await maybe_refresh_account_tz(engine, redis_client, client)
-                except Exception:  # noqa: BLE001
-                    logger.debug("account_tz warmup пропущен", exc_info=True)
-                # Money: per-ad эскалация недоставленной паузы (канал Vision завис, авто-исцеление
-                # не помогло) — точечный «выключи вручную» с именем ad и спендом. Троттл внутри.
-                try:
-                    from core.meta_api.autostop_alert import escalate_undelivered_autostop_pauses
-
-                    await escalate_undelivered_autostop_pauses(
-                        engine,
-                        redis_client,
-                        requested_by=_AUTO_STOP_REQUESTED_BY,
-                        stuck_after_seconds=_UNDELIVERED_AFTER_SEC,
-                        dedup_ttl_seconds=_UNDELIVERED_DEDUP_SEC,
+                    updated = await refresh_account_timezones(engine, client)
+                    retry_after = (
+                        _TIMEZONE_REFRESH_SECONDS if updated > 0 else _TIMEZONE_RETRY_SECONDS
                     )
+                    next_timezone_refresh_at = loop_now + retry_after
                 except Exception:  # noqa: BLE001
-                    logger.debug("undelivered-pause escalation пропущена", exc_info=True)
+                    next_timezone_refresh_at = loop_now + _TIMEZONE_RETRY_SECONDS
+                    logger.debug("durable account timezone refresh skipped", exc_info=True)
+            # Money: this PostgreSQL scan and notification intent never depend on Redis.
             try:
-                await asyncio.wait_for(stop.wait(), timeout=IDLE_SLEEP_SECONDS)
-            except asyncio.TimeoutError:
-                pass
+                from core.meta_api.autostop_alert import escalate_undelivered_autostop_pauses
+
+                await escalate_undelivered_autostop_pauses(
+                    engine,
+                    requested_by=_AUTO_STOP_REQUESTED_BY,
+                    stuck_after_seconds=_UNDELIVERED_AFTER_SEC,
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("undelivered-pause escalation пропущена", exc_info=True)
+            if wakeup is not None:
+                await wakeup.wait_for_work(stop)
+            else:
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=IDLE_SLEEP_SECONDS)
+                except asyncio.TimeoutError:
+                    pass
             continue
 
-        await process_one_task(
-            engine,
-            claim.task,
-            client=client,
-            redis_client=redis_client,
-            alert_ctx=alert_ctx,
-        )
+        vision_profile_id = str(claim.browser_profile_id or "").strip()
+        if not vision_profile_id:
+            raise RuntimeError("browser-ready claim returned no canonical Vision profile")
+        with client.operation_authority(
+            caller=_BROWSER_OPERATION_CALLER,
+            task_id=claim.task.id,
+            lease_owner=claim.task.lease_owner,
+            lease_token=claim.task.lease_token,
+            vision_profile_id=vision_profile_id,
+            browser_readiness_generation=claim.browser_readiness_generation,
+        ):
+            await process_one_task(
+                engine,
+                claim.task,
+                client=client,
+                alert_ctx=alert_ctx,
+            )
 
 
 # ====================== entrypoint ======================
 
 
 async def main_loop(database_url: str | None = None) -> None:
+    start_worker_metrics_server(WORKER_NAME)
     db_url = database_url or _get_database_url()
     engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
-    redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
 
     # MetaApiClient — eager-init: gRPC channel создаётся без блокировки;
-    # реальный fail только при первом ExecuteGraphCall, маршрутизируется в requeue.
+    # реальный fail только при первом ExecuteGraphCallV5, маршрутизируется в requeue.
     meta_client = _build_meta_client(engine)
     await meta_client.start()
 
@@ -1315,6 +2284,11 @@ async def main_loop(database_url: str | None = None) -> None:
     alert_ctx = AutostopAlertContext(engine=engine)
 
     stop = asyncio.Event()
+    wakeup = TaskQueueWakeup(
+        db_url,
+        task_type="meta_api_mutation",
+        lanes=_CLAIM_LANES,
+    )
     loop = asyncio.get_running_loop()
     for sig_name in ("SIGTERM", "SIGINT"):
         try:
@@ -1329,19 +2303,16 @@ async def main_loop(database_url: str | None = None) -> None:
                 engine,
                 stop,
                 client=meta_client,
-                redis_client=redis_client,
                 alert_ctx=alert_ctx,
+                wakeup=wakeup,
             ),
-            heartbeat_loop(redis_client, stop),
+            metrics_loop(stop, engine),
+            wakeup.run(stop),
         )
     finally:
         try:
             await meta_client.close()
         except Exception:  # noqa: BLE001
             logger.exception("meta_client.close() упал")
-        try:
-            await redis_client.aclose()
-        except Exception:  # noqa: BLE001
-            pass
         await engine.dispose()
         logger.info("meta_api_worker остановлен")

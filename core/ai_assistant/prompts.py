@@ -7,7 +7,6 @@
 Поддерживаемые роли:
 - `operator` — главный промпт для /ask, AI-чата в UI и TMA (заменил INSTRUCTIONS.md).
 - `analytics` — аналитический режим (глубокий разбор метрик через Marketing API READ).
-- `creator_nl_parser` — NL-парсер для request_create_campaign (текст → spec_summary).
 - `competitor_extraction` — анализ структуры креатива (analyze_creative).
 - `ad_copy` — генерация вариантов текстов объявления (generate_ad_copy).
 """
@@ -26,9 +25,6 @@ _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 # Скилы — узкие доменные добавки к системному промпту (по одной на сценарий).
 _SKILLS_DIR = _PROMPTS_DIR / "skills"
-
-# Legacy путь к INSTRUCTIONS.md — поддержка старого формата (для миграционного периода).
-_INSTRUCTIONS_PATH_LEGACY = Path(__file__).resolve().parent / "INSTRUCTIONS.md"
 
 
 class PromptNotFoundError(FileNotFoundError):
@@ -79,22 +75,6 @@ def load_skill(name: str) -> str:
         raise PromptNotFoundError(f"skill {name!r} не найден ({path})") from exc
 
 
-def load_instructions() -> str:
-    """Legacy-функция. Возвращает текущий operator-промпт.
-
-    Сохранена для обратной совместимости с тестами и старым кодом, который
-    ожидал INSTRUCTIONS.md. Новый код должен использовать `load_prompt('operator')`.
-    """
-    try:
-        return load_prompt("operator")
-    except PromptNotFoundError:
-        # Миграционный фолбэк на старый INSTRUCTIONS.md (на случай, если он ещё лежит).
-        try:
-            return _INSTRUCTIONS_PATH_LEGACY.read_text(encoding="utf-8").strip()
-        except OSError:
-            return ""
-
-
 SYSTEM_PROMPT_DIAGNOSTICS = """Ты — диагностический ассистент FB Stop Bot.
 
 Тебе пришёл критический алерт о том, что авто-восстановление не помогло.
@@ -118,15 +98,7 @@ def build_chat_system_prompt(skills: tuple[str, ...] | list[str] | None = None) 
     skills — имена файлов из `prompts/skills/` (без .md); отсутствующий скил
     не роняет чат — warning в лог и пропуск.
     """
-    try:
-        base = load_prompt("operator")
-    except PromptNotFoundError:
-        base = (
-            "Ты — AI-помощник FB Stop Bot. Помогаешь диагностировать и управлять системой "
-            "через whitelisted tools. Отвечай коротко, по делу, на русском."
-        )
-
-    parts = [base]
+    parts = [load_prompt("operator")]
     for name in skills or ():
         try:
             parts.append(load_skill(name))

@@ -1,0 +1,13 @@
+[Unit]
+Description=FB Agent isolated pgBackRest restore drill
+Requires=docker.service
+After=docker.service
+OnFailure=fb-agent-host-operation-failed@restore_drill.service
+
+[Service]
+Type=oneshot
+Environment=FB_AGENT_ROOT=/opt/fb-agent
+ExecStartPre=/usr/bin/install -d -m 0700 /opt/fb-agent/shared/backup-evidence/restore-drills
+ExecStart=/usr/local/libexec/fb-agent-release-verifier/current/verified-release-exec.py --state app --entrypoint scripts/pgbackrest-restore-drill.sh -- --backup-env /opt/fb-agent/shared/pgbackrest.env --config-file /opt/fb-agent/shared/pgbackrest.conf --latest-pitr --prove-post-backup-wal --evidence-dir /opt/fb-agent/shared/backup-evidence/restore-drills
+Nice=15
+IOSchedulingClass=idle

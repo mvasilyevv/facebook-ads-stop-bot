@@ -9,26 +9,28 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as OpenRouteImport } from './routes/open'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as StatsIndexRouteImport } from './routes/stats/index'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
-import { Route as ScriptsIndexRouteImport } from './routes/scripts/index'
 import { Route as OffersIndexRouteImport } from './routes/offers/index'
-import { Route as HistoryIndexRouteImport } from './routes/history/index'
-import { Route as HealthIndexRouteImport } from './routes/health/index'
 import { Route as DesktopIndexRouteImport } from './routes/desktop/index'
 import { Route as CampaignsIndexRouteImport } from './routes/campaigns/index'
+import { Route as AnalyticsIndexRouteImport } from './routes/analytics/index'
 import { Route as AdsIndexRouteImport } from './routes/ads/index'
+import { Route as ActionsIndexRouteImport } from './routes/actions/index'
+import { Route as SystemSourcesRouteImport } from './routes/system/sources'
+import { Route as IncidentsIncidentIdRouteImport } from './routes/incidents/$incidentId'
 import { Route as AdsFbAdIdRouteImport } from './routes/ads/$fbAdId'
+import { Route as ActionsActionIdRouteImport } from './routes/actions/$actionId'
 
+const OpenRoute = OpenRouteImport.update({
+  id: '/open',
+  path: '/open',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const StatsIndexRoute = StatsIndexRouteImport.update({
-  id: '/stats/',
-  path: '/stats/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsIndexRoute = SettingsIndexRouteImport.update({
@@ -36,24 +38,9 @@ const SettingsIndexRoute = SettingsIndexRouteImport.update({
   path: '/settings/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ScriptsIndexRoute = ScriptsIndexRouteImport.update({
-  id: '/scripts/',
-  path: '/scripts/',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const OffersIndexRoute = OffersIndexRouteImport.update({
   id: '/offers/',
   path: '/offers/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const HistoryIndexRoute = HistoryIndexRouteImport.update({
-  id: '/history/',
-  path: '/history/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const HealthIndexRoute = HealthIndexRouteImport.update({
-  id: '/health/',
-  path: '/health/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DesktopIndexRoute = DesktopIndexRouteImport.update({
@@ -66,9 +53,29 @@ const CampaignsIndexRoute = CampaignsIndexRouteImport.update({
   path: '/campaigns/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AnalyticsIndexRoute = AnalyticsIndexRouteImport.update({
+  id: '/analytics/',
+  path: '/analytics/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdsIndexRoute = AdsIndexRouteImport.update({
   id: '/ads/',
   path: '/ads/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ActionsIndexRoute = ActionsIndexRouteImport.update({
+  id: '/actions/',
+  path: '/actions/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SystemSourcesRoute = SystemSourcesRouteImport.update({
+  id: '/system/sources',
+  path: '/system/sources',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IncidentsIncidentIdRoute = IncidentsIncidentIdRouteImport.update({
+  id: '/incidents/$incidentId',
+  path: '/incidents/$incidentId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdsFbAdIdRoute = AdsFbAdIdRouteImport.update({
@@ -76,117 +83,136 @@ const AdsFbAdIdRoute = AdsFbAdIdRouteImport.update({
   path: '/ads/$fbAdId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ActionsActionIdRoute = ActionsActionIdRouteImport.update({
+  id: '/actions/$actionId',
+  path: '/actions/$actionId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/open': typeof OpenRoute
+  '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
+  '/system/sources': typeof SystemSourcesRoute
+  '/actions/': typeof ActionsIndexRoute
   '/ads/': typeof AdsIndexRoute
+  '/analytics/': typeof AnalyticsIndexRoute
   '/campaigns/': typeof CampaignsIndexRoute
   '/desktop/': typeof DesktopIndexRoute
-  '/health/': typeof HealthIndexRoute
-  '/history/': typeof HistoryIndexRoute
   '/offers/': typeof OffersIndexRoute
-  '/scripts/': typeof ScriptsIndexRoute
   '/settings/': typeof SettingsIndexRoute
-  '/stats/': typeof StatsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/open': typeof OpenRoute
+  '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
+  '/system/sources': typeof SystemSourcesRoute
+  '/actions': typeof ActionsIndexRoute
   '/ads': typeof AdsIndexRoute
+  '/analytics': typeof AnalyticsIndexRoute
   '/campaigns': typeof CampaignsIndexRoute
   '/desktop': typeof DesktopIndexRoute
-  '/health': typeof HealthIndexRoute
-  '/history': typeof HistoryIndexRoute
   '/offers': typeof OffersIndexRoute
-  '/scripts': typeof ScriptsIndexRoute
   '/settings': typeof SettingsIndexRoute
-  '/stats': typeof StatsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/open': typeof OpenRoute
+  '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
+  '/system/sources': typeof SystemSourcesRoute
+  '/actions/': typeof ActionsIndexRoute
   '/ads/': typeof AdsIndexRoute
+  '/analytics/': typeof AnalyticsIndexRoute
   '/campaigns/': typeof CampaignsIndexRoute
   '/desktop/': typeof DesktopIndexRoute
-  '/health/': typeof HealthIndexRoute
-  '/history/': typeof HistoryIndexRoute
   '/offers/': typeof OffersIndexRoute
-  '/scripts/': typeof ScriptsIndexRoute
   '/settings/': typeof SettingsIndexRoute
-  '/stats/': typeof StatsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/open'
+    | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/incidents/$incidentId'
+    | '/system/sources'
+    | '/actions/'
     | '/ads/'
+    | '/analytics/'
     | '/campaigns/'
     | '/desktop/'
-    | '/health/'
-    | '/history/'
     | '/offers/'
-    | '/scripts/'
     | '/settings/'
-    | '/stats/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/open'
+    | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/incidents/$incidentId'
+    | '/system/sources'
+    | '/actions'
     | '/ads'
+    | '/analytics'
     | '/campaigns'
     | '/desktop'
-    | '/health'
-    | '/history'
     | '/offers'
-    | '/scripts'
     | '/settings'
-    | '/stats'
   id:
     | '__root__'
     | '/'
+    | '/open'
+    | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/incidents/$incidentId'
+    | '/system/sources'
+    | '/actions/'
     | '/ads/'
+    | '/analytics/'
     | '/campaigns/'
     | '/desktop/'
-    | '/health/'
-    | '/history/'
     | '/offers/'
-    | '/scripts/'
     | '/settings/'
-    | '/stats/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  OpenRoute: typeof OpenRoute
+  ActionsActionIdRoute: typeof ActionsActionIdRoute
   AdsFbAdIdRoute: typeof AdsFbAdIdRoute
+  IncidentsIncidentIdRoute: typeof IncidentsIncidentIdRoute
+  SystemSourcesRoute: typeof SystemSourcesRoute
+  ActionsIndexRoute: typeof ActionsIndexRoute
   AdsIndexRoute: typeof AdsIndexRoute
+  AnalyticsIndexRoute: typeof AnalyticsIndexRoute
   CampaignsIndexRoute: typeof CampaignsIndexRoute
   DesktopIndexRoute: typeof DesktopIndexRoute
-  HealthIndexRoute: typeof HealthIndexRoute
-  HistoryIndexRoute: typeof HistoryIndexRoute
   OffersIndexRoute: typeof OffersIndexRoute
-  ScriptsIndexRoute: typeof ScriptsIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
-  StatsIndexRoute: typeof StatsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/open': {
+      id: '/open'
+      path: '/open'
+      fullPath: '/open'
+      preLoaderRoute: typeof OpenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/stats/': {
-      id: '/stats/'
-      path: '/stats'
-      fullPath: '/stats/'
-      preLoaderRoute: typeof StatsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/': {
@@ -196,32 +222,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/scripts/': {
-      id: '/scripts/'
-      path: '/scripts'
-      fullPath: '/scripts/'
-      preLoaderRoute: typeof ScriptsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/offers/': {
       id: '/offers/'
       path: '/offers'
       fullPath: '/offers/'
       preLoaderRoute: typeof OffersIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/history/': {
-      id: '/history/'
-      path: '/history'
-      fullPath: '/history/'
-      preLoaderRoute: typeof HistoryIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/health/': {
-      id: '/health/'
-      path: '/health'
-      fullPath: '/health/'
-      preLoaderRoute: typeof HealthIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/desktop/': {
@@ -238,11 +243,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CampaignsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/analytics/': {
+      id: '/analytics/'
+      path: '/analytics'
+      fullPath: '/analytics/'
+      preLoaderRoute: typeof AnalyticsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ads/': {
       id: '/ads/'
       path: '/ads'
       fullPath: '/ads/'
       preLoaderRoute: typeof AdsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/actions/': {
+      id: '/actions/'
+      path: '/actions'
+      fullPath: '/actions/'
+      preLoaderRoute: typeof ActionsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/system/sources': {
+      id: '/system/sources'
+      path: '/system/sources'
+      fullPath: '/system/sources'
+      preLoaderRoute: typeof SystemSourcesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/incidents/$incidentId': {
+      id: '/incidents/$incidentId'
+      path: '/incidents/$incidentId'
+      fullPath: '/incidents/$incidentId'
+      preLoaderRoute: typeof IncidentsIncidentIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/ads/$fbAdId': {
@@ -252,21 +285,30 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdsFbAdIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/actions/$actionId': {
+      id: '/actions/$actionId'
+      path: '/actions/$actionId'
+      fullPath: '/actions/$actionId'
+      preLoaderRoute: typeof ActionsActionIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  OpenRoute: OpenRoute,
+  ActionsActionIdRoute: ActionsActionIdRoute,
   AdsFbAdIdRoute: AdsFbAdIdRoute,
+  IncidentsIncidentIdRoute: IncidentsIncidentIdRoute,
+  SystemSourcesRoute: SystemSourcesRoute,
+  ActionsIndexRoute: ActionsIndexRoute,
   AdsIndexRoute: AdsIndexRoute,
+  AnalyticsIndexRoute: AnalyticsIndexRoute,
   CampaignsIndexRoute: CampaignsIndexRoute,
   DesktopIndexRoute: DesktopIndexRoute,
-  HealthIndexRoute: HealthIndexRoute,
-  HistoryIndexRoute: HistoryIndexRoute,
   OffersIndexRoute: OffersIndexRoute,
-  ScriptsIndexRoute: ScriptsIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
-  StatsIndexRoute: StatsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -24,6 +24,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.money import validated_currency_code
+
 
 def cabinet_day_start_utc(offset_hours: float, now: datetime) -> datetime:
     """Начало текущих суток кабинета в UTC.
@@ -95,4 +97,67 @@ async def current_day_spend(
     """
     async with engine.connect() as conn:
         row = (await conn.execute(text(sql), params)).one()
+    return Decimal(str(row.total)) if row.total is not None else Decimal("0")
+
+
+async def current_day_spend_for_account(
+    engine: AsyncEngine,
+    *,
+    account_id: str,
+    currency: str,
+    cabinet_day_start: datetime,
+) -> Decimal:
+    """Latest-per-ad spend for one cabinet since its persisted IANA-day boundary.
+
+    This path is used by the safety watchdog.  It deliberately accepts an exact
+    server-computed boundary instead of a Redis numeric-offset cache and filters
+    the SQL to one account, so another cabinet can never contaminate the shadow
+    detector's reported-spend evidence.
+    """
+    canonical_account_id = str(account_id or "").strip().removeprefix("act_")
+    if not canonical_account_id:
+        raise ValueError("account_id is required")
+    confirmed_currency = validated_currency_code(currency)
+    if confirmed_currency is None:
+        raise ValueError("currency must be confirmed")
+    if cabinet_day_start.tzinfo is None:
+        raise ValueError("cabinet_day_start must be timezone-aware")
+    prune_floor = cabinet_day_start - timedelta(days=1)
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT
+                        COALESCE(SUM(latest.spend), 0) AS total,
+                        COUNT(*) FILTER (
+                            WHERE latest.cycle_ts IS NOT NULL
+                              AND latest.currency IS DISTINCT FROM :currency
+                        ) AS incompatible_rows
+                    FROM fb_ads AS ad
+                    JOIN fb_adsets AS adset ON adset.id = ad.adset_id
+                    JOIN fb_campaigns AS campaign ON campaign.id = adset.campaign_id
+                    LEFT JOIN LATERAL (
+                        SELECT metrics.spend, metrics.currency, metrics.cycle_ts
+                        FROM ad_metrics AS metrics
+                        WHERE metrics.ad_id = ad.id
+                          AND metrics.cycle_ts >= :prune_floor
+                          AND metrics.cycle_ts >= :cabinet_day_start
+                        ORDER BY metrics.cycle_ts DESC
+                        LIMIT 1
+                    ) AS latest ON TRUE
+                    WHERE ad.is_active = TRUE
+                      AND campaign.ad_account_id = :account_id
+                    """
+                ),
+                {
+                    "account_id": canonical_account_id,
+                    "currency": confirmed_currency,
+                    "cabinet_day_start": cabinet_day_start,
+                    "prune_floor": prune_floor,
+                },
+            )
+        ).one()
+    if int(row.incompatible_rows or 0):
+        raise ValueError("reported spend contains unknown or mixed currency evidence")
     return Decimal(str(row.total)) if row.total is not None else Decimal("0")

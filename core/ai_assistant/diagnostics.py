@@ -38,8 +38,9 @@ def _read_log_tail(log_name: str, lines: int) -> str:
 
 _LOG_HINTS_BY_KEY: dict[str, str] = {
     "observer": "observer.log",
-    "telegram": "telegram.log",
-    "telegram_poller": "telegram.log",
+    "telegram_delivery": "telegram_delivery_worker.log",
+    "telegram_updates": "telegram_update_worker.log",
+    "telegram": "telegram_delivery_worker.log",
     "meta_api": "meta_api_worker.log",
     "enable_recommendation": "enable_recommendation_worker.log",
     "browser_agent": "browser_agent.log",
@@ -52,7 +53,7 @@ def _guess_log_name(alert_key: str) -> str:
     for hint, log in _LOG_HINTS_BY_KEY.items():
         if hint in lower:
             return log
-    return "supervisord.log"
+    return "health_watchdog.log"
 
 
 async def diagnose_alert(

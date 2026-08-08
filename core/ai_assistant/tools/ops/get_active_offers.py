@@ -19,7 +19,7 @@ class GetActiveOffersTool:
         "name": "get_active_offers",
         "description": (
             "Список активных офферов (code, name, vertical). Используется для "
-            "матчинга с названиями кампаний и для drafts/request_bulk_pause."
+            "матчинга с названиями кампаний."
         ),
         "input_schema": {
             "type": "object",

@@ -27,29 +27,28 @@ vi.mock("@/lib/tg", () => ({
 import { TabBar } from "@/components/layout/TabBar";
 
 describe("TabBar", () => {
-  // Рендерит все 4 вкладки канона: Панель/Объявления/История/Ещё (Черновики убраны)
+  // Action-first канон: Сейчас/Действия/Реклама/Ещё.
   it("рендерит 4 основные вкладки", () => {
     render(<TabBar />);
-    expect(screen.getByLabelText("Панель")).toBeInTheDocument();
-    expect(screen.getByLabelText("Объявления")).toBeInTheDocument();
-    expect(screen.getByLabelText("История")).toBeInTheDocument();
+    expect(screen.getByLabelText("Сейчас")).toBeInTheDocument();
+    expect(screen.getByLabelText("Действия")).toBeInTheDocument();
+    expect(screen.getByLabelText("Реклама")).toBeInTheDocument();
     expect(screen.getByLabelText("Ещё")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Черновики")).not.toBeInTheDocument();
   });
 
   // Активная вкладка имеет aria-current="page"
-  it("Панель активна при pathname '/'", () => {
+  it("Сейчас активна при pathname '/'", () => {
     mockLocation.pathname = "/";
     render(<TabBar />);
-    const btn = screen.getByLabelText("Панель");
+    const btn = screen.getByLabelText("Сейчас");
     expect(btn).toHaveAttribute("aria-current", "page");
   });
 
   // Неактивная вкладка — нет aria-current
-  it("Объявления неактивны при pathname '/'", () => {
+  it("Реклама неактивна при pathname '/'", () => {
     mockLocation.pathname = "/";
     render(<TabBar />);
-    const btn = screen.getByLabelText("Объявления");
+    const btn = screen.getByLabelText("Реклама");
     expect(btn).not.toHaveAttribute("aria-current");
   });
 
@@ -58,17 +57,17 @@ describe("TabBar", () => {
     mockLocation.pathname = "/";
     mockNavigate.mockClear();
     render(<TabBar />);
-    await userEvent.click(screen.getByLabelText("Объявления"));
+    await userEvent.click(screen.getByLabelText("Реклама"));
     expect(mockNavigate).toHaveBeenCalledWith({ to: "/ads" });
   });
 
-  // История — основной таб, навигирует на /history
-  it("клик по Истории навигирует на /history", async () => {
+  // Действия — основной money-action таб.
+  it("клик по Действия навигирует на /actions", async () => {
     mockLocation.pathname = "/";
     mockNavigate.mockClear();
     render(<TabBar />);
-    await userEvent.click(screen.getByLabelText("История"));
-    expect(mockNavigate).toHaveBeenCalledWith({ to: "/history" });
+    await userEvent.click(screen.getByLabelText("Действия"));
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/actions" });
   });
 
   // Скрывается на /ads/:fbAdId (detail)
@@ -76,5 +75,21 @@ describe("TabBar", () => {
     mockLocation.pathname = "/ads/12345";
     const { container } = render(<TabBar />);
     expect(container.firstChild).toBeNull();
+  });
+
+  it("оставляет основные вкладки на /open как явный путь выхода", () => {
+    mockLocation.pathname = "/open";
+    render(<TabBar />);
+    expect(
+      screen.getByRole("navigation", { name: "Навигация" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Сейчас")).toBeInTheDocument();
+  });
+
+  it("подсвечивает «Ещё» на мобильной аналитике", () => {
+    mockLocation.pathname = "/analytics";
+    render(<TabBar />);
+
+    expect(screen.getByLabelText("Ещё")).toHaveAttribute("aria-current", "page");
   });
 });

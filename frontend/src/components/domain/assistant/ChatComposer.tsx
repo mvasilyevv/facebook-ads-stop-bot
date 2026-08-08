@@ -39,7 +39,7 @@ export function ChatComposer() {
   }
 
   return (
-    <div className="shrink-0 border-t border-[var(--hairline)] p-2.5 flex items-end gap-2">
+    <div className="shrink-0 border-t border-[var(--color-hairline)] p-2.5 flex items-end gap-2">
       <textarea
         ref={textareaRef}
         value={value}
@@ -53,7 +53,7 @@ export function ChatComposer() {
         placeholder="Спроси что-нибудь…"
         aria-label="Сообщение ассистенту"
         className={cn(
-          "flex-1 resize-none bg-bg-2 border border-[var(--hairline-strong)] text-bg-11",
+          "flex-1 resize-none bg-bg-2 border border-[var(--color-hairline-strong)] text-bg-11",
           "rounded-[var(--radius-2)] px-3 py-2 text-[13px] font-body leading-[1.4]",
           "placeholder:text-bg-9 max-h-[72px]",
           "focus:bg-bg-3 focus:border-accent focus:outline-none",
@@ -66,7 +66,7 @@ export function ChatComposer() {
         disabled={pending || !value.trim()}
         aria-label="Отправить сообщение"
         className={cn(
-          "size-9 shrink-0 flex items-center justify-center rounded-[var(--radius-2)]",
+          "size-11 shrink-0 flex items-center justify-center rounded-[var(--radius-2)]",
           "bg-accent border border-accent text-bg-0",
           "hover:bg-accent-muted hover:border-accent-muted transition-colors duration-[120ms]",
           "disabled:opacity-40 disabled:cursor-not-allowed",

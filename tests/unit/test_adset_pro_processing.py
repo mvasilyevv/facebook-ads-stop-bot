@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
-from core.adset_pro.ingest import canonical_event_type
 from core.adset_pro.processing import (
-    LEGACY_POSITIVE_EVENT_TYPES,
-    _canonical_event_type_sql,
+    TrackerTaskClaim,
     _retry_at,
     attribution_conflicts,
     cancel_unstarted_auto_pause,
     claim_event_tasks,
     confirmed_deposit_at,
     mark_task_retry,
-    requeue_aggregation_repair,
 )
 
 
@@ -49,18 +48,10 @@ def test_conflicting_ad_attribution_is_detected_without_false_positive() -> None
     assert attribution_conflicts(None, ["ad-a"]) is False
 
 
-def test_n1_positive_alias_contract_matches_runtime_canonicalizer() -> None:
-    assert all(canonical_event_type(value) is not None for value in LEGACY_POSITIVE_EVENT_TYPES)
-    sql = _canonical_event_type_sql("e.event_type")
-    assert "e.event_type" in sql
-    assert "registration" in sql
-    assert "ftd" in sql
-    assert "redeposit" in sql
-
-
 class _Result:
-    def __init__(self, rows: list[tuple[Any, ...]]):
+    def __init__(self, rows: list[tuple[Any, ...]], *, rowcount: int | None = None):
         self.rows = rows
+        self.rowcount = len(rows) if rowcount is None else rowcount
 
     def first(self):
         return self.rows[0] if self.rows else None
@@ -88,67 +79,54 @@ class _Engine:
         yield self.conn
 
 
+def _claim(task_id: int = 91) -> TrackerTaskClaim:
+    now = datetime.now(UTC)
+    return TrackerTaskClaim(
+        task_id=task_id,
+        lease_owner=uuid.UUID("11111111-1111-4111-8111-111111111111"),
+        lease_token=3,
+        lease_expires_at=now + timedelta(minutes=2),
+        deadline_at=now + timedelta(minutes=2),
+    )
+
+
 @pytest.mark.asyncio
 async def test_claim_terminalizes_exhausted_tasks_before_claiming() -> None:
+    claim = _claim()
     engine = _Engine(
         [
-            _Result([]),  # recover provider id
-            _Result([]),  # terminally ignore unsupported N-1 rows
-            _Result([]),  # enqueue missing N-1 tasks
             _Result([]),  # terminalize exhausted tasks
-            _Result([(91,)]),  # claim runnable task
+            _Result(
+                [
+                    (
+                        claim.task_id,
+                        claim.lease_owner,
+                        claim.lease_token,
+                        claim.lease_expires_at,
+                        claim.deadline_at,
+                    )
+                ]
+            ),  # claim runnable task
         ]
     )
 
-    claimed = await claim_event_tasks(engine, limit=10)
+    claimed = await claim_event_tasks(engine, limit=10, worker_id=claim.lease_owner)
 
-    assert claimed == [91]
-    provider_repair_sql = engine.conn.executed[0][0]
-    ignored_sql = engine.conn.executed[1][0]
-    enqueue_sql = engine.conn.executed[2][0]
-    terminal_sql = engine.conn.executed[3][0]
-    assert "provider_event_id = COALESCE" in provider_repair_sql
-    assert "attribution_status = 'ignored'" in ignored_sql
-    assert "tracker_n1_recovery" in enqueue_sql
-    assert "jsonb_build_object" in enqueue_sql
-    assert "SET event_type" not in "\n".join(sql for sql, _ in engine.conn.executed)
+    assert claimed == [claim]
+    terminal_sql = engine.conn.executed[0][0]
     assert "status = 'failed'" in terminal_sql
     assert "attempt_count >= max_attempts" in terminal_sql
-    assert "next_retry_at = NULL" in terminal_sql
 
 
 @pytest.mark.asyncio
 async def test_infra_failure_on_last_attempt_dead_letters_task() -> None:
-    engine = _Engine([_Result([(5, 5, "running")]), _Result([])])
+    claim = _claim()
+    engine = _Engine([_Result([(5, 5, "running", None)]), _Result([], rowcount=1)])
 
-    await mark_task_retry(engine, task_id=91, error="network")
-
-    update_sql = engine.conn.executed[-1][0]
-    assert "status = 'failed'" in update_sql
-    assert "next_retry_at = NULL" in update_sql
-
-
-@pytest.mark.asyncio
-async def test_aggregation_failure_requeues_succeeded_task_beyond_lookback() -> None:
-    engine = _Engine([_Result([(1, 5, "succeeded")]), _Result([])])
-
-    await requeue_aggregation_repair(engine, task_id=91, error="aggregate failed")
-
-    update_sql, params = engine.conn.executed[-1]
-    assert "status = 'retrying'" in update_sql
-    assert "completed_at = NULL" in update_sql
-    assert params["retry_at"] > datetime.now(UTC)
-
-
-@pytest.mark.asyncio
-async def test_aggregation_failure_on_last_attempt_dead_letters_task() -> None:
-    engine = _Engine([_Result([(5, 5, "succeeded")]), _Result([])])
-
-    await requeue_aggregation_repair(engine, task_id=91, error="aggregate failed")
+    assert await mark_task_retry(engine, claim=claim, error="network") is True
 
     update_sql = engine.conn.executed[-1][0]
     assert "status = 'failed'" in update_sql
-    assert "next_retry_at = NULL" in update_sql
 
 
 @pytest.mark.asyncio
@@ -159,6 +137,7 @@ async def test_positive_event_cancels_only_before_external_boundary_with_fresh_s
             _Result([]),  # advisory lock
             _Result([(now - timedelta(seconds=10), 90)]),  # fresh Meta snapshot
             _Result([(101,), (102,)]),  # DB only returns eligible auto pauses
+            _Result([], rowcount=0),  # durable cancellation marker for crossed boundary
         ]
     )
     result = await cancel_unstarted_auto_pause(conn, fb_ad_id="238001", now=now)
@@ -178,10 +157,52 @@ async def test_stale_meta_snapshot_cancels_unstarted_task_and_requests_refresh()
             _Result([]),
             _Result([(now - timedelta(minutes=10), 90)]),
             _Result([(103,)]),
+            _Result([], rowcount=0),
         ]
     )
     result = await cancel_unstarted_auto_pause(conn, fb_ad_id="238001", now=now)
     assert result.cancelled_task_ids == (103,)
     assert result.meta_snapshot_fresh is False
     assert result.needs_scan_refresh is True
-    assert len(conn.executed) == 3
+    assert len(conn.executed) == 4
+
+
+@pytest.mark.asyncio
+async def test_positive_event_resolves_correlated_incident_in_same_transaction(
+    monkeypatch,
+) -> None:
+    import core.adset_pro.processing as processing
+
+    now = datetime.now(UTC)
+    correlation_id = uuid.uuid4()
+    lifecycle = AsyncMock()
+    monkeypatch.setattr(
+        processing,
+        "transition_correlated_incident_in_transaction",
+        lifecycle,
+    )
+    conn = _Conn(
+        [
+            _Result([]),
+            _Result([(now, 90)]),
+            _Result([(104, correlation_id, {"mutation_kind": "pause_ad"})]),
+            _Result([], rowcount=0),
+        ]
+    )
+
+    result = await cancel_unstarted_auto_pause(conn, fb_ad_id="238001", now=now)
+
+    assert result.cancelled_task_ids == (104,)
+    lifecycle.assert_awaited_once_with(
+        conn,
+        task_id=104,
+        correlation_id=correlation_id,
+        phase="recovered",
+        payload={"mutation_kind": "pause_ad"},
+    )
+    update_sql = conn.executed[2][0]
+    assert "positive_tracker_event_before_external_call" in update_sql
+    assert "lease_owner = NULL" in update_sql
+    crossed_sql = conn.executed[3][0]
+    assert "cancel_requested_at = COALESCE(cancel_requested_at, now())" in crossed_sql
+    assert "external_started_at IS NOT NULL" in crossed_sql

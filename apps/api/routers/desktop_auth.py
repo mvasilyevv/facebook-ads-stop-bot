@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import logging
+import stat
 import time
 from asyncio import Lock
 from collections.abc import Callable
+from pathlib import Path
 from typing import Annotated, Protocol
 
 import httpx
@@ -24,9 +27,8 @@ from core.auth.desktop_access import (
     create_desktop_session,
     delete_desktop_session,
     load_desktop_session,
-    mark_desktop_owner_checked,
 )
-from core.config import Settings, reveal_secret
+from core.config import Settings
 from core.telegram.service import find_recipient_by_telegram_user_id
 
 logger = logging.getLogger(__name__)
@@ -46,15 +48,60 @@ class DesktopReadinessProbe(Protocol):
     async def check(self, settings: Settings) -> dict[str, bool]: ...
 
 
+class DesktopReadinessCredentialError(ValueError):
+    """Committed desktop readiness credential state is absent or unsafe."""
+
+
+def _desktop_readiness_credentials(settings: Settings) -> tuple[str, str, str]:
+    path = Path(settings.desktop_readiness_credentials_path)
+    root = path.parent
+    try:
+        resolved = path.resolve(strict=True)
+        file_stat = resolved.lstat()
+    except OSError as exc:
+        raise DesktopReadinessCredentialError("credential state is unavailable") from exc
+    if (
+        resolved.parent != root / "states"
+        or not stat.S_ISREG(file_stat.st_mode)
+        or stat.S_IMODE(file_stat.st_mode) != 0o600
+    ):
+        raise DesktopReadinessCredentialError("credential state violates its contract")
+    try:
+        content = resolved.read_bytes()
+        lines = content.decode("utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise DesktopReadinessCredentialError("credential state cannot be read") from exc
+
+    def exactly_one(key: str) -> str:
+        prefix = f"{key}="
+        values = [line[len(prefix) :] for line in lines if line.startswith(prefix)]
+        if len(values) != 1 or not values[0]:
+            raise DesktopReadinessCredentialError(f"{key} is missing")
+        return values[0]
+
+    username = exactly_one("DESKTOP_KASM_SERVICE_USER").strip()
+    password = exactly_one("DESKTOP_KASM_SERVICE_PASSWORD")
+    if not username or ":" in username or len(password) < 16:
+        raise DesktopReadinessCredentialError("credential state values are invalid")
+    revision = hashlib.sha256(content).hexdigest()
+    return username, password, revision
+
+
+def _desktop_readiness_revision(settings: Settings) -> str:
+    try:
+        return _desktop_readiness_credentials(settings)[2]
+    except DesktopReadinessCredentialError:
+        return "unavailable"
+
+
 class NetworkDesktopReadinessProbe:
     """Fail-closed Kasm HTTP and BasicAuth readiness check."""
 
     async def check(self, settings: Settings) -> dict[str, bool]:
         """Require both the Kasm auth challenge and authenticated HTTP surface."""
-        username = settings.desktop_kasm_service_user.strip()
-        password = reveal_secret(settings.desktop_kasm_service_password)
-        configured = bool(username and password)
-        if not configured:
+        try:
+            username, password, _ = _desktop_readiness_credentials(settings)
+        except DesktopReadinessCredentialError:
             return {"configured": False, "auth_challenge": False, "authenticated": False}
         try:
             async with httpx.AsyncClient(
@@ -98,15 +145,22 @@ class DesktopReadyzCache:
         self._lock = Lock()
         self._checks: dict[str, bool] | None = None
         self._expires_at = 0.0
+        self._credential_revision = ""
 
     async def get(self, settings: Settings, probe: DesktopReadinessProbe) -> dict[str, bool]:
         ttl = settings.desktop_readiness_cache_seconds
+        credential_revision = _desktop_readiness_revision(settings)
         if ttl <= 0:
             return await probe.check(settings)
         async with self._lock:
-            if self._checks is None or self._monotonic() >= self._expires_at:
+            if (
+                self._checks is None
+                or self._credential_revision != credential_revision
+                or self._monotonic() >= self._expires_at
+            ):
                 self._checks = await probe.check(settings)
                 self._expires_at = self._monotonic() + ttl
+                self._credential_revision = credential_revision
             return dict(self._checks)
 
 
@@ -167,6 +221,7 @@ async def _resolve_desktop_session(
     redis: DepRedis,
     settings: DepSettings,
 ) -> tuple[str, DesktopSession] | None:
+    del settings
     token = request.cookies.get(DESKTOP_SESSION_COOKIE)
     session = await load_desktop_session(redis, token)
     if session is None or token is None:
@@ -175,17 +230,12 @@ async def _resolve_desktop_session(
     if request_hostname != session.expected_hostname:
         await delete_desktop_session(redis, token)
         return None
-    now = int(time.time())
-    if now - session.owner_checked_at >= settings.desktop_access_owner_recheck_seconds:
-        recipient = await find_recipient_by_telegram_user_id(
-            engine, telegram_user_id=session.telegram_user_id
-        )
-        if recipient is None or recipient.role != "owner":
-            await delete_desktop_session(redis, token)
-            return None
-        session = await mark_desktop_owner_checked(redis, token, session, now)
-        if session is None:
-            return None
+    recipient = await find_recipient_by_telegram_user_id(
+        engine, telegram_user_id=session.telegram_user_id
+    )
+    if recipient is None or recipient.role != "owner":
+        await delete_desktop_session(redis, token)
+        return None
     return token, session
 
 

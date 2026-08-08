@@ -6,9 +6,10 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Numeric, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.schema import conv
 
 from core.models.base import Base, Timestamp, UUIDPrimaryKey
 
@@ -17,46 +18,51 @@ class OfferRule(UUIDPrimaryKey, Timestamp, Base):
     """Пороговые значения стоп-правил для оффера.
 
     UNIQUE(offer_id) — строго 1:1 с offers.
-    Все пороги nullable — правило считается неактивным при NULL.
+    Monetary/frequency пороги nullable — соответствующее правило неактивно при NULL.
+    Чувствительность всегда задана и ограничена диапазоном 1–100.
     """
 
     __tablename__ = "offer_rules"
-    __table_args__ = (UniqueConstraint("offer_id", name="uq_offer_rules_offer_id"),)
+    __table_args__ = (
+        UniqueConstraint("offer_id", name="uq_offer_rules_offer_id"),
+        CheckConstraint(
+            "cpa_threshold IS NULL OR (cpa_threshold > 0 AND cpa_threshold < 'Infinity'::numeric)",
+            name="cpa_threshold_positive_finite",
+        ),
+        CheckConstraint(
+            "frequency_threshold IS NULL OR "
+            "(frequency_threshold > 0 AND frequency_threshold < 'Infinity'::numeric)",
+            name="frequency_threshold_positive_finite",
+        ),
+        CheckConstraint(
+            "stop_percent_of_rule BETWEEN 1 AND 100",
+            name="stop_percent_range",
+        ),
+        CheckConstraint(
+            "warning_percent_of_stop BETWEEN 1 AND 100",
+            name="warning_percent_range",
+        ),
+        CheckConstraint(
+            "currency IS NULL OR currency ~ '^[A-Z]{3}$'",
+            name=conv("ck_offer_rules_currency"),
+        ),
+        CheckConstraint(
+            "cpa_threshold IS NULL OR currency IS NOT NULL",
+            name=conv("ck_offer_rules_cpa_currency_required"),
+        ),
+    )
 
     offer_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("offers.id", ondelete="CASCADE"),
         nullable=False,
     )
-    # МЁРТВОЕ поле: evaluator не читает, из UI и API убрано (H-2 аудита 02.07);
-    # колонка оставлена намеренно — дроп не запрашивался (см. M1).
-    spend_no_event_threshold: Mapped[Decimal | None] = mapped_column(
-        Numeric(10, 2),
-        nullable=True,
-    )
     cpa_threshold: Mapped[Decimal | None] = mapped_column(
-        Numeric(10, 2),
+        Numeric(20, 6),
         nullable=True,
     )
-    # МЁРТВОЕ поле: evaluator не читает, из UI и API убрано (H-2 аудита 02.07);
-    # колонка оставлена намеренно — дроп не запрашивался (см. M1).
-    cpm_threshold: Mapped[Decimal | None] = mapped_column(
-        Numeric(10, 2),
-        nullable=True,
-    )
-    # МЁРТВОЕ поле: evaluator не читает, из UI и API убрано (H-2 аудита 02.07);
-    # колонка оставлена намеренно — дроп не запрашивался (см. M1).
-    ctr_threshold: Mapped[Decimal | None] = mapped_column(
-        Numeric(5, 2),
-        nullable=True,
-    )
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     frequency_threshold: Mapped[Decimal | None] = mapped_column(
-        Numeric(5, 2),
-        nullable=True,
-    )
-    # МЁРТВОЕ поле: evaluator не читает, из UI и API убрано (H-2 аудита 02.07);
-    # колонка оставлена намеренно — дроп не запрашивался (см. M1).
-    funnel_ratio_threshold: Mapped[Decimal | None] = mapped_column(
         Numeric(5, 2),
         nullable=True,
     )

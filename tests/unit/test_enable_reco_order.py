@@ -1,50 +1,37 @@
-# -*- coding: utf-8 -*-
-"""enable_reco: при сбое TG mark_recommended НЕ ставится (рекомендация не теряется)."""
+"""Enable recommendation persistence and durable notification ordering."""
 
 from __future__ import annotations
 
+import inspect
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import apps.enable_recommendation_worker.main as er
+import apps.enable_recommendation_worker.main as worker
+from core.enable_reco.analyzer import RecommendationDecision
 
 
-@pytest.fixture(autouse=True)
-def _mock_web_app_url():
-    """send_alert дёргает load_web_app_url(engine) для web_app deep-link кнопки.
-    В unit-тестах engine — MagicMock, реальный SQL не выполнить → мокаем (None)."""
-    with patch(
-        "apps.enable_recommendation_worker.main.load_web_app_url",
-        AsyncMock(return_value=None),
-    ):
-        yield
-
-
-def _fake_candidate() -> er.CandidateRow:
-    """Минимальный CandidateRow для тестов send_alert."""
-    return er.CandidateRow(
+def _candidate() -> worker.CandidateRow:
+    return worker.CandidateRow(
         ad_id=uuid.uuid4(),
-        fb_ad_id="act_123_456",
+        fb_ad_id="123456",
         ad_name="Test Ad",
         campaign_name="Test Campaign",
         adset_name="Test AdSet",
         alert_state="disabled",
-        last_transition_at=__import__("datetime").datetime(
-            2026, 6, 1, 0, 0, tzinfo=__import__("datetime").timezone.utc
-        ),
+        last_transition_at=datetime(2026, 6, 1, tzinfo=UTC),
         snoozed_until=None,
         offer_code="CR2",
         cpa_threshold=None,
+        ad_account_id="123",
+        offer_currency="USD",
         open_state_token=uuid.uuid4(),
     )
 
 
-def _fake_decision():
-    """Минимальный RecommendationDecision для тестов send_alert."""
-    from core.enable_reco.analyzer import RecommendationDecision
-
+def _decision() -> RecommendationDecision:
     return RecommendationDecision(
         recommend=True,
         level="warning",
@@ -53,259 +40,98 @@ def _fake_decision():
     )
 
 
-# send_alert возвращает bool успеха
 @pytest.mark.asyncio
-async def test_send_alert_returns_bool():
-    client = AsyncMock()
-    client.send_message = AsyncMock(return_value={"ok": True})
-    engine = MagicMock()
-    fake_r = MagicMock()
-    fake_r.chat_id = "1"
-    with patch(
-        "apps.enable_recommendation_worker.main.load_active_recipients",
-        AsyncMock(return_value=[fake_r]),
-    ):
-        res = await er.send_alert(
-            client,
-            candidate=_fake_candidate(),
-            decision=_fake_decision(),
-            recommendation_id=uuid.uuid4(),
-            engine=engine,
+async def test_enqueue_notification_returns_outbox_acceptance() -> None:
+    notification_id = uuid.uuid4()
+    notify = AsyncMock(return_value=True)
+    with patch.object(worker, "notify_owners_in_transaction", notify):
+        accepted = await worker.enqueue_recommendation_notification(
+            MagicMock(),
+            candidate=_candidate(),
+            decision=_decision(),
+            recommendation_id=notification_id,
         )
-    assert res is True
+
+    assert accepted is True
+    notify.assert_awaited_once()
+    assert notify.await_args.kwargs["dedupe_key"] == (f"enable-recommendation:{notification_id}")
+    assert notify.await_args.kwargs.get("dedupe_ttl_seconds") is None
 
 
-# send_alert упал → возвращает False (мок client кидает исключение)
 @pytest.mark.asyncio
-async def test_send_alert_failure_false():
-    client = AsyncMock()
-    client.send_message = AsyncMock(side_effect=RuntimeError("TG недоступен"))
-    engine = MagicMock()
-    fake_r = MagicMock()
-    fake_r.chat_id = "1"
-    with patch(
-        "apps.enable_recommendation_worker.main.load_active_recipients",
-        AsyncMock(return_value=[fake_r]),
+async def test_enqueue_notification_reports_no_eligible_delivery() -> None:
+    with patch.object(
+        worker,
+        "notify_owners_in_transaction",
+        AsyncMock(return_value=False),
     ):
-        res = await er.send_alert(
-            client,
-            candidate=_fake_candidate(),
-            decision=_fake_decision(),
+        accepted = await worker.enqueue_recommendation_notification(
+            MagicMock(),
+            candidate=_candidate(),
+            decision=_decision(),
             recommendation_id=uuid.uuid4(),
-            engine=engine,
         )
-    assert res is False
+
+    assert accepted is False
 
 
-# send_alert с пустым списком recipients → False
-@pytest.mark.asyncio
-async def test_send_alert_no_recipients_false():
-    client = AsyncMock()
-    engine = MagicMock()
-    with patch(
-        "apps.enable_recommendation_worker.main.load_active_recipients",
-        AsyncMock(return_value=[]),
-    ):
-        res = await er.send_alert(
-            client,
-            candidate=_fake_candidate(),
-            decision=_fake_decision(),
-            recommendation_id=uuid.uuid4(),
-            engine=engine,
-        )
-    assert res is False
+async def _run_once_with_notification_result(
+    notification_result: bool,
+) -> tuple[dict[str, int], list[str]]:
+    calls: list[str] = []
 
-
-# send_alert при None client → возвращает False
-@pytest.mark.asyncio
-async def test_send_alert_none_client_false():
-    engine = MagicMock()
-    res = await er.send_alert(
-        None,
-        candidate=_fake_candidate(),
-        decision=_fake_decision(),
-        recommendation_id=uuid.uuid4(),
-        engine=engine,
-    )
-    assert res is False
-
-
-# При сбое TG mark_recommended НЕ вызывается (рекомендация не теряется)
-@pytest.mark.asyncio
-async def test_mark_recommended_not_called_on_send_failure():
-    """Главный инвариант: сбой send_alert → mark_recommended пропускается."""
-    call_log: list[str] = []
-
-    async def fake_insert(*_, **__):
+    async def insert(*args, **kwargs):
+        calls.append("insert")
         return uuid.uuid4()
 
-    async def fake_send(*_, **__):
-        call_log.append("send")
-        return False  # имитируем сбой TG
-
-    async def fake_mark(redis_client, ad_id):
-        call_log.append("mark")
-        return True
-
-    async def fake_candidates(*_, **__):
-        return [_fake_candidate()]
-
-    async def fake_metrics(*_, **__):
-        return []
-
-    async def fake_scanning(*_):
-        return True
-
-    from core.enable_reco.analyzer import RecommendationDecision
-
-    def fake_should_recommend(**__):
-        return RecommendationDecision(
-            recommend=True, level="warning", skip_reason=None, snapshot={}
-        )
-
-    async def fake_is_recent(*_, **__):
-        return False
+    async def enqueue(*args, **kwargs):
+        calls.append("enqueue")
+        return notification_result
 
     with (
-        patch.object(er, "fetch_candidates", fake_candidates),
-        patch.object(er, "fetch_metrics_since", fake_metrics),
-        patch.object(er, "insert_recommendation", fake_insert),
-        patch.object(er, "send_alert", fake_send),
-        patch.object(er, "mark_recommended", fake_mark),
-        patch.object(er, "is_recently_recommended", fake_is_recent),
-        patch("apps.enable_recommendation_worker.main.load_scanning_enabled", fake_scanning),
-        patch("apps.enable_recommendation_worker.main.should_recommend", fake_should_recommend),
+        patch.object(worker, "load_scanning_enabled", AsyncMock(return_value=True)),
+        patch.object(worker, "load_auto_enable_recommendations", AsyncMock(return_value=False)),
+        patch.object(worker, "fetch_candidates", AsyncMock(return_value=[_candidate()])),
+        patch.object(
+            worker,
+            "resolve_account_currencies",
+            AsyncMock(return_value=MagicMock(currencies={"123": "USD"})),
+        ),
+        patch.object(worker, "fetch_metrics_since", AsyncMock(return_value=[])),
+        patch.object(worker, "insert_recommendation", insert),
+        patch.object(worker, "enqueue_recommendation_notification", enqueue),
+        patch.object(worker, "should_recommend", return_value=_decision()),
     ):
-        engine = MagicMock()
-        counts = await er.run_once(
-            engine,
-            redis_client=AsyncMock(),
-            tg_client=AsyncMock(),
-        )
-
-    # send был вызван, mark — нет
-    assert "send" in call_log
-    assert "mark" not in call_log
-    # счётчик send_failed должен учитывать сбой
-    assert counts.get("send_failed", 0) == 1
-    assert counts.get("alerts_sent", 0) == 0
+        counts = await worker.run_once(MagicMock())
+    return counts, calls
 
 
-# При успешной отправке mark_recommended вызывается
 @pytest.mark.asyncio
-async def test_mark_recommended_called_on_send_success():
-    """При успешном send_alert — mark_recommended ДОЛЖЕН быть вызван."""
-    call_log: list[str] = []
+async def test_outbox_rejection_keeps_persisted_recommendation_visible() -> None:
+    counts, calls = await _run_once_with_notification_result(False)
 
-    async def fake_insert(*_, **__):
-        return uuid.uuid4()
-
-    async def fake_send(*_, **__):
-        call_log.append("send")
-        return True  # успешная отправка
-
-    async def fake_mark(redis_client, ad_id):
-        call_log.append("mark")
-        return True
-
-    async def fake_candidates(*_, **__):
-        return [_fake_candidate()]
-
-    async def fake_metrics(*_, **__):
-        return []
-
-    async def fake_scanning(*_):
-        return True
-
-    from core.enable_reco.analyzer import RecommendationDecision
-
-    def fake_should_recommend(**__):
-        return RecommendationDecision(
-            recommend=True, level="warning", skip_reason=None, snapshot={}
-        )
-
-    async def fake_is_recent(*_, **__):
-        return False
-
-    with (
-        patch.object(er, "fetch_candidates", fake_candidates),
-        patch.object(er, "fetch_metrics_since", fake_metrics),
-        patch.object(er, "insert_recommendation", fake_insert),
-        patch.object(er, "send_alert", fake_send),
-        patch.object(er, "mark_recommended", fake_mark),
-        patch.object(er, "is_recently_recommended", fake_is_recent),
-        patch("apps.enable_recommendation_worker.main.load_scanning_enabled", fake_scanning),
-        patch("apps.enable_recommendation_worker.main.should_recommend", fake_should_recommend),
-    ):
-        engine = MagicMock()
-        counts = await er.run_once(
-            engine,
-            redis_client=AsyncMock(),
-            tg_client=AsyncMock(),
-        )
-
-    # оба вызваны
-    assert "send" in call_log
-    assert "mark" in call_log
-    assert counts.get("alerts_sent", 0) == 1
+    assert calls == ["insert", "enqueue"]
+    assert counts["recommendations"] == 1
+    assert counts["alerts_sent"] == 0
+    assert counts["send_failed"] == 1
 
 
-# Web — самостоятельный канал: сбой Telegram не должен удалять рекомендацию.
 @pytest.mark.asyncio
-async def test_send_failure_keeps_recommendation_visible_in_web():
-    """Сбой send_alert не откатывает DB recommendation и auto-action."""
-    call_log: list[str] = []
-    fixed_rec_id = uuid.uuid4()
+async def test_outbox_acceptance_counts_alert() -> None:
+    counts, calls = await _run_once_with_notification_result(True)
 
-    async def fake_insert(*_, **__):
-        call_log.append("insert")
-        return fixed_rec_id
+    assert calls == ["insert", "enqueue"]
+    assert counts["recommendations"] == 1
+    assert counts["alerts_sent"] == 1
+    assert "send_failed" not in counts
 
-    async def fake_send(*_, **__):
-        call_log.append("send")
-        return False  # имитируем сбой TG
 
-    async def fake_mark(redis_client, ad_id):
-        call_log.append("mark")
-        return True
+def test_run_once_has_no_redis_or_telegram_gate() -> None:
+    parameters = inspect.signature(worker.run_once).parameters
+    source = inspect.getsource(worker)
 
-    async def fake_candidates(*_, **__):
-        return [_fake_candidate()]
-
-    async def fake_metrics(*_, **__):
-        return []
-
-    async def fake_scanning(*_):
-        return True
-
-    from core.enable_reco.analyzer import RecommendationDecision
-
-    def fake_should_recommend(**__):
-        return RecommendationDecision(
-            recommend=True, level="warning", skip_reason=None, snapshot={}
-        )
-
-    async def fake_is_recent(*_, **__):
-        return False
-
-    with (
-        patch.object(er, "fetch_candidates", fake_candidates),
-        patch.object(er, "fetch_metrics_since", fake_metrics),
-        patch.object(er, "insert_recommendation", fake_insert),
-        patch.object(er, "send_alert", fake_send),
-        patch.object(er, "mark_recommended", fake_mark),
-        patch.object(er, "is_recently_recommended", fake_is_recent),
-        patch("apps.enable_recommendation_worker.main.load_scanning_enabled", fake_scanning),
-        patch("apps.enable_recommendation_worker.main.should_recommend", fake_should_recommend),
-    ):
-        engine = MagicMock()
-        counts = await er.run_once(
-            engine,
-            redis_client=AsyncMock(),
-            tg_client=AsyncMock(),
-        )
-
-    # insert → send (fail); delete отката не вызывается, recommendation остаётся в web.
-    assert call_log == ["insert", "send"]
-    assert counts.get("send_failed", 0) == 1
-    assert counts.get("alerts_sent", 0) == 0
+    assert "redis_client" not in parameters
+    assert "tg_client" not in parameters
+    assert "enable_reco:last:" not in source
+    assert "is_recently_recommended" not in source
+    assert "mark_recommended" not in source

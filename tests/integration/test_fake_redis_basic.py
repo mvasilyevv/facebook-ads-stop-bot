@@ -1,10 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Базовые тесты fakeredis — проверка контрактов которые мы будем использовать в проде:
-worker:heartbeat:* (TTL 60s), ai:cache:* (TTL 300-900s), observer:runtime (TTL 60s),
-pubsub каналы.
+"""Базовые тесты fakeredis для disposable cache/rate-limit и wakeup channels.
 
-Без живого Redis. Когда будем выносить heartbeat в Redis (см. DB_REDESIGN §7) —
-эти тесты гарантируют что API совпадает.
+Durable control, notification and process-liveness state is deliberately absent.
 """
 
 from __future__ import annotations
@@ -12,30 +9,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
-
-# Сценарий: SET с TTL и GET — базовый контракт для worker:heartbeat:* и observer:runtime
-@pytest.mark.asyncio
-async def test_set_with_ttl_and_get(fake_redis_client) -> None:
-    await fake_redis_client.set("worker:heartbeat:observer", "alive", ex=60)
-    value = await fake_redis_client.get("worker:heartbeat:observer")
-    assert value == "alive"
-
-    ttl = await fake_redis_client.ttl("worker:heartbeat:observer")
-    assert 50 <= ttl <= 60
-
-
-# Сценарий: JSON payload — наш паттерн для observer:runtime
-@pytest.mark.asyncio
-async def test_json_payload_roundtrip(fake_redis_client) -> None:
-    payload = {
-        "worker_status": "running",
-        "active_phase": "parse",
-        "next_scan_at": "2026-05-27T10:00:00Z",
-    }
-    await fake_redis_client.set("observer:runtime", json.dumps(payload), ex=60)
-    raw = await fake_redis_client.get("observer:runtime")
-    assert json.loads(raw) == payload
 
 
 # Сценарий: TTL контракт.
@@ -58,30 +31,30 @@ async def test_expiration_contract(fake_redis_client) -> None:
     assert ttl_no_expire == -1
 
 
-# Сценарий: pub/sub — наш паттерн для fb_agent:scan:finished
+# Сценарий: pub/sub используется только как accelerator durable tracker inbox.
 @pytest.mark.asyncio
 async def test_pubsub_publish_subscribe(fake_redis_client) -> None:
     pubsub = fake_redis_client.pubsub()
-    await pubsub.subscribe("fb_agent:scan:finished")
+    await pubsub.subscribe("fb_agent:tracker:wakeup")
 
     # Drain subscribe-message
     await pubsub.get_message(timeout=0.5)
 
     # Publisher шлёт событие
     n_receivers = await fake_redis_client.publish(
-        "fb_agent:scan:finished",
-        json.dumps({"scan_id": 42, "outcome": "success"}),
+        "fb_agent:tracker:wakeup",
+        json.dumps({"event_id": 42}),
     )
     assert n_receivers == 1
 
     msg = await pubsub.get_message(timeout=1.0)
     assert msg is not None
     assert msg["type"] == "message"
-    assert msg["channel"] == "fb_agent:scan:finished"
+    assert msg["channel"] == "fb_agent:tracker:wakeup"
     payload = json.loads(msg["data"])
-    assert payload["scan_id"] == 42
+    assert payload["event_id"] == 42
 
-    await pubsub.unsubscribe("fb_agent:scan:finished")
+    await pubsub.unsubscribe("fb_agent:tracker:wakeup")
     await pubsub.aclose()
 
 

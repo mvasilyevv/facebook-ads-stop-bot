@@ -55,6 +55,8 @@ class AlertEvent(Base):
     __table_args__ = (
         PrimaryKeyConstraint("id", "created_at", name="pk_alert_events"),
         Index("ix_alert_events_ad_created", "ad_id", "created_at"),
+        # Baseline-managed partition-pruning index.
+        Index("ix_alert_events_scan_id_created", "scan_id", "created_at"),
         Index("ix_alert_events_stage", "stage"),
         Index("ix_alert_events_state", "state"),
         Index(

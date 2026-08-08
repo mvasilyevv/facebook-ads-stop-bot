@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Юнит-тесты Волны 2/E: граница суток кабинета + загрузка TZ-оффсета из Redis."""
+"""Unit tests for IANA cabinet-day boundaries and Meta timezone validation."""
 
 from __future__ import annotations
 
@@ -8,7 +8,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from core.dashboard.cabinet_spend import cabinet_day_start_utc
-from core.meta_api.account_tz import DEFAULT_OFFSET_HOURS, load_offset, load_offset_map
+from core.meta_api.account_tz import (
+    cabinet_day_end_for_timezone,
+    cabinet_day_start_for_timezone,
+    canonical_account_id,
+    fetch_account_timezone,
+    validated_timezone_name,
+)
 
 
 # UTC-кабинет: граница суток = полночь UTC того же дня.
@@ -52,123 +58,48 @@ def test_boundary_just_after_midnight() -> None:
     assert cabinet_day_start_utc(0.0, now) == datetime(2026, 6, 19, 0, 0, tzinfo=UTC)
 
 
-# --- account_tz: загрузка оффсета из Redis ---
+# --- Authoritative IANA account timezone ---
 
 
-class _FakeRedis:
-    """Минимальный фейк Redis: get по словарю, decode_responses=True (строки)."""
-
-    def __init__(self, store: dict[str, str]) -> None:
-        self._store = store
-
-    async def get(self, key: str):
-        return self._store.get(key)
+def test_account_id_and_iana_validation() -> None:
+    assert canonical_account_id(" act_123 ") == "123"
+    assert validated_timezone_name("Asia/Singapore") == "Asia/Singapore"
+    assert validated_timezone_name("Definitely/Not-A-Timezone") is None
 
 
-# Ключ в кэше → парсится в float оффсет.
-@pytest.mark.asyncio
-async def test_load_offset_from_cache() -> None:
-    redis = _FakeRedis({"account_tz:123": "-7.0"})
-    assert await load_offset(redis, "123") == -7.0
-
-
-# Нет ключа → дефолт (UTC).
-@pytest.mark.asyncio
-async def test_load_offset_default_when_missing() -> None:
-    redis = _FakeRedis({})
-    assert await load_offset(redis, "999") == DEFAULT_OFFSET_HOURS
-
-
-# Пустой account_id → дефолт без обращения к Redis.
-@pytest.mark.asyncio
-async def test_load_offset_empty_account() -> None:
-    redis = _FakeRedis({"account_tz:": "5"})
-    assert await load_offset(redis, "") == DEFAULT_OFFSET_HOURS
-
-
-# Карта per-account: известные из кэша, неизвестные → дефолт.
-@pytest.mark.asyncio
-async def test_load_offset_map_mixed() -> None:
-    redis = _FakeRedis({"account_tz:a": "2.0"})
-    m = await load_offset_map(redis, ["a", "b"])
-    assert m == {"a": 2.0, "b": DEFAULT_OFFSET_HOURS}
-
-
-# Битое значение в кэше → дефолт (устойчивость).
-@pytest.mark.asyncio
-async def test_load_offset_corrupt_value() -> None:
-    redis = _FakeRedis({"account_tz:x": "не-число"})
-    assert await load_offset(redis, "x") == DEFAULT_OFFSET_HOURS
-
-
-# --- maybe_refresh_account_tz: throttle с успехо-зависимым интервалом (фикс ревью) ---
-
-
-class _FakeRedisRW:
-    """Фейк Redis с set(ex, nx) + get для проверки throttle-логики."""
-
-    def __init__(self) -> None:
-        self.store: dict = {}
-
-    async def set(self, key, value, *, ex=None, nx=False):
-        if nx and key in self.store:
-            return None
-        self.store[key] = (value, ex)
-        return True
-
-    async def get(self, key):
-        x = self.store.get(key)
-        return x[0] if x else None
-
-
-# Успешный refresh (>0) → throttle продлевается на полный интервал.
-@pytest.mark.asyncio
-async def test_maybe_refresh_success_extends(monkeypatch) -> None:
-    import core.meta_api.account_tz as m
-
-    async def fake_refresh(_e, _r, _c):
-        return 1
-
-    monkeypatch.setattr(m, "refresh_account_tz_cache", fake_refresh)
-    redis = _FakeRedisRW()
-    ok = await m.maybe_refresh_account_tz(
-        None, redis, None, min_interval_seconds=6000, retry_interval_seconds=60
+def test_iana_boundary_uses_offset_at_midnight_on_dst_transition() -> None:
+    """New York noon is UTC-4, but midnight before spring shift was UTC-5."""
+    now = datetime(2024, 3, 10, 12, 0, tzinfo=UTC)
+    assert cabinet_day_start_for_timezone("America/New_York", now) == datetime(
+        2024, 3, 10, 5, 0, tzinfo=UTC
     )
-    assert ok is True
-    assert redis.store[m._REFRESH_THROTTLE_KEY][1] == 6000
-
-
-# Провал refresh (0 обновлено) → остаётся КОРОТКИЙ lock (повтор скоро, не виснет на 6ч).
-@pytest.mark.asyncio
-async def test_maybe_refresh_failure_keeps_short(monkeypatch) -> None:
-    import core.meta_api.account_tz as m
-
-    async def fake_refresh(_e, _r, _c):
-        return 0
-
-    monkeypatch.setattr(m, "refresh_account_tz_cache", fake_refresh)
-    redis = _FakeRedisRW()
-    ok = await m.maybe_refresh_account_tz(
-        None, redis, None, min_interval_seconds=6000, retry_interval_seconds=60
+    assert cabinet_day_end_for_timezone("America/New_York", now) == datetime(
+        2024, 3, 11, 4, 0, tzinfo=UTC
     )
-    assert ok is False
-    assert redis.store[m._REFRESH_THROTTLE_KEY][1] == 60
 
 
-# Пока throttle-ключ жив — refresh не зовётся повторно.
+class _FakeGraphClient:
+    def __init__(self, response: dict) -> None:
+        self.response = response
+        self.calls: list[dict] = []
+
+    async def execute_graph_call(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
 @pytest.mark.asyncio
-async def test_maybe_refresh_throttled(monkeypatch) -> None:
-    import core.meta_api.account_tz as m
+async def test_fetch_account_timezone_keeps_valid_iana_name() -> None:
+    client = _FakeGraphClient({"timezone_offset_hours_utc": 8, "timezone_name": "Asia/Singapore"})
+    timezone_name = await fetch_account_timezone(client, "act_123")
+    assert timezone_name == "Asia/Singapore"
+    assert client.calls[0]["endpoint"] == "/act_123"
+    assert client.calls[0]["query_params"] == {"fields": "timezone_name"}
 
-    calls = []
 
-    async def fake_refresh(_e, _r, _c):
-        calls.append(1)
-        return 1
-
-    monkeypatch.setattr(m, "refresh_account_tz_cache", fake_refresh)
-    redis = _FakeRedisRW()
-    await m.maybe_refresh_account_tz(None, redis, None)
-    second = await m.maybe_refresh_account_tz(None, redis, None)
-    assert second is False
-    assert len(calls) == 1
+@pytest.mark.asyncio
+async def test_fetch_account_timezone_rejects_numeric_offset_without_iana_name() -> None:
+    client = _FakeGraphClient(
+        {"timezone_offset_hours_utc": -7, "timezone_name": "Definitely/Not-A-Timezone"}
+    )
+    assert await fetch_account_timezone(client, "123") is None

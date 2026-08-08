@@ -8,7 +8,6 @@ from core.models.catalog.fb_adset import FbAdset
 from core.models.catalog.fb_campaign import FbCampaign
 from core.models.catalog.offer import Offer
 from core.models.catalog.offer_rule import OfferRule
-from core.models.catalog.offer_rule_stat import OfferRuleStat
 
 __all__ = [
     "FbAd",
@@ -16,5 +15,4 @@ __all__ = [
     "FbCampaign",
     "Offer",
     "OfferRule",
-    "OfferRuleStat",
 ]

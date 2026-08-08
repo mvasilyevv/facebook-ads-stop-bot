@@ -11,11 +11,11 @@ from dataclasses import asdict, dataclass
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
-DESKTOP_SESSION_COOKIE = "__Secure-adpulse_desktop_session_v3"
+DESKTOP_SESSION_COOKIE = "__Secure-adpulse_desktop_session_v4"
 DESKTOP_PRINCIPAL = "adpulse-desktop"
 
-_TICKET_PREFIX = "desktop_access:v3:ticket:"
-_SESSION_PREFIX = "desktop_access:v3:session:"
+_TICKET_PREFIX = "desktop_access:v4:ticket:"
+_SESSION_PREFIX = "desktop_access:v4:session:"
 
 
 class DesktopAccessError(ValueError):
@@ -37,7 +37,6 @@ class DesktopSession:
     source: str
     issued_at: int
     expires_at: int
-    owner_checked_at: int
     expected_hostname: str
 
 
@@ -146,7 +145,6 @@ async def create_desktop_session(
         source=source,
         issued_at=current,
         expires_at=current + ttl,
-        owner_checked_at=current,
         expected_hostname=hostname,
     )
     created = await redis.set(
@@ -176,7 +174,6 @@ async def load_desktop_session(
             source=str(payload["source"]),
             issued_at=int(payload["issued_at"]),
             expires_at=int(payload["expires_at"]),
-            owner_checked_at=int(payload["owner_checked_at"]),
             expected_hostname=str(payload["expected_hostname"]).strip().lower().rstrip("."),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -192,27 +189,6 @@ async def load_desktop_session(
         await redis.delete(key)
         return None
     return session
-
-
-async def mark_desktop_owner_checked(
-    redis: Any, token: str, session: DesktopSession, now: int
-) -> DesktopSession | None:
-    """Refresh owner verification only while the original session still exists.
-
-    ``XX`` is intentional: a concurrent logout must win and may never be
-    undone by an owner recheck that started just before the deletion.
-    """
-    updated = DesktopSession(**{**asdict(session), "owner_checked_at": int(now)})
-    remaining = updated.expires_at - int(now)
-    if remaining <= 0:
-        return None
-    refreshed = await redis.set(
-        _digest_key(_SESSION_PREFIX, token),
-        json.dumps(asdict(updated), separators=(",", ":")),
-        ex=remaining,
-        xx=True,
-    )
-    return updated if refreshed else None
 
 
 async def delete_desktop_session(redis: Any, token: str | None) -> None:
@@ -232,5 +208,4 @@ __all__ = [
     "create_desktop_ticket",
     "delete_desktop_session",
     "load_desktop_session",
-    "mark_desktop_owner_checked",
 ]

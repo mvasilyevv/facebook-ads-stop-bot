@@ -5,7 +5,7 @@
 > этот playbook = операционная выжимка «как делать».
 
 ## Статус
-- ✅ **работает:** видео-разведка Ad Library (`recon_video.py` / `recon_video2.py` text-fallback без логина / `recon_adlib.py`), ffmpeg-раскадровка, образцы скачаны (`media_video/`); залив видео у `fb` — `MediaUploader.upload_video` (gRPC UploadVideo); **uniquify видео** — `scripts/uniquify_video.py` (новый md5 + невидимые микро-изменения: кроп 1-2px, тон, шум, ±0.5% скорости; раскладка `{1..N}/` как у картинок; тесты `tests/unit/test_video_uniquify.py`); **оверлеи текста** — `scripts/overlay_video.py` (clean-video пайплайн, см. раздел ниже; тесты `tests/unit/test_video_overlay.py`).
+- ✅ **работает:** ручная видео-разведка Ad Library (`scripts/recon_adlib.py`), ffmpeg-раскадровка; залив видео у `fb` — `MediaUploader.upload_video` (gRPC UploadVideo); **uniquify видео** — `scripts/uniquify_video.py`; **оверлеи текста** — единственный `scripts/overlay_video.py` (тесты `tests/unit/test_video_overlay.py`).
 - ⚠️ **грабли:** mp4 агент НЕ «смотрит» напрямую — только раскадровка; скачивание mp4 headless иногда фейлится → постер+метаданные; модели ≤15с, рабочие паттерны 20–32с → склейка сегментов (ffmpeg concat); Meta активно режет gambling-видео у конкурентов → закладывать запас вариантов.
 - 🔧 **сломано:** —
 

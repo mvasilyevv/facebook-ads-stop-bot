@@ -11,14 +11,10 @@ import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { toast } from "@/components/ui/Toast";
-import {
-  useVisionSettings,
-  useUpdateVisionSettings,
-  useReconnectVision,
-} from "@/lib/api/settings";
+import { useVisionSettings, useUpdateVisionSettings, useReconnectVision } from "@/lib/api/settings";
 
 export const VisionTab: FC = () => {
-  const { data, isLoading, error, refetch } = useVisionSettings();
+  const { data, isLoading, error } = useVisionSettings();
   const updateMut = useUpdateVisionSettings();
   const reconnectMut = useReconnectVision();
 
@@ -42,7 +38,7 @@ export const VisionTab: FC = () => {
   }
 
   if (error) {
-    return <ErrorState error={error} onRetry={() => void refetch()} />;
+    return <ErrorState error={error} onRetry={() => void 0} />;
   }
 
   const handleSave = async () => {
@@ -71,23 +67,16 @@ export const VisionTab: FC = () => {
     }
   };
 
-  // CDP-бейдж отражает РЕАЛЬНУЮ сессию (cdp_ready), а не статус процесса. Раньше при
-  // cdp_ready=false бейдж подменялся на runtime_status="ONLINE" (статус процесса
-  // browser-agent) → противоречие с «Активная CDP-сессия отсутствует». Теперь честно:
-  // READY (сессия есть) / НЕТ СЕССИИ (агент жив, но сессии нет) / OFFLINE (агент мёртв).
-  const agentAlive = Boolean(data?.runtime_status);
-  const cdpStatus = data?.cdp_ready ? "READY" : agentAlive ? "НЕТ СЕССИИ" : "OFFLINE";
-  const cdpVariant = data?.cdp_ready
-    ? ("success" as const)
-    : agentAlive
-      ? ("warning" as const)
-      : ("stop" as const);
-  // Источник токена: показываем «(.env)», если токен взят из .env, а не сохранён в БД.
-  const tokenLabel = data?.has_token
-    ? data?.token_source === "env"
-      ? "Задан (.env)"
-      : "Задан"
-    : "Не задан";
+  const channelStatus = data?.channel_status ?? "UNKNOWN";
+  const channelVariant =
+    channelStatus === "READY"
+      ? ("success" as const)
+      : channelStatus === "DEGRADED"
+        ? ("warning" as const)
+        : channelStatus === "UNAVAILABLE"
+          ? ("stop" as const)
+          : ("neutral" as const);
+  const tokenLabel = data?.has_token ? "Задан" : "Не задан";
 
   return (
     <div className="space-y-5 max-w-xl">
@@ -101,34 +90,18 @@ export const VisionTab: FC = () => {
             </Badge>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-[13px] text-bg-10">Агент</span>
-            <Badge variant={agentAlive ? "success" : "stop"} size="sm">
-              {data?.runtime_status ?? "OFFLINE"}
+            <span className="text-[13px] text-bg-10">Browser channel</span>
+            <Badge variant={channelVariant} size="sm">
+              {channelStatus}
             </Badge>
           </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[13px] text-bg-10">CDP</span>
-            <Badge variant={cdpVariant} size="sm">
-              {cdpStatus}
-            </Badge>
-          </div>
-          {data?.cdp_port && (
-            <div className="flex items-center justify-between">
-              <span className="text-[13px] text-bg-10">CDP Port</span>
-              <span className="font-display text-[12px] text-bg-9 tabular-nums">
-                {data.cdp_port}
-              </span>
-            </div>
-          )}
-          {data?.runtime_status_message && (
-            <div className="text-[11px] text-bg-8 mt-1">
-              {data.runtime_status_message}
-            </div>
+          {data?.channel_message && (
+            <div className="text-[12px] text-bg-8 mt-1">{data.channel_message}</div>
           )}
         </div>
 
         {/* Reconnect */}
-        <div className="mt-4 pt-4 border-t border-[var(--hairline)]">
+        <div className="mt-4 pt-4 border-t border-[var(--color-hairline)]">
           <Button
             variant="secondary"
             onClick={() => void handleReconnect()}
@@ -160,11 +133,7 @@ export const VisionTab: FC = () => {
           />
         </div>
         <div className="mt-4">
-          <Button
-            variant="primary"
-            onClick={() => void handleSave()}
-            loading={updateMut.isPending}
-          >
+          <Button variant="primary" onClick={() => void handleSave()} loading={updateMut.isPending}>
             Сохранить
           </Button>
         </div>

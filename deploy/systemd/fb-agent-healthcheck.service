@@ -5,4 +5,4 @@ After=fb-agent.service
 [Service]
 Type=oneshot
 Environment=FB_AGENT_ROOT=/opt/fb-agent
-ExecStart=/opt/fb-agent/current/scripts/server-compose.sh ready
+ExecStart=/usr/local/libexec/fb-agent-release-verifier/current/verified-release-exec.py --state app --entrypoint scripts/platform-compose.sh -- ready

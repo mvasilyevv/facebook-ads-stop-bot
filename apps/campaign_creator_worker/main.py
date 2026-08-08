@@ -2,7 +2,7 @@
 """campaign_creator_worker main loop — исполнение залива FB-кампаний (Волна 2, Подход A).
 
 Состояние процесса (зеркало meta_api_worker):
-- heartbeat: Redis worker:heartbeat:campaign_creator TTL 60s (фоновый таск)
+- liveness: process-local Prometheus gauge (фоновый таск)
 - idle: spinning poll с asyncio.sleep
 - graceful: SIGTERM/SIGINT → завершить текущий цикл и закрыть ресурсы
 
@@ -13,9 +13,10 @@
 
 Money-критичная классификация ошибок (через execute.classify_execution_error):
 - permanent (валидация конфига, Meta permission/policy-reject) → run=failed + task mark_failed.
-- transient (сеть, rate-limit, Vision unavailable) → run остаётся в работе, task requeue + backoff.
-- partial-create (часть объектов уже в Meta) → run=failed + created_meta_ids (осиротевшие),
-  task mark_failed БЕЗ retry (повтор = дубль кампании + двойной открут бюджета).
+- transient до persisted external boundary → run=queued, task retry + backoff;
+- любой неоднозначный сбой после boundary, включая первый POST без ack, → terminal
+  UNKNOWN + manual review, без blind retry;
+- partial-create сохраняет created_meta_ids для ручной сверки/чистки.
 
 Money-инварианты: кампания всегда PAUSED (кривой запуск не тратит); idempotency_key
 задачи (offer+date+хеш структуры) против двойного залива; budget hard-cap в CampaignConfig.
@@ -24,29 +25,39 @@ Money-инварианты: кампания всегда PAUSED (кривой �
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
 import shutil
 import signal
 import time
-from typing import Any
+from typing import Any, Literal
+from uuid import UUID
 
-import redis.asyncio as redis_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from apps.campaign_creator_worker import (
     _campaign_upload_root,
     _resolve_creo_dir,
-    finalize_run_failed,
-    finalize_run_succeeded,
     load_run,
     parse_run_config,
     resolve_concepts_from_config,
     set_run_status,
 )
-from apps.campaign_creator_worker import claim_campaign_task as _claim
+from apps.campaign_creator_worker import (
+    claim_campaign_task as _claim,
+)
+from apps.campaign_creator_worker import (
+    finalize_run_cancelled as _finalize_run_cancelled,
+)
+from apps.campaign_creator_worker import (
+    finalize_run_failed as _finalize_run_failed,
+)
+from apps.campaign_creator_worker import (
+    finalize_run_succeeded as _finalize_run_succeeded,
+)
 from core.campaign_builder.builder import build_campaign_spec
 from core.campaign_builder.creative_ledger import record_creative
 from core.campaign_builder.execute import (
@@ -55,16 +66,192 @@ from core.campaign_builder.execute import (
     execute_campaign_spec,
 )
 from core.db import WORKER_ENGINE_KWARGS
+from core.deadlines import bind_absolute_deadline
 from core.meta_api.client import MetaApiClient
+from core.meta_api.errors import BrowserReadinessRejectedError
 from core.meta_api.upload import MediaUploader
-from core.tasks.queue import Task, mark_failed, mark_succeeded, requeue_for_retry
+from core.tasks.irreversible_control import (
+    CreatorTaskControl,
+    CreatorTaskControlAbort,
+    CreatorTaskFenceLost,
+    run_with_task_control,
+    seconds_until_deadline,
+)
+from core.tasks.queue import (
+    Task,
+    release_after_browser_readiness_rejection,
+    requeue_for_retry,
+)
+from core.tasks.queue import (
+    mark_failed as _queue_mark_failed,
+)
+from core.tasks.queue import (
+    mark_succeeded as _queue_mark_succeeded,
+)
+from core.worker_metrics import (
+    mark_worker_heartbeat,
+    record_irreversible_safety_event,
+    record_irreversible_task_outcome,
+)
 
 logger = logging.getLogger("campaign_creator_worker")
 
 WORKER_NAME = "campaign_creator"
-HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
-HEARTBEAT_TTL_SECONDS = 60
+_METRICS_INTERVAL_SECONDS = 15.0
 IDLE_SLEEP_SECONDS = 5
+
+_PROCESS_STARTED_AT: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "campaign_creator_process_started_at",
+    default=None,
+)
+_PROCESS_OUTCOME_RECORDED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "campaign_creator_process_outcome_recorded",
+    default=False,
+)
+
+
+def _begin_process_metrics() -> None:
+    _PROCESS_STARTED_AT.set(time.monotonic())
+    _PROCESS_OUTCOME_RECORDED.set(False)
+
+
+def _record_terminal_outcome(outcome: Literal["CONFIRMED", "REJECTED", "UNKNOWN"]) -> None:
+    if _PROCESS_OUTCOME_RECORDED.get():
+        return
+    started_at = _PROCESS_STARTED_AT.get()
+    record_irreversible_task_outcome(
+        WORKER_NAME,
+        "campaign_create",
+        outcome,
+        duration_seconds=time.monotonic() - started_at if started_at is not None else None,
+    )
+    if outcome == "UNKNOWN":
+        record_irreversible_safety_event(
+            WORKER_NAME,
+            "campaign_create",
+            "ambiguous_no_retry",
+        )
+    _PROCESS_OUTCOME_RECORDED.set(True)
+
+
+def _record_stale_fence() -> None:
+    record_irreversible_safety_event(WORKER_NAME, "campaign_create", "stale_fence")
+
+
+async def finalize_run_failed(
+    engine: AsyncEngine,
+    run_id: str,
+    *,
+    task: Task,
+    error: str,
+    created_meta_ids: dict[str, Any] | None = None,
+    task_result: dict[str, Any] | None = None,
+    progress: dict[str, Any] | None = None,
+) -> bool:
+    applied = await _finalize_run_failed(
+        engine,
+        run_id,
+        task=task,
+        error=error,
+        created_meta_ids=created_meta_ids,
+        task_result=task_result,
+        progress=progress,
+    )
+    if applied:
+        outcome = "UNKNOWN" if (task_result or {}).get("outcome") == "UNKNOWN" else "REJECTED"
+        _record_terminal_outcome(outcome)
+    else:
+        _record_stale_fence()
+    return applied
+
+
+async def finalize_run_succeeded(
+    engine: AsyncEngine,
+    run_id: str,
+    *,
+    task: Task,
+    created_meta_ids: dict[str, Any],
+    progress: dict[str, Any],
+) -> bool:
+    applied = await _finalize_run_succeeded(
+        engine,
+        run_id,
+        task=task,
+        created_meta_ids=created_meta_ids,
+        progress=progress,
+    )
+    if applied:
+        _record_terminal_outcome("CONFIRMED")
+    else:
+        _record_stale_fence()
+    return applied
+
+
+async def finalize_run_cancelled(
+    engine: AsyncEngine,
+    run_id: str,
+    *,
+    task: Task,
+    reason: str,
+) -> bool:
+    applied = await _finalize_run_cancelled(
+        engine,
+        run_id,
+        task=task,
+        reason=reason,
+    )
+    if applied:
+        _record_terminal_outcome("REJECTED")
+    else:
+        _record_stale_fence()
+    return applied
+
+
+async def mark_failed(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    error: str,
+    result: dict[str, Any] | None = None,
+    lease_owner: UUID | None = None,
+    lease_token: int | None = None,
+) -> bool:
+    applied = await _queue_mark_failed(
+        engine,
+        task_id=task_id,
+        error=error,
+        result=result,
+        lease_owner=lease_owner,
+        lease_token=lease_token,
+    )
+    if applied:
+        outcome = "UNKNOWN" if (result or {}).get("outcome") == "UNKNOWN" else "REJECTED"
+        _record_terminal_outcome(outcome)
+    else:
+        _record_stale_fence()
+    return applied
+
+
+async def mark_succeeded(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+    result: dict[str, Any] | None = None,
+    lease_owner: UUID | None = None,
+    lease_token: int | None = None,
+) -> bool:
+    applied = await _queue_mark_succeeded(
+        engine,
+        task_id=task_id,
+        result=result,
+        lease_owner=lease_owner,
+        lease_token=lease_token,
+    )
+    if applied:
+        _record_terminal_outcome("CONFIRMED")
+    else:
+        _record_stale_fence()
+    return applied
 
 
 def _get_database_url() -> str:
@@ -73,25 +260,22 @@ def _get_database_url() -> str:
     return get_settings().database_url
 
 
-def _get_redis_url() -> str:
-    return os.environ.get("REDIS_URL", "redis://localhost:6380/0")
-
-
-def _build_meta_client() -> MetaApiClient:
+def _build_meta_client(engine: AsyncEngine) -> MetaApiClient:
     """Сконструировать клиент Marketing API (gRPC к browser-agent)."""
     return MetaApiClient(
         host=os.environ.get("BROWSER_AGENT_HOST", "localhost"),
         port=int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051")),
+        operation_engine=engine,
     )
 
 
 async def _persist_partial_created_ids(
     engine: AsyncEngine,
     *,
-    task_id: int,
+    task: Task,
     created_ids: dict[str, Any],
     failed_step: str,
-) -> None:
+) -> bool:
     """created_ids partial-провала — в task_queue.result, не только в логи/campaign_run.
 
     Урок MID-24: у 8 старых failed-задач result был NULL, а id осиротевших объектов
@@ -100,22 +284,183 @@ async def _persist_partial_created_ids(
     Пишем ДО mark_failed (guard status='running' тот же); best-effort — сбой записи
     не должен помешать mark_failed.
     """
-    payload = {"partial_fail": True, "failed_step": failed_step, "created_ids": created_ids}
+    payload = {
+        "outcome": "UNKNOWN",
+        "reconcile_required": True,
+        "manual_review_required": True,
+        "operation": "campaign_create",
+        "partial_fail": True,
+        "failed_step": failed_step,
+        "created_ids": created_ids,
+    }
     try:
         async with engine.begin() as conn:
-            await conn.execute(
+            result = await conn.execute(
                 text(
                     "UPDATE task_queue SET result = CAST(:r AS JSONB), updated_at = NOW() "
-                    "WHERE id = :id AND status = 'running'"
+                    "WHERE id = :id AND status = 'running' "
+                    "AND lease_owner = :lease_owner AND lease_token = :lease_token "
+                    "AND lease_expires_at > clock_timestamp()"
                 ),
-                {"id": task_id, "r": json.dumps(payload)},
+                {
+                    "id": task.id,
+                    "r": json.dumps(payload),
+                    "lease_owner": task.lease_owner,
+                    "lease_token": task.lease_token,
+                },
             )
+        return (result.rowcount or 0) > 0
     except Exception:  # noqa: BLE001 — best-effort, mark_failed важнее
         logger.warning(
             "campaign_create: не удалось записать created_ids в task_queue.result (task=%s)",
-            task_id,
+            task.id,
             exc_info=True,
         )
+        return False
+
+
+class _FencedGraphClient:
+    """Persist/check the task boundary immediately before every Meta RPC."""
+
+    def __init__(self, delegate: MetaApiClient, control: CreatorTaskControl) -> None:
+        self._delegate = delegate
+        self._control = control
+
+    async def execute_graph_call(self, **kwargs: Any) -> dict[str, Any]:
+        method = str(kwargs.get("method") or "CALL").upper()
+        endpoint = str(kwargs.get("endpoint") or "unknown")
+        await self._control.begin_external(f"Meta {method} {endpoint}")
+        record_irreversible_safety_event(
+            WORKER_NAME,
+            "campaign_create",
+            "external_boundary",
+        )
+        return await self._delegate.execute_graph_call(**kwargs)
+
+
+class _FencedUploader:
+    """Apply the same task boundary to MediaUploader external methods."""
+
+    def __init__(self, delegate: MediaUploader, control: CreatorTaskControl) -> None:
+        self._delegate = delegate
+        self._control = control
+
+    async def upload_image(self, *args: Any, **kwargs: Any) -> str:
+        await self._control.begin_external("MediaUploader.upload_image")
+        record_irreversible_safety_event(WORKER_NAME, "campaign_create", "external_boundary")
+        return await self._delegate.upload_image(*args, **kwargs)
+
+    async def upload_video_from_bytes(self, *args: Any, **kwargs: Any) -> str:
+        await self._control.begin_external("MediaUploader.upload_video_from_bytes")
+        record_irreversible_safety_event(WORKER_NAME, "campaign_create", "external_boundary")
+        return await self._delegate.upload_video_from_bytes(*args, **kwargs)
+
+    async def wait_video_ready(self, *args: Any, **kwargs: Any) -> bool:
+        await self._control.begin_external("MediaUploader.wait_video_ready")
+        record_irreversible_safety_event(WORKER_NAME, "campaign_create", "external_boundary")
+        return await self._delegate.wait_video_ready(*args, **kwargs)
+
+    async def get_video_thumbnail_url(self, *args: Any, **kwargs: Any) -> str:
+        await self._control.begin_external("MediaUploader.get_video_thumbnail_url")
+        record_irreversible_safety_event(WORKER_NAME, "campaign_create", "external_boundary")
+        return await self._delegate.get_video_thumbnail_url(*args, **kwargs)
+
+
+def _campaign_unknown_result(
+    task: Task,
+    *,
+    run_id: str,
+    reason: str,
+    created_ids: dict[str, Any] | None = None,
+    failed_step: str | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "outcome": "UNKNOWN",
+        "reconcile_required": True,
+        "manual_review_required": True,
+        "operation": "campaign_create",
+        "run_id": run_id,
+        "reason": reason,
+    }
+    if created_ids is not None:
+        result["created_ids"] = created_ids
+    if failed_step is not None:
+        result["failed_step"] = failed_step
+    if task.correlation_id is not None:
+        result["correlation_id"] = str(task.correlation_id)
+    return result
+
+
+def _campaign_rejected_result(*, run_id: str, reason: str) -> dict[str, Any]:
+    return {
+        "outcome": "REJECTED",
+        "operation": "campaign_create",
+        "run_id": run_id,
+        "reason": reason,
+    }
+
+
+def _browser_readiness_rejection(
+    exc: BaseException,
+) -> BrowserReadinessRejectedError | None:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, BrowserReadinessRejectedError):
+            return current
+        seen.add(id(current))
+        current = current.__cause__
+    return None
+
+
+async def _finalize_campaign_control_abort(
+    engine: AsyncEngine,
+    task: Task,
+    control: CreatorTaskControl,
+    *,
+    run_id: str,
+    exc: CreatorTaskControlAbort,
+) -> None:
+    if exc.external_started or control.external_started:
+        await finalize_run_failed(
+            engine,
+            run_id,
+            task=task,
+            error=f"campaign creation interrupted after external boundary: {exc.reason}",
+            task_result=_campaign_unknown_result(
+                task,
+                run_id=run_id,
+                reason=exc.reason,
+            ),
+            progress={"stage": "failed", "outcome": "UNKNOWN", "reason": exc.reason},
+        )
+        return
+    record_irreversible_safety_event(
+        WORKER_NAME,
+        "campaign_create",
+        "pre_boundary_stop",
+    )
+    if exc.reason == "cancel_requested":
+        applied = await finalize_run_cancelled(
+            engine,
+            run_id,
+            task=task,
+            reason=task.cancel_reason or "campaign creation cancelled before external call",
+        )
+        if not applied:
+            logger.warning("campaign_create: pre-boundary cancel lost fence task=%s", task.id)
+        return
+    await finalize_run_failed(
+        engine,
+        run_id,
+        task=task,
+        error="absolute task deadline exceeded before first Meta call",
+        task_result=_campaign_rejected_result(
+            run_id=run_id,
+            reason="absolute_deadline_exceeded_before_external_call",
+        ),
+        progress={"stage": "failed", "outcome": "REJECTED", "reason": exc.reason},
+    )
 
 
 # ====================== обработка одной задачи ======================
@@ -133,16 +478,27 @@ async def process_one_task(
     client/uploader опциональны для тестов; production main_loop всегда передаёт реальные.
     Result задачи в task_queue синхронизирован со статусом campaign_run.
     """
+    _begin_process_metrics()
     run_id = (task.payload or {}).get("run_id")
     if not run_id:
         logger.error("campaign_create: task id=%s без run_id в payload", task.id)
-        await _safe_mark_failed(engine, task, "invalid payload: нет run_id")
+        await _safe_mark_failed(
+            engine,
+            task,
+            "invalid payload: нет run_id",
+            result={"outcome": "REJECTED", "reason": "missing_run_id"},
+        )
         return
 
     run = await load_run(engine, str(run_id))
     if run is None:
         logger.error("campaign_create: task id=%s run_id=%s не найден", task.id, run_id)
-        await _safe_mark_failed(engine, task, f"campaign_run {run_id} не найден")
+        await _safe_mark_failed(
+            engine,
+            task,
+            f"campaign_run {run_id} не найден",
+            result=_campaign_rejected_result(run_id=str(run_id), reason="run_not_found"),
+        )
         return
 
     # Уже терминальный run (succeeded/failed/cancelled) — задача-дубль/повтор после
@@ -155,9 +511,24 @@ async def process_one_task(
             run.status,
         )
         if run.status == "succeeded":
-            await mark_succeeded(engine, task_id=task.id, result={"run_id": str(run_id)})
+            await mark_succeeded(
+                engine,
+                task_id=task.id,
+                result={"outcome": "CONFIRMED", "run_id": str(run_id)},
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
+            )
         else:
-            await mark_failed(engine, task_id=task.id, error=f"run уже {run.status}")
+            await mark_failed(
+                engine,
+                task_id=task.id,
+                error=f"run уже {run.status}",
+                result=_campaign_rejected_result(
+                    run_id=str(run_id), reason=f"run_already_{run.status}"
+                ),
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
+            )
         return
 
     # Money-safety (HIGH-2/HIGH-3): run уже В РАБОТЕ (uniquifying/uploading/creating)
@@ -175,30 +546,92 @@ async def process_one_task(
             run_id,
             run.status,
         )
-        await finalize_run_failed(
+        applied = await finalize_run_failed(
             engine,
             str(run_id),
+            task=task,
             error=(
                 f"run уже в работе/с созданными объектами (status={run.status}) — "
                 "повторное исполнение запрещено (риск дубля кампании), проверь Meta вручную"
             ),
+            task_result=_campaign_unknown_result(
+                task,
+                run_id=str(run_id),
+                reason="preexisting_in_progress_or_created_objects",
+            ),
+            progress={
+                "stage": "failed",
+                "outcome": "UNKNOWN",
+                "reason": "preexisting_in_progress_or_created_objects",
+            },
         )
-        await _safe_mark_failed(
-            engine, task, f"run уже в работе (status={run.status}) — re-execute запрещён"
+        if not applied:
+            logger.warning(
+                "campaign_create: stale fence while rejecting re-execute task=%s", task.id
+            )
+        return
+
+    control = CreatorTaskControl(
+        engine=engine,
+        task=task,
+        operation="campaign_create",
+        target_id=str(run_id),
+    )
+    try:
+        await control.check()
+    except CreatorTaskControlAbort as exc:
+        await _finalize_campaign_control_abort(engine, task, control, run_id=str(run_id), exc=exc)
+        return
+    except CreatorTaskFenceLost:
+        _record_stale_fence()
+        logger.warning("campaign_create: stale task fence before execution task=%s", task.id)
+        return
+
+    if control.external_started:
+        applied = await finalize_run_failed(
+            engine,
+            str(run_id),
+            task=task,
+            error="task was claimed with a pre-existing external boundary",
+            task_result=_campaign_unknown_result(
+                task,
+                run_id=str(run_id),
+                reason="preexisting_external_boundary",
+            ),
+            progress={
+                "stage": "failed",
+                "outcome": "UNKNOWN",
+                "reason": "preexisting_external_boundary",
+            },
         )
+        if not applied:
+            logger.warning(
+                "campaign_create: stale fence while rejecting pre-existing boundary task=%s",
+                task.id,
+            )
         return
 
     if client is None or uploader is None:
         logger.error("campaign_create: task id=%s — Meta-клиент/uploader не доступен", task.id)
-        await set_run_status(engine, str(run_id), "failed")
         await finalize_run_failed(
-            engine, str(run_id), error="MetaApiClient/MediaUploader не доступен (Vision?)"
+            engine,
+            str(run_id),
+            task=task,
+            error="MetaApiClient/MediaUploader не доступен (Vision?)",
+            task_result=_campaign_rejected_result(
+                run_id=str(run_id), reason="creator_dependencies_unavailable"
+            ),
         )
-        await _safe_mark_failed(engine, task, "MetaApiClient/MediaUploader не доступен")
         return
 
     await _execute_run(
-        engine, task, run_id=str(run_id), config=run.config, client=client, uploader=uploader
+        engine,
+        task,
+        run_id=str(run_id),
+        config=run.config,
+        client=client,
+        uploader=uploader,
+        control=control,
     )
 
 
@@ -210,6 +643,7 @@ async def _execute_run(
     config: dict[str, Any],
     client: MetaApiClient,
     uploader: MediaUploader,
+    control: CreatorTaskControl,
 ) -> None:
     """Гоняет execute с записью прогресса/статуса и маршрутизацией ошибок."""
     # 1) Валидация конфига (pydantic) — permanent при ошибке.
@@ -219,23 +653,50 @@ async def _execute_run(
         spec = build_campaign_spec(cfg)
     except Exception as exc:  # noqa: BLE001 — валидация конфига/концептов = permanent
         logger.error("campaign_create: task id=%s конфиг невалиден: %r", task.id, exc)
-        await finalize_run_failed(engine, run_id, error=f"invalid config: {exc!r}")
-        await _safe_mark_failed(engine, task, f"invalid config: {exc!r}")
+        await finalize_run_failed(
+            engine,
+            run_id,
+            task=task,
+            error=f"invalid config: {exc!r}",
+            task_result=_campaign_rejected_result(run_id=run_id, reason="invalid_config"),
+        )
         return
 
     # Атомарный queued→uniquifying (cancel-гонка): если конкурентный cancel успел перевести
     # run в cancelled, переход НЕ пройдёт (expect='queued') → прерываемся ДО любого создания
     # объектов в Meta. Задачу терминируем как succeeded (обработана: run отменён, создавать нечего).
     if not await set_run_status(
-        engine, run_id, "uniquifying", progress={"stage": "uniquifying"}, expect="queued"
+        engine,
+        run_id,
+        "uniquifying",
+        task=task,
+        progress={"stage": "uniquifying"},
+        expect="queued",
     ):
+        try:
+            await control.check()
+        except CreatorTaskControlAbort as exc:
+            await _finalize_campaign_control_abort(engine, task, control, run_id=run_id, exc=exc)
+            return
+        except CreatorTaskFenceLost:
+            _record_stale_fence()
+            logger.warning(
+                "campaign_create: queued transition rejected by stale fence task=%s",
+                task.id,
+            )
+            return
         logger.info(
             "campaign_create: task id=%s — run %s отменён до старта (cancel-гонка), пропуск без создания",
             task.id,
             run_id,
         )
         await _safe_mark_failed(
-            engine, task, "run отменён до старта (cancel-гонка) — пропуск без создания"
+            engine,
+            task,
+            "run отменён до старта (cancel-гонка) — пропуск без создания",
+            result=_campaign_rejected_result(
+                run_id=run_id, reason="run_cancelled_before_external_call"
+            ),
         )
         _cleanup_upload_dir(cfg.creo_root)
         return
@@ -246,11 +707,27 @@ async def _execute_run(
         # не роняет залив (execute ловит).
         stage = snapshot.get("stage", "creating")
         run_status = stage if stage in ("uniquifying", "uploading", "creating") else "creating"
-        await set_run_status(engine, run_id, run_status, progress=snapshot)
+        applied = await set_run_status(
+            engine,
+            run_id,
+            run_status,
+            task=task,
+            progress=snapshot,
+        )
+        if not applied:
+            # ``set_run_status`` deliberately rejects a row after an operator
+            # sets cancel_requested_at.  Re-read the DB-authoritative control
+            # state before calling this a stale fence: cooperative abort must
+            # finalize REJECTED/UNKNOWN, not strand the task as ``running``.
+            await control.check()
+            raise CreatorTaskFenceLost(
+                f"campaign progress rejected for stale task fence task={task.id}"
+            )
 
     async def _record(code: str, kind: str, creative_id: str) -> None:
         # Реестр — best-effort аудит: его сбой не должен ронять успешный залив.
         try:
+            await control.check()
             async with engine.begin() as conn:
                 await record_creative(
                     conn,
@@ -265,16 +742,69 @@ async def _execute_run(
                 "реестр креатива не записан: code=%s run=%s", code, run_id, exc_info=True
             )
 
-    try:
-        result = await execute_campaign_spec(
+    fenced_client = _FencedGraphClient(client, control)
+    fenced_uploader = _FencedUploader(uploader, control)
+    timeout_seconds = seconds_until_deadline(task.deadline_at)
+
+    async def _execute() -> Any:
+        return await execute_campaign_spec(
             cfg,
             spec,
             concepts_by_campaign=concepts_by_campaign,
-            client=client,
-            uploader=uploader,
+            client=fenced_client,
+            uploader=fenced_uploader,
             on_progress=on_progress,
             on_creative_created=_record,
         )
+
+    try:
+        with bind_absolute_deadline(task.deadline_at):
+            async with asyncio.timeout(timeout_seconds):
+                result = await run_with_task_control(control, _execute)
+    except CreatorTaskControlAbort as exc:
+        await _finalize_campaign_control_abort(engine, task, control, run_id=run_id, exc=exc)
+        logger.warning(
+            "campaign_create: task=%s stopped reason=%s external=%s",
+            task.id,
+            exc.reason,
+            exc.external_started,
+        )
+        return
+    except CreatorTaskFenceLost:
+        _record_stale_fence()
+        logger.warning(
+            "campaign_create: task=%s lost lease; active external work cancelled",
+            task.id,
+        )
+        return
+    except asyncio.TimeoutError:
+        if control.external_started:
+            await finalize_run_failed(
+                engine,
+                run_id,
+                task=task,
+                error="campaign creation exceeded absolute deadline after external boundary",
+                task_result=_campaign_unknown_result(
+                    task, run_id=run_id, reason="absolute_deadline_exceeded"
+                ),
+                progress={
+                    "stage": "failed",
+                    "outcome": "UNKNOWN",
+                    "reason": "absolute_deadline_exceeded",
+                },
+            )
+        else:
+            await finalize_run_failed(
+                engine,
+                run_id,
+                task=task,
+                error="absolute task deadline exceeded before first Meta call",
+                task_result=_campaign_rejected_result(
+                    run_id=run_id,
+                    reason="absolute_deadline_exceeded_before_external_call",
+                ),
+            )
+        return
     except PartialCreateError as exc:
         # Часть объектов уже в Meta — НЕ ретраим (дубли). run=failed + осиротевшие id.
         logger.error(
@@ -284,20 +814,101 @@ async def _execute_run(
             exc.created_ids,
             exc.failed_step,
         )
+        await _persist_partial_created_ids(
+            engine,
+            task=task,
+            created_ids=exc.created_ids,
+            failed_step=exc.failed_step,
+        )
         await finalize_run_failed(
             engine,
             run_id,
+            task=task,
             error=f"partial_fail (step={exc.failed_step}): проверь Meta вручную: {exc!r}",
             created_meta_ids=exc.created_ids,
+            task_result=_campaign_unknown_result(
+                task,
+                run_id=run_id,
+                reason="partial_or_ack_lost",
+                created_ids=exc.created_ids,
+                failed_step=exc.failed_step,
+            ),
+            progress={
+                "stage": "failed",
+                "outcome": "UNKNOWN",
+                "reason": "partial_or_ack_lost",
+                "failed_step": exc.failed_step,
+            },
         )
-        await _persist_partial_created_ids(
-            engine, task_id=task.id, created_ids=exc.created_ids, failed_step=exc.failed_step
-        )
-        await _safe_mark_failed(engine, task, f"partial_fail: {exc!r}")
         # Концепты НЕ чистим при ошибке — нужны для ретрая (повтор залива тем же config).
         # Старые upload-папки подметает retention в cleanup_worker.
         return
     except Exception as exc:  # noqa: BLE001 — единая маршрутизация по classify
+        readiness_rejection = _browser_readiness_rejection(exc)
+        if readiness_rejection is not None:
+
+            async def reset_run_for_readiness(
+                conn,
+                task_status: str,
+            ) -> None:
+                run_status = "cancelled" if task_status == "cancelled" else "queued"
+                progress = {
+                    "stage": run_status,
+                    "reason": "browser_readiness_rejected",
+                }
+                updated = await conn.execute(
+                    text(
+                        """
+                        UPDATE campaign_run
+                        SET status = :status,
+                            progress = CAST(:progress AS jsonb),
+                            updated_at = clock_timestamp()
+                        WHERE id = :run_id
+                        """
+                    ),
+                    {
+                        "status": run_status,
+                        "progress": json.dumps(progress),
+                        "run_id": run_id,
+                    },
+                )
+                if (updated.rowcount or 0) != 1:
+                    raise RuntimeError("campaign run disappeared during readiness release")
+
+            released = await release_after_browser_readiness_rejection(
+                engine,
+                task=task,
+                error=repr(readiness_rejection),
+                transactional_effect=reset_run_for_readiness,
+            )
+            if released == "retrying":
+                logger.warning(
+                    "campaign_create: task=%s browser readiness rejected; "
+                    "released without attempt burn",
+                    task.id,
+                )
+            elif released != "cancelled":
+                logger.warning(
+                    "campaign_create: task=%s readiness release lost its fence",
+                    task.id,
+                )
+            return
+        if control.external_started:
+            await finalize_run_failed(
+                engine,
+                run_id,
+                task=task,
+                error=f"ambiguous failure after external boundary: {exc!r}",
+                task_result=_campaign_unknown_result(
+                    task, run_id=run_id, reason="external_result_ambiguous"
+                ),
+                progress={
+                    "stage": "failed",
+                    "outcome": "UNKNOWN",
+                    "reason": "external_result_ambiguous",
+                },
+            )
+            return
         kind = classify_execution_error(exc)
         if kind == "transient":
             # Money-safety: transient по classify_execution_error возможен ТОЛЬКО до
@@ -305,7 +916,23 @@ async def _execute_run(
             # не создан. Сбрасываем run обратно в 'queued' ПЕРЕД requeue: иначе он застрял
             # в 'uniquifying' (set_run_status выше), и re-claim guard в process_one_task
             # («run уже в работе» → failed) зарубил бы легитимный transient-retry.
-            await set_run_status(engine, run_id, "queued")
+            if task.attempt_count + 1 >= task.max_attempts:
+                await finalize_run_failed(
+                    engine,
+                    run_id,
+                    task=task,
+                    error=f"transient exhausted before external call: {exc!r}",
+                    task_result=_campaign_rejected_result(
+                        run_id=run_id, reason="pre_external_attempts_exhausted"
+                    ),
+                )
+                return
+            reset = await set_run_status(engine, run_id, "queued", task=task)
+            if not reset:
+                logger.warning(
+                    "campaign_create: run reset rejected by stale fence task=%s", task.id
+                )
+                return
             # Сеть/rate-limit/Vision — задача в requeue с backoff, run снова queued.
             retried = await requeue_for_retry(
                 engine,
@@ -313,6 +940,9 @@ async def _execute_run(
                 error=repr(exc),
                 attempt_count=task.attempt_count,
                 max_attempts=task.max_attempts,
+                lease_owner=task.lease_owner,
+                lease_token=task.lease_token,
+                lane=task.lane,
             )
             if retried:
                 logger.warning(
@@ -324,40 +954,56 @@ async def _execute_run(
                     task.id,
                     exc,
                 )
-                await finalize_run_failed(engine, run_id, error=f"transient exhausted: {exc!r}")
-                # Концепты НЕ чистим — оставляем для ретрая (retention подметёт старое).
             return
         # permanent: валидация/Meta permission/policy → run=failed, без retry.
         logger.error("campaign_create: task id=%s → permanent fail: %r", task.id, exc)
-        await finalize_run_failed(engine, run_id, error=f"permanent: {exc!r}")
-        await _safe_mark_failed(engine, task, f"permanent: {exc!r}")
+        await finalize_run_failed(
+            engine,
+            run_id,
+            task=task,
+            error=f"permanent before external call: {exc!r}",
+            task_result=_campaign_rejected_result(
+                run_id=run_id, reason="permanent_pre_external_failure"
+            ),
+        )
         # Концепты НЕ чистим — оставляем для ретрая (retention подметёт старое).
         return
 
     # Успех: created_meta_ids в run + task succeeded.
     final_progress = {"stage": "succeeded", **result.created_meta_ids}
-    await finalize_run_succeeded(
+    applied = await finalize_run_succeeded(
         engine,
         run_id,
+        task=task,
         created_meta_ids=result.created_meta_ids,
         progress=final_progress,
     )
-    applied = await mark_succeeded(
-        engine, task_id=task.id, result={"run_id": run_id, **result.created_meta_ids}
-    )
     if not applied:
         logger.warning(
-            "campaign_create: task id=%s mark_succeeded не применился (гонка) — run уже succeeded",
+            "campaign_create: atomic success rejected by stale fence task id=%s",
             task.id,
         )
-    else:
-        logger.info("campaign_create: task id=%s succeeded (run %s)", task.id, run_id)
+        return
+    logger.info("campaign_create: task id=%s succeeded (run %s)", task.id, run_id)
     _cleanup_upload_dir(cfg.creo_root)
 
 
-async def _safe_mark_failed(engine: AsyncEngine, task: Task, error: str) -> None:
+async def _safe_mark_failed(
+    engine: AsyncEngine,
+    task: Task,
+    error: str,
+    *,
+    result: dict[str, Any] | None = None,
+) -> None:
     """mark_failed с логом гонки (status != running)."""
-    applied = await mark_failed(engine, task_id=task.id, error=error)
+    applied = await mark_failed(
+        engine,
+        task_id=task.id,
+        error=error,
+        result=result or {"outcome": "REJECTED"},
+        lease_owner=task.lease_owner,
+        lease_token=task.lease_token,
+    )
     if not applied:
         logger.warning(
             "campaign_create: task id=%s mark_failed не применился (гонка с воркером)", task.id
@@ -371,8 +1017,8 @@ def _cleanup_upload_dir(creo_root: str | None) -> None:
     Meta) ИЛИ для ретрая после ошибки. Поэтому при ошибке (partial/permanent/exhausted)
     папку НЕ чистим — пользователь может «Повторить залив» тем же config; старые папки
     подметает retention в cleanup_worker. Зовётся только при success и cancel-гонке.
-    Защита: удаляем только подпапку внутри корня загрузок (не произвольный путь);
-    абсолютные creo_root (legacy/тесты) вне корня — пропускаем. Сбой не роняет задачу.
+    Защита: upload ID резолвится только как подпапка внутри корня загрузок.
+    Сбой не роняет задачу.
     """
     if not creo_root:
         return
@@ -452,16 +1098,12 @@ async def _run_has_created_meta_ids(engine: AsyncEngine, run_id: str) -> bool:
 # ====================== sub-loops ======================
 
 
-async def heartbeat_loop(redis_client: redis_asyncio.Redis, stop: asyncio.Event) -> None:
-    """Периодически обновляет worker:heartbeat:campaign_creator с TTL 60s."""
-    interval = HEARTBEAT_TTL_SECONDS / 2
+async def metrics_loop(stop: asyncio.Event) -> None:
+    """Refresh the process-local Prometheus liveness gauge."""
     while not stop.is_set():
+        mark_worker_heartbeat(WORKER_NAME)
         try:
-            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
-        except Exception:  # noqa: BLE001
-            logger.exception("heartbeat: ошибка записи в Redis")
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=interval)
+            await asyncio.wait_for(stop.wait(), timeout=_METRICS_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
             pass
 
@@ -487,18 +1129,60 @@ async def task_loop(
             continue
 
         try:
-            await process_one_task(engine, claim.task, client=client, uploader=uploader)
+            vision_profile_id = str(claim.browser_profile_id or "").strip()
+            if not vision_profile_id:
+                raise RuntimeError(
+                    "browser-ready campaign claim returned no canonical Vision profile"
+                )
+            with client.operation_authority(
+                caller="campaign_creator",
+                task_id=claim.task.id,
+                lease_owner=claim.task.lease_owner,
+                lease_token=claim.task.lease_token,
+                vision_profile_id=vision_profile_id,
+                browser_readiness_generation=claim.browser_readiness_generation,
+            ):
+                await process_one_task(engine, claim.task, client=client, uploader=uploader)
         except Exception:  # noqa: BLE001 — неожиданная ошибка (напр. БД в фазе pre-execute гардов)
-            # process_one_task сам маршрутизирует ошибки execute (requeue/mark_failed/
-            # finalize), но pre-execute гарды (load_run / _run_has_created_meta_ids /
-            # set_run_status) делают DB-I/O ВНЕ внутреннего try. Транзиентная ошибка БД
-            # там не должна ронять воркер (иначе asyncio.gather падает, heartbeat встаёт,
-            # подтверждённый залив теряется). Задача остаётся 'running' → reconciler через
-            # 30 мин уведёт её в retrying. Логируем и продолжаем цикл.
             logger.exception(
-                "campaign_create: непредвиденная ошибка обработки task id=%s — воркер продолжает",
+                "campaign_create: unexpected crash task id=%s — terminal UNKNOWN",
                 claim.task.id,
             )
+            run_id = str((claim.task.payload or {}).get("run_id") or "")
+            try:
+                if run_id:
+                    await finalize_run_failed(
+                        engine,
+                        run_id,
+                        task=claim.task,
+                        error="unexpected campaign creator worker crash",
+                        task_result=_campaign_unknown_result(
+                            claim.task,
+                            run_id=run_id,
+                            reason="unexpected_worker_crash",
+                        ),
+                        progress={
+                            "stage": "failed",
+                            "outcome": "UNKNOWN",
+                            "reason": "unexpected_worker_crash",
+                        },
+                    )
+                else:
+                    await _safe_mark_failed(
+                        engine,
+                        claim.task,
+                        "unexpected campaign creator worker crash",
+                        result={
+                            "outcome": "UNKNOWN",
+                            "reconcile_required": True,
+                            "manual_review_required": True,
+                            "reason": "unexpected_worker_crash",
+                        },
+                    )
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "campaign_create: UNKNOWN finalize also failed task=%s", claim.task.id
+                )
             await _sleep_or_stop(stop)
 
 
@@ -515,9 +1199,8 @@ async def _sleep_or_stop(stop: asyncio.Event) -> None:
 async def main_loop(database_url: str | None = None) -> None:
     db_url = database_url or _get_database_url()
     engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
-    redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
 
-    meta_client = _build_meta_client()
+    meta_client = _build_meta_client(engine)
     await meta_client.start()
     uploader = MediaUploader(meta_client)
 
@@ -534,16 +1217,12 @@ async def main_loop(database_url: str | None = None) -> None:
     try:
         await asyncio.gather(
             task_loop(engine, stop, client=meta_client, uploader=uploader),
-            heartbeat_loop(redis_client, stop),
+            metrics_loop(stop),
         )
     finally:
         try:
             await meta_client.close()
         except Exception:  # noqa: BLE001
             logger.exception("meta_client.close() упал")
-        try:
-            await redis_client.aclose()
-        except Exception:  # noqa: BLE001
-            pass
         await engine.dispose()
         logger.info("campaign_creator_worker остановлен")

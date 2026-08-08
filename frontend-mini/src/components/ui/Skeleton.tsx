@@ -44,26 +44,3 @@ function SkeletonBase({ className }: { className?: string }) {
     />
   );
 }
-
-/** Карточка-скелетон для списка объявлений. */
-export function AdCardSkeleton() {
-  return (
-    <div className="bg-[var(--color-bg-1)] border border-[var(--hairline)] rounded-[var(--radius-3)] p-4 space-y-3">
-      <div className="flex justify-between items-start gap-2">
-        <div className="flex-1 space-y-1">
-          <Skeleton className="h-3 w-24" />
-          <Skeleton className="h-4 w-40" />
-        </div>
-        <Skeleton className="h-5 w-16" />
-      </div>
-      <div className="grid grid-cols-4 gap-2">
-        {[...Array(4)].map((_, i) => (
-          <div key={i} className="space-y-1">
-            <Skeleton className="h-3 w-full" />
-            <Skeleton className="h-4 w-full" />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}

@@ -78,13 +78,7 @@ describe("ConfirmDialog", () => {
 
   // Primary variant — кнопка рендерится
   it("confirmVariant primary рендерится", () => {
-    render(
-      <ConfirmDialog
-        {...defaultProps}
-        confirmVariant="primary"
-        confirmLabel="Одобрить"
-      />,
-    );
+    render(<ConfirmDialog {...defaultProps} confirmVariant="primary" confirmLabel="Одобрить" />);
     expect(screen.getByRole("button", { name: "Одобрить" })).toBeInTheDocument();
   });
 

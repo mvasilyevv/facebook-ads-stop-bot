@@ -9,7 +9,7 @@ ingest_postback + load_external_deposits_batch + evaluate_stop_rules.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -18,12 +18,25 @@ from sqlalchemy import text
 
 from core.adset_pro import PostbackEvent
 from core.adset_pro.ingest import ingest_postback
-from core.adset_pro.processing import claim_event_tasks, process_event_task
+from core.adset_pro.processing import (
+    TrackerLeaseLostError,
+    claim_event_tasks,
+    mark_task_retry,
+    process_event_task,
+)
 from core.adset_pro.queries import load_external_deposits_batch
 from core.domain import AlertStage
 from core.rules.evaluator import evaluate_stop_rules
 from core.rules.types import RuleContext
 from core.scanner.models import ScannedAdRow
+
+
+def _tracker_window() -> dict[str, datetime]:
+    now = datetime.now(UTC)
+    return {
+        "window_start": now - timedelta(days=1),
+        "window_end": now + timedelta(days=1),
+    }
 
 
 @pytest_asyncio.fixture
@@ -66,6 +79,8 @@ def _make_row(
     """Минимально-валидный ScannedAdRow для проверки правила spend_with_dep/spend_no_dep."""
     return ScannedAdRow(
         fb_ad_id=fb_ad_id,
+        campaign_id=f"9{fb_ad_id}",
+        adset_id=f"8{fb_ad_id}",
         campaign_name="CAMP",
         adset_name="ADSET",
         ad_name=f"AD_{fb_ad_id}",
@@ -103,6 +118,8 @@ async def test_ad_without_deposits_hits_stop(pg_engine, fb_ad_fixture, clean_ads
         deposits=0,
     )
     ctx = RuleContext(
+        currency="USD",
+        currency_exponent=2,
         cpa_amount=Decimal("50"),
         warning_percent_of_stop=Decimal("80"),
         external_deposits=0,
@@ -133,6 +150,8 @@ async def test_external_confirmed_pair_protects_from_stop(
     )
     # Шаг 1: без external_deposits объявление должно попасть в WARNING/STOP по spend_no_dep.
     ctx_no_ext = RuleContext(
+        currency="USD",
+        currency_exponent=2,
         cpa_amount=Decimal("50"),
         warning_percent_of_stop=Decimal("80"),
         external_deposits=0,
@@ -153,10 +172,12 @@ async def test_external_confirmed_pair_protects_from_stop(
     )
     ingest = await ingest_postback(pg_engine, ftd)
     assert ingest.inserted is True
-    task_id = (await claim_event_tasks(pg_engine))[0]
-    assert (await process_event_task(pg_engine, task_id=task_id)).processed is True
+    claim = (await claim_event_tasks(pg_engine))[0]
+    assert (await process_event_task(pg_engine, claim=claim)).processed is True
 
-    counts = await load_external_deposits_batch(pg_engine, fb_ad_ids=[fb_ad_id])
+    counts = await load_external_deposits_batch(
+        pg_engine, fb_ad_ids=[fb_ad_id], **_tracker_window()
+    )
     assert counts.get(fb_ad_id, 0) == 0
 
     registration = PostbackEvent(
@@ -169,13 +190,17 @@ async def test_external_confirmed_pair_protects_from_stop(
         raw={},
     )
     await ingest_postback(pg_engine, registration)
-    task_id = (await claim_event_tasks(pg_engine))[0]
-    assert (await process_event_task(pg_engine, task_id=task_id)).processed is True
-    counts = await load_external_deposits_batch(pg_engine, fb_ad_ids=[fb_ad_id])
+    claim = (await claim_event_tasks(pg_engine))[0]
+    assert (await process_event_task(pg_engine, claim=claim)).processed is True
+    counts = await load_external_deposits_batch(
+        pg_engine, fb_ad_ids=[fb_ad_id], **_tracker_window()
+    )
     assert counts.get(fb_ad_id, 0) >= 1
 
     # Шаг 3: с external_deposits=1 — переходим в deposit_stage; spend=60% < stop_with_dep 70%.
     ctx_with_ext = RuleContext(
+        currency="USD",
+        currency_exponent=2,
         cpa_amount=Decimal("50"),
         warning_percent_of_stop=Decimal("80"),
         external_deposits=counts[fb_ad_id],
@@ -186,6 +211,103 @@ async def test_external_confirmed_pair_protects_from_stop(
         f"external_deposits должен был защитить от STOP, но stage={ev_with_ext.stage}, "
         f"codes={ev_with_ext.stop_rule_codes + ev_with_ext.warning_rule_codes}"
     )
+
+
+@pytest.mark.asyncio
+async def test_expired_tracker_generation_cannot_project_event_or_retry_task(
+    pg_engine,
+    fb_ad_fixture,
+    clean_adsetpro_events,
+) -> None:
+    fb_ad_id = await _get_fb_ad_id_string(pg_engine, fb_ad_fixture.ad_id)
+    event = PostbackEvent(
+        click_id=f"expired-{uuid.uuid4().hex}",
+        fb_ad_id=fb_ad_id,
+        event_type="registration",
+        revenue=Decimal("0"),
+        currency="USD",
+        received_at=datetime.now(UTC),
+        raw={},
+    )
+    ingest = await ingest_postback(pg_engine, event)
+    assert ingest.inserted is True
+    claim = (await claim_event_tasks(pg_engine))[0]
+    async with pg_engine.connect() as conn:
+        event_before = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT processed_at, attribution_status, attempt_count
+                    FROM adsetpro_postback_events
+                    WHERE id = :event_id
+                    """
+                ),
+                {"event_id": ingest.event_id},
+            )
+        ).one()
+        click_state_before = await conn.scalar(
+            text("SELECT COUNT(*) FROM tracker_click_state WHERE click_id = :click_id"),
+            {"click_id": event.click_id},
+        )
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET lease_expires_at = clock_timestamp() - interval '1 second'
+                WHERE id = :task_id
+                """
+            ),
+            {"task_id": claim.task_id},
+        )
+
+    with pytest.raises(TrackerLeaseLostError):
+        await process_event_task(pg_engine, claim=claim)
+    assert (
+        await mark_task_retry(
+            pg_engine,
+            claim=claim,
+            error="expired generation must not retry",
+        )
+        is False
+    )
+
+    async with pg_engine.connect() as conn:
+        task = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT status, lease_owner, lease_token, completed_at, result
+                    FROM task_queue
+                    WHERE id = :task_id
+                    """
+                ),
+                {"task_id": claim.task_id},
+            )
+        ).one()
+        persisted_event = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT processed_at, attribution_status, attempt_count
+                    FROM adsetpro_postback_events
+                    WHERE id = :event_id
+                    """
+                ),
+                {"event_id": ingest.event_id},
+            )
+        ).one()
+        click_state_count = await conn.scalar(
+            text("SELECT COUNT(*) FROM tracker_click_state WHERE click_id = :click_id"),
+            {"click_id": event.click_id},
+        )
+    assert task.status == "running"
+    assert task.lease_owner == claim.lease_owner
+    assert task.lease_token == claim.lease_token
+    assert task.completed_at is None
+    assert task.result is None
+    assert persisted_event == event_before
+    assert click_state_count == click_state_before
 
 
 # Сценарий: только дубль (is_duplicate=TRUE) в БД → load_external_deposits_batch не считает.
@@ -207,6 +329,8 @@ async def test_duplicate_postbacks_do_not_count(pg_engine, fb_ad_fixture, clean_
             {"fb": fb_ad_id},
         )
 
-    counts = await load_external_deposits_batch(pg_engine, fb_ad_ids=[fb_ad_id])
+    counts = await load_external_deposits_batch(
+        pg_engine, fb_ad_ids=[fb_ad_id], **_tracker_window()
+    )
     # is_duplicate=TRUE исключается из счёта.
     assert counts.get(fb_ad_id, 0) == 0

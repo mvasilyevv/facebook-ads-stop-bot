@@ -3,34 +3,37 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 
 class VisionSettingsResponse(BaseModel):
-    """Ответ на GET /settings/vision — публичные поля VisionConfig + runtime из Redis."""
+    """Public Vision configuration plus a direct browser-agent channel probe."""
 
     model_config = ConfigDict(from_attributes=True)
 
     has_token: bool = False
-    # Откуда взят токен: "db" (vision_config), "env" (.env VISION_X_TOKEN fallback) или
-    # None (нет нигде). Vision подключается токеном из БД, а при пустой БД — из .env;
-    # без этого поля UI пугал «Не задан» при рабочем .env-токене.
-    token_source: str | None = None
     profile_id: str | None = None
-    auto_restart_on_missing_cdp: bool = True
-    runtime_status: str | None = None
-    runtime_status_message: str | None = None
-    cdp_ready: bool = False
-    cdp_port: int | None = None
+    configuration_revision: str | None = None
+    channel_status: Literal["READY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"] = "UNKNOWN"
+    channel_message: str | None = None
+    required_browser_contract_version: int
+    browser_contract_version: int | None = None
+    browser_contract_compatible: bool = False
+    browser_session_id: str | None = None
+    live_profile_id: str | None = None
+    graph_probe_performed: bool = False
+    graph_probe_ok: bool = False
 
 
 class VisionSettingsUpdateRequest(BaseModel):
-    """Тело PUT /settings/vision — обновить x_token / profile_id / флаг self-heal."""
+    """Тело PUT /settings/vision — обновить x_token / profile_id."""
+
+    model_config = ConfigDict(extra="forbid")
 
     x_token: str | None = None
     profile_id: str | None = None
-    # None = не трогать; bool = выставить флаг self-heal Vision-сессии.
-    auto_restart_on_missing_cdp: bool | None = None
 
 
 class VisionReconnectResponse(BaseModel):
@@ -40,13 +43,13 @@ class VisionReconnectResponse(BaseModel):
 
 
 class VisionEnsureCdpResponse(BaseModel):
-    """Ответ на POST /vision/ensure-cdp (bootstrap при старте run.sh).
+    """Ответ на POST /vision/ensure-cdp для platform desktop healer.
 
-    Контракт под run.sh: ok|status|action|message. Эндпоинт никогда не падает 5xx —
-    при недоступности browser-agent возвращает ok=false с пояснением.
+    Контракт: ok|status|action|message. Эндпоинт никогда не падает 5xx; при
+    недоступности browser-agent возвращает ok=false с пояснением.
     """
 
     ok: bool = True
-    status: str = "UNKNOWN"  # READY | RECONNECTED | UNAVAILABLE
-    action: str = "none"  # none | reconnect
+    status: str = "UNKNOWN"  # READY | RECOVERED | UNAVAILABLE
+    action: str = "none"  # none | restart
     message: str = ""

@@ -90,6 +90,7 @@ class FindAdsTool:
                 method="GET",
                 endpoint=f"/{ad_account_id}/ads",
                 query_params=params,
+                ad_account_id=ad_account_id,
             )
         except MetaApiError as exc:
             raise ToolError(f"Marketing API: {exc}") from exc

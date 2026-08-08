@@ -16,11 +16,18 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Literal
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.dashboard.metric_aggregation import latest_per_ad_per_day_cte
+from core.meta_api.account_tz import (
+    resolve_account_currencies,
+    resolve_cabinet_days,
+)
+from core.meta_api.identity import require_ad_account_id
+from core.money import validated_currency_code
 
 
 @dataclass(frozen=True)
@@ -31,7 +38,9 @@ class TopAdRow:
     fb_ad_id: str
     ad_name: str
     offer_code: str | None
-    spend_usd: Decimal
+    account_id: str
+    currency: str
+    spend: Decimal
     clicks: int
     leads: int
     cpc: Decimal | None
@@ -51,7 +60,12 @@ class DigestPayload:
     disable_tasks_failed: int = 0
     active_offers_count: int = 0
     active_ads_count: int = 0
-    total_spend_window_usd: Decimal = Decimal("0")
+    money_state: Literal["ready", "unavailable"] = "unavailable"
+    money_account_id: str | None = None
+    currency: str | None = None
+    currency_observed_at: datetime | None = None
+    money_issues: tuple[str, ...] = ()
+    total_spend_window: Decimal | None = None
 
 
 async def _count_alerts_by_stage(
@@ -91,10 +105,8 @@ async def _count_disable_tasks(
 ) -> tuple[int, int]:
     """Считает завершённые задачи отключения рекламы за окно.
 
-    Отключение идёт через Marketing API: task_type='meta_api_mutation' с
-    mutation_kind='pause_ad' (авто-стоп observer'а и ручные кнопки). Старый
-    task_type='disable' (DOM-канал удалён) учитываем тоже — на случай
-    долёживающих задач в окне перехода.
+    Отключение идёт через единый Marketing API канал:
+    task_type='meta_api_mutation' с mutation_kind='pause_ad'.
 
     Фильтр по completed_at — таски берутся только те, что фактически
     завершились в окне (а не были созданы в нём).
@@ -108,13 +120,8 @@ async def _count_disable_tasks(
                         COUNT(*) FILTER (WHERE status = 'succeeded') AS ok,
                         COUNT(*) FILTER (WHERE status = 'failed')    AS fail
                     FROM task_queue
-                    WHERE (
-                            task_type = 'disable'
-                            OR (
-                                task_type = 'meta_api_mutation'
-                                AND payload->>'mutation_kind' = 'pause_ad'
-                            )
-                          )
+                    WHERE task_type = 'meta_api_mutation'
+                      AND payload->>'mutation_kind' = 'pause_ad'
                       AND completed_at IS NOT NULL
                       AND completed_at >= :start
                       AND completed_at <  :end
@@ -166,9 +173,11 @@ async def _top_ads_and_total_spend(
     *,
     window_start: datetime,
     window_end: datetime,
+    account_id: str,
+    currency: str,
     limit: int = 5,
 ) -> tuple[list[TopAdRow], Decimal]:
-    """Топ-N ad по последнему spend за окно + общий spend за окно (per-ad-per-day).
+    """Топ-N и total внутри одного подтверждённого cabinet/currency scope.
 
     Логика:
     - топ-строки: latest-per-ad (DISTINCT ON ad_id) — для ранжирования по текущему spend;
@@ -178,6 +187,11 @@ async def _top_ads_and_total_spend(
     ⚠️ ad_metrics partitioned by cycle_ts — обязательно указываем границы окна,
     иначе сканируются все партиции.
     """
+    canonical_account_id = require_ad_account_id(account_id)
+    confirmed_currency = validated_currency_code(currency)
+    if confirmed_currency is None:
+        raise ValueError("digest currency must be confirmed")
+
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
@@ -194,6 +208,7 @@ async def _top_ads_and_total_spend(
                         FROM ad_metrics m
                         WHERE m.cycle_ts >= :start
                           AND m.cycle_ts <  :end
+                          AND m.currency = :currency
                         ORDER BY m.ad_id, m.cycle_ts DESC
                     )
                     SELECT
@@ -207,11 +222,18 @@ async def _top_ads_and_total_spend(
                     JOIN fb_campaigns c ON c.id = ads.campaign_id
                     LEFT JOIN offers o  ON o.id = c.offer_id
                     WHERE lm.spend > 0
+                      AND c.ad_account_id = :account_id
                     ORDER BY lm.spend DESC NULLS LAST
                     LIMIT :limit
                     """
                 ),
-                {"start": window_start, "end": window_end, "limit": int(limit)},
+                {
+                    "start": window_start,
+                    "end": window_end,
+                    "account_id": canonical_account_id,
+                    "currency": confirmed_currency,
+                    "limit": int(limit),
+                },
             )
         ).all()
 
@@ -223,11 +245,24 @@ async def _top_ads_and_total_spend(
             columns=("spend",),
             from_param="start",
             to_param="end",
+            extra_select=", m.currency AS currency",
         )
         total_row = (
             await conn.execute(
-                text(f"WITH {_total_cte} SELECT COALESCE(SUM(spend), 0) FROM per_ad_day"),
-                {"start": window_start, "end": window_end},
+                text(
+                    f"WITH {_total_cte} "
+                    "SELECT COALESCE(SUM(spend), 0) "
+                    "FROM per_ad_day "
+                    "WHERE ad_account_id = :account_id "
+                    "AND timezone_known "
+                    "AND currency = :currency"
+                ),
+                {
+                    "start": window_start,
+                    "end": window_end,
+                    "account_id": canonical_account_id,
+                    "currency": confirmed_currency,
+                },
             )
         ).one()
 
@@ -237,7 +272,9 @@ async def _top_ads_and_total_spend(
             fb_ad_id=str(row[1]),
             ad_name=str(row[2] or ""),
             offer_code=str(row[3]) if row[3] else None,
-            spend_usd=Decimal(str(row[4] or 0)),
+            account_id=canonical_account_id,
+            currency=confirmed_currency,
+            spend=Decimal(str(row[4] or 0)),
             clicks=int(row[5] or 0),
             leads=int(row[6] or 0),
             cpc=Decimal(str(row[7])) if row[7] is not None else None,
@@ -247,6 +284,42 @@ async def _top_ads_and_total_spend(
     ]
     total = Decimal(str(total_row[0] or 0))
     return top_rows, total
+
+
+async def _money_scopes_with_evidence(
+    engine: AsyncEngine,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+) -> tuple[tuple[str, str | None], ...]:
+    """Return exact cabinet/currency scopes that have spend evidence."""
+
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT DISTINCT campaign.ad_account_id, metric.currency
+                    FROM ad_metrics AS metric
+                    JOIN fb_ads AS ad ON ad.id = metric.ad_id
+                    JOIN fb_adsets AS adset ON adset.id = ad.adset_id
+                    JOIN fb_campaigns AS campaign ON campaign.id = adset.campaign_id
+                    WHERE metric.cycle_ts >= :start
+                      AND metric.cycle_ts < :end
+                      AND metric.spend IS NOT NULL
+                    ORDER BY campaign.ad_account_id, metric.currency NULLS FIRST
+                    """
+                ),
+                {"start": window_start, "end": window_end},
+            )
+        ).all()
+    return tuple(
+        (
+            require_ad_account_id(str(account_id)),
+            validated_currency_code(currency),
+        )
+        for account_id, currency in rows
+    )
 
 
 async def build_digest(
@@ -276,12 +349,65 @@ async def build_digest(
     )
     offers_cnt = await _count_active_offers(engine)
     ads_cnt = await _count_active_ads_normal(engine)
-    top_ads, total_spend = await _top_ads_and_total_spend(
+    money_scopes = await _money_scopes_with_evidence(
         engine,
         window_start=window_start,
         window_end=window_end,
-        limit=top_limit,
     )
+    account_ids = tuple(sorted({account_id for account_id, _currency in money_scopes}))
+    money_state: Literal["ready", "unavailable"] = "unavailable"
+    money_account_id: str | None = None
+    currency: str | None = None
+    currency_observed_at: datetime | None = None
+    money_issues: tuple[str, ...]
+    top_ads: list[TopAdRow] = []
+    total_spend: Decimal | None = None
+    if not money_scopes:
+        money_issues = ("Нет подтверждённых spend-снимков за окно",)
+    elif any(scope_currency is None for _account_id, scope_currency in money_scopes):
+        money_account_id = account_ids[0] if len(account_ids) == 1 else None
+        money_issues = (
+            "Денежные итоги скрыты: часть spend-снимков не имеет подтверждённой валюты",
+        )
+    elif len(money_scopes) != 1:
+        money_account_id = account_ids[0] if len(account_ids) == 1 else None
+        scope_kind = "несколько валют" if len(account_ids) == 1 else "несколько кабинетов"
+        money_issues = (f"Денежные итоги скрыты: окно содержит {scope_kind}",)
+    else:
+        money_account_id, evidence_currency = money_scopes[0]
+        assert evidence_currency is not None
+        currency_resolution = await resolve_account_currencies(
+            engine,
+            account_ids=[money_account_id],
+            now=window_end,
+        )
+        cabinet_days = await resolve_cabinet_days(
+            engine,
+            account_ids=[money_account_id],
+            now=window_end,
+        )
+        current_currency = currency_resolution.currency
+        currency_observed_at = currency_resolution.observed_at
+        if currency_resolution.state != "single" or current_currency is None:
+            money_issues = ("Денежные итоги скрыты: валюта кабинета не подтверждена",)
+            currency_observed_at = None
+        elif current_currency != evidence_currency:
+            money_issues = ("Денежные итоги скрыты: валюта кабинета изменилась внутри окна",)
+            currency_observed_at = None
+        elif not cabinet_days.timezone_known:
+            money_issues = ("Денежные итоги скрыты: граница суток кабинета не подтверждена",)
+        else:
+            currency = evidence_currency
+            top_ads, total_spend = await _top_ads_and_total_spend(
+                engine,
+                window_start=window_start,
+                window_end=window_end,
+                account_id=money_account_id,
+                currency=currency,
+                limit=top_limit,
+            )
+            money_state = "ready"
+            money_issues = ()
 
     return DigestPayload(
         window_start_utc=window_start,
@@ -293,7 +419,12 @@ async def build_digest(
         disable_tasks_failed=fail_cnt,
         active_offers_count=offers_cnt,
         active_ads_count=ads_cnt,
-        total_spend_window_usd=total_spend,
+        money_state=money_state,
+        money_account_id=money_account_id,
+        currency=currency,
+        currency_observed_at=currency_observed_at,
+        money_issues=money_issues,
+        total_spend_window=total_spend,
     )
 
 

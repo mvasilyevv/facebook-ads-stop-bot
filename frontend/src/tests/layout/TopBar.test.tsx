@@ -36,4 +36,16 @@ describe("TopBar", () => {
 
     expect(screen.getByLabelText("Текущий раздел")).toHaveTextContent("Аналитика");
   });
+
+  it.each([
+    ["/system/sources", "Источники и воркеры"],
+    ["/incidents/incident-42", "Инцидент"],
+  ])("shows a concrete breadcrumb for %s", (pathname, label) => {
+    routerState.pathname = pathname;
+
+    render(<TopBar />);
+
+    expect(screen.getByLabelText("Текущий раздел")).toHaveTextContent(label);
+    expect(screen.getByLabelText("Текущий раздел")).not.toHaveTextContent("—");
+  });
 });

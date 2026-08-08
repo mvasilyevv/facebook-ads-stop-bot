@@ -1,7 +1,6 @@
 /**
  * Button — primary/secondary/danger/ghost/ghost-danger × lg/md/sm/xs/icon.
- * Дизайн-спека: docs/frontend_mockups/dashboard.html .btn
- * Макет: height 36px (md), 28px (sm); акцент bg на primary.
+ * Размеры и состояния задаются общими production design tokens.
  */
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
@@ -22,23 +21,21 @@ export const buttonStyles = cva(
         primary:
           "bg-accent border-accent text-bg-0 hover:bg-accent-muted hover:border-accent-muted",
         secondary:
-          "bg-bg-2 border-[var(--hairline-strong)] text-bg-11 hover:bg-bg-3 hover:border-bg-7",
+          "bg-bg-2 border-[var(--color-hairline-strong)] text-bg-11 hover:bg-bg-3 hover:border-bg-7",
         danger:
           "bg-danger-bg border-[rgba(199,98,92,0.3)] text-danger hover:bg-[rgba(199,98,92,0.15)] hover:border-[rgba(199,98,92,0.5)]",
-        ghost:
-          "bg-transparent border-transparent text-bg-10 hover:bg-bg-2 hover:text-bg-11",
+        ghost: "bg-transparent border-transparent text-bg-10 hover:bg-bg-2 hover:text-bg-11",
         "ghost-danger":
           "bg-transparent border-transparent text-danger hover:bg-danger-bg hover:border-[rgba(199,98,92,0.3)]",
-        link:
-          "bg-transparent border-transparent text-bg-11 hover:text-accent underline-offset-4 hover:underline px-0",
+        link: "bg-transparent border-transparent text-bg-11 hover:text-accent underline-offset-4 hover:underline px-0",
       },
       size: {
         // icon-only: квадрат без px
-        icon: "h-8 w-8 p-0",
-        xs: "h-6 px-2 text-[11px]",
-        sm: "h-7 px-3 text-[12.5px]",
-        md: "h-9 px-4 text-[13.5px]",
-        lg: "h-10 px-5 text-[14px]",
+        icon: "h-11 w-11 p-0",
+        xs: "h-11 px-3 text-[12px]",
+        sm: "h-11 px-3 text-[13px]",
+        md: "h-11 px-4 text-[14px]",
+        lg: "h-12 px-5 text-[15px]",
       },
       fullWidth: {
         true: "w-full",
@@ -54,8 +51,7 @@ export const buttonStyles = cva(
 );
 
 export interface ButtonProps
-  extends ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonStyles> {
+  extends ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonStyles> {
   leftIcon?: ReactNode;
   rightIcon?: ReactNode;
   /** Показывает spinner вместо leftIcon, disabled=true. */

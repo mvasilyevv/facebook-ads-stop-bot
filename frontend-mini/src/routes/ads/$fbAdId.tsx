@@ -1,364 +1,227 @@
-/**
- * AdDetail — полноэкранная страница объявления.
- * Маршрут: /ads/$fbAdId (file-based TanStack Router).
- *
- * Канон: Eyebrow «ОБЪЯВЛЕНИЕ», имя mono text-bg-11, AlertStateBadge + Pill offer_code,
- * danger-callout с RulePills, MetricsGrid 3 колонки, AlertTimeline, кнопки 44px.
- *
- * API: useTmaAd(fbAdId) + useTmaDisable + useTmaClaim.
- * BackButton — нативный TG (TelegramBackButton в __root по паттерну /ads/.+).
- * TabBar скрывается (TabBar.tsx HIDDEN_ON: /^\/ads\/.+$/).
- */
 import { createFileRoute } from "@tanstack/react-router";
+
 import {
-  useTmaAd,
-  useTmaDisable,
-  useTmaClaim,
-} from "@/lib/api";
+  formatZonedDateTime,
+  timezoneEvidenceLabel,
+} from "@fb/shared/format/time";
+import { formatSpend } from "@fb/shared/format/number";
 import {
-  AlertStateBadge,
-  Button,
-  Pill,
-  Skeleton,
-  EmptyState,
-  ErrorState,
-} from "@/components/ui";
-import { Eyebrow, RulePills } from "@/components/data";
-import { MetricsGrid } from "@/components/domain/MetricsGrid";
-import type { MetricCell } from "@/components/domain/MetricsGrid";
-import { AlertTimeline } from "@/components/domain/AlertTimeline";
+  confirmedOperatorCurrency,
+  formatOperatorCount,
+} from "@fb/shared/operator/adsViewModel";
 import {
-  normalizeAlertState,
-  formatSpend,
-  formatPercent,
-  formatInt,
-} from "@fb/shared";
-import type { TmaAdMetrics } from "@/lib/api";
-import { haptic, tgConfirm, tgAlert, openLink } from "@/lib/tg";
+  adsForRealtimeState,
+  severityForDataState,
+} from "@fb/shared/operator/viewModel";
+import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
+import { useOperatorRealtimeStatus } from "@fb/operator-api";
+
+import { EmptyState, ErrorState, Skeleton } from "@/components/ui";
+import {
+  MiniAdCommand,
+  MiniSeverityBadge,
+} from "@/features/operator/OperatorAds";
+import { operatorProblemMessage, useOperatorAds } from "@/lib/operatorApi";
 
 export const Route = createFileRoute("/ads/$fbAdId")({
-  component: AdDetailPage,
+  component: AdDetailRoute,
 });
 
-function AdDetailPage() {
+function AdDetailRoute() {
   const { fbAdId } = Route.useParams();
+  return <MiniAdDetail fbAdId={fbAdId} />;
+}
 
-  const { data, isLoading, isError, error, refetch } = useTmaAd(fbAdId);
-  const disable = useTmaDisable();
-  const claim = useTmaClaim();
+export function MiniAdDetail({ fbAdId }: { fbAdId: string }) {
+  const realtimeStatus = useOperatorRealtimeStatus();
+  const ads = useOperatorAds({ search: fbAdId, page: 1, page_size: 10 });
+  const displayPayload = ads.data
+    ? adsForRealtimeState(
+        ads.data,
+        realtimeStatus === "connected" && !ads.isError,
+      )
+    : null;
+  const ad =
+    displayPayload?.rows.find((candidate) => candidate.fb_ad_id === fbAdId) ??
+    null;
 
-  const busy = disable.isPending || claim.isPending;
-
-  /** Отключить через API: confirm → мутация. */
-  async function handleDisable() {
-    haptic.impact("heavy");
-    const ok = await tgConfirm("Отключить объявление через API?");
-    if (!ok) return;
-    try {
-      await disable.mutateAsync({ fbAdId });
-      await tgAlert("Задача отключения поставлена");
-    } catch (e) {
-      await tgAlert((e as Error).message ?? "Ошибка");
-    }
-  }
-
-  /** Claim — снять алерт вручную. */
-  async function handleClaim() {
-    haptic.selection();
-    try {
-      await claim.mutateAsync({ fbAdId });
-      await tgAlert("Алерт снят");
-    } catch (e) {
-      await tgAlert((e as Error).message ?? "Ошибка");
-    }
-  }
-
-  /** Открыть в Ads Manager. */
-  function handleOpenAdsManager() {
-    if (!data?.account_id) return;
-    haptic.selection();
-    openLink(
-      `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${data.account_id}&selected_ad_ids=${fbAdId}`,
-    );
-  }
-
-  // ─── Состояния ────────────────────────────────────────────────────────────
-
-  if (isLoading) {
+  if (ads.isPending && !ads.data) {
     return (
-      <div className="flex flex-col gap-4 p-4">
-        {/* шапка */}
-        <div className="space-y-2">
-          <Skeleton className="h-3 w-20" />
-          <Skeleton className="h-5 w-full" />
-          <Skeleton className="h-5 w-3/4" />
-          <div className="flex gap-2">
-            <Skeleton className="h-5 w-16" />
-            <Skeleton className="h-5 w-12" />
-          </div>
-        </div>
-        {/* метрики */}
-        <Skeleton className="h-28 w-full" />
-        {/* таймлайн */}
-        <Skeleton className="h-20 w-full" />
-        {/* кнопки */}
-        <div className="space-y-2">
-          <Skeleton className="h-11 w-full" />
-          <Skeleton className="h-11 w-full" />
-        </div>
+      <div
+        role="status"
+        aria-label="Загрузка объявления"
+        className="grid gap-3 p-4"
+      >
+        <Skeleton className="h-36 w-full" />
+        <Skeleton className="h-52 w-full" />
       </div>
     );
   }
-
-  if (isError || !data) {
+  if (ads.isError && !ads.data) {
     return (
       <div className="p-4">
         <ErrorState
-          message={(error as Error | null)?.message ?? "Не удалось загрузить объявление"}
-          onRetry={() => void refetch()}
+          message={operatorProblemMessage(ads.error)}
+          onRetry={() => void ads.refetch()}
         />
       </div>
     );
   }
-
-  const {
-    ad_name,
-    campaign_name,
-    adset_name,
-    offer_code,
-    state,
-    can_open_in_ads_manager,
-    recent_alerts = [],
-  } = data;
-
-  const metrics: TmaAdMetrics = (data.metrics ?? {}) as TmaAdMetrics;
-  const normalized = normalizeAlertState(state);
-
-  // Превью креатива: image приоритетнее thumb (крупнее). Нет ни того, ни другого → секции нет.
-  const creativeSrc = data.creative_image_url || data.creative_thumb_url || null;
-
-  // Инцидент активен → показываем Claim
-  const hasIncident = ["warning_sent", "stop_sent", "claimed"].includes(normalized);
-
-  // Сработавшие правила: TmaRecentAlert не содержит rule_codes — callout не рендерится
-  const alertRuleCodes: string[] = [];
-  // Собираем коды правил из recent_alerts (у TmaRecentAlert нет rule_codes — только reason_title)
-  // Коды будут пустые, если backend не возвращает — callout рендерится только если есть коды
-
-  // Ячейки метрик
-  const cplValue = metrics.cost_per_lead != null ? parseFloat(String(metrics.cost_per_lead)) : null;
-  const ctrValue = metrics.ctr != null ? parseFloat(String(metrics.ctr)) : null;
-
-  const metricCells: MetricCell[] = [
-    {
-      label: "Spend",
-      value: formatSpend(metrics.spend),
-    },
-    {
-      label: "CPL",
-      value: cplValue != null ? formatSpend(cplValue) : "—",
-    },
-    {
-      label: "CTR",
-      value: ctrValue != null ? formatPercent(ctrValue) : "—",
-    },
-    {
-      label: "Leads",
-      value: metrics.leads != null ? formatInt(metrics.leads) : "—",
-    },
-    {
-      label: "Regs",
-      value: metrics.registrations != null ? formatInt(metrics.registrations) : "—",
-    },
-    {
-      label: "Deposits",
-      value: metrics.deposits != null ? formatInt(metrics.deposits) : "—",
-    },
-  ];
+  if (!ad && displayPayload?.state === "empty") {
+    return (
+      <div className="p-4">
+        <EmptyState
+          title="Объявление не найдено"
+          description="Ссылка устарела или строка отсутствует в актуальном каталоге."
+        />
+      </div>
+    );
+  }
+  if (!ad) {
+    return (
+      <div className="p-4">
+        <EmptyState
+          title="Карточка не подтверждена"
+          description="Дождитесь сверки live-снимка. Отсутствие строки пока не подтверждает, что объявления нет."
+        />
+      </div>
+    );
+  }
+  const scope = displayPayload?.scope;
+  const currency = confirmedOperatorCurrency(scope);
+  const timestampTimezone =
+    scope?.cabinet_timezone_state === "single"
+      ? scope.cabinet_timezone
+      : scope?.display_timezone;
+  const timezoneLabel = scope
+    ? timezoneEvidenceLabel(
+        scope.cabinet_timezone,
+        scope.cabinet_timezone_state,
+      )
+    : timezoneEvidenceLabel(null, "unknown");
+  const timezoneContext =
+    scope?.cabinet_timezone_state === "single"
+      ? timezoneLabel
+      : `${timezoneLabel}${scope?.display_timezone ? ` · отображение ${scope.display_timezone}` : ""}`;
 
   return (
-    <div className="flex flex-col pb-8">
-      {/* ── Шапка ─────────────────────────────────────────────────────────── */}
-      <header
-        className="px-4 pt-4 pb-3 border-b border-[var(--hairline)]"
-        style={{ background: "var(--color-bg-0)" }}
-      >
-        {/* Eyebrow «ОБЪЯВЛЕНИЕ» + контекст кампании */}
-        <Eyebrow className="mb-2.5">
-          ОБЪЯВЛЕНИЕ
-          {campaign_name ? (
-            <>
-              <span className="text-bg-7">·</span>
-              <span className="text-bg-8 normal-case tracking-normal font-normal truncate max-w-[180px]">
-                {campaign_name}
-              </span>
-            </>
-          ) : null}
-        </Eyebrow>
-
-        {/* Имя объявления */}
-        <h1
-          className="font-display text-bg-11 mb-2.5 leading-tight"
-          style={{ fontSize: 16, fontWeight: 500, letterSpacing: "-0.01em" }}
-        >
-          {ad_name ?? fbAdId}
-        </h1>
-
-        {/* FSM-бейдж + код оффера + кабинет (мульти-кабинет) */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <AlertStateBadge state={state} withDot />
-          {offer_code && (
-            <Pill variant="accent">{offer_code}</Pill>
-          )}
-          {data.account_id && (
-            <span
-              className="font-display tabular-nums text-bg-9 border border-[var(--hairline)] rounded-[var(--radius-1)] px-1.5"
-              style={{ fontSize: 10, lineHeight: "18px" }}
-              title={`Кабинет ${data.account_id}`}
-            >
-              act {data.account_id}
-            </span>
-          )}
-          {/* fb_ad_id как мелкая метка */}
-          <span
-            className="font-display tabular-nums text-bg-8 ml-auto"
-            style={{ fontSize: 10 }}
-          >
-            {fbAdId}
-          </span>
+    <article className="pb-6">
+      <header className="border-b border-[var(--color-hairline)] bg-bg-0 px-4 pb-4 pt-3">
+        <div className="font-display text-[12px] uppercase tracking-[.08em] text-bg-8">
+          Объявление
         </div>
-
-        {/* Adset контекст */}
-        {adset_name && (
-          <p
-            className="font-display text-bg-8 mt-1.5 truncate"
-            style={{ fontSize: 10 }}
-          >
-            {adset_name}
-          </p>
-        )}
-
+        <h1 className="mt-3 break-words font-display text-[26px] font-medium leading-tight text-bg-11">
+          {ad.name}
+        </h1>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <MiniSeverityBadge
+            severity={severityForDataState(ad.severity, ad.data_state)}
+          />
+          <DataStateBadge state={ad.data_state} compact />
+        </div>
+        <p className="mt-3 break-all font-display text-[12px] text-bg-8">
+          Meta ID {ad.fb_ad_id}
+        </p>
       </header>
 
-      <div className="flex flex-col gap-5 p-4">
-        {/* ── Danger-callout с правилами (если есть коды) ─────────────────── */}
-        {alertRuleCodes.length > 0 && (
-          <div
-            style={{
-              background: "var(--color-danger-bg)",
-              borderLeft: "2px solid var(--color-danger)",
-              border: "1px solid color-mix(in srgb, var(--color-danger) 30%, transparent)",
-              borderLeftWidth: 2,
-              borderRadius: "var(--radius-2)",
-              padding: "10px 12px",
-              display: "flex",
-              gap: 6,
-              flexWrap: "wrap" as const,
-            }}
+      <div className="grid gap-4 px-4 pt-4">
+        {ad.data_state !== "ready" ? (
+          <DataStateNotice state={ad.data_state} compact />
+        ) : null}
+
+        <section
+          className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-4"
+          aria-labelledby="mini-ad-metrics"
+        >
+          <h2
+            id="mini-ad-metrics"
+            className="m-0 font-display text-[18px] text-bg-11"
           >
-            <RulePills codes={alertRuleCodes} />
-          </div>
-        )}
-
-        {/* ── Креатив (превью, если бэк отдал URL) ───────────────────────── */}
-        {creativeSrc && (
-          <section>
-            <Eyebrow className="mb-2.5">КРЕАТИВ</Eyebrow>
-            <a
-              href={creativeSrc}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={() => haptic.selection()}
-              className="block rounded-[var(--radius-3)] overflow-hidden border border-[var(--hairline)]"
-              style={{ background: "var(--color-bg-1)" }}
-              aria-label="Открыть креатив в полном размере"
-            >
-              <img
-                src={creativeSrc}
-                alt="Превью креатива"
-                loading="lazy"
-                className="w-full max-h-[320px] object-contain"
-              />
-            </a>
-          </section>
-        )}
-
-        {/* ── Метрики ────────────────────────────────────────────────────── */}
-        <section>
-          <Eyebrow className="mb-2.5">МЕТРИКИ</Eyebrow>
-          {metricCells.length > 0 ? (
-            <MetricsGrid cells={metricCells} />
-          ) : (
-            <EmptyState title="Нет данных" description="Метрики появятся после первого скана" />
-          )}
+            Экономика и воронка
+          </h2>
+          <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-5">
+            <Metric
+              label="Расход"
+              value={formatSpend(ad.metrics.spend, currency)}
+            />
+            <Metric
+              label="Показы"
+              value={formatOperatorCount(ad.metrics.impressions)}
+            />
+            <Metric
+              label="Клики"
+              value={formatOperatorCount(ad.metrics.clicks)}
+            />
+            <Metric
+              label="Регистрации"
+              value={formatOperatorCount(ad.metrics.registrations)}
+            />
+            <Metric label="FTD" value={formatOperatorCount(ad.metrics.ftd)} />
+            <Metric
+              label="Депозиты"
+              value={formatOperatorCount(ad.metrics.confirmed_deposits)}
+            />
+            <Metric label="CPC" value={formatSpend(ad.metrics.cpc, currency)} />
+            <Metric
+              label="Цена рег."
+              value={formatSpend(ad.metrics.cost_per_registration, currency)}
+            />
+          </dl>
         </section>
 
-        {/* ── Лента алертов ──────────────────────────────────────────────── */}
-        {recent_alerts.length > 0 && (
-          <section>
-            <Eyebrow className="mb-2.5">ИСТОРИЯ АЛЕРТОВ</Eyebrow>
-            <div
-              className="border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden"
-              style={{ background: "var(--color-bg-1)" }}
-            >
-              <div className="px-3 py-0.5">
-                <AlertTimeline alerts={recent_alerts} />
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* ── Действия ──────────────────────────────────────────────────── */}
-        <section className="flex flex-col gap-2.5">
-          <Eyebrow className="mb-0.5">ДЕЙСТВИЯ</Eyebrow>
-
-          {/* Claim — только при активном инциденте */}
-          {hasIncident && (
-            <Button
-              variant="secondary"
-              size="md"
-              fullWidth
-              loading={claim.isPending}
-              disabled={busy}
-              onClick={() => void handleClaim()}
-            >
-              Снять алерт
-            </Button>
-          )}
-
-          {/* Disable — опасное действие */}
-          <Button
-            variant="danger"
-            size="md"
-            fullWidth
-            loading={disable.isPending}
-            disabled={busy}
-            onClick={() => void handleDisable()}
+        <section
+          className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-4"
+          aria-labelledby="mini-ad-context"
+        >
+          <h2
+            id="mini-ad-context"
+            className="m-0 font-display text-[18px] text-bg-11"
           >
-            Отключить объявление
-          </Button>
-
-          {/* Открыть в Ads Manager */}
-          {can_open_in_ads_manager && (
-            <Button
-              variant="ghost"
-              size="md"
-              fullWidth
-              onClick={handleOpenAdsManager}
-            >
-              Открыть в Ads Manager ↗
-            </Button>
-          )}
+            Контекст
+          </h2>
+          <dl className="mt-4 grid gap-3">
+            <Field
+              label="Доставка"
+              value={ad.delivery_status ?? "Не подтверждено"}
+            />
+            <Field label="Кампания" value={ad.campaign_name} />
+            <Field label="Адсет" value={ad.adset_name} />
+            <Field
+              label="Данные на"
+              value={
+                timestampTimezone
+                  ? formatZonedDateTime(ad.as_of, timestampTimezone)
+                  : "—"
+              }
+            />
+            <Field label="Часовой пояс" value={timezoneContext} />
+          </dl>
         </section>
 
-        {/* ── Пустой стейт если нет алертов ─────────────────────────────── */}
-        {recent_alerts.length === 0 && normalized === "normal" && (
-          <EmptyState
-            title="Нет активных алертов"
-            description="Объявление в норме"
-          />
-        )}
+        <div className="sticky bottom-[calc(12px+var(--tg-content-safe-bottom,0px))] rounded-[var(--radius-3)] border border-[var(--color-hairline-strong)] bg-bg-0/95 p-3 backdrop-blur">
+          <MiniAdCommand ad={ad} full />
+        </div>
       </div>
+    </article>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-[12px] text-bg-8">{label}</dt>
+      <dd className="mt-1 font-display text-[18px] tabular-nums text-bg-11">
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="border-b border-[var(--color-hairline)] pb-3 last:border-0">
+      <dt className="text-[12px] text-bg-8">{label}</dt>
+      <dd className="mt-1 break-words text-[14px] text-bg-11">{value}</dd>
     </div>
   );
 }

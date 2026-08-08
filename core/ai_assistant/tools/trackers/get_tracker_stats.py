@@ -15,11 +15,18 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, ClassVar
 
 from core.adset_pro.credentials import create_adsetpro_client
 from core.adset_pro.errors import AdsetProError
 from core.ai_assistant.tools.base import RiskLevel, ToolContext, ToolError
+from core.money import (
+    UnsupportedCurrencyExponentError,
+    currency_exponent,
+    require_exact_currency_amount,
+    validated_currency_code,
+)
 
 # Метрики, которые запрашиваем всегда (дефолт query_stats отдаёт только clicks).
 _METRICS: tuple[str, ...] = (
@@ -49,18 +56,98 @@ _ALLOWED_GROUPS: frozenset[str] = frozenset(
 _MAX_WINDOW_DAYS = 365
 
 
-def _num(value: Any) -> float:
-    """Безопасно в float. None/мусор → 0."""
-    if value is None:
-        return 0.0
+def _decimal(value: Any, *, non_negative: bool = False) -> Decimal | None:
+    """Parse a finite decimal without inventing a confirmed zero."""
+
+    if value is None or isinstance(value, bool):
+        return None
     try:
-        return float(value)
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not parsed.is_finite() or (non_negative and parsed < 0):
+        return None
+    return parsed
+
+
+def _count(value: Any) -> int | None:
+    parsed = _decimal(value, non_negative=True)
+    if parsed is None or parsed != parsed.to_integral_value():
+        return None
+    return int(parsed)
+
+
+def _format_count(label: str, value: Any) -> str:
+    parsed = _count(value)
+    return f"{label}: {parsed}" if parsed is not None else f"{label}: —"
+
+
+def _row_currency(row: dict[str, Any]) -> tuple[str, int] | None:
+    code = validated_currency_code(row.get("currency") or row.get("event_currency"))
+    if code is None:
+        return None
+    try:
+        return code, currency_exponent(code)
+    except UnsupportedCurrencyExponentError:
+        return None
+
+
+def _money(value: Any, *, currency: tuple[str, int] | None) -> str:
+    """Render only exact money carrying a reviewed currency/exponent."""
+
+    if currency is None:
+        return "— (валюта не подтверждена)"
+    code, exponent = currency
+    try:
+        amount = require_exact_currency_amount(
+            value,
+            currency=code,
+            exponent=exponent,
+            field="tracker money",
+        )
     except (TypeError, ValueError):
-        return 0.0
+        return f"— ({code}: некорректная сумма)"
+    return f"{amount:.{exponent}f} {code}"
 
 
-def _money(value: Any) -> str:
-    return f"${_num(value):.2f}"
+def _sum_counts(rows: list[dict[str, Any]], field: str) -> int | None:
+    values = [_count(row.get(field)) for row in rows]
+    if any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
+
+
+def _common_currency(rows: list[dict[str, Any]]) -> tuple[str, int] | None:
+    currencies = [_row_currency(row) for row in rows]
+    if not currencies or any(currency is None for currency in currencies):
+        return None
+    unique = set(currencies)
+    return next(iter(unique)) if len(unique) == 1 else None
+
+
+def _sum_money(
+    rows: list[dict[str, Any]],
+    field: str,
+    *,
+    currency: tuple[str, int] | None,
+) -> str:
+    if currency is None:
+        return "— (mixed/unknown currency)"
+    code, exponent = currency
+    amounts: list[Decimal] = []
+    for row in rows:
+        try:
+            amounts.append(
+                require_exact_currency_amount(
+                    row.get(field),
+                    currency=code,
+                    exponent=exponent,
+                    field=f"tracker {field}",
+                )
+            )
+        except (TypeError, ValueError):
+            return f"— ({code}: неполные данные)"
+    return f"{sum(amounts, start=Decimal(0)):.{exponent}f} {code}"
 
 
 class GetTrackerStatsTool:
@@ -124,9 +211,12 @@ class GetTrackerStatsTool:
             "from": since.isoformat(),
             "to": until.isoformat(),
             "metrics": list(_METRICS),
+            # Monetary aggregates are meaningless without their provider-owned
+            # currency identity.  Force it into every returned bucket.
+            "groups": ["event_currency"],
         }
         if group_by:
-            mcp_args["groups"] = [group_by]
+            mcp_args["groups"].insert(0, group_by)
 
         client = await create_adsetpro_client(engine)
         try:
@@ -167,55 +257,89 @@ class GetTrackerStatsTool:
         group_by: str | None,
         limit: int,
     ) -> str:
+        valid = [row for row in rows if isinstance(row, dict)]
+        if not valid:
+            return f"AdSet.pro: нет валидных данных за {since}…{until}."
+
         if not group_by:
-            head = rows[0] if isinstance(rows[0], dict) else {}
+            currency = _common_currency(valid)
+            clicks = _sum_counts(valid, "clicks")
+            regs = _sum_counts(valid, "registrations")
+            ftds = _sum_counts(valid, "ftds")
+            parts = [
+                f"Клики: {clicks}" if clicks is not None else "Клики: —",
+                f"Реги: {regs}" if regs is not None else "Реги: —",
+                f"Provider FTD: {ftds}" if ftds is not None else "Provider FTD: —",
+                f"Доход: {_sum_money(valid, 'revenue', currency=currency)}",
+                f"Расход: {_sum_money(valid, 'cost', currency=currency)}",
+                f"Профит: {_sum_money(valid, 'profit', currency=currency)}",
+            ]
             return (
-                f"AdSet.pro {since}…{until} · итого\n{self._metrics_line(head)}\n"
+                f"AdSet.pro {since}…{until} · итого\n{' · '.join(parts)}\n"
                 "Примечание: provider FTD ≠ локально подтверждённый депозит STOP-контура."
             )
 
-        valid = [r for r in rows if isinstance(r, dict)]
-        valid.sort(key=lambda r: (_num(r.get("ftds")), _num(r.get("revenue"))), reverse=True)
+        valid.sort(
+            key=lambda row: (
+                _count(row.get("ftds")) is not None,
+                _count(row.get("ftds")) or 0,
+                _decimal(row.get("revenue"), non_negative=True) is not None,
+                _decimal(row.get("revenue"), non_negative=True) or Decimal(0),
+            ),
+            reverse=True,
+        )
 
         lines = [f"AdSet.pro {since}…{until} · разрез: {group_by}"]
         for r in valid[:limit]:
             label = str(r.get(group_by) or "—").strip() or "—"
-            lines.append(f"• {label[:48]}: {self._metrics_line(r, compact=True)}")
+            currency = _row_currency(r)
+            currency_label = f" [{currency[0]}]" if currency is not None else ""
+            lines.append(f"• {label[:48]}{currency_label}: {self._metrics_line(r, compact=True)}")
         if len(valid) > limit:
             lines.append(f"… ещё {len(valid) - limit} строк (увеличь limit)")
 
-        tot_clicks = sum(_num(r.get("clicks")) for r in valid)
-        tot_regs = sum(_num(r.get("registrations")) for r in valid)
-        tot_ftds = sum(_num(r.get("ftds")) for r in valid)
-        tot_rev = sum(_num(r.get("revenue")) for r in valid)
-        tot_profit = sum(_num(r.get("profit")) for r in valid)
+        total_currency = _common_currency(valid)
+        tot_clicks = _sum_counts(valid, "clicks")
+        tot_regs = _sum_counts(valid, "registrations")
+        tot_ftds = _sum_counts(valid, "ftds")
         lines.append(
-            f"ИТОГО ({len(valid)}): клики {int(tot_clicks)}, реги {int(tot_regs)}, "
-            f"provider FTD {int(tot_ftds)}, доход {_money(tot_rev)}, профит {_money(tot_profit)}"
+            f"ИТОГО ({len(valid)}): "
+            f"клики {tot_clicks if tot_clicks is not None else '—'}, "
+            f"реги {tot_regs if tot_regs is not None else '—'}, "
+            f"provider FTD {tot_ftds if tot_ftds is not None else '—'}, "
+            f"доход {_sum_money(valid, 'revenue', currency=total_currency)}, "
+            f"профит {_sum_money(valid, 'profit', currency=total_currency)}"
         )
         lines.append("Примечание: provider FTD ≠ локально подтверждённый депозит STOP-контура.")
         return "\n".join(lines)
 
     @staticmethod
     def _metrics_line(r: dict[str, Any], *, compact: bool = False) -> str:
-        clicks = int(_num(r.get("clicks")))
-        regs = int(_num(r.get("registrations")))
-        ftds = int(_num(r.get("ftds")))
+        currency = _row_currency(r)
+        clicks = _count(r.get("clicks"))
+        regs = _count(r.get("registrations"))
+        ftds = _count(r.get("ftds"))
         rev = r.get("revenue")
         if compact:
-            return f"клики {clicks}, реги {regs}, provider FTD {ftds}, доход {_money(rev)}"
+            return (
+                f"клики {clicks if clicks is not None else '—'}, "
+                f"реги {regs if regs is not None else '—'}, "
+                f"provider FTD {ftds if ftds is not None else '—'}, "
+                f"доход {_money(rev, currency=currency)}"
+            )
 
         parts = [
-            f"Клики: {clicks}",
-            f"Реги: {regs}",
-            f"Provider FTD: {ftds}",
-            f"Доход: {_money(rev)}",
-            f"Расход: {_money(r.get('cost'))}",
-            f"Профит: {_money(r.get('profit'))}",
+            _format_count("Клики", r.get("clicks")),
+            _format_count("Реги", r.get("registrations")),
+            _format_count("Provider FTD", r.get("ftds")),
+            f"Доход: {_money(rev, currency=currency)}",
+            f"Расход: {_money(r.get('cost'), currency=currency)}",
+            f"Профит: {_money(r.get('profit'), currency=currency)}",
         ]
         roi, epc = r.get("roi"), r.get("epc")
-        if roi is not None:
-            parts.append(f"ROI: {roi}")
+        parsed_roi = _decimal(roi)
+        if parsed_roi is not None:
+            parts.append(f"ROI: {parsed_roi}")
         if epc is not None:
-            parts.append(f"EPC: {epc}")
+            parts.append(f"EPC: {_money(epc, currency=currency)}")
         return " · ".join(parts)

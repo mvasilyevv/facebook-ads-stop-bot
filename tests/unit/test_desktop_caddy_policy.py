@@ -13,7 +13,12 @@ def test_public_desktop_is_cookie_authenticated_kasm_only() -> None:
     assert "import desktop_session_auth" in desktop
     assert "reverse_proxy 127.0.0.1:8444" in desktop
     assert 'header_up Authorization "Basic {$DESKTOP_KASM_SERVICE_AUTH_B64}"' in desktop
-    assert "stream_timeout 30m" in desktop
+    public_desktop = desktop.split("desktop.adpulse.su {", maxsplit=1)[1].split(
+        "http://desktop.localhost:8099", maxsplit=1
+    )[0]
+    assert "stream_timeout 1m" in public_desktop
+    assert "stream_timeout 30m" not in public_desktop
+    assert "owner revoke is enforced on reconnect within 60s" in public_desktop
     assert "uri /desktop-auth/verify" in app
     assert "header_up -Remote-User" in app
     assert "header_up -Authorization" in app
@@ -33,7 +38,7 @@ def test_only_redeem_logout_and_internal_verify_are_public_on_desktop_host() -> 
     )[0]
 
     assert "log_skip" in redeem
-    assert "reverse_proxy 127.0.0.1:8100" in redeem
+    assert "reverse_proxy 127.0.0.1:18100" in redeem
     assert "header_up -Authorization" in redeem
     assert "respond 404" in verify
     assert "handle /desktop/logout" in config
@@ -50,7 +55,7 @@ def test_both_readiness_routes_require_panel_session() -> None:
     config = APP_SITE.read_text(encoding="utf-8")
     for route in ("/desktop-readyz", "/desktop-kasm-readyz"):
         readiness = config.split(f"handle {route}", maxsplit=1)[1].split("handle /", maxsplit=1)[0]
-        assert "reverse_proxy 127.0.0.1:8100" in readiness
+        assert "reverse_proxy 127.0.0.1:18100" in readiness
         assert "import panel_session_auth" in readiness
 
 
@@ -58,7 +63,8 @@ def test_installer_atomically_installs_and_restores_desktop_site() -> None:
     installer = (ROOT / "scripts" / "install-server-units.sh").read_text(encoding="utf-8")
 
     assert 'DESKTOP_CADDY_SITE="/etc/caddy/sites-enabled/desktop.adpulse.su.caddy"' in installer
-    assert 'install -m 0644 "$PROJECT_DIR/deploy/caddy/desktop.adpulse.su.caddy"' in installer
+    assert 'cp -- "$PROJECT_DIR/deploy/caddy/desktop.adpulse.su.caddy"' in installer
+    assert 'install -m 0644 "$TEMP_DIR/desktop-site.new.caddy"' in installer
     assert 'cp -- "$TEMP_DIR/desktop-site.caddy" "$DESKTOP_CADDY_SITE"' in installer
     assert "caddy validate --config" in installer
     assert 'DESKTOP_ACCESS_LOG="$CADDY_LOG_DIR/fb-agent-desktop-access.log"' in installer

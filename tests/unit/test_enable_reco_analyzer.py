@@ -1,28 +1,40 @@
 # -*- coding: utf-8 -*-
-"""Unit-тесты pure-функций core/enable_reco/analyzer.py + alert.py."""
+"""Unit-тесты pure-функций core/enable_reco/analyzer.py."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from core.enable_reco.alert import (
-    ENABLE_RECO_CALLBACK_PREFIX,
-    EnableRecoRenderInput,
-    build_enable_reco_callback,
-    render_enable_reco_alert,
-)
 from core.enable_reco.analyzer import (
     AnalyzerThresholds,
     MetricSnapshot,
     OfferThresholds,
-    RecommendationDecision,
-    should_recommend,
 )
+from core.enable_reco.analyzer import (
+    should_recommend as _should_recommend,
+)
+
+
+def should_recommend(**kwargs):
+    return _should_recommend(
+        account_currency="USD",
+        currency_exponent=2,
+        **kwargs,
+    )
 
 
 def _now() -> datetime:
     return datetime(2026, 5, 27, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _confirmed_offer(cpa: Decimal) -> OfferThresholds:
+    return OfferThresholds(
+        cpa_threshold=cpa,
+        currency="USD",
+        stop_percent_of_rule=Decimal("80"),
+        warning_percent_of_stop=Decimal("80"),
+    )
 
 
 def _metric(
@@ -59,7 +71,7 @@ def test_skips_non_recommendable_state() -> None:
         snoozed_until=None,
         now=_now(),
         metrics=[_metric()],
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
     )
     assert decision.recommend is False
     assert "state=normal" in (decision.skip_reason or "")
@@ -72,7 +84,7 @@ def test_skips_when_snoozed() -> None:
         snoozed_until=_now() + timedelta(hours=1),
         now=_now(),
         metrics=[_metric()],
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
     )
     assert decision.recommend is False
     assert decision.skip_reason == "snoozed"
@@ -85,7 +97,7 @@ def test_skips_when_no_metrics() -> None:
         snoozed_until=None,
         now=_now(),
         metrics=[],
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
     )
     assert decision.recommend is False
     assert "мало метрик" in (decision.skip_reason or "")
@@ -108,7 +120,7 @@ def test_recommends_ok_when_canonical_rules_are_clear() -> None:
                 cost_per_registration="1.0",
             )
         ],
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
     )
     assert decision.recommend is True
     assert decision.level == "ok"
@@ -132,7 +144,7 @@ def test_recommends_warning_when_canonical_rule_is_warning() -> None:
                 cost_per_registration="1.40",
             )
         ],
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
     )
     assert decision.recommend is True
     assert decision.level == "warning"
@@ -146,7 +158,7 @@ def test_no_recommendation_when_metrics_still_bad() -> None:
         snoozed_until=None,
         now=_now(),
         metrics=[_metric(spend="50.0", cost_per_lead="40.0", deposits=0)],
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
     )
     assert decision.recommend is False
     assert "Стоп" in (decision.skip_reason or "") or "границ" in (decision.skip_reason or "")
@@ -169,7 +181,7 @@ def test_disabled_state_is_recommendable() -> None:
                 cost_per_registration="1.0",
             )
         ],
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
     )
     assert decision.recommend is True
 
@@ -188,7 +200,7 @@ def test_deposits_without_registration_are_not_signal() -> None:
                 deposits=3,
             )
         ],
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
     )
     assert decision.recommend is False
 
@@ -207,7 +219,7 @@ def test_registration_and_deposit_do_not_override_canonical_stop() -> None:
                 deposits=3,
             )
         ],
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
     )
     assert decision.recommend is False
 
@@ -249,7 +261,7 @@ def test_custom_threshold_min_metrics() -> None:
         snoozed_until=None,
         now=_now(),
         metrics=[_metric(spend="1.0", cost_per_lead="5.0")],
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
         thresholds=AnalyzerThresholds(min_metrics_required=3),
     )
     assert decision.recommend is False
@@ -284,7 +296,7 @@ def test_snapshot_summary_keys() -> None:
                 cost_per_registration="0.5",
             ),
         ],
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
     )
     assert decision.recommend is True
     snap = decision.snapshot
@@ -317,83 +329,9 @@ def test_cumulative_spend_uses_latest_not_sum() -> None:
         snoozed_until=None,
         now=_now(),
         metrics=metrics,
-        offer=OfferThresholds(cpa_threshold=Decimal("10")),
+        offer=_confirmed_offer(Decimal("10")),
     )
     assert decision.recommend is True
     assert decision.level == "ok"
     # snapshot тоже отражает последний снимок, не сумму
     assert decision.snapshot["total_spend"] == "3.0"
-
-
-# ====================== alert renderer ======================
-
-
-# Сценарий: callback_data строится из префикса + fb_ad_id
-def test_build_enable_reco_callback() -> None:
-    rec_id = "00000000-0000-0000-0000-000023000999"
-    assert build_enable_reco_callback(rec_id) == f"{ENABLE_RECO_CALLBACK_PREFIX}:{rec_id}"
-
-
-# Сценарий: render возвращает (text, reply_markup) с одной кнопкой и нужным callback_data
-def test_render_includes_inline_button_with_correct_callback() -> None:
-    decision = RecommendationDecision(
-        recommend=True,
-        level="ok",
-        reasons=("spend ок", "cost_per_lead ок"),
-        snapshot={"metrics_count": 3, "total_spend": "1.5", "latest_deposits": 2},
-    )
-    inp = EnableRecoRenderInput(
-        recommendation_id="00000000-0000-0000-0000-000000000555",
-        fb_ad_id="2300555",
-        ad_name="Test Ad",
-        campaign_name="Camp1",
-        adset_name="Adset1",
-        offer_code="CR2",
-        decision=decision,
-    )
-    text, markup = render_enable_reco_alert(inp)
-    assert "Можно включать" in text
-    assert "spend ок" in text
-    assert "id 2300555" in text  # ID объявления в подвале карточки
-    assert markup is not None
-    btn = markup["inline_keyboard"][0][0]
-    assert btn["callback_data"] == "ereco:00000000-0000-0000-0000-000000000555"
-    assert "Включить" in btn["text"]
-
-
-# Сценарий: warning-уровень — другой префикс эмодзи в тексте
-def test_render_warning_level_prefix() -> None:
-    decision = RecommendationDecision(
-        recommend=True, level="warning", reasons=("единственный сигнал",)
-    )
-    inp = EnableRecoRenderInput(
-        recommendation_id="00000000-0000-0000-0000-000000000001",
-        fb_ad_id="x",
-        ad_name="a",
-        campaign_name="c",
-        adset_name="s",
-        offer_code=None,
-        decision=decision,
-    )
-    text, _ = render_enable_reco_alert(inp)
-    assert "Возможно стоит включить" in text
-
-
-# HTML-спецсимволы в названии/кампании экранируются — не ломаем parse_mode=HTML
-def test_render_escapes_html() -> None:
-    decision = RecommendationDecision(
-        recommend=True, level="ok", reasons=("<b>boom</b>",), snapshot={}
-    )
-    inp = EnableRecoRenderInput(
-        recommendation_id="00000000-0000-0000-0000-000000000002",
-        fb_ad_id="1",
-        ad_name="<script>x</script>",
-        campaign_name="Camp<>",
-        adset_name="A&B",
-        offer_code=None,
-        decision=decision,
-    )
-    text, _ = render_enable_reco_alert(inp)
-    assert "<script>" not in text
-    assert "&lt;script&gt;" in text  # ad_name попал в заголовок и экранирован
-    assert "&amp;" in text  # adset 'A&B' в блок-цитате

@@ -1,418 +1,258 @@
-# Runbooks — FB Stop Bot
+# Production runbooks
 
-Сценарии реагирования на инциденты, восстановления и опасных операций.
+Актуальные сценарии для safety-first production contour. Команды ниже не
+выполняют денежные действия и не изменяют данные, если это явно не указано.
+Любой manual pause/activate выполняется через operator UI или `CommandService`,
+а не прямым SQL или вызовом Meta.
 
-Перед действиями убедитесь, что у вас есть доступ к: серверу с проектом
-(SSH), Telegram-каналу для алертов, Vision UI, Postgres и Redis (`docker
-compose exec`). Полная архитектура и список воркеров — в [CLAUDE.md](CLAUDE.md).
+Пути предполагают установку в `/opt/fb-agent/current` и state directory
+`/opt/fb-agent/shared`.
 
-## Содержание
-
-- [Vision-сессия упала](#vision)
-- [Воркер не дышит (health_watchdog алерт)](#worker-dead)
-- [Telegram-бот не отвечает](#tg-down)
-- [Meta API: токен сессии invalidated (190)](#token-invalid)
-- [Disable не срабатывает (toggle gate down)](#toggle-down)
-- [Партиции на следующий месяц не созданы](#partition-stuck)
-- [Очередь забилась (>1000 pending tasks)](#queue-full)
-- [Ротация ENCRYPTION_KEY](#rotate-key)
-- [Восстановление БД из бэкапа](#restore-db)
-- [Полный wipe и пересоздание схемы](#full-wipe)
-- [Postback от AdSet.pro возвращает 401/503](#postback-fail)
-- [Frontend выдаёт CORS-ошибки](#cors)
-
----
-
-<a id="vision"></a>
-## Vision-сессия упала
-
-**Симптомы:**
-- В `.logs/observer.log` — `ScanDataUnavailableError`, `SessionUnavailableError` или `gRPC StatusCode.UNAVAILABLE`.
-- Любой toggle-таск падает в `task_queue.status='retrying'`.
-- Health watchdog шлёт алерт `observer worker stale` (если `observer:runtime` устарел >5 мин).
-
-**Диагностика:**
+## Первичная диагностика
 
 ```bash
-# Vision API alive?
-curl -sf "$VISION_API_URL/api/sessions/$VISION_PROFILE_ID"
-
-# CDP порт виден?
-curl -sf "http://localhost:8100/api/vision/ensure-cdp" -X POST
-
-# gRPC браузер-агент слышит?
-nc -z localhost 50051
-
-# Лог browser-agent
-tail -50 .logs/browser_agent.log
+sudo /opt/fb-agent/current/scripts/platform-compose.sh status
+sudo /opt/fb-agent/current/scripts/platform-compose.sh ready
+sudo /opt/fb-agent/current/scripts/platform-desktop-compose.sh status
+sudo /opt/fb-agent/current/scripts/platform-compose.sh logs api
 ```
 
-**Действия:**
+В operator UI сначала проверить:
 
-1. Открыть Vision UI, проверить что профиль `VISION_PROFILE_ID` запущен и не отключён.
-2. Зайти в Ads Manager вручную через окно профиля — может быть expired session (Facebook требует повторного login). Если так — залогиниться заново и оставить вкладку Ads Manager открытой.
-3. Если CDP порт пропал — вызвать `POST /api/vision/ensure-cdp` (с `X-API-Key` если задан). При `VISION_AUTO_RESTART_ON_MISSING_CDP=true` это закроет окно профиля и переоткроет с CDP.
-4. Если browser-agent в `FATAL`/`BACKOFF` — `supervisorctl -c supervisord.conf restart browser_agent`.
-5. После восстановления Vision — `supervisorctl restart all` (observer переподключится к browser-agent).
+- состояние и `as_of` каждого источника;
+- ranked attention feed;
+- выполняемые, `failed` и `unknown` actions;
+- notification diagnostics;
+- correlation ID инцидента.
 
----
+`partial`, `stale`, `unavailable` и `unknown` — самостоятельные состояния. Их
+нельзя трактовать как исправный источник или подтверждённый ноль.
 
-<a id="worker-dead"></a>
-## Воркер не дышит
+## Browser/Vision недоступен
 
-**Симптомы:**
-- В TG приходит `Воркер <name> не дышит более N минут (heartbeat истёк)` от health_watchdog.
-- В Redis отсутствует `worker:heartbeat:<name>` (TTL 60s истёк).
-
-**Диагностика:**
+Симптомы: source `unavailable`, actor кабинета не обновляет snapshot, gRPC
+deadline/connection error, Meta action завершилась `UNKNOWN`.
 
 ```bash
-# Что говорит supervisord
-supervisorctl -c supervisord.conf status
-
-# Лог воркера
-tail -100 .logs/<worker>.log
-
-# Heartbeat ключи в Redis
-redis-cli -p 6380 keys 'worker:heartbeat:*'
-redis-cli -p 6380 ttl worker:heartbeat:observer
-
-# Стек упавшего процесса
-grep -E 'Traceback|ERROR|CRITICAL' .logs/<worker>.log | tail -20
+sudo /opt/fb-agent/current/scripts/platform-desktop-compose.sh status
+sudo /opt/fb-agent/current/scripts/platform-desktop-compose.sh logs browser-agent
+sudo systemctl status fb-agent-desktop-heal.timer
+sudo journalctl -u fb-agent-desktop-heal.service -n 100 --no-pager
+sudo grep 'operation="desktop_healer"' \
+  /var/lib/node_exporter/textfile_collector/fb-agent-host-operations.prom
 ```
 
-**Действия:**
+Порядок действий:
 
-1. Если воркер в `BACKOFF`/`FATAL` — `supervisorctl restart <worker>`.
-2. Если воркер в `RUNNING`, но heartbeat не пишется — лог скажет почему (вероятно блок на gRPC или Redis). Проверить `nc -z localhost 50051` и `redis-cli -p 6380 ping`.
-3. Если `EXPECTED_WORKERS` в env не совпадает с реально нужным набором — поправить и рестартовать `health_watchdog` (`supervisorctl restart health_watchdog`). Алерт дедуплицируется на 1 час через `health:alerted:<worker>` в Redis.
-4. Если воркер постоянно падает — посмотреть `core/<домен>/` соответствующего воркера, проверить наличие нужных таблиц в БД (`apply_schema.py` мог не пройти).
+1. Проверить фактическую готовность Kasm/Vision desktop, а не только открытый
+   TCP-порт.
+2. Открыть нужный Ads Manager cabinet и убедиться, что Facebook session жива.
+3. Проверить, что actor показывает правильный `ad_account_id`, stage, lease и
+   свежий snapshot.
+4. Если desktop исправен, перезапустить только browser-agent:
 
----
-
-<a id="tg-down"></a>
-## Telegram-бот не отвечает
-
-**Симптомы:**
-- `/start`, `/help`, `/spy` молчат.
-- Алерты от observer/health_watchdog не приходят.
-
-**Диагностика:**
-
-```bash
-# Токен живой?
-TG_TOKEN=$(.venv/bin/python -c "from core.crypto import decrypt_token; from core.telegram.service import load_telegram_config; import asyncio; from core.db import get_engine; ...")
-# проще — через прямой запрос если токен известен:
-curl -sf "https://api.telegram.org/bot<TOKEN>/getMe"
-
-# Логи poller'а
-tail -50 .logs/telegram.log
-
-# Что в telegram_config
-docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot \
-    -c "SELECT chat_id, forum_warning_thread_id, forum_stop_thread_id, web_app_url, updated_at FROM telegram_config;"
-```
-
-**Действия:**
-
-1. Проверить что `telegram_config.bot_token_encrypted` не пустой. Если пустой — записать через UI/API (или прямой INSERT с зашифрованным значением).
-2. Проверить что `ENCRYPTION_KEY` в `.env` тот же, что использовался при сохранении токена (иначе `decrypt_token` упадёт с `InvalidToken`).
-3. Если Telegram API отвечает 401 — токен отозван у BotFather, нужен новый.
-4. `supervisorctl restart telegram_poller`.
-5. Если бот шлёт сообщения, но не получает обновления — проверить, что нет конкурирующего polling (нельзя одновременно polling + webhook).
-
----
-
-<a id="token-invalid"></a>
-## Meta API: токен сессии invalidated (190)
-
-**Симптомы:**
-- В `.logs/meta_api_worker.log` повторяющиеся `TokenInvalidError` (Graph error code 190).
-- Все таски `meta_api_mutation` уходят в `failed` без retry.
-- AI-tools падают с `TokenInvalidError`.
-
-**Действия:**
-
-1. Зайти в Ads Manager через Vision-профиль вручную, проверить что сессия Facebook жива.
-2. Если сессия живая, но Marketing API всё равно отдаёт 190 — токен сессии (LSD/access_token, который Marketing API получает через `page.evaluate(fetch)`) был invalidated на стороне Meta. Перезагрузить страницу Ads Manager во вкладке профиля.
-3. Если не помогло — `supervisorctl restart browser_agent` (полный перезапуск gRPC сервиса вместе с Vision-сессией).
-4. Если повторяется регулярно — возможно, аккаунт под подозрением Meta. Эскалировать вручную.
-
-> Marketing API доступен только из Vision-сессии (`page.evaluate(fetch)`).
-> Полный отрыв в standalone-Marketing-API не пройдёт `Identity Confirmation` —
-> см. `META_INTEGRATION_PLAN.md` § 11 и `CLAUDE.md` "Этап 4 Ad Library — закрыт".
-
----
-
-<a id="toggle-down"></a>
-## Disable не срабатывает
-
-**Симптомы:**
-- В `task_queue` есть записи `task_type='disable'`, `status='retrying'`, `attempts > 3`.
-- В TG приходит сообщение, что disable не сработал.
-
-**Диагностика:**
-
-```bash
-# Что в очереди
-docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot -c "
-  SELECT task_type, status, attempts, last_error, fb_ad_id, created_at, next_attempt_at
-  FROM task_queue
-  WHERE task_type IN ('disable','enable')
-    AND status IN ('retrying','failed')
-  ORDER BY created_at DESC LIMIT 20;
-"
-
-# Что говорит disable_worker
-tail -100 .logs/disable_worker.log | grep -E 'ERROR|toggle_ad|gRPC'
-```
-
-**Действия:**
-
-1. Vision-сессия жива? → см. [Vision-сессия упала](#vision).
-2. Если ошибки про "элемент не найден" / "колонка скрыта" — Ads Manager поменял DOM. Нужно обновить парсер: `services/browser-agent/src/parser.ts` и `ads-columns.ts`. Это код-change, не runbook.
-3. Если задача в `failed` навсегда — отменить вручную:
-   ```sql
-   UPDATE task_queue SET status='cancelled' WHERE id = '<task_id>';
-   ```
-   и при необходимости создать новую через UI / TG inline.
-4. Reconciler автоматически переводит `running` старше 30 мин → `retrying` (см. `apps/reconciler_worker/`). Если этого не происходит — проверьте, что reconciler_worker жив.
-
----
-
-<a id="partition-stuck"></a>
-## Партиции на следующий месяц не созданы
-
-**Симптомы:**
-- INSERT в `ad_metrics`, `alert_events`, `scan_runs`, `meta_api_audit_log`, `meta_api_webhook_event`, `ad_library_snapshot`, `tracker_postback` падают с `no partition of relation ... found for row`.
-- Воркеры падают в начале нового месяца.
-
-**Диагностика:**
-
-```bash
-docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot -c "
-  SELECT parent.relname AS parent, child.relname AS partition
-  FROM pg_inherits
-  JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
-  JOIN pg_class child  ON child.oid  = pg_inherits.inhrelid
-  WHERE parent.relname IN (
-    'ad_metrics','alert_events','scan_runs',
-    'meta_api_audit_log','meta_api_webhook_event',
-    'ad_library_snapshot','tracker_postback'
-  )
-  ORDER BY 1,2;
-"
-```
-
-**Действия:**
-
-1. `cleanup_worker` создаёт партиции на следующий месяц раз в сутки в 04:00 UTC. Если воркер был мёртв — `supervisorctl restart cleanup_worker` и подождать одного прохода (либо запустить `python run_cleanup_worker.py` вручную).
-2. Аварийно создать партицию руками:
-   ```sql
-   CREATE TABLE ad_metrics_2026_06
-     PARTITION OF ad_metrics
-     FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
-   -- повторить для всех 7 партиционированных таблиц
-   ```
-
----
-
-<a id="queue-full"></a>
-## Очередь забилась (>1000 pending tasks)
-
-**Симптомы:**
-- `SELECT count(*) FROM task_queue WHERE status IN ('pending','retrying')` > 1000.
-- Disable срабатывает с задержкой в десятки минут.
-
-**Диагностика:**
-
-```sql
-SELECT task_type, status, count(*), min(created_at), max(created_at)
-FROM task_queue
-WHERE status IN ('pending','retrying','running')
-GROUP BY 1,2
-ORDER BY 3 DESC;
-```
-
-**Действия:**
-
-1. Узкое место — воркер. Если `disable_worker` отстаёт — он работает sequentially (`FOR UPDATE SKIP LOCKED` + один Vision поток). Параллелить нельзя — Vision-сессия одна. Только ускорить отдельные toggle-операции.
-2. Если очередь забита `meta_api_mutation` — `meta_api_worker` обрабатывает по одному и retry'ит при `RateLimited`. Подождать.
-3. Если очередь забита retry'ями — почистить:
-   ```sql
-   -- Отменить таски старше 24h
-   UPDATE task_queue SET status='cancelled'
-   WHERE status='retrying' AND created_at < now() - interval '24 hours';
-   ```
-4. Reconciler уже отменяет `draft` старше 24 часов автоматически (`cancel_stale_drafts`).
-
----
-
-<a id="rotate-key"></a>
-## Ротация ENCRYPTION_KEY
-
-**Когда нужно:** периодически (раз в 6–12 мес) или при подозрении на утечку
-`.env` / secret manager.
-
-**Опасность:** если перешифровать только часть строк или потерять старый
-ключ — расшифровать `vision_config.x_token_encrypted` /
-`telegram_config.bot_token_encrypted` уже не получится. Бэкап обязателен.
-
-**Шаги:**
-
-1. Сделать бэкап:
    ```bash
-   python scripts/backup_secrets.py   # data/secrets_backup_*.json
-   pg_dump … > backup.sql              # на всякий случай полный dump
+   sudo /opt/fb-agent/current/scripts/platform-desktop-compose.sh restart
    ```
-2. Сгенерировать новый ключ:
-   ```bash
-   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-   ```
-3. В `.env` поставить:
-   ```
-   ENCRYPTION_KEY=<новый>
-   ENCRYPTION_KEY_VERIFY=<старый>     # см. Settings в core/config.py
-   ```
-4. Прогнать перешифровку через утилиту `core/crypto.py::rotate_encryption_key` (
-   она использует raw SQL по `telegram_config` и `vision_config`, не зависит
-   от ORM). Готового CLI на момент написания нет — запуск через REPL:
-   ```python
-   import asyncio
-   from core.crypto import rotate_encryption_key
-   asyncio.run(rotate_encryption_key(old_key="<старый>", new_key="<новый>"))
-   ```
-5. Проверить, что Vision/TG продолжают работать:
-   - `curl http://localhost:8100/readyz`
-   - `curl http://localhost:8100/system-readyz`
-   - В TG: `/start` должен ответить
-   - `supervisorctl restart all`
-6. После проверки убрать `ENCRYPTION_KEY_VERIFY` из `.env`.
 
-Если что-то пошло не так — `python scripts/restore_secrets.py <backup>`
-после возврата старого `ENCRYPTION_KEY`.
+5. Не перезапускать весь application color: scan и control pages независимы.
+6. Для action со статусом `UNKNOWN` дождаться reconciliation. Не создавать
+   вторую задачу с другим idempotency key.
 
----
-
-<a id="restore-db"></a>
-## Восстановление БД из бэкапа
-
-**Сценарий:** Postgres-том повреждён / пересоздаётся инстанс / пришла катастрофа.
-
-**Шаги:**
-
-1. Если есть полный `pg_dump`:
-   ```bash
-   docker compose down postgres
-   docker volume rm fb_agent_pgdata
-   docker compose up -d postgres
-   make db-wait
-   docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot < backup.sql
-   ```
-2. Если бэкапа схемы нет, но есть `data/secrets_backup_*.json` от старой
-   установки:
-   ```bash
-   python scripts/apply_schema.py --confirm-drop
-   python scripts/restore_secrets.py <path/to/backup>
-   ```
-   Остальные настройки (offer, observer interval, install cost) задаются
-   заново через UI или прямой INSERT.
-3. После восстановления — `supervisorctl restart all`, проверки из § 4
-   [DEPLOYMENT.md](DEPLOYMENT.md).
-
----
-
-<a id="full-wipe"></a>
-## Полный wipe и пересоздание схемы
-
-**Когда:** разработческий стенд, повреждённая схема, миграция на новую
-структуру.
-
-**Опасность:** `apply_schema.py --confirm-drop` делает
-`DROP SCHEMA public CASCADE` — необратимо удаляет все данные.
+## Worker offline или stale
 
 ```bash
-python scripts/backup_secrets.py          # обязательно
-docker compose ps                          # убедиться что Postgres alive
-python scripts/apply_schema.py --confirm-drop
-python scripts/restore_secrets.py
-supervisorctl -c supervisord.conf restart all
+sudo /opt/fb-agent/current/scripts/platform-compose.sh status
+sudo /opt/fb-agent/current/scripts/platform-compose.sh logs <service>
+curl -fsS https://app.adpulse.su/system-readyz
 ```
 
-`apply_schema.py` создаёт партиции только на текущий + следующий месяц.
-Для следующих месяцев работает `cleanup_worker`.
+Проверить Prometheus alerts `FBWorkerMetricsAbsent` и
+`FBWorkerMetricsTargetDown`: отсутствие серии и недоступность target имеют
+разные причины. Для локального endpoint каждый worker слушает собственный
+metrics port; карта портов — в [../worker_metrics.md](../worker_metrics.md).
 
----
-
-<a id="postback-fail"></a>
-## Postback от AdSet.pro возвращает 401/503
-
-**Симптомы:**
-- AdSet.pro показывает ответ `401/503` для `GET /api/v1/postback/adsetpro`.
-- AdSet.pro в своей админке видит ошибки доставки.
-
-**Действия:**
-
-1. **503 "not configured"** — `ADSETPRO_POSTBACK_SECRET` пуст в `.env`.
-   Задать случайный секрет длиной не менее 32 символов, прописать его query-параметром
-   `token` в GET-шаблоне AdSet.pro и перезапустить API.
-2. **401 "invalid secret"** — секрет в `.env` и в AdSet.pro расходятся.
-   Сверить, обновить, рестартовать.
-3. Использовать публичный HTTPS URL через Caddy. Маршрут postback исключён из access-логов;
-   не добавлять полный URL с token в прикладные логи или тикеты.
-4. Поддерживаются только `registration`, `ftd` и `redeposit` со стабильным transaction ID.
-   Отрицательные и неизвестные статусы отвечают `200 ignored` и не меняют бизнес-данные.
-5. Проверить backlog/unmatched/processing lag в блоке `AdSet.pro · Live`.
-
----
-
-<a id="cors"></a>
-## Frontend выдаёт CORS-ошибки
-
-**Симптомы:**
-- В консоли браузера: `CORS policy: No 'Access-Control-Allow-Origin'`.
-
-**Действия:**
-
-1. Задать `FRONTEND_ORIGIN` в `.env` (например, `http://localhost:5173`).
-2. `supervisorctl restart api`.
-3. Без `FRONTEND_ORIGIN` CORS-middleware не подключается — это
-   намеренно (см. `apps/api/main.py`).
-4. На проде передавайте полный origin с протоколом и портом, без
-   trailing slash.
-
----
-
-## Общие команды диагностики
+Перезапускать весь color не нужно. Если требуется рестарт одного container,
+использовать active-color Compose через поддерживаемый wrapper:
 
 ```bash
-# Всё ли крутится
-supervisorctl -c supervisord.conf status
-
-# Логи отдельных воркеров
-tail -50 .logs/observer.log
-tail -50 .logs/disable_worker.log
-tail -50 .logs/meta_api_worker.log
-./run.sh --logs                              # tail -20 каждого *.log
-
-# Метрики FastAPI (Prometheus)
-curl -s http://localhost:8100/metrics | grep app_requests_total
-
-# Очередь задач
-docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot -c "
-  SELECT task_type, status, count(*) FROM task_queue GROUP BY 1,2 ORDER BY 1,2;
-"
-
-# FSM ad_alert_state
-docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot -c "
-  SELECT alert_state, count(*) FROM ad_alert_state GROUP BY 1;
-"
-
-# Recent alert events
-docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot -c "
-  SELECT created_at, alert_stage, fb_ad_id, rules_triggered
-  FROM alert_events
-  WHERE created_at > now() - interval '1 hour'
-  ORDER BY created_at DESC LIMIT 20;
-"
+sudo /opt/fb-agent/current/scripts/platform-compose.sh compose restart <service>
+sudo /opt/fb-agent/current/scripts/platform-compose.sh ready
 ```
+
+Для `autopause_worker` после рестарта обязательно подтвердить, что существует
+ровно один владелец money lease. Обычный `meta_api` не должен claim-ить
+`lane=money`.
+
+## Telegram updates или delivery не работают
+
+Telegram принимает updates только webhook-путём. Не включать polling и не
+вызывать Bot API вручную из business code.
+
+1. Открыть Settings → Telegram → Diagnostics. Проверить webhook readiness,
+   последний committed update, backlog inbox/replies/deliveries, dead letters и
+   recipient state.
+2. Проверить оба worker:
+
+   ```bash
+   sudo /opt/fb-agent/current/scripts/platform-compose.sh logs telegram_update_worker
+   sudo /opt/fb-agent/current/scripts/platform-compose.sh logs telegram_delivery_worker
+   ```
+
+3. Проверить ingress через Caddy и API logs. `204` допустим только после commit
+   строки `telegram_updates_inbox`.
+4. `401` означает отозванный bot token и должен открыть critical incident.
+   Ввести новый token через защищённые Settings и повторно применить webhook
+   штатным configurator во время release.
+5. `403` отключает конкретного recipient; не включать его обратно без
+   подтверждения владельца.
+6. `429` переносит `scheduled_at` на полный `retry_after`. Не рестартовать worker
+   ради ускорения и не создавать duplicate delivery.
+7. Invalid HTML остаётся dead letter. Исправить renderer/template и явно
+   переиздать snapshot; скрытой text fallback-отправки нет.
+8. Если пользователь удалил редактируемую карточку, ожидается событие
+   `incident_snapshot_reissued`, а не молчаливое новое сообщение.
+
+Для read-only проверки очередей:
+
+```bash
+sudo /opt/fb-agent/current/scripts/platform-compose.sh infra exec -T postgres \
+  psql -U fb_stop_bot -d fb_stop_bot -c "
+    SELECT status, count(*)
+    FROM notification_deliveries
+    GROUP BY status ORDER BY status;
+  "
+```
+
+Не помещать bot token в URL, shell history, ticket, exception или лог.
+
+## Money action зависла или стала UNKNOWN
+
+Сначала найти action в UI по correlation ID. `202` означает только `queued`.
+
+Read-only снимок очереди:
+
+```bash
+sudo /opt/fb-agent/current/scripts/platform-compose.sh infra exec -T postgres \
+  psql -U fb_stop_bot -d fb_stop_bot -c "
+    SELECT id, task_type, lane, status, priority, available_at,
+           deadline_at, lease_owner, lease_token, lease_expires_at,
+           correlation_id
+    FROM task_queue
+    WHERE lane = 'money'
+      AND status IN ('pending', 'retrying', 'running')
+    ORDER BY priority DESC, available_at, created_at, id
+    LIMIT 50;
+  "
+```
+
+Дальше:
+
+- `pending`: проверить `available_at`, deadline и наличие active money lease;
+- `running`: проверить lease expiry, owner identity и browser deadline;
+- `UNKNOWN`: сверить фактический Meta status через reconciliation;
+- stale fencing token: не завершать задачу вручную и не переписывать token;
+- create/duplicate: после неоднозначного ответа сначала искать side effect в
+  Meta, затем принимать ручное решение.
+
+Запрещено переводить task в success прямым SQL. Если нужна отмена, использовать
+поддерживаемую operator action: она записывает причину, CAS и notification event.
+
+## Snapshot stale или отсутствуют данные
+
+1. Проверить `state`, `as_of`, freshness, sources и issues каждой секции.
+2. Сопоставить actor кабинета с последним `cabinet_runtime` snapshot.
+3. Убедиться, что кабинет явно настроен. Пустой scan set должен завершиться
+   fail-closed skip; произвольная открытая вкладка не сканируется.
+4. Проверить раздельно scan-page и control-page. Ошибка scan не должна блокировать
+   pause/activate.
+5. После WS sequence gap клиент должен сделать одно snapshot reconciliation.
+   Частые полные refetch указывают на ошибку sequence/revision contract.
+
+Нельзя заполнять gaps нулями или показывать stale source зелёным.
+
+## PostgreSQL или очередь недоступны
+
+PostgreSQL — обязательный control plane. При его недоступности money actions и
+notification commits должны fail closed. Redis может быть недоступен: система
+продолжает DB polling в degraded режиме.
+
+```bash
+sudo /opt/fb-agent/current/scripts/platform-compose.sh infra ps
+sudo /opt/fb-agent/current/scripts/platform-compose.sh infra logs --tail=200 postgres
+sudo /opt/fb-agent/current/scripts/platform-compose.sh infra logs --tail=200 redis
+```
+
+После рестарта PostgreSQL consumers перечитывают БД; потеря `LISTEN/NOTIFY` не
+теряет committed work. Проверить queue age, expired leases и reconciliation,
+затем `platform-compose.sh ready`.
+
+## Backup и восстановление
+
+Production backup — только pgBackRest с continuous WAL и off-host repository.
+Реплика не является backup.
+
+```bash
+sudo /opt/fb-agent/current/scripts/pgbackrest-admin.sh \
+  --release-env /opt/fb-agent/shared/active-release-images.env \
+  --app-env /opt/fb-agent/shared/active-app.env \
+  --backup-env /opt/fb-agent/shared/pgbackrest.env full
+
+sudo /opt/fb-agent/current/scripts/pgbackrest-restore-drill.sh \
+  --release-env /opt/fb-agent/shared/active-release-images.env \
+  --app-env /opt/fb-agent/shared/active-app.env \
+  --backup-env /opt/fb-agent/shared/pgbackrest.env
+```
+
+Restore drill использует отдельные временные container/network/volume и не
+монтирует production volume. Полное удаление схемы не является способом
+восстановления. Любой реальный restore или PITR требует maintenance window,
+зафиксированного target time и подтверждения владельца.
+
+Состояние systemd-задач хранится независимо от journal:
+
+```bash
+sudo grep -E 'operation="(pgbackrest_full|pgbackrest_diff|restore_drill)"' \
+  /var/lib/node_exporter/textfile_collector/fb-agent-host-operations.prom
+sudo systemctl status fb-agent-pgbackrest-full.timer \
+  fb-agent-pgbackrest-diff.timer fb-agent-restore-drill.timer
+```
+
+`status=-1` означает незавершённый запуск, `0` — последний запуск завершился
+ошибкой, `1` — подтверждённый успех. Нельзя гасить `FBPgBackRestBackupStale`
+или `FBRestoreDrillOverdue` ручной правкой `.prom`: требуется новый успешный
+backup/isolated restore.
+
+## Failed deployment или rollback
+
+Release state и reconciliation являются источником истины; не переключать
+Caddy вручную поверх незавершённого journal.
+
+```bash
+sudo systemctl status fb-agent-release-reconcile.service
+sudo journalctl -u fb-agent-release-reconcile.service -n 200 --no-pager
+sudo /opt/fb-agent/current/scripts/platform-compose.sh status
+sudo grep -E 'operation="release_(boot_reconcile|reconcile|rollback)"' \
+  /var/lib/node_exporter/textfile_collector/fb-agent-host-operations.prom
+```
+
+Release script сам возвращает traffic и singleton leases к последнему
+зафиксированному color в пределах общего 180-секундного deadline. PostgreSQL
+никогда не downgrade-ится. Если reconciliation помечен critical, остановить
+повторные release-запуски и сохранить journal/evidence для расследования.
+`FBReleaseRollbackFailed` снимается только успешной reconciliation, которая
+запишет recovery; `/opt/fb-agent/shared/rollback-failed.json` остаётся
+forensic-маркером и не удаляется ради «зелёного» статуса.
+
+Полный release contract: [../../deploy/bluegreen/README.md](../../deploy/bluegreen/README.md).
+
+## Запрещённые операции
+
+- production schema wipe или `DROP SCHEMA`;
+- прямое изменение money task status/lease/fencing token;
+- повтор create/duplicate после `UNKNOWN` без reconciliation;
+- прямой Telegram send из worker/business code;
+- включение второго money consumer;
+- production build на VPS или запуск image по mutable tag;
+- ручной Caddy switch в обход release journal;
+- вывод секретов в URL или диагностику.

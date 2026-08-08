@@ -94,6 +94,9 @@ function makeSession(overrides: Record<string, unknown> = {}): any {
     playwright: chromium as any,
     browser: null,
     primaryPage: null,
+    scanPages: new Map(),
+    controlPages: new Map(),
+    interactivePages: new Map(),
     humanProfile: {
       speedFactor: 1,
       jitterFactor: 1,
@@ -110,63 +113,6 @@ function makeSession(overrides: Record<string, unknown> = {}): any {
     ...overrides,
   };
 }
-
-// Проверяем, что disconnectBrowser рвёт только локальную сессию и не закрывает удалённый профиль.
-test('disconnectBrowser clears local references without closing browser', async () => {
-  const manager = new SessionManager();
-  let closeCalls = 0;
-  const session = makeSession({
-    browser: {
-      close: async () => {
-        closeCalls += 1;
-      },
-      contexts: () => [],
-    },
-    primaryPage: { url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' },
-  });
-
-  (manager as any).sessions.set(session.id, session);
-  await manager.disconnectBrowser(session.id);
-
-  const stored = (manager as any).sessions.get(session.id);
-  assert.equal(closeCalls, 0);
-  assert.equal(stored.browser, null);
-  assert.equal(stored.primaryPage, null);
-  assert.equal(stored.playwright, null);
-  assert.equal(stored.status, 'disconnected');
-});
-
-// Проверяем, что stopBrowser закрывает браузер и завершает профиль через Vision API.
-test('stopBrowser closes browser and stops Vision profile', async () => {
-  const manager = new SessionManager();
-  let closeCalls = 0;
-  const stopCalls: Array<[string, string]> = [];
-  const originalStopProfile = VisionClient.prototype.stopProfile;
-
-  VisionClient.prototype.stopProfile = async function stopProfile(folderId: string, profileId: string) {
-    stopCalls.push([folderId, profileId]);
-  };
-
-  try {
-    const session = makeSession({
-      browser: {
-        close: async () => {
-          closeCalls += 1;
-        },
-        contexts: () => [],
-      },
-    });
-    (manager as any).sessions.set(session.id, session);
-
-    await manager.stopBrowser(session.id);
-
-    assert.equal(closeCalls, 1);
-    assert.deepEqual(stopCalls, [['folder-1', 'profile-1']]);
-    assert.equal((manager as any).sessions.has(session.id), false);
-  } finally {
-    VisionClient.prototype.stopProfile = originalStopProfile;
-  }
-});
 
 // Проверяем, что startBrowser ждёт готовности CDP endpoint перед подключением.
 test('startBrowser waits for cdp readiness before connecting', async () => {
@@ -284,75 +230,14 @@ test('reconnectBrowser detaches old CDP client without closing it (H-6)', async 
   }
 });
 
-// Проверяем, что профиль без CDP-порта не перезапускается, если recovery явно выключен.
-test('startBrowser does not restart missing cdp profile when auto recovery is disabled', async () => {
+test('ordinary start never restarts a profile without a CDP port', async () => {
   const manager = new SessionManager();
-  const previousFlag = process.env.VISION_AUTO_RESTART_ON_MISSING_CDP;
-  process.env.VISION_AUTO_RESTART_ON_MISSING_CDP = 'false';
-
-  const originalResolveFolderId = VisionClient.prototype.resolveFolderId;
-  const originalGetProfile = VisionClient.prototype.getProfile;
-  const originalWaitUntilProfileHasPort = VisionClient.prototype.waitUntilProfileHasPort;
-  const originalRestartProfileToRecoverPort = VisionClient.prototype.restartProfileToRecoverPort;
-
-  VisionClient.prototype.resolveFolderId = async function resolveFolderId() {
-    return 'folder-1';
-  };
-  VisionClient.prototype.getProfile = async function getProfile() {
-    return { folder_id: 'folder-1', profile_id: 'profile-1', port: null };
-  };
-  VisionClient.prototype.waitUntilProfileHasPort = async function waitUntilProfileHasPort() {
-    return null;
-  };
-  VisionClient.prototype.restartProfileToRecoverPort = async function restartProfileToRecoverPort() {
-    throw new Error('restartProfileToRecoverPort не должен вызываться');
-  };
-
-  try {
-    await assert.rejects(
-      manager.startBrowser({
-        visionXToken: 'token',
-        visionApiUrl: 'http://127.0.0.1:3030',
-        visionProfileId: 'profile-1',
-      }),
-      /Автоперезапуск профиля для восстановления CDP-порта отключён/,
-    );
-  } finally {
-    if (previousFlag === undefined) {
-      delete process.env.VISION_AUTO_RESTART_ON_MISSING_CDP;
-    } else {
-      process.env.VISION_AUTO_RESTART_ON_MISSING_CDP = previousFlag;
-    }
-    VisionClient.prototype.resolveFolderId = originalResolveFolderId;
-    VisionClient.prototype.getProfile = originalGetProfile;
-    VisionClient.prototype.waitUntilProfileHasPort = originalWaitUntilProfileHasPort;
-    VisionClient.prototype.restartProfileToRecoverPort = originalRestartProfileToRecoverPort;
-  }
-});
-
-// Проверяем, что профиль без CDP-порта перезапускается по умолчанию.
-test('startBrowser restarts missing cdp profile by default', async () => {
-  const manager = new SessionManager();
-  const previousFlag = process.env.VISION_AUTO_RESTART_ON_MISSING_CDP;
-  delete process.env.VISION_AUTO_RESTART_ON_MISSING_CDP;
-
-  const adsPage = { url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' };
-  const browser = {
-    contexts: () => [
-      {
-        addInitScript: async () => {},
-        pages: () => [adsPage],
-      },
-    ],
-  };
   let restartCalls = 0;
 
   const originalResolveFolderId = VisionClient.prototype.resolveFolderId;
   const originalGetProfile = VisionClient.prototype.getProfile;
   const originalWaitUntilProfileHasPort = VisionClient.prototype.waitUntilProfileHasPort;
   const originalRestartProfileToRecoverPort = VisionClient.prototype.restartProfileToRecoverPort;
-  const originalWaitUntilCdpReady = VisionClient.prototype.waitUntilCdpReady;
-  const originalConnectOverCDP = chromium.connectOverCDP;
 
   VisionClient.prototype.resolveFolderId = async function resolveFolderId() {
     return 'folder-1';
@@ -365,33 +250,202 @@ test('startBrowser restarts missing cdp profile by default', async () => {
   };
   VisionClient.prototype.restartProfileToRecoverPort = async function restartProfileToRecoverPort() {
     restartCalls += 1;
-    return { folder_id: 'folder-1', profile_id: 'profile-1', port: 7101 };
+    throw new Error('ordinary start must not restart Vision');
   };
-  VisionClient.prototype.waitUntilCdpReady = async function waitUntilCdpReady() {
-    return true;
-  };
-  (chromium as any).connectOverCDP = async () => browser as any;
 
   try {
-    const session = await manager.startBrowser({
-      visionXToken: 'token',
-      visionApiUrl: 'http://127.0.0.1:3030',
-      visionProfileId: 'profile-1',
-    });
-
-    assert.equal(restartCalls, 1);
-    assert.equal(session.cdpPort, 7101);
-    assert.equal(session.primaryPage, adsPage as any);
+    await assert.rejects(
+      manager.startBrowser({
+        visionXToken: 'token',
+        visionApiUrl: 'http://127.0.0.1:3030',
+        visionProfileId: 'profile-1',
+      }),
+      /capability-authorized maintenance recovery/,
+    );
+    assert.equal(restartCalls, 0);
   } finally {
-    if (previousFlag === undefined) {
-      delete process.env.VISION_AUTO_RESTART_ON_MISSING_CDP;
-    } else {
-      process.env.VISION_AUTO_RESTART_ON_MISSING_CDP = previousFlag;
-    }
     VisionClient.prototype.resolveFolderId = originalResolveFolderId;
     VisionClient.prototype.getProfile = originalGetProfile;
     VisionClient.prototype.waitUntilProfileHasPort = originalWaitUntilProfileHasPort;
     VisionClient.prototype.restartProfileToRecoverPort = originalRestartProfileToRecoverPort;
+  }
+});
+
+test('maintenance recovery restarts a live profile without a local session', async () => {
+  const manager = new SessionManager();
+  const adsPage = { url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' };
+  const browser = {
+    contexts: () => [
+      {
+        addInitScript: async () => {},
+        pages: () => [adsPage],
+      },
+    ],
+  };
+  let restartCalls = 0;
+  const connectedPorts: string[] = [];
+
+  const originalResolveFolderId = VisionClient.prototype.resolveFolderId;
+  const originalGetProfile = VisionClient.prototype.getProfile;
+  const originalRestartProfileToRecoverPort =
+    VisionClient.prototype.restartProfileToRecoverPort;
+  const originalWaitUntilCdpReady = VisionClient.prototype.waitUntilCdpReady;
+  const originalConnectOverCDP = chromium.connectOverCDP;
+
+  VisionClient.prototype.resolveFolderId = async function resolveFolderId() {
+    return 'folder-1';
+  };
+  VisionClient.prototype.getProfile = async function getProfile() {
+    return { folder_id: 'folder-1', profile_id: 'profile-1', port: 6001 };
+  };
+  VisionClient.prototype.restartProfileToRecoverPort =
+    async function restartProfileToRecoverPort() {
+      restartCalls += 1;
+      return { folder_id: 'folder-1', profile_id: 'profile-1', port: 7101 };
+    };
+  VisionClient.prototype.waitUntilCdpReady = async function waitUntilCdpReady() {
+    return true;
+  };
+  (chromium as any).connectOverCDP = async (url: string) => {
+    connectedPorts.push(url);
+    return browser as any;
+  };
+
+  try {
+    const session = await manager.recoverBrowserProfileUnderMaintenance({
+      visionXToken: 'token',
+      visionApiUrl: 'http://127.0.0.1:3030',
+      visionProfileId: 'profile-1',
+      visionFolderId: 'folder-1',
+    });
+
+    assert.equal(restartCalls, 1);
+    assert.deepEqual(connectedPorts, ['http://127.0.0.1:7101']);
+    assert.equal(session.cdpPort, 7101);
+    assert.equal(session.primaryPage, adsPage as any);
+  } finally {
+    VisionClient.prototype.resolveFolderId = originalResolveFolderId;
+    VisionClient.prototype.getProfile = originalGetProfile;
+    VisionClient.prototype.restartProfileToRecoverPort =
+      originalRestartProfileToRecoverPort;
+    VisionClient.prototype.waitUntilCdpReady = originalWaitUntilCdpReady;
+    (chromium as any).connectOverCDP = originalConnectOverCDP;
+  }
+});
+
+test('cancel during start initialization never commits a hidden session', async () => {
+  const manager = new SessionManager();
+  const controller = new AbortController();
+  let initStartedResolve: (() => void) | undefined;
+  let releaseInitResolve: (() => void) | undefined;
+  const initStarted = new Promise<void>((resolve) => {
+    initStartedResolve = resolve;
+  });
+  const releaseInit = new Promise<void>((resolve) => {
+    releaseInitResolve = resolve;
+  });
+  const adsPage = { url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' };
+  const browser = {
+    contexts: () => [
+      {
+        addInitScript: async () => {
+          initStartedResolve?.();
+          await releaseInit;
+        },
+        pages: () => [adsPage],
+      },
+    ],
+  };
+  const originalResolveFolderId = VisionClient.prototype.resolveFolderId;
+  const originalGetProfile = VisionClient.prototype.getProfile;
+  const originalWaitUntilCdpReady = VisionClient.prototype.waitUntilCdpReady;
+  const originalConnectOverCDP = chromium.connectOverCDP;
+
+  VisionClient.prototype.resolveFolderId = async () => 'folder-1';
+  VisionClient.prototype.getProfile = async () => ({
+    folder_id: 'folder-1',
+    profile_id: 'profile-1',
+    port: 6001,
+  });
+  VisionClient.prototype.waitUntilCdpReady = async () => true;
+  (chromium as any).connectOverCDP = async () => browser as any;
+
+  try {
+    const pending = manager.startBrowser({
+      visionXToken: 'token',
+      visionApiUrl: 'http://127.0.0.1:3030',
+      visionProfileId: 'profile-1',
+      signal: controller.signal,
+    });
+    await initStarted;
+    controller.abort('test_cancelled');
+    releaseInitResolve?.();
+
+    await assert.rejects(pending, /lifecycle operation cancelled/);
+    assert.deepEqual(manager.listSessions(), []);
+  } finally {
+    VisionClient.prototype.resolveFolderId = originalResolveFolderId;
+    VisionClient.prototype.getProfile = originalGetProfile;
+    VisionClient.prototype.waitUntilCdpReady = originalWaitUntilCdpReady;
+    (chromium as any).connectOverCDP = originalConnectOverCDP;
+  }
+});
+
+test('cancel during reconnect page creation preserves incumbent session', async () => {
+  const manager = new SessionManager();
+  const controller = new AbortController();
+  let newPageStartedResolve: (() => void) | undefined;
+  let releaseNewPageResolve: ((page: any) => void) | undefined;
+  const newPageStarted = new Promise<void>((resolve) => {
+    newPageStartedResolve = resolve;
+  });
+  const releaseNewPage = new Promise<any>((resolve) => {
+    releaseNewPageResolve = resolve;
+  });
+  const oldBrowser = { contexts: () => [], removeAllListeners: () => undefined };
+  const newBrowser = {
+    contexts: () => [
+      {
+        addInitScript: async () => undefined,
+        pages: () => [],
+        newPage: async () => {
+          newPageStartedResolve?.();
+          return releaseNewPage;
+        },
+      },
+    ],
+    removeAllListeners: () => undefined,
+  };
+  const originalGetProfile = VisionClient.prototype.getProfile;
+  const originalWaitUntilCdpReady = VisionClient.prototype.waitUntilCdpReady;
+  const originalConnectOverCDP = chromium.connectOverCDP;
+
+  VisionClient.prototype.getProfile = async () => ({
+    folder_id: 'folder-1',
+    profile_id: 'profile-1',
+    port: 6001,
+  });
+  VisionClient.prototype.waitUntilCdpReady = async () => true;
+  (chromium as any).connectOverCDP = async () => newBrowser as any;
+
+  try {
+    const session = makeSession({
+      browser: oldBrowser,
+      primaryPage: null,
+      status: 'disconnected',
+    });
+    (manager as any).sessions.set(session.id, session);
+    const pending = manager.reconnectBrowser(session.id, {
+      signal: controller.signal,
+    });
+    await newPageStarted;
+    controller.abort('test_cancelled');
+    releaseNewPageResolve?.({ url: () => 'about:blank' });
+
+    await assert.rejects(pending, /lifecycle operation cancelled/);
+    assert.equal(session.browser, oldBrowser);
+  } finally {
+    VisionClient.prototype.getProfile = originalGetProfile;
     VisionClient.prototype.waitUntilCdpReady = originalWaitUntilCdpReady;
     (chromium as any).connectOverCDP = originalConnectOverCDP;
   }
@@ -461,6 +515,49 @@ test('reconnectBrowser reuses existing profile port without restart', async () =
   }
 });
 
+test('ordinary reconnect never restarts a profile without a CDP port', async () => {
+  const manager = new SessionManager();
+  let restartCalls = 0;
+  const originalGetProfile = VisionClient.prototype.getProfile;
+  const originalWaitUntilProfileHasPort = VisionClient.prototype.waitUntilProfileHasPort;
+  const originalRestartProfileToRecoverPort =
+    VisionClient.prototype.restartProfileToRecoverPort;
+
+  VisionClient.prototype.getProfile = async function getProfile() {
+    return { folder_id: 'folder-1', profile_id: 'profile-1', port: null };
+  };
+  VisionClient.prototype.waitUntilProfileHasPort =
+    async function waitUntilProfileHasPort() {
+      return null;
+    };
+  VisionClient.prototype.restartProfileToRecoverPort =
+    async function restartProfileToRecoverPort() {
+      restartCalls += 1;
+      throw new Error('ordinary reconnect must not restart Vision');
+    };
+
+  try {
+    const session = makeSession({
+      status: 'disconnected',
+      browser: null,
+      primaryPage: null,
+      playwright: null,
+    });
+    (manager as any).sessions.set(session.id, session);
+
+    await assert.rejects(
+      manager.reconnectBrowser(session.id),
+      /capability-authorized maintenance recovery/,
+    );
+    assert.equal(restartCalls, 0);
+  } finally {
+    VisionClient.prototype.getProfile = originalGetProfile;
+    VisionClient.prototype.waitUntilProfileHasPort = originalWaitUntilProfileHasPort;
+    VisionClient.prototype.restartProfileToRecoverPort =
+      originalRestartProfileToRecoverPort;
+  }
+});
+
 // Проверяем, что reconnectBrowser явно падает, если CDP endpoint так и не стал доступен.
 test('reconnectBrowser fails when cdp endpoint never becomes ready', async () => {
   const manager = new SessionManager();
@@ -522,9 +619,9 @@ test('rememberAdsManagerUrl записывает только URL Ads Manager', 
   );
 });
 
-// ensureAdsManagerPage: первый цикл (act ещё неизвестен, нет fallbackUrl) → trust-on-first-use:
+// ensureScanPage: первый цикл (act ещё неизвестен, нет fallbackUrl) → trust-on-first-use:
 // принимаем открытую вкладку Ads Manager и запоминаем URL (далее act известен → строгая сверка).
-test('ensureAdsManagerPage возвращает живую вкладку Ads Manager и запоминает URL (TOFU)', async () => {
+test('ensureScanPage возвращает живую вкладку Ads Manager и запоминает URL (TOFU)', async () => {
   const manager = new SessionManager();
   const adsUrl = 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=123';
   const adsPage = { isClosed: () => false, url: () => adsUrl };
@@ -534,28 +631,28 @@ test('ensureAdsManagerPage возвращает живую вкладку Ads Ma
   };
   const session = makeSession({ browser, primaryPage: null });
 
-  const page = await manager.ensureAdsManagerPage(session as any);
+  const page = await manager.ensureScanPage(session as any);
 
   assert.equal(page, adsPage as any);
   assert.equal(session.primaryPage, adsPage as any);
   assert.equal(session.lastAdsManagerUrl, adsUrl);
 });
 
-// ensureAdsManagerPage: браузер/CDP мертвы → бросаем (восстановление эскалируется на observer).
-test('ensureAdsManagerPage бросает, если браузер отключён', async () => {
+// ensureScanPage: браузер/CDP мертвы → бросаем (восстановление эскалируется на observer).
+test('ensureScanPage бросает, если браузер отключён', async () => {
   const manager = new SessionManager();
   const browser = { isConnected: () => false, contexts: () => [] };
   const session = makeSession({ browser, primaryPage: null });
 
   await assert.rejects(
-    manager.ensureAdsManagerPage(session as any),
+    manager.ensureScanPage(session as any),
     /Основная страница браузера недоступна/,
   );
 });
 
-// ensureAdsManagerPage: вкладку закрыли, браузер жив → переоткрываем НОВУЮ вкладку на known-good
+// ensureScanPage: вкладку закрыли, браузер жив → переоткрываем НОВУЮ вкладку на known-good
 // URL кабинета; чужую вкладку не трогаем (её goto не зовём).
-test('ensureAdsManagerPage переоткрывает вкладку на known-good URL, чужие не трогает', async () => {
+test('ensureScanPage переоткрывает вкладку на known-good URL, чужие не трогает', async () => {
   const manager = new SessionManager();
   let otherGotoCalls = 0;
   const otherPage = {
@@ -585,7 +682,7 @@ test('ensureAdsManagerPage переоткрывает вкладку на known-
   const browser = { isConnected: () => true, contexts: () => [context] };
   const session = makeSession({ browser, primaryPage: null, lastAdsManagerUrl: knownUrl });
 
-  const page = await manager.ensureAdsManagerPage(session as any);
+  const page = await manager.ensureScanPage(session as any);
 
   assert.equal(newPageCalls, 1);
   assert.equal(gotoUrl, knownUrl);
@@ -594,9 +691,9 @@ test('ensureAdsManagerPage переоткрывает вкладку на known-
   assert.equal(otherGotoCalls, 0); // чужую вкладку не трогали
 });
 
-// ensureAdsManagerPage: нет вкладки и нет known-good/fallback URL → бросаем
+// ensureScanPage: нет вкладки и нет known-good/fallback URL → бросаем
 // (в общем кабинете НЕ угадываем дефолтный act, иначе можно попасть в чужой кабинет).
-test('ensureAdsManagerPage бросает, если URL кабинета неизвестен', async () => {
+test('ensureScanPage бросает, если URL кабинета неизвестен', async () => {
   const manager = new SessionManager();
   const context = {
     pages: () => [],
@@ -608,14 +705,14 @@ test('ensureAdsManagerPage бросает, если URL кабинета неи�
   const session = makeSession({ browser, primaryPage: null, lastAdsManagerUrl: null });
 
   await assert.rejects(
-    manager.ensureAdsManagerPage(session as any),
+    manager.ensureScanPage(session as any),
     /Основная страница браузера недоступна/,
   );
 });
 
-// ensureAdsManagerPage: known-good URL нет, но передан fallbackUrl (реконструированный из act_id) →
+// ensureScanPage: known-good URL нет, но передан fallbackUrl (реконструированный из act_id) →
 // открываем новую вкладку на нём.
-test('ensureAdsManagerPage использует fallbackUrl, если known-good URL нет', async () => {
+test('ensureScanPage использует fallbackUrl, если known-good URL нет', async () => {
   const manager = new SessionManager();
   const fallbackUrl = 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=555';
   let gotoUrl: string | null = null;
@@ -630,15 +727,78 @@ test('ensureAdsManagerPage использует fallbackUrl, если known-good
   const browser = { isConnected: () => true, contexts: () => [context] };
   const session = makeSession({ browser, primaryPage: null, lastAdsManagerUrl: null });
 
-  const page = await manager.ensureAdsManagerPage(session as any, { fallbackUrl });
+  const page = await manager.ensureScanPage(session as any, { fallbackUrl });
 
   assert.equal(gotoUrl, fallbackUrl);
   assert.equal(page, newPage as any);
 });
 
-// ensureAdsManagerPage: открыта вкладка ДРУГОГО кабинета (act≠ожидаемому) → не сканируем чужой,
+test('cancel during role-page creation closes the eventual unowned tab', async () => {
+  const manager = new SessionManager();
+  const fallbackUrl = 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=555';
+  let resolvePage!: (page: any) => void;
+  const pendingPage = new Promise<any>((resolve) => { resolvePage = resolve; });
+  let closed = 0;
+  const newPage = {
+    isClosed: () => closed > 0,
+    url: () => '',
+    goto: async () => undefined,
+    close: async () => { closed += 1; },
+  };
+  const context = { pages: () => [], newPage: () => pendingPage };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null, lastAdsManagerUrl: null });
+  const controller = new AbortController();
+
+  const operation = manager.ensureScanPage(session as any, {
+    fallbackUrl,
+    signal: controller.signal,
+  });
+  controller.abort('grpc_cancelled');
+  await assert.rejects(operation, /browser operation cancelled/i);
+
+  resolvePage(newPage);
+  await new Promise<void>((resolve) => { setImmediate(resolve); });
+
+  assert.equal(closed, 1);
+  assert.equal(session.scanPages?.size, 0);
+});
+
+test('cancel during role-page navigation closes and never assigns the page', async () => {
+  const manager = new SessionManager();
+  const fallbackUrl = 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=555';
+  let navigationStartedResolve!: () => void;
+  const navigationStarted = new Promise<void>((resolve) => { navigationStartedResolve = resolve; });
+  let closed = 0;
+  const newPage = {
+    isClosed: () => closed > 0,
+    url: () => '',
+    goto: async () => {
+      navigationStartedResolve();
+      return new Promise<void>(() => undefined);
+    },
+    close: async () => { closed += 1; },
+  };
+  const context = { pages: () => [], newPage: async () => newPage };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null, lastAdsManagerUrl: null });
+  const controller = new AbortController();
+
+  const operation = manager.ensureScanPage(session as any, {
+    fallbackUrl,
+    signal: controller.signal,
+  });
+  await navigationStarted;
+  controller.abort('grpc_cancelled');
+  await assert.rejects(operation, /browser operation cancelled/i);
+
+  assert.equal(closed, 1);
+  assert.equal(session.scanPages?.size, 0);
+});
+
+// ensureScanPage: открыта вкладка ДРУГОГО кабинета (act≠ожидаемому) → не сканируем чужой,
 // переоткрываем СВОЙ кабинет. Защита от тихой слепоты MV при нескольких кабинетах владельца.
-test('ensureAdsManagerPage не подхватывает вкладку другого кабинета (act mismatch)', async () => {
+test('ensureScanPage не подхватывает вкладку другого кабинета (act mismatch)', async () => {
   const manager = new SessionManager();
   const foreignAds = {
     isClosed: () => false,
@@ -657,14 +817,14 @@ test('ensureAdsManagerPage не подхватывает вкладку друг
   const browser = { isConnected: () => true, contexts: () => [context] };
   const session = makeSession({ browser, primaryPage: null, lastAdsManagerUrl: ownUrl });
 
-  const page = await manager.ensureAdsManagerPage(session as any);
+  const page = await manager.ensureScanPage(session as any);
 
   assert.equal(gotoUrl, ownUrl); // переоткрыли СВОЙ кабинет, а не сканируем чужой act=999
   assert.equal(page, ownPage as any);
 });
 
-// ensureAdsManagerPage: открыта вкладка ТОГО ЖE кабинета (act совпал) → используем её, не переоткрываем.
-test('ensureAdsManagerPage принимает вкладку того же кабинета (act match)', async () => {
+// ensureScanPage: открыта вкладка ТОГО ЖE кабинета (act совпал) → используем её, не переоткрываем.
+test('ensureScanPage принимает вкладку того же кабинета (act match)', async () => {
   const manager = new SessionManager();
   const liveUrl = 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=111&business_id=5';
   const sameAds = { isClosed: () => false, url: () => liveUrl };
@@ -681,13 +841,13 @@ test('ensureAdsManagerPage принимает вкладку того же ка�
     lastAdsManagerUrl: 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=111',
   });
 
-  const page = await manager.ensureAdsManagerPage(session as any);
+  const page = await manager.ensureScanPage(session as any);
 
   assert.equal(page, sameAds as any);
   assert.equal(session.lastAdsManagerUrl, liveUrl); // обновили на текущий URL той же вкладки
 });
 
-// ====================== Мульти-кабинет (MULTI_CABINET_PLAN.md M2) ======================
+// ====================== Явная multi-cabinet identity ======================
 
 // URL кабинета строится детерминированно из числового act.
 test('adsManagerUrlForAct строит URL кабинета на уровне кампаний с колонками', () => {
@@ -717,7 +877,7 @@ test('findAdsManagerPageByAct находит вкладку своего каб�
   assert.equal(findAdsManagerPageByAct(browser as any, '111'), cab1);
 });
 
-// Чужой/несуществующий кабинет и закрытые вкладки → null (вкладку откроет ensureAdsManagerPage).
+// Чужой/несуществующий кабинет и закрытые вкладки → null (вкладку откроет ensureScanPage).
 test('findAdsManagerPageByAct: нет вкладки → null, закрытая не считается', () => {
   const closedCab = {
     isClosed: () => true,
@@ -756,9 +916,9 @@ test('findReusableNonCabinetPage: берёт FB/пустую, пропускае
   assert.equal(findReusableNonCabinetPage(null), null);
 });
 
-// ensureAdsManagerPage(actId): нет своей вкладки → переиспользует исходную FB-вкладку (navigate),
+// ensureScanPage(actId): нет своей вкладки → переиспользует исходную FB-вкладку (navigate),
 // новую не плодит, чужой кабинет (?act=999) НЕ трогает.
-test('ensureAdsManagerPage (actId): переиспользует исходную FB-вкладку, чужой кабинет не трогает', async () => {
+test('ensureScanPage (actId): переиспользует исходную FB-вкладку, чужой кабинет не трогает', async () => {
   const manager = new SessionManager();
   let fbGoto: string | null = null;
   const fbPage = {
@@ -787,7 +947,7 @@ test('ensureAdsManagerPage (actId): переиспользует исходну�
   const browser = { isConnected: () => true, contexts: () => [context] };
   const session = makeSession({ browser, primaryPage: null });
 
-  const page = await manager.ensureAdsManagerPage(session as any, { actId: '111' });
+  const page = await manager.ensureScanPage(session as any, { actId: '111' });
 
   assert.equal(page, fbPage as any); // переиспользовали исходную FB-вкладку
   assert.ok(String(fbGoto).includes('act=111'), 'навигировали на нужный кабинет');
@@ -795,8 +955,8 @@ test('ensureAdsManagerPage (actId): переиспользует исходну�
   assert.equal(foreignGoto, 0); // чужой кабинет не трогали
 });
 
-// ensureAdsManagerPage(actId): нейтральной вкладки нет (только чужой кабинет) → открывает НОВУЮ.
-test('ensureAdsManagerPage (actId): нет нейтральной вкладки → открывает новую', async () => {
+// ensureScanPage(actId): нейтральной вкладки нет (только чужой кабинет) → открывает НОВУЮ.
+test('ensureScanPage (actId): нет нейтральной вкладки → открывает новую', async () => {
   const manager = new SessionManager();
   const foreignCab = {
     isClosed: () => false,
@@ -821,15 +981,15 @@ test('ensureAdsManagerPage (actId): нет нейтральной вкладки
   const browser = { isConnected: () => true, contexts: () => [context] };
   const session = makeSession({ browser, primaryPage: null });
 
-  const page = await manager.ensureAdsManagerPage(session as any, { actId: '111' });
+  const page = await manager.ensureScanPage(session as any, { actId: '111' });
 
   assert.equal(newPageCalls, 1);
   assert.ok(String(gotoUrl).includes('act=111'));
   assert.equal(page, newPage as any);
 });
 
-// ensureAdsManagerPage(actId): своя вкладка кабинета уже открыта → переиспользуется как есть (без navigate).
-test('ensureAdsManagerPage (actId): своя вкладка уже открыта → используется без navigate', async () => {
+// ensureScanPage(actId): своя вкладка кабинета уже открыта → переиспользуется как есть (без navigate).
+test('ensureScanPage (actId): своя вкладка уже открыта → используется без navigate', async () => {
   const manager = new SessionManager();
   const ownCab = {
     isClosed: () => false,
@@ -844,8 +1004,205 @@ test('ensureAdsManagerPage (actId): своя вкладка уже открыт�
   const browser = { isConnected: () => true, contexts: () => [context] };
   const session = makeSession({ browser, primaryPage: null });
 
-  const page = await manager.ensureAdsManagerPage(session as any, { actId: '111' });
+  const page = await manager.ensureScanPage(session as any, { actId: '111' });
   assert.equal(page, ownCab as any);
+});
+
+test('scan/control pages физически разделены per cabinet', async () => {
+  const manager = new SessionManager();
+  const targetUrl = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111';
+  const scanPage = {
+    isClosed: () => false,
+    url: () => targetUrl,
+  };
+  let created = 0;
+  const pages: any[] = [scanPage];
+  const context = {
+    pages: () => pages,
+    newPage: async () => {
+      created += 1;
+      let currentUrl = 'about:blank';
+      const page = {
+        isClosed: () => false,
+        url: () => currentUrl,
+        goto: async (url: string) => {
+          currentUrl = url;
+        },
+      };
+      pages.push(page);
+      return page;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: scanPage });
+
+  const scan = await manager.ensureScanPage(session, { actId: '111' });
+  const control = await manager.ensureControlPage(session, { actId: '111' });
+
+  assert.equal(scan, scanPage);
+  assert.notEqual(control, scan, 'control не имеет права fallback на scan page');
+  assert.equal(created, 1);
+  assert.equal(session.scanPages.get('111'), scan);
+  assert.equal(session.controlPages.get('111'), control);
+});
+
+test('scan/control/interactive pages physically distinct per cabinet', async () => {
+  const manager = new SessionManager();
+  const targetUrl = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=333';
+  const initial = { isClosed: () => false, url: () => targetUrl };
+  const pages: any[] = [initial];
+  const context = {
+    pages: () => pages,
+    newPage: async () => {
+      let currentUrl = 'about:blank';
+      const page = {
+        isClosed: () => false,
+        url: () => currentUrl,
+        goto: async (url: string) => { currentUrl = url; },
+      };
+      pages.push(page);
+      return page;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: initial });
+
+  const scan = await manager.ensureScanPage(session, { actId: '333' });
+  const control = await manager.ensureControlPage(session, { actId: '333' });
+  const interactive = await manager.ensureInteractivePage(session, { actId: '333' });
+
+  assert.equal(new Set([scan, control, interactive]).size, 3);
+  assert.equal(session.scanPages.get('333'), scan);
+  assert.equal(session.controlPages.get('333'), control);
+  assert.equal(session.interactivePages.get('333'), interactive);
+});
+
+test('poisoned control page is never reused even when CDP close does not settle', async () => {
+  const manager = new SessionManager();
+  const targetUrl = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=444';
+  const poisoned = {
+    isClosed: () => false,
+    url: () => targetUrl,
+    close: async () => new Promise<void>(() => undefined),
+  };
+  const pages: any[] = [poisoned];
+  let replacement: any;
+  const context = {
+    pages: () => pages,
+    newPage: async () => {
+      let currentUrl = 'about:blank';
+      replacement = {
+        isClosed: () => false,
+        url: () => currentUrl,
+        goto: async (url: string) => {
+          currentUrl = url;
+        },
+      };
+      pages.push(replacement);
+      return replacement;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: poisoned });
+  session.controlPages.set('444', poisoned as any);
+
+  manager.poisonRolePage(session, 'control', '444', poisoned as any);
+  const selected = await manager.ensureControlPage(session, { actId: '444' });
+
+  assert.equal(selected, replacement);
+  assert.notEqual(selected, poisoned);
+  assert.equal(session.controlPages.get('444'), replacement);
+});
+
+test('poison quarantine stays weak across many hung-close replacement cycles', async () => {
+  const manager = new SessionManager();
+  const targetUrl = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=445';
+  const makeHungPage = () => ({
+    isClosed: () => false,
+    url: () => targetUrl,
+    close: async () => new Promise<void>(() => undefined),
+  });
+  const initial = makeHungPage();
+  const pages: any[] = [initial];
+  let created = 0;
+  const context = {
+    pages: () => pages,
+    newPage: async () => {
+      let currentUrl = 'about:blank';
+      const page = {
+        isClosed: () => false,
+        url: () => currentUrl,
+        goto: async (url: string) => {
+          currentUrl = url;
+        },
+        close: async () => new Promise<void>(() => undefined),
+      };
+      created += 1;
+      pages.push(page);
+      return page;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: initial });
+  session.controlPages.set('445', initial as any);
+
+  let current: any = initial;
+  const quarantined = new Set<any>();
+  for (let cycle = 0; cycle < 128; cycle += 1) {
+    quarantined.add(current);
+    manager.poisonRolePage(session, 'control', '445', current);
+    const replacement = await manager.ensureControlPage(session, { actId: '445' });
+    assert.equal(
+      quarantined.has(replacement),
+      false,
+      `cycle ${cycle} reused a page whose close never settled`,
+    );
+    current = replacement;
+  }
+
+  assert.equal(created, 128);
+  assert.equal((manager as any).poisonedPages instanceof WeakSet, true);
+  assert.equal(
+    (manager as any).poisonedPages.size,
+    undefined,
+    'weak quarantine must not expose or retain an ever-growing strong Set',
+  );
+});
+
+test('закрытие scan page не заменяет и не трогает control page', async () => {
+  const manager = new SessionManager();
+  const targetUrl = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=222';
+  let scanClosed = false;
+  const oldScan = { isClosed: () => scanClosed, url: () => targetUrl };
+  const control = { isClosed: () => false, url: () => targetUrl };
+  const pages: any[] = [oldScan, control];
+  let replacement: any;
+  const context = {
+    pages: () => pages,
+    newPage: async () => {
+      let currentUrl = 'about:blank';
+      replacement = {
+        isClosed: () => false,
+        url: () => currentUrl,
+        goto: async (url: string) => {
+          currentUrl = url;
+        },
+      };
+      pages.push(replacement);
+      return replacement;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: oldScan });
+  session.scanPages.set('222', oldScan as any);
+  session.controlPages.set('222', control as any);
+  scanClosed = true;
+
+  const healedScan = await manager.ensureScanPage(session, { actId: '222' });
+
+  assert.equal(healedScan, replacement);
+  assert.notEqual(healedScan, control);
+  assert.equal(session.controlPages.get('222'), control);
 });
 
 // closeForeignCabinetTabs: закрывает кабинет вне набора офферов, нужные кабинеты и обычные

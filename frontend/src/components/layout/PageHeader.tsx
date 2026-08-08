@@ -1,15 +1,14 @@
 /**
- * PageHeader — стандартный header страницы (канон design_handoff/templates.jsx).
+ * PageHeader — единый header operator-страниц.
  *
- * Структура (PageHead из templates.jsx — единый для всех страниц):
+ * Структура:
  *   [Eyebrow "0N / РАЗДЕЛ"]
  *   [h1 — mono 30px, weight 500, ls -0.02em, БЕЗ точки]   [action-slot]
  *   [subtitle — 13px, separators]
  *
  * Без ghost-числа и trailing-точки — это рудимент старого макета,
- * канон их запрещает (см. README design_handoff).
+ * текущая система их не использует.
  *
- * SectionTitleRow — eyebrow + 22px title + right action.
  * HeaderSep — разделитель · в subtitle.
  */
 
@@ -26,13 +25,7 @@ interface PageHeaderProps {
   action?: ReactNode;
 }
 
-export function PageHeader({
-  eyebrowNum,
-  eyebrow,
-  title,
-  subtitle,
-  action,
-}: PageHeaderProps) {
+export function PageHeader({ eyebrowNum, eyebrow, title, subtitle, action }: PageHeaderProps) {
   return (
     <header className="mb-8">
       <Eyebrow num={eyebrowNum}>{eyebrow}</Eyebrow>
@@ -62,45 +55,5 @@ export function HeaderSep() {
     <span aria-hidden="true" className="text-bg-8 mx-2.5">
       ·
     </span>
-  );
-}
-
-/** Live-dot для subtitle — пульсирующий зелёный индикатор. */
-export function LiveDot() {
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-block size-[6px] rounded-full bg-success mr-1.5 align-[1px] animate-pulse"
-    />
-  );
-}
-
-// ─── SectionTitleRow ──────────────────────────────────────────────────────────
-
-interface SectionTitleRowProps {
-  eyebrowNum?: string;
-  eyebrow: string;
-  title: string;
-  action?: ReactNode;
-  className?: string;
-}
-
-export function SectionTitleRow({
-  eyebrowNum,
-  eyebrow,
-  title,
-  action,
-  className,
-}: SectionTitleRowProps) {
-  return (
-    <div className={className}>
-      <Eyebrow num={eyebrowNum}>{eyebrow}</Eyebrow>
-      <div className="flex items-center justify-between gap-4 mt-2">
-        <h2 className="font-display text-[22px] font-medium leading-[1.15] tracking-[-0.02em] text-bg-11 m-0">
-          {title}
-        </h2>
-        {action ? <div className="shrink-0">{action}</div> : null}
-      </div>
-    </div>
   );
 }

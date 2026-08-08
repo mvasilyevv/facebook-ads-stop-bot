@@ -7,26 +7,12 @@ campaign_matches_owner→True для ВСЕХ → бот авто-стопнул
 
 from __future__ import annotations
 
-import json
+import uuid
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from apps.observer_worker import main as observer_main
 from core.observer.queries import multi_cabinet_requires_owner_tag
-
-
-class _FakeRedis:
-    """Fake redis: SET NX EX + observer:runtime payload (как в prepare_workspace тестах)."""
-
-    def __init__(self):
-        self.store: dict[str, str] = {}
-
-    async def set(self, key, value, ex=None, nx=False):
-        if nx and key in self.store:
-            return None
-        self.store[key] = value
-        return True
-
-    async def get(self, key):
-        return self.store.get(key)
 
 
 class _ExplodingGate:
@@ -72,9 +58,6 @@ def _patch_cycle_deps(monkeypatch, *, owner_tag, accounts):
             "interval_seconds": 90,
         }
 
-    async def _auto_restart(_engine):
-        return True
-
     async def _accounts(_engine):
         return list(accounts)
 
@@ -85,28 +68,26 @@ def _patch_cycle_deps(monkeypatch, *, owner_tag, accounts):
         raise AssertionError("process_scan_rows не должен вызываться при сработавшем гарде")
 
     monkeypatch.setattr(observer_main, "load_observer_config", _cfg)
-    monkeypatch.setattr(observer_main, "load_vision_auto_restart_flag", _auto_restart)
     monkeypatch.setattr(observer_main, "resolve_scan_account_ids", _accounts)
     monkeypatch.setattr(observer_main, "list_offers_without_accounts", _orphans)
     monkeypatch.setattr(observer_main, "process_scan_rows", _fail_process)
 
 
 # Мульти-каб + пустой owner_tag: run_one_cycle ПРОПУСКАЕТ скан (gate/process не дёргаются),
-# пишет skipped-исход и шлёт deduped ops-алерт. Это money-гард против авто-стопа чужой рекламы.
+# пишет skipped-исход и durable ops-incident. Это money-гард против авто-стопа чужой рекламы.
 async def test_run_one_cycle_skips_multi_cab_without_owner_tag(monkeypatch) -> None:
     _patch_cycle_deps(monkeypatch, owner_tag=None, accounts=["111", "222"])
-    redis = _FakeRedis()
-    summary = await observer_main.run_one_cycle(
-        engine=None, gate=_ExplodingGate(), redis_client=redis, tg_client=None
-    )
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(observer_main, "notify_recurring_incident", notify)
+    summary = await observer_main.run_one_cycle(engine=None, gate=_ExplodingGate())
     assert summary["outcome"] == "skipped"
     assert summary["reason"] == "multi_cab_no_owner_tag"
-    # Дедуп-ключ ops-алерта выставлен.
-    assert observer_main.MULTI_CAB_NO_OWNER_ALERT_DEDUP_KEY in redis.store
-    # Runtime отражает остановку по безопасности (не paused — скан включён, но небезопасен).
-    payload = json.loads(redis.store["observer:runtime"])
-    assert payload["status"] == "running"
-    assert "owner_tag" in payload["status_message"]
+    notify.assert_awaited_once()
+    assert (
+        notify.await_args.kwargs["incident_key"]
+        == observer_main.OBSERVER_MULTI_CAB_UNSAFE_INCIDENT_KEY
+    )
+    assert notify.await_args.kwargs["audience"] == "all"
 
 
 # Мульти-каб С owner_tag: гард НЕ срабатывает — НЕ возвращаем skipped (доходим до скана).
@@ -114,7 +95,8 @@ async def test_run_one_cycle_skips_multi_cab_without_owner_tag(monkeypatch) -> N
 # ставим gate, который сразу бросает — раз skipped не вернули, значит дошли до scan-фазы.
 async def test_run_one_cycle_proceeds_multi_cab_with_owner_tag(monkeypatch) -> None:
     _patch_cycle_deps(monkeypatch, owner_tag="MV", accounts=["111", "222"])
-    redis = _FakeRedis()
+    resolve = AsyncMock(return_value=True)
+    monkeypatch.setattr(observer_main, "resolve_recurring_incident", resolve)
 
     reached_scan = {"value": False}
 
@@ -131,14 +113,38 @@ async def test_run_one_cycle_proceeds_multi_cab_with_owner_tag(monkeypatch) -> N
     # этого выставит reached_scan. Перехватываем падение _begin_scan_run/_finish_scan_run.
     monkeypatch.setattr(observer_main, "_begin_scan_run", _async_ret(1))
     monkeypatch.setattr(observer_main, "_finish_scan_run", _async_ret(None))
-    monkeypatch.setattr(observer_main, "_publish_scan_finished", _async_ret(None))
-    summary = await observer_main.run_one_cycle(
-        engine=None, gate=_Gate(), redis_client=redis, tg_client=None
-    )
+
+    class _InMemorySupervisor:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def run_cycle(self, accounts, run_cabinet):
+            return [
+                await run_cabinet(
+                    account_id,
+                    index,
+                    SimpleNamespace(
+                        ad_account_id=account_id,
+                        owner_instance=uuid.uuid4(),
+                        lease_token=1,
+                    ),
+                )
+                for index, account_id in enumerate(accounts)
+            ]
+
+    # This unit covers the owner guard; lease/fencing behavior has dedicated
+    # PostgreSQL tests and therefore stays outside this engine-less adapter.
+    monkeypatch.setattr(observer_main, "CabinetSupervisor", _InMemorySupervisor)
+    monkeypatch.setattr(observer_main, "assert_cabinet_lease", _async_ret(True))
+    summary = await observer_main.run_one_cycle(engine=None, gate=_Gate())
     observer_main._reset_prepared_accounts()
     assert reached_scan["value"] is True  # гард не сработал, дошли до скан-фазы
     assert summary["outcome"] != "skipped"
-    assert observer_main.MULTI_CAB_NO_OWNER_ALERT_DEDUP_KEY not in redis.store
+    resolve.assert_awaited_once()
+    assert (
+        resolve.await_args.kwargs["incident_key"]
+        == observer_main.OBSERVER_MULTI_CAB_UNSAFE_INCIDENT_KEY
+    )
 
 
 def _async_ret(value):

@@ -48,7 +48,6 @@
   - `get_offer_performance` / `get_insights` — метрики из Meta (нужна Vision-сессия).
   - `analyze_creative` — разбор текста (hook/pain/CTA/proof).
   - `generate_ad_copy` — генерация рекламного текста.
-  - `get_competitor_patterns` — паттерны конкурентов из Ad Library.
 - Новую находку — в нужный раздел по шаблону (в конце файла). С датой и цифрами.
 
 ### Карта макросов трекера (ext_sub в AdSet.pro)

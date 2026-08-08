@@ -2,9 +2,9 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { ComponentType } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { apiSend } = vi.hoisted(() => ({ apiSend: vi.fn() }));
+const { post } = vi.hoisted(() => ({ post: vi.fn() }));
 
-vi.mock("@/lib/api/client", () => ({ apiSend }));
+vi.mock("@/lib/api/generatedClient", () => ({ generatedFetchApi: { POST: post } }));
 
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => options,
@@ -21,7 +21,7 @@ const enterLaunchMode = () => {
 
 describe("RemoteDesktopPage", () => {
   beforeEach(() => {
-    apiSend.mockReset();
+    post.mockReset();
     window.history.replaceState({}, "", "/remote-desktop");
   });
 
@@ -40,25 +40,22 @@ describe("RemoteDesktopPage", () => {
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     expect(screen.getByText(/в новой вкладке/i)).toBeInTheDocument();
-    expect(apiSend).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
   });
 
   // Режим запуска: на монтировании получает билет и заменяет адрес вкладки.
   it("в режиме запуска получает билет и заменяет адрес вкладки", async () => {
     enterLaunchMode();
-    const replace = vi
-      .spyOn(desktopNavigation, "replace")
-      .mockImplementation(() => undefined);
-    apiSend.mockResolvedValue({
-      url: "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
-      expires_at: "2026-07-17T12:00:00Z",
-      transport: "kasm",
+    const replace = vi.spyOn(desktopNavigation, "replace").mockImplementation(() => undefined);
+    post.mockResolvedValue({
+      data: { url: "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use", expires_at: "2026-07-17T12:00:00Z", transport: "kasm" },
+      response: { ok: true },
     });
 
     render(<RemoteDesktopPage />);
 
     await waitFor(() => {
-      expect(apiSend).toHaveBeenCalledWith("POST", "/desktop/launch");
+      expect(post).toHaveBeenCalledWith("/api/desktop/launch");
       expect(replace).toHaveBeenCalledWith(
         "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
       );
@@ -68,7 +65,7 @@ describe("RemoteDesktopPage", () => {
   // Режим запуска, ошибка API: показывает сообщение и ссылку «Повторить».
   it("в режиме запуска показывает ошибку и предлагает повторить", async () => {
     enterLaunchMode();
-    apiSend.mockRejectedValue(new Error("Доступ к рабочему столу запрещён."));
+    post.mockRejectedValue(new Error("Доступ к рабочему столу запрещён."));
 
     render(<RemoteDesktopPage />);
 
@@ -80,13 +77,10 @@ describe("RemoteDesktopPage", () => {
   // Режим запуска, чужой origin в билете: адрес не заменяется, показывается ошибка.
   it("в режиме запуска не переходит по URL вне production desktop origin", async () => {
     enterLaunchMode();
-    const replace = vi
-      .spyOn(desktopNavigation, "replace")
-      .mockImplementation(() => undefined);
-    apiSend.mockResolvedValue({
-      url: "https://evil.example/desktop-auth/redeem?ticket=stolen",
-      expires_at: "2026-07-17T12:00:00Z",
-      transport: "kasm",
+    const replace = vi.spyOn(desktopNavigation, "replace").mockImplementation(() => undefined);
+    post.mockResolvedValue({
+      data: { url: "https://evil.example/desktop-auth/redeem?ticket=stolen", expires_at: "2026-07-17T12:00:00Z", transport: "kasm" },
+      response: { ok: true },
     });
 
     render(<RemoteDesktopPage />);

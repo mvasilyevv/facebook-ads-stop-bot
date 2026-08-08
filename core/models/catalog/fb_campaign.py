@@ -6,9 +6,10 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.schema import conv
 
 from core.models.base import Base, Timestamp, UUIDPrimaryKey
 
@@ -19,13 +20,14 @@ class FbCampaign(UUIDPrimaryKey, Timestamp, Base):
     offer_id — nullable, ON DELETE SET NULL: если оффер удалён, кампания остаётся unmatched.
     fb_campaign_id — Meta numeric ID, уникален только среди NOT NULL (partial UNIQUE) —
     ЭТО идентичность кампании для upsert'а (writers.upsert_catalog_hierarchy).
-    campaign_name НЕ уникально с 0020: одноимённые кампании разных кабинетов сосуществуют.
+    campaign_name не является идентичностью: одноимённые кампании разных
+    кабинетов сосуществуют.
     """
 
     __tablename__ = "fb_campaigns"
     __table_args__ = (
         # Идентичность кампании = fb_campaign_id (partial unique ниже). Имя НЕ уникально:
-        # одноимённые кампании разных кабинетов — разные строки (миграция 0020, HIGH-3).
+        # одноимённые кампании разных кабинетов — разные строки.
         Index("ix_fb_campaigns_campaign_name", "campaign_name"),
         Index(
             "ix_fb_campaigns_fb_id_unique",
@@ -46,7 +48,10 @@ class FbCampaign(UUIDPrimaryKey, Timestamp, Base):
         Index(
             "ix_fb_campaigns_ad_account",
             "ad_account_id",
-            postgresql_where=text("ad_account_id IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "ad_account_id ~ '^[0-9]+$'",
+            name=conv("ck_fb_campaigns_ad_account_identity"),
         ),
     )
 
@@ -54,11 +59,11 @@ class FbCampaign(UUIDPrimaryKey, Timestamp, Base):
         String(32),
         nullable=True,
     )
-    # Мульти-кабинет: числовой ID кабинета (без префикса act_), из которого кампания
-    # просканирована. NULL — историческая запись до мульти-кабинетности.
-    ad_account_id: Mapped[str | None] = mapped_column(
+    # Явный числовой ID кабинета (без префикса act_). Каталог без этой identity
+    # не может породить money-задачу.
+    ad_account_id: Mapped[str] = mapped_column(
         String(32),
-        nullable=True,
+        nullable=False,
     )
     campaign_name: Mapped[str] = mapped_column(
         String(255),

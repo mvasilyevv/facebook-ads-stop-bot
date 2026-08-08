@@ -1,15 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Observer degraded-алерт (Layer 3): доставка через telegram_recipients (инцидент 01.07).
-
-Легаси-путь слал напрямую в telegram_config.chat_id (NULL в проде) и молча
-``return False`` — при слепом канале владелец не получил ни одного degraded-алерта,
-хотя детект отработал трижды. Новый контракт: доставка через notify_recipients
-(тот же путь, что health_watchdog), warning при недоставке, сброс дедупа при
-недоставке (алерт не теряется на TTL).
-"""
+"""Observer degraded incident: durable PostgreSQL notification path."""
 
 from __future__ import annotations
 
+import asyncio
+import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,72 +13,131 @@ import pytest
 import apps.observer_worker.main as ow
 
 
-# Дедуп свободен + notify_recipients доставил → True, текст содержит суть деградации
+# Durable outbox accepted the event.
 @pytest.mark.asyncio
 async def test_degraded_alert_delivers_via_recipients(monkeypatch):
     spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(ow, "notify_recipients", spy)
-    redis = AsyncMock()
-    redis.set = AsyncMock(return_value=True)  # SET NX прошёл — окно свободно
+    monkeypatch.setattr(ow, "notify_recurring_incident", spy)
 
     ok = await ow._maybe_alert_degraded(
         object(),
-        redis,
         consecutive_failures=44,
         last_error="AioRpcError: профиль не запущен",
     )
 
     assert ok is True
     spy.assert_awaited_once()
-    text = spy.await_args.kwargs["text"]
-    assert "деградация" in text.lower()
-    assert "44" in text
-    # Дедуп при успехе НЕ снимается
-    redis.delete.assert_not_awaited()
+    facts = spy.await_args.kwargs
+    assert facts["severity"] == "critical"
+    assert "Observer" in facts["title"]
+    assert "44" in facts["summary"]
+    assert facts["incident_key"] == ow.OBSERVER_DEGRADED_INCIDENT_KEY
+    assert facts["audience"] == "all"
+    assert facts["resource_type"] == "worker"
 
 
-# Дедуп уже стоит (SET NX вернул falsy) → notify_recipients не зовётся, False
+# Every detected tick reaches the durable facade with the same event key.
 @pytest.mark.asyncio
-async def test_degraded_alert_dedup_skips_send(monkeypatch):
-    spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(ow, "notify_recipients", spy)
-    redis = AsyncMock()
-    redis.set = AsyncMock(return_value=None)  # NX: ключ уже существует
+async def test_degraded_alert_repeated_ticks_use_same_event_key(monkeypatch):
+    spy = AsyncMock(side_effect=(True, False))
+    monkeypatch.setattr(ow, "notify_recurring_incident", spy)
 
-    ok = await ow._maybe_alert_degraded(object(), redis, consecutive_failures=5, last_error=None)
+    first = await ow._maybe_alert_degraded(object(), consecutive_failures=5, last_error=None)
+    second = await ow._maybe_alert_degraded(object(), consecutive_failures=6, last_error=None)
 
-    assert ok is False
-    spy.assert_not_awaited()
+    assert first is True
+    assert second is False
+    assert spy.await_count == 2
+    assert {call.kwargs["incident_key"] for call in spy.await_args_list} == {
+        ow.OBSERVER_DEGRADED_INCIDENT_KEY
+    }
 
 
-# notify_recipients вернул False → warning в лог + сброс дедупа (ретрай на след. цикле)
+# Outbox rejection is visible in logs.
 @pytest.mark.asyncio
-async def test_degraded_alert_undelivered_warns_and_rearms(monkeypatch, caplog):
+async def test_degraded_alert_outbox_rejection_warns(monkeypatch, caplog):
     spy = AsyncMock(return_value=False)
-    monkeypatch.setattr(ow, "notify_recipients", spy)
-    redis = AsyncMock()
-    redis.set = AsyncMock(return_value=True)
+    monkeypatch.setattr(ow, "notify_recurring_incident", spy)
 
     with caplog.at_level("WARNING"):
-        ok = await ow._maybe_alert_degraded(
-            object(), redis, consecutive_failures=7, last_error="net down"
-        )
+        ok = await ow._maybe_alert_degraded(object(), consecutive_failures=7, last_error="net down")
 
     assert ok is False
     spy.assert_awaited_once()
-    # Тихий провал запрещён: обязана быть warning-строка о недоставке
-    assert any("не доставлен" in r.getMessage().lower() for r in caplog.records)
-    # Дедуп снят — следующий цикл деградации попробует доставить снова
-    redis.delete.assert_awaited_once_with(ow.DEGRADED_ALERT_DEDUP_KEY)
+    assert any("outbox" in r.getMessage().lower() for r in caplog.records)
 
 
-# redis None (нет дедупа) → False, notify_recipients не зовётся
 @pytest.mark.asyncio
-async def test_degraded_alert_without_redis_noop(monkeypatch):
-    spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(ow, "notify_recipients", spy)
+async def test_degraded_lifecycle_never_resolves_partial_or_unknown(monkeypatch) -> None:
+    state = ow._ObserverState(consecutive_scan_failures=2)
+    alert = AsyncMock(return_value=True)
+    resolve = AsyncMock(return_value=True)
+    monkeypatch.setattr(ow, "_maybe_alert_degraded", alert)
+    monkeypatch.setattr(ow, "resolve_recurring_incident", resolve)
+    monkeypatch.setattr(ow, "DEGRADED_ALERT_THRESHOLD", 3)
 
-    ok = await ow._maybe_alert_degraded(object(), None, consecutive_failures=3, last_error=None)
+    await ow._track_degraded_incident(
+        object(),
+        state=state,
+        summary={"outcome": "partial", "error": "missing rows"},
+    )
+    await ow._track_degraded_incident(
+        object(),
+        state=state,
+        summary={"outcome": "unknown"},
+    )
 
-    assert ok is False
-    spy.assert_not_awaited()
+    assert state.consecutive_scan_failures == 3
+    alert.assert_awaited_once()
+    resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_degraded_lifecycle_resolves_only_confirmed_complete_scan(monkeypatch) -> None:
+    state = ow._ObserverState(consecutive_scan_failures=4)
+    resolve = AsyncMock(return_value=True)
+    monkeypatch.setattr(ow, "resolve_recurring_incident", resolve)
+
+    await ow._track_degraded_incident(
+        object(),
+        state=state,
+        summary={"outcome": "success"},
+    )
+
+    assert state.consecutive_scan_failures == 0
+    resolve.assert_awaited_once()
+    assert resolve.await_args.kwargs["incident_key"] == ow.OBSERVER_DEGRADED_INCIDENT_KEY
+
+
+@pytest.mark.asyncio
+async def test_main_loop_counts_an_unhandled_claimed_scan_crash_once(monkeypatch) -> None:
+    class _Engine:
+        async def dispose(self) -> None:
+            return None
+
+    async def _metrics(*_args, **_kwargs) -> None:
+        await asyncio.Event().wait()
+
+    async def _crash(*_args, **_kwargs):
+        raise RuntimeError("cycle crashed")
+
+    continue_values = iter((True, False))
+    degraded = AsyncMock(return_value=True)
+    monkeypatch.setattr(ow, "start_worker_metrics_server", lambda *_args: None)
+    monkeypatch.setattr(ow, "_get_database_url", lambda: "postgresql+asyncpg://unused")
+    monkeypatch.setattr(ow, "create_async_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr(ow, "metrics_loop", _metrics)
+    task = SimpleNamespace(id=1842, lease_owner=uuid.uuid4(), lease_token=3)
+    monkeypatch.setattr(ow, "claim_observer_scan", AsyncMock(return_value=task))
+    monkeypatch.setattr(ow, "_run_claimed_observer_scan", _crash)
+    monkeypatch.setattr(ow, "_maybe_alert_degraded", degraded)
+    monkeypatch.setattr(ow, "DEGRADED_ALERT_THRESHOLD", 1)
+    monkeypatch.setattr(ow.asyncio, "sleep", AsyncMock())
+
+    await ow.main_loop(
+        gate_factory=AsyncMock(return_value=object()),
+        should_continue=lambda: next(continue_values),
+    )
+
+    degraded.assert_awaited_once()
+    assert degraded.await_args.kwargs["consecutive_failures"] == 1

@@ -1,3 +1,5 @@
+name: fb_agent_vision
+
 services:
   webtop:
     image: ${DESKTOP_WEBTOP_IMAGE:?set DESKTOP_WEBTOP_IMAGE to an immutable image@sha256 reference}
@@ -43,6 +45,11 @@ services:
       timeout: 5s
       retries: 18
       start_period: 30s
+    labels:
+      com.fb-agent.managed: "true"
+      com.fb-agent.cluster-id: ${FB_AGENT_BOOTSTRAP_CLUSTER_ID:?set FB_AGENT_BOOTSTRAP_CLUSTER_ID}
+      com.fb-agent.purpose: vision
+      com.fb-agent.release: ${FB_AGENT_VISION_RELEASE_ID:?set FB_AGENT_VISION_RELEASE_ID}
 
   kasmvnc:
     image: ${DESKTOP_KASMVNC_IMAGE:?set DESKTOP_KASMVNC_IMAGE to an immutable image@sha256 reference}
@@ -70,11 +77,16 @@ services:
       start_period: 20s
     security_opt:
       - no-new-privileges:true
+    labels:
+      com.fb-agent.managed: "true"
+      com.fb-agent.cluster-id: ${FB_AGENT_BOOTSTRAP_CLUSTER_ID:?set FB_AGENT_BOOTSTRAP_CLUSTER_ID}
+      com.fb-agent.purpose: vision
+      com.fb-agent.release: ${FB_AGENT_VISION_RELEASE_ID:?set FB_AGENT_VISION_RELEASE_ID}
 
 volumes:
   x11-socket:
 
 networks:
   fb-agent:
-    name: fb_agent_default
+    name: fb_agent_safety_first_platform
     external: true

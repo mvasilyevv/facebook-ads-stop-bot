@@ -7,11 +7,10 @@
    ручную рекомендацию и проверяется только перед автоматическим исполнением.
 2. Для каждого читает метрики из ad_metrics где cycle_ts > last_transition_at.
 3. Прогоняет через analyzer.should_recommend(...).
-4. Дедуп через Redis (`enable_reco:last:{ad_id}` TTL 6h, NX).
-5. INSERT enable_recommendations; OK при включённом master-toggle безопасно
+4. INSERT enable_recommendations с PostgreSQL idempotency key; OK при включённом master-toggle безопасно
    переводится в enable-задачу, WARNING остаётся ручным решением.
-6. SEND TG-алерт best-effort: ошибка доставки не откатывает рекомендацию/задачу.
-7. Heartbeat `worker:heartbeat:enable_reco` TTL 60s.
+5. Пишет deterministic event в PostgreSQL notification outbox; доставляет gateway worker.
+6. Process liveness is exported through the worker Prometheus endpoint.
 
 Graceful shutdown по SIGTERM/SIGINT.
 """
@@ -31,10 +30,9 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from core.db import WORKER_ENGINE_KWARGS
-from core.enable_reco.alert import EnableRecoRenderInput, render_enable_reco_alert
 from core.enable_reco.analyzer import (
     AnalyzerThresholds,
     MetricSnapshot,
@@ -48,21 +46,20 @@ from core.enable_reco.confirmation import (
     RecommendationUnsafeStateError,
     promote_enable_recommendation,
 )
+from core.meta_api.account_tz import canonical_account_id, resolve_account_currencies
+from core.money import UnsupportedCurrencyExponentError, currency_exponent
 from core.observer.queries import load_scanning_enabled
-from core.telegram.service import load_active_recipients, load_telegram_config
-from core.telegram.web_app_url import load_web_app_url, normalize_web_app_base
+from core.telegram.worker_notify import notify_owners_in_transaction
+from core.worker_metrics import mark_worker_heartbeat
 
 logger = logging.getLogger(__name__)
 
 WORKER_NAME = "enable_reco"
-HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
-HEARTBEAT_TTL_SECONDS = 60
+_METRICS_INTERVAL_SECONDS = 15.0
 
 INTERVAL_SECONDS = int(os.environ.get("ENABLE_RECO_INTERVAL_SEC", "300"))
 # Минимальный возраст «отключённости» до выдачи рекомендации (защита от мгновенного включения)
 COOLDOWN_SECONDS = int(os.environ.get("ENABLE_RECO_COOLDOWN_SEC", "3600"))
-# Дедуп между рекомендациями для одного ad (6 часов по умолчанию)
-DEDUP_TTL_SECONDS = int(os.environ.get("ENABLE_RECO_DEDUP_TTL_SEC", str(6 * 3600)))
 # Лимит кандидатов за один цикл — защита от лавинной нагрузки
 MAX_CANDIDATES_PER_CYCLE = int(os.environ.get("ENABLE_RECO_MAX_PER_CYCLE", "50"))
 # Метрики после last_transition_at — окно по умолчанию шире cooldown'а
@@ -70,11 +67,6 @@ METRICS_LOOKBACK_SECONDS = int(os.environ.get("ENABLE_RECO_METRICS_LOOKBACK_SEC"
 # Кейс куратора: «показов мало + CTR хороший» → рекомендация hold_until_cpl.
 CURATOR_IMPR_CEILING = int(os.environ.get("ENABLE_RECO_CURATOR_IMPR_CEILING", "500"))
 CURATOR_CTR_FLOOR = os.environ.get("ENABLE_RECO_CURATOR_CTR_FLOOR", "3.0")
-# Денежный фолбэк-кап grace для офферов без cpa_threshold (ревью M-1).
-CURATOR_FALLBACK_SPEND_CAP = os.environ.get("ENABLE_RECO_CURATOR_FALLBACK_CAP", "10.00")
-
-DEDUP_KEY_PREFIX = "enable_reco:last:"
-
 
 # ====================== Контракт строки кандидата ======================
 
@@ -93,6 +85,8 @@ class CandidateRow:
     snoozed_until: datetime | None
     offer_code: str | None
     cpa_threshold: Decimal | None
+    ad_account_id: str | None = None
+    offer_currency: str | None = None
     frequency_threshold: Decimal | None = None
     stop_percent_of_rule: Decimal | None = None
     warning_percent_of_stop: Decimal | None = None
@@ -116,7 +110,9 @@ _CANDIDATES_SQL = text(
         st.last_transition_at,
         st.snoozed_until,
         o.code AS offer_code,
+        c.ad_account_id,
         r.cpa_threshold,
+        r.currency,
         r.frequency_threshold,
         r.stop_percent_of_rule,
         r.warning_percent_of_stop,
@@ -138,7 +134,7 @@ _CANDIDATES_SQL = text(
             WHERE tq.task_type = 'meta_api_mutation'
               AND tq.payload->>'mutation_kind' = 'pause_ad'
               AND tq.payload->>'target_id' = a.fb_ad_id
-              AND tq.status IN ('draft', 'pending', 'running', 'retrying')
+              AND tq.status IN ('pending', 'running', 'retrying')
         ) AS has_unfinished_pause
     FROM ad_alert_state st
     JOIN fb_ads a ON a.id = st.ad_id
@@ -186,15 +182,17 @@ async def fetch_candidates(engine: AsyncEngine, *, limit: int) -> list[Candidate
             last_transition_at=r[6],
             snoozed_until=r[7],
             offer_code=str(r[8]) if r[8] else None,
-            cpa_threshold=r[9],
-            frequency_threshold=r[10],
-            stop_percent_of_rule=r[11],
-            warning_percent_of_stop=r[12],
-            tracker_registrations=int(r[13] or 0),
-            tracker_confirmed_deposits=int(r[14] or 0),
-            open_state_token=r[15],
-            delivery_status=str(r[16]) if r[16] else None,
-            has_unfinished_pause=bool(r[17]),
+            ad_account_id=canonical_account_id(r[9]),
+            cpa_threshold=r[10],
+            offer_currency=str(r[11]) if r[11] else None,
+            frequency_threshold=r[12],
+            stop_percent_of_rule=r[13],
+            warning_percent_of_stop=r[14],
+            tracker_registrations=int(r[15] or 0),
+            tracker_confirmed_deposits=int(r[16] or 0),
+            open_state_token=r[17],
+            delivery_status=str(r[18]) if r[18] else None,
+            has_unfinished_pause=bool(r[19]),
         )
         for r in rows
     ]
@@ -229,51 +227,15 @@ async def fetch_metrics_since(
     ]
 
 
-# ====================== Redis: дедуп и heartbeat ======================
+# ====================== Prometheus process signal ======================
 
 
-async def is_recently_recommended(redis_client, ad_id: uuid.UUID) -> bool:
-    """Проверка дедупа: уже рекомендовали в течение DEDUP_TTL_SECONDS?"""
-    if redis_client is None:
-        return False
-    key = f"{DEDUP_KEY_PREFIX}{ad_id}"
-    try:
-        existing = await redis_client.get(key)
-        return existing is not None
-    except Exception:  # noqa: BLE001
-        logger.exception("redis GET %s упал", key)
-        return False
-
-
-async def mark_recommended(redis_client, ad_id: uuid.UUID) -> bool:
-    """Ставит дедуп-ключ. Возвращает True если новая запись (SET NX), False если уже стоял."""
-    if redis_client is None:
-        return True
-    key = f"{DEDUP_KEY_PREFIX}{ad_id}"
-    try:
-        ok = await redis_client.set(key, "1", ex=DEDUP_TTL_SECONDS, nx=True)
-        return bool(ok)
-    except Exception:  # noqa: BLE001
-        logger.exception("redis SET NX %s упал", key)
-        return False
-
-
-async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
-    """Фоновый heartbeat: пишет worker:heartbeat:enable_reco каждые TTL/2.
-
-    Отдельный таск, НЕ завязан на основной цикл (раз в INTERVAL_SECONDS=300с): при TTL 60с
-    ключ протухал между прогонами, и health_watchdog слал ложные «enable_reco не дышит».
-    """
-    if redis_client is None:
-        return
-    interval = HEARTBEAT_TTL_SECONDS / 2
+async def metrics_loop(stop: asyncio.Event) -> None:
+    """Refresh Prometheus independently of the slow recommendation interval."""
     while not stop.is_set():
+        mark_worker_heartbeat(WORKER_NAME)
         try:
-            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
-        except Exception:  # noqa: BLE001
-            logger.exception("enable_reco heartbeat: ошибка записи в Redis")
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=interval)
+            await asyncio.wait_for(stop.wait(), timeout=_METRICS_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
             pass
 
@@ -282,7 +244,7 @@ async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
 
 
 async def insert_recommendation(
-    engine: AsyncEngine,
+    connection: AsyncConnection,
     *,
     ad_id: uuid.UUID,
     level: str,
@@ -290,102 +252,62 @@ async def insert_recommendation(
     live_batch_started_at: datetime,
     idempotency_key: str,
 ) -> uuid.UUID | None:
-    """INSERT в enable_recommendations. Идемпотентен по idempotency_key."""
+    """Insert inside the caller's recommendation/outbox transaction."""
     rec_id = uuid.uuid4()
-    async with engine.begin() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO enable_recommendations
-                        (id, ad_id, snapshot_metrics, recommendation_level,
-                         live_batch_started_at, idempotency_key)
-                    VALUES
-                        (:rid, :aid, CAST(:snap AS JSONB), :lvl, :batch, :ik)
-                    ON CONFLICT (idempotency_key) DO NOTHING
-                    RETURNING id
-                    """
-                ),
-                {
-                    "rid": rec_id,
-                    "aid": ad_id,
-                    "snap": json.dumps(snapshot or {}),
-                    "lvl": level,
-                    "batch": live_batch_started_at,
-                    "ik": idempotency_key,
-                },
-            )
-        ).first()
+    row = (
+        await connection.execute(
+            text(
+                """
+                INSERT INTO enable_recommendations
+                    (id, ad_id, snapshot_metrics, recommendation_level,
+                     live_batch_started_at, idempotency_key)
+                VALUES
+                    (:rid, :aid, CAST(:snap AS JSONB), :lvl, :batch, :ik)
+                ON CONFLICT (idempotency_key) DO NOTHING
+                RETURNING id
+                """
+            ),
+            {
+                "rid": rec_id,
+                "aid": ad_id,
+                "snap": json.dumps(snapshot or {}),
+                "lvl": level,
+                "batch": live_batch_started_at,
+                "ik": idempotency_key,
+            },
+        )
+    ).first()
     return row[0] if row else None
 
 
-# ====================== TG отправка ======================
+# ====================== Notification outbox ======================
 
 
-async def send_alert(
-    tg_client,
+async def enqueue_recommendation_notification(
+    connection: AsyncConnection,
     *,
     candidate: CandidateRow,
     decision: RecommendationDecision,
     recommendation_id: uuid.UUID,
-    engine: Any,
     auto_promoted: bool = False,
 ) -> bool:
-    """Шлёт TG-алерт с inline-кнопкой «Включить» всем активным recipients.
-
-    Возвращает True при успешной доставке ≥1 получателю, False при сбое или отсутствии TG.
-    mark_recommended должен вызываться ТОЛЬКО при True — иначе рекомендация теряется навсегда.
-    """
-    web_app_base = normalize_web_app_base(await load_web_app_url(engine))
-    text_body, reply_markup = render_enable_reco_alert(
-        EnableRecoRenderInput(
-            recommendation_id=str(recommendation_id),
-            fb_ad_id=candidate.fb_ad_id,
-            ad_name=candidate.ad_name,
-            campaign_name=candidate.campaign_name,
-            adset_name=candidate.adset_name,
-            offer_code=candidate.offer_code,
-            decision=decision,
-            web_app_base=web_app_base,
-        )
+    """Project the card inside the recommendation/task transaction."""
+    title = (
+        f"Автовключение в очереди · {candidate.offer_code or candidate.ad_name}"
+        if auto_promoted
+        else f"Рекомендация · {candidate.offer_code or candidate.ad_name}"
     )
-    if auto_promoted:
-        text_body = "⚡ Автовключение поставлено в очередь\n\n" + text_body
-        reply_markup = None
-
-    if tg_client is None:
-        logger.warning(
-            "TG не настроен — рекомендация для fb_ad_id=%s только в лог", candidate.fb_ad_id
-        )
-        return False
-    try:
-        recipients = await load_active_recipients(engine)
-    except Exception:  # noqa: BLE001
-        logger.exception("send_alert: не удалось загрузить recipients")
-        return False
-    if not recipients:
-        logger.warning(
-            "send_alert: нет активных recipients — рекомендация для %s только в лог",
-            candidate.fb_ad_id,
-        )
-        return False
-    delivered = False
-    for r in recipients:
-        try:
-            await tg_client.send_message(
-                chat_id=str(r.chat_id),
-                text=text_body,
-                reply_markup=reply_markup,
-                parse_mode="HTML",
-            )
-            delivered = True
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "send_alert: не доставлено chat_id=%s (fb_ad_id=%s)",
-                r.chat_id,
-                candidate.fb_ad_id,
-            )
-    return delivered
+    reasons = list(decision.reasons or ())[:2]
+    return await notify_owners_in_transaction(
+        connection,
+        event_type="enable_recommendation",
+        severity="warning",
+        title=title,
+        summary=f"Объявление: {candidate.ad_name}",
+        lines=[*(f"Причина: {reason}" for reason in reasons)],
+        status="queued" if auto_promoted else "decision_required",
+        dedupe_key=f"enable-recommendation:{recommendation_id}",
+    )
 
 
 async def load_auto_enable_recommendations(engine: AsyncEngine) -> bool:
@@ -410,8 +332,6 @@ async def load_auto_enable_recommendations(engine: AsyncEngine) -> bool:
 async def run_once(
     engine: AsyncEngine,
     *,
-    redis_client,
-    tg_client,
     thresholds: AnalyzerThresholds | None = None,
     now: datetime | None = None,
 ) -> dict[str, int]:
@@ -423,7 +343,6 @@ async def run_once(
     thresholds = thresholds or AnalyzerThresholds(
         curator_impr_ceiling=CURATOR_IMPR_CEILING,
         curator_ctr_floor=Decimal(CURATOR_CTR_FLOOR),
-        curator_fallback_spend_cap=Decimal(CURATOR_FALLBACK_SPEND_CAP),
     )
 
     # Асимметричный стоп: на паузе сканирования рекомендации включения бессмысленны
@@ -431,7 +350,7 @@ async def run_once(
     if not await load_scanning_enabled(engine):
         return {
             "candidates": 0,
-            "skipped_dedup": 0,
+            "skipped_existing": 0,
             "skipped_decision": 0,
             "recommendations": 0,
             "alerts_sent": 0,
@@ -441,7 +360,7 @@ async def run_once(
     candidates = await fetch_candidates(engine, limit=MAX_CANDIDATES_PER_CYCLE)
     counts = {
         "candidates": len(candidates),
-        "skipped_dedup": 0,
+        "skipped_existing": 0,
         "skipped_decision": 0,
         "recommendations": 0,
         "alerts_sent": 0,
@@ -451,10 +370,37 @@ async def run_once(
 
     auto_enable_on = await load_auto_enable_recommendations(engine)
     batch_started_at = now
+    currency_resolution = await resolve_account_currencies(
+        engine,
+        account_ids=[
+            account_id
+            for candidate in candidates
+            if (account_id := canonical_account_id(candidate.ad_account_id))
+        ],
+        now=now,
+    )
 
     for cand in candidates:
-        if await is_recently_recommended(redis_client, cand.ad_id):
-            counts["skipped_dedup"] += 1
+        account_id = canonical_account_id(cand.ad_account_id)
+        account_currency = currency_resolution.currencies.get(account_id)
+        if account_currency is None:
+            counts["skipped_decision"] += 1
+            logger.warning(
+                "skip ad_id=%s fb_ad_id=%s: cabinet currency is unavailable",
+                cand.ad_id,
+                cand.fb_ad_id,
+            )
+            continue
+        try:
+            account_currency_exponent = currency_exponent(account_currency)
+        except UnsupportedCurrencyExponentError:
+            counts["skipped_decision"] += 1
+            logger.warning(
+                "skip ad_id=%s fb_ad_id=%s: currency %s has no reviewed exponent",
+                cand.ad_id,
+                cand.fb_ad_id,
+                account_currency,
+            )
             continue
 
         since = max(
@@ -477,10 +423,13 @@ async def run_once(
             metrics=metrics,
             offer=OfferThresholds(
                 cpa_threshold=cand.cpa_threshold,
+                currency=cand.offer_currency,
                 frequency_threshold=cand.frequency_threshold,
                 stop_percent_of_rule=cand.stop_percent_of_rule,
                 warning_percent_of_stop=cand.warning_percent_of_stop,
             ),
+            account_currency=account_currency,
+            currency_exponent=account_currency_exponent,
             thresholds=thresholds,
             allow_curator=curator_allowed,
             tracker_registrations=cand.tracker_registrations,
@@ -513,63 +462,60 @@ async def run_once(
             "incident_open_state_token": str(cand.open_state_token),
             "incident_last_transition_at": cand.last_transition_at.isoformat(),
         }
-        new_id = await insert_recommendation(
-            engine,
-            ad_id=cand.ad_id,
-            level=decision.level or "warning",
-            snapshot=recommendation_snapshot,
-            live_batch_started_at=batch_started_at,
-            idempotency_key=idem_key,
-        )
+        # Recommendation, optional activation task and its operator card are one
+        # durable decision. A projection failure rolls the whole unit back.
+        async with engine.begin() as conn:
+            new_id = await insert_recommendation(
+                conn,
+                ad_id=cand.ad_id,
+                level=decision.level or "warning",
+                snapshot=recommendation_snapshot,
+                live_batch_started_at=batch_started_at,
+                idempotency_key=idem_key,
+            )
 
-        # Если запись не создалась (idempotency_key уже есть в БД) — алерт не шлём
-        if new_id is None:
-            counts["skipped_decision"] += 1
-            continue
+            # Если запись не создалась (idempotency_key уже есть в БД) — алерт не шлём
+            if new_id is None:
+                counts["skipped_existing"] += 1
+                continue
+
+            auto_promoted = False
+            if auto_enable_on and decision.level == "ok":
+                try:
+                    await promote_enable_recommendation(
+                        engine,
+                        recommendation_id=new_id,
+                        requested_by="auto_enable_recommendation_worker",
+                        auto_mode=True,
+                        connection=conn,
+                    )
+                    auto_promoted = True
+                except (
+                    RecommendationAlreadyPromotedError,
+                    RecommendationNotFoundError,
+                    RecommendationUnsafeStateError,
+                ) as exc:
+                    counts["auto_promotion_failed"] = counts.get("auto_promotion_failed", 0) + 1
+                    logger.info(
+                        "auto-enable revalidation rejected recommendation=%s ad=%s: %s",
+                        new_id,
+                        cand.fb_ad_id,
+                        exc,
+                    )
+
+            sent = await enqueue_recommendation_notification(
+                conn,
+                candidate=cand,
+                decision=decision,
+                recommendation_id=new_id,
+                auto_promoted=auto_promoted,
+            )
 
         counts["recommendations"] += 1
-
-        auto_promoted = False
-        if auto_enable_on and decision.level == "ok":
-            try:
-                await promote_enable_recommendation(
-                    engine,
-                    recommendation_id=new_id,
-                    requested_by="auto_enable_recommendation_worker",
-                    auto_mode=True,
-                )
-                auto_promoted = True
-                counts["auto_promoted"] = counts.get("auto_promoted", 0) + 1
-            except (
-                RecommendationAlreadyPromotedError,
-                RecommendationNotFoundError,
-                RecommendationUnsafeStateError,
-            ) as exc:
-                counts["auto_promotion_failed"] = counts.get("auto_promotion_failed", 0) + 1
-                logger.info(
-                    "auto-enable revalidation rejected recommendation=%s ad=%s: %s",
-                    new_id,
-                    cand.fb_ad_id,
-                    exc,
-                )
-
-        # Уведомление best-effort: web-рекомендация и auto-задача уже сохранены.
-        # Ошибка Telegram не откатывает решение и не скрывает его от Dashboard.
-        sent = await send_alert(
-            tg_client,
-            candidate=cand,
-            decision=decision,
-            recommendation_id=new_id,
-            engine=engine,
-            auto_promoted=auto_promoted,
-        )
+        if auto_promoted:
+            counts["auto_promoted"] = counts.get("auto_promoted", 0) + 1
         if not sent:
             counts["send_failed"] = counts.get("send_failed", 0) + 1
-            continue
-
-        # Дедуп по Redis (NX) — ставим только после успешной отправки
-        if not await mark_recommended(redis_client, cand.ad_id):
-            counts["skipped_dedup"] += 1
             continue
 
         counts["alerts_sent"] += 1
@@ -590,9 +536,6 @@ def _timedelta_safe(seconds: int):
 async def main_loop(
     *,
     engine_factory: Callable[[], Awaitable[AsyncEngine]] | None = None,
-    redis_factory: Callable[[], Awaitable[object]] | None = None,
-    tg_factory: Callable[[AsyncEngine], Awaitable[tuple[object, str | None, int | None]]]
-    | None = None,
     should_continue: Callable[[], bool] = lambda: True,
 ) -> None:
     """Бесконечный цикл.
@@ -600,12 +543,8 @@ async def main_loop(
     Все factories допускают подмену в тестах. По умолчанию используются прод-реализации.
     """
     engine_factory = engine_factory or _default_engine_factory
-    redis_factory = redis_factory or _default_redis_factory
-    tg_factory = tg_factory or _default_tg_factory
 
     engine = await engine_factory()
-    redis_client = await redis_factory()
-    tg_client, _chat_id, _thread_id = await tg_factory(engine)
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -615,9 +554,7 @@ async def main_loop(
         except (NotImplementedError, RuntimeError):
             pass
 
-    # Фоновый heartbeat — независим от основного цикла (раз в 300с), чтобы ключ
-    # worker:heartbeat:enable_reco (TTL 60с) не протухал между прогонами.
-    hb_task = asyncio.create_task(heartbeat_loop(redis_client, stop_event))
+    metrics_task = asyncio.create_task(metrics_loop(stop_event))
 
     logger.info(
         "enable_recommendation_worker запущен (interval=%ss, cooldown=%ss)",
@@ -630,8 +567,6 @@ async def main_loop(
             try:
                 summary = await run_once(
                     engine,
-                    redis_client=redis_client,
-                    tg_client=tg_client,
                 )
                 if any(v > 0 for v in summary.values()):
                     logger.info("enable_reco counts: %s", summary)
@@ -645,23 +580,11 @@ async def main_loop(
                 pass
     finally:
         logger.info("enable_recommendation_worker остановлен")
-        hb_task.cancel()
+        metrics_task.cancel()
         try:
-            await hb_task
+            await metrics_task
         except asyncio.CancelledError:
             pass
-        if redis_client is not None:
-            try:
-                await redis_client.aclose()
-            except Exception:  # noqa: BLE001
-                pass
-        if tg_client is not None:
-            try:
-                close = getattr(tg_client, "close", None)
-                if close is not None:
-                    await close()
-            except Exception:  # noqa: BLE001
-                pass
         await engine.dispose()
 
 
@@ -674,48 +597,12 @@ async def _default_engine_factory() -> AsyncEngine:
     return create_async_engine(get_settings().database_url, **WORKER_ENGINE_KWARGS)
 
 
-async def _default_redis_factory():
-    try:
-        import redis.asyncio as redis_asyncio  # type: ignore
-    except ImportError:
-        logger.warning("redis package не установлен — дедуп и heartbeat отключены")
-        return None
-
-    url = os.environ.get("REDIS_URL", "redis://localhost:6380/0")
-    return redis_asyncio.from_url(url, decode_responses=True)
-
-
-async def _default_tg_factory(engine: AsyncEngine):
-    """Возвращает (client, None, None).
-
-    thread_id убран: алерты идут через send_alert → load_active_recipients (DM каждому).
-    chat_id не используется в прод-пути (engine передаётся напрямую в run_once).
-    """
-    from core.telegram.client import TelegramBotClient
-
-    try:
-        cfg = await load_telegram_config(engine)
-    except Exception:  # noqa: BLE001
-        logger.exception("не удалось прочитать telegram_config")
-        return None, None, None
-
-    if cfg is None or not cfg.bot_token:
-        logger.warning("telegram_config пуст — алерты только в лог")
-        return None, None, None
-
-    client = TelegramBotClient(cfg.bot_token)
-    # thread_id убран: рассылка через load_active_recipients в send_alert (нет forum-топика)
-    return client, None, None
-
-
 __all__ = [
     "CandidateRow",
+    "enqueue_recommendation_notification",
     "fetch_candidates",
     "fetch_metrics_since",
     "insert_recommendation",
-    "is_recently_recommended",
     "main_loop",
-    "mark_recommended",
     "run_once",
-    "send_alert",
 ]

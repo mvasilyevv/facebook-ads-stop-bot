@@ -12,8 +12,6 @@ async pg_engine fixture из conftest работала в том же event loop
 
 from __future__ import annotations
 
-import json
-
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -57,8 +55,10 @@ async def test_get_observer_settings_returns_defaults(
     assert data["is_scanning_enabled"] is False
     assert isinstance(data["default_interval_seconds"], int)
     assert data["auto_enable_recommendations"] is False
-    # Поля перенесены в OfferRule — возвращаем null для стабильного shape.
-    assert data["warning_percent_of_stop"] is None
+    assert "warning_percent_of_stop" not in data
+    assert "cpc_warning_percent" not in data
+    assert "cpl_warning_percent" not in data
+    assert "cpr_warning_percent" not in data
 
 
 # PUT обновляет поля, последующий GET отражает изменения.
@@ -153,7 +153,7 @@ async def test_patch_scanning_enable_blocked_when_nothing_monitored(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.patch("/api/settings/observer/scanning", json={"enabled": True})
         assert resp.status_code == 409
-        assert "кампани" in resp.json()["detail"].lower()
+        assert "кампани" in resp.json()["message"].lower()
         # Флаг НЕ включился — скан остался off.
         get_after = await ac.get("/api/settings/observer")
     assert get_after.json()["is_scanning_enabled"] is False
@@ -177,7 +177,7 @@ async def test_patch_scanning_enable_allowed_when_monitored(
         assert resp.json()["is_scanning_enabled"] is True
 
 
-# PATCH /auto-enable меняет колонку auto_enable_recommendations (проверка миграции 0003).
+# PATCH /auto-enable меняет baseline-колонку auto_enable_recommendations.
 @pytest.mark.asyncio
 async def test_patch_auto_enable_toggles_column(
     pg_engine, fake_redis_client, clean_observer_config
@@ -199,50 +199,60 @@ async def test_patch_auto_enable_toggles_column(
     assert get_resp.json()["auto_enable_recommendations"] is False
 
 
-# POST /scan-now публикует сообщение в Redis-канал fb_agent:observer:trigger.
+# POST /scan-now создаёт durable interactive task без Redis control-path.
 @pytest.mark.asyncio
-async def test_scan_now_publishes_to_redis(fake_redis_client):
-    app = _make_app(redis=fake_redis_client)
-
-    # Подписываемся на канал до публикации.
-    pubsub = fake_redis_client.pubsub()
-    await pubsub.subscribe("fb_agent:observer:trigger")
-    # Пропускаем subscribe-confirmation сообщение.
-    await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
-
+async def test_scan_now_enqueues_durable_interactive_task(
+    pg_engine, fake_redis_client, clean_observer_config
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/settings/observer/scan-now")
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["task_id"] > 0
+    assert body["correlation_id"]
 
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "triggered"
+    async with pg_engine.begin() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT task_type, status, lane, priority, requested_by, payload,
+                           EXTRACT(EPOCH FROM (deadline_at - created_at)) AS deadline_seconds
+                    FROM task_queue WHERE id = :task_id
+                    """
+                ),
+                {"task_id": body["task_id"]},
+            )
+        ).one()
+        assert row.task_type == "observer_scan"
+        assert row.status == "pending"
+        assert row.lane == "interactive"
+        assert row.priority == 75
+        assert row.requested_by == "operator_api"
+        assert row.payload == {"reason": "operator_scan_now"}
+        assert 119 <= float(row.deadline_seconds) <= 121
+        await conn.execute(
+            text("DELETE FROM task_queue WHERE id = :task_id"), {"task_id": body["task_id"]}
+        )
 
-    # Читаем сообщение из pubsub.
-    msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-    assert msg is not None
-    assert msg["type"] == "message"
-    data = json.loads(msg["data"])
-    assert data["requested_by"] == "api"
-    assert "ts" in data
 
-    await pubsub.unsubscribe("fb_agent:observer:trigger")
-    await pubsub.aclose()
-
-
-# POST /scan-now без Redis → 503 (Redis недоступен).
 @pytest.mark.asyncio
-async def test_scan_now_returns_503_when_redis_unavailable():
-    """Подменяем redis на объект чей publish бросает RuntimeError."""
+async def test_scan_now_does_not_depend_on_redis(pg_engine, clean_observer_config):
     from unittest.mock import AsyncMock, MagicMock
 
     broken_redis = MagicMock()
     broken_redis.publish = AsyncMock(side_effect=RuntimeError("Redis недоступен"))
 
-    app = _make_app(redis=broken_redis)
+    app = _make_app(engine=pg_engine, redis=broken_redis)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/settings/observer/scan-now")
-
-    assert resp.status_code == 503
-    assert "Redis" in resp.json()["detail"]
+    assert resp.status_code == 202
+    task_id = resp.json()["task_id"]
+    broken_redis.publish.assert_not_awaited()
+    async with pg_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM task_queue WHERE id = :task_id"), {"task_id": task_id})
 
 
 # GET отдаёт пустой campaign_ids по умолчанию; scan_source выпилен (am_tabular — единственный).
@@ -271,6 +281,83 @@ async def test_patch_campaigns_sets_allowlist(pg_engine, fake_redis_client, clea
         assert r.json()["campaign_ids"] == ["120244801453970044", "120244530626090044"]
         g = await ac.get("/api/settings/observer")
         assert len(g.json()["campaign_ids"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_refresh_campaigns_requires_postgresql_vision_credentials(
+    pg_engine,
+    fake_redis_client,
+    clean_observer_config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import patch
+
+    monkeypatch.setenv("VISION_X_TOKEN", "must-not-be-used")
+    monkeypatch.setenv("VISION_PROFILE_ID", "must-not-be-used")
+    async with pg_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM vision_config"))
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    with patch("clients.python_grpc.client.BrowserAgentClient") as client_ctor:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            response = await ac.post(
+                "/api/settings/observer/campaigns/refresh",
+                params={"ad_account_id": "123"},
+            )
+
+    assert response.status_code == 409
+    assert response.json()["message"] == "Vision runtime не настроен"
+    client_ctor.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_refresh_campaigns_is_blocked_by_browser_maintenance(
+    pg_engine,
+    fake_redis_client,
+    clean_observer_config,
+) -> None:
+    import uuid
+    from unittest.mock import patch
+
+    owner = uuid.uuid4().hex
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO system_config (key, value, description)
+                VALUES (
+                  'browser_maintenance',
+                  jsonb_build_object(
+                    'owner', CAST(:owner AS text),
+                    'expires_at', clock_timestamp() + interval '5 minutes'
+                  ),
+                  'test'
+                )
+                ON CONFLICT (key) DO UPDATE
+                SET value = EXCLUDED.value,
+                    description = EXCLUDED.description,
+                    updated_at = clock_timestamp()
+                """
+            ),
+            {"owner": owner},
+        )
+    try:
+        app = _make_app(engine=pg_engine, redis=fake_redis_client)
+        with patch("clients.python_grpc.client.BrowserAgentClient") as client_ctor:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as ac:
+                response = await ac.post(
+                    "/api/settings/observer/campaigns/refresh",
+                    params={"ad_account_id": "123"},
+                )
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(text("DELETE FROM system_config WHERE key = 'browser_maintenance'"))
+
+    assert response.status_code == 409
+    client_ctor.assert_not_called()
 
 
 # PUT с is_scanning_enabled=true проходит гейт «нечего сканировать» → 409 (аудит 2026-07-12, C-1).

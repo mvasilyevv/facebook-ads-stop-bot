@@ -4,14 +4,8 @@ import { useState } from "react";
 import { MiniHeader } from "@/components/layout/MiniHeader";
 import { Button } from "@/components/ui";
 import { Eyebrow } from "@/components/data";
-import { fetchJson } from "@/lib/api";
+import { tmaFetchApi } from "@/lib/auth";
 import { haptic, openLink } from "@/lib/tg";
-
-interface DesktopLaunchResponse {
-  url: string;
-  expires_at: string;
-  transport: "kasm";
-}
 
 const DESKTOP_ORIGIN = "https://desktop.adpulse.su";
 
@@ -40,10 +34,8 @@ function RemoteDesktopPage() {
     setConnectionError(null);
     setIsConnecting(true);
     try {
-      const payload = await fetchJson<DesktopLaunchResponse>("/desktop/launch", {
-        method: "POST",
-      });
-      if (typeof payload.url !== "string" || payload.url.length === 0) {
+      const { data: payload, response } = await tmaFetchApi.POST("/api/desktop/launch");
+      if (!response.ok || !payload?.url) {
         throw new Error("Сервер вернул некорректный билет рабочего стола.");
       }
       if (payload.transport !== "kasm") {
@@ -62,11 +54,15 @@ function RemoteDesktopPage() {
 
   return (
     <div className="flex min-h-full flex-col pb-6">
-      <MiniHeader eyebrowNum="05" eyebrow="SYSTEM · REMOTE" title="Рабочий стол" />
+      <MiniHeader
+        eyebrowNum="05"
+        eyebrow="СИСТЕМА · УДАЛЁННЫЙ ДОСТУП"
+        title="Рабочий стол"
+      />
 
       <div className="flex flex-col gap-5 p-4">
-        <section className="overflow-hidden rounded-[var(--radius-3)] border border-[var(--hairline-strong)] bg-bg-1">
-          <div className="flex min-h-[156px] flex-col items-center justify-center gap-3 border-b border-[var(--hairline)] px-5 py-6 text-center">
+        <section className="overflow-hidden rounded-[var(--radius-3)] border border-[var(--color-hairline-strong)] bg-bg-1">
+          <div className="flex min-h-[156px] flex-col items-center justify-center gap-3 border-b border-[var(--color-hairline)] px-5 py-6 text-center">
             <span className="flex size-14 items-center justify-center rounded-[var(--radius-3)] bg-bg-3 text-accent">
               <MonitorUp size={28} strokeWidth={1.5} aria-hidden="true" />
             </span>

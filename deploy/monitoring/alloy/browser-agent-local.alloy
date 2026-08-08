@@ -1,0 +1,25 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// Same-host monitoring only. The regular Docker discovery cannot observe an
+// IP for a container using network_mode: container:vision-webtop.
+prometheus.scrape "browser_agent" {
+  targets = [{
+    "__address__"       = "vision-webtop:9464",
+    "deployment_color" = "independent",
+    "job"               = "fb-agent-runtime",
+    "node"              = "local-app-host",
+    "service"           = "browser-agent",
+  }]
+  forward_to      = [prometheus.remote_write.local.receiver]
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+}
+
+prometheus.remote_write "local" {
+  endpoint {
+    url = "http://prometheus:9090/api/v1/write"
+  }
+}

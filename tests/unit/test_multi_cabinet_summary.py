@@ -36,17 +36,43 @@ def test_all_error_gives_error() -> None:
     assert agg["error"] == "boom"
 
 
-# Один success среди ошибок → цикл success (частичный провал НЕ считается деградацией).
-def test_any_success_gives_success() -> None:
+# Один success среди ошибок → explicit partial, а не false-green.
+def test_success_plus_error_gives_partial() -> None:
     agg = _aggregate_cycle_summary([_acc("error", error="x"), _acc("success", with_offer=3)])
-    assert agg["outcome"] == "success"
+    assert agg["outcome"] == "partial"
     assert agg["rows_with_offer"] == 3
 
 
-# Смесь empty+error без success → empty (скан жив, данных нет).
-def test_empty_plus_error_gives_empty() -> None:
+# Смесь empty+error не является подтверждённым нулём.
+def test_empty_plus_error_gives_partial() -> None:
     agg = _aggregate_cycle_summary([_acc("empty"), _acc("error", error="x")])
+    assert agg["outcome"] == "partial"
+
+
+def test_empty_only_is_confirmed_empty() -> None:
+    agg = _aggregate_cycle_summary([_acc("empty"), _acc("empty", acc_id="222")])
     assert agg["outcome"] == "empty"
+
+
+def test_timeout_or_skipped_never_becomes_success() -> None:
+    assert _aggregate_cycle_summary([_acc("success"), _acc("timeout")])["outcome"] == "partial"
+    assert _aggregate_cycle_summary([_acc("empty"), _acc("skipped")])["outcome"] == "partial"
+
+
+def test_lock_skip_without_scan_id_does_not_crash_aggregation() -> None:
+    summary = _aggregate_cycle_summary(
+        [
+            _acc("success"),
+            {
+                "ad_account_id": "222",
+                "outcome": "skipped",
+                "error": "cabinet_actor_lock_held",
+            },
+        ]
+    )
+
+    assert summary["outcome"] == "partial"
+    assert summary["accounts"][1]["scan_id"] is None
 
 
 # Worst-case агрегация для адаптивного интервала: stop в ОДНОМ кабинете → CRITICAL цикла.
@@ -71,13 +97,13 @@ def test_warning_in_one_account_gives_elevated_mode() -> None:
     assert resolve_scan_mode(agg) == "ELEVATED"
 
 
-# Счётчики суммируются по кабинетам; scan_id — последний (совместимость со старым summary).
-def test_counters_summed_and_last_scan_id() -> None:
+# Счётчики суммируются, а scan identity остаётся привязанной к кабинету.
+def test_counters_summed_and_scan_ids_stay_per_account() -> None:
     a1 = _acc("success", with_offer=2)
     a1["scan_id"] = 10
     a2 = _acc("success", with_offer=3, acc_id="222")
     a2["scan_id"] = 11
     agg = _aggregate_cycle_summary([a1, a2])
     assert agg["rows_total"] == 5
-    assert agg["scan_id"] == 11
+    assert [account["scan_id"] for account in agg["accounts"]] == [10, 11]
     assert agg["duration_ms"] == 200

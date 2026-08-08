@@ -60,7 +60,7 @@ class _FakeTool:
 def test_register_unique_and_duplicate() -> None:
     reg = ToolRegistry()
     reg.register(_FakeTool("alpha", RiskLevel.READ_ONLY))
-    reg.register(_FakeTool("beta", RiskLevel.DRAFT_REQUIRED))
+    reg.register(_FakeTool("beta", RiskLevel.CREATIVE))
     assert reg.list_names() == ["alpha", "beta"]
 
     with pytest.raises(ValueError):
@@ -81,23 +81,23 @@ def test_unregister_and_get() -> None:
 def test_list_by_risk_splits_correctly() -> None:
     reg = ToolRegistry()
     a = _FakeTool("a", RiskLevel.READ_ONLY)
-    b = _FakeTool("b", RiskLevel.DRAFT_REQUIRED)
+    b = _FakeTool("b", RiskLevel.CREATIVE)
     c = _FakeTool("c", RiskLevel.READ_ONLY)
     reg.register(a)
     reg.register(b)
     reg.register(c)
 
     read_only = reg.list_by_risk(RiskLevel.READ_ONLY)
-    drafts = reg.list_by_risk(RiskLevel.DRAFT_REQUIRED)
+    creative = reg.list_by_risk(RiskLevel.CREATIVE)
     assert sorted(t.name for t in read_only) == ["a", "c"]
-    assert [t.name for t in drafts] == ["b"]
+    assert [t.name for t in creative] == ["b"]
 
 
 # schemas() возвращает плоский список схем (по числу tools).
 def test_schemas_returns_list() -> None:
     reg = ToolRegistry()
     reg.register(_FakeTool("a", RiskLevel.READ_ONLY))
-    reg.register(_FakeTool("b", RiskLevel.DRAFT_REQUIRED))
+    reg.register(_FakeTool("b", RiskLevel.CREATIVE))
     schemas = reg.schemas()
     assert len(schemas) == 2
     assert {s["name"] for s in schemas} == {"a", "b"}

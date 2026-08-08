@@ -6,7 +6,6 @@ import {
   isValidCountryCode,
   searchCountries,
 } from "../geo";
-import { alertStateCssVar } from "../../constants/states";
 
 describe("deriveGeoFromNames — единый гео-парсер web/mini", () => {
   // Классический формат имени кампании: гео отдельным токеном через « | ».
@@ -79,20 +78,5 @@ describe("searchCountries — поиск по имени/коду, хранит 
   it("исключает выбранные коды", () => {
     const res = searchCountries("", { exclude: ["GH"], limit: 300 });
     expect(res.some((c) => c.code === "GH")).toBe(false);
-  });
-});
-
-describe("alertStateCssVar — state → FSM-токен", () => {
-  // Токены названы по СТАДИИ: warning_sent → --fsm-warning (НЕ --fsm-warning_sent).
-  // Регресс бага mini: невидимая точка для warning/stop из-за несуществующего токена.
-  it("warning_sent/stop_sent маппятся на токены стадий", () => {
-    expect(alertStateCssVar("warning_sent")).toBe("var(--fsm-warning)");
-    expect(alertStateCssVar("stop_sent")).toBe("var(--fsm-stop)");
-  });
-
-  // UPPERCASE из TMA-API нормализуется.
-  it("нормализует UPPERCASE и null", () => {
-    expect(alertStateCssVar("STOP_SENT")).toBe("var(--fsm-stop)");
-    expect(alertStateCssVar(null)).toBe("var(--fsm-normal)");
   });
 });

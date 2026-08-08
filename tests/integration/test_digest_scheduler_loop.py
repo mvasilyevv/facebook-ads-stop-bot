@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Интеграционные тесты apps/digest_scheduler/main.run_one_tick.
+"""Интеграционные тесты durable digest scheduler.
 
-Используем fake_redis_client + БД из docker-compose + monkeypatch для TG.
-Меняем системное время через явный параметр `now`, чтобы прогонять
-сценарии «в окне / вне окна / повтор после отправки».
+Scheduler только фиксирует event/deliveries в PostgreSQL-outbox. Telegram I/O
+выполняет отдельный delivery worker и здесь намеренно не мокается как success.
 """
 
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import pytest
@@ -19,41 +17,11 @@ from sqlalchemy import text
 
 from apps.digest_scheduler.main import (
     DigestWindow,
-    digest_sent_key,
     run_one_tick,
 )
 from core.config import get_settings
 from core.crypto import encrypt
-
-
-@dataclass
-class FakeTGClient:
-    """Минимальный стаб TelegramBotClient: фиксирует все send_message вызовы."""
-
-    sent: list[dict] = field(default_factory=list)
-    closed: bool = False
-
-    async def send_message(
-        self,
-        *,
-        chat_id: str,
-        text: str,
-        message_thread_id: int | None = None,
-        reply_markup: dict | None = None,
-        parse_mode: str | None = "HTML",
-    ) -> dict:
-        self.sent.append(
-            {
-                "chat_id": chat_id,
-                "text": text,
-                "thread_id": message_thread_id,
-                "parse_mode": parse_mode,
-            }
-        )
-        return {"message_id": len(self.sent)}
-
-    async def close(self) -> None:
-        self.closed = True
+from core.telegram.gateway import telegram_credential_fingerprint
 
 
 @pytest_asyncio.fixture
@@ -62,6 +30,13 @@ async def clean_loop_tables(pg_engine):
 
     async def _truncate():
         async with pg_engine.begin() as conn:
+            for t in (
+                "telegram_action_tokens",
+                "telegram_message_slots",
+                "notification_deliveries",
+                "notification_events",
+            ):
+                await conn.execute(text(f"DELETE FROM {t}"))
             for t in (
                 "task_queue",
                 "alert_events",
@@ -72,10 +47,11 @@ async def clean_loop_tables(pg_engine):
                 "fb_campaigns",
                 "offer_rules",
                 "offers",
-                "telegram_recipients",
                 "telegram_config",
             ):
                 await conn.execute(text(f"DELETE FROM {t}"))
+            await conn.execute(text("DELETE FROM telegram_recipient_preferences"))
+            await conn.execute(text("DELETE FROM telegram_recipients"))
 
     await _truncate()
     yield
@@ -86,156 +62,164 @@ async def _seed_tg_config_and_recipient(pg_engine) -> tuple[int, str]:
     """Кладёт singleton telegram_config с зашифрованным токеном + 1 recipient."""
     bot_token = "1234567:ABC"
     enc = encrypt(bot_token)
+    fingerprint = bytes.fromhex(telegram_credential_fingerprint(bot_token))
     chat_id = 555_000_111
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
                 """
                 INSERT INTO telegram_config
-                    (singleton_key, bot_token_encrypted, chat_id, poller_offset)
-                VALUES ('default', :tok, :cid, 0)
+                    (singleton_key, bot_token_encrypted, bot_token_fingerprint,
+                     is_enabled, webhook_generation, webhook_applied_generation,
+                     webhook_operation, webhook_state, webhook_configured_at)
+                VALUES ('default', :tok, :fingerprint,
+                        TRUE, 1, 1, 'configure', 'configured', NOW())
                 ON CONFLICT (singleton_key) DO UPDATE
                 SET bot_token_encrypted = EXCLUDED.bot_token_encrypted,
-                    chat_id = EXCLUDED.chat_id
+                    bot_token_fingerprint = EXCLUDED.bot_token_fingerprint,
+                    is_enabled = TRUE,
+                    webhook_generation = 1,
+                    webhook_applied_generation = 1,
+                    webhook_operation = 'configure',
+                    webhook_state = 'configured',
+                    webhook_configured_at = NOW()
                 """
             ),
-            {"tok": enc, "cid": chat_id},
+            {"tok": enc, "fingerprint": fingerprint},
         )
-        await conn.execute(
-            text(
-                """
+        recipient_id = (
+            await conn.execute(
+                text(
+                    """
                 INSERT INTO telegram_recipients (chat_id, telegram_user_id, role)
                 VALUES (:cid, :uid, 'owner')
+                RETURNING id
                 """
+                ),
+                {"cid": chat_id, "uid": 999_111_222},
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                "INSERT INTO telegram_recipient_preferences (recipient_id, min_severity) "
+                "VALUES (:recipient_id, 'ok')"
             ),
-            {"cid": chat_id, "uid": 999_111_222},
+            {"recipient_id": recipient_id},
         )
     return chat_id, bot_token
 
 
-def _factory_recording(captured: list[FakeTGClient]):
-    """Фабрика, которая создаёт новый FakeTGClient и сохраняет его в captured."""
-
-    def _factory(_bot_token: str) -> FakeTGClient:
-        client = FakeTGClient()
-        captured.append(client)
-        return client
-
-    return _factory
-
-
-# В окне 09:00 UTC и Redis-флаг ещё не выставлен → digest отправляется
+# В окне 09:00 UTC event и delivery атомарно ставятся в durable outbox.
 @pytest.mark.asyncio
-async def test_run_one_tick_sends_in_window(
-    pg_engine, fake_redis_client, clean_loop_tables
-) -> None:
+async def test_run_one_tick_queues_in_window(pg_engine, clean_loop_tables) -> None:
     chat_id, _ = await _seed_tg_config_and_recipient(pg_engine)
     now = datetime(2026, 5, 27, 9, 0, 0, tzinfo=timezone.utc)
-    window = DigestWindow(hour=9, minute=0, window_minutes=5)
+    window = DigestWindow(hour=9, minute=0)
 
-    captured: list[FakeTGClient] = []
     status = await run_one_tick(
         engine=pg_engine,
-        redis_client=fake_redis_client,
-        tg_client_factory=_factory_recording(captured),
         now=now,
         window=window,
     )
-    assert status == "sent"
-    assert len(captured) == 1
-    assert len(captured[0].sent) == 1
-    assert captured[0].sent[0]["chat_id"] == str(chat_id)
-    assert captured[0].sent[0]["parse_mode"] == "HTML"
-    assert captured[0].closed is True
+    assert status == "queued"
 
-    # Флаг проставлен
-    assert await fake_redis_client.get(digest_sent_key(now)) == "1"
+    async with pg_engine.connect() as conn:
+        event = (
+            await conn.execute(
+                text(
+                    "SELECT event_type, audience, facts FROM notification_events "
+                    "WHERE dedupe_key = 'daily-digest:2026-05-27'"
+                )
+            )
+        ).one()
+        deliveries = (
+            await conn.execute(
+                text("SELECT state, telegram_chat_id FROM notification_deliveries ORDER BY id")
+            )
+        ).all()
+    assert event.event_type == "daily_digest"
+    assert event.audience == "all"
+    assert "Spend не подтверждён" in event.facts["summary"]
+    assert any("Деньги:" in line for line in event.facts["lines"])
+    assert deliveries == [("pending", chat_id)]
 
 
 # Повторный прогон в этом же окне (через минуту) → не шлёт повторно
 @pytest.mark.asyncio
-async def test_run_one_tick_skips_when_already_sent(
-    pg_engine, fake_redis_client, clean_loop_tables
-) -> None:
+async def test_run_one_tick_skips_when_already_sent(pg_engine, clean_loop_tables) -> None:
     await _seed_tg_config_and_recipient(pg_engine)
     now1 = datetime(2026, 5, 27, 9, 0, 0, tzinfo=timezone.utc)
     now2 = datetime(2026, 5, 27, 9, 1, 0, tzinfo=timezone.utc)
-    window = DigestWindow(hour=9, minute=0, window_minutes=5)
-
-    captured: list[FakeTGClient] = []
-    factory = _factory_recording(captured)
+    window = DigestWindow(hour=9, minute=0)
 
     first = await run_one_tick(
         engine=pg_engine,
-        redis_client=fake_redis_client,
-        tg_client_factory=factory,
         now=now1,
         window=window,
     )
     second = await run_one_tick(
         engine=pg_engine,
-        redis_client=fake_redis_client,
-        tg_client_factory=factory,
         now=now2,
         window=window,
     )
 
-    assert first == "sent"
+    assert first == "queued"
     assert second == "already_sent"
-    # Клиент создан только один раз
-    assert len(captured) == 1
-    assert len(captured[0].sent) == 1
+    async with pg_engine.connect() as conn:
+        assert (
+            await conn.scalar(
+                text(
+                    "SELECT COUNT(*) FROM notification_events "
+                    "WHERE dedupe_key = 'daily-digest:2026-05-27'"
+                )
+            )
+            == 1
+        )
 
 
 # 08:00 UTC — до планового времени → out_of_window (catch-up открывается с 09:00)
 @pytest.mark.asyncio
-async def test_run_one_tick_out_of_window(pg_engine, fake_redis_client, clean_loop_tables) -> None:
+async def test_run_one_tick_out_of_window(pg_engine, clean_loop_tables) -> None:
     await _seed_tg_config_and_recipient(pg_engine)
     now = datetime(2026, 5, 27, 8, 0, 0, tzinfo=timezone.utc)
-    window = DigestWindow(hour=9, minute=0, window_minutes=5)
+    window = DigestWindow(hour=9, minute=0)
 
-    captured: list[FakeTGClient] = []
     status = await run_one_tick(
         engine=pg_engine,
-        redis_client=fake_redis_client,
-        tg_client_factory=_factory_recording(captured),
         now=now,
         window=window,
     )
     assert status == "out_of_window"
-    assert captured == []
-    assert await fake_redis_client.get(digest_sent_key(now)) is None
 
 
-# В окне, но telegram_config пустой → ничего не шлём, но и не ставим флаг
-# (чтобы при появлении токена на следующем тике дойти до отправки)
+# Отсутствие bot config не влияет на commit event; credential gate живёт в delivery worker.
 @pytest.mark.asyncio
-async def test_run_one_tick_no_tg_config(
-    pg_engine, fake_redis_client, clean_loop_tables, monkeypatch
+async def test_run_one_tick_queues_without_tg_config(
+    pg_engine, clean_loop_tables, monkeypatch
 ) -> None:
-    # CI всегда задаёт TELEGRAM_BOT_TOKEN. Для сценария «не настроено нигде»
-    # явно выключаем env-bootstrap, иначе чистая БД корректно создаст singleton.
-    monkeypatch.setattr(get_settings(), "telegram_bot_token", SecretStr(""))
+    # Env не является runtime credential source; чистая БД остаётся чистой.
+    monkeypatch.setattr(
+        get_settings(),
+        "telegram_bot_token",
+        SecretStr("123456789:RUNTIME_MUST_NOT_IMPORT"),
+    )
     now = datetime(2026, 5, 27, 9, 0, 0, tzinfo=timezone.utc)
-    window = DigestWindow(hour=9, minute=0, window_minutes=5)
+    window = DigestWindow(hour=9, minute=0)
 
-    captured: list[FakeTGClient] = []
     status = await run_one_tick(
         engine=pg_engine,
-        redis_client=fake_redis_client,
-        tg_client_factory=_factory_recording(captured),
         now=now,
         window=window,
     )
-    assert status == "no_tg_config"
-    assert captured == []
-    # Флаг не ставится — иначе пропустим день
-    assert await fake_redis_client.get(digest_sent_key(now)) is None
+    assert status == "queued"
+    async with pg_engine.connect() as conn:
+        assert await conn.scalar(text("SELECT COUNT(*) FROM notification_events")) == 1
+        assert await conn.scalar(text("SELECT COUNT(*) FROM notification_deliveries")) == 0
 
 
-# Конфиг есть, recipient'ов нет → флаг ставим (не задвоим), но никому не пишем
+# Без recipients event остаётся durable, deliveries появятся только для текущей аудитории.
 @pytest.mark.asyncio
-async def test_run_one_tick_no_recipients(pg_engine, fake_redis_client, clean_loop_tables) -> None:
+async def test_run_one_tick_queues_without_recipients(pg_engine, clean_loop_tables) -> None:
     # Только telegram_config, без recipient'ов
     enc = encrypt("1234:abc")
     async with pg_engine.begin() as conn:
@@ -243,38 +227,35 @@ async def test_run_one_tick_no_recipients(pg_engine, fake_redis_client, clean_lo
             text(
                 """
                 INSERT INTO telegram_config
-                    (singleton_key, bot_token_encrypted, chat_id, poller_offset)
-                VALUES ('default', :tok, :cid, 0)
+                    (singleton_key, bot_token_encrypted)
+                VALUES ('default', :tok)
                 ON CONFLICT (singleton_key) DO UPDATE
-                SET bot_token_encrypted = EXCLUDED.bot_token_encrypted,
-                    chat_id = EXCLUDED.chat_id
+                SET bot_token_encrypted = EXCLUDED.bot_token_encrypted
                 """
             ),
-            {"tok": enc, "cid": 123},
+            {"tok": enc},
         )
 
     now = datetime(2026, 5, 27, 9, 1, 0, tzinfo=timezone.utc)
-    window = DigestWindow(hour=9, minute=0, window_minutes=5)
+    window = DigestWindow(hour=9, minute=0)
 
-    captured: list[FakeTGClient] = []
     status = await run_one_tick(
         engine=pg_engine,
-        redis_client=fake_redis_client,
-        tg_client_factory=_factory_recording(captured),
         now=now,
         window=window,
     )
-    assert status == "no_recipients"
-    assert captured == []
-    assert await fake_redis_client.get(digest_sent_key(now)) == "1"
+    assert status == "queued"
+    async with pg_engine.connect() as conn:
+        assert await conn.scalar(text("SELECT COUNT(*) FROM notification_events")) == 1
+        assert await conn.scalar(text("SELECT COUNT(*) FROM notification_deliveries")) == 0
 
 
 # Revoked recipient игнорируется
 @pytest.mark.asyncio
-async def test_run_one_tick_skips_revoked_recipients(
-    pg_engine, fake_redis_client, clean_loop_tables
-) -> None:
-    enc = encrypt("1234:abc")
+async def test_run_one_tick_skips_revoked_recipients(pg_engine, clean_loop_tables) -> None:
+    bot_token = "1234:abc"
+    enc = encrypt(bot_token)
+    fingerprint = bytes.fromhex(telegram_credential_fingerprint(bot_token))
     chat_active = 100
     chat_revoked = 200
     async with pg_engine.begin() as conn:
@@ -282,43 +263,65 @@ async def test_run_one_tick_skips_revoked_recipients(
             text(
                 """
                 INSERT INTO telegram_config
-                    (singleton_key, bot_token_encrypted, chat_id, poller_offset)
-                VALUES ('default', :tok, :cid, 0)
+                    (singleton_key, bot_token_encrypted, bot_token_fingerprint,
+                     is_enabled, webhook_generation, webhook_applied_generation,
+                     webhook_operation, webhook_state, webhook_configured_at)
+                VALUES ('default', :tok, :fingerprint,
+                        TRUE, 1, 1, 'configure', 'configured', NOW())
                 ON CONFLICT (singleton_key) DO UPDATE
                 SET bot_token_encrypted = EXCLUDED.bot_token_encrypted,
-                    chat_id = EXCLUDED.chat_id
+                    bot_token_fingerprint = EXCLUDED.bot_token_fingerprint,
+                    is_enabled = TRUE,
+                    webhook_generation = 1,
+                    webhook_applied_generation = 1,
+                    webhook_operation = 'configure',
+                    webhook_state = 'configured',
+                    webhook_configured_at = NOW()
                 """
             ),
-            {"tok": enc, "cid": chat_active},
+            {"tok": enc, "fingerprint": fingerprint},
         )
-        await conn.execute(
-            text(
-                """
+        recipient_rows = (
+            await conn.execute(
+                text(
+                    """
                 INSERT INTO telegram_recipients (chat_id, telegram_user_id, role, revoked_at)
                 VALUES
                     (:c1, :u1, 'owner', NULL),
                     (:c2, :u2, 'recipient', NOW())
+                RETURNING id, chat_id
                 """
+                ),
+                {
+                    "c1": chat_active,
+                    "u1": uuid.uuid4().int % 1_000_000_000,
+                    "c2": chat_revoked,
+                    "u2": uuid.uuid4().int % 1_000_000_000,
+                },
+            )
+        ).all()
+        active_recipient_id = next(row.id for row in recipient_rows if row.chat_id == chat_active)
+        await conn.execute(
+            text(
+                "INSERT INTO telegram_recipient_preferences (recipient_id, min_severity) "
+                "VALUES (:recipient_id, 'ok')"
             ),
-            {
-                "c1": chat_active,
-                "u1": uuid.uuid4().int % 1_000_000_000,
-                "c2": chat_revoked,
-                "u2": uuid.uuid4().int % 1_000_000_000,
-            },
+            {"recipient_id": active_recipient_id},
         )
 
     now = datetime(2026, 5, 27, 9, 0, 0, tzinfo=timezone.utc)
-    window = DigestWindow(hour=9, minute=0, window_minutes=5)
+    window = DigestWindow(hour=9, minute=0)
 
-    captured: list[FakeTGClient] = []
     status = await run_one_tick(
         engine=pg_engine,
-        redis_client=fake_redis_client,
-        tg_client_factory=_factory_recording(captured),
         now=now,
         window=window,
     )
-    assert status == "sent"
-    sent_chat_ids = {m["chat_id"] for m in captured[0].sent}
-    assert sent_chat_ids == {str(chat_active)}
+    assert status == "queued"
+    async with pg_engine.connect() as conn:
+        sent_chat_ids = set(
+            (
+                await conn.execute(text("SELECT telegram_chat_id FROM notification_deliveries"))
+            ).scalars()
+        )
+    assert sent_chat_ids == {chat_active}

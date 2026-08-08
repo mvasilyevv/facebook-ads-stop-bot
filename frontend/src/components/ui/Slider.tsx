@@ -32,7 +32,7 @@ export function Slider({
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between">
-        <label htmlFor={id} className="text-[11px] font-display tracking-wider uppercase text-bg-9">
+        <label htmlFor={id} className="text-[12px] font-display tracking-wider uppercase text-bg-9">
           {label}
         </label>
         <span className="font-display tabular-nums text-[13px] text-accent">{value}%</span>
@@ -48,12 +48,12 @@ export function Slider({
         aria-label={label}
         onChange={(e) => onChange(Number(e.target.value))}
         className={[
-          "h-6 min-h-6 w-full accent-[var(--accent)] cursor-pointer",
+          "h-11 min-h-11 w-full accent-[var(--color-accent)] cursor-pointer",
           "disabled:opacity-40 disabled:cursor-not-allowed",
           "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
         ].join(" ")}
       />
-      {hint ? <span className="text-[11px] text-bg-9">{hint}</span> : null}
+      {hint ? <span className="text-[12px] text-bg-9">{hint}</span> : null}
     </div>
   );
 }

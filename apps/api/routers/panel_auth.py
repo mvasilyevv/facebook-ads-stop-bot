@@ -6,14 +6,13 @@ from __future__ import annotations
 import html
 import json
 import logging
-import time
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from apps.api.deps import DepEngine, DepRedis, DepSettings
+from apps.api.deps import DepEngine, DepSettings
 from core.auth.panel_access import (
     PANEL_SESSION_COOKIE,
     TELEGRAM_JWKS_URL,
@@ -28,7 +27,6 @@ from core.auth.panel_access import (
     create_panel_ticket,
     delete_panel_session,
     load_panel_session,
-    mark_owner_checked,
     safe_return_to,
     save_oidc_attempt,
     verify_telegram_id_token,
@@ -39,7 +37,6 @@ from core.telegram.service import find_recipient_by_telegram_user_id
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["panel-auth"])
 
-_JWKS_CACHE_KEY = "panel_auth:v1:telegram_jwks"
 _NO_STORE = {
     "Cache-Control": "no-store",
     "Pragma": "no-cache",
@@ -130,25 +127,14 @@ def _clear_session_cookie(response: Response) -> None:
 async def resolve_panel_session(
     request: Request,
     engine: DepEngine,
-    redis: DepRedis,
     settings: DepSettings,
 ) -> tuple[str, PanelSession] | None:
-    """Resolve a server-side session and periodically recheck the owner role."""
+    """Resolve a session only while its Telegram recipient is an active owner."""
+    del settings
     token = request.cookies.get(PANEL_SESSION_COOKIE)
-    session = await load_panel_session(redis, token)
+    session = await load_panel_session(engine, token)
     if session is None or token is None:
         return None
-    now = int(time.time())
-    if now - session.owner_checked_at >= settings.panel_auth_owner_recheck_seconds:
-        recipient = await find_recipient_by_telegram_user_id(
-            engine, telegram_user_id=session.telegram_user_id
-        )
-        if recipient is None or recipient.role != "owner":
-            await delete_panel_session(redis, token)
-            return None
-        session = await mark_owner_checked(redis, token, session, now)
-        if session is None:
-            return None
     return token, session
 
 
@@ -182,16 +168,11 @@ async def _exchange_code(
     return token
 
 
-async def _load_jwks(redis: DepRedis, *, force_refresh: bool = False) -> dict:
-    if not force_refresh:
-        cached = await redis.get(_JWKS_CACHE_KEY)
-        if cached:
-            try:
-                parsed = json.loads(cached)
-                if isinstance(parsed, dict):
-                    return parsed
-            except json.JSONDecodeError:
-                pass
+async def _load_jwks(*, force_refresh: bool = False) -> dict:
+    # ``force_refresh`` documents the single key-rotation retry at the caller.
+    # JWKS is intentionally fetched without Redis: panel authentication must
+    # remain available when the optional cache/wakeup service is unavailable.
+    del force_refresh
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             response = await client.get(TELEGRAM_JWKS_URL)
@@ -205,7 +186,6 @@ async def _load_jwks(redis: DepRedis, *, force_refresh: bool = False) -> dict:
         raise PanelAuthError("Telegram вернул некорректные ключи") from exc
     if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list):
         raise PanelAuthError("Telegram вернул некорректные ключи")
-    await redis.set(_JWKS_CACHE_KEY, json.dumps(jwks, separators=(",", ":")), ex=3600)
     return jwks
 
 
@@ -220,7 +200,7 @@ async def login(settings: DepSettings, return_to: str | None = Query(default=Non
 
 @router.get("/telegram/start", include_in_schema=False)
 async def telegram_start(
-    redis: DepRedis,
+    engine: DepEngine,
     settings: DepSettings,
     return_to: str | None = Query(default=None),
 ) -> Response:
@@ -232,7 +212,7 @@ async def telegram_start(
             redirect_uri=settings.telegram_oidc_redirect_uri,
             return_to=return_to,
         )
-        await save_oidc_attempt(redis, state, attempt, settings.panel_auth_state_ttl_seconds)
+        await save_oidc_attempt(engine, state, attempt, settings.panel_auth_state_ttl_seconds)
     except PanelAuthError as exc:
         return _auth_error(str(exc), status_code=503)
     return RedirectResponse(url, status_code=303, headers=_NO_STORE)
@@ -241,14 +221,13 @@ async def telegram_start(
 @router.get("/telegram/callback", include_in_schema=False)
 async def telegram_callback(
     engine: DepEngine,
-    redis: DepRedis,
     settings: DepSettings,
     state: str = Query(default=""),
     code: str = Query(default=""),
     error: str | None = Query(default=None),
 ) -> Response:
     try:
-        attempt = await consume_oidc_attempt(redis, state)
+        attempt = await consume_oidc_attempt(engine, state)
         if error:
             raise PanelAuthError("Вход отменён в Telegram")
         if not code:
@@ -260,7 +239,7 @@ async def telegram_callback(
             code=code,
             verifier=attempt.code_verifier,
         )
-        jwks = await _load_jwks(redis)
+        jwks = await _load_jwks()
         try:
             claims = verify_telegram_id_token(
                 id_token,
@@ -272,7 +251,7 @@ async def telegram_callback(
             # Key rotation: refresh once, then fail closed if the kid is still unknown.
             claims = verify_telegram_id_token(
                 id_token,
-                jwks=await _load_jwks(redis, force_refresh=True),
+                jwks=await _load_jwks(force_refresh=True),
                 client_id=settings.telegram_oidc_client_id,
                 nonce=attempt.nonce,
             )
@@ -284,7 +263,7 @@ async def telegram_callback(
             logger.warning("Panel Telegram login denied (telegram_user_id=%d)", telegram_user_id)
             raise PanelAuthError("Этот Telegram-аккаунт не назначен владельцем панели")
         ticket, _ = await create_panel_ticket(
-            redis,
+            engine,
             telegram_user_id=telegram_user_id,
             source="telegram_oidc",
             return_to=attempt.return_to,
@@ -302,19 +281,18 @@ async def telegram_callback(
 @router.get("/redeem", include_in_schema=False)
 async def redeem(
     engine: DepEngine,
-    redis: DepRedis,
     settings: DepSettings,
     ticket: str = Query(default=""),
 ) -> Response:
     try:
-        grant = await consume_panel_ticket(redis, ticket)
+        grant = await consume_panel_ticket(engine, ticket)
         recipient = await find_recipient_by_telegram_user_id(
             engine, telegram_user_id=grant.telegram_user_id
         )
         if recipient is None or recipient.role != "owner":
             raise PanelAuthError("Доступ владельца был отозван")
         token, _ = await create_panel_session(
-            redis,
+            engine,
             telegram_user_id=grant.telegram_user_id,
             role="owner",
             source=grant.source,
@@ -331,12 +309,21 @@ async def redeem(
 async def verify(
     request: Request,
     engine: DepEngine,
-    redis: DepRedis,
     settings: DepSettings,
 ) -> Response:
-    resolved = await resolve_panel_session(request, engine, redis, settings)
+    resolved = await resolve_panel_session(request, engine, settings)
     if resolved is not None:
-        return Response(status_code=200, headers=_NO_STORE)
+        _token, session = resolved
+        return Response(
+            status_code=200,
+            headers={
+                **_NO_STORE,
+                # Caddy copies this server-derived identity onto the original
+                # request after stripping the client-provided header from the
+                # verifier subrequest.  It is attribution, not authorization.
+                "X-Verified-Operator-Principal": (f"panel:{session.telegram_user_id}"),
+            },
+        )
 
     forwarded_uri = safe_return_to(request.headers.get("x-forwarded-uri"))
     login_url = "/auth/login?" + urlencode({"return_to": forwarded_uri})
@@ -353,8 +340,8 @@ async def verify(
 
 
 @router.get("/logout", include_in_schema=False)
-async def logout(request: Request, redis: DepRedis) -> Response:
-    await delete_panel_session(redis, request.cookies.get(PANEL_SESSION_COOKIE))
+async def logout(request: Request, engine: DepEngine) -> Response:
+    await delete_panel_session(engine, request.cookies.get(PANEL_SESSION_COOKIE))
     response = RedirectResponse("/auth/login", status_code=303, headers=_NO_STORE)
     _clear_session_cookie(response)
     return response

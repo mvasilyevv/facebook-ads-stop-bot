@@ -16,25 +16,40 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   errorMessage?: string;
 }
 
-export function Select({ label, options, errorMessage, id, className, ...rest }: SelectProps) {
+export function Select({
+  label,
+  options,
+  errorMessage,
+  id,
+  className,
+  "aria-describedby": ariaDescribedBy,
+  "aria-invalid": ariaInvalid,
+  ...rest
+}: SelectProps) {
   const generatedId = useId();
   const selectId = id ?? generatedId;
+  const errorId = `${selectId}-error`;
+  const describedBy = [ariaDescribedBy, errorMessage ? errorId : undefined]
+    .filter(Boolean)
+    .join(" ");
   return (
     <div className="flex flex-col gap-1">
       {label && (
         <label
           htmlFor={selectId}
-          className="text-[11px] uppercase tracking-[0.07em] text-[var(--color-bg-9)] font-mono"
+          className="text-[12px] uppercase tracking-[0.07em] text-[var(--color-bg-9)] font-mono"
         >
           {label}
         </label>
       )}
       <select
         id={selectId}
+        aria-describedby={describedBy || undefined}
+        aria-invalid={errorMessage ? true : ariaInvalid}
         {...rest}
         className={cn(
           "min-h-[44px] px-3 w-full appearance-none rounded-[var(--radius-2)]",
-          "bg-[var(--color-bg-2)] border border-[var(--hairline)]",
+          "bg-[var(--color-bg-2)] border border-[var(--color-hairline)]",
           "text-[14px] text-[var(--color-bg-11)] font-body",
           "focus:outline-none focus:border-[var(--color-accent)]",
           "disabled:opacity-40 disabled:cursor-not-allowed",
@@ -50,7 +65,13 @@ export function Select({ label, options, errorMessage, id, className, ...rest }:
         ))}
       </select>
       {errorMessage && (
-        <p className="text-[12px] text-[var(--color-danger)]">{errorMessage}</p>
+        <p
+          id={errorId}
+          role="alert"
+          className="text-[12px] text-[var(--color-danger)]"
+        >
+          {errorMessage}
+        </p>
       )}
     </div>
   );

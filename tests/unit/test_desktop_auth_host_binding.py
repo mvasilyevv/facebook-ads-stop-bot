@@ -23,7 +23,6 @@ async def test_ticket_and_session_are_bound_to_desktop_hostname(monkeypatch):
         _env_file=None,
         require_api_key=False,
         desktop_public_origin="https://desktop.adpulse.su",
-        desktop_access_owner_recheck_seconds=60,
     )
 
     async def recipient(_engine, *, telegram_user_id):

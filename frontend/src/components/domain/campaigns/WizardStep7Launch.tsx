@@ -2,21 +2,20 @@
  * Шаг 7 — Запуск и прогресс.
  *
  * - Кнопка «Залить кампанию» → POST /tools/campaigns/launch → run_id
- * - Поллинг GET /runs/{run_id} каждые 3 сек до терминального статуса
+ * - Progress updates arrive through the PostgreSQL-authoritative operator stream
  * - Прогресс-шкала по статусу: queued → uniquifying → uploading → creating → succeeded
  * - При succeeded: список созданных Meta-ID
- * - При failed: ошибка + кнопка cleanup
+ * - При failed: ошибка + created IDs для ручной сверки
  */
 
-import { type FC, useState, useEffect } from "react";
+import { type FC, useState } from "react";
+import { campaignRunRequiresManualReview } from "@fb/shared";
 import {
   Rocket,
   CheckCircle,
   XCircle,
   Loader2,
   ExternalLink,
-  Trash2,
-  RefreshCw,
   ChevronDown,
   Copy,
   Check,
@@ -28,12 +27,11 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import {
   useLaunchCampaign,
   useRunDetail,
-  useCleanupRun,
   RUN_STATUS_LABELS,
-  TERMINAL_RUN_STATUSES,
   type CampaignConfig,
   type RunStatus,
 } from "@/lib/api/campaigns";
+import { CampaignRunManualReview } from "./CampaignRunManualReview";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -48,13 +46,7 @@ interface WizardStep7LaunchProps {
 
 // ─── Шаги прогресса ──────────────────────────────────────────────────────────
 
-const PROGRESS_STEPS: RunStatus[] = [
-  "queued",
-  "uniquifying",
-  "uploading",
-  "creating",
-  "succeeded",
-];
+const PROGRESS_STEPS: RunStatus[] = ["queued", "uniquifying", "uploading", "creating", "succeeded"];
 
 const STATUS_STEP_INDEX: Partial<Record<RunStatus, number>> = {
   queued: 0,
@@ -74,7 +66,6 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
   onFinish,
 }) => {
   const launchMut = useLaunchCampaign();
-  const cleanupMut = useCleanupRun();
 
   const handleLaunch = () => {
     launchMut.mutate(
@@ -85,46 +76,33 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
     );
   };
 
-  // Повтор после ошибки: тот же config, но СВЕЖИЙ idempotency_key (иначе launch вернёт
-  // тот же упавший run по ON CONFLICT). Концепты переиспользуются — воркер не чистит
-  // upload-папку при ошибке (только при успехе), так что заново загружать не нужно.
-  const handleRetry = () => {
-    launchMut.mutate(
-      { config, preset_id: presetId ?? null, idempotency_key: crypto.randomUUID() },
-      {
-        onSuccess: (out) => onRunId(out.run_id),
-      },
-    );
-  };
-
   return (
     <div className="space-y-6">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
+        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 7 · ЗАПУСК
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
           Запуск залива
         </h2>
         <p className="text-[13px] text-bg-9 mt-1">
-          Кампании создаются в статусе PAUSED — спенда не будет. Снимешь паузу в Ads Manager.
+          Кампания, ad set и ad создаются PAUSED — спенда не будет до ручного review.
         </p>
       </div>
 
       {/* Кнопка запуска (до run_id) */}
       {!runId && (
-        <div className="border border-[var(--hairline)] rounded-[var(--radius-3)] p-6 bg-bg-1 text-center space-y-4">
+        <div className="border border-[var(--color-hairline)] rounded-[var(--radius-3)] p-6 bg-bg-1 text-center space-y-4">
           <div className="size-14 mx-auto rounded-full bg-accent/10 flex items-center justify-center">
             <Rocket size={24} className="text-accent" />
           </div>
           <div>
-            <div className="font-display text-[15px] font-medium text-bg-11">
-              Готово к заливу?
-            </div>
+            <div className="font-display text-[15px] font-medium text-bg-11">Готово к заливу?</div>
             <div className="text-[12px] text-bg-8 mt-1">
-              Оффер: <b>{config.offer_code}</b> · Дата: <b>{config.start_date}</b> ·
-              Кампаний: <b>{config.campaigns.length}</b>
+              Оффер: <b>{config.offer_code}</b> · Дата:{" "}
+              <b>{config.start_date || "следующий день кабинета"}</b> · Кампаний:{" "}
+              <b>{config.campaigns.length}</b>
             </div>
           </div>
           {launchMut.isError && (
@@ -132,9 +110,7 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
               role="alert"
               className="text-[12px] text-danger bg-danger/10 border border-danger/30 rounded-[var(--radius-2)] px-3 py-2"
             >
-              {launchMut.error instanceof Error
-                ? launchMut.error.message
-                : "Ошибка запуска залива"}
+              {launchMut.error instanceof Error ? launchMut.error.message : "Ошибка запуска залива"}
             </div>
           )}
           <Button
@@ -150,24 +126,7 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
       )}
 
       {/* Прогресс (после run_id) */}
-      {runId && (
-        <RunProgress
-          runId={runId}
-          onCleanup={() => cleanupMut.mutate(runId)}
-          cleaningUp={cleanupMut.isPending}
-          cleanupResult={cleanupMut.data}
-          onRetry={handleRetry}
-          retrying={launchMut.isPending}
-          retryError={
-            launchMut.isError
-              ? launchMut.error instanceof Error
-                ? launchMut.error.message
-                : "Не удалось повторить залив"
-              : null
-          }
-          onFinish={onFinish}
-        />
-      )}
+      {runId && <RunProgress runId={runId} onFinish={onFinish} />}
     </div>
   );
 };
@@ -176,39 +135,11 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
 
 interface RunProgressProps {
   runId: string;
-  onCleanup: () => void;
-  cleaningUp: boolean;
-  cleanupResult?: { meta_ids: Record<string, unknown>; detail: string };
-  onRetry: () => void;
-  retrying: boolean;
-  retryError: string | null;
   onFinish: () => void;
 }
 
-function RunProgress({
-  runId,
-  onCleanup,
-  cleaningUp,
-  cleanupResult,
-  onRetry,
-  retrying,
-  retryError,
-  onFinish,
-}: RunProgressProps) {
-  // Поллинг каждые 3 сек пока статус не терминальный
-  const [interval, setInterval_] = useState<number | false>(3000);
-
-  const { data: run, isLoading } = useRunDetail(runId, {
-    refetchInterval: interval,
-  });
-
-  // Остановить поллинг при достижении терминального статуса
-  useEffect(() => {
-    const runStatus = run?.status as RunStatus | undefined;
-    if (runStatus && TERMINAL_RUN_STATUSES.includes(runStatus)) {
-      setInterval_(false);
-    }
-  }, [run?.status]);
+function RunProgress({ runId, onFinish }: RunProgressProps) {
+  const { data: run, isLoading } = useRunDetail(runId);
 
   if (isLoading && !run) {
     return (
@@ -227,15 +158,14 @@ function RunProgress({
   const succeeded = status === "succeeded";
   const failed = status === "failed";
   const cancelled = status === "cancelled";
+  const manualReviewRequired = campaignRunRequiresManualReview(run);
 
   return (
     <div className="space-y-5 min-w-0">
       {/* Статус-шкала */}
       <ProgressBar status={status} stepIdx={stepIdx} />
 
-      {succeeded && (
-        <SuccessSummary ids={run.created_meta_ids ?? {}} onFinish={onFinish} />
-      )}
+      {succeeded && <SuccessSummary ids={run.created_meta_ids ?? {}} onFinish={onFinish} />}
 
       {!succeeded && (
         <div
@@ -244,7 +174,7 @@ function RunProgress({
             failed
               ? "bg-danger/10 border-danger/30 text-danger"
               : cancelled
-                ? "bg-bg-3 border-[var(--hairline)] text-bg-9"
+                ? "bg-bg-3 border-[var(--color-hairline)] text-bg-9"
                 : "bg-accent-bg border-accent/30 text-accent",
           )}
           role={failed || cancelled ? "alert" : "status"}
@@ -265,58 +195,9 @@ function RunProgress({
         </div>
       )}
 
-      {/* Повтор после ошибки — тот же конфиг, без пересоздания (концепты переиспользуются) */}
-      {failed && (
-        <div className="space-y-2">
-          <Button
-            variant="primary"
-            size="md"
-            leftIcon={<RefreshCw size={14} />}
-            onClick={onRetry}
-            loading={retrying}
-          >
-            Повторить залив
-          </Button>
-          {retryError && (
-            <div role="alert" className="text-[12px] text-danger break-words">
-              {retryError}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Cleanup при ошибке с частичным созданием */}
-      {(failed || cancelled) &&
-        run.created_meta_ids &&
-        Object.keys(run.created_meta_ids).length > 0 &&
-        !cleanupResult && (
-          <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] p-4 bg-bg-2 space-y-2">
-            <div className="text-[12px] text-bg-8">
-              Часть объектов была создана в Meta до ошибки. Запросите список для ручного сноса.
-            </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<Trash2 size={13} />}
-              onClick={onCleanup}
-              loading={cleaningUp}
-            >
-              Показать список для cleanup
-            </Button>
-          </div>
-        )}
-
-      {/* Результат cleanup */}
-      {cleanupResult && (
-        <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] p-4 bg-bg-2 text-[12px] text-bg-9">
-          {cleanupResult.detail}
-          {Object.keys(cleanupResult.meta_ids).length > 0 && (
-            <pre className="mt-2 font-mono text-[11px] text-bg-8 overflow-auto">
-              {JSON.stringify(cleanupResult.meta_ids, null, 2)}
-            </pre>
-          )}
-        </div>
-      )}
+      {manualReviewRequired ? (
+        <CampaignRunManualReview createdMetaIds={run.created_meta_ids ?? {}} />
+      ) : null}
 
       <TechnicalDetails
         runId={runId}
@@ -335,6 +216,7 @@ function ProgressBar({ status, stepIdx }: { status: RunStatus; stepIdx: number }
 
   return (
     <div
+      role="group"
       className="grid grid-cols-5 gap-1.5"
       aria-label={`Прогресс залива: ${RUN_STATUS_LABELS[status]}`}
     >
@@ -362,7 +244,7 @@ function ProgressBar({ status, stepIdx }: { status: RunStatus; stepIdx: number }
             />
             <span
               className={cn(
-                "font-display text-[8px] sm:text-[9px] tracking-[0.08em] sm:tracking-wider uppercase text-center truncate w-full",
+                "font-display text-[12px] sm:text-[12px] tracking-[0.08em] sm:tracking-wider uppercase text-center truncate w-full",
                 done ? "text-success" : current ? "text-accent" : "text-bg-8",
               )}
             >
@@ -418,7 +300,7 @@ function SuccessSummary({ ids, onFinish }: { ids: Record<string, unknown>; onFin
               <h3 className="font-display text-[17px] font-medium text-bg-11 m-0">
                 Залив завершён
               </h3>
-              <span className="inline-flex items-center gap-1 rounded-full border border-success/25 bg-success/10 px-2 py-0.5 font-display text-[9px] tracking-wider uppercase text-success">
+              <span className="inline-flex items-center gap-1 rounded-full border border-success/25 bg-success/10 px-2 py-0.5 font-display text-[12px] tracking-wider uppercase text-success">
                 <ShieldCheck size={10} />
                 PAUSED · без спенда
               </span>
@@ -435,7 +317,7 @@ function SuccessSummary({ ids, onFinish }: { ids: Record<string, unknown>; onFin
               <div className="font-mono text-[19px] leading-none tabular-nums text-bg-11">
                 {group.ids.length}
               </div>
-              <div className="mt-1 font-display text-[9px] tracking-wider uppercase text-bg-8">
+              <div className="mt-1 font-display text-[12px] tracking-wider uppercase text-bg-8">
                 {group.label}
               </div>
             </div>
@@ -457,7 +339,7 @@ function SuccessSummary({ ids, onFinish }: { ids: Record<string, unknown>; onFin
               href={adsManagerHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="h-10 w-full sm:w-auto px-4 inline-flex items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--hairline-strong)] bg-bg-2 text-[13.5px] font-medium text-bg-11 hover:bg-bg-3 hover:border-bg-7 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              className="h-11 w-full sm:w-auto px-4 inline-flex items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 text-[13.5px] font-medium text-bg-11 hover:bg-bg-3 hover:border-bg-7 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               <ExternalLink size={14} />
               Открыть в Ads Manager
@@ -486,7 +368,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
       type="button"
       onClick={() => void handleCopy()}
       aria-label={`Скопировать ${label}`}
-      className="size-7 shrink-0 rounded-[var(--radius-1)] inline-flex items-center justify-center text-bg-8 hover:text-bg-11 hover:bg-bg-3 transition-colors focus-visible:outline-2 focus-visible:outline-accent"
+      className="size-11 shrink-0 rounded-[var(--radius-2)] inline-flex items-center justify-center text-bg-8 hover:text-bg-11 hover:bg-bg-3 transition-colors focus-visible:outline-2 focus-visible:outline-accent"
     >
       {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
     </button>
@@ -509,20 +391,22 @@ function TechnicalDetails({
   const hasProgress = progress && Object.keys(progress).length > 0;
 
   return (
-    <details className="group border-t border-[var(--hairline)] pt-1">
-      <summary className="list-none cursor-pointer py-2.5 flex items-center gap-2 text-[11px] text-bg-8 hover:text-bg-10 transition-colors focus-visible:outline-2 focus-visible:outline-accent rounded-[var(--radius-1)]">
+    <details className="group border-t border-[var(--color-hairline)] pt-1">
+      <summary className="list-none cursor-pointer py-2.5 flex items-center gap-2 text-[12px] text-bg-8 hover:text-bg-10 transition-colors focus-visible:outline-2 focus-visible:outline-accent rounded-[var(--radius-1)]">
         <ChevronDown
           size={13}
           className="transition-transform duration-150 group-open:rotate-180"
         />
         Технические детали
-        <span className="ml-auto font-mono text-[10px] text-bg-8">run {runId.slice(0, 8)}</span>
+        <span className="ml-auto font-mono text-[12px] text-bg-8">run {runId.slice(0, 8)}</span>
       </summary>
 
       <div className="pb-2 pt-1 space-y-3">
         <div className="flex items-center gap-2 rounded-[var(--radius-2)] bg-bg-1 px-3 py-2">
-          <span className="font-display text-[9px] tracking-wider uppercase text-bg-8">Run ID</span>
-          <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-bg-10" title={runId}>
+          <span className="font-display text-[12px] tracking-wider uppercase text-bg-8">
+            Run ID
+          </span>
+          <code className="min-w-0 flex-1 truncate font-mono text-[12px] text-bg-10" title={runId}>
             {runId}
           </code>
           <CopyButton value={runId} label="Run ID" />
@@ -533,13 +417,13 @@ function TechnicalDetails({
           return (
             <div key={group.key} className="rounded-[var(--radius-2)] bg-bg-1 px-3 py-2.5">
               <div className="flex items-center gap-2">
-                <span className="font-display text-[9px] tracking-wider uppercase text-bg-8">
+                <span className="font-display text-[12px] tracking-wider uppercase text-bg-8">
                   {group.label}
                 </span>
-                <span className="text-[10px] text-bg-8">{group.ids.length}</span>
+                <span className="text-[12px] text-bg-8">{group.ids.length}</span>
                 <CopyButton value={value} label={`ID: ${group.label}`} />
               </div>
-              <code className="mt-1.5 block font-mono text-[10.5px] leading-relaxed text-bg-9 break-all">
+              <code className="mt-1.5 block font-mono text-[12px] leading-relaxed text-bg-9 break-all">
                 {value}
               </code>
             </div>
@@ -547,11 +431,11 @@ function TechnicalDetails({
         })}
 
         {hasProgress && (
-          <div className="rounded-[var(--radius-2)] bg-bg-1 divide-y divide-[var(--hairline)]">
+          <div className="rounded-[var(--radius-2)] bg-bg-1 divide-y divide-[var(--color-hairline)]">
             {Object.entries(progress).map(([key, value]) => (
               <div key={key} className="grid grid-cols-[auto,minmax(0,1fr)] gap-3 px-3 py-2">
-                <span className="font-mono text-[10.5px] text-bg-8">{key}</span>
-                <span className="min-w-0 text-right font-mono text-[10.5px] text-bg-9 break-all">
+                <span className="font-mono text-[12px] text-bg-8">{key}</span>
+                <span className="min-w-0 text-right font-mono text-[12px] text-bg-9 break-all">
                   {String(value)}
                 </span>
               </div>

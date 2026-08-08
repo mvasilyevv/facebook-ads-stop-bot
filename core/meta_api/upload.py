@@ -16,21 +16,24 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, NoReturn
 
 import grpc
 
 from clients.python_grpc.v1 import meta_api_pb2
-from core.meta_api.client import MetaApiClient
+from core.meta_api.client import MetaApiClient, media_operation_binding
 from core.meta_api.errors import (
+    AmbiguousResultError,
+    BrowserReadinessRejectedError,
     MetaApiError,
     PermanentError,
     SessionUnavailableError,
-    TemporaryError,
 )
+from core.meta_api.identity import graph_ad_account_id, require_ad_account_id
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,14 @@ VIDEO_READY_POLL_INTERVAL_SECONDS = 4.0
 # Лимит размера картинки для single-shot upload. Meta документирует 8MB, но
 # с учётом base64-кодирования и proto overhead закладываем запас.
 MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class MediaUploader:
@@ -84,7 +95,7 @@ class MediaUploader:
         """Загрузить картинку → вернуть image_hash для использования в creative.
 
         Args:
-            ad_account_id: с префиксом "act_".
+            ad_account_id: явный числовой ID (форма ``act_123`` тоже принимается).
             image_bytes: бинарные данные картинки.
             filename: имя файла (попадает в multipart filename).
             content_type: MIME-тип (image/jpeg, image/png, image/gif).
@@ -96,10 +107,8 @@ class MediaUploader:
         """
         if self._client._stub is None:  # type: ignore[attr-defined]
             raise RuntimeError("MetaApiClient не запущен: вызови await client.start()")
-        if not ad_account_id or not ad_account_id.startswith("act_"):
-            raise ValueError(
-                f"ad_account_id должен начинаться с 'act_', получено {ad_account_id!r}"
-            )
+        account_id = require_ad_account_id(ad_account_id)
+        endpoint = f"/{graph_ad_account_id(account_id)}/adimages"
         if not image_bytes:
             raise ValueError("image_bytes пустой")
         if len(image_bytes) > MAX_IMAGE_SIZE_BYTES:
@@ -107,12 +116,24 @@ class MediaUploader:
                 f"image_bytes слишком большой: {len(image_bytes)} > {MAX_IMAGE_SIZE_BYTES} (MAX)"
             )
 
+        authorization = await self._client.prepare_operation_authorization(
+            rpc="upload_image",
+            operation=media_operation_binding(
+                rpc="upload_image",
+                attributes={
+                    "filename": filename,
+                    "content_type": content_type,
+                    "content_sha256": hashlib.sha256(image_bytes).hexdigest(),
+                },
+            ),
+            ad_account_id=account_id,
+        )
         request = meta_api_pb2.UploadImageRequest(
-            session_id=self._client.session_id,
-            ad_account_id=ad_account_id,
+            ad_account_id=account_id,
             filename=filename,
             content_type=content_type,
             file_bytes=image_bytes,
+            **authorization,
         )
 
         try:
@@ -121,19 +142,16 @@ class MediaUploader:
                 timeout=_UPLOAD_TIMEOUT_SECONDS,
             )
         except grpc.RpcError as exc:  # type: ignore[misc]
-            raise self._grpc_to_error(exc, endpoint=f"/{ad_account_id}/adimages") from exc
+            await self._raise_grpc_error(exc, endpoint=endpoint)
 
         if not response.ok:
             err_msg = response.error or "UploadImage: неизвестная ошибка"
-            # Различаем недоступность сессии vs ошибку Meta.
-            if "TOKEN_NOT_FOUND" in err_msg or "PAGE_EVALUATE_ERROR" in err_msg:
-                raise SessionUnavailableError(err_msg, endpoint=f"/{ad_account_id}/adimages")
-            raise PermanentError(err_msg, endpoint=f"/{ad_account_id}/adimages")
+            raise self._upload_response_error(err_msg, endpoint=endpoint)
 
         if not response.image_hash:
-            raise PermanentError(
-                "UploadImage: image_hash пустой в успешном ответе",
-                endpoint=f"/{ad_account_id}/adimages",
+            raise AmbiguousResultError(
+                "UploadImage вернул ok=true без image_hash после dispatch",
+                endpoint=endpoint,
             )
 
         logger.info(
@@ -142,72 +160,9 @@ class MediaUploader:
             response.url[:60] if response.url else "",
             response.duration_ms,
         )
-        return response.image_hash
-
-    async def upload_image_from_url(
-        self,
-        ad_account_id: str,
-        image_url: str,
-        name: str | None = None,
-    ) -> str:
-        """Загрузка картинки по URL — Meta сама скачает.
-
-        Возвращает image_hash из ответа Graph API.
-
-        Args:
-            ad_account_id: с префиксом "act_".
-            image_url: HTTPS-ссылка на картинку (только https).
-            name: имя картинки в Meta (опционально).
-
-        Raises:
-            ValueError: пустой URL или URL без https://.
-            SessionUnavailableError: browser-agent или Vision-сессия недоступны.
-            PermanentError: Meta вернул ошибку (токен, права и т.д.).
-        """
-        if self._client._stub is None:  # type: ignore[attr-defined]
-            raise RuntimeError("MetaApiClient не запущен: вызови await client.start()")
-        if not ad_account_id or not ad_account_id.startswith("act_"):
-            raise ValueError(
-                f"ad_account_id должен начинаться с 'act_', получено {ad_account_id!r}"
-            )
-        if not image_url:
-            raise ValueError("image_url не может быть пустым")
-        if not image_url.startswith("https://"):
-            raise ValueError(f"image_url должен начинаться с 'https://', получено {image_url!r}")
-
-        request = meta_api_pb2.UploadImageRequest(
-            session_id=self._client.session_id,
-            ad_account_id=ad_account_id,
-            image_url=image_url,
-            name=name or "",
-            # file_bytes/filename/content_type оставляем пустыми — URL-путь
-        )
-
-        try:
-            response = await self._client._stub.UploadImage(  # type: ignore[attr-defined]
-                request,
-                timeout=_UPLOAD_TIMEOUT_SECONDS,
-            )
-        except grpc.RpcError as exc:  # type: ignore[misc]
-            raise self._grpc_to_error(exc, endpoint=f"/{ad_account_id}/adimages") from exc
-
-        if not response.ok:
-            err_msg = response.error or "UploadImage (url): неизвестная ошибка"
-            if "TOKEN_NOT_FOUND" in err_msg or "PAGE_EVALUATE_ERROR" in err_msg:
-                raise SessionUnavailableError(err_msg, endpoint=f"/{ad_account_id}/adimages")
-            raise PermanentError(err_msg, endpoint=f"/{ad_account_id}/adimages")
-
-        if not response.image_hash:
-            raise PermanentError(
-                "UploadImage (url): image_hash пустой в успешном ответе",
-                endpoint=f"/{ad_account_id}/adimages",
-            )
-
-        logger.info(
-            "upload_image_from_url: hash=%s url=%s duration=%dмс",
-            response.image_hash[:16] + "...",
-            image_url[:60],
-            response.duration_ms,
+        self._client._remember_campaign_uploaded_image_hash(
+            response.image_hash,
+            ad_account_id=account_id,
         )
         return response.image_hash
 
@@ -227,7 +182,7 @@ class MediaUploader:
         filename, file_size). Последний — флаг is_last_chunk=true.
 
         Args:
-            ad_account_id: с префиксом "act_".
+            ad_account_id: явный числовой ID (форма ``act_123`` тоже принимается).
             video_path: путь к файлу (Path или str).
             filename: явное имя файла (по умолчанию — basename из path).
 
@@ -238,10 +193,8 @@ class MediaUploader:
         """
         if self._client._stub is None:  # type: ignore[attr-defined]
             raise RuntimeError("MetaApiClient не запущен: вызови await client.start()")
-        if not ad_account_id or not ad_account_id.startswith("act_"):
-            raise ValueError(
-                f"ad_account_id должен начинаться с 'act_', получено {ad_account_id!r}"
-            )
+        account_id = require_ad_account_id(ad_account_id)
+        endpoint = f"/{graph_ad_account_id(account_id)}/advideos"
 
         path = Path(video_path)
         # Sync файловые операции внутри async: допустимо, потому что вызывается
@@ -255,30 +208,30 @@ class MediaUploader:
             raise ValueError(f"video_path: файл пустой: {path}")
 
         effective_filename = filename or path.name
+        content_sha256 = await asyncio.to_thread(_file_sha256, path)
 
         try:
             response = await self._client._stub.UploadVideo(  # type: ignore[attr-defined]
                 self._video_chunks(
-                    ad_account_id=ad_account_id,
+                    ad_account_id=account_id,
                     filename=effective_filename,
                     file_size=file_size,
+                    content_sha256=content_sha256,
                     video_path=path,
                 ),
                 timeout=_UPLOAD_TIMEOUT_SECONDS,
             )
         except grpc.RpcError as exc:  # type: ignore[misc]
-            raise self._grpc_to_error(exc, endpoint=f"/{ad_account_id}/advideos") from exc
+            await self._raise_grpc_error(exc, endpoint=endpoint)
 
         if not response.ok:
             err_msg = response.error or "UploadVideo: неизвестная ошибка"
-            if "TOKEN_NOT_FOUND" in err_msg or "PAGE_EVALUATE_ERROR" in err_msg:
-                raise SessionUnavailableError(err_msg, endpoint=f"/{ad_account_id}/advideos")
-            raise PermanentError(err_msg, endpoint=f"/{ad_account_id}/advideos")
+            raise self._upload_response_error(err_msg, endpoint=endpoint)
 
         if not response.video_id:
-            raise PermanentError(
-                "UploadVideo: video_id пустой в успешном ответе",
-                endpoint=f"/{ad_account_id}/advideos",
+            raise AmbiguousResultError(
+                "UploadVideo вернул ok=true без video_id после dispatch",
+                endpoint=endpoint,
             )
 
         logger.info(
@@ -287,6 +240,10 @@ class MediaUploader:
             response.chunks_processed,
             response.duration_ms,
             file_size,
+        )
+        self._client._remember_campaign_uploaded_video_id(
+            response.video_id,
+            ad_account_id=account_id,
         )
         return response.video_id
 
@@ -303,46 +260,49 @@ class MediaUploader:
         """
         if self._client._stub is None:  # type: ignore[attr-defined]
             raise RuntimeError("MetaApiClient не запущен: вызови await client.start()")
-        if not ad_account_id or not ad_account_id.startswith("act_"):
-            raise ValueError(
-                f"ad_account_id должен начинаться с 'act_', получено {ad_account_id!r}"
-            )
+        account_id = require_ad_account_id(ad_account_id)
+        endpoint = f"/{graph_ad_account_id(account_id)}/advideos"
         if not video_bytes:
             raise ValueError("video_bytes пустой")
 
         file_size = len(video_bytes)
+        content_sha256 = hashlib.sha256(video_bytes).hexdigest()
 
         try:
             response = await self._client._stub.UploadVideo(  # type: ignore[attr-defined]
                 self._video_chunks_from_bytes(
-                    ad_account_id=ad_account_id,
+                    ad_account_id=account_id,
                     filename=filename,
                     file_size=file_size,
+                    content_sha256=content_sha256,
                     video_bytes=video_bytes,
                 ),
                 timeout=_UPLOAD_TIMEOUT_SECONDS,
             )
         except grpc.RpcError as exc:  # type: ignore[misc]
-            raise self._grpc_to_error(exc, endpoint=f"/{ad_account_id}/advideos") from exc
+            await self._raise_grpc_error(exc, endpoint=endpoint)
 
         if not response.ok:
             err_msg = response.error or "UploadVideo: неизвестная ошибка"
-            if "TOKEN_NOT_FOUND" in err_msg or "PAGE_EVALUATE_ERROR" in err_msg:
-                raise SessionUnavailableError(err_msg, endpoint=f"/{ad_account_id}/advideos")
-            raise PermanentError(err_msg, endpoint=f"/{ad_account_id}/advideos")
+            raise self._upload_response_error(err_msg, endpoint=endpoint)
 
         if not response.video_id:
-            raise PermanentError(
-                "UploadVideo: video_id пустой",
-                endpoint=f"/{ad_account_id}/advideos",
+            raise AmbiguousResultError(
+                "UploadVideo вернул ok=true без video_id после dispatch",
+                endpoint=endpoint,
             )
 
+        self._client._remember_campaign_uploaded_video_id(
+            response.video_id,
+            ad_account_id=account_id,
+        )
         return response.video_id
 
     async def wait_video_ready(
         self,
         video_id: str,
         *,
+        ad_account_id: str,
         timeout: float = VIDEO_READY_TIMEOUT_SECONDS,  # noqa: ASYNC109 — deadline-поллинг с graceful False, не cancel
         interval: float = VIDEO_READY_POLL_INTERVAL_SECONDS,
     ) -> bool:
@@ -368,10 +328,13 @@ class MediaUploader:
                     method="GET",
                     endpoint=f"/{video_id}",
                     query_params={"fields": "status"},
+                    ad_account_id=ad_account_id,
                 )
                 status_obj = (resp or {}).get("status") or {}
                 video_status = str(status_obj.get("video_status", "")).lower()
                 last_status = video_status or last_status
+            except BrowserReadinessRejectedError:
+                raise
             except Exception as exc:  # noqa: BLE001 — статус-GET best-effort, не валит залив
                 logger.warning(
                     "video %s: ошибка чтения статуса (продолжаю поллинг): %r", video_id, exc
@@ -398,6 +361,7 @@ class MediaUploader:
         self,
         video_id: str,
         *,
+        ad_account_id: str,
         retries: int = 6,
         interval: float = 3.0,
     ) -> str:
@@ -416,6 +380,7 @@ class MediaUploader:
                     method="GET",
                     endpoint=f"/{video_id}/thumbnails",
                     query_params={"fields": "uri,is_preferred"},
+                    ad_account_id=ad_account_id,
                 )
                 data = (resp or {}).get("data") or []
                 if data:
@@ -423,6 +388,8 @@ class MediaUploader:
                     uri = str((preferred or data[0]).get("uri", ""))
                     if uri:
                         return uri
+            except BrowserReadinessRejectedError:
+                raise
             except Exception as exc:  # noqa: BLE001 — best-effort, поллим дальше
                 last = repr(exc)
                 logger.warning("get_video_thumbnail_url %s: %r", video_id, exc)
@@ -438,6 +405,7 @@ class MediaUploader:
         ad_account_id: str,
         filename: str,
         file_size: int,
+        content_sha256: str,
         video_path: Path,
     ) -> AsyncIterator[meta_api_pb2.UploadVideoChunk]:
         """Async iterator: читает файл и эмитит UploadVideoChunk-сообщения.
@@ -446,6 +414,18 @@ class MediaUploader:
         отправка по сети. Использовать aiofiles ради не-блокирующего read()
         даст лишь маргинальное улучшение в стандартном случае.
         """
+        authorization = await self._client.prepare_operation_authorization(
+            rpc="upload_video",
+            operation=media_operation_binding(
+                rpc="upload_video",
+                attributes={
+                    "filename": filename,
+                    "file_size": file_size,
+                    "content_sha256": content_sha256,
+                },
+            ),
+            ad_account_id=ad_account_id,
+        )
         with open(video_path, "rb") as f:  # noqa: ASYNC230
             chunk_index = 0
             bytes_sent = 0
@@ -458,7 +438,6 @@ class MediaUploader:
                 # В первом чанке заполняем все метаданные.
                 if chunk_index == 0:
                     yield meta_api_pb2.UploadVideoChunk(
-                        session_id=self._client.session_id,
                         ad_account_id=ad_account_id,
                         filename=filename,
                         file_size=file_size,
@@ -466,6 +445,7 @@ class MediaUploader:
                         chunk_index=chunk_index,
                         is_last_chunk=is_last,
                         is_init=False,
+                        **authorization,
                     )
                 else:
                     yield meta_api_pb2.UploadVideoChunk(
@@ -483,9 +463,22 @@ class MediaUploader:
         ad_account_id: str,
         filename: str,
         file_size: int,
+        content_sha256: str,
         video_bytes: bytes,
     ) -> AsyncIterator[meta_api_pb2.UploadVideoChunk]:
         """Async iterator из in-memory bytes."""
+        authorization = await self._client.prepare_operation_authorization(
+            rpc="upload_video",
+            operation=media_operation_binding(
+                rpc="upload_video",
+                attributes={
+                    "filename": filename,
+                    "file_size": file_size,
+                    "content_sha256": content_sha256,
+                },
+            ),
+            ad_account_id=ad_account_id,
+        )
         chunk_index = 0
         bytes_sent = 0
         view = memoryview(video_bytes)
@@ -496,7 +489,6 @@ class MediaUploader:
             is_last = new_bytes_sent >= file_size
             if chunk_index == 0:
                 yield meta_api_pb2.UploadVideoChunk(
-                    session_id=self._client.session_id,
                     ad_account_id=ad_account_id,
                     filename=filename,
                     file_size=file_size,
@@ -504,6 +496,7 @@ class MediaUploader:
                     chunk_index=chunk_index,
                     is_last_chunk=is_last,
                     is_init=False,
+                    **authorization,
                 )
             else:
                 yield meta_api_pb2.UploadVideoChunk(
@@ -513,6 +506,22 @@ class MediaUploader:
                 )
             chunk_index += 1
             bytes_sent = new_bytes_sent
+
+    async def _raise_grpc_error(
+        self,
+        exc: grpc.RpcError,
+        *,
+        endpoint: str,
+    ) -> NoReturn:
+        readiness_error = await self._client._controlled_presend_readiness_error(  # noqa: SLF001
+            exc,
+            endpoint=endpoint,
+        )
+        if readiness_error is not None:
+            raise readiness_error from exc
+        # Capability/lease authorization and post-dispatch transport semantics
+        # remain owned by the upload mapper below.
+        raise self._grpc_to_error(exc, endpoint=endpoint) from exc
 
     @staticmethod
     def _grpc_to_error(exc: grpc.RpcError, *, endpoint: str) -> MetaApiError:
@@ -525,12 +534,32 @@ class MediaUploader:
                 f"Vision-сессия не готова к upload: {details}",
                 endpoint=endpoint,
             )
-        if code in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED):
-            return TemporaryError(
-                f"browser-agent недоступен ({code.name if code else '?'}): {details}",
+        if code in (grpc.StatusCode.INVALID_ARGUMENT, grpc.StatusCode.PERMISSION_DENIED):
+            return PermanentError(
+                f"browser operation authorization rejected: {details}",
                 endpoint=endpoint,
             )
-        return TemporaryError(
-            f"gRPC error {code.name if code else '?'}: {details}",
+        # After an upload RPC has been dispatched, a transport error is not
+        # evidence that Meta did not accept the media.  The exact-session and
+        # contract preconditions are converted by
+        # _controlled_presend_readiness_error before reaching this mapper.
+        return AmbiguousResultError(
+            f"gRPC response lost after upload dispatch ({code.name if code else code}): {details}",
+            endpoint=endpoint,
+        )
+
+    @staticmethod
+    def _upload_response_error(message: str, *, endpoint: str) -> MetaApiError:
+        """Classify only explicit server rejections as permanent.
+
+        The v5 browser service reports exact-session/contract failures via gRPC
+        status before browser I/O.  A normal ``ok=false`` technical response is
+        therefore an invalid/legacy transport shape and cannot prove whether
+        Meta accepted the upload.
+        """
+        if message.startswith(("GRAPH_ERROR_", "INVALID_ARGUMENT")):
+            return PermanentError(message, endpoint=endpoint)
+        return AmbiguousResultError(
+            f"unstructured upload failure after dispatch: {message}",
             endpoint=endpoint,
         )

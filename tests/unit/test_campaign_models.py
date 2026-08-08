@@ -14,7 +14,7 @@ from core.models.campaigns import CampaignPreset, CampaignRun
 from core.models.campaigns.run import CAMPAIGN_RUN_STATUSES
 
 
-# Обе таблицы зарегистрированы в Base.metadata (нужно для create_all/Alembic autogenerate).
+# Обе таблицы зарегистрированы в Base.metadata для Alembic drift-check.
 def test_tables_registered_in_metadata() -> None:
     assert "campaign_preset" in Base.metadata.tables
     assert "campaign_run" in Base.metadata.tables

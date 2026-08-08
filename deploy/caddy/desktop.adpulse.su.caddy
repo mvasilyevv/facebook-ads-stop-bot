@@ -20,7 +20,7 @@ desktop.adpulse.su {
 		# A ticket is issued for this exact hostname and consumed only once.
 		handle /desktop-auth/redeem {
 			log_skip
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up -Remote-User
 				header_up -Authorization
 				header_up -Proxy-Authorization
@@ -39,7 +39,7 @@ desktop.adpulse.su {
 
 		handle /desktop/logout {
 			log_skip
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up -Remote-User
 				header_up -Authorization
 				header_up -Proxy-Authorization
@@ -50,7 +50,9 @@ desktop.adpulse.su {
 		handle {
 			import desktop_session_auth
 			reverse_proxy 127.0.0.1:8444 {
-				stream_timeout 30m
+				# forward_auth runs at stream establishment. Bound every public Kasm
+				# connection so an owner revoke is enforced on reconnect within 60s.
+				stream_timeout 1m
 				stream_close_delay 5m
 				# Kasm BasicAuth is an upstream-only service credential. The browser
 				# authenticates exclusively with the host-only desktop session cookie.

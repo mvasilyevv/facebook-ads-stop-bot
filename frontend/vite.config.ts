@@ -5,8 +5,8 @@ import tailwindcss from "@tailwindcss/vite";
 import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import path from "node:path";
 
-// Vite config для нового фронта.
-// - Порт 5174 (старый фронт 5173).
+// Operator web Vite config.
+// - Dev port 5174.
 // - Proxy /api → http://localhost:8100 (FastAPI backend).
 // - Tailwind 4 через @tailwindcss/vite — без отдельного PostCSS pipeline.
 // - TanStack Router plugin — file-based routing с автогенерацией routeTree.
@@ -25,13 +25,27 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@fb/operator-api": path.resolve(__dirname, "../packages/operator-api/src"),
+      "@fb/operator-ui": path.resolve(__dirname, "../packages/operator-ui/src"),
       "@fb/shared": path.resolve(__dirname, "../packages/shared/src"),
     },
+    // Storybook browser tests execute linked workspace source together with
+    // renderer code. Keep one React dispatcher even after a cold optimizer run.
+    dedupe: ["react", "react-dom"],
   },
   // Workspace-пакет @fb/shared потребляется как исходники (.ts) — не пре-бандлить,
   // чтобы HMR работал через границу пакета.
   optimizeDeps: {
-    exclude: ["@fb/shared"],
+    exclude: ["@fb/shared", "@fb/operator-api", "@fb/operator-ui"],
+    // Linked workspace source hides these imports from Vite's initial crawl.
+    // Discovering them after React mounts forces a dependency reload and can
+    // temporarily mix two optimizer generations (invalid hook dispatcher).
+    include: [
+      "@radix-ui/react-toast",
+      "@fb/operator-api > openapi-fetch",
+      "@fb/operator-api > openapi-react-query",
+      "zustand",
+    ],
   },
   server: {
     port: 5174,
@@ -48,8 +62,8 @@ export default defineConfig({
       },
     },
   },
-  // preview НЕ наследует server.proxy — дублируем для prod-режима (./run.sh без --dev,
-  // фронт сервится через `vite preview`). Тот же таргет API/WS, что и в dev.
+  // `vite preview` не наследует server.proxy, поэтому локальный preview использует
+  // тот же API/WS target, что и dev server.
   preview: {
     port: 5174,
     strictPort: false,
@@ -74,15 +88,8 @@ export default defineConfig({
           react: ["react", "react-dom"],
           router: ["@tanstack/react-router"],
           query: ["@tanstack/react-query"],
-          charts: ["recharts"],
         },
       },
     },
-  },
-  test: {
-    globals: true,
-    environment: "jsdom",
-    setupFiles: ["./src/tests/setup.ts"],
-    css: false,
   },
 });

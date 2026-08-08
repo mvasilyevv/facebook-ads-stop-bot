@@ -1,175 +1,126 @@
-# Playbook: Залив FB-кампании (gambling)
+# Playbook: запуск Facebook Ads кампании
 
-> Источник правды агента `fb`. Читать ПЕРЕД заливом. Правки — только с апрува байера.
+Источник правды для operator-controlled campaign creation. Production-запуск
+выполняется desktop-first через web UI и `campaign_creator_worker`; TMA и
+mobile web показывают progress, result и доступные lifecycle actions, но не
+содержат отдельный wizard.
 
-## Статус
-- ✅ **ОСНОВНОЙ МЕТОД — универсальный движок `scripts/fb_launch.py --config <YAML>`** (проверен
-  боевым заливом GH_CR 17.06: 2 кампании CBO × 2 адсета, статика 5+5 + видео 4+4 = 18 ads, PAUSED).
-  Один движок на все заливы; конкретика (кабинет/пиксель/гео/бюджет/структура/креативы) — в
-  YAML-конфиге (`scripts/launch_configs/<name>.yaml`, pydantic-валидация). Картинки И видео,
-  CBO/ABO, без текста / с текстом — всё через конфиг. См. «Метод 1» ниже. НЕ плодить скрипт-на-залив.
-- ✅ **работает:** Graph API Batch — проверено боевым заливом GH_AVI 1×5×1 (`scripts/create_gh_avi_api.py`,
-  legacy-референс low-level): кампания + 5 адсетов + 5 креативов + 5 ads, PAUSED.
-- ✅ **DELETE через API работает** (чистка осиротевших). `#10 Permission Denied` бывает транзиентно
-  сразу после создания объекта — повторить через паузу.
-- ⚠️ **грабли:** Vision-автопилот зависит от селекторов Ads Manager (дрейфуют). Batch НЕ атомарен
-  (partial-fail → осиротевшие PAUSED-объекты, чистить через `delete_objects.py`).
-- 🔧 **сломано:** Vision-автопилот шаг `set_budget` (старый ABO-селектор «Бюджет группы»). Для залива
-  используем Метод 1 (API) — он от UI не зависит.
+Прямые одноразовые launch scripts и запись/replay UI-сценария не являются
+production-путём. Не использовать их как скрытый резерв при ошибке worker.
 
-## Стандартные правила (ВСЕГДА)
-- **Уточнять `act_id` кабинета** перед каждым заливом (явно подтвердить с байером). Текущий: `act_26943307705301002`.
-- **Залив на 2 кабинета** (решение 2026-06-09): основной + второй от байера — для большей
-  вариации аудитории. Уточнять оба `act_id`; структура кампаний дублируется на оба кабинета.
-- **Офферы и пиксели — через шаринг от коллеги-агента, не заводятся самостоятельно.** Перед заливом
-  убедиться, что на оба кабинета расшарены нужные офферы (Casongo + Prbet/PrideSpins) и актуальный пиксель
-  (GH NEW). Нет доступа — запросить шаринг у коллеги (через байера/lead), не заводить оффер/пиксель сам.
-- **Prelanding-check оффера ДО залива.** Открыть свою трекинговую ссылку с боевого Vision-профиля
-  (гео кабинета) и убедиться, что лендинг/оффер реально открывается, а не отдаёт «not available in your country»
-  / редирект на Google. **Доступность плавающая** — проверять каждый раз, единичное успешное открытие
-  не гарантирует доступ для всей аудитории гео (кейс 22Bet 2026-06-09).
-- **QA-аудит креативов — ГЕЙТ ДО залива, не после.** Все креативы прогнать по QA-чеклисту (`creative-gen.md`) ПЕРЕД заливом. Агент-генератор брак пропускает (уроки GH_AVI: инвертированный чат, дубль уведомлений, чужой оффер «+100%/промокод» вместо нашего) — нужна приёмка по пунктам глазами. ⚠️ При структуре «визуал × N текстов» сверять синхрон сумм: цифра на картинке ↔ цифра в тексте (либо суммы-выигрыша только на картинке, тексты сумма-агностик).
-- **Нейминг кампаний/адсетов/объявлений — согласовать с байером** (не вводить молча). Метки-статусы (угол кампании, текст-подход в адсете для sub6, визуал+подход в ad для sub7) допустимы, но обоснованы и утверждены заранее.
-- **Событие пикселя — «Покупка» (Purchase/FTD).** Objective `OUTCOME_SALES`, optimization `OFFSITE_CONVERSIONS`,
-  `promoted_object={pixel_id, custom_event_type: PURCHASE, smart_pse_enabled: false}`. Не TRAFFIC даже на холодном пикселе.
-- **Дата в имени = СЛЕДУЮЩИЙ день** (today+1). Имя: `MV | <GEO> | <SLOT> | adset.pro | DD.MM`.
-- **`start_time` адсетов — ОБЯЗАТЕЛЕН** = следующие сутки 00:00 в TZ кабинета. Без него Meta ставит момент
-  создания (баг «старт сегодня в 00:32»). TZ узнать: `GET /act_X?fields=timezone_name,timezone_offset_hours_utc`.
-  Текущий кабинет — `America/Hermosillo` (UTC-7, без перехода на лето) → `YYYY-MM-DDT00:00:00-07:00`.
-- **Страница — ВЫБОР БАЙЕРА, не первую из `promote_pages` вслепую.** Выгрузить все (`inspect_setup.py`:
-  `promote_pages` + `/me/accounts` с категорией/правами), показать, байер выбирает. (Текущая: Game star `103053722121477`.)
-- `special_ad_categories = ["NONE"]` (gambling-whitelist; прямое соглашение с Meta — см. `creative-gen.md`).
-- **ABO или CBO — выбор под задачу.** **ABO = 1-N-1** (1 объявление на адсет; бюджет на адсете → чистые FTD
-  по вариантам). `bid_strategy` при ABO — **на АДСЕТЕ** (`LOWEST_COST_WITHOUT_CAP`), НЕ на кампании.
-  Дефолт теста = ABO $2.99/адсет, если не сказано иначе.
-- **Статус — PAUSED** → байер ревьюит в Ads Manager → сам unpause. ACTIVE сами не ставим.
-- **Гео: Антарктида + целевая страна** (`geo_locations.countries: ["<ISO>", "AQ"]`). Антарктиду — всегда.
-- **Advantage+ «оптимизация текста»** (`text_optimizations`) — для гемблы `OPT_OUT` (контроль формулировок),
-  если байер не сказал вкл. С v22.0 каждая creative-фича opt-in/out поштучно (бандл депрекейтнут).
-- Vision-браузер в **РУССКОЙ локали** (для Метода 2 — гео/CTA/события по-русски).
+## Безопасный lifecycle
 
-## Методология теста (важно — не путать варианты)
-- **Этап 1 — тест КРЕАТИВОВ.** N адсетов = N разных картинок при **ЕДИНОМ тексте** (primary/headline/desc).
-  Имена адсетов — по коду креатива (`CR001 | <визуал>`). Ищем лучший ВИЗУАЛ по FTD.
-- **Этап 2 — тест УГЛОВ по тексту.** Берём победивший креатив, на нём N адсетов с РАЗНЫМ primary text.
-  Отдельный залив после данных.
-- Антипаттерн: 5×3 (несколько ads в адсете) при ABO — показы/обучение делятся, атрибуция по вариантам грязнится.
-
-## Метод 1 — Универсальный движок `fb_launch.py` (основной)
-
-**Агент: используй ЭТОТ метод. На новый залив НЕ пишешь новый скрипт — создаёшь YAML-конфиг и
-запускаешь движок.** Движок `scripts/fb_launch.py` уже содержит весь костяк (порядок создания,
-upload, retry, partial-fail cleanup, url_tags по SOP, +AQ, thumbnail+wait для видео).
-
-```bash
-python scripts/fb_launch.py --config scripts/launch_configs/<name>.yaml            # spec-print (dry, валидация+файлы)
-python scripts/fb_launch.py --config scripts/launch_configs/<name>.yaml --go        # боевое создание PAUSED
-python scripts/fb_launch.py --config scripts/launch_configs/<name>.yaml --go --only static   # одна кампания
-python scripts/fb_launch.py --config scripts/launch_configs/<name>.yaml --cleanup <id> [<id>...]  # снести осиротевшее
+```text
+validate → operator review → queued → preparing → uploading → creating
+        → confirmed | failed | unknown | cancelled
 ```
 
-**Как завести новый залив:** скопируй `scripts/launch_configs/GH_CR_18_06.yaml` (рабочий эталон),
-поменяй под оффер/кабинет. Поля конфига (pydantic-валидация — ошибка ловится ДО выхода в кабинет):
-- `account`: `act_id`, `page_id` (выбор байера), `pixel_id`, `tz_offset` (TZ кабинета, для start_time).
-- `offer_code` (код оффера, в имя слитно для матчинга observer'ом), `byer_tag` (=MV, в sub2).
-- `budget`: `level` = `campaign` (CBO) / `adset` (ABO); `daily_cents`; `bid_strategy`
-  (`LOWEST_COST_WITHOUT_CAP` / `COST_CAP` / `LOWEST_COST_WITH_BID_CAP` + `bid_amount_cents`).
-- `targeting`: `countries` (AQ добавляется сам), `age_min/max`, `advantage_audience`.
-- `attribution`: `click_through_days` / `view_through_days` (дефолт 7-1-1 по ментору; менять по байеру).
-- `destination_link` (трекинг-ссылка из AdSet.pro → в `link`), `cta`, `ad_text.mode` (`none` / `full`),
-  `text_optimizations` (`OPT_OUT` для гемблы).
-- `start_date` (YYYY-MM-DD = **следующий день**; из неё имя `{date}`=DD.MM и `start_time`).
-- `creo_root` + `creative_codes` (`filename` / `map` / `auto` → код в `sub3`) + `campaigns`→`adsets`
-  (имена с плейсхолдерами `{byer}`/`{offer}`/`{date}`, `dir`, `glob`).
-- Проверка результата: `python scripts/fb_verify.py <campaign_id>` (структура + медиа + url_tags).
+- HTTP `202` подтверждает только постановку в очередь.
+- Один launch использует стабильный idempotency key и correlation ID.
+- После начала внешнего create ошибка может означать `unknown`; весь запуск не
+  повторяется вслепую.
+- При `unknown` сначала сверяются созданные Meta objects и только затем
+  оператор выбирает дальнейшее действие.
+- Все создаваемые campaign/ad set/ad остаются `PAUSED` до ручного review.
+- Отмена допустима только пока contract явно показывает cancelable state.
 
-**Подготовка сессии перед `--go` (боевые грабли 17.06):**
-- Поднять Vision-сессию: `python scripts/start_vision_session.py` (после рестарта browser-agent
-  сессия сама НЕ поднимается → `check_health` = False; движок при `--go` требует живую сессию).
-- Если правил `services/browser-agent/src/**` — пересобрать dist И **перезапустить процесс**
-  browser-agent (старый код висит в памяти; см. memory «browser_agent restart after build»).
-- Видео-upload рушится навигацией Vision (`Execution context was destroyed`) — движок ретраит
-  с паузой; prelanding-ссылку проверять штатным `Navigate`, НЕ новой CDP-вкладкой (Vision её
-  закрывает → stall watchdog'а).
+## Перед запуском
 
-### Под капотом (low-level, legacy-референс `scripts/create_gh_avi_api.py`)
-- Канал: прямой gRPC stub `ExecuteGraphCall` БЕЗ поля `ad_account_id` (proto отстал от `client.py` —
-  хелперы и `delete_objects.py`/`verify_campaign.py` падают `ValueError`; движок ходит через stub,
-  primary-вкладка Vision = нужный кабинет). НЕ httpx — токен session-bound, META_PLAN §1.
-- **page_id:** задаётся константой по выбору байера (НЕ авто-первая). Подтвердить имя: `GET /{page_id}?fields=name`.
-- **Картинки:** `MediaUploader.upload_image(act, bytes) → image_hash`. Хэши переиспользуемы между перезаливами
-  (одинаковый файл → одинаковый хэш, повторно грузить не обязательно).
-- **Порядок создания (проверено боевым; БЕЗ JSONPath):**
-  1. **Кампания — отдельным 1-entry batch**, берём `campaign_id` из ответа. ⚠️ Операция, на которую ссылаются
-     JSONPath-ом (`{result=campaign:$.id}`), возвращает `null` в ответе батча (был ложный `missing_sub_result`) —
-     поэтому кампанию создаём отдельно. При ABO кампания — БЕЗ бюджета и БЕЗ `bid_strategy`
-     (стратегия на кампании без её бюджета → отказ `subcode 1885737 «В кампании нет бюджета»`).
-  2. **Адсеты** — batch с РЕАЛЬНЫМ `campaign_id` (без JSONPath).
-  3. **Креативы** — batch.
-  4. **Ads** — batch (по реальным `adset_id` + `creative_id`).
-- **Эталонное тело адсета (ABO):** `billing_event: IMPRESSIONS`, `optimization_goal: OFFSITE_CONVERSIONS`,
-  `bid_strategy: LOWEST_COST_WITHOUT_CAP` (на адсете), `daily_budget`, `destination_type: WEBSITE`,
-  `promoted_object: {pixel_id, custom_event_type: PURCHASE, smart_pse_enabled: false}`,
-  `attribution_spec: [{event_type: CLICK_THROUGH, window_days: 7}, {event_type: VIEW_THROUGH, window_days: 1}]`
-  (атрибуция **7-1-1** — дефолт по решению ментора 2026-06-09; менять только по явному указанию байера),
-  `targeting: {geo_locations: {countries: [GEO, AQ], location_types: [home, recent]}, age_min, age_max,
-  targeting_automation: {advantage_audience: 1}}`, `start_time`, `status: PAUSED`.
-- **Тело креатива:** `object_story_spec{page_id, link_data{message, link, image_hash, name=headline, description,
-  call_to_action{PLAY_GAME}}}`, `url_tags`, `degrees_of_freedom_spec.creative_features_spec.text_optimizations.enroll_status`.
-- Хелперы: `core/meta_api/mutations/_batch_helpers.py` (`make_batch_entry`/`build_batch_payload`/`parse_batch_response`;
-  `_encode_value` сохраняет JSONPath refs и корректно кодирует вложенные JSON-объекты `targeting`/`promoted_object`).
+Оператор подтверждает:
 
-### Эталон ABO в кабинете (референс полей)
-Чужие рабочие кампании `14.05 MZ/ZM Artemteam ABO 1-3-1` (`inspect_abo.py`): OUTCOME_SALES, 1 ад/адсет,
-адсеты названы числами, `promoted_object` с `smart_pse_enabled:false`, attribution CLICK/VIEW, targeting с
-Advantage+ audience + `[GEO, AQ]` + home/recent + age 18-65. Сверяться при сомнениях в полях.
+1. Точный `ad_account_id` для каждого кабинета.
+2. Offer, destination link и доступность prelanding из нужного browser profile.
+3. Page и Pixel, реально расшаренные на выбранный кабинет.
+4. Свежий server-owned снимок кабинета: IANA timezone, ISO currency, её minor-unit
+   exponent, время наблюдения и начало следующего cabinet-local day.
+5. Objective, optimization event, attribution window, budget model и limits в
+   major units подтверждённой валюты.
+6. GEO, age, placements и creative feature settings.
+7. Campaign/ad set/ad naming и tracking parameters.
+8. Полный creative QA: формат, текст, цифры, язык, offer, отсутствие дублей.
+9. Все создаваемые объекты имеют initial status `PAUSED`.
 
-## Структура папки креативов
-Канон: `creo_folder/{1..N}/файлы`. Для **Этапа 1 (тест креативов)** берём **1-ю копию** каждого формата
-(`{a}/GH_AVI_CR00a_1.jpeg`) → N адсетов × 1 ад. Uniquify-копии 2–3 — в запас/масштаб.
-⚠️ Uniquify кладёт копии в `<OFFER>_<CRxxx>_..._3copies/{1,2,3}/` — перед заливом разложить в канон.
+Если любой обязательный источник `partial`, `stale` или `unavailable`, validate
+не должен превращать неизвестное значение в default. Запуск откладывается до
+следующего подтверждённого снимка источника.
 
-## Трекинг (url_tags объявления)
-`sub2=MV&sub3={format_code}&sub4={cabinet_id}&sub5={{campaign.name}}&sub6={{adset.name}}&sub7={{ad.name}}&sub8={{ad.id}}`.
-sub3 = код креатива (`GH_AVI_CR001`), **sub4 = ЧИСЛОВОЙ id кабинета БЕЗ префикса `act_`**
-(`ACT.removeprefix("act_")`), sub6 = имя адсета, sub8 = стабильный Meta Ad ID для live-атрибуции.
-`{{...}}` — FB-макросы, оставлять как есть.
-⚠️ `url_tags` у созданного креатива **immutable** (`POST /{creative_id} url_tags` → `Invalid parameter`) —
-поправить можно только пересозданием креатива (проще — перезалить кампанию исправленным скриптом).
-Проверять по факту: `verify_campaign.py` печатает `url_tags` каждого объявления.
+## Бизнес-правила теста
 
-## Метод 2 — Vision-автопилот (fallback / когда нужен UI-сабмит)
-Шаблон: `scripts/run_creator_gh_avi.py` (`--print` / `--run`). Кликает Ads Manager как человек.
-`core/campaign_creator/`: `build_campaign_spec_from_folder` → `build_plan` → `open_page(client)` → `PlanRunner`.
-- Пауза observer на сборку: `UPDATE observer_config SET is_scanning_enabled=false` ДО, вернуть `true` в finally.
-- 🔧 Селекторы дрейфуют (`set_budget` сломан). Использовать только если API-путь недоступен.
+- Тест креативов: разные visuals при одном тексте и чистой атрибуции варианта.
+- Тест текстовых углов: один выигравший visual, разные тексты отдельным запуском.
+- ABO/CBO, budgets, bid strategy и attribution выбираются под задачу и явно
+  отображаются в preview.
+- Start time вычисляется сервером в timezone кабинета; локальная дата браузера
+  не является источником истины.
+- Клиент не передаёт timezone, currency или evidence timestamp. Суммы передаются
+  decimal strings в major units и переводятся в integer minor units только
+  сервером по явному exponent; неизвестная валюта блокирует запуск.
+- Page не выбирается автоматически как первая доступная.
+- Tracking содержит стабильный Meta Ad ID и согласованные sub-параметры; raw
+  internal task/action IDs в destination URL не передаются.
 
-## Инструменты (scripts/)
-- **`fb_launch.py --config <YAML> [--go] [--only K] [--cleanup id...]`** — ОСНОВНОЙ движок залива.
-- **`fb_verify.py <campaign_id>`** — проверка структуры/медиа/url_tags (в обход proto-бага). Гонять ПЕРЕД unpause.
-- `launch_configs/*.yaml` — конфиги заливов; эталон `GH_CR_18_06.yaml`.
-- `start_vision_session.py` — поднять Vision-сессию (нужно перед `--go` после рестарта browser-agent).
-- `inspect_setup.py` — таймзона кабинета + все страницы + creative-поля (выбор страницы, проверка enhancements).
-- `inspect_abo.py [OBJECTIVE]` — разбор ABO-кампаний кабинета (эталон полей).
-- `check_campaigns.py "<needle>"` — дубль/осиротевшие перед заливом.
-- `create_gh_avi_api.py` — legacy low-level референс (хардкод, не для новых заливов).
-- ⚠️ `verify_campaign.py` / `delete_objects.py` — падают `ValueError` на proto-баге `ad_account_id`;
-  использовать `fb_verify.py` и `fb_launch.py --cleanup` (оба через прямой stub).
+## Creative QA gate
 
-## Подъём стека (нужен — Vision-сессия)
-- `./run.sh --no-tunnel` (фон). Docker (PG :5433, Redis :6380) + browser-agent gRPC :50051 + воркеры + Vision.
-- ⚠️ Пустой `telegram_config` → run.sh падает на poller BACKOFF → `python scripts/restore_secrets.py`, рестарт.
-- Готовность: `nc -z localhost 50051`; `redis-cli -p 6380 GET observer:runtime` (был успешный скан).
+До постановки в очередь:
 
-## Перед перезаливом / чистка
-- ⚠️ **Кампании со спендом > 0 НЕ удаляем** (теряется история/статистика). Дропать можно ТОЛЬКО
-  кампании с **0 спенда за всё время** (осиротевшие от частичных заливов, debug-объекты). Перед
-  `delete_objects.py` проверить спенд: `get_insights.py <id> maximum`.
-- Перезалив со спендом-кампанией: старую оставить PAUSED рядом, новый залив = **НОВАЯ кампания**
-  (не дроп старой). Дубль/осиротевшие (0 спенд) — `delete_objects.py`. Проверить дубль:
-  `check_campaigns.py "GH | AVI"`. Картинки (image_hash) переиспользуются — заново не грузить.
+- все файлы открываются и соответствуют заявленному media type;
+- aspect ratio и длительность допустимы для placements;
+- текст на изображении совпадает с ad copy и валютой;
+- нет чужого offer, старого промокода, инвертированного UI или повторного кадра;
+- каждый concept имеет уникальный стабильный code;
+- preview показывает точное количество campaigns, ad sets, creatives и ads;
+- большие uploads укладываются в deadline либо разбиты на явные resumable jobs.
 
-## После залива
-- `verify_campaign.py <id>` → убедиться в start_time/странице/полях → отдать байеру на ревью → он сам unpause.
-- Observer мониторит (стоп-правила + авто-стоп через Meta API). `status: live` в реестре оффера.
-- Через ~неделю — `creative_report` по FTD (разрез `sub3`/`sub6`) → лучший креатив → Этап 2.
+QA не заменяется автоматическим анализом. Финальное подтверждение остаётся у
+оператора.
+
+## Во время запуска
+
+Web UI показывает:
+
+- stage и процент progress;
+- количество подготовленных, загруженных и созданных объектов;
+- correlation ID;
+- deadline и freshness последнего update;
+- конкретную ошибку без raw traceback/secret;
+- доступные `resume`, `abort` или manual reconciliation только если backend
+  действительно поддерживает действие в этом state.
+
+Не закрывать incident как resolved по факту успешной постановки в очередь.
+Финальный green допустим только после подтверждённых Meta IDs и результата
+`confirmed`.
+
+## Partial failure и UNKNOWN
+
+1. Остановить повторные launch attempts с новым key.
+2. Открыть run detail и сохранить correlation ID.
+3. Сверить Meta по account, naming window и already-created IDs.
+4. Классифицировать объекты: complete, incomplete, orphan, ambiguous.
+5. Не удалять campaign, если у неё есть spend или неизвестна история.
+6. Cleanup нулевых orphan objects — отдельное destructive действие с точным
+   списком IDs и подтверждением оператора.
+7. После сверки закрыть run как confirmed/failed/unknown штатным lifecycle, а
+   не прямым SQL.
+
+## После запуска
+
+- Проверить структуру, statuses, budgets, schedule, Page, Pixel, creatives и
+  tracking непосредственно в Ads Manager.
+- Сопоставить созданные Meta IDs с run result.
+- Убедиться, что observer видит нужный cabinet и новые ads без stale/partial.
+- Передать оператору список объектов на review; activation — отдельная
+  осознанная command.
+- После накопления данных анализировать creative performance по устойчивому
+  creative code и latest-per-ad метрикам.
+
+## Диагностика worker
+
+```bash
+sudo /opt/fb-agent/current/scripts/platform-compose.sh status
+sudo /opt/fb-agent/current/scripts/platform-compose.sh logs campaign_creator
+sudo /opt/fb-agent/current/scripts/platform-desktop-compose.sh status
+```
+
+Если browser channel недоступен, следовать
+[RUNBOOKS.md](RUNBOOKS.md#browservision-недоступен). Перезапуск worker не
+является разрешением повторить неоднозначную внешнюю операцию.

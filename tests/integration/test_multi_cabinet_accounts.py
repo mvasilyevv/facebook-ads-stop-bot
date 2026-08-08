@@ -5,8 +5,8 @@
 1. resolve_scan_account_ids — union по активным офферам, дедуп, сортировка,
    неактивные офферы игнорируются, мусорные значения отбрасываются.
 2. list_offers_without_accounts — активные офферы с пустым списком кабинетов.
-3. upsert_catalog_hierarchy — пишет fb_campaigns.ad_account_id; повторный upsert
-   с None НЕ затирает уже известную привязку (COALESCE-семантика).
+3. upsert_catalog_hierarchy — требует явные account/campaign IDs и пишет
+   fb_campaigns.ad_account_id.
 
 Cleanup prefix-scoped (урок Round 11): не трогаем чужие строки при random-порядке.
 """
@@ -109,43 +109,31 @@ async def test_list_offers_without_accounts(pg_engine: AsyncEngine, clean_mcab) 
     assert f"{PFX}_FULL" not in missing
 
 
-# upsert пишет ad_account_id кампании; повторный upsert с None не затирает привязку.
 @pytest.mark.asyncio
-async def test_upsert_catalog_keeps_account_on_none(pg_engine: AsyncEngine, clean_mcab) -> None:
+async def test_upsert_catalog_rejects_missing_account(pg_engine: AsyncEngine, clean_mcab) -> None:
     common = dict(
-        fb_ad_id=f"{PFX}9001",
+        fb_ad_id="9001",
         ad_name=f"{PFX} ad",
-        fb_adset_id=None,
+        fb_adset_id="8101",
         adset_name=f"{PFX} adset",
-        fb_campaign_id=None,
+        fb_campaign_id="8001",
         campaign_name=f"{PFX} campaign",
         offer_id=None,
         delivery_status="ACTIVE",
     )
-    # Первый скан из кабинета 555 — привязка записана.
-    await upsert_catalog_hierarchy(pg_engine, **common, ad_account_id="555")
-    # Повторный скан без кабинета (fallback) — привязка должна сохраниться.
-    await upsert_catalog_hierarchy(pg_engine, **common, ad_account_id=None)
-
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT ad_account_id FROM fb_campaigns WHERE campaign_name = :n"),
-                {"n": f"{PFX} campaign"},
-            )
-        ).first()
-    assert row is not None and row[0] == "555"
+    with pytest.raises(ValueError, match="explicit numeric account id"):
+        await upsert_catalog_hierarchy(pg_engine, **common, ad_account_id=None)  # type: ignore[arg-type]
 
 
 # Скан из другого кабинета обновляет привязку (кампания переехала/пересоздана).
 @pytest.mark.asyncio
 async def test_upsert_catalog_updates_account(pg_engine: AsyncEngine, clean_mcab) -> None:
     common = dict(
-        fb_ad_id=f"{PFX}9002",
+        fb_ad_id="9002",
         ad_name=f"{PFX} ad2",
-        fb_adset_id=None,
+        fb_adset_id="8102",
         adset_name=f"{PFX} adset2",
-        fb_campaign_id=None,
+        fb_campaign_id="8002",
         campaign_name=f"{PFX} campaign2",
         offer_id=None,
         delivery_status="ACTIVE",

@@ -1,13 +1,12 @@
 /**
- * Misc stories — Skeleton, EmptyState, ErrorState, Spinner, ProgressBar, Tooltip, Kbd, Card, Switch, Select, Toast.
+ * Misc stories — Skeleton, EmptyState, ErrorState, Spinner, ProgressBar, Kbd, Card, Switch, Select, Toast.
  */
 import type { Meta, StoryObj } from "@storybook/react";
 import { InboxIcon } from "lucide-react";
-import { Skeleton, SkeletonRows } from "../src/components/ui/Skeleton";
+import { Skeleton } from "../src/components/ui/Skeleton";
 import { EmptyState } from "../src/components/ui/EmptyState";
 import { ErrorState } from "../src/components/ui/ErrorState";
 import { Spinner, ProgressBar } from "../src/components/ui/Spinner";
-import { Tooltip } from "../src/components/ui/Tooltip";
 import { Kbd } from "../src/components/ui/Kbd";
 import { Card } from "../src/components/ui/Card";
 import { Switch } from "../src/components/ui/Switch";
@@ -30,7 +29,9 @@ export const SkeletonVariants: Story = {
       <Skeleton width="70%" />
       <Skeleton width="50%" height={10} />
       <Skeleton height={80} />
-      <SkeletonRows count={3} />
+      {Array.from({ length: 3 }, (_, index) => (
+        <Skeleton key={index} variant="row" />
+      ))}
     </div>
   ),
 };
@@ -48,7 +49,7 @@ export const EmptyStateFull: Story = {
 export const ErrorStateFull: Story = {
   render: () => (
     <ErrorState
-      error="Network Error: Failed to fetch /api/dashboard/ads"
+      error="Network Error: Failed to fetch /api/operator/ads"
       onRetry={() => console.log("retry")}
     />
   ),
@@ -73,14 +74,6 @@ export const Progress: Story = {
       <ProgressBar value={100} />
       <ProgressBar />
     </div>
-  ),
-};
-
-export const TooltipDemo: Story = {
-  render: () => (
-    <Tooltip content="Горячая клавиша / для поиска">
-      <Button variant="secondary">Навести мышь</Button>
-    </Tooltip>
   ),
 };
 
@@ -138,16 +131,25 @@ export const ToastDemo: Story = {
     <>
       <ToastViewport />
       <div className="flex gap-2">
-        <Button variant="secondary" onClick={() => toast.success("Сохранено", "Настройки обновлены")}>
+        <Button
+          variant="secondary"
+          onClick={() => toast.success("Сохранено", "Настройки обновлены")}
+        >
           Success
         </Button>
         <Button variant="secondary" onClick={() => toast.info("Инфо", "Новый скан запущен")}>
           Info
         </Button>
-        <Button variant="secondary" onClick={() => toast.warning("Внимание", "Достигнут лимит запросов")}>
+        <Button
+          variant="secondary"
+          onClick={() => toast.warning("Внимание", "Достигнут лимит запросов")}
+        >
           Warning
         </Button>
-        <Button variant="danger" onClick={() => toast.error("Ошибка", "Не удалось подключиться к API")}>
+        <Button
+          variant="danger"
+          onClick={() => toast.error("Ошибка", "Не удалось подключиться к API")}
+        >
           Error
         </Button>
       </div>

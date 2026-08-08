@@ -1,5 +1,5 @@
 /**
- * Страница «Кампании» (блок 01 OPERATE) — скоуп наблюдения.
+ * Страница «Кампании» — скоуп наблюдения.
  *
  * Вынесено из Settings → Observer: Owner Campaign Tag (какие кампании «мои»)
  * + отслеживаемые кампании (allowlist). Определяет, что именно сканирует бот.
@@ -19,7 +19,9 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
-import { useMonitoringSnapshot } from "@/lib/hooks/useMonitoringSnapshot";
+import { useOperatorRealtimeStatus } from "@fb/operator-api";
+import { snapshotForRealtimeState } from "@fb/shared/operator/viewModel";
+import { useOperatorSnapshot } from "@/lib/api/operator";
 import {
   useObserverSettings,
   useUpdateOwnerTag,
@@ -57,7 +59,7 @@ const ScopeCard: FC = () => {
   return (
     <Card padded>
       <OwnerTagSection />
-      <div className="my-5 border-t border-[var(--hairline)]" />
+      <div className="my-5 border-t border-[var(--color-hairline)]" />
       <CampaignAllowlistSection />
     </Card>
   );
@@ -66,7 +68,7 @@ const ScopeCard: FC = () => {
 // ─── Owner Campaign Tag ───────────────────────────────────────────────────────
 
 const OwnerTagSection: FC = () => {
-  const { data, isLoading, error, refetch } = useObserverSettings();
+  const { data, isLoading, error } = useObserverSettings();
   const updateMut = useUpdateOwnerTag();
   // Тэги как список (на бэке хранятся одной строкой через запятую).
   const [tags, setTags] = useState<string[]>([]);
@@ -84,7 +86,7 @@ const OwnerTagSection: FC = () => {
   }, [data]);
 
   if (isLoading) return <Skeleton className="h-32 w-full" />;
-  if (error) return <ErrorState error={error} onRetry={() => void refetch()} />;
+  if (error) return <ErrorState error={error} onRetry={() => void 0} />;
 
   // Точечный PATCH: full-PUT из кэша молча откатывал is_scanning_enabled (аудит C-1).
   const handleSave = async () => {
@@ -98,12 +100,12 @@ const OwnerTagSection: FC = () => {
 
   return (
     <div>
-      <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-2">
+      <div className="font-display text-[12px] tracking-[0.12em] uppercase text-bg-8 mb-2">
         ТЕГИ ВЛАДЕЛЬЦА
       </div>
       <div className="text-[12px] text-bg-9 mb-3">
-        Метки в названии кампании, по которым бот отделяет ваши кампании от остальных. Добавляйте
-        по одной через Enter. Если оставить поле пустым, фильтрации по владельцу не будет.
+        Метки в названии кампании, по которым бот отделяет ваши кампании от остальных. Добавляйте по
+        одной через Enter. Если оставить поле пустым, фильтрации по владельцу не будет.
       </div>
       <TagListInput
         id="owner-tag"
@@ -131,7 +133,7 @@ const OwnerTagSection: FC = () => {
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
 const CabinetAutostartCard: FC = () => {
-  const { data, isLoading, error, refetch } = useCabinetAutostart();
+  const { data, isLoading, error } = useCabinetAutostart();
   const updateMut = useUpdateCabinetAutostart();
   const [enabled, setEnabled] = useState(false);
   const [time, setTime] = useState("06:00");
@@ -145,7 +147,7 @@ const CabinetAutostartCard: FC = () => {
   }, [data]);
 
   if (isLoading) return <Skeleton className="h-32 w-full" />;
-  if (error) return <ErrorState error={error} onRetry={() => void refetch()} />;
+  if (error) return <ErrorState error={error} onRetry={() => void 0} />;
 
   const handleSave = async () => {
     const [hh, mm] = time.split(":");
@@ -180,42 +182,43 @@ const CabinetAutostartCard: FC = () => {
 
   return (
     <>
-    <Card eyebrow="АВТОСТАРТ КАБИНЕТА" padded>
-      <div className="text-[12px] text-bg-9 mb-3">
-        В заданное время бот автоматически включит объявления выбранных кампаний и запустит
-        мониторинг. Перед первым включением потребуется подтверждение.
-      </div>
-
-      <Switch
-        checked={enabled}
-        onChange={() => setEnabled((v) => !v)}
-        label="Включить автостарт"
-        visualLabel="Статус"
-      />
-
-      <div className="mt-4 flex flex-col items-start gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div style={{ maxWidth: 160 }} className="flex-1">
-          <Input
-            id="autostart-time"
-            type="time"
-            label="Время (UTC)"
-            value={time}
-            onChange={(e) => setTime(e.target.value)}
-          />
-          <p className="mt-1.5 text-[11px] text-bg-9">
-            Локальное время: {localTimeForUtc(time)} ({Intl.DateTimeFormat().resolvedOptions().timeZone})
-          </p>
+      <Card eyebrow="АВТОСТАРТ КАБИНЕТА" padded>
+        <div className="text-[12px] text-bg-9 mb-3">
+          В заданное время бот автоматически включит объявления выбранных кампаний и запустит
+          мониторинг. Перед первым включением потребуется подтверждение.
         </div>
-        <Button
-          variant="primary"
-          onClick={requestSave}
-          loading={updateMut.isPending}
-          disabled={!isDirty}
-        >
-          Сохранить расписание
-        </Button>
-      </div>
-    </Card>
+
+        <Switch
+          checked={enabled}
+          onChange={() => setEnabled((v) => !v)}
+          label="Включить автостарт"
+          visualLabel="Статус"
+        />
+
+        <div className="mt-4 flex flex-col items-start gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div style={{ maxWidth: 160 }} className="flex-1">
+            <Input
+              id="autostart-time"
+              type="time"
+              label="Время (UTC)"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+            />
+            <p className="mt-1.5 text-[12px] text-bg-9">
+              Локальное время: {localTimeForUtc(time)} (
+              {Intl.DateTimeFormat().resolvedOptions().timeZone})
+            </p>
+          </div>
+          <Button
+            variant="primary"
+            onClick={requestSave}
+            loading={updateMut.isPending}
+            disabled={!isDirty}
+          >
+            Сохранить расписание
+          </Button>
+        </div>
+      </Card>
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
@@ -276,11 +279,21 @@ const CampaignName: FC<{ name: string }> = ({ name }) => {
 };
 
 const CampaignAllowlistSection: FC = () => {
-  const monitoring = useMonitoringSnapshot();
+  const realtimeStatus = useOperatorRealtimeStatus();
+  const operatorSnapshotQuery = useOperatorSnapshot({ window: "today" });
+  const operatorSnapshot = operatorSnapshotQuery.data
+    ? snapshotForRealtimeState(operatorSnapshotQuery.data, realtimeStatus === "connected")
+    : null;
   // Старые кампании (дата в имени старше 14 дней, не выбранные) по умолчанию скрыты —
   // бэк фильтрует по дате из названия; тумблер ниже списка показывает всё.
   const [showStale, setShowStale] = useState(false);
-  const { data: campaigns, isLoading } = useObserverCampaigns(showStale);
+  const {
+    data: campaigns,
+    isLoading,
+    isError: campaignsUnavailable,
+    error: campaignsError,
+    refetch: refetchCampaigns,
+  } = useObserverCampaigns(showStale);
   const refreshMut = useRefreshObserverCampaigns();
   const saveMut = useSetCampaignAllowlist();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -334,15 +347,33 @@ const CampaignAllowlistSection: FC = () => {
   };
 
   const hasCampaigns = !!campaigns && campaigns.length > 0;
-  const initialSelected = new Set(campaigns?.filter((campaign) => campaign.selected).map((campaign) => campaign.id) ?? []);
+  const initialSelected = new Set(
+    campaigns?.filter((campaign) => campaign.selected).map((campaign) => campaign.id) ?? [],
+  );
   const hasSelectionChanges =
     selected.size !== initialSelected.size || [...selected].some((id) => !initialSelected.has(id));
-  const refreshUnavailable = monitoring.state === "offline" || monitoring.state === "unknown";
+  const refreshUnavailable =
+    operatorSnapshotQuery.isLoading ||
+    operatorSnapshotQuery.isError ||
+    operatorSnapshot === null ||
+    operatorSnapshot.system.state === "stale" ||
+    operatorSnapshot.system.state === "unavailable" ||
+    operatorSnapshot.system.data?.severity === "critical";
+
+  if (campaignsUnavailable) {
+    return (
+      <ErrorState
+        title="Список кампаний недоступен"
+        error={campaignsError}
+        onRetry={() => void refetchCampaigns()}
+      />
+    );
+  }
 
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
-        <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8">
+        <div className="font-display text-[12px] tracking-[0.12em] uppercase text-bg-8">
           КАМПАНИИ ПОД КОНТРОЛЕМ
         </div>
         <Button
@@ -357,12 +388,12 @@ const CampaignAllowlistSection: FC = () => {
           Обновить из кабинета
         </Button>
       </div>
-      <div className="text-[11px] text-bg-8 mb-3">
-        Выбранные кампании участвуют в мониторинге, авто-стопе и расписании запуска. Если ничего
-        не выбрано, бот не будет отслеживать и включать объявления.
+      <div className="text-[12px] text-bg-8 mb-3">
+        Выбранные кампании участвуют в мониторинге, авто-стопе и расписании запуска. Если ничего не
+        выбрано, бот не будет отслеживать и включать объявления.
       </div>
       {refreshUnavailable ? (
-        <p className="mb-3 text-[11px] text-warning" role="status">
+        <p className="mb-3 text-[12px] text-warning" role="status">
           Обновление из кабинета недоступно, пока контур мониторинга не восстановлен.
         </p>
       ) : null}
@@ -371,13 +402,13 @@ const CampaignAllowlistSection: FC = () => {
         <Skeleton className="h-24 w-full" />
       ) : !hasCampaigns ? (
         <div
-          className="text-[12px] text-bg-8 border border-[var(--hairline)] rounded-[var(--radius-2)]"
-          style={{ padding: "var(--s-4)" }}
+          className="text-[12px] text-bg-8 border border-[var(--color-hairline)] rounded-[var(--radius-2)]"
+          style={{ padding: "var(--space-4)" }}
         >
           Кампаний нет. Проверьте теги владельца и обновите список из кабинета.
         </div>
       ) : (
-        <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden">
+        <div className="border border-[var(--color-hairline)] rounded-[var(--radius-2)] overflow-hidden">
           {/* Шапка: выбрать/снять все (tri-state) */}
           <button
             type="button"
@@ -385,16 +416,16 @@ const CampaignAllowlistSection: FC = () => {
             aria-checked={headerState === "mixed" ? "mixed" : headerState}
             onClick={toggleAll}
             className={cn(
-              "w-full flex items-center gap-2.5 px-3 py-2 text-left",
-              "bg-bg-1 border-b border-[var(--hairline)] cursor-pointer",
+              "min-h-11 w-full flex items-center gap-2.5 px-3 py-2 text-left",
+              "bg-bg-1 border-b border-[var(--color-hairline)] cursor-pointer",
               "hover:bg-bg-2 transition-colors",
             )}
           >
             <CheckBox state={headerState} />
-            <span className="font-display text-[10.5px] tracking-wider uppercase text-bg-9">
+            <span className="font-display text-[12px] tracking-wider uppercase text-bg-9">
               {allSelected ? "Снять все" : "Выбрать все"}
             </span>
-            <span className="ml-auto font-display tabular-nums text-[11px] text-bg-8">
+            <span className="ml-auto font-display tabular-nums text-[12px] text-bg-8">
               {selected.size} / {allIds.length}
             </span>
           </button>
@@ -412,12 +443,10 @@ const CampaignAllowlistSection: FC = () => {
                   aria-label={c.name || c.id}
                   onClick={() => toggle(c.id)}
                   className={cn(
-                    "w-full flex items-center gap-2.5 px-3 py-2.5 text-left text-[13px]",
-                    "border-b border-l-2 border-b-[var(--hairline)] last:border-b-0 cursor-pointer",
+                    "min-h-11 w-full flex items-center gap-2.5 px-3 py-2.5 text-left text-[13px]",
+                    "border-b border-l-2 border-b-[var(--color-hairline)] last:border-b-0 cursor-pointer",
                     "transition-colors",
-                    isSel
-                      ? "bg-accent-bg border-l-accent"
-                      : "border-l-transparent hover:bg-bg-2",
+                    isSel ? "bg-accent-bg border-l-accent" : "border-l-transparent hover:bg-bg-2",
                   )}
                 >
                   <CheckBox state={isSel} />
@@ -431,7 +460,7 @@ const CampaignAllowlistSection: FC = () => {
 
       <div
         className="flex items-center justify-between gap-4"
-        style={{ marginTop: "var(--s-4)" }}
+        style={{ marginTop: "var(--space-4)" }}
       >
         <Button
           variant="primary"
@@ -444,7 +473,7 @@ const CampaignAllowlistSection: FC = () => {
         <button
           type="button"
           onClick={() => setShowStale((v) => !v)}
-          className="text-[12px] text-bg-9 hover:text-bg-11 underline underline-offset-4 transition-colors"
+          className="inline-flex min-h-11 items-center px-2 text-[12px] text-bg-9 hover:text-bg-11 underline underline-offset-4 transition-colors"
         >
           {showStale ? "Скрыть старые кампании" : "Показать старые (>14 дней)"}
         </button>

@@ -7,23 +7,9 @@ Graph API Batch endpoint: POST /v22.0/ (root) с параметром
 Все sub-requests параллельно с одним токеном за один HTTP-запрос. Каждый
 sub-request возвращает свой `code` (HTTP status) и `body` (JSON).
 
-Контракт params (поддерживаются обе формы для совместимости):
-1. Полная: {"object_ids": [...], "status": "PAUSED"|"ACTIVE", "object_type": "ad"|"adset"|"campaign"}
-2. Сокращённая (от drafts/): {"ad_ids": [...], "action": "pause"|"activate"}
+Единственный контракт params: {"ad_ids": [...], "action": "pause"|"activate"}.
 
-Пример (полная):
-    MetaMutationPayload(
-        mutation_kind="bulk_status_change",
-        target_id="23847001",  # любой из object_ids
-        params={
-            "object_ids": ["23847001", "23847002", "23847003"],
-            "status": "PAUSED",
-            "object_type": "ad",
-        },
-        ad_account_id="act_123",
-    )
-
-Пример (от drafts):
+Пример:
     MetaMutationPayload(
         mutation_kind="bulk_status_change",
         target_id="bulk:3",
@@ -36,20 +22,7 @@ sub-request возвращает свой `code` (HTTP status) и `body` (JSON).
 - Каждый sub-request имеет таймаут как и обычный API call.
 - Failures отдельных sub-requests не валят весь batch.
 
-ВНИМАНИЕ — корреляция object_type ↔ object_ids НЕ проверяется!
-    object_type указывается caller'ом и попадает только в audit + extra поля,
-    но handler НЕ выполняет pre-flight `GET /<id>?fields=id` чтобы убедиться,
-    что id'шки реально принадлежат типу. Если caller передал
-    object_type='campaign' со списком ad-id, Meta попытается выключить
-    кампании по этим id (а это уже совершенно другие сущности) — последствия
-    необратимы.
-
-    Caller обязан гарантировать корреляцию. Для AI-tools (например,
-    request_bulk_pause) это значит сначала SELECT из локальной БД
-    (`fb_ads`/`fb_campaigns`) или явный list_ads/list_campaigns, и только
-    потом — bulk_status_change.
-
-    Полный pre-flight check через Graph API — отдельная фича.
+Каждый id предварительно проходит owner/catalog guard как Meta ad id.
 """
 
 from __future__ import annotations
@@ -58,7 +31,7 @@ import logging
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
-from core.meta_api.errors import MutationValidationError, TemporaryError
+from core.meta_api.errors import AmbiguousResultError, MutationValidationError, TemporaryError
 from core.meta_api.mutations._batch_helpers import (
     MAX_BATCH_ENTRIES,
     build_batch_payload,
@@ -71,9 +44,6 @@ from core.meta_api.schemas import MetaMutationPayload
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_OBJECT_TYPES = frozenset({"ad", "adset", "campaign"})
-
-# Маппинг сокращённого action из drafts → Graph API status.
 _ACTION_TO_STATUS = {
     "pause": "PAUSED",
     "activate": "ACTIVE",
@@ -91,13 +61,13 @@ class BulkStatusChangeHandler:
         payload: MetaMutationPayload,
     ) -> dict[str, Any]:
         params = payload.params or {}
-        object_ids, status, object_type = self._extract_params(params)
+        object_ids, status = self._extract_params(params)
 
         # Логируем явно — критично для аудита: видим связку type↔count↔status,
         # помогает отследить ошибки caller'а (несовпадение type с id'шками).
         logger.info(
             "bulk_status_change: type=%s count=%d status=%s first_id=%s",
-            object_type,
+            "ad",
             len(object_ids),
             status,
             object_ids[0] if object_ids else "?",
@@ -119,7 +89,25 @@ class BulkStatusChangeHandler:
         )
 
         # Привязываем object_id к каждому sub-result по индексу (Batch сохраняет порядок).
-        parsed = parse_batch_response(graph_response, expected_count=len(object_ids))
+        parsed = parse_batch_response(
+            graph_response,
+            expected_count=len(object_ids),
+            success_evidence="mutation_ack",
+        )
+        ambiguous_ids = [
+            object_ids[row["index"]]
+            for row in parsed
+            if row.get("mutation_evidence") == "unknown" and row["index"] < len(object_ids)
+        ]
+        if ambiguous_ids:
+            # Do not publish partial/confirmed from transport-only 2xx evidence.
+            # The worker reads actual configured status for every target before
+            # deciding whether any idempotent status write may be retried.
+            raise AmbiguousResultError(
+                "Meta batch mutation returned no exact success=true acknowledgement "
+                f"for ids={','.join(ambiguous_ids)}",
+                endpoint="/",
+            )
         sub_results = [
             {
                 "id": object_ids[r["index"]] if r["index"] < len(object_ids) else None,
@@ -140,8 +128,9 @@ class BulkStatusChangeHandler:
         # Классифицируем по parsed (там есть body с Graph-кодами; sub_results
         # body не несут — они уходят в task_queue.result компактными).
         failed_parsed = [r for r in parsed if not r["success"]]
-        if failed_parsed and len(failed_parsed) == len(parsed):
-            classified = [classify_sub_failure(r) for r in failed_parsed]
+        transport_failures = [row for row in failed_parsed if row.get("mutation_evidence") is None]
+        if transport_failures and len(transport_failures) == len(parsed):
+            classified = [classify_sub_failure(r) for r in transport_failures]
             if all(isinstance(exc, TemporaryError) for exc in classified):
                 logger.warning(
                     "bulk_status_change: все %d саб-реквестов упали транзиентно "
@@ -154,7 +143,6 @@ class BulkStatusChangeHandler:
             graph_response=graph_response,
             modified_ids=[r["id"] for r in sub_results if r["success"]],
             extra={
-                "object_type": object_type,
                 "status_applied": status,
                 "batch_size": len(object_ids),
                 "succeeded": sum(1 for r in sub_results if r["success"]),
@@ -164,48 +152,17 @@ class BulkStatusChangeHandler:
         )
 
     @staticmethod
-    def _extract_params(params: dict[str, Any]) -> tuple[list[str], str, str]:
-        """Достать object_ids/status/object_type из payload.params.
-
-        Поддерживает обе формы: полную (object_ids+status+object_type) и
-        сокращённую (ad_ids+action). Бросает MutationValidationError на bad input.
-        """
-        # Полная форма
-        if "object_ids" in params or "status" in params:
-            raw_ids = params.get("object_ids") or []
-            status_raw = params.get("status")
-            object_type = (params.get("object_type") or "ad").lower()
-            if not isinstance(raw_ids, list) or not raw_ids:
-                raise MutationValidationError("object_ids: ожидается непустой список ID")
-            if not isinstance(status_raw, str):
-                raise MutationValidationError(f"status: ожидается строка, получено {status_raw!r}")
-            status = status_raw.strip().upper()
-            if status not in ("PAUSED", "ACTIVE"):
-                raise MutationValidationError(
-                    f"status: допустимо PAUSED или ACTIVE, получено {status_raw!r}"
-                )
-        # Сокращённая (от drafts)
-        elif "ad_ids" in params or "action" in params:
-            raw_ids = params.get("ad_ids") or []
-            action = str(params.get("action") or "").lower().strip()
-            if not isinstance(raw_ids, list) or not raw_ids:
-                raise MutationValidationError("ad_ids: ожидается непустой список ID")
-            if action not in _ACTION_TO_STATUS:
-                raise MutationValidationError(
-                    f"action: допустимо pause/activate, получено {params.get('action')!r}"
-                )
-            status = _ACTION_TO_STATUS[action]
-            object_type = "ad"
-        else:
+    def _extract_params(params: dict[str, Any]) -> tuple[list[str], str]:
+        """Validate and return canonical ad ids plus Graph status."""
+        raw_ids = params.get("ad_ids") or []
+        action = str(params.get("action") or "").lower().strip()
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise MutationValidationError("ad_ids: ожидается непустой список ID")
+        if action not in _ACTION_TO_STATUS:
             raise MutationValidationError(
-                "bulk_status_change: params должен содержать "
-                "(object_ids+status+object_type) или (ad_ids+action)"
+                f"action: допустимо pause/activate, получено {params.get('action')!r}"
             )
-
-        if object_type not in _ALLOWED_OBJECT_TYPES:
-            raise MutationValidationError(
-                f"object_type: допустимо {sorted(_ALLOWED_OBJECT_TYPES)}, получено {object_type!r}"
-            )
+        status = _ACTION_TO_STATUS[action]
 
         object_ids: list[str] = []
         for raw in raw_ids:
@@ -227,4 +184,4 @@ class BulkStatusChangeHandler:
                 seen.add(sid)
                 deduped.append(sid)
 
-        return deduped, status, object_type
+        return deduped, status

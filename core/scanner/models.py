@@ -6,6 +6,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+# Wire-level proof required before a live scanner response can reach persistence
+# or money decisions. Protobuf scalar default 0 intentionally identifies an old
+# producer that did not implement the fail-closed metric completeness contract.
+SCANNER_METRICS_CONTRACT_REVISION = 1
+
 
 @dataclass(slots=True, frozen=True)
 class ScannedAdRow:
@@ -18,8 +23,9 @@ class ScannedAdRow:
     delivery_status: str
     spend: Decimal
     budget: str = ""
-    # Meta campaign.id (из am_tabular). Пусто, если скан не дал id (старый путь/DOM).
+    # Meta campaign.id/adset.id из Graph. Пустое/нечисловое значение делает весь скан partial.
     campaign_id: str = ""
+    adset_id: str = ""
     reach: int = 0
     impressions: int = 0
     clicks: int = 0

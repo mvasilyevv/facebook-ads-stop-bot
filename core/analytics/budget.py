@@ -42,17 +42,25 @@ def calculate_live_budget(
     registrations: int,
     confirmed_deposits: int,
 ) -> LiveBudget | None:
-    """Return the live base/stop budget for one ad, or ``None`` without CPA.
+    """Return live base/stop budget, or ``None`` without confirmed rule inputs.
 
     The stage deliberately follows the same funnel ordering as the stop evaluator.
     A confirmed deposit uses one CPA cap regardless of the number of deposits, which
     matches the current conservative deposit-stage rule.
     """
-    if cpa_threshold is None or Decimal(cpa_threshold) <= 0:
+    if cpa_threshold is None or stop_percent_of_rule is None:
         return None
 
     cpa = Decimal(cpa_threshold)
-    stop_percent = Decimal(stop_percent_of_rule or Decimal("80"))
+    stop_percent = Decimal(stop_percent_of_rule)
+    if (
+        not cpa.is_finite()
+        or cpa <= 0
+        or not stop_percent.is_finite()
+        or stop_percent <= 0
+        or stop_percent > _HUNDRED
+    ):
+        return None
 
     if confirmed_deposits > 0:
         stage: BudgetStage = "deposit"

@@ -1,81 +1,62 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import type { AnalyticsDaypart, AnalyticsLiveBudgetSeries, AnalyticsPerformance } from "@fb/shared";
+import { keepPreviousData } from "@tanstack/react-query";
+import type { operations } from "@fb/shared/api/generated";
+import {
+  normalizeAnalyticsDaypart,
+  normalizeAnalyticsLiveBudgetSeries,
+  normalizeAnalyticsPerformance,
+} from "@fb/shared/analytics/runtime";
 
-import { apiGet } from "./client";
+import { generatedApi } from "./generatedClient";
 
-export interface AnalyticsFilters {
-  period: "today" | "custom";
-  from_iso?: string;
-  to_iso?: string;
-  account_id?: string;
-  offer_id?: string;
-  campaign_id?: string;
-  search?: string;
-}
+type PerformanceQuery = NonNullable<
+  operations["get_analytics_performance_api_analytics_performance_get"]["parameters"]["query"]
+>;
+type LiveBudgetQuery = NonNullable<
+  operations["get_analytics_live_budget_api_analytics_live_budget_get"]["parameters"]["query"]
+>;
+type DaypartQuery = NonNullable<
+  operations["get_analytics_daypart_api_analytics_daypart_get"]["parameters"]["query"]
+>;
 
-export interface AnalyticsPerformanceParams extends AnalyticsFilters {
-  level: "campaign" | "adset" | "ad";
-  parent_id?: string;
-  sort?:
-    | "name"
-    | "spend"
-    | "clicks"
-    | "registrations"
-    | "ftds"
-    | "confirmed_deposits"
-    | "revenue"
-    | "base_delta";
-  direction?: "asc" | "desc";
-  page?: number;
-  page_size?: number;
-}
+export type AnalyticsPerformanceParams = PerformanceQuery &
+  Required<Pick<PerformanceQuery, "period" | "level">>;
 
 export function useAnalyticsPerformance(params: AnalyticsPerformanceParams, enabled = true) {
-  return useQuery<AnalyticsPerformance>({
-    queryKey: ["analytics", "performance", params],
-    queryFn: ({ signal }) =>
-      apiGet<AnalyticsPerformance>(
-        "/analytics/performance",
-        params as unknown as Record<string, string | number | boolean | null | undefined>,
-        signal,
-      ),
-    staleTime: params.period === "today" ? 20_000 : 60_000,
-    placeholderData: keepPreviousData,
-    enabled,
-  });
+  return generatedApi.useQuery(
+    "get",
+    "/api/analytics/performance",
+    { params: { query: params } },
+    {
+      staleTime: params.period === "today" ? 20_000 : 60_000,
+      placeholderData: keepPreviousData,
+      select: normalizeAnalyticsPerformance,
+      enabled,
+    },
+  );
 }
 
-export function useAnalyticsLiveBudget(
-  params: Pick<AnalyticsFilters, "account_id" | "offer_id" | "campaign_id">,
-  enabled = true,
-) {
-  return useQuery<AnalyticsLiveBudgetSeries>({
-    queryKey: ["analytics", "live-budget", params],
-    queryFn: ({ signal }) =>
-      apiGet<AnalyticsLiveBudgetSeries>(
-        "/analytics/live-budget",
-        params as Record<string, string | number | boolean | null | undefined>,
-        signal,
-      ),
-    staleTime: 20_000,
-    enabled,
-  });
+export function useAnalyticsLiveBudget(params: LiveBudgetQuery, enabled = true) {
+  return generatedApi.useQuery(
+    "get",
+    "/api/analytics/live-budget",
+    { params: { query: params } },
+    { staleTime: 20_000, select: normalizeAnalyticsLiveBudgetSeries, enabled },
+  );
 }
 
 export function useAnalyticsDaypart(
-  params: Omit<AnalyticsFilters, "period" | "search"> & { timezone: string },
+  params: DaypartQuery,
   enabled = true,
 ) {
-  return useQuery<AnalyticsDaypart>({
-    queryKey: ["analytics", "daypart", params],
-    queryFn: ({ signal }) =>
-      apiGet<AnalyticsDaypart>(
-        "/analytics/daypart",
-        params as Record<string, string | number | boolean | null | undefined>,
-        signal,
-      ),
-    staleTime: 60_000,
-    placeholderData: keepPreviousData,
-    enabled,
-  });
+  return generatedApi.useQuery(
+    "get",
+    "/api/analytics/daypart",
+    { params: { query: params } },
+    {
+      staleTime: 60_000,
+      placeholderData: keepPreviousData,
+      select: normalizeAnalyticsDaypart,
+      enabled,
+    },
+  );
 }

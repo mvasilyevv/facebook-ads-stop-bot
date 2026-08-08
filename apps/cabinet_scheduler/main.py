@@ -4,17 +4,16 @@
 Money-критичный воркер. В плановое время (UTC, ежедневно) автоматически:
 1. Включает (enable) объявления СВОИХ кампаний (owner-scoped) с нужной ДАТОЙ
    в названии кампании. Создаёт сразу pending-задачу bulk_status_change activate
-   (без draft-подтверждения — это автостарт).
-2. Триггерит observer scan (publish в Redis fb_agent:observer:trigger).
+   (без дополнительного подтверждения — это автостарт).
+2. Ставит durable observer_scan в PostgreSQL.
 
 Контракт:
 - Окно: HH:MM UTC из конфига и до конца суток UTC (catch-up при downtime воркера).
-- Защита от повторов: Redis ``cabinet:autostart:YYYY-MM-DD`` TTL 26ч (SET NX) +
-  idempotency_key задачи (включает дату запуска) — двойная защита от дубля enable.
+- Защита от повторов: task_queue idempotency + фактические ad_ids за день.
 - Owner-scoping ОБЯЗАТЕЛЕН (тег из observer_config). Без owner-тега фильтр
   выключен (включаются все кампании с датой) — это осознанный режим владельца.
 - Пустой список дат → ничего не включаем (безопасность: НЕ включать весь кабинет).
-- Heartbeat: ``worker:heartbeat:cabinet_scheduler`` TTL 60s.
+- Process liveness is exported through the worker Prometheus endpoint.
 
 Конфиг (system_config key='cabinet_autostart') меняется без рестарта — читается
 на каждом тике.
@@ -23,43 +22,44 @@ Money-критичный воркер. В плановое время (UTC, еж
 from __future__ import annotations
 
 import asyncio
-import json
+import hashlib
 import logging
 import os
 import signal
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import redis.asyncio as redis_asyncio
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from core.db import WORKER_ENGINE_KWARGS
-from core.meta_api.bulk import MAX_BULK, resolve_owner_ad_ids_by_campaign_ids
+from core.meta_api.bulk import (
+    MAX_BULK,
+    capture_autostart_activation_guards,
+    resolve_owner_ads_by_account,
+)
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
 from core.observer.queries import load_observer_config, load_scanning_enabled
+from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
 from core.scheduler.cabinet_autostart import (
-    AUTOSTART_DONE_TTL_SECONDS,
-    autostart_done_key,
     is_in_autostart_window,
     read_autostart_config,
 )
-from core.telegram.worker_notify import notify_owners
+from core.telegram.worker_notify import notify_owners_in_transaction
+from core.worker_metrics import mark_worker_heartbeat
 
 logger = logging.getLogger("cabinet_scheduler")
 
 WORKER_NAME = "cabinet_scheduler"
-HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
-HEARTBEAT_TTL_SECONDS = 60
+_METRICS_INTERVAL_SECONDS = 15.0
 
 # Главный цикл — раз в минуту (как digest_scheduler / health_watchdog).
 CHECK_INTERVAL_SECONDS = int(os.environ.get("CABINET_CHECK_INTERVAL_SEC", "60"))
 
-# Redis-канал триггера observer scan (тот же, что у /scan-now).
-_OBSERVER_TRIGGER_CHANNEL = "fb_agent:observer:trigger"
-
 # Действие mutation — включение (activate). Автостарт всегда включает.
 _AUTOSTART_ACTION = "activate"
+_AUTOSTART_DAY_LOCK_NAMESPACE = 1128353356
 
 # Потолок резолва объявлений автостарта (защита от резолва всего кабинета). Один
 # bulk_status_change ограничен MAX_BULK (лимит Meta Batch API), поэтому всё, что
@@ -82,13 +82,13 @@ AUTOSTART_FRESHNESS_HOURS = int(os.environ.get("CABINET_AUTOSTART_FRESHNESS_HOUR
 async def run_one_tick(
     *,
     engine: AsyncEngine,
-    redis_client: redis_asyncio.Redis,
     now: datetime,
 ) -> dict[str, Any]:
     """Один проход автостарта. Возвращает summary dict с ключом 'outcome'.
 
     outcome ∈ {'scanning_paused', 'disabled', 'not_in_window', 'already_done',
-    'no_campaigns', 'no_owner_ads', 'started'}.
+    'no_campaigns', 'no_owner_ads', 'rejected_missing_account',
+    'guard_rejected', 'started'}.
 
     Шаги:
     0. Глобальный стоп: is_scanning_enabled=false → 'scanning_paused' (асимметричный
@@ -97,12 +97,9 @@ async def run_one_tick(
        автостарт доработает. Был на паузе всё окно → день пропущен, без сюрпризов.
     1. Читаем конфиг. Выключен → 'disabled'.
     2. Не в окне → 'not_in_window'.
-    3. Redis SET NX дедуп-ключ. Уже стоит → 'already_done'.
-    4. owner_tag из observer_config.
-    5. Резолвим owner-scoped ad_id по датам.
-    6. Если есть ad_id → создаём pending bulk_status_change activate (idempotent).
-    7. Триггерим observer scan (publish).
-    8. summary.
+    3. Читаем уже зафиксированные в task_queue ad_ids за этот день.
+    4. Создаём activation tasks только для ещё не запланированных ads.
+    5. Атомарно ставим idempotent observer_scan в ту же durable queue.
     """
     # Шаг 0 — money-критичный гейт: на паузе сканирования НЕ включаем объявления
     # и НЕ триггерим скан. Без этого автостарт жёг бы бюджет при «выключенном» боте.
@@ -118,25 +115,6 @@ async def run_one_tick(
     if not is_in_autostart_window(now, hour_utc, minute_utc):
         return {"outcome": "not_in_window"}
 
-    # Дедуп. M8: маркер ставим ПОСЛЕ успешного действия (а не до), иначе транзиентная
-    # ошибка resolve/create «съедала» весь день (ключ выставлен, повтора нет до завтра).
-    # От гонки двух тиков деньги защищены idempotency_key самой задачи (один task на день).
-    done_key = autostart_done_key(now)
-    try:
-        already_done = await redis_client.get(done_key)
-    except Exception:
-        # N6: НЕ трактуем ошибку Redis как 'already_done' — иначе money-критичный
-        # автостарт МОЛЧА пропускается на весь день при недоступном Redis. Возвращаем
-        # retryable-исход: done-маркер НЕ ставим → следующий тик повторит, и при
-        # восстановлении Redis в окне (catch-up до конца суток) автостарт сработает.
-        # Двойного запуска нет — idempotency_key bulk-задачи (один task на день).
-        logger.exception(
-            "cabinet_autostart: ошибка GET %s в Redis — повтор на следующем тике", done_key
-        )
-        return {"outcome": "redis_error"}
-    if already_done:
-        return {"outcome": "already_done"}
-
     day = now.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
     # Источник кампаний автостарта = allowlist отслеживаемых (observer_config.campaign_ids).
@@ -147,7 +125,6 @@ async def run_one_tick(
     owner_tag = (observer_config or {}).get("owner_campaign_tag")
     campaign_ids = list((observer_config or {}).get("campaign_ids") or [])
     if not campaign_ids:
-        await _set_autostart_done(redis_client, done_key)
         logger.info(
             "cabinet_autostart: фича включена, но отслеживаемых кампаний нет (allowlist пуст) — "
             "пропускаю день %s",
@@ -159,7 +136,7 @@ async def run_one_tick(
     # (last_seen_at >= now - FRESHNESS). Защита от реактивации давно снятых ads —
     # is_active=TRUE монотонно-истинный и мёртвые объявления не отсекает.
     since = now.astimezone(timezone.utc) - timedelta(hours=AUTOSTART_FRESHNESS_HOURS)
-    ad_ids, total = await resolve_owner_ad_ids_by_campaign_ids(
+    resolution = await resolve_owner_ads_by_account(
         engine,
         owner_tag=owner_tag,
         campaign_ids=campaign_ids,
@@ -167,182 +144,300 @@ async def run_one_tick(
         limit=_AUTOSTART_MAX_ADS,
     )
 
-    if ad_ids:
-        # M3: режем на чанки по MAX_BULK (лимит Meta Batch API) — одна bulk-задача на
-        # чанк с УНИКАЛЬНЫМ idempotency_key (...:{idx}), иначе при >50 объявлениях
-        # включались бы только первые 50, а остальные молча оставались на паузе.
-        sorted_ids = sorted(ad_ids)
-        chunks = [sorted_ids[i : i + MAX_BULK] for i in range(0, len(sorted_ids), MAX_BULK)]
-        truncated = total > len(ad_ids)
-        task_ids: list[int] = []
-        for idx, chunk in enumerate(chunks):
-            payload = MetaMutationPayload(
-                mutation_kind="bulk_status_change",
-                target_id=f"autostart:{len(chunk)}:{idx}",
-                params={
-                    "ad_ids": chunk,
-                    "action": _AUTOSTART_ACTION,
-                    "resolved_from_campaigns": campaign_ids,
-                },
-                ad_account_id=None,
-            )
-            # idempotency_key с датой запуска И индексом чанка: повторный тик в тот же
-            # день не задвоит ни один чанк.
-            idem_key = f"autostart:{day}:{_AUTOSTART_ACTION}:{idx}"
-            tid = await create_mutation_task(
-                engine,
-                payload=payload,
-                requested_by="cabinet_autostart",
-                status="pending",
-                idempotency_key=idem_key,
-            )
-            if tid is not None:
-                task_ids.append(tid)
-        logger.info(
-            "cabinet_autostart: создано enable-задач=%d (chunks), ad_ids=%d (total=%d, "
-            "truncated=%s), day=%s",
-            len(task_ids),
-            len(ad_ids),
-            total,
-            truncated,
-            day,
+    if resolution.missing_account_count:
+        logger.error(
+            "cabinet_autostart: REJECTED — %d owner ads have no explicit ad_account_id",
+            resolution.missing_account_count,
         )
-        if truncated:
-            logger.warning(
-                "cabinet_autostart: total=%d превысил потолок %d — включены не все "
-                "объявления, остаток требует ручной проверки (day=%s)",
-                total,
-                _AUTOSTART_MAX_ADS,
-                day,
+        async with engine.begin() as conn:
+            await notify_owners_in_transaction(
+                conn,
+                event_type="cabinet_autostart",
+                severity="critical",
+                title=f"Автостарт отклонён · {day}",
+                summary="У объявлений нет явного кабинета",
+                lines=[f"Без ad_account_id: {resolution.missing_account_count}"],
+                status="rejected",
+                dedupe_key=f"autostart_alert:{day}:rejected_missing_account",
             )
-
-        # Триггерим observer scan независимо от того, были ли ad_id — кабинет
-        # мог измениться, скан подтянет актуальное состояние.
-        await _trigger_observer_scan(redis_client)
-
-        # M8: маркер «выполнено» — только при started-пути (задачи созданы + скан).
-        # no_owner_ads не ставит маркер → следующий тик в окне повторит попытку
-        # (catch-up до конца суток). Двойного включения нет: idempotency_key задач.
-        await _set_autostart_done(redis_client, done_key)
-
         return {
-            "outcome": "started",
+            "outcome": "rejected_missing_account",
             "day": day,
-            "task_id": task_ids[0] if task_ids else None,  # backward-compat (первая задача)
-            "task_ids": task_ids,
-            "ad_count": len(ad_ids),
-            "total": total,
-            "chunks": len(chunks),
-            "truncated": truncated,
-            "scan_triggered": True,
+            "total": resolution.total,
+            "missing_account_count": resolution.missing_account_count,
+            "task_ids": [],
+            "scan_triggered": False,
         }
-    else:
+
+    if not resolution.ads_by_account:
         logger.info(
             "cabinet_autostart: по кампаниям %s owner-объявлений не нашлось (owner_tag=%s), day=%s",
             campaign_ids,
             owner_tag,
             day,
         )
-        # M5: скан при no_owner_ads — НЕ чаще раза в сутки (SET NX), иначе каждый тик
-        # (60с) до конца суток форсил бы observer-scan (~960/день) и обнулял адаптивный
-        # интервал (anti-detect риск). done-маркер НЕ ставим — резолв всё равно
-        # ретраится в окне (catch-up enable, если объявления появятся позже).
-        scan_triggered = await _trigger_scan_once_per_day(redis_client, now)
+        async with engine.begin() as conn:
+            scan_receipt = await enqueue_observer_scan(
+                engine,
+                requested_by="cabinet_autostart",
+                reason="autostart_no_owner_ads",
+                idempotency_key=observer_scan_idempotency_key("autostart-empty", day),
+                connection=conn,
+            )
+            await notify_owners_in_transaction(
+                conn,
+                event_type="cabinet_autostart",
+                severity="warning",
+                title=f"Автостарт не выполнен · {day}",
+                summary="Owner-объявления не найдены",
+                lines=["Проверь даты в названиях кампаний"],
+                status="not_started",
+                dedupe_key=f"autostart_alert:{day}:no_owner_ads",
+            )
         return {
             "outcome": "no_owner_ads",
             "day": day,
-            "total": total,
-            "scan_triggered": scan_triggered,
+            "total": resolution.total,
+            "scan_triggered": scan_receipt.created,
+            "scan_task_id": scan_receipt.task_id,
         }
 
-
-async def _set_autostart_done(redis_client: redis_asyncio.Redis, done_key: str) -> None:
-    """Выставить дедуп-маркер автостарта (после успешного прогона). Best-effort."""
-    try:
-        await redis_client.set(done_key, "1", ex=AUTOSTART_DONE_TTL_SECONDS)
-    except Exception:
-        logger.exception("cabinet_autostart: не удалось выставить маркер %s", done_key)
-
-
-async def _trigger_scan_once_per_day(redis_client: redis_asyncio.Redis, now: datetime) -> bool:
-    """Триггернуть observer-scan не чаще раза в сутки (SET NX дневной ключ).
-
-    Возвращает True, если скан триггернут сейчас, False — если уже был сегодня или
-    Redis недоступен. Защита от спама форс-сканов в ветке no_owner_ads (M5).
-    """
-    day = now.astimezone(timezone.utc).strftime("%Y-%m-%d")
-    key = f"cabinet:autostart:scan:{day}"
-    try:
-        was_set = await redis_client.set(key, "1", ex=AUTOSTART_DONE_TTL_SECONDS, nx=True)
-    except Exception:
-        logger.exception("cabinet_autostart: ошибка SET NX scan-маркера %s", key)
-        return False
-    if not was_set:
-        return False
-    await _trigger_observer_scan(redis_client)
-    return True
-
-
-async def _trigger_observer_scan(redis_client: redis_asyncio.Redis) -> None:
-    """Publish сигнал немедленного scan в observer (как POST /scan-now)."""
-    payload = json.dumps(
-        {"requested_by": WORKER_NAME, "ts": datetime.now(timezone.utc).isoformat()}
+    selected_count = sum(len(ids) for ids in resolution.ads_by_account.values())
+    truncated = resolution.total > selected_count
+    task_ids: list[int] = []
+    newly_targeted: list[str] = []
+    chunks_count = 0
+    all_resolved_ids = sorted(
+        ad_id for account_ads in resolution.ads_by_account.values() for ad_id in account_ads
     )
-    try:
-        await redis_client.publish(_OBSERVER_TRIGGER_CHANNEL, payload)
-    except Exception:
-        logger.exception("cabinet_autostart: не смог опубликовать observer-trigger в Redis")
-
-
-async def _alert_autostart(engine: Any, redis_client: Any, summary: dict) -> None:
-    """Подтверждение/алерт автостарта кабинета. Best-effort, дедуп по дню."""
-    outcome = summary.get("outcome")
-    day = summary.get("day", "")
-    if outcome == "started":
-        task_ids = summary.get("task_ids")
-        if not task_ids and summary.get("task_id") is not None:
-            task_ids = [summary["task_id"]]
-        task_ids = task_ids or []
-        lines = [
-            f"🚀 <b>Автостарт кабинета {day}</b>",
-            f"Поставлено объявлений: {summary.get('ad_count')} (задач: {len(task_ids)}).",
-        ]
-        if summary.get("truncated"):
-            lines.append(
-                f"⚠️ Найдено {summary.get('total')} — превышен потолок автостарта, "
-                f"включены не все. Проверь остаток вручную."
-            )
-        text = "\n".join(lines)
-    elif outcome == "no_owner_ads":
-        text = (
-            f"⚠️ <b>Автостарт {day}: owner-объявлений не найдено</b>\n"
-            f"Кабинет НЕ поднят. Проверь даты в названиях кампаний."
+    guard_rejections: dict[str, str] = {}
+    async with engine.begin() as conn:
+        # Serialize every scheduler instance before reading the durable daily
+        # ledger.  Per-ad locks alone are too late: a losing concurrent tick
+        # could otherwise keep its stale empty ledger and enqueue an ungated
+        # reconciliation scan after the winner committed the bulk child.
+        await conn.execute(
+            text("SELECT pg_advisory_xact_lock(:namespace, hashtext(:autostart_day))"),
+            {
+                "namespace": _AUTOSTART_DAY_LOCK_NAMESPACE,
+                "autostart_day": day,
+            },
         )
-    else:
-        return
-    await notify_owners(
-        engine,
-        redis_client,
-        category="autostart",
-        text=text,
-        dedup_key=f"autostart_alert:{day}:{outcome}",
-        dedup_ttl_seconds=93600,
+        existing_task_ids, already_targeted = await _load_scheduled_autostart_ads(
+            engine,
+            day=day,
+            connection=conn,
+        )
+        pending_by_account = {
+            account_id: sorted(set(account_ads) - already_targeted)
+            for account_id, account_ads in resolution.ads_by_account.items()
+        }
+        pending_ids = sorted(
+            ad_id for account_ads in pending_by_account.values() for ad_id in account_ads
+        )
+        # Same per-ad mutex as CommandService. A concurrent stop either commits
+        # first and blocks this snapshot or commits after the guarded activation
+        # lifecycle and therefore wins the final Meta state.
+        for ad_id in pending_ids:
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:ad_id))"),
+                {"ad_id": ad_id},
+            )
+
+        guarded_by_account: dict[str, list[tuple[str, dict[str, object]]]] = {}
+        for account_id in sorted(pending_by_account):
+            guards = await capture_autostart_activation_guards(
+                conn,
+                ad_ids=pending_by_account[account_id],
+                expected_ad_account_id=account_id,
+            )
+            guard_rejections.update(guards.rejected_by_ad_id)
+            guarded_by_account[account_id] = sorted(guards.guards_by_ad_id.items())
+
+        for account_id in sorted(guarded_by_account):
+            guarded_ads = guarded_by_account[account_id]
+            for offset in range(0, len(guarded_ads), MAX_BULK):
+                guarded_chunk = guarded_ads[offset : offset + MAX_BULK]
+                chunk = [ad_id for ad_id, _guard in guarded_chunk]
+                chunk_digest = hashlib.sha256(",".join(chunk).encode("utf-8")).hexdigest()[:20]
+                payload = MetaMutationPayload(
+                    mutation_kind="bulk_status_change",
+                    target_id=f"autostart:{account_id}:{chunk_digest}",
+                    params={
+                        "ad_ids": chunk,
+                        "action": _AUTOSTART_ACTION,
+                        "autostart_day": day,
+                        "resolved_from_campaigns": campaign_ids,
+                        "activation_guards": {ad_id: guard for ad_id, guard in guarded_chunk},
+                    },
+                    ad_account_id=account_id,
+                )
+                task_id = await create_mutation_task(
+                    engine,
+                    payload=payload,
+                    requested_by="cabinet_autostart",
+                    status="pending",
+                    idempotency_key=(
+                        f"autostart:{day}:{_AUTOSTART_ACTION}:{account_id}:{chunk_digest}"
+                    ),
+                    connection=conn,
+                )
+                if task_id is not None:
+                    task_ids.append(task_id)
+                    newly_targeted.extend(chunk)
+                chunks_count += 1
+
+        dependency_task_ids = sorted({*existing_task_ids, *task_ids})
+        if dependency_task_ids:
+            scan_key = observer_scan_idempotency_key(
+                "autostart-barrier",
+                f"{day}:{','.join(str(task_id) for task_id in dependency_task_ids)}",
+            )
+        else:
+            scan_key = observer_scan_idempotency_key(
+                "autostart-guard",
+                f"{day}:{','.join(all_resolved_ids)}",
+            )
+        scan_receipt = await enqueue_observer_scan(
+            engine,
+            requested_by="cabinet_autostart",
+            reason="autostart_activation_reconciliation",
+            idempotency_key=scan_key,
+            dependency_task_ids=dependency_task_ids,
+            connection=conn,
+        )
+        if task_ids:
+            notification_lines = [f"Объявлений: {len(newly_targeted)} · задач: {len(task_ids)}"]
+            if truncated:
+                notification_lines.append(
+                    f"Найдено {resolution.total}: лимит достигнут, проверь остаток"
+                )
+            if guard_rejections:
+                notification_lines.append(f"Не прошли safety-проверку: {len(guard_rejections)}")
+            await notify_owners_in_transaction(
+                conn,
+                event_type="cabinet_autostart",
+                severity="warning",
+                title=f"Автостарт кабинета · {day}",
+                summary="Задачи активации поставлены в очередь",
+                lines=notification_lines,
+                status="queued",
+                dedupe_key=f"autostart_alert:{day}:started",
+            )
+        elif not existing_task_ids and guard_rejections:
+            await notify_owners_in_transaction(
+                conn,
+                event_type="cabinet_autostart",
+                severity="critical",
+                title=f"Автостарт отклонён · {day}",
+                summary="Состояние объявлений изменилось или небезопасно",
+                lines=[f"Не включено: {len(guard_rejections)}"],
+                status="rejected",
+                dedupe_key=f"autostart_alert:{day}:guard_rejected",
+            )
+    if not task_ids and not existing_task_ids and guard_rejections:
+        return {
+            "outcome": "guard_rejected",
+            "day": day,
+            "task_ids": [],
+            "rejected_ads": len(guard_rejections),
+            "rejection_reasons": dict(sorted(guard_rejections.items())),
+            "scan_triggered": scan_receipt.created,
+            "scan_task_id": scan_receipt.task_id,
+        }
+    if not task_ids:
+        return {
+            "outcome": "already_done",
+            "day": day,
+            "task_ids": existing_task_ids,
+            "scan_triggered": scan_receipt.created,
+            "scan_task_id": scan_receipt.task_id,
+        }
+
+    logger.info(
+        "cabinet_autostart: queued tasks=%d new_ads=%d total=%d truncated=%s day=%s",
+        len(task_ids),
+        len(newly_targeted),
+        resolution.total,
+        truncated,
+        day,
     )
+    if truncated:
+        logger.warning(
+            "cabinet_autostart: total=%d exceeded cap=%d; manual review required (day=%s)",
+            resolution.total,
+            _AUTOSTART_MAX_ADS,
+            day,
+        )
+    return {
+        "outcome": "started",
+        "day": day,
+        "task_ids": task_ids,
+        "ad_count": len(newly_targeted),
+        "total": resolution.total,
+        "accounts": len(resolution.ads_by_account),
+        "chunks": chunks_count,
+        "truncated": truncated,
+        "guard_rejected_ads": len(guard_rejections),
+        "guard_rejection_reasons": dict(sorted(guard_rejections.items())),
+        "scan_triggered": True,
+        "scan_task_id": scan_receipt.task_id,
+    }
+
+
+async def _load_scheduled_autostart_ads(
+    engine: AsyncEngine,
+    *,
+    day: str,
+    connection: AsyncConnection | None = None,
+) -> tuple[list[int], set[str]]:
+    """Return the durable daily activation ledger from task_queue payloads."""
+
+    async def _load(conn: AsyncConnection) -> list[Any]:
+        return (
+            await conn.execute(
+                text(
+                    """
+                    SELECT id, payload
+                    FROM task_queue
+                    WHERE task_type = 'meta_api_mutation'
+                      AND requested_by = 'cabinet_autostart'
+                      AND payload->>'mutation_kind' = 'bulk_status_change'
+                      AND payload #>> '{params,action}' = 'activate'
+                      AND payload #>> '{params,autostart_day}' = :day
+                    ORDER BY id
+                    """
+                ),
+                {"day": day},
+            )
+        ).all()
+
+    if connection is not None:
+        rows = await _load(connection)
+    else:
+        async with engine.connect() as conn:
+            rows = await _load(conn)
+    task_ids: list[int] = []
+    targeted: set[str] = set()
+    for row in rows:
+        task_ids.append(int(row.id))
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+        ad_ids = params.get("ad_ids") if isinstance(params, dict) else []
+        if isinstance(ad_ids, list):
+            targeted.update(str(ad_id) for ad_id in ad_ids if ad_id)
+    return task_ids, targeted
 
 
 # ====================== loops ======================
 
 
-async def heartbeat_loop(redis_client: redis_asyncio.Redis, stop: asyncio.Event) -> None:
-    """Раз в HEARTBEAT_TTL/2 пишет heartbeat в Redis."""
-    interval = HEARTBEAT_TTL_SECONDS / 2
+async def metrics_loop(stop: asyncio.Event) -> None:
+    """Refresh the process-local Prometheus liveness gauge."""
     while not stop.is_set():
+        mark_worker_heartbeat(WORKER_NAME)
         try:
-            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
-        except Exception:
-            logger.exception("heartbeat: ошибка записи в Redis")
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=interval)
+            await asyncio.wait_for(stop.wait(), timeout=_METRICS_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
             pass
 
@@ -350,18 +445,16 @@ async def heartbeat_loop(redis_client: redis_asyncio.Redis, stop: asyncio.Event)
 async def tick_loop(
     *,
     engine: AsyncEngine,
-    redis_client: redis_asyncio.Redis,
     stop: asyncio.Event,
 ) -> None:
     """Основной цикл — раз в минуту прогоняет run_one_tick."""
     while not stop.is_set():
         try:
             now = datetime.now(timezone.utc)
-            summary = await run_one_tick(engine=engine, redis_client=redis_client, now=now)
+            summary = await run_one_tick(engine=engine, now=now)
             outcome = summary.get("outcome")
             if outcome not in ("scanning_paused", "disabled", "not_in_window", "already_done"):
                 logger.info("cabinet_autostart tick: %s", summary)
-            await _alert_autostart(engine, redis_client, summary)
         except Exception:
             logger.exception("Ошибка в cabinet_autostart tick")
         try:
@@ -379,14 +472,9 @@ def _get_database_url() -> str:
     return get_settings().database_url
 
 
-def _get_redis_url() -> str:
-    return os.environ.get("REDIS_URL", "redis://localhost:6380/0")
-
-
 async def main_loop(database_url: str | None = None) -> None:
     db_url = database_url or _get_database_url()
     engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
-    redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -399,24 +487,18 @@ async def main_loop(database_url: str | None = None) -> None:
     logger.info("cabinet_scheduler запущен (tick=%ss)", CHECK_INTERVAL_SECONDS)
     try:
         await asyncio.gather(
-            heartbeat_loop(redis_client, stop),
-            tick_loop(engine=engine, redis_client=redis_client, stop=stop),
+            metrics_loop(stop),
+            tick_loop(engine=engine, stop=stop),
         )
     finally:
-        try:
-            await redis_client.aclose()
-        except Exception:
-            logger.exception("Ошибка закрытия Redis")
         await engine.dispose()
         logger.info("cabinet_scheduler остановлен")
 
 
 __all__ = [
-    "HEARTBEAT_KEY",
     "WORKER_NAME",
-    "_alert_autostart",
-    "heartbeat_loop",
     "main_loop",
+    "metrics_loop",
     "run_one_tick",
     "tick_loop",
 ]

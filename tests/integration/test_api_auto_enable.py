@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Интеграционные тесты CRUD /dashboard/auto-enable-disabled.
+"""Integration tests for observer auto-enable exclusions.
 
 Используем реальный Postgres из docker-compose и fakeredis.
 Каждый тест изолирован через fixture с cleanup по CASCADE от offers.
@@ -50,7 +50,9 @@ async def ae_ad_fixture(pg_engine):
             {"i": offer_id, "c": f"AE_{suffix}", "n": f"AE offer {suffix}"},
         )
         await conn.execute(
-            text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
+            text(
+                "INSERT INTO fb_campaigns (id, campaign_name, offer_id, ad_account_id) VALUES (:i, :n, :o, '123')"
+            ),
             {"i": campaign_id, "n": f"CMP_AE_{suffix}", "o": offer_id},
         )
         await conn.execute(
@@ -87,7 +89,7 @@ async def test_auto_enable_list_empty(pg_engine, fake_redis_client, ae_ad_fixtur
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/dashboard/auto-enable-disabled")
+        resp = await ac.get("/api/settings/observer/auto-enable-exclusions")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -113,7 +115,7 @@ async def test_auto_enable_list_with_records(pg_engine, fake_redis_client, ae_ad
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/dashboard/auto-enable-disabled")
+        resp = await ac.get("/api/settings/observer/auto-enable-exclusions")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -135,7 +137,7 @@ async def test_auto_enable_post_happy(pg_engine, fake_redis_client, ae_ad_fixtur
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post(
-            f"/api/dashboard/auto-enable-disabled/{fb_ad_id}",
+            f"/api/settings/observer/auto-enable-exclusions/{fb_ad_id}",
             json={"reason": "manually disabled by user"},
         )
 
@@ -161,7 +163,7 @@ async def test_auto_enable_post_unknown_ad_404(pg_engine, fake_redis_client):
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post(
-            "/api/dashboard/auto-enable-disabled/nonexistent_ae_ad",
+            "/api/settings/observer/auto-enable-exclusions/nonexistent_ae_ad",
             json={"reason": "no such ad"},
         )
 
@@ -176,13 +178,13 @@ async def test_auto_enable_post_duplicate_409(pg_engine, fake_redis_client, ae_a
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp1 = await ac.post(
-            f"/api/dashboard/auto-enable-disabled/{fb_ad_id}",
+            f"/api/settings/observer/auto-enable-exclusions/{fb_ad_id}",
             json={"reason": "первый раз"},
         )
         assert resp1.status_code == 201
 
         resp2 = await ac.post(
-            f"/api/dashboard/auto-enable-disabled/{fb_ad_id}",
+            f"/api/settings/observer/auto-enable-exclusions/{fb_ad_id}",
             json={"reason": "повторный"},
         )
 
@@ -206,7 +208,7 @@ async def test_auto_enable_delete_happy(pg_engine, fake_redis_client, ae_ad_fixt
     fb_ad_id = ae_ad_fixture["fb_ad_id_1"]
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.delete(f"/api/dashboard/auto-enable-disabled/{fb_ad_id}")
+        resp = await ac.delete(f"/api/settings/observer/auto-enable-exclusions/{fb_ad_id}")
 
     assert resp.status_code == 204
 
@@ -227,7 +229,7 @@ async def test_auto_enable_delete_not_disabled_404(pg_engine, fake_redis_client,
     fb_ad_id = ae_ad_fixture["fb_ad_id_2"]
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.delete(f"/api/dashboard/auto-enable-disabled/{fb_ad_id}")
+        resp = await ac.delete(f"/api/settings/observer/auto-enable-exclusions/{fb_ad_id}")
 
     assert resp.status_code == 404
 
@@ -239,15 +241,15 @@ async def test_auto_enable_idempotent_post_delete_post(pg_engine, fake_redis_cli
     fb_ad_id = ae_ad_fixture["fb_ad_id_1"]
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        r1 = await ac.post(f"/api/dashboard/auto-enable-disabled/{fb_ad_id}", json={})
+        r1 = await ac.post(f"/api/settings/observer/auto-enable-exclusions/{fb_ad_id}", json={})
         assert r1.status_code == 201
 
-        r2 = await ac.delete(f"/api/dashboard/auto-enable-disabled/{fb_ad_id}")
+        r2 = await ac.delete(f"/api/settings/observer/auto-enable-exclusions/{fb_ad_id}")
         assert r2.status_code == 204
 
         # После удаления снова можно добавить
         r3 = await ac.post(
-            f"/api/dashboard/auto-enable-disabled/{fb_ad_id}",
+            f"/api/settings/observer/auto-enable-exclusions/{fb_ad_id}",
             json={"reason": "повторное отключение"},
         )
         assert r3.status_code == 201

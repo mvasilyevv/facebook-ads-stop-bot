@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 """Integration: MCP server call_tool → реальный pg_engine + fake_redis.
 
-Покрывает три ключевых сценария call_tool:
+Покрывает два ключевых сценария call_tool:
 1. READ_ONLY tool (`get_active_offers`) — реальный SQL к offers, ответ — TextContent.
-2. DRAFT_REQUIRED tool (`request_budget_change`) — отключён (MCP read-only),
-   НЕ создаёт строку в task_queue + не экспонируется в list_tools.
-3. Неизвестный tool — TextContent с сообщением "Неизвестный tool".
+2. Неизвестный tool — TextContent с сообщением "Неизвестный tool".
 
 Дополнительно: rate-limit per client_key через fake_redis (лимит 30/час).
 """
@@ -88,69 +86,6 @@ async def test_call_tool_read_only_returns_offers(
     block = contents[0]
     assert block.type == "text"
     assert seeded_offer in block.text
-
-
-# DRAFT_REQUIRED отключён в MCP (read-only): request_budget_change → отказ, БЕЗ записи.
-@pytest.mark.asyncio
-async def test_call_tool_draft_is_disabled(
-    pg_engine: AsyncEngine,
-    fake_redis_client,
-    clean_meta_tasks,
-) -> None:
-    mgr = MCPContextManager()
-    mgr.engine = pg_engine
-    mgr.redis_client = fake_redis_client
-    app = build_server(mgr)
-
-    contents = await _invoke_call_tool(
-        app,
-        "request_budget_change",
-        {
-            "adset_id": "23000999",
-            "ad_account_id": "act_42",
-            "daily_budget_usd": 12.34,
-            "reason": "mcp integration test",
-        },
-    )
-    assert len(contents) == 1
-    assert "отключён" in contents[0].text
-
-    # Никакой строки в task_queue: write-мутации через MCP недоступны.
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT 1 FROM task_queue
-                    WHERE task_type = 'meta_api_mutation'
-                    ORDER BY id DESC LIMIT 1
-                    """
-                )
-            )
-        ).first()
-    assert row is None
-
-
-# DRAFT_REQUIRED tools не экспонируются в list_tools — MCP остаётся read-only.
-@pytest.mark.asyncio
-async def test_list_tools_excludes_draft(
-    pg_engine: AsyncEngine,
-    fake_redis_client,
-) -> None:
-    mgr = MCPContextManager()
-    mgr.engine = pg_engine
-    mgr.redis_client = fake_redis_client
-    app = build_server(mgr)
-
-    handler = app.request_handlers[types.ListToolsRequest]
-    request = types.ListToolsRequest(method="tools/list")
-    server_result = await handler(request)
-    tools: list[types.Tool] = server_result.root.tools  # type: ignore[assignment]
-
-    names = {t.name for t in tools}
-    assert names, "list_tools пуст — должны остаться read-only инструменты"
-    # Ни одного request_* (DRAFT_REQUIRED) в списке.
-    assert not any(n.startswith("request_") for n in names), names
 
 
 # Неизвестный tool возвращает TextContent с пояснением, не падает.

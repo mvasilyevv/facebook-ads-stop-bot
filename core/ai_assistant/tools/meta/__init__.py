@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from core.ai_assistant.tools.meta.find_ads import FindAdsTool
 from core.ai_assistant.tools.meta.get_account_health import GetAccountHealthTool
-from core.ai_assistant.tools.meta.get_competitor_patterns import GetCompetitorPatternsTool
 from core.ai_assistant.tools.meta.get_insights import GetInsightsTool
 from core.ai_assistant.tools.meta.get_offer_performance import GetOfferPerformanceTool
 from core.ai_assistant.tools.registry import GLOBAL_REGISTRY
@@ -17,12 +16,10 @@ GLOBAL_REGISTRY.register(GetInsightsTool())
 GLOBAL_REGISTRY.register(FindAdsTool())
 GLOBAL_REGISTRY.register(GetOfferPerformanceTool())
 GLOBAL_REGISTRY.register(GetAccountHealthTool())
-GLOBAL_REGISTRY.register(GetCompetitorPatternsTool())
 
 __all__ = [
     "FindAdsTool",
     "GetAccountHealthTool",
-    "GetCompetitorPatternsTool",
     "GetInsightsTool",
     "GetOfferPerformanceTool",
 ]

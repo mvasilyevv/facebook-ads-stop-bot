@@ -14,8 +14,8 @@ Scope из аргумента: `$ARGUMENTS` (пусто → `all`).
 
 ## Что искать в первую очередь (специфика проекта)
 1. **Money-баги** — неверная агрегация спенда/CPL/CPR/ROI; `SUM()` по кумулятивным `ad_metrics` (нужен `DISTINCT ON` per ad/day, см. `core/dashboard/metric_aggregation.py`); фолс-стоп/недо-стоп в `core/rules/evaluator.py`; дубли side-эффектов (нарушение идемпотентности outbox); orphan-таски (`task_type`, который некому исполнить).
-2. **Partition pruning** — запросы к partitioned-таблицам (`ad_metrics`, `alert_events`, `scan_runs`, `adsetpro_postback_events`, `meta_api_webhook_event`, `meta_api_audit_log`) ОБЯЗАНЫ фильтровать по партиционному ключу. Без него — full scan всех партиций.
-3. **Race conditions** — `task_queue` (FOR UPDATE SKIP LOCKED + `WHERE status='running'`-guard + bool-возврат), concurrent observer FSM (`WHERE alert_state NOT IN ('claimed','disabled')` в ON CONFLICT), reconciler-zombie, alert_dispatcher pre-claim dedup, idempotency_key.
+2. **Partition pruning** — запросы к partitioned-таблицам (`ad_metrics`, `alert_events`, `scan_runs`, `adsetpro_postback_events`, `meta_api_audit_log`) ОБЯЗАНЫ фильтровать по партиционному ключу. Без него — full scan всех партиций.
+3. **Race conditions** — `task_queue` (FOR UPDATE SKIP LOCKED + fencing token), concurrent observer FSM, reconciler-zombie, notification delivery claim/CAS, idempotency_key.
 4. **Security / ACL** — timing-safe сравнение секретов (`secrets.compare_digest`), draft-task ACL (`created_by_chat_id` / `admin_override`), owner-scoping (word-boundary regex, не substring ILIKE), CORS `"*"`, утечки секретов в логи.
 5. **FSM-инварианты** — однонаправленность переходов, сохранение `open_token` при эскалации, terminal-state guard.
 6. **Async/IO** — блокирующие вызовы в async-коде, незакрытые соединения/сессии, N+1, отсутствие таймаутов на httpx/grpc.
@@ -36,7 +36,7 @@ Scope из аргумента: `$ARGUMENTS` (пусто → `all`).
 Домены и рекомендуемые модели:
 - **B1** `core/observer` + `core/rules` + `core/scanner` — детект, FSM, стоп-правила, evaluator → **opus**
 - **B2** `core/meta_api` + `core/tasks` + `apps/meta_api_worker` — мутации, batch-encode, идемпотентность, draft-ACL, outbox → **opus**
-- **B3** `apps/*_worker` (observer/cabinet_scheduler/reconciler/digest/cleanup/health_watchdog/tracker_aggregator/enable_recommendation/creator) — heartbeat, race, graceful shutdown, scheduler-окна → **opus**
+- **B3** `apps/*_worker` (observer/autopause/meta_api/cabinet_scheduler/reconciler/telegram/digest/cleanup/health_watchdog/tracker_reconciliation/enable_recommendation/campaign_creator) — heartbeat, race, graceful shutdown, scheduler-окна → **opus**
 - **B4** `apps/api` (FastAPI routers v1) — endpoints, SQL, partition-pruning, валидация, security, partial-failure → **sonnet**
 - **B5** `core/models` + `migrations` + `core/dashboard` + `core/adset_pro` — схема, индексы, партиции, агрегации спенда, дедуп ingest → **opus** (money-агрегации)
 - **F1** `frontend/` (новый TS strict) — React 19, TanStack, типы, god-components → **sonnet**
@@ -63,6 +63,6 @@ Severity:
 
 ## Запреты
 - Не редактируй код, не чини «по пути», не коммить.
-- Не запускай `pytest tests/integration` / любые тесты на живой shared-БД (стирают данные — нужен `backup_secrets.py`). Статика, чтение, `ruff check`, `pytest tests/unit` (если безопасно и быстро) — можно.
+- Не запускай `pytest tests/integration` / любые тесты на живой shared-БД. Интеграционные проверки разрешены только на одноразовой изолированной PostgreSQL; статика, чтение, `ruff check`, `pytest tests/unit` (если безопасно и быстро) — можно.
 - Не выдумывай находки ради объёма. Чистая зона — это валидный результат.
 - Отвечай по-русски.

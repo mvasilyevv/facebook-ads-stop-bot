@@ -1,15 +1,16 @@
 /**
- * OfferFormModal — модал создания/редактирования оффера (только identity).
+ * OfferFormModal — модал создания/редактирования оффера.
  *
  * Поля:
  *   - code (string, только при создании; name=code на бэке)
+ *   - vertical (категория оффера)
  *   - ad_account_ids (мульти-кабинет, минимум 1)
  *   - pixel_id, countries (гео) — для дерайва визарда
  *   - is_active (boolean)
  *
  * Стоп-правила (CPA + чувствительность) — НЕ здесь: они в отдельной кнопке «Правила»
  * (RulesDrawer). Целевой CPA един и живёт в правилах (offer_rules.cpa_threshold) —
- * из него и пороги, и префилл бида визарда. vertical убран из UI (колонка nullable).
+ * из него и пороги, и префилл бида визарда.
  */
 
 import { useEffect, useState } from "react";
@@ -18,6 +19,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { TagListInput } from "@/components/ui/TagListInput";
 import { CountryMultiSelect } from "@/components/ui/CountryMultiSelect";
+import { Select } from "@/components/ui/Select";
 import { Switch } from "@/components/ui/Switch";
 import type { Offer } from "@fb/shared";
 
@@ -25,6 +27,7 @@ import type { Offer } from "@fb/shared";
 
 export interface OfferFormValues {
   code: string;
+  vertical: string | null;
   is_active: boolean;
   /** FB Pixel ID оффера (событие оптимизации Purchase/FTD). Пусто — не задан. */
   pixel_id: string;
@@ -33,6 +36,16 @@ export interface OfferFormValues {
   /** Гео оффера (ISO-2 upper). Дефолт [] — не задано. */
   countries: string[];
 }
+
+const VERTICAL_OPTIONS = [
+  { value: "", label: "Не указана" },
+  { value: "gambling", label: "Gambling" },
+  { value: "nutra", label: "Nutra" },
+  { value: "finance", label: "Finance" },
+  { value: "dating", label: "Dating" },
+  { value: "crypto", label: "Crypto" },
+  { value: "other", label: "Другая" },
+];
 
 // Кабинет: срез act_ и проверка на числовой ID — для TagListInput.
 const normalizeAccount = (token: string): string => token.replace(/^act_/i, "");
@@ -44,7 +57,7 @@ interface OfferFormModalProps {
   onOpenChange: (open: boolean) => void;
   /** Если задан — режим редактирования. Иначе — создание. */
   offer?: Offer | null;
-  /** Обработчик сохранения. Получает identity-поля оффера. */
+  /** Обработчик сохранения. Получает редактируемую конфигурацию оффера. */
   onSave: (values: OfferFormValues) => Promise<void>;
 }
 
@@ -52,20 +65,9 @@ interface OfferFormModalProps {
 
 export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormModalProps) {
   const isEdit = !!offer;
-  // Offer из @fb/shared не содержит countries (gen:api не запускаем) — читаем мягко
-  // через расширение. ad_account_ids/pixel_id уже есть в generated.
-  const offerExt = offer as
-    | (Offer & {
-        ad_account_ids?: string[];
-        pixel_id?: string | null;
-        countries?: string[];
-      })
-    | null
-    | undefined;
-  const offerAccounts = offerExt?.ad_account_ids ?? [];
-  const offerCountries = offerExt?.countries ?? [];
 
   const [code, setCode] = useState("");
+  const [vertical, setVertical] = useState("");
   const [isActive, setIsActive] = useState(true);
   // Кабинеты как список тэгов (без сырой строки) — добавление/удаление поэлементно.
   const [accounts, setAccounts] = useState<string[]>([]);
@@ -81,15 +83,14 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
   useEffect(() => {
     if (open) {
       setCode(offer?.code ?? "");
+      setVertical(offer?.vertical ?? "");
       setIsActive(offer?.is_active ?? true);
-      setAccounts(offerAccounts);
-      setPixelId(offerExt?.pixel_id ?? "");
-      setCountries(offerCountries);
+      setAccounts(offer?.ad_account_ids ?? []);
+      setPixelId(offer?.pixel_id ?? "");
+      setCountries(offer?.countries ?? []);
       setCodeError(undefined);
       setAccountsError(undefined);
     }
-    // offerAccounts/offerCountries — производные от offer; отдельные зависимости не нужны.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, offer]);
 
   function handleClose(next: boolean) {
@@ -123,6 +124,7 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
     try {
       await onSave({
         code: code.trim().toUpperCase(),
+        vertical: vertical || null,
         is_active: isActive,
         pixel_id: pixelId.trim(),
         ad_account_ids: accounts,
@@ -166,17 +168,26 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
             />
           ) : (
             <div>
-              <div className="font-display text-[11px] tracking-wider uppercase text-bg-9 mb-1.5">
+              <div className="font-display text-[12px] tracking-wider uppercase text-bg-9 mb-1.5">
                 Код оффера
               </div>
               <div className="font-display text-[14px] text-accent tracking-[0.06em]">
                 {offer!.code}
-                <span className="ml-2 text-[10px] text-bg-8 tracking-normal normal-case">
+                <span className="ml-2 text-[12px] text-bg-8 tracking-normal normal-case">
                   (нельзя изменить)
                 </span>
               </div>
             </div>
           )}
+
+          <Select
+            id="offer-vertical"
+            label="Вертикаль"
+            value={vertical}
+            onChange={(event) => setVertical(event.target.value)}
+            options={VERTICAL_OPTIONS}
+            disabled={busy}
+          />
 
           {/* Кабинеты (мульти-кабинет): тэги — добавляешь по одному, минимум 1 */}
           <TagListInput

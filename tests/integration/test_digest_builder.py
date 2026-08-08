@@ -20,7 +20,8 @@ from core.telegram.digest_builder import build_digest
 
 @pytest_asyncio.fixture
 async def clean_digest_tables(pg_engine):
-    """Чистит таблицы, по которым агрегируем digest, до и после теста."""
+    """Isolate digest rows and restore any pre-existing cabinet authority."""
+    account_ids = ("123", "456")
 
     async def _truncate():
         async with pg_engine.begin() as conn:
@@ -36,10 +37,53 @@ async def clean_digest_tables(pg_engine):
                 "offers",
             ):
                 await conn.execute(text(f"DELETE FROM {t}"))
+            await conn.execute(
+                text(
+                    "DELETE FROM meta_account_snapshot "
+                    "WHERE account_id = ANY(CAST(:account_ids AS text[]))"
+                ),
+                {"account_ids": list(account_ids)},
+            )
+
+    async with pg_engine.connect() as conn:
+        previous_rows = [
+            dict(row)
+            for row in (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT account_id, timezone_name, currency,
+                               currency_observed_at, created_at, updated_at
+                        FROM meta_account_snapshot
+                        WHERE account_id = ANY(CAST(:account_ids AS text[]))
+                        ORDER BY account_id
+                        """
+                    ),
+                    {"account_ids": list(account_ids)},
+                )
+            ).mappings()
+        ]
 
     await _truncate()
-    yield
-    await _truncate()
+    try:
+        yield
+    finally:
+        await _truncate()
+        if previous_rows:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO meta_account_snapshot
+                            (account_id, timezone_name, currency,
+                             currency_observed_at, created_at, updated_at)
+                        VALUES
+                            (:account_id, :timezone_name, :currency,
+                             :currency_observed_at, :created_at, :updated_at)
+                        """
+                    ),
+                    previous_rows,
+                )
 
 
 @pytest_asyncio.fixture
@@ -57,6 +101,19 @@ async def two_ads_world(pg_engine, clean_digest_tables):
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
+                """
+                INSERT INTO meta_account_snapshot
+                    (account_id, timezone_name, currency, currency_observed_at)
+                VALUES ('123', 'UTC', 'USD', NOW())
+                ON CONFLICT (account_id) DO UPDATE
+                SET timezone_name = EXCLUDED.timezone_name,
+                    currency = EXCLUDED.currency,
+                    currency_observed_at = EXCLUDED.currency_observed_at
+                """
+            )
+        )
+        await conn.execute(
+            text(
                 "INSERT INTO offers (id, code, name, is_active) VALUES "
                 "(:a, 'DIG_A', 'Offer A', TRUE), (:b, 'DIG_B', 'Offer B', TRUE)"
             ),
@@ -64,8 +121,7 @@ async def two_ads_world(pg_engine, clean_digest_tables):
         )
         await conn.execute(
             text(
-                "INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES "
-                "(:ca, 'DIG_A | KE', :a), (:cb, 'DIG_B | KE', :b)"
+                "INSERT INTO fb_campaigns (id, campaign_name, offer_id, ad_account_id) VALUES (:ca, 'DIG_A | KE', :a, '123'), (:cb, 'DIG_B | KE', :b, '123')"
             ),
             {"ca": campaign_a, "a": offer_a, "cb": campaign_b, "b": offer_b},
         )
@@ -137,7 +193,7 @@ async def test_build_digest_counts_alerts_by_stage(pg_engine, two_ads_world) -> 
     assert payload.alerts_stop_count == 1
 
 
-# Завершённые disable_tasks за окно — успешные/проваленные
+# Завершённые pause_ad money-задачи за окно — успешные/проваленные
 @pytest.mark.asyncio
 async def test_build_digest_counts_disable_tasks(pg_engine, two_ads_world) -> None:
     now = _now()
@@ -157,9 +213,11 @@ async def test_build_digest_counts_disable_tasks(pg_engine, two_ads_world) -> No
                     """
                     INSERT INTO task_queue
                         (task_type, status, idempotency_key, payload,
-                         requested_by, completed_at, created_at, updated_at)
+                         requested_by, lane, completed_at, created_at, updated_at)
                     VALUES
-                        ('disable', :s, :k, CAST('{}' AS JSONB), 'test', :c,
+                        ('meta_api_mutation', :s, :k,
+                         CAST('{"mutation_kind":"pause_ad","target_id":"digest-test-ad","ad_account_id":"123"}' AS JSONB),
+                         'test', 'money', :c,
                          COALESCE(:c, NOW()), COALESCE(:c, NOW()))
                     """
                 ),
@@ -175,7 +233,7 @@ async def test_build_digest_counts_disable_tasks(pg_engine, two_ads_world) -> No
     assert payload.disable_tasks_failed == 1
 
 
-# Топ-5 по spend + total_spend_window_usd считается per-ad-per-day (CRIT-1 fix).
+# Топ-5 по spend + total_spend_window считается per-ad-per-day (CRIT-1 fix).
 # Топ-строки — latest-per-ad (для ранжирования); total — sum дневных итогов.
 @pytest.mark.asyncio
 async def test_build_digest_top_ads_and_total_spend(pg_engine, two_ads_world) -> None:
@@ -189,6 +247,16 @@ async def test_build_digest_top_ads_and_total_spend(pg_engine, two_ads_world) ->
     ad_b = two_ads_world["ad_b"]
 
     async with pg_engine.begin() as conn:
+        # Currency evidence is evaluated against the explicit digest boundary,
+        # not the wall clock used when the shared fixture was created.
+        await conn.execute(
+            text(
+                "UPDATE meta_account_snapshot "
+                "SET currency_observed_at = :observed_at "
+                "WHERE account_id = '123'"
+            ),
+            {"observed_at": now},
+        )
         # ad_a: два снапшота в РАЗНЫХ UTC-днях (вчера=60, сегодня=100).
         # per-day CTE берёт latest per (ad, day): вчера=60, сегодня=100 → дневные итоги 60+100=160.
         # ad_b: один снапшот сегодня = 50 → дневной итог 50.
@@ -204,8 +272,9 @@ async def test_build_digest_top_ads_and_total_spend(pg_engine, two_ads_world) ->
             await conn.execute(
                 text(
                     """
-                    INSERT INTO ad_metrics (ad_id, cycle_ts, spend, clicks, leads, cpc, cost_per_lead)
-                    VALUES (:a, :t, :s, 10, 1, 0.5, 5.0)
+                    INSERT INTO ad_metrics
+                        (ad_id, cycle_ts, currency, spend, clicks, leads, cpc, cost_per_lead)
+                    VALUES (:a, :t, 'USD', :s, 10, 1, 0.5, 5.0)
                     """
                 ),
                 {"a": ad_id, "t": ts, "s": spend},
@@ -213,14 +282,18 @@ async def test_build_digest_top_ads_and_total_spend(pg_engine, two_ads_world) ->
 
     payload = await build_digest(pg_engine, day_start_utc=now)
     # total per-day: 60 (ad_a вчера) + 100 (ad_a сегодня) + 50 (ad_b сегодня) = 210
-    assert payload.total_spend_window_usd == Decimal("210.00")
+    assert payload.money_state == "ready"
+    assert payload.money_account_id == "123"
+    assert payload.currency == "USD"
+    assert payload.total_spend_window == Decimal("210.00")
     assert len(payload.top_ads_by_spend) == 2
     # Топ-строки: latest-per-ad — ad_a последний=100, ad_b=50
     assert payload.top_ads_by_spend[0].ad_id == ad_a
-    assert payload.top_ads_by_spend[0].spend_usd == Decimal("100.00")
+    assert payload.top_ads_by_spend[0].spend == Decimal("100.00")
+    assert payload.top_ads_by_spend[0].currency == "USD"
     assert payload.top_ads_by_spend[0].offer_code == "DIG_A"
     assert payload.top_ads_by_spend[1].ad_id == ad_b
-    assert payload.top_ads_by_spend[1].spend_usd == Decimal("50.00")
+    assert payload.top_ads_by_spend[1].spend == Decimal("50.00")
 
 
 # Активные офферы (is_active=true) считаются корректно
@@ -272,9 +345,193 @@ async def test_build_digest_empty(pg_engine, clean_digest_tables) -> None:
     assert payload.disable_tasks_succeeded == 0
     assert payload.disable_tasks_failed == 0
     assert payload.top_ads_by_spend == []
-    assert payload.total_spend_window_usd == Decimal("0")
+    assert payload.money_state == "unavailable"
+    assert payload.total_spend_window is None
+    assert payload.money_issues
     assert payload.active_offers_count == 0
     assert payload.active_ads_count == 0
+
+
+@pytest.mark.asyncio
+async def test_digest_hides_money_when_currency_evidence_is_stale(
+    pg_engine,
+    two_ads_world,
+) -> None:
+    now = _now()
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE meta_account_snapshot
+                SET currency_observed_at = :observed_at
+                WHERE account_id = '123'
+                """
+            ),
+            {"observed_at": now - timedelta(hours=25)},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO ad_metrics (ad_id, cycle_ts, currency, spend)
+                VALUES (:ad_id, :cycle_ts, 'USD', 12.50)
+                """
+            ),
+            {
+                "ad_id": two_ads_world["ad_a"],
+                "cycle_ts": now - timedelta(minutes=1),
+            },
+        )
+
+    payload = await build_digest(pg_engine, day_start_utc=now)
+
+    assert payload.money_state == "unavailable"
+    assert payload.currency is None
+    assert payload.total_spend_window is None
+    assert payload.top_ads_by_spend == []
+    assert payload.money_issues == ("Денежные итоги скрыты: валюта кабинета не подтверждена",)
+
+
+@pytest.mark.asyncio
+async def test_digest_never_ranks_or_sums_across_accounts_and_currencies(
+    pg_engine,
+    two_ads_world,
+) -> None:
+    now = _now()
+    campaign_id, adset_id, ad_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO meta_account_snapshot
+                    (account_id, timezone_name, currency, currency_observed_at)
+                VALUES ('456', 'UTC', 'EUR', NOW())
+                ON CONFLICT (account_id) DO UPDATE
+                SET timezone_name = EXCLUDED.timezone_name,
+                    currency = EXCLUDED.currency,
+                    currency_observed_at = EXCLUDED.currency_observed_at
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO fb_campaigns (id, campaign_name, ad_account_id)
+                VALUES (:campaign_id, 'DIG_MULTI', '456')
+                """
+            ),
+            {"campaign_id": campaign_id},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO fb_adsets (id, campaign_id, adset_name)
+                VALUES (:adset_id, :campaign_id, 'DIG_MULTI_SET')
+                """
+            ),
+            {"adset_id": adset_id, "campaign_id": campaign_id},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name)
+                VALUES (:ad_id, :adset_id, '456001', 'DIG_MULTI_AD')
+                """
+            ),
+            {"ad_id": ad_id, "adset_id": adset_id},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO ad_metrics (ad_id, cycle_ts, currency, spend)
+                VALUES
+                    (:first_ad_id, :cycle_ts, 'USD', 10),
+                    (:second_ad_id, :cycle_ts, 'EUR', 999)
+                """
+            ),
+            {
+                "first_ad_id": two_ads_world["ad_a"],
+                "second_ad_id": ad_id,
+                "cycle_ts": now - timedelta(minutes=1),
+            },
+        )
+
+    payload = await build_digest(pg_engine, day_start_utc=now)
+
+    assert payload.money_state == "unavailable"
+    assert payload.currency is None
+    assert payload.total_spend_window is None
+    assert payload.top_ads_by_spend == []
+    assert payload.money_issues == ("Денежные итоги скрыты: окно содержит несколько кабинетов",)
+
+
+@pytest.mark.asyncio
+async def test_digest_hides_same_account_mixed_currency_evidence(
+    pg_engine,
+    two_ads_world,
+) -> None:
+    now = _now()
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO ad_metrics (ad_id, cycle_ts, currency, spend)
+                VALUES
+                    (:first_ad_id, :cycle_ts, 'USD', 10),
+                    (:second_ad_id, :cycle_ts, 'EUR', 20)
+                """
+            ),
+            {
+                "first_ad_id": two_ads_world["ad_a"],
+                "second_ad_id": two_ads_world["ad_b"],
+                "cycle_ts": now - timedelta(minutes=1),
+            },
+        )
+
+    payload = await build_digest(pg_engine, day_start_utc=now)
+
+    assert payload.money_state == "unavailable"
+    assert payload.currency is None
+    assert payload.total_spend_window is None
+    assert payload.top_ads_by_spend == []
+    assert payload.money_issues == ("Денежные итоги скрыты: окно содержит несколько валют",)
+
+
+@pytest.mark.asyncio
+async def test_digest_preserves_three_decimal_currency_spend(
+    pg_engine,
+    two_ads_world,
+) -> None:
+    now = _now()
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE meta_account_snapshot
+                SET currency = 'BHD', currency_observed_at = :observed_at
+                WHERE account_id = '123'
+                """
+            ),
+            {"observed_at": now},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO ad_metrics (ad_id, cycle_ts, currency, spend)
+                VALUES (:ad_id, :cycle_ts, 'BHD', 1.001)
+                """
+            ),
+            {
+                "ad_id": two_ads_world["ad_a"],
+                "cycle_ts": now - timedelta(minutes=1),
+            },
+        )
+
+    payload = await build_digest(pg_engine, day_start_utc=now)
+
+    assert payload.money_state == "ready"
+    assert payload.currency == "BHD"
+    assert payload.total_spend_window == Decimal("1.001")
+    assert payload.top_ads_by_spend[0].spend == Decimal("1.001")
 
 
 # Naive datetime запрещён в build_digest
@@ -299,8 +556,9 @@ async def test_build_digest_top_excludes_zero_spend(pg_engine, two_ads_world) ->
             await conn.execute(
                 text(
                     """
-                    INSERT INTO ad_metrics (ad_id, cycle_ts, spend, clicks, leads, cpc, cost_per_lead)
-                    VALUES (:a, :t, :s, 0, 0, NULL, NULL)
+                    INSERT INTO ad_metrics
+                        (ad_id, cycle_ts, currency, spend, clicks, leads, cpc, cost_per_lead)
+                    VALUES (:a, :t, 'USD', :s, 0, 0, NULL, NULL)
                     """
                 ),
                 {"a": ad_id, "t": now - timedelta(hours=1), "s": spend},
@@ -311,7 +569,7 @@ async def test_build_digest_top_excludes_zero_spend(pg_engine, two_ads_world) ->
     assert len(payload.top_ads_by_spend) == 1
     assert payload.top_ads_by_spend[0].ad_id == ad_a
     # total_spend — сумма ВСЕХ snapshot'ов (нули не влияют): 75 + 0 = 75.
-    assert payload.total_spend_window_usd == Decimal("75.00")
+    assert payload.total_spend_window == Decimal("75.00")
 
 
 # Регресс: все ad с нулевым spend → Топ-5 пуст (как пустой день), total=0.
@@ -327,8 +585,9 @@ async def test_build_digest_top_empty_when_all_zero_spend(pg_engine, two_ads_wor
             await conn.execute(
                 text(
                     """
-                    INSERT INTO ad_metrics (ad_id, cycle_ts, spend, clicks, leads, cpc, cost_per_lead)
-                    VALUES (:a, :t, 0, 0, 0, NULL, NULL)
+                    INSERT INTO ad_metrics
+                        (ad_id, cycle_ts, currency, spend, clicks, leads, cpc, cost_per_lead)
+                    VALUES (:a, :t, 'USD', 0, 0, 0, NULL, NULL)
                     """
                 ),
                 {"a": ad_id, "t": now - timedelta(hours=1)},
@@ -336,4 +595,5 @@ async def test_build_digest_top_empty_when_all_zero_spend(pg_engine, two_ads_wor
 
     payload = await build_digest(pg_engine, day_start_utc=now)
     assert payload.top_ads_by_spend == []
-    assert payload.total_spend_window_usd == Decimal("0")
+    assert payload.money_state == "ready"
+    assert payload.total_spend_window == Decimal("0")

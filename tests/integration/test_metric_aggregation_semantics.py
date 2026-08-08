@@ -7,27 +7,23 @@
 столько раз, сколько было циклов. Плюс spend сбрасывается посуточно (cabinet
 day reset), поэтому многодневная агрегация должна складывать ДНЕВНЫЕ итоги.
 
-Эти тесты проверяют фактический ответ 4 endpoint'ов на одинаковом наборе
-кумулятивных данных: правильный spend = сумма ПОСЛЕДНИХ snapshot'ов
-(per-ad / per-ad-per-day), а не сумма всех строк.
+Эти тесты проверяют активные offers/analytics endpoints и общий CTE на
+кумулятивных данных: spend равен сумме последних snapshot'ов, а не всех строк.
 
 Используем явные cycle_ts, привязанные к `date_trunc('day', now())` и
 `date_trunc('hour', now())`, чтобы границы суток/часа были детерминированы
 независимо от момента запуска теста (кроме редкого случая запуска ровно на
 границе — циклы кладутся с запасом внутрь бакета).
 
-Изоляция от чужих данных в shared-БД: per-offer/per-campaign/per-ad endpoint'ы
-(`/offers/compare`, `/dashboard/performance`, `/history/ads`) проверяются ТОЧНО
-по нашей сущности (фильтр по offer_code/campaign_name/ad_name). Глобальные
-агрегации (`/history/summary`, `/dashboard/chart-data`) проверяются через
-scoped-SQL по нашим ad_id и/или `>=`-границу — точное равенство тут невозможно,
-т.к. в окне могут быть строки других тестов/фикстур.
+Изоляция от чужих данных в shared-БД достигается отдельным offer/campaign id.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 import pytest_asyncio
@@ -36,29 +32,16 @@ from sqlalchemy import text
 
 from apps.api.deps import get_engine, get_redis
 from apps.api.main import create_app
+from core.dashboard.metric_aggregation import latest_per_ad_per_day_cte
+from core.meta_api.account_tz import persist_account_context
 
-
-def _now_iso() -> str:
-    """Текущий момент UTC (верхняя граница окна)."""
-    from datetime import UTC, datetime
-
-    return datetime.now(UTC).isoformat()
-
-
-def _today_start_iso() -> str:
-    """Начало текущих суток UTC (00:00)."""
-    from datetime import UTC, datetime
-
-    now = datetime.now(UTC)
-    return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-
-
-def _yesterday_start_iso() -> str:
-    """Начало вчерашних суток UTC."""
-    from datetime import UTC, datetime, timedelta
-
-    now = datetime.now(UTC) - timedelta(days=1)
-    return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+_SAFE_ROLLING_DAY_ANCHOR_SQL = """(
+    CASE
+        WHEN NOW() - date_trunc('day', NOW()) >= INTERVAL '12 hours'
+        THEN date_trunc('day', NOW()) + INTERVAL '6 hours'
+        ELSE date_trunc('day', NOW()) - INTERVAL '1 day' + INTERVAL '18 hours'
+    END
+)"""
 
 
 def _make_app(*, engine, redis):
@@ -70,7 +53,7 @@ def _make_app(*, engine, redis):
     return app
 
 
-async def _seed_chain(conn, *, code_suffix: str) -> dict:
+async def _seed_chain(conn, *, code_suffix: str, account_id: str | None = None) -> dict:
     """Создаёт offer→campaign→adset→2 ads. Возвращает id'шники.
 
     Два объявления нужны, чтобы проверить, что spend складывается ПО объявлениям
@@ -81,27 +64,79 @@ async def _seed_chain(conn, *, code_suffix: str) -> dict:
     adset_id = uuid.uuid4()
     ad1_id = uuid.uuid4()
     ad2_id = uuid.uuid4()
+    fb_campaign_id = f"{campaign_id.int % 10**18:018d}"
+    fb_adset_id = f"{adset_id.int % 10**18:018d}"
+    fb_ad_ids = {
+        ad1_id: f"{ad1_id.int % 10**18:018d}",
+        ad2_id: f"{ad2_id.int % 10**18:018d}",
+    }
 
     await conn.execute(
         text("INSERT INTO offers (id, code, name) VALUES (:i, :c, :n)"),
         {"i": offer_id, "c": f"SEM_{code_suffix}", "n": f"Semantics {code_suffix}"},
     )
     await conn.execute(
-        text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
-        {"i": campaign_id, "n": f"SEM_CMP_{code_suffix}", "o": offer_id},
+        text(
+            "INSERT INTO fb_campaigns "
+            "(id, fb_campaign_id, campaign_name, offer_id, ad_account_id) "
+            "VALUES (:i, :fb_campaign_id, :n, :o, :account_id)"
+        ),
+        {
+            "i": campaign_id,
+            "fb_campaign_id": fb_campaign_id,
+            "n": f"SEM_CMP_{code_suffix}",
+            "o": offer_id,
+            "account_id": account_id,
+        },
     )
     await conn.execute(
-        text("INSERT INTO fb_adsets (id, campaign_id, adset_name) VALUES (:i, :c, :n)"),
-        {"i": adset_id, "c": campaign_id, "n": f"SEM_ADS_{code_suffix}"},
+        text(
+            "INSERT INTO fb_adsets (id, campaign_id, fb_adset_id, adset_name) "
+            "VALUES (:i, :c, :fb_adset_id, :n)"
+        ),
+        {
+            "i": adset_id,
+            "c": campaign_id,
+            "fb_adset_id": fb_adset_id,
+            "n": f"SEM_ADS_{code_suffix}",
+        },
     )
-    for aid, fb in ((ad1_id, f"sem1_{code_suffix}"), (ad2_id, f"sem2_{code_suffix}")):
+    for aid in (ad1_id, ad2_id):
+        fb_ad_id = fb_ad_ids[aid]
         await conn.execute(
             text(
-                "INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name, last_seen_at) "
-                "VALUES (:i, :a, :f, :n, NOW())"
+                "INSERT INTO fb_ads "
+                "(id, adset_id, fb_ad_id, ad_name, first_seen_at, last_seen_at) "
+                "VALUES (:i, :a, :f, :n, NOW() - INTERVAL '7 days', NOW())"
             ),
-            {"i": aid, "a": adset_id, "f": fb, "n": f"SEM_AD_{fb}"},
+            {"i": aid, "a": adset_id, "f": fb_ad_id, "n": f"SEM_AD_{fb_ad_id}"},
         )
+
+    stored_rows = (
+        await conn.execute(
+            text(
+                """
+                SELECT c.fb_campaign_id, c.ad_account_id, s.fb_adset_id, a.fb_ad_id
+                FROM fb_ads AS a
+                JOIN fb_adsets AS s ON s.id = a.adset_id
+                JOIN fb_campaigns AS c ON c.id = s.campaign_id
+                WHERE a.id = ANY(:ad_ids)
+                ORDER BY a.id
+                """
+            ),
+            {"ad_ids": [ad1_id, ad2_id]},
+        )
+    ).all()
+    assert len(stored_rows) == 2
+    assert {row.fb_ad_id for row in stored_rows} == set(fb_ad_ids.values())
+    for row in stored_rows:
+        identity = (
+            row.fb_campaign_id,
+            row.fb_adset_id,
+            row.fb_ad_id,
+        )
+        assert all(value.isdigit() for value in identity)
+        assert row.ad_account_id is None or row.ad_account_id.isdigit()
 
     return {
         "offer_id": offer_id,
@@ -110,6 +145,10 @@ async def _seed_chain(conn, *, code_suffix: str) -> dict:
         "ad2_id": ad2_id,
         "offer_code": f"SEM_{code_suffix}",
         "campaign_name": f"SEM_CMP_{code_suffix}",
+        "account_id": account_id,
+        "fb_campaign_id": fb_campaign_id,
+        "fb_adset_id": fb_adset_id,
+        "fb_ad_ids": tuple(fb_ad_ids.values()),
     }
 
 
@@ -151,6 +190,14 @@ async def clean_semantics(pg_engine):
             await conn.execute(text("DELETE FROM fb_ads WHERE ad_name LIKE 'SEM\\_AD\\_%'"))
             await conn.execute(text("DELETE FROM fb_adsets WHERE adset_name LIKE 'SEM\\_ADS\\_%'"))
             await conn.execute(
+                text(
+                    "DELETE FROM meta_account_snapshot WHERE account_id IN "
+                    "(SELECT ad_account_id FROM fb_campaigns "
+                    "WHERE campaign_name LIKE 'SEM\\_CMP\\_%' "
+                    "AND ad_account_id IS NOT NULL)"
+                )
+            )
+            await conn.execute(
                 text("DELETE FROM fb_campaigns WHERE campaign_name LIKE 'SEM\\_CMP\\_%'")
             )
             await conn.execute(text("DELETE FROM offers WHERE code LIKE 'SEM\\_%'"))
@@ -160,246 +207,153 @@ async def clean_semantics(pg_engine):
     await _cleanup()
 
 
-# ─────────────────── Суточное окно / hour-bucket: 5 циклов в одни сутки ──────────────
-
-
-# chart-data (hour-bucket): 5 кумулятивных циклов на ad в одном часе → берём
-# последний (50 и 25), spend бакета = 75, НЕ 375 (сумма всех снимков).
 @pytest.mark.asyncio
-async def test_chart_data_hour_bucket_not_inflated(pg_engine, fake_redis_client, clean_semantics):
+async def test_cabinet_timezone_groups_across_utc_midnight_for_cte_and_performance(
+    pg_engine, fake_redis_client, clean_semantics
+) -> None:
+    """UTC midnight is not a reset for an Asia/Singapore Meta cabinet."""
+    canonical_account = f"{uuid.uuid4().int % 10**12:012d}"
     async with pg_engine.begin() as conn:
-        ids = await _seed_chain(conn, code_suffix="CHART")
-        # ad1: 10→20→30→40→50, ad2: 5→10→15→20→25 — все в текущем часе.
-        # Кладём в середину часа (+30 мин от начала часа) минус offset по 5 минут,
-        # чтобы 5 точек точно попали в один и тот же date_trunc('hour').
-        for n, (s1, s2) in enumerate([(10, 5), (20, 10), (30, 15), (40, 20), (50, 25)], start=0):
-            ts = f"date_trunc('hour', NOW()) + INTERVAL '5 minutes' + INTERVAL '{n} minutes'"
+        ids = await _seed_chain(
+            conn,
+            code_suffix="CABTZ",
+            account_id=canonical_account,
+        )
+        anchor = await conn.scalar(text("SELECT date_trunc('day', NOW())"))
+        for expression, spend in (
+            ("date_trunc('day', NOW()) - INTERVAL '10 minutes'", "40"),
+            ("date_trunc('day', NOW()) + INTERVAL '10 minutes'", "50"),
+            ("date_trunc('day', NOW()) + INTERVAL '16 hours 10 minutes'", "5"),
+            ("date_trunc('day', NOW()) + INTERVAL '17 hours'", "10"),
+        ):
             await _insert_metric(
-                conn, ad_id=ids["ad1_id"], cycle_ts_sql=ts, spend=Decimal(s1), leads=s1
+                conn,
+                ad_id=ids["ad1_id"],
+                cycle_ts_sql=expression,
+                spend=Decimal(spend),
+                leads=int(Decimal(spend)),
             )
+            # Campaign-level analytics is lossless: the sibling ad must have a
+            # confirmed snapshot too, otherwise the campaign spend is partial.
             await _insert_metric(
-                conn, ad_id=ids["ad2_id"], cycle_ts_sql=ts, spend=Decimal(s2), leads=s2
+                conn,
+                ad_id=ids["ad2_id"],
+                cycle_ts_sql=expression,
+                spend=Decimal("0"),
+                leads=0,
             )
 
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/dashboard/chart-data", params={"hours": 24, "bucket": "hour"})
-
-    assert resp.status_code == 200
-    buckets = resp.json()
-    # Суммируем по всем бакетам в ответе (в окне могут быть и чужие ad'ы, поэтому
-    # проверяем наш вклад через отдельный прямой запрос ниже). Здесь — sanity:
-    # наш час должен дать ровно 75 от двух наших ad'ов.
-    # Прямой контроль через SQL по нашим ad'ам:
+    assert await persist_account_context(
+        pg_engine,
+        account_id=canonical_account,
+        timezone_name="Asia/Singapore",
+        currency="USD",
+    )
+    from_dt = anchor - timedelta(hours=1)
+    to_dt = anchor + timedelta(hours=18)
+    cte = latest_per_ad_per_day_cte(cte_alias="per_ad_day", columns=("spend",))
     async with pg_engine.connect() as conn:
-        check = (
+        total, cabinet_days, timezone_known, account_id = (
             await conn.execute(
                 text(
-                    """
-                    WITH per_bucket_ad AS (
-                        SELECT DISTINCT ON (date_trunc('hour', m.cycle_ts), m.ad_id)
-                            m.spend
-                        FROM ad_metrics m
-                        WHERE m.ad_id = ANY(:ids)
-                        ORDER BY date_trunc('hour', m.cycle_ts), m.ad_id, m.cycle_ts DESC
-                    )
-                    SELECT COALESCE(SUM(spend), 0) FROM per_bucket_ad
-                    """
+                    f"WITH {cte} "
+                    "SELECT COALESCE(SUM(spend), 0), COUNT(*), "
+                    "BOOL_AND(timezone_known), MAX(ad_account_id) "
+                    "FROM per_ad_day WHERE ad_id = :ad_id"
                 ),
-                {"ids": [ids["ad1_id"], ids["ad2_id"]]},
+                {"from_dt": from_dt, "to_dt": to_dt, "ad_id": ids["ad1_id"]},
             )
-        ).scalar_one()
-    assert Decimal(str(check)) == Decimal("75"), "latest-per-(hour×ad) должно дать 75, не 375"
-    # И endpoint должен вернуть хотя бы один бакет с нашим вкладом (spend >= 75).
-    assert buckets, "chart-data вернул пустой список"
-    assert any(Decimal(b["spend"]) >= Decimal("75") for b in buckets)
-
-
-# /history за сутки: 5 кумулятивных циклов на ad → дневной итог = latest (50, 25),
-# spend=75 (НЕ 375). /history/summary и /history/ads используют один per-day CTE.
-# Per-ad проверяем точно через /history/ads (изоляция от чужих ad'ов в shared-БД);
-# summary глобален, поэтому сверяем что он НЕ ниже нашего вклада.
-@pytest.mark.asyncio
-async def test_history_single_day_not_inflated(pg_engine, fake_redis_client, clean_semantics):
-    async with pg_engine.begin() as conn:
-        ids = await _seed_chain(conn, code_suffix="SUMM")
-        for n, (s1, s2) in enumerate([(10, 5), (20, 10), (30, 15), (40, 20), (50, 25)], start=0):
-            # Все циклы в текущих сутках (относительно NOW — попадают в партицию).
-            ts = f"date_trunc('day', NOW()) + INTERVAL '1 hour' + INTERVAL '{n} minutes'"
-            await _insert_metric(
-                conn, ad_id=ids["ad1_id"], cycle_ts_sql=ts, spend=Decimal(s1), leads=s1
+        ).one()
+        persisted = (
+            await conn.execute(
+                text(
+                    "SELECT account_id, timezone_name, currency "
+                    "FROM meta_account_snapshot WHERE account_id = :account_id"
+                ),
+                {"account_id": canonical_account},
             )
-            await _insert_metric(
-                conn, ad_id=ids["ad2_id"], cycle_ts_sql=ts, spend=Decimal(s2), leads=s2
-            )
+        ).one()
+    assert Decimal(total) == Decimal("60")
+    assert cabinet_days == 2
+    assert timezone_known is True
+    assert account_id == canonical_account
+    assert persisted == (canonical_account, "Asia/Singapore", "USD")
 
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    window = {
-        "from_iso": _today_start_iso(),
-        "to_iso": _now_iso(),
-    }
+    cabinet_timezone = ZoneInfo("Asia/Singapore")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        ads_resp = await ac.get("/api/history/ads", params=window)
-    assert ads_resp.status_code == 200
-    ads = ads_resp.json()
-    ad1 = next((a for a in ads if a["ad_name"] == "SEM_AD_sem1_SUMM"), None)
-    ad2 = next((a for a in ads if a["ad_name"] == "SEM_AD_sem2_SUMM"), None)
-    assert ad1 is not None and ad2 is not None
-    # Каждый ad: последний снимок за день, НЕ сумма 5 циклов (которая дала бы 150/75).
-    assert Decimal(ad1["spend"]) == Decimal("50.00")
-    assert Decimal(ad2["spend"]) == Decimal("25.00")
-    assert ad1["leads"] == 50 and ad2["leads"] == 25
+        response = await ac.get(
+            "/api/analytics/performance",
+            params={
+                "period": "custom",
+                "from_date": from_dt.astimezone(cabinet_timezone).date().isoformat(),
+                "to_date": to_dt.astimezone(cabinet_timezone).date().isoformat(),
+                "level": "campaign",
+                "campaign_id": str(ids["campaign_id"]),
+                "account_id": canonical_account,
+            },
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["rows"][0]["spend"] == "60.00", body["rows"][0]
+    assert body["window"]["timezone"] == "Asia/Singapore"
+    assert body["window"]["timezone_known"] is True
+    assert body["rows"][0]["timezone_known"] is True
 
-    # summary глобален: не ниже нашего вклада (75) и точно не «наш вклад × 5» (375).
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        sum_resp = await ac.get("/api/history/summary", params=window)
-    assert sum_resp.status_code == 200
-    assert Decimal(sum_resp.json()["totals"]["spend"]) >= Decimal("75.00")
 
-
-# /offers/compare за сутки: 5 циклов на ad → spend=75, не 375.
 @pytest.mark.asyncio
-async def test_offers_compare_single_day_not_inflated(
-    pg_engine, fake_redis_client, clean_semantics
-):
+async def test_invalid_persisted_timezone_falls_back_to_utc(pg_engine, clean_semantics) -> None:
+    canonical_account = f"{uuid.uuid4().int % 10**12:012d}"
     async with pg_engine.begin() as conn:
-        ids = await _seed_chain(conn, code_suffix="CMP")
-        for n, (s1, s2) in enumerate([(10, 5), (20, 10), (30, 15), (40, 20), (50, 25)], start=0):
-            ts = f"date_trunc('day', NOW()) + INTERVAL '1 hour' + INTERVAL '{n} minutes'"
+        ids = await _seed_chain(
+            conn,
+            code_suffix="BADTZ",
+            account_id=canonical_account,
+        )
+        anchor = await conn.scalar(text("SELECT date_trunc('day', NOW())"))
+        await conn.execute(
+            text(
+                """
+                INSERT INTO meta_account_snapshot
+                    (account_id, timezone_name, currency, currency_observed_at)
+                VALUES (:account_id, 'Definitely/Not-A-Timezone', 'USD', NOW())
+                """
+            ),
+            {"account_id": canonical_account},
+        )
+        for expression, spend in (
+            ("date_trunc('day', NOW()) - INTERVAL '10 minutes'", "40"),
+            ("date_trunc('day', NOW()) + INTERVAL '10 minutes'", "50"),
+            ("date_trunc('day', NOW()) + INTERVAL '17 hours'", "10"),
+        ):
             await _insert_metric(
-                conn, ad_id=ids["ad1_id"], cycle_ts_sql=ts, spend=Decimal(s1), leads=s1
-            )
-            await _insert_metric(
-                conn, ad_id=ids["ad2_id"], cycle_ts_sql=ts, spend=Decimal(s2), leads=s2
-            )
-
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/offers/compare", params={"days": 1})
-
-    assert resp.status_code == 200
-    row = next((r for r in resp.json() if r["offer_code"] == ids["offer_code"]), None)
-    assert row is not None
-    assert Decimal(row["spend"]) == Decimal("75.00"), "compare spend завышен (ждали 75)"
-    assert row["leads"] == 75
-
-
-# /dashboard/performance top_campaigns за сутки: 5 циклов на ad → spend=75, не 375.
-@pytest.mark.asyncio
-async def test_performance_top_campaign_single_day_not_inflated(
-    pg_engine, fake_redis_client, clean_semantics
-):
-    async with pg_engine.begin() as conn:
-        ids = await _seed_chain(conn, code_suffix="PERF")
-        for n, (s1, s2) in enumerate([(10, 5), (20, 10), (30, 15), (40, 20), (50, 25)], start=0):
-            ts = f"date_trunc('day', NOW()) + INTERVAL '1 hour' + INTERVAL '{n} minutes'"
-            await _insert_metric(
-                conn, ad_id=ids["ad1_id"], cycle_ts_sql=ts, spend=Decimal(s1), leads=s1
-            )
-            await _insert_metric(
-                conn, ad_id=ids["ad2_id"], cycle_ts_sql=ts, spend=Decimal(s2), leads=s2
+                conn,
+                ad_id=ids["ad1_id"],
+                cycle_ts_sql=expression,
+                spend=Decimal(spend),
+                leads=int(Decimal(spend)),
             )
 
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/dashboard/performance", params={"days": 1})
-
-    assert resp.status_code == 200
-    camp = next(
-        (c for c in resp.json()["top_campaigns"] if c["campaign_name"] == ids["campaign_name"]),
-        None,
-    )
-    assert camp is not None
-    assert Decimal(camp["spend"]) == Decimal("75.00"), "top_campaigns spend завышен (ждали 75)"
-    # leaderboard на том же наборе
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp2 = await ac.get("/api/dashboard/performance", params={"days": 1})
-    off = next(
-        (o for o in resp2.json()["offer_leaderboard"] if o["offer_code"] == ids["offer_code"]),
-        None,
-    )
-    assert off is not None
-    assert Decimal(off["spend"]) == Decimal("75.00"), "offer_leaderboard spend завышен (ждали 75)"
-
-
-# ─────────────────── Многодневное окно: посуточный reset ──────────────────────
-
-
-# /history за 2 суток: вчера кумулятив→50, сегодня (после reset) кумулятив→30.
-# Правильно: per-ad-per-day latest → 50 + 30 = 80, НЕ сумма всех строк (165).
-# Per-ad через /history/ads (изолировано от чужих данных в shared-БД).
-@pytest.mark.asyncio
-async def test_history_multiday_sums_daily_totals(pg_engine, fake_redis_client, clean_semantics):
-    async with pg_engine.begin() as conn:
-        ids = await _seed_chain(conn, code_suffix="MULTI")
-        # Вчера: кумулятив 20 → 50 (последний снимок = дневной итог 50).
-        for n, s in enumerate([20, 35, 50], start=0):
-            ts = (
-                "date_trunc('day', NOW()) - INTERVAL '1 day' "
-                f"+ INTERVAL '2 hours' + INTERVAL '{n} minutes'"
+    cte = latest_per_ad_per_day_cte(cte_alias="per_ad_day", columns=("spend",))
+    async with pg_engine.connect() as conn:
+        total, timezone_known, cabinet_timezone = (
+            await conn.execute(
+                text(
+                    f"WITH {cte} SELECT COALESCE(SUM(spend), 0), "
+                    "BOOL_AND(timezone_known), MAX(cabinet_timezone) "
+                    "FROM per_ad_day WHERE ad_id = :ad_id"
+                ),
+                {
+                    "from_dt": anchor - timedelta(hours=1),
+                    "to_dt": anchor + timedelta(hours=18),
+                    "ad_id": ids["ad1_id"],
+                },
             )
-            await _insert_metric(
-                conn, ad_id=ids["ad1_id"], cycle_ts_sql=ts, spend=Decimal(s), leads=s
-            )
-        # Сегодня (после reset): кумулятив 10 → 30 (дневной итог 30).
-        for n, s in enumerate([10, 20, 30], start=0):
-            ts = f"date_trunc('day', NOW()) + INTERVAL '2 hours' + INTERVAL '{n} minutes'"
-            await _insert_metric(
-                conn, ad_id=ids["ad1_id"], cycle_ts_sql=ts, spend=Decimal(s), leads=s
-            )
-
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    window = {"from_iso": _yesterday_start_iso(), "to_iso": _now_iso()}
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/history/ads", params=window)
-
-    assert resp.status_code == 200
-    ad_row = next((a for a in resp.json() if a["ad_name"] == "SEM_AD_sem1_MULTI"), None)
-    assert ad_row is not None
-    # 50 (день1 итог) + 30 (день2 итог) = 80, а не 20+35+50+10+20+30 = 165.
-    assert Decimal(ad_row["spend"]) == Decimal("80.00"), "многодневный spend должен быть 80, не 165"
-    assert ad_row["leads"] == 80
+        ).one()
+    # Explicit UTC fallback: previous UTC day=40, current UTC day latest=10.
+    assert Decimal(total) == Decimal("50")
+    assert timezone_known is False
+    assert cabinet_timezone == "UTC"
 
 
 # ─────────────────── Граничные случаи ─────────────────────────────────────────
-
-
-# Пустое окно (нет метрик у наших ad'ов в окне) → spend 0.
-@pytest.mark.asyncio
-async def test_empty_window_zero(pg_engine, fake_redis_client, clean_semantics):
-    async with pg_engine.begin() as conn:
-        await _seed_chain(conn, code_suffix="EMPTY")
-        # Метрик не вставляем вовсе.
-
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        row_resp = await ac.get("/api/offers/compare", params={"days": 1})
-    assert row_resp.status_code == 200
-    row = next((r for r in row_resp.json() if r["offer_code"] == "SEM_EMPTY"), None)
-    assert row is not None
-    assert Decimal(row["spend"]) == Decimal("0.00")
-    assert row["leads"] == 0
-
-
-# Один ad, один цикл → возвращается ровно его значение (не теряется и не двоится).
-# Per-ad через /history/ads (изолировано от чужих ad'ов в shared-БД).
-@pytest.mark.asyncio
-async def test_single_ad_single_cycle(pg_engine, fake_redis_client, clean_semantics):
-    async with pg_engine.begin() as conn:
-        ids = await _seed_chain(conn, code_suffix="ONE")
-        ts = "date_trunc('day', NOW()) + INTERVAL '3 hours'"
-        await _insert_metric(
-            conn, ad_id=ids["ad1_id"], cycle_ts_sql=ts, spend=Decimal("42.50"), leads=7
-        )
-
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
-            "/api/history/ads",
-            params={"from_iso": _today_start_iso(), "to_iso": _now_iso()},
-        )
-    assert resp.status_code == 200
-    ad_row = next((a for a in resp.json() if a["ad_name"] == "SEM_AD_sem1_ONE"), None)
-    assert ad_row is not None
-    assert Decimal(ad_row["spend"]) == Decimal("42.50")
-    assert ad_row["leads"] == 7

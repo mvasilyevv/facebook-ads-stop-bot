@@ -6,18 +6,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import inspect
 
 import grpc
 
+import core.meta_api.autostop_alert as autostop_alert
 from core.meta_api.autostop_alert import (
-    _minutes_since,
-    build_autostop_channel_down_alert,
-    build_undelivered_pause_alert,
     is_channel_down_error,
 )
 from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import (
+    AmbiguousResultError,
     NotFoundError,
     PermanentError,
     RateLimitedError,
@@ -33,15 +32,16 @@ def test_failed_to_fetch_is_channel_down() -> None:
     assert is_channel_down_error(exc) is True
 
 
-# Vision-сессия недоступна (-1/-3 и circuit-open) — канал мёртв
+# Vision-сессия доказанно недоступна (-1/circuit-open) — канал мёртв.
+# Page-evaluate loss (-3) тоже сигнал outage, но исход мутации ambiguous.
 def test_session_unavailable_is_channel_down() -> None:
     assert is_channel_down_error(SessionUnavailableError("token_not_found", code=-1)) is True
-    assert is_channel_down_error(SessionUnavailableError("page-evaluate", code=-3)) is True
+    assert is_channel_down_error(AmbiguousResultError("page-evaluate", code=-3)) is True
 
 
-# gRPC UNAVAILABLE → TemporaryError с code=None — канал мёртв
+# gRPC UNAVAILABLE → ambiguous с code=None — канал мёртв
 def test_grpc_unavailable_is_channel_down() -> None:
-    exc = TemporaryError("browser-agent временно недоступен (UNAVAILABLE)", code=None)
+    exc = AmbiguousResultError("browser-agent response lost (UNAVAILABLE)", code=None)
     assert is_channel_down_error(exc) is True
 
 
@@ -75,52 +75,8 @@ def test_real_grpc_error_mapped_is_channel_down() -> None:
     assert is_channel_down_error(mapped) is True
 
 
-# CRITICAL-текст содержит ad_id, число фейлов и явный money-сигнал
-def test_alert_text_has_money_signal_and_context() -> None:
-    text = build_autostop_channel_down_alert(
-        fail_count=5,
-        fb_ad_id="120246662749510044",
-        last_error="Failed to fetch",
-    )
-    assert "120246662749510044" in text
-    assert "5" in text
-    # money-сигнал + указание чинить канал, а не «нажми кнопку»
-    low = text.lower()
-    assert "авто-стоп" in low or "auto-stop" in low
-    assert "vision" in low or "graph" in low
-
-
-# Per-ad алерт «выключи вручную» содержит имя объявления, id, спенд, минуты и «вручную»
-def test_undelivered_alert_has_ad_name_spend_and_manual_hint() -> None:
-    text = build_undelivered_pause_alert(
-        ad_name="GH_CR2_Aviator_001",
-        fb_ad_id="120246662749510044",
-        spend="123.45",
-        minutes_stuck=12,
-        last_error="Failed to fetch",
-    )
-    assert "GH_CR2_Aviator_001" in text
-    assert "120246662749510044" in text
-    assert "123.45" in text
-    assert "12" in text
-    assert "вручную" in text.lower()
-
-
-# Пустые имя/спенд не валят рендер (прочерк), id и минуты на месте
-def test_undelivered_alert_handles_missing_name_and_spend() -> None:
-    text = build_undelivered_pause_alert(
-        ad_name=None,
-        fb_ad_id="999",
-        spend=None,
-        minutes_stuck=20,
-        last_error=None,
-    )
-    assert "999" in text
-    assert "—" in text  # прочерк вместо имени/спенда
-
-
-# _minutes_since: целые минуты от tz-aware метки; None/битое → 0
-def test_minutes_since() -> None:
-    assert _minutes_since(None) == 0
-    past = datetime.now(timezone.utc) - timedelta(minutes=15, seconds=30)
-    assert _minutes_since(past) == 15  # дробь усекается вниз
+def test_notification_path_has_no_redis_gate() -> None:
+    source = inspect.getsource(autostop_alert)
+    assert "redis_client" not in source
+    assert "autostop:net_fail_count" not in source
+    assert "autostop:alerted" not in source

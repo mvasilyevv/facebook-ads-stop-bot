@@ -49,15 +49,29 @@ def _ctx():
 # Тоталы без разреза: метрики в строке, депозиты = ftds
 @pytest.mark.asyncio
 async def test_totals_no_group(monkeypatch):
-    fake = _FakeClient({"data": [{"clicks": 100, "registrations": 5, "ftds": 2, "revenue": 30}]})
+    fake = _FakeClient(
+        {
+            "data": [
+                {
+                    "clicks": 100,
+                    "registrations": 5,
+                    "ftds": 2,
+                    "revenue": "30.00",
+                    "cost": "20.00",
+                    "profit": "10.00",
+                    "event_currency": "USD",
+                }
+            ]
+        }
+    )
     _patch_client(monkeypatch, fake)
     out = await GetTrackerStatsTool().run(_ctx(), {"days": 7})
     assert "итого" in out
     assert "Клики: 100" in out and "Реги: 5" in out
-    assert "Provider FTD: 2" in out and "$30.00" in out
+    assert "Provider FTD: 2" in out and "30.00 USD" in out
     assert "локально подтверждённый депозит" in out
     assert fake.captured[0] == "query_stats"
-    assert "groups" not in fake.captured[1]  # без group_by не шлём groups
+    assert fake.captured[1]["groups"] == ["event_currency"]
 
 
 # Разрез по event_type: сортировка по FTD desc + ИТОГО суммирует ВСЕ строки (не только показанные)
@@ -65,13 +79,23 @@ async def test_totals_no_group(monkeypatch):
 async def test_group_event_type_sorted_and_totals(monkeypatch):
     payload = {
         "data": [
-            {"event_type": "CPA_HOLD", "clicks": 0, "registrations": 50, "ftds": 0, "revenue": 0},
+            {
+                "event_type": "CPA_HOLD",
+                "clicks": 0,
+                "registrations": 50,
+                "ftds": 0,
+                "revenue": 0,
+                "profit": 0,
+                "event_currency": "USD",
+            },
             {
                 "event_type": "CPA_ACCEPT",
                 "clicks": 0,
                 "registrations": 0,
                 "ftds": 11,
                 "revenue": 59,
+                "profit": 59,
+                "event_currency": "USD",
             },
             {
                 "event_type": "SOURCE_CLICK",
@@ -79,6 +103,8 @@ async def test_group_event_type_sorted_and_totals(monkeypatch):
                 "registrations": 0,
                 "ftds": 0,
                 "revenue": 0,
+                "profit": 0,
+                "event_currency": "USD",
             },
         ]
     }
@@ -92,6 +118,7 @@ async def test_group_event_type_sorted_and_totals(monkeypatch):
     assert "ещё 2 строк" in out  # limit=1 из 3
     # ИТОГО по всем 3 строкам: реги 50, FTD 11
     assert "ИТОГО (3)" in out and "реги 50" in out and "FTD 11" in out
+    assert "59.00 USD" in out
 
 
 # Невалидный дименшен → ToolError со списком разрешённых
@@ -121,7 +148,7 @@ async def test_adsetpro_error_wrapped(monkeypatch):
 # Явные since/until переопределяют days и попадают в MCP-args
 @pytest.mark.asyncio
 async def test_explicit_window_overrides_days(monkeypatch):
-    fake = _FakeClient({"data": [{"clicks": 1}]})
+    fake = _FakeClient({"data": [{"clicks": 1, "event_currency": "USD"}]})
     _patch_client(monkeypatch, fake)
     await GetTrackerStatsTool().run(
         _ctx(), {"days": 7, "since": "2026-01-01", "until": "2026-01-31"}
@@ -144,3 +171,92 @@ async def test_requires_engine(monkeypatch):
     _patch_client(monkeypatch, _FakeClient())
     with pytest.raises(ToolError, match="engine"):
         await GetTrackerStatsTool().run(ToolContext(client_key="t", engine=None), {"days": 1})
+
+
+@pytest.mark.asyncio
+async def test_money_is_hidden_without_confirmed_currency(monkeypatch):
+    fake = _FakeClient(
+        {
+            "data": [
+                {
+                    "clicks": 3,
+                    "registrations": None,
+                    "ftds": "bad",
+                    "revenue": "99.99",
+                    "cost": "12.00",
+                    "profit": "87.99",
+                }
+            ]
+        }
+    )
+    _patch_client(monkeypatch, fake)
+
+    out = await GetTrackerStatsTool().run(_ctx(), {"days": 1})
+
+    assert "Клики: 3" in out
+    assert "Реги: —" in out
+    assert "Provider FTD: —" in out
+    assert "99.99" not in out
+    assert "mixed/unknown currency" in out
+    assert "$" not in out
+
+
+@pytest.mark.asyncio
+async def test_mixed_currency_never_sums_money(monkeypatch):
+    fake = _FakeClient(
+        {
+            "data": [
+                {
+                    "clicks": 1,
+                    "registrations": 0,
+                    "ftds": 0,
+                    "revenue": "10.00",
+                    "cost": "1.00",
+                    "profit": "9.00",
+                    "event_currency": "USD",
+                },
+                {
+                    "clicks": 2,
+                    "registrations": 0,
+                    "ftds": 0,
+                    "revenue": "20.00",
+                    "cost": "2.00",
+                    "profit": "18.00",
+                    "event_currency": "EUR",
+                },
+            ]
+        }
+    )
+    _patch_client(monkeypatch, fake)
+
+    out = await GetTrackerStatsTool().run(_ctx(), {"days": 1})
+
+    assert "Клики: 3" in out
+    assert "30.00" not in out
+    assert "mixed/unknown currency" in out
+
+
+@pytest.mark.asyncio
+async def test_currency_exponent_controls_tracker_money_precision(monkeypatch):
+    fake = _FakeClient(
+        {
+            "data": [
+                {
+                    "clicks": 1,
+                    "registrations": 1,
+                    "ftds": 1,
+                    "revenue": "3.125",
+                    "cost": "1.000",
+                    "profit": "2.125",
+                    "event_currency": "KWD",
+                }
+            ]
+        }
+    )
+    _patch_client(monkeypatch, fake)
+
+    out = await GetTrackerStatsTool().run(_ctx(), {"days": 1})
+
+    assert "3.125 KWD" in out
+    assert "1.000 KWD" in out
+    assert "2.125 KWD" in out

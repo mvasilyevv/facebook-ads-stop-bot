@@ -3,7 +3,7 @@
 
 Money-критично: создаёт записи, по которым воркер заливает кампании в Meta и
 тратит рекламный бюджет. Защита — idempotency_key (offer+date+хеш структуры) +
-кампания всегда PAUSED по launch_state (спенда нет до ручного снятия паузы).
+campaign, ad set и ad всегда создаются PAUSED до отдельного ручного review.
 
 Все маршруты под prefix /api (auto-discovery) → /api/tools/campaigns/*.
 X-API-Key на write-методах ставит ApiKeyAuthMiddleware (без dev-tools gate).
@@ -14,9 +14,8 @@ Endpoints:
     POST   /tools/campaigns/validate                     — dry-run план
     POST   /tools/campaigns/launch                       — создать run + задачу
     GET    /tools/campaigns/runs[/{id}]                  — список / детали
-    POST   /tools/campaigns/runs/{id}/clone              — клон в черновик
-    POST   /tools/campaigns/runs/{id}/cancel             — отмена в очереди
-    POST   /tools/campaigns/runs/{id}/cleanup            — пометить на снос Meta
+    POST   /tools/campaigns/runs/{id}/abort              — cooperative abort
+    POST   /tools/campaigns/runs/{id}/resume             — safe checkpoint resume
 """
 
 from __future__ import annotations
@@ -30,25 +29,48 @@ import re
 import shutil
 import uuid
 from pathlib import Path
+from typing import Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from apps.api.deps import DepEngine
+from apps.api.middleware.api_problem import api_problem_payload
 from apps.api.routers.v1.schemas.campaigns_create import (
     AdsetPlanOut,
     CampaignPlanOut,
-    CleanupOut,
     LaunchIn,
     LaunchOut,
     PresetIn,
     PresetOut,
+    RunCommandOut,
+    RunControlOptionOut,
+    RunControlsOut,
     RunDetailOut,
     RunSummaryOut,
+    RunTaskOut,
     UploadConceptsOut,
     UploadedConceptOut,
     ValidateIn,
     ValidatePlanOut,
+)
+from apps.api.schemas.problem import ApiProblem
+from core.campaign_builder.account_context import (
+    CampaignAccountContext,
+    CampaignAccountContextError,
+    require_campaign_account_context,
 )
 from core.campaign_builder.builder import build_campaign_spec, total_code_span
 from core.campaign_builder.config import CampaignConfig, ref_media_kind
@@ -57,6 +79,20 @@ from core.campaign_builder.creative_ledger import (
     peek_next_seq,
     reconcile_offer_seq,
 )
+from core.commands import (
+    CampaignRunControlUnavailableError,
+    CampaignRunIdempotencyConflictError,
+    CampaignRunNotFoundError,
+    CommandService,
+    principal_scoped_idempotency_key,
+)
+from core.commands.campaign_runs import (
+    campaign_run_controls,
+    campaign_task_state,
+)
+from core.tasks.queue import (
+    create_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +100,18 @@ router = APIRouter(tags=["campaigns"])
 
 # task_type воркера-исполнителя (контракт со стримом campaign_creator_worker).
 CAMPAIGN_TASK_TYPE = "campaign_create"
+
+_RUN_COMMAND_PROBLEM_RESPONSES = {
+    200: {
+        "model": RunCommandOut,
+        "description": "Replayed command lifecycle or immediately confirmed abort",
+    },
+    401: {"model": ApiProblem, "description": "Authentication failed"},
+    403: {"model": ApiProblem, "description": "Owner role required"},
+    404: {"model": ApiProblem, "description": "Campaign run not found"},
+    409: {"model": ApiProblem, "description": "Command is unsafe or no longer applicable"},
+    422: {"model": ApiProblem, "description": "Invalid command input"},
+}
 
 # Лимиты загрузки концептов (зеркало tools.py creative-uniquify).
 _MAX_TOTAL_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 МБ (видео тяжелее картинок)
@@ -104,13 +152,6 @@ def _sniff_media_kind(head: bytes) -> str | None:
     return None
 
 
-# Отмена разрешена ТОЛЬКО пока воркер не начал исполнение (queued). Как только воркер
-# атомарно перевёл queued→uniquifying, cancel получает 409. Иначе была cancel-гонка: cancel
-# при uniquifying/uploading ставил run=cancelled, но воркер (не перечитывая статус) всё равно
-# создавал PAUSED-кампанию вопреки 200 на cancel → призрак. Спенда не было (PAUSED), но намерение нарушалось.
-_CANCELLABLE_RUN_STATUSES = ("queued",)
-
-
 def _campaign_upload_root() -> Path:
     """Корень временных папок загрузки концептов (per-run).
 
@@ -136,15 +177,13 @@ def _config_upload_dir(config: CampaignConfig) -> Path:
 def _validate_uploaded_concepts(config: CampaignConfig) -> None:
     """Проверяет назначенные refs до создания run и любых объектов в Meta.
 
-    UI хранит один ``creo_root`` на весь набор. Если старый черновик смешал refs
+    UI хранит один ``creo_root`` на весь набор. Если payload смешал refs
     из разных upload-папок, эта проверка отдаёт синхронный 422 на preview/launch,
     вместо обречённой async-задачи в campaign_creator_worker.
     """
     assigned = [(block.key, ref) for block in config.campaigns for ref in block.concept_refs]
-    # Вложенный legacy-контракт без concept_refs всё ещё поддерживается. Плоский UI
-    # отдельно запрещает пустые кампании в launch через concept_counts_map().
     if not assigned:
-        return
+        raise ValueError("каждой кампании нужен хотя бы один загруженный концепт")
 
     upload_dir = _config_upload_dir(config)
     if not upload_dir.is_dir():
@@ -175,16 +214,118 @@ def _compute_idempotency_key(config: CampaignConfig) -> str:
     Один и тот же конфиг → один и тот же ключ → повторный launch не задвоит залив.
     Хешируем канонический JSON конфига (порядок ключей фиксирован).
     """
-    canonical = config.model_dump_json()
+    canonical_data = config.model_dump(mode="json")
+    # Evidence time is persisted for audit but must not let a routine account
+    # refresh bypass duplicate-launch protection.  Timezone and currency remain
+    # in the digest, so a real account-context change creates a different key.
+    account = canonical_data.get("account")
+    if isinstance(account, dict):
+        account.pop("account_context_observed_at", None)
+    canonical = json.dumps(
+        canonical_data, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
     return f"campaign:{config.offer_code}:{config.start_date}:{digest}"
+
+
+async def _require_offer_scope(
+    engine: DepEngine,
+    *,
+    offer_code: str,
+    account_context: CampaignAccountContext,
+) -> None:
+    """Reject a catalog offer/account/currency mismatch before any writes."""
+
+    async with engine.connect() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        """
+                    SELECT offer.ad_account_ids,
+                           rule.cpa_threshold,
+                           rule.currency
+                    FROM offers AS offer
+                    LEFT JOIN offer_rules AS rule ON rule.offer_id = offer.id
+                    WHERE offer.code = :offer_code
+                    LIMIT 1
+                    """
+                    ),
+                    {"offer_code": offer_code},
+                )
+            )
+            .mappings()
+            .first()
+        )
+    if row is None:
+        return
+
+    configured_accounts = {
+        str(value or "").strip().removeprefix("act_")
+        for value in (row["ad_account_ids"] or [])
+        if str(value or "").strip()
+    }
+    if configured_accounts and account_context.account_id not in configured_accounts:
+        raise HTTPException(
+            status_code=409,
+            detail="Выбранный кабинет не привязан к офферу",
+        )
+
+    rule_currency = str(row["currency"] or "").strip().upper()
+    if row["cpa_threshold"] is not None and not rule_currency:
+        raise HTTPException(
+            status_code=409,
+            detail="Валютный контекст CPA оффера не подтверждён",
+        )
+    if rule_currency and rule_currency != account_context.currency:
+        raise HTTPException(
+            status_code=409,
+            detail="Валюта CPA оффера не совпадает с валютой кабинета",
+        )
+
+
+async def _campaign_config_from_request(
+    body: ValidateIn | LaunchIn,
+    engine: DepEngine,
+) -> CampaignConfig:
+    """Resolve server-owned context and build one immutable domain config."""
+
+    try:
+        context = await require_campaign_account_context(
+            engine,
+            account_id=body.config.act_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Некорректный Ad Account ID") from exc
+    except CampaignAccountContextError as exc:
+        status_code = 409 if exc.context.state == "stale" else 422
+        message = (
+            "Контекст кабинета устарел; дождитесь подтверждённого обновления Meta"
+            if exc.context.state == "stale"
+            else "Для кабинета не подтверждены таймзона, валюта или денежная точность"
+        )
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+    await _require_offer_scope(
+        engine,
+        offer_code=body.config.offer_code,
+        account_context=context,
+    )
+    assert context.timezone_name is not None
+    assert context.currency is not None
+    assert context.observed_at is not None
+    return body.domain_config(
+        timezone_name=context.timezone_name,
+        currency=context.currency,
+        account_context_observed_at=context.observed_at,
+    )
 
 
 # ─────────────────────────────── presets ────────────────────────────────
 
 
 _PRESET_COLUMNS = """
-    id::text AS id, name, act_id, page_id, pixel_id, tz_offset,
+    id::text AS id, name, act_id, page_id, pixel_id,
     offer_code, byer_tag, objective, optimization_goal, custom_event_type,
     special_ad_categories, cta, text_optimizations,
     click_through_days, view_through_days, url_tags_template, naming_template,
@@ -230,13 +371,13 @@ async def create_preset(body: PresetIn, engine: DepEngine) -> PresetOut:
                 text(
                     """
                     INSERT INTO campaign_preset
-                        (name, act_id, page_id, pixel_id, tz_offset, offer_code, byer_tag,
+                        (name, act_id, page_id, pixel_id, offer_code, byer_tag,
                          objective, optimization_goal, custom_event_type,
                          special_ad_categories, cta, text_optimizations,
                          click_through_days, view_through_days,
                          url_tags_template, naming_template, extra)
                     VALUES
-                        (:name, :act_id, :page_id, :pixel_id, :tz_offset, :offer_code, :byer_tag,
+                        (:name, :act_id, :page_id, :pixel_id, :offer_code, :byer_tag,
                          :objective, :optimization_goal, :custom_event_type,
                          CAST(:special_ad_categories AS JSONB), :cta, :text_optimizations,
                          :click_through_days, :view_through_days,
@@ -288,7 +429,7 @@ async def update_preset(preset_id: str, body: PresetIn, engine: DepEngine) -> Pr
                     """
                     UPDATE campaign_preset SET
                         name=:name, act_id=:act_id, page_id=:page_id, pixel_id=:pixel_id,
-                        tz_offset=:tz_offset, offer_code=:offer_code, byer_tag=:byer_tag,
+                        offer_code=:offer_code, byer_tag=:byer_tag,
                         objective=:objective, optimization_goal=:optimization_goal,
                         custom_event_type=:custom_event_type,
                         special_ad_categories=CAST(:special_ad_categories AS JSONB),
@@ -493,19 +634,19 @@ async def _stream_uploads_to_dir(
 async def validate_config(body: ValidateIn, engine: DepEngine) -> ValidatePlanOut:
     """Dry-run: собирает план (число объектов + нейминг) без создания в Meta.
 
-    concept_counts (число концептов на блок) передаётся в build_campaign_spec —
-    раскладка K концептов × copies (сквозная нумерация ads), как у исполнителя.
+    Количество концептов берётся только из config.campaigns[*].concept_refs —
+    раскладка K концептов × copies совпадает с исполнителем.
     """
     try:
-        config = body.domain_config()
+        config = await _campaign_config_from_request(body, engine)
         _validate_uploaded_concepts(config)
         # Превью показывает реалистичные коды: продолжаем нумерацию оффера.
         # peek_next_seq — read-only, счётчик не двигает.
         async with engine.connect() as conn:
             config.code_start = await peek_next_seq(conn, config.offer_code) + 1
-        spec = build_campaign_spec(config, concept_counts=body.concept_counts_map())
+        spec = build_campaign_spec(config)
     except (ValueError, KeyError) as exc:
-        raise HTTPException(status_code=422, detail=f"Невалидный конфиг: {exc}") from exc
+        raise HTTPException(status_code=422, detail="Невалидный конфиг кампании") from exc
 
     campaigns: list[CampaignPlanOut] = []
     total_adsets = 0
@@ -527,12 +668,17 @@ async def validate_config(body: ValidateIn, engine: DepEngine) -> ValidatePlanOu
 
     return ValidatePlanOut(
         offer_code=spec.offer_code,
-        launch_state=spec.launch_state.value,
+        creation_policy=spec.creation_policy,
         copies_per_concept=spec.copies_per_concept,
         campaign_count=len(campaigns),
         adset_count=total_adsets,
         ad_count=total_ads,
         campaigns=campaigns,
+        start_date=config.start_date,
+        start_time=config.start_time,
+        timezone_name=config.account.timezone_name,
+        currency=config.account.currency,
+        account_context_observed_at=config.account.account_context_observed_at,
     )
 
 
@@ -547,31 +693,26 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
     launch того же конфига → находим существующий run, ничего не дублируем (200-shape).
     Воркер по run_id грузит CampaignRun и исполняет залив.
     """
-    # Нормализуем плоский/вложенный вход в доменный CampaignConfig (единая точка).
-    config = body.domain_config()
-    # Валидируем структуру через builder (тот же путь и та же раскладка K, что validate):
-    # concept_counts → превью, по которому байер апрувил, и залив сверяются на одной спеке.
-    counts = body.concept_counts_map()
+    # Нормализуем канонический плоский вход в доменный CampaignConfig.
     try:
-        build_campaign_spec(config, concept_counts=counts)
+        config = await _campaign_config_from_request(body, engine)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Невалидный конфиг кампании") from exc
+    # Builder и воркер читают те же concept_refs, поэтому preview и залив совпадают.
+    try:
+        build_campaign_spec(config)
         _validate_uploaded_concepts(config)
     except (ValueError, KeyError) as exc:
-        raise HTTPException(status_code=422, detail=f"Невалидный конфиг: {exc}") from exc
+        raise HTTPException(status_code=422, detail="Невалидный конфиг кампании") from exc
 
-    # Fail-fast: блок без концептов создаст обречённый run (воркер упадёт на resolve_concepts).
-    # build_campaign_spec этого не ловит (0 концептов = 0 ads, не ошибка). Отбиваем ДО создания
-    # run/задачи — чтобы в истории не плодились заведомо-failed заливы (UX + чистота очереди).
-    if counts is not None:
-        empty = sorted(k for k, v in counts.items() if v < 1)
-        if empty:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Кампании без концептов: {', '.join(empty)} — назначь хотя бы один концепт",
-            )
-
-    ikey = body.idempotency_key or _compute_idempotency_key(config)
+    ikey = _compute_idempotency_key(config)
     # В БД пишем КАНОНИЧЕСКИЙ доменный снимок (воркер ждёт вложенный CampaignConfig).
     config_json = config.model_dump_json()
+    account_context_observed_at = config.model_dump(mode="json")["account"][
+        "account_context_observed_at"
+    ]
 
     preset_uuid: uuid.UUID | None = None
     if body.preset_id:
@@ -654,29 +795,23 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
         # Задача воркера: payload = {run_id}. task_type='campaign_create' (контракт).
         # Тот же idempotency_key — двойная защита от дубля залива. ON CONFLICT DO NOTHING:
         # если задача уже есть (гонка/повтор) — берём существующую, не плодим дубль.
-        task_row = (
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO task_queue
-                        (task_type, status, idempotency_key, payload,
-                         attempt_count, max_attempts, requested_by)
-                    VALUES
-                        (:tt, 'pending', :ik, CAST(:pl AS JSONB), 0, 5, :rb)
-                    ON CONFLICT (idempotency_key) DO NOTHING
-                    RETURNING id
-                    """
-                ),
-                {
-                    "tt": CAMPAIGN_TASK_TYPE,
-                    "ik": ikey,
-                    "pl": json.dumps({"run_id": run_id}),
-                    "rb": "api_launch",
-                },
-            )
-        ).first()
-        if task_row is None:
-            task_row = (
+        task_id = await create_task(
+            engine,
+            task_type=CAMPAIGN_TASK_TYPE,
+            idempotency_key=ikey,
+            payload={
+                "run_id": run_id,
+                "account_id": config.account.act_num,
+                "currency": config.account.currency,
+                "currency_exponent": config.account.currency_exponent,
+                "cabinet_timezone": config.account.timezone_name,
+                "account_context_observed_at": account_context_observed_at,
+            },
+            requested_by="api_launch",
+            connection=conn,
+        )
+        if task_id is None:
+            existing_task = (
                 await conn.execute(
                     text(
                         "SELECT id FROM task_queue WHERE idempotency_key = :ik "
@@ -685,8 +820,8 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
                     {"ik": ikey, "tt": CAMPAIGN_TASK_TYPE},
                 )
             ).first()
+            task_id = int(existing_task.id) if existing_task else None
 
-    task_id = int(task_row.id) if task_row else None
     logger.info("campaign launch: run_id=%s task_id=%s ikey=%s", run_id, task_id, ikey)
     return LaunchOut(
         run_id=run_id,
@@ -697,6 +832,37 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
 
 
 # ─────────────────────────────── runs ────────────────────────────────
+
+
+def _campaign_problem(
+    request: Request,
+    *,
+    status_code: int,
+    code: str,
+    message: str,
+) -> JSONResponse:
+    correlation_id = str(getattr(request.state, "request_id", None) or uuid.uuid4())
+    return JSONResponse(
+        status_code=status_code,
+        content=api_problem_payload(
+            code=code,
+            message=message,
+            correlation_id=correlation_id,
+        ),
+        headers={"X-Request-Id": correlation_id},
+    )
+
+
+def _normalized_task_result(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
 
 
 @router.get("/tools/campaigns/runs", response_model=list[RunSummaryOut])
@@ -751,10 +917,44 @@ async def get_run(run_id: str, engine: DepEngine) -> RunDetailOut:
             await conn.execute(
                 text(
                     """
-                    SELECT id::text AS id, preset_id::text AS preset_id, status,
-                           config, progress, created_meta_ids, error, idempotency_key,
-                           created_at::text AS created_at, updated_at::text AS updated_at
-                    FROM campaign_run WHERE id = :rid LIMIT 1
+                    SELECT run.id::text AS id,
+                           run.preset_id::text AS preset_id,
+                           run.status,
+                           run.config,
+                           run.progress,
+                           run.created_meta_ids,
+                           run.error,
+                           run.idempotency_key,
+                           run.created_at::text AS created_at,
+                           run.updated_at::text AS updated_at,
+                           task.id AS task_id,
+                           task.status AS task_status,
+                           task.result AS task_result,
+                           task.attempt_count,
+                           task.max_attempts,
+                           task.requested_by,
+                           task.external_started_at,
+                           task.cancel_requested_at,
+                           task.deadline_at,
+                           task.created_at AS task_created_at,
+                           task.updated_at AS task_updated_at,
+                           task.completed_at AS task_completed_at,
+                           task.correlation_id
+                    FROM campaign_run AS run
+                    LEFT JOIN LATERAL (
+                        SELECT id, status, result, attempt_count, max_attempts,
+                               requested_by,
+                               external_started_at, cancel_requested_at,
+                               deadline_at, created_at, updated_at, completed_at,
+                               correlation_id
+                        FROM task_queue
+                        WHERE task_type = 'campaign_create'
+                          AND payload->>'run_id' = run.id::text
+                        ORDER BY id DESC
+                        LIMIT 1
+                    ) AS task ON TRUE
+                    WHERE run.id = :rid
+                    LIMIT 1
                     """
                 ),
                 {"rid": rid},
@@ -762,153 +962,197 @@ async def get_run(run_id: str, engine: DepEngine) -> RunDetailOut:
         ).first()
     if row is None:
         raise HTTPException(status_code=404, detail=f"Запуск id={run_id} не найден")
-    return RunDetailOut(**dict(row._mapping))
-
-
-@router.post("/tools/campaigns/runs/{run_id}/clone", response_model=LaunchOut, status_code=201)
-async def clone_run(run_id: str, engine: DepEngine) -> LaunchOut:
-    """Клон запуска в новый черновик-run (status=queued БЕЗ задачи).
-
-    Клон не заливает сразу: создаёт queued-run с новым idempotency_key
-    (config + другой start_date/повторный залив должны иметь свой ключ).
-    Пользователь правит и жмёт launch отдельно. Здесь — только заготовка config.
-    """
-    try:
-        rid = uuid.UUID(run_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="run_id не UUID") from exc
-
-    async with engine.begin() as conn:
-        src = (
-            await conn.execute(
-                text("SELECT config, preset_id FROM campaign_run WHERE id = :rid LIMIT 1"),
-                {"rid": rid},
-            )
-        ).first()
-        if src is None:
-            raise HTTPException(status_code=404, detail=f"Запуск id={run_id} не найден")
-
-        # Новый клон-черновик: idempotency_key=NULL (ещё не залив, задачи нет).
-        config_json = src.config if isinstance(src.config, str) else json.dumps(src.config)
-        clone_row = (
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO campaign_run (preset_id, config, status, idempotency_key)
-                    VALUES (:preset_id, CAST(:config AS JSONB), 'queued', NULL)
-                    RETURNING id::text AS id, status
-                    """
-                ),
-                {"preset_id": src.preset_id, "config": config_json},
-            )
-        ).first()
-
-    return LaunchOut(
-        run_id=clone_row.id,
-        task_id=None,
-        status=clone_row.status,
-        idempotency_key="",
+    values = dict(row._mapping)
+    result = _normalized_task_result(values.pop("task_result"))
+    task: RunTaskOut | None = None
+    task_context: dict[str, object] | None = None
+    task_id = values.pop("task_id")
+    task_status = values.pop("task_status")
+    attempt_count = values.pop("attempt_count")
+    max_attempts = values.pop("max_attempts")
+    requested_by = values.pop("requested_by")
+    external_started_at = values.pop("external_started_at")
+    cancel_requested_at = values.pop("cancel_requested_at")
+    deadline_at = values.pop("deadline_at")
+    task_created_at = values.pop("task_created_at")
+    task_updated_at = values.pop("task_updated_at")
+    task_completed_at = values.pop("task_completed_at")
+    correlation_id = values.pop("correlation_id")
+    if task_id is not None and task_status is not None:
+        raw_outcome = str(result.get("outcome") or "").upper()
+        outcome = "UNKNOWN" if result.get("reconcile_required") is True else raw_outcome
+        if outcome not in {"CONFIRMED", "REJECTED", "UNKNOWN"}:
+            outcome = None
+        task = RunTaskOut(
+            id=int(task_id),
+            state=campaign_task_state(status=str(task_status), result=result),
+            queue_status=str(task_status),
+            outcome=outcome,
+            attempt_count=int(attempt_count or 0),
+            max_attempts=int(max_attempts or 1),
+            requested_by=str(requested_by or ""),
+            external_started=external_started_at is not None,
+            cancel_requested_at=cancel_requested_at,
+            deadline_at=deadline_at,
+            created_at=task_created_at,
+            updated_at=task_updated_at,
+            completed_at=task_completed_at,
+            correlation_id=str(correlation_id),
+            result=result or None,
+        )
+        task_context = {
+            "task_status": str(task_status),
+            "task_result": result,
+            "external_started_at": external_started_at,
+            "cancel_requested_at": cancel_requested_at,
+        }
+    controls = campaign_run_controls(
+        run_status=str(values["status"]),
+        run_config=values["config"] if isinstance(values["config"], dict) else {},
+        created_meta_ids=(
+            values["created_meta_ids"] if isinstance(values["created_meta_ids"], dict) else {}
+        ),
+        task=task_context,
+    )
+    return RunDetailOut(
+        **values,
+        task=task,
+        controls=RunControlsOut(
+            abort=RunControlOptionOut(
+                available=controls.abort.available,
+                reason=controls.abort.reason,
+            ),
+            resume=RunControlOptionOut(
+                available=controls.resume.available,
+                reason=controls.resume.reason,
+            ),
+        ),
     )
 
 
-@router.post("/tools/campaigns/runs/{run_id}/cancel", response_model=RunSummaryOut)
-async def cancel_run(run_id: str, engine: DepEngine) -> RunSummaryOut:
-    """Отмена запуска в очереди (status=cancelled + отмена задачи).
-
-    Money-гард: отмена только ДО creating (необратимое создание Meta уже идёт).
-    409 если run уже creating/succeeded/failed/cancelled.
-    """
+async def _run_control_command(
+    *,
+    action: Literal["abort", "resume"],
+    run_id: uuid.UUID,
+    engine: DepEngine,
+    request: Request,
+    response: Response,
+    idempotency_key: str,
+) -> RunCommandOut | JSONResponse:
+    requested_by = str(getattr(request.state, "operator_principal", "operator:web"))
     try:
-        rid = uuid.UUID(run_id)
+        scoped_idempotency_key = principal_scoped_idempotency_key(
+            principal=requested_by,
+            client_key=idempotency_key,
+        )
+        service = CommandService(engine)
+        if action == "abort":
+            receipt = await service.abort_campaign_run(
+                run_id=run_id,
+                requested_by=requested_by,
+                idempotency_key=scoped_idempotency_key,
+            )
+        else:
+            receipt = await service.resume_campaign_run(
+                run_id=run_id,
+                requested_by=requested_by,
+                idempotency_key=scoped_idempotency_key,
+            )
+    except CampaignRunNotFoundError:
+        return _campaign_problem(
+            request,
+            status_code=404,
+            code="campaign_run_not_found",
+            message="Запуск кампании не найден",
+        )
+    except CampaignRunIdempotencyConflictError:
+        return _campaign_problem(
+            request,
+            status_code=409,
+            code="idempotency_conflict",
+            message="Idempotency-Key уже связан с другой командой",
+        )
+    except CampaignRunControlUnavailableError as exc:
+        return _campaign_problem(
+            request,
+            status_code=409,
+            code=exc.reason,
+            message=f"Команда {action} недоступна: {exc.reason}",
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail="run_id не UUID") from exc
+        return _campaign_problem(
+            request,
+            status_code=422,
+            code="invalid_campaign_run_command",
+            message=str(exc),
+        )
 
-    async with engine.begin() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT status, idempotency_key FROM campaign_run WHERE id = :rid LIMIT 1"),
-                {"rid": rid},
-            )
-        ).first()
-        if row is None:
-            raise HTTPException(status_code=404, detail=f"Запуск id={run_id} не найден")
-        if row.status not in _CANCELLABLE_RUN_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Нельзя отменить запуск в статусе '{row.status}' — "
-                    f"отмена только до начала создания (creating)"
-                ),
-            )
-
-        updated = (
-            await conn.execute(
-                text(
-                    """
-                    UPDATE campaign_run
-                    SET status = 'cancelled', updated_at = NOW()
-                    WHERE id = :rid AND status = ANY(:allowed)
-                    RETURNING id::text AS id, preset_id::text AS preset_id, status,
-                              config->>'offer_code' AS offer_code, idempotency_key, error,
-                              created_at::text AS created_at, updated_at::text AS updated_at
-                    """
-                ),
-                {"rid": rid, "allowed": list(_CANCELLABLE_RUN_STATUSES)},
-            )
-        ).first()
-        # rowcount=0 → статус сменился между SELECT и UPDATE (гонка с воркером).
-        if updated is None:
-            raise HTTPException(
-                status_code=409, detail="Состояние запуска изменилось — повторите запрос"
-            )
-
-        # Отменяем связанную задачу, если ещё не исполняется.
-        if row.idempotency_key:
-            await conn.execute(
-                text(
-                    """
-                    UPDATE task_queue
-                    SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
-                    WHERE idempotency_key = :ik
-                      AND task_type = :tt
-                      AND status IN ('draft', 'pending', 'retrying')
-                    """
-                ),
-                {"ik": row.idempotency_key, "tt": CAMPAIGN_TASK_TYPE},
-            )
-
-    return RunSummaryOut(**dict(updated._mapping))
+    response.status_code = (
+        status.HTTP_202_ACCEPTED if receipt.state in {"queued", "running"} else status.HTTP_200_OK
+    )
+    return RunCommandOut(
+        action=receipt.action,
+        run_id=str(receipt.run_id),
+        task_id=receipt.task_id,
+        state=receipt.state,
+        run_status=receipt.run_status,
+        created=receipt.created,
+        correlation_id=str(receipt.correlation_id),
+        reason=receipt.reason,
+    )
 
 
-@router.post("/tools/campaigns/runs/{run_id}/cleanup", response_model=CleanupOut)
-async def cleanup_run(run_id: str, engine: DepEngine) -> CleanupOut:
-    """Пометить созданные Meta-объекты на снос (partial-fail recovery).
+@router.post(
+    "/tools/campaigns/runs/{run_id}/abort",
+    response_model=RunCommandOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=_RUN_COMMAND_PROBLEM_RESPONSES,
+)
+async def abort_run(
+    run_id: uuid.UUID,
+    engine: DepEngine,
+    request: Request,
+    response: Response,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=128,
+    ),
+) -> RunCommandOut | JSONResponse:
+    """Request cooperative cancellation; acceptance is never completion."""
+    return await _run_control_command(
+        action="abort",
+        run_id=run_id,
+        engine=engine,
+        request=request,
+        response=response,
+        idempotency_key=idempotency_key,
+    )
 
-    Возвращает created_meta_ids run для ручного/задачного сноса. Реальный снос —
-    отдельной meta-мутацией (вне scope этого роутера). Money-safe: только читает
-    список id, ничего сам в Meta не трогает.
-    """
-    try:
-        rid = uuid.UUID(run_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="run_id не UUID") from exc
-    async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT created_meta_ids FROM campaign_run WHERE id = :rid LIMIT 1"),
-                {"rid": rid},
-            )
-        ).first()
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"Запуск id={run_id} не найден")
 
-    meta_ids = row.created_meta_ids
-    if isinstance(meta_ids, str):
-        meta_ids = json.loads(meta_ids)
-    meta_ids = meta_ids or {}
-
-    if not meta_ids:
-        detail = "Созданных Meta-объектов нет — снос не требуется"
-    else:
-        detail = "Список созданных Meta-объектов для сноса (реальный снос — отдельной мутацией)"
-    return CleanupOut(run_id=run_id, meta_ids=meta_ids, detail=detail)
+@router.post(
+    "/tools/campaigns/runs/{run_id}/resume",
+    response_model=RunCommandOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=_RUN_COMMAND_PROBLEM_RESPONSES,
+)
+async def resume_run(
+    run_id: uuid.UUID,
+    engine: DepEngine,
+    request: Request,
+    response: Response,
+    idempotency_key: str = Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=128,
+    ),
+) -> RunCommandOut | JSONResponse:
+    """Resume only a verified REJECTED pre-external checkpoint."""
+    return await _run_control_command(
+        action="resume",
+        run_id=run_id,
+        engine=engine,
+        request=request,
+        response=response,
+        idempotency_key=idempotency_key,
+    )

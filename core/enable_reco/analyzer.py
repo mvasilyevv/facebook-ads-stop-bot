@@ -29,6 +29,14 @@ from decimal import Decimal
 from typing import Literal
 
 from core.domain import EnableRecommendationLevel
+from core.money import (
+    CurrencyExponentMismatchError,
+    InvalidCurrencyAmountError,
+    UnsupportedCurrencyExponentError,
+    require_currency_exponent,
+    require_exact_currency_amount,
+    validated_currency_code,
+)
 from core.observer.pipeline import build_rule_context
 from core.observer.queries import OfferRules
 from core.rules.evaluator import determine_enable_recommendation_level, evaluate_stop_rules
@@ -46,9 +54,6 @@ class AnalyzerThresholds:
     # Кейс куратора: «показов мало + CTR хороший» → включить и держать до цены лида.
     curator_impr_ceiling: int = 500
     curator_ctr_floor: Decimal = Decimal("3.0")  # проценты, как ad_metrics.ctr
-    # Ревью M-1: grace ОБЯЗАН иметь денежную границу. Если у оффера нет
-    # cpa_threshold — кап берётся отсюда, а не остаётся безлимитным на всё окно.
-    curator_fallback_spend_cap: Decimal = Decimal("10.00")
 
 
 DEFAULT_THRESHOLDS = AnalyzerThresholds()
@@ -59,6 +64,7 @@ class OfferThresholds:
     """Пороги оффера для конкретного объявления."""
 
     cpa_threshold: Decimal | None = None
+    currency: str | None = None
     frequency_threshold: Decimal | None = None
     stop_percent_of_rule: Decimal | None = None
     warning_percent_of_stop: Decimal | None = None
@@ -128,6 +134,8 @@ def should_recommend(
     now: datetime,
     metrics: list[MetricSnapshot],
     offer: OfferThresholds | None,
+    account_currency: str,
+    currency_exponent: int,
     thresholds: AnalyzerThresholds = DEFAULT_THRESHOLDS,
     allow_curator: bool = True,
     tracker_registrations: int = 0,
@@ -171,6 +179,46 @@ def should_recommend(
     total_spend = _latest_spend(metrics)
     latest = _latest(metrics)
 
+    if latest is None:
+        return RecommendationDecision(
+            recommend=False,
+            skip_reason="нет свежего снимка для канонической проверки",
+            snapshot=_snapshot_summary(metrics, total_spend, latest),
+        )
+
+    if cpa is None or not cpa.is_finite() or cpa <= 0:
+        return RecommendationDecision(
+            recommend=False,
+            skip_reason="у оффера не задан положительный конечный CPA",
+            snapshot=_snapshot_summary(metrics, total_spend, latest),
+        )
+    try:
+        confirmed_currency, confirmed_exponent = require_currency_exponent(
+            account_currency,
+            currency_exponent,
+        )
+        if validated_currency_code(offer.currency if offer else None) != confirmed_currency:
+            raise CurrencyExponentMismatchError(
+                "offer currency does not match confirmed cabinet currency"
+            )
+        cpa = require_exact_currency_amount(
+            cpa,
+            currency=confirmed_currency,
+            exponent=confirmed_exponent,
+            field="cpa_threshold",
+            allow_zero=False,
+        )
+    except (
+        CurrencyExponentMismatchError,
+        InvalidCurrencyAmountError,
+        UnsupportedCurrencyExponentError,
+    ) as exc:
+        return RecommendationDecision(
+            recommend=False,
+            skip_reason=f"неподтверждённый денежный контекст: {exc}",
+            snapshot=_snapshot_summary(metrics, total_spend, latest),
+        )
+
     # --- Кейс куратора (отдельная ветка, НЕ смешивается с recovery-сигналами) ---
     # Показов мало при хорошем CTR: данных для вердикта недостаточно, ранний стоп
     # мог убить потенциального виннера. Рекомендуем включить и держать до ~1×CPA
@@ -185,9 +233,7 @@ def should_recommend(
     ):
         snapshot = _snapshot_summary(metrics, total_spend, latest)
         snapshot["hold_until_cpl"] = True
-        # Денежная граница grace всегда есть: 1×CPA оффера, а без CPA — фолбэк (M-1).
-        cap = cpa if (cpa is not None and cpa > 0) else thresholds.curator_fallback_spend_cap
-        snapshot["grace_spend_cap"] = str(cap)
+        snapshot["grace_spend_cap"] = str(cpa)
         return RecommendationDecision(
             recommend=True,
             level="warning",
@@ -200,20 +246,6 @@ def should_recommend(
             snapshot=snapshot,
         )
 
-    if latest is None:
-        return RecommendationDecision(
-            recommend=False,
-            skip_reason="нет свежего снимка для канонической проверки",
-            snapshot=_snapshot_summary(metrics, total_spend, latest),
-        )
-
-    if cpa is None or cpa <= 0:
-        return RecommendationDecision(
-            recommend=False,
-            skip_reason="у оффера не задан CPA для канонической проверки",
-            snapshot=_snapshot_summary(metrics, total_spend, latest),
-        )
-
     tracker_registrations = max(tracker_registrations, int(latest.registrations or 0))
     tracker_confirmed_deposits = max(
         tracker_confirmed_deposits,
@@ -224,6 +256,7 @@ def should_recommend(
         code="enable-recovery",
         name="enable-recovery",
         cpa_threshold=cpa,
+        currency=offer.currency if offer else None,
         frequency_threshold=offer.frequency_threshold if offer else None,
         stop_percent_of_rule=offer.stop_percent_of_rule if offer else None,
         warning_percent_of_stop=offer.warning_percent_of_stop if offer else None,
@@ -249,6 +282,8 @@ def should_recommend(
     )
     ctx = build_rule_context(
         offer_rules,
+        account_currency=confirmed_currency,
+        currency_exponent=confirmed_exponent,
         external_deposits=tracker_confirmed_deposits,
         frequency_current=latest.frequency,
         impressions=latest.impressions,

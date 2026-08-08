@@ -1,158 +1,381 @@
 # -*- coding: utf-8 -*-
-"""Grace-окно «включить и держать до цены лида» (кейс куратора).
+"""Durable curator grace for confirmed ad activation.
 
-Механика: при подтверждении hold-рекомендации (кнопка ereco) в Redis ставится
-маркер enable_grace:{fb_ad_id} с TTL. Observer раз в цикл читает ВСЕ маркеры
-одним SCAN'ом (не per-ad!) и передаёт карту в pipeline: для объявления под
-активным grace срабатывания стоп-правил подавляются (и алерт, и авто-стоп),
-пока не выполнится ЛЮБОЕ из условий выхода:
-- истёк TTL / время until;
-- после фактического включения набран ещё spend_allowance (~1×CPA) — дальше судит CPL.
-
-Важно: это НЕ снуз. Снуз сознательно глушит только TG-алерты (MID-2), а grace —
-именно временное «не стопай, даём открутить». Redis-потеря маркера = fail-safe:
-правила снова действуют немедленно (деградация в сторону стопа, не пережога).
+PostgreSQL is the only authority.  A grace record is cabinet-day scoped and is
+stored on ``ad_alert_state`` before the activating task becomes terminal.  The
+observer reads it together with the FSM snapshot; there is no Redis marker,
+TTL, scan, serializer or compatibility path.
 """
 
 from __future__ import annotations
 
-import json
-import logging
+import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
-logger = logging.getLogger(__name__)
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-GRACE_KEY_PREFIX = "enable_grace:"
+from core.meta_api.account_tz import (
+    CabinetCurrencyUnknownError,
+    CabinetTimezoneUnknownError,
+    canonical_account_id,
+    resolve_required_account_currency,
+    resolve_required_cabinet_day,
+)
+from core.money import (
+    InvalidCurrencyAmountError,
+    UnsupportedCurrencyExponentError,
+    currency_exponent,
+    require_currency_exponent,
+    require_exact_currency_amount,
+    validated_currency_code,
+)
+from core.observer.cabinet_supervisor import CabinetLease
 
 
-@dataclass(frozen=True)
+class EnableGraceUnsafeError(ValueError):
+    """The current durable state cannot safely create the requested grace."""
+
+
+@dataclass(frozen=True, slots=True)
 class EnableGrace:
-    """Активный grace-маркер одного объявления."""
+    """One coherent, cabinet-day-scoped grace record."""
 
     until: datetime
-    # Кумулятивный дневной spend, до которого держим (≈1×CPA). None — только по времени.
-    spend_cap: Decimal | None = None
-    # Spend в момент успешного activate. Падение ниже baseline означает reset дня
-    # или рассинхрон метрик — fail-safe завершаем grace.
-    baseline_spend: Decimal | None = None
+    spend_cap: Decimal
+    baseline_spend: Decimal
+    cabinet_day_start: datetime
+    currency: str
+    currency_exponent: int
 
 
-def grace_is_active(grace: EnableGrace, *, now: datetime, spend: Decimal | None) -> bool:
-    """Действует ли grace: время не вышло И спенд-кап не выбран.
+@dataclass(frozen=True, slots=True)
+class PreparedEnableGrace:
+    """Validated grace plus the canonical PostgreSQL ad identity."""
 
-    spend — кумулятивный дневной spend объявления (включает докликовый расход
-    того же cabinet-дня — куратору важен порядок ~1×CPA, не копеечная точность).
-    spend=None (нет данных) → считаем активным: без метрик стоп всё равно не сработает.
+    ad_id: uuid.UUID
+    fb_ad_id: str
+    grace: EnableGrace
+
+
+def grace_is_active(
+    grace: EnableGrace,
+    *,
+    now: datetime,
+    spend: Decimal | None,
+    cabinet_day_start: datetime,
+    currency: str,
+    currency_exponent: int,
+) -> bool:
+    """Return true only while time, day and cumulative-spend evidence agree.
+
+    Missing spend is unknown, not zero, and therefore cannot suppress a money
+    rule.  A cumulative reset below the activation baseline also ends grace
+    fail-closed.
     """
-    if grace.until <= now:
+    if now.tzinfo is None or cabinet_day_start.tzinfo is None:
+        raise ValueError("grace evaluation timestamps must be timezone-aware")
+    if grace.cabinet_day_start != cabinet_day_start:
         return False
-    if grace.baseline_spend is not None and spend is not None and spend < grace.baseline_spend:
+    confirmed_currency, confirmed_exponent = require_currency_exponent(
+        currency,
+        currency_exponent,
+    )
+    if grace.currency != confirmed_currency or grace.currency_exponent != confirmed_exponent:
         return False
-    if grace.spend_cap is not None and spend is not None and spend >= grace.spend_cap:
+    if grace.until <= now or spend is None:
         return False
-    return True
+    current_spend = require_exact_currency_amount(
+        spend,
+        currency=confirmed_currency,
+        exponent=confirmed_exponent,
+        field="spend",
+    )
+    if current_spend < grace.baseline_spend:
+        return False
+    return current_spend < grace.spend_cap
 
 
-async def set_enable_grace(
-    redis_client: Any,
+async def prepare_enable_grace(
+    engine: AsyncEngine,
     *,
     fb_ad_id: str,
+    ad_account_id: str,
+    requested_spend_cap: Decimal | str,
     grace_seconds: int,
-    spend_cap: Decimal | str | None = None,
-    baseline_spend: Decimal | str | None = None,
-    spend_allowance: Decimal | str | None = None,
-) -> bool:
-    """Поставить grace-маркер. Best-effort: False при недоступном Redis (не бросает)."""
-    if redis_client is None:
-        return False
-    try:
-        baseline = (
-            Decimal(str(baseline_spend)) if baseline_spend not in (None, "", "None") else None
-        )
-        allowance = (
-            Decimal(str(spend_allowance)) if spend_allowance not in (None, "", "None") else None
-        )
-        cap = Decimal(str(spend_cap)) if spend_cap not in (None, "", "None") else None
-    except (InvalidOperation, TypeError, ValueError):
-        return False
-    if baseline is not None and (not baseline.is_finite() or baseline < 0):
-        return False
-    if allowance is not None:
-        if baseline is None or not allowance.is_finite() or allowance <= 0:
-            return False
-        cap = baseline + allowance
-    if cap is not None and (not cap.is_finite() or cap <= 0):
-        return False
+    now: datetime | None = None,
+    require_disabled: bool = True,
+) -> PreparedEnableGrace:
+    """Revalidate status, current spend, CPA and cabinet day before activation.
 
-    until = datetime.now(timezone.utc) + timedelta(seconds=int(grace_seconds))
-    payload = json.dumps(
-        {
-            "until": until.isoformat(),
-            "spend_cap": str(cap) if cap is not None else None,
-            "baseline_spend": str(baseline) if baseline is not None else None,
-        }
-    )
-    try:
-        # TTL с запасом +60с к until: истечение по времени контролирует поле until,
-        # TTL — гарантия самоочистки ключей.
-        await redis_client.set(f"{GRACE_KEY_PREFIX}{fb_ad_id}", payload, ex=grace_seconds + 60)
-        return True
-    except Exception:  # noqa: BLE001
-        logger.warning("enable_grace: не смог поставить маркер для %s", fb_ad_id, exc_info=True)
-        return False
-
-
-def _parse_grace(raw: str) -> EnableGrace | None:
-    """Разобрать JSON-маркер. Битый маркер → None (правила действуют как обычно)."""
-    try:
-        data = json.loads(raw)
-        until = datetime.fromisoformat(str(data["until"]))
-        if until.tzinfo is None:
-            until = until.replace(tzinfo=timezone.utc)
-        cap_raw = data.get("spend_cap")
-        cap = Decimal(str(cap_raw)) if cap_raw not in (None, "", "None") else None
-        if cap is not None and (not cap.is_finite() or cap <= 0):
-            return None
-        baseline_raw = data.get("baseline_spend")
-        baseline = Decimal(str(baseline_raw)) if baseline_raw not in (None, "", "None") else None
-        if baseline is not None and (not baseline.is_finite() or baseline < 0):
-            return None
-        return EnableGrace(until=until, spend_cap=cap, baseline_spend=baseline)
-    except (ValueError, KeyError, TypeError, InvalidOperation):
-        return None
-
-
-async def load_enable_grace_map(redis_client: Any) -> dict[str, EnableGrace]:
-    """Прочитать все grace-маркеры одним проходом (раз в scan-цикл, не per-ad).
-
-    Любая ошибка Redis → пустая карта: fail-safe в сторону обычных стоп-правил.
+    ``requested_spend_cap`` is an absolute daily cap (normally one CPA), never
+    an allowance added to already-spent money.  A lower current CPA may tighten
+    the cap; it can never increase the reviewed intent.
     """
-    if redis_client is None:
-        return {}
-    out: dict[str, EnableGrace] = {}
+    observed_at = now or datetime.now(UTC)
+    if observed_at.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    if int(grace_seconds) <= 0:
+        raise EnableGraceUnsafeError("grace_seconds must be positive")
+
+    account_id = canonical_account_id(ad_account_id)
+    if not account_id:
+        raise EnableGraceUnsafeError("ad account identity is missing")
     try:
-        async for key in redis_client.scan_iter(match=f"{GRACE_KEY_PREFIX}*", count=100):
-            key_str = key.decode() if isinstance(key, bytes) else str(key)
-            raw = await redis_client.get(key_str)
-            if raw is None:
-                continue
-            raw_str = raw.decode() if isinstance(raw, bytes) else str(raw)
-            grace = _parse_grace(raw_str)
-            if grace is not None:
-                out[key_str[len(GRACE_KEY_PREFIX) :]] = grace
-    except Exception:  # noqa: BLE001
-        logger.warning("enable_grace: не смог прочитать маркеры из Redis", exc_info=True)
-        return {}
-    return out
+        cabinet_day = await resolve_required_cabinet_day(
+            engine,
+            account_id=account_id,
+            now=observed_at,
+        )
+    except CabinetTimezoneUnknownError as exc:
+        raise EnableGraceUnsafeError(
+            f"IANA timezone is not confirmed for account {account_id}"
+        ) from exc
+    try:
+        account_currency = await resolve_required_account_currency(
+            engine,
+            account_id=account_id,
+            now=observed_at,
+        )
+        account_currency_exponent = currency_exponent(account_currency)
+    except (CabinetCurrencyUnknownError, UnsupportedCurrencyExponentError) as exc:
+        raise EnableGraceUnsafeError(f"currency is not confirmed for account {account_id}") from exc
+    cabinet_day_start = cabinet_day.starts_at
+
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT fa.id,
+                           fa.delivery_status,
+                           state.alert_state,
+                           latest.spend,
+                           latest.currency AS metric_currency,
+                           rule.cpa_threshold,
+                           rule.currency AS rule_currency
+                    FROM fb_ads fa
+                    JOIN fb_adsets adset ON adset.id = fa.adset_id
+                    JOIN fb_campaigns campaign ON campaign.id = adset.campaign_id
+                    LEFT JOIN ad_alert_state state ON state.ad_id = fa.id
+                    LEFT JOIN offer_rules rule ON rule.offer_id = campaign.offer_id
+                    LEFT JOIN LATERAL (
+                        SELECT metric.spend, metric.currency
+                        FROM ad_metrics metric
+                        WHERE metric.ad_id = fa.id
+                          AND metric.cycle_ts >= :cabinet_day_start
+                          AND metric.cycle_ts <= :observed_at
+                        ORDER BY metric.cycle_ts DESC
+                        LIMIT 1
+                    ) latest ON TRUE
+                    WHERE fa.fb_ad_id = :fb_ad_id
+                      AND campaign.ad_account_id = :account_id
+                    """
+                ),
+                {
+                    "fb_ad_id": str(fb_ad_id),
+                    "account_id": account_id,
+                    "cabinet_day_start": cabinet_day_start,
+                    "observed_at": observed_at,
+                },
+            )
+        ).first()
+    if row is None:
+        raise EnableGraceUnsafeError("ad is absent from the requested cabinet")
+    if require_disabled and (
+        str(row.delivery_status or "").strip().upper() != "OFF"
+        or str(row.alert_state or "").strip().lower() != "disabled"
+    ):
+        raise EnableGraceUnsafeError("ad is no longer confirmed OFF and disabled")
+    if row.spend is None:
+        raise EnableGraceUnsafeError("current cabinet-day spend is unknown")
+    if validated_currency_code(row.metric_currency) != account_currency:
+        raise EnableGraceUnsafeError("latest spend currency does not match the cabinet")
+    if validated_currency_code(row.rule_currency) != account_currency:
+        raise EnableGraceUnsafeError("offer CPA currency does not match the cabinet")
+
+    try:
+        baseline_spend = require_exact_currency_amount(
+            row.spend,
+            currency=account_currency,
+            exponent=account_currency_exponent,
+            field="baseline_spend",
+        )
+        spend_cap = require_exact_currency_amount(
+            requested_spend_cap,
+            currency=account_currency,
+            exponent=account_currency_exponent,
+            field="spend_cap",
+            allow_zero=False,
+        )
+        if row.cpa_threshold is not None:
+            current_cpa = require_exact_currency_amount(
+                row.cpa_threshold,
+                currency=account_currency,
+                exponent=account_currency_exponent,
+                field="current_cpa",
+                allow_zero=False,
+            )
+            spend_cap = min(spend_cap, current_cpa)
+    except InvalidCurrencyAmountError as exc:
+        raise EnableGraceUnsafeError(str(exc)) from exc
+    if baseline_spend >= spend_cap:
+        raise EnableGraceUnsafeError(
+            "current cabinet-day spend has already reached the absolute grace cap"
+        )
+
+    until = min(
+        observed_at + timedelta(seconds=int(grace_seconds)),
+        cabinet_day.ends_at,
+    )
+    if until <= observed_at:
+        raise EnableGraceUnsafeError("cabinet day ended before grace could start")
+    return PreparedEnableGrace(
+        ad_id=uuid.UUID(str(row.id)),
+        fb_ad_id=str(fb_ad_id),
+        grace=EnableGrace(
+            until=until,
+            spend_cap=spend_cap,
+            baseline_spend=baseline_spend,
+            cabinet_day_start=cabinet_day_start,
+            currency=account_currency,
+            currency_exponent=account_currency_exponent,
+        ),
+    )
+
+
+async def persist_enable_grace(
+    connection: AsyncConnection,
+    *,
+    prepared: PreparedEnableGrace,
+) -> None:
+    """Persist a coherent grace record inside the caller's transaction."""
+    grace = prepared.grace
+    result = await connection.execute(
+        text(
+            """
+            INSERT INTO ad_alert_state (
+                ad_id,
+                alert_state,
+                enable_grace_until,
+                enable_grace_spend_cap,
+                enable_grace_baseline_spend,
+                enable_grace_cabinet_day_start,
+                enable_grace_currency,
+                enable_grace_currency_exponent
+            )
+            VALUES (
+                :ad_id,
+                'normal',
+                :grace_until,
+                :spend_cap,
+                :baseline_spend,
+                :cabinet_day_start,
+                :currency,
+                :currency_exponent
+            )
+            ON CONFLICT (ad_id) DO UPDATE
+            SET enable_grace_until = EXCLUDED.enable_grace_until,
+                enable_grace_spend_cap = EXCLUDED.enable_grace_spend_cap,
+                enable_grace_baseline_spend = EXCLUDED.enable_grace_baseline_spend,
+                enable_grace_cabinet_day_start = EXCLUDED.enable_grace_cabinet_day_start,
+                enable_grace_currency = EXCLUDED.enable_grace_currency,
+                enable_grace_currency_exponent = EXCLUDED.enable_grace_currency_exponent,
+                updated_at = NOW()
+            WHERE ad_alert_state.ad_id = EXCLUDED.ad_id
+            RETURNING ad_id
+            """
+        ),
+        {
+            "ad_id": prepared.ad_id,
+            "grace_until": grace.until,
+            "spend_cap": grace.spend_cap,
+            "baseline_spend": grace.baseline_spend,
+            "cabinet_day_start": grace.cabinet_day_start,
+            "currency": grace.currency,
+            "currency_exponent": grace.currency_exponent,
+        },
+    )
+    if result.first() is None:
+        raise RuntimeError(f"enable grace was not persisted for {prepared.fb_ad_id}")
+
+
+async def clear_enable_grace_for_currency_mismatch(
+    engine: AsyncEngine,
+    *,
+    ad_id: uuid.UUID,
+    currency: str,
+    currency_exponent: int,
+    cabinet_lease: CabinetLease | None = None,
+) -> bool:
+    """Clear stale monetary grace identity before the observer decides."""
+
+    confirmed_currency, confirmed_exponent = require_currency_exponent(
+        currency,
+        currency_exponent,
+    )
+    async with engine.begin() as connection:
+        if cabinet_lease is not None:
+            owned = (
+                await connection.execute(
+                    text(
+                        """
+                        SELECT 1
+                        FROM cabinet_runtime
+                        WHERE ad_account_id = :account
+                          AND owner_instance = :owner
+                          AND lease_token = :token
+                          AND lease_expires_at > clock_timestamp()
+                        FOR UPDATE
+                        """
+                    ),
+                    {
+                        "account": cabinet_lease.ad_account_id,
+                        "owner": cabinet_lease.owner_instance,
+                        "token": cabinet_lease.lease_token,
+                    },
+                )
+            ).first()
+            if owned is None:
+                raise RuntimeError(
+                    f"cabinet fence rejected for account={cabinet_lease.ad_account_id}"
+                )
+        result = await connection.execute(
+            text(
+                """
+                UPDATE ad_alert_state
+                SET enable_grace_until = NULL,
+                    enable_grace_spend_cap = NULL,
+                    enable_grace_baseline_spend = NULL,
+                    enable_grace_cabinet_day_start = NULL,
+                    enable_grace_currency = NULL,
+                    enable_grace_currency_exponent = NULL,
+                    updated_at = NOW()
+                WHERE ad_id = :ad_id
+                  AND enable_grace_until IS NOT NULL
+                  AND (
+                      enable_grace_currency IS DISTINCT FROM :currency
+                      OR enable_grace_currency_exponent IS DISTINCT FROM :currency_exponent
+                  )
+                """
+            ),
+            {
+                "ad_id": ad_id,
+                "currency": confirmed_currency,
+                "currency_exponent": confirmed_exponent,
+            },
+        )
+    return bool(result.rowcount)
 
 
 __all__ = [
-    "GRACE_KEY_PREFIX",
     "EnableGrace",
+    "EnableGraceUnsafeError",
+    "PreparedEnableGrace",
+    "clear_enable_grace_for_currency_mismatch",
     "grace_is_active",
-    "load_enable_grace_map",
-    "set_enable_grace",
+    "persist_enable_grace",
+    "prepare_enable_grace",
 ]

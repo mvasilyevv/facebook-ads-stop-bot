@@ -2,8 +2,8 @@
  * Slider — ползунок на native input[type=range] (1–100), монохромный.
  * Портировано из frontend/src/components/ui/Slider.tsx (паритет web/mini,
  * MID-21 аудита 02.07) — используется для чувствительности стоп-правил оффера
- * (stop% / warning%). Тач-цель thumb расширена до 44px через CSS pseudo-element
- * (native range thumb на touch слишком мал сам по себе) — канон mini ≥44px.
+ * (stop% / warning%). Сам native input занимает 44px по высоте; визуальный
+ * track остаётся тонким через browser-specific track pseudo-elements.
  */
 import { useId } from "react";
 
@@ -36,14 +36,15 @@ export function Slider({
       <div className="flex items-baseline justify-between">
         <label
           htmlFor={id}
-          className="text-[11px] uppercase tracking-[0.07em] text-[var(--color-bg-9)] font-mono"
+          className="text-[12px] uppercase tracking-[0.07em] text-[var(--color-bg-9)] font-mono"
         >
           {label}
         </label>
-        <span className="font-display tabular-nums text-[14px] text-accent">{value}%</span>
+        <span className="font-display tabular-nums text-[14px] text-accent">
+          {value}%
+        </span>
       </div>
-      {/* Обёртка задаёт тач-высоту ≥44px (сам range тонкий, но hit-area — вся полоса). */}
-      <div className="flex items-center min-h-[44px] -my-2.5">
+      <div className="flex min-h-11 items-center">
         <input
           id={id}
           type="range"
@@ -54,10 +55,10 @@ export function Slider({
           disabled={disabled}
           aria-label={label}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="mini-slider w-full accent-[var(--color-accent)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          className="mini-slider h-11 w-full cursor-pointer accent-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-40"
         />
       </div>
-      {hint ? <span className="text-[11px] text-bg-9">{hint}</span> : null}
+      {hint ? <span className="text-[12px] text-bg-9">{hint}</span> : null}
     </div>
   );
 }

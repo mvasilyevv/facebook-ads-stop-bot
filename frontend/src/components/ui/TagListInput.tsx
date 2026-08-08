@@ -106,20 +106,17 @@ export function TagListInput({
   return (
     <div className="flex flex-col gap-1.5">
       {label ? (
-        <label
-          htmlFor={id}
-          className="text-[11px] font-display tracking-wider uppercase text-bg-9"
-        >
+        <label htmlFor={id} className="text-[12px] font-display tracking-wider uppercase text-bg-9">
           {label}
         </label>
       ) : null}
       <div
         className={cn(
           "w-full bg-bg-2 border rounded-[var(--radius-2)]",
-          "flex flex-wrap items-center gap-1.5 px-2 py-1.5 min-h-8",
+          "flex min-h-11 flex-wrap items-center gap-1.5 px-2 py-1.5",
           "transition-colors duration-[120ms]",
           "focus-within:bg-bg-3 focus-within:border-accent",
-          error ? "border-danger" : "border-[var(--hairline-strong)]",
+          error ? "border-danger" : "border-[var(--color-hairline-strong)]",
           disabled && "opacity-40 cursor-not-allowed",
         )}
       >
@@ -147,17 +144,17 @@ export function TagListInput({
           spellCheck={false}
           className={cn(
             "flex-1 min-w-[80px] bg-transparent outline-none",
-            "text-[13.5px] text-bg-11 placeholder:text-bg-9 h-6",
+            "h-11 text-[13.5px] text-bg-11 placeholder:text-bg-9",
           )}
         />
       </div>
       {error ? (
-        <span id={errorId} role="alert" className="text-[11px] text-danger font-display">
+        <span id={errorId} role="alert" className="text-[12px] text-danger font-display">
           {error}
         </span>
       ) : null}
       {helpText && !error ? (
-        <span id={helpId} className="text-[11px] text-bg-9">
+        <span id={helpId} className="text-[12px] text-bg-9">
           {helpText}
         </span>
       ) : null}

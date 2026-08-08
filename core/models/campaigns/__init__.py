@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Campaigns-домен: пресеты и запуски создания FB-кампаний.
-
-См. дизайн docs/superpowers/specs/2026-06-22-campaign-creation-service-design.md.
-"""
+"""Campaigns-домен: пресеты и запуски создания FB-кампаний."""
 
 from __future__ import annotations
 

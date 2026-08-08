@@ -7,7 +7,8 @@ Endpoints под /api (благодаря auto-discovery с prefix="/api"):
 - PATCH /settings/observer/scanning     — переключает is_scanning_enabled
 - PATCH /settings/observer/owner-tag    — точечно меняет owner_campaign_tag (анти лост-апдейт)
 - PATCH /settings/observer/auto-enable  — переключает auto_enable_recommendations
-- POST /settings/observer/scan-now — публикует Redis сигнал fb_agent:observer:trigger
+- GET/POST/DELETE /settings/observer/auto-enable-exclusions — исключения по объявлениям
+- POST /settings/observer/scan-now — ставит durable observer_scan в PostgreSQL
 """
 
 from __future__ import annotations
@@ -15,14 +16,18 @@ from __future__ import annotations
 import logging
 import os
 import re
+import uuid
 from datetime import UTC, date, datetime
 
-from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import select, text
+from fastapi import APIRouter, HTTPException, Query, Response
+from sqlalchemy import delete, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.deps import DepEngine, DepRedis, DepSettings
+from apps.api.deps import DepEngine, DepSettings
 from apps.api.routers.v1.schemas.settings_observer import (
+    AutoEnableExclusionCreate,
+    AutoEnableExclusionResponse,
     AutoEnableToggleRequest,
     CampaignAllowlistRequest,
     CampaignOption,
@@ -32,15 +37,21 @@ from apps.api.routers.v1.schemas.settings_observer import (
     ScanningToggleRequest,
     ScanNowResponse,
 )
+from core.models.catalog.fb_ad import FbAd
+from core.models.observer.ad_auto_enable_disabled import AdAutoEnableDisabled
 from core.models.settings.observer_config import ObserverConfig
 from core.observer.queries import campaign_matches_owner
+from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
+from core.tasks.browser_fence import (
+    BrowserExclusiveMaintenance,
+    BrowserFenceLeaseLost,
+    BrowserOperationBlocked,
+    BrowserOperationDrainTimeout,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings/observer", tags=["settings"])
-
-# Канал Redis для триггера scan-now.
-_SCAN_NOW_CHANNEL = "fb_agent:observer:trigger"
 
 # Дата в названии кампании (DD.MM или DD.MM.YY). У owner-кампаний она в КОНЦЕ имени
 # («MV | GH_CR | video | adset.pro | 18.06»), поэтому берём ПОСЛЕДНее совпадение.
@@ -135,11 +146,7 @@ def _to_response(cfg: ObserverConfig) -> ObserverSettingsResponse:
 
 @router.get("", response_model=ObserverSettingsResponse)
 async def get_observer_settings(engine: DepEngine) -> ObserverSettingsResponse:
-    """Возвращает текущий ObserverConfig singleton.
-
-    Поля warning_percent_of_stop и WARNING-параметры возвращаются как null —
-    они перенесены в OfferRule (per-offer). Фронт получает стабильный shape.
-    """
+    """Возвращает текущий ObserverConfig singleton."""
     async with AsyncSession(engine) as session:
         cfg = await _get_singleton(session)
         return _to_response(cfg)
@@ -235,13 +242,131 @@ async def patch_observer_auto_enable(
     body: AutoEnableToggleRequest,
     engine: DepEngine,
 ) -> ObserverSettingsResponse:
-    """Переключает только auto_enable_recommendations (требует миграции 0003)."""
+    """Переключает только auto_enable_recommendations."""
     async with AsyncSession(engine) as session:
         cfg = await _get_singleton(session)
         cfg.auto_enable_recommendations = body.enabled
         result = _to_response(cfg)
         await session.commit()
         return result
+
+
+@router.get(
+    "/auto-enable-exclusions",
+    response_model=list[AutoEnableExclusionResponse],
+)
+async def list_auto_enable_exclusions(
+    engine: DepEngine,
+) -> list[AutoEnableExclusionResponse]:
+    """List ads which the operator excluded from automatic re-enable."""
+    stmt = (
+        select(
+            AdAutoEnableDisabled.ad_id,
+            AdAutoEnableDisabled.created_at,
+            AdAutoEnableDisabled.reason,
+            FbAd.fb_ad_id,
+            FbAd.ad_name,
+        )
+        .join(FbAd, AdAutoEnableDisabled.ad_id == FbAd.id, isouter=True)
+        .order_by(AdAutoEnableDisabled.created_at.desc())
+    )
+    async with engine.connect() as conn:
+        rows = (await conn.execute(stmt)).fetchall()
+    return [
+        AutoEnableExclusionResponse(
+            fb_ad_id=row.fb_ad_id or "",
+            internal_id=row.ad_id,
+            ad_name=row.ad_name,
+            disabled_at=row.created_at,
+            reason=row.reason,
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/auto-enable-exclusions/{fb_ad_id}",
+    response_model=AutoEnableExclusionResponse,
+    status_code=201,
+)
+async def create_auto_enable_exclusion(
+    fb_ad_id: str,
+    engine: DepEngine,
+    body: AutoEnableExclusionCreate | None = None,
+) -> AutoEnableExclusionResponse:
+    """Exclude one existing ad from automatic re-enable."""
+    reason = body.reason if body else None
+    async with engine.begin() as conn:
+        ad_row = (
+            await conn.execute(select(FbAd.id, FbAd.ad_name).where(FbAd.fb_ad_id == fb_ad_id))
+        ).one_or_none()
+        if ad_row is None:
+            raise HTTPException(status_code=404, detail=f"Объявление {fb_ad_id!r} не найдено")
+        if (
+            await conn.execute(
+                select(AdAutoEnableDisabled.id).where(AdAutoEnableDisabled.ad_id == ad_row.id)
+            )
+        ).one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Авто-включение уже отключено для объявления {fb_ad_id!r}",
+            )
+
+        now = datetime.now(UTC)
+        try:
+            result = (
+                await conn.execute(
+                    AdAutoEnableDisabled.__table__.insert()
+                    .values(
+                        ad_id=ad_row.id,
+                        cabinet_day_started_at=now,
+                        reason=reason,
+                        created_at=now,
+                    )
+                    .returning(
+                        AdAutoEnableDisabled.ad_id,
+                        AdAutoEnableDisabled.created_at,
+                        AdAutoEnableDisabled.reason,
+                    )
+                )
+            ).one()
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Авто-включение уже отключено для объявления {fb_ad_id!r}",
+            ) from exc
+
+    return AutoEnableExclusionResponse(
+        fb_ad_id=fb_ad_id,
+        internal_id=result.ad_id,
+        ad_name=ad_row.ad_name,
+        disabled_at=result.created_at,
+        reason=result.reason,
+    )
+
+
+@router.delete("/auto-enable-exclusions/{fb_ad_id}", status_code=204)
+async def remove_auto_enable_exclusion(fb_ad_id: str, engine: DepEngine) -> Response:
+    """Remove one automatic re-enable exclusion."""
+    async with engine.begin() as conn:
+        ad_row = (
+            await conn.execute(select(FbAd.id).where(FbAd.fb_ad_id == fb_ad_id))
+        ).one_or_none()
+        if ad_row is None:
+            raise HTTPException(status_code=404, detail=f"Объявление {fb_ad_id!r} не найдено")
+        deleted = (
+            await conn.execute(
+                delete(AdAutoEnableDisabled)
+                .where(AdAutoEnableDisabled.ad_id == ad_row.id)
+                .returning(AdAutoEnableDisabled.id)
+            )
+        ).one_or_none()
+    if deleted is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Флаг авто-включения не установлен для объявления {fb_ad_id!r}",
+        )
+    return Response(status_code=204)
 
 
 @router.patch("/campaigns", response_model=ObserverSettingsResponse)
@@ -316,12 +441,49 @@ async def refresh_observer_campaigns(
     settings: DepSettings,
     ad_account_id: str | None = Query(
         default=None,
-        description="L10: числовой ID кабинета — резолв из вкладки этого кабинета. "
-        "Пусто → текущая primary-вкладка (legacy).",
+        description="Числовой ID кабинета. Если не задан, используются кабинеты активных офферов.",
     ),
     include_stale: bool = Query(
         default=False, description="Показать и старые кампании (как в GET /campaigns)."
     ),
+) -> list[CampaignOption]:
+    """Run discovery under an exclusive fence because StartBrowser may restart."""
+    try:
+        async with BrowserExclusiveMaintenance(
+            engine,
+            operation_kind="campaign_refresh",
+        ) as fence:
+            result = await _refresh_observer_campaigns_unfenced(
+                engine=engine,
+                settings=settings,
+                ad_account_id=ad_account_id,
+                include_stale=include_stale,
+            )
+            await fence.assert_held()
+            return result
+    except BrowserOperationBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Vision maintenance is active; campaign refresh was not started",
+        ) from exc
+    except BrowserOperationDrainTimeout as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Active browser work did not drain; campaign refresh was not started",
+        ) from exc
+    except BrowserFenceLeaseLost as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Campaign refresh fence was lost; retry after reconciliation",
+        ) from exc
+
+
+async def _refresh_observer_campaigns_unfenced(
+    *,
+    engine,
+    settings,
+    ad_account_id: str | None,
+    include_stale: bool,
 ) -> list[CampaignOption]:
     """Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).
 
@@ -332,49 +494,44 @@ async def refresh_observer_campaigns(
     (в названии есть дата → свежие выше).
 
     Кабинеты: если задан явный ad_account_id — только он; иначе ВСЕ кабинеты активных
-    офферов (offers.ad_account_ids, resolve_scan_account_ids) — обходим каждый и сливаем
-    кампании (dedup по fb_campaign_id). Нет активных офферов → legacy primary-вкладка.
+    офферов (offers.ad_account_ids, resolve_scan_account_ids). Без настроенного кабинета
+    запрос отклоняется: текущая browser-вкладка не является identity.
     """
     import grpc
 
     from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
-    from core.config import reveal_secret
-    from core.crypto import decrypt
-    from core.models.settings.vision_config import VisionConfig
+    from core.meta_api.identity import require_ad_account_id
+    from core.vision_runtime import VisionConfigurationError, load_vision_runtime_config
 
     async with AsyncSession(engine) as session:
         cfg = await _get_singleton(session)
         owner_tag = cfg.owner_campaign_tag
         allowlist = set(cfg.campaign_ids or [])
-        vc = await session.scalar(
-            select(VisionConfig).where(VisionConfig.singleton_key == "default")
-        )
-        x_token = reveal_secret(settings.vision_x_token)
-        profile_id = settings.vision_profile_id
-        if vc:
-            if vc.x_token_encrypted:
-                try:
-                    x_token = decrypt(vc.x_token_encrypted)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("refresh_campaigns: decrypt vision token failed: %s", exc)
-            if vc.profile_id:
-                profile_id = vc.profile_id
 
-    # Кабинеты для обхода: явный ad_account_id (один) ИЛИ ВСЕ кабинеты активных офферов
-    # (resolve_scan_account_ids) — подтягиваем кампании из всех кабинетов, указанных в
-    # офферах. Нет активных офферов → legacy: текущая primary-вкладка ("").
+    try:
+        vision = await load_vision_runtime_config(engine)
+    except VisionConfigurationError as exc:
+        raise HTTPException(status_code=409, detail="Vision runtime не настроен") from exc
+
+    # Кабинеты для обхода: явный ad_account_id (один) ИЛИ ВСЕ кабинеты активных офферов.
     from core.observer.accounts import resolve_scan_account_ids
 
     if ad_account_id:
-        targets = [ad_account_id]
+        targets = [require_ad_account_id(ad_account_id)]
     else:
-        targets = await resolve_scan_account_ids(engine) or [""]
+        targets = [require_ad_account_id(value) for value in await resolve_scan_account_ids(engine)]
+    if not targets:
+        raise HTTPException(
+            status_code=409,
+            detail="Нет явно настроенного ad_account_id для обновления кампаний",
+        )
 
     client = BrowserAgentClient(
         BrowserAgentConfig(
-            vision_x_token=x_token,
+            vision_x_token=vision.x_token,
             vision_api_url=settings.vision_api_url,
-            vision_profile_id=profile_id,
+            vision_profile_id=vision.profile_id,
+            vision_folder_id=os.environ.get("VISION_FOLDER_ID") or None,
             # grpc_host/port из env — иначе из Docker api клиент идёт на localhost:50051,
             # а browser-agent на хосте (host.docker.internal). Это и была причина «пусто»:
             # refresh не достукивался до browser-agent. Зеркало settings_vision/observer.
@@ -388,17 +545,17 @@ async def refresh_observer_campaigns(
         # Гарантируем активную Vision-сессию: refresh самодостаточен и НЕ зависит от того,
         # сканирует ли observer сейчас (иначе зацикленность: включение скана гейтится пустым
         # allowlist'ом → observer не сканирует → нет сессии → refresh не видит кампании →
-        # нечем заполнить allowlist). StartBrowser идемпотентен: создаёт сессию или
-        # переиспользует уже поднятый профиль (CDP) — берёт session_id для list_campaigns.
+        # нечем заполнить allowlist). StartBrowser создаёт только process-local сессию,
+        # подключаясь к уже живому CDP; lifecycle профиля здесь не меняется.
         await client.start_browser()
         # По каждому кабинету list_campaigns откроет его вкладку (ensureAdsManagerPage(actId)),
         # достанет graph-токен со страницы и резолвит кампании по owner_tag.
         for acc in targets:
-            cs = await client.list_campaigns(owner_tag=owner_tag or "", ad_account_id=acc or "")
+            cs = await client.list_campaigns(owner_tag=owner_tag or "", ad_account_id=acc)
             for c in cs:
-                merged[c["id"]] = c  # dedup по fb_campaign_id (между кабинетами не пересекаются)
+                merged[c["id"]] = {**c, "ad_account_id": acc}
     except grpc.RpcError as exc:
-        raise HTTPException(status_code=503, detail=f"browser-agent недоступен: {exc}") from exc
+        raise HTTPException(status_code=503, detail="browser-agent недоступен") from exc
     except Exception as exc:
         # LOW (аудит 02.07): голый Exception — не показываем str(exc) клиенту (может
         # нести внутренние детали), полная ошибка уходит в лог.
@@ -414,8 +571,8 @@ async def refresh_observer_campaigns(
 
     campaigns = list(merged.values())
 
-    # Апсерт в каталог по fb_campaign_id (идентичность кампании, 0020/HIGH-3) —
-    # чтобы GET /campaigns видел новые. У campaigns-edge ID есть всегда.
+    # Апсерт в каталог по fb_campaign_id, чтобы GET /campaigns видел новые.
+    # У campaigns-edge ID есть всегда.
     now = datetime.now(UTC)
     if campaigns:
         async with AsyncSession(engine) as session:
@@ -423,16 +580,23 @@ async def refresh_observer_campaigns(
                 await session.execute(
                     text(
                         """
-                        INSERT INTO fb_campaigns (fb_campaign_id, campaign_name, last_seen_at)
-                        VALUES (:cid, :name, :now)
+                        INSERT INTO fb_campaigns
+                            (fb_campaign_id, campaign_name, ad_account_id, last_seen_at)
+                        VALUES (:cid, :name, :account_id, :now)
                         ON CONFLICT (fb_campaign_id) WHERE fb_campaign_id IS NOT NULL
                         DO UPDATE
                         SET last_seen_at = :now,
                             campaign_name = EXCLUDED.campaign_name,
+                            ad_account_id = EXCLUDED.ad_account_id,
                             is_active = TRUE
                         """
                     ),
-                    {"cid": c["id"], "name": c["name"], "now": now},
+                    {
+                        "cid": c["id"],
+                        "name": c["name"],
+                        "account_id": c["ad_account_id"],
+                        "now": now,
+                    },
                 )
             await session.commit()
 
@@ -449,18 +613,18 @@ async def refresh_observer_campaigns(
     return result
 
 
-@router.post("/scan-now", response_model=ScanNowResponse)
-async def post_scan_now(redis: DepRedis) -> ScanNowResponse:
-    """Публикует Redis-событие fb_agent:observer:trigger для немедленного запуска scan.
-
-    observer_worker подписан на канал fb_agent:observer:trigger и немедленно
-    запускает scan-цикл по этому событию (main.py::_on_trigger).
-    Если Redis недоступен — возвращает 503.
-    """
-    payload = f'{{"requested_by": "api", "ts": "{datetime.now(UTC).isoformat()}"}}'
-    try:
-        await redis.publish(_SCAN_NOW_CHANNEL, payload)
-    except Exception as exc:
-        logger.error("Не удалось опубликовать событие scan-now в Redis: %s", exc)
-        raise HTTPException(status_code=503, detail="Redis недоступен") from exc
-    return ScanNowResponse(status="triggered")
+@router.post("/scan-now", response_model=ScanNowResponse, status_code=202)
+async def post_scan_now(engine: DepEngine) -> ScanNowResponse:
+    """Atomically enqueue a scan; ``202`` means queued, never completed."""
+    request_nonce = uuid.uuid4().hex
+    receipt = await enqueue_observer_scan(
+        engine,
+        requested_by="operator_api",
+        reason="operator_scan_now",
+        idempotency_key=observer_scan_idempotency_key("api", request_nonce),
+    )
+    return ScanNowResponse(
+        status="queued",
+        task_id=receipt.task_id,
+        correlation_id=receipt.correlation_id,
+    )

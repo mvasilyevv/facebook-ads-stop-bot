@@ -1,22 +1,27 @@
 # -*- coding: utf-8 -*-
-"""Интеграционный: adsetpro_credentials — ротация ключа БД-first с фолбэком на .env.
+"""Интеграционный: DB-only runtime и one-shot env bootstrap AdSet.pro.
 
 Singleton 'default' сохраняется/восстанавливается в фикстуре (БД общая — нельзя
-затирать реальные ключи). Проверяет Fernet-roundtrip через BYTEA + приоритет БД→env.
+затирать реальные ключи). Проверяет Fernet-roundtrip и DB authority.
 """
 
 from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
 from core.adset_pro.credentials import (
+    bootstrap_adsetpro_credentials_from_env,
     load_adsetpro_credentials,
     resolve_adsetpro_api_key,
     resolve_adsetpro_postback_secret,
     upsert_adsetpro_credentials,
 )
+from core.crypto import decrypt
 
 
 @pytest_asyncio.fixture
@@ -68,44 +73,100 @@ async def test_upsert_and_load_roundtrip(preserve_adsetpro_credentials) -> None:
     assert creds.postback_secret == "pb_secret_XYZ"
 
 
-# Ротация: повторный upsert меняет ключ; БД-значение имеет приоритет над .env.
+# Ротация: повторный upsert меняет ключ без рестарта.
 @pytest.mark.asyncio
-async def test_resolve_api_key_prefers_db_over_env(preserve_adsetpro_credentials) -> None:
+async def test_resolve_api_key_uses_database_value(preserve_adsetpro_credentials) -> None:
     engine = preserve_adsetpro_credentials
     await upsert_adsetpro_credentials(engine, api_key="db_key_v1")
-    assert await resolve_adsetpro_api_key(engine, fallback="env_key") == "db_key_v1"
+    assert await resolve_adsetpro_api_key(engine) == "db_key_v1"
 
     # Ротация без рестарта — следующий resolve берёт новый ключ.
     await upsert_adsetpro_credentials(engine, api_key="db_key_v2")
-    assert await resolve_adsetpro_api_key(engine, fallback="env_key") == "db_key_v2"
+    assert await resolve_adsetpro_api_key(engine) == "db_key_v2"
 
 
-# Нет строки в БД → resolve уходит на .env-фолбэк.
 @pytest.mark.asyncio
-async def test_resolve_api_key_falls_back_to_env_when_no_row(
+async def test_resolve_api_key_is_empty_when_database_row_is_absent(
     preserve_adsetpro_credentials,
 ) -> None:
     engine = preserve_adsetpro_credentials  # фикстура уже удалила строку
     assert await load_adsetpro_credentials(engine) is None
-    assert await resolve_adsetpro_api_key(engine, fallback="env_fallback_key") == "env_fallback_key"
+    assert await resolve_adsetpro_api_key(engine) == ""
 
 
-# postback secret: БД-first, при отсутствии — .env-фолбэк (пусто → 503-семантика у endpoint'а).
 @pytest.mark.asyncio
-async def test_resolve_postback_secret_db_then_env(preserve_adsetpro_credentials) -> None:
+async def test_resolve_postback_secret_uses_database_value(preserve_adsetpro_credentials) -> None:
     engine = preserve_adsetpro_credentials
-    # Без секрета в БД (только api_key) → фолбэк на env.
     await upsert_adsetpro_credentials(engine, api_key="k", postback_secret=None)
-    assert await resolve_adsetpro_postback_secret(engine, fallback="env_secret") == "env_secret"
+    assert await resolve_adsetpro_postback_secret(engine) == ""
 
     # С секретом в БД → берётся из БД.
     await upsert_adsetpro_credentials(engine, api_key="k", postback_secret="db_secret")
-    assert await resolve_adsetpro_postback_secret(engine, fallback="env_secret") == "db_secret"
+    assert await resolve_adsetpro_postback_secret(engine) == "db_secret"
 
 
-# Битый BYTEA (не Fernet-токен) → load возвращает None → resolve уходит на фолбэк.
 @pytest.mark.asyncio
-async def test_corrupt_blob_falls_back(preserve_adsetpro_credentials) -> None:
+async def test_env_bootstrap_is_concurrency_safe_encrypted_and_supports_postback_only(
+    preserve_adsetpro_credentials,
+) -> None:
+    engine = preserve_adsetpro_credentials
+    postback_secret = "POSTBACK_ONLY_SECRET"
+    settings = SimpleNamespace(
+        adsetpro_mcp_key="",
+        adsetpro_postback_secret=postback_secret,
+    )
+
+    results = await asyncio.gather(
+        *(bootstrap_adsetpro_credentials_from_env(engine, settings=settings) for _ in range(4))
+    )
+
+    assert results.count(True) == 1
+    assert await resolve_adsetpro_api_key(engine) == ""
+    assert await resolve_adsetpro_postback_secret(engine) == postback_secret
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT api_key_encrypted, postback_secret_encrypted
+                    FROM adsetpro_credentials
+                    WHERE singleton_key = 'default'
+                    """
+                )
+            )
+        ).all()
+    assert len(rows) == 1
+    assert rows[0][0] is None
+    assert bytes(rows[0][1]).decode() != postback_secret
+    assert decrypt(bytes(rows[0][1]).decode()) == postback_secret
+
+
+@pytest.mark.asyncio
+async def test_existing_database_credentials_block_env_reimport(
+    preserve_adsetpro_credentials,
+) -> None:
+    engine = preserve_adsetpro_credentials
+    await upsert_adsetpro_credentials(
+        engine,
+        api_key="db-key",
+        postback_secret="db-secret",
+    )
+
+    inserted = await bootstrap_adsetpro_credentials_from_env(
+        engine,
+        settings=SimpleNamespace(
+            adsetpro_mcp_key="env-key",
+            adsetpro_postback_secret="env-secret",
+        ),
+    )
+
+    assert inserted is False
+    assert await resolve_adsetpro_api_key(engine) == "db-key"
+    assert await resolve_adsetpro_postback_secret(engine) == "db-secret"
+
+
+@pytest.mark.asyncio
+async def test_corrupt_blob_leaves_runtime_unconfigured(preserve_adsetpro_credentials) -> None:
     engine = preserve_adsetpro_credentials
     async with engine.begin() as conn:
         await conn.execute(
@@ -120,10 +181,10 @@ async def test_corrupt_blob_falls_back(preserve_adsetpro_credentials) -> None:
         )
     # Декодирование/дешифровка падает → None, а не пустой/мусорный ключ.
     assert await load_adsetpro_credentials(engine) is None
-    assert await resolve_adsetpro_api_key(engine, fallback="safe_env") == "safe_env"
+    assert await resolve_adsetpro_api_key(engine) == ""
 
 
-# Пустой api_key запрещён (колонка NOT NULL) — upsert бросает ValueError.
+# Rotation-upsert требует API key; postback-only создаёт bootstrap-функция.
 @pytest.mark.asyncio
 async def test_upsert_empty_api_key_raises(preserve_adsetpro_credentials) -> None:
     engine = preserve_adsetpro_credentials

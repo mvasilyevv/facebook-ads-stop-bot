@@ -3,13 +3,15 @@
 
 from __future__ import annotations
 
-import json
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+
+from core.commands import CommandService
 
 
 class RecommendationNotFoundError(Exception):
@@ -38,6 +40,7 @@ async def promote_enable_recommendation(
     requested_by: str,
     created_by_chat_id: int | None = None,
     auto_mode: bool = False,
+    connection: AsyncConnection | None = None,
 ) -> PromotionResult:
     """Заблокировать конкретную рекомендацию, revalidate и создать activate_ad.
 
@@ -50,7 +53,8 @@ async def promote_enable_recommendation(
     except (TypeError, ValueError, AttributeError) as exc:
         raise RecommendationNotFoundError("Некорректный id рекомендации") from exc
 
-    async with engine.begin() as conn:
+    transaction = engine.begin() if connection is None else nullcontext(connection)
+    async with transaction as conn:
         row = (
             await conn.execute(
                 text(
@@ -111,7 +115,7 @@ async def promote_enable_recommendation(
                                SELECT 1
                                FROM task_queue tq
                                WHERE tq.task_type = 'meta_api_mutation'
-                                 AND tq.status IN ('draft', 'pending', 'running', 'retrying')
+                                 AND tq.status IN ('pending', 'running', 'retrying')
                                  AND (
                                      (tq.payload->>'mutation_kind' = 'pause_ad'
                                       AND tq.payload->>'target_id' = fa.fb_ad_id)
@@ -185,16 +189,16 @@ async def promote_enable_recommendation(
                     "Рекомендация куратора устарела: объявление не подтверждено как OFF"
                 )
             try:
-                allowance = Decimal(str(snapshot.get("grace_spend_cap")))
+                spend_cap = Decimal(str(snapshot.get("grace_spend_cap")))
             except (InvalidOperation, TypeError, ValueError) as exc:
                 raise RecommendationUnsafeStateError(
                     "У рекомендации куратора отсутствует корректный лимит grace"
                 ) from exc
-            if not allowance.is_finite() or allowance <= 0:
+            if not spend_cap.is_finite() or spend_cap <= 0:
                 raise RecommendationUnsafeStateError(
                     "У рекомендации куратора отсутствует корректный лимит grace"
                 )
-            grace_payload = {"spend_allowance": str(allowance)}
+            grace_payload = {"spend_cap": str(spend_cap)}
 
         params: dict[str, object] = {
             "source": "recommendation",
@@ -202,40 +206,23 @@ async def promote_enable_recommendation(
             "ad_id": str(row.ad_id),
         }
         if grace_payload is not None:
-            # Это только intent. Redis marker ставит meta_api_worker после
-            # подтверждённого успеха внешнего activate_ad.
+            # Это только reviewed intent. Meta worker повторно сверяет status,
+            # cabinet-day spend и текущий CPA, затем атомарно сохраняет grace
+            # вместе с terminal task state после подтверждённого activate_ad.
             params["enable_grace"] = grace_payload
 
-        payload = {
-            "mutation_kind": "activate_ad",
-            "target_id": str(row.fb_ad_id),
-            "params": params,
-            "ad_account_id": str(row.ad_account_id) if row.ad_account_id else None,
-        }
-        task_row = (
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO task_queue
-                        (task_type, status, idempotency_key, payload,
-                         attempt_count, max_attempts, requested_by, created_by_chat_id)
-                    VALUES
-                        ('meta_api_mutation', 'pending', :ik, CAST(:pl AS JSONB),
-                         0, 5, :rb, :ccid)
-                    RETURNING id
-                    """
-                ),
-                {
-                    "ik": f"reco:activate_ad:{rec_id}",
-                    "pl": json.dumps(payload),
-                    "rb": (requested_by or "recommendation")[:64],
-                    "ccid": int(created_by_chat_id) if created_by_chat_id is not None else None,
-                },
-            )
-        ).first()
-        if task_row is None:  # pragma: no cover — INSERT ... RETURNING invariant
-            raise RuntimeError("Не удалось создать activate_ad task")
-        task_id = int(task_row[0])
+        receipt = await CommandService(engine).enqueue_ad_action(
+            action_kind="activate_ad",
+            fb_ad_id=str(row.fb_ad_id),
+            requested_by=(requested_by or "recommendation")[:64],
+            idempotency_key=f"reco:activate_ad:{rec_id}",
+            params=params,
+            created_by_chat_id=(
+                int(created_by_chat_id) if created_by_chat_id is not None else None
+            ),
+            connection=conn,
+        )
+        task_id = receipt.task_id
 
         promoted = await conn.execute(
             text(

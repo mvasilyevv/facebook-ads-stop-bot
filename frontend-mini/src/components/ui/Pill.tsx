@@ -24,7 +24,7 @@ export function Pill({ variant = "default", children, className }: PillProps) {
   return (
     <span
       className={cn(
-        "inline-block font-mono text-[10px] font-semibold px-[5px] py-[2px] leading-none rounded-[var(--radius-1)]",
+        "inline-block font-mono text-[12px] font-semibold px-[5px] py-[2px] leading-none rounded-[var(--radius-1)]",
         PILL_STYLES[variant],
         className,
       )}

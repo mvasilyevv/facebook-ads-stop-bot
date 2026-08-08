@@ -2,9 +2,9 @@
 """Integration: outbox lifecycle для task_type='meta_api_mutation'.
 
 Сценарии:
-- DRAFT → approve → PENDING → claim → execute (заглушка) → FAILED
+- PENDING → claim → execute (заглушка) → FAILED
 - Идемпотентность: повторный create_mutation_task с тем же ключом → None
-- Reconcile: stuck running → retrying; stale drafts → cancelled
+- Reconcile: stuck running → retrying
 - Audit log: запись через record_audit_log реально появляется
 
 Требует реальный Postgres из docker-compose (pg_engine fixture).
@@ -25,18 +25,14 @@ from apps.meta_api_worker.main import process_one_task
 from core.meta_api.audit import record_audit_log
 from core.meta_api.errors import RateLimitedError, TokenInvalidError
 from core.meta_api.queue import (
-    approve_draft_task,
     cancel_task,
-    claim_pending_task,
-    create_draft_task,
+    claim_browser_ready_mutation_task,
     create_mutation_task,
-    list_drafts,
-)
-from core.meta_api.reconciler import (
-    cancel_stale_meta_drafts,
-    reconcile_stuck_meta_running,
 )
 from core.meta_api.schemas import MetaMutationPayload
+from core.tasks.queue import reconcile_stuck_running
+
+pytestmark = pytest.mark.usefixtures("fresh_browser_readiness")
 
 
 # Очищаем task_queue и audit_log перед каждым тестом, чтобы не загрязнять.
@@ -44,6 +40,42 @@ from core.meta_api.schemas import MetaMutationPayload
 async def clean_meta_tables(pg_engine: AsyncEngine):
     async def _truncate():
         async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM telegram_action_tokens
+                    WHERE incident_id IN (
+                        SELECT id FROM incidents
+                        WHERE incident_key = 'meta:token-invalid'
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM telegram_message_slots
+                    WHERE incident_id IN (
+                        SELECT id FROM incidents
+                        WHERE incident_key = 'meta:token-invalid'
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM notification_events
+                    WHERE incident_id IN (
+                        SELECT id FROM incidents
+                        WHERE incident_key = 'meta:token-invalid'
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text("DELETE FROM incidents WHERE incident_key = 'meta:token-invalid'")
+            )
             await conn.execute(text("DELETE FROM task_queue WHERE task_type = 'meta_api_mutation'"))
             await conn.execute(text("DELETE FROM meta_api_audit_log"))
 
@@ -62,38 +94,36 @@ def _unique_payload(kind: str = "pause_ad") -> MetaMutationPayload:
     )
 
 
+def _unique_numeric_payload(kind: str = "pause_ad") -> MetaMutationPayload:
+    """Status handlers require the numeric Meta object id shape."""
+    target_id = str(10**17 + uuid.uuid4().int % (9 * 10**17))
+    return MetaMutationPayload(
+        mutation_kind=kind,
+        target_id=target_id,
+        params={"reason": "semantic ack integration test"},
+        ad_account_id="act_42",
+    )
+
+
 # ====================== Lifecycle ======================
 
 
-# Полный жизненный цикл: DRAFT → approve → claim → execute (мок dispatch_mutation, успех) → SUCCEEDED.
+# Full lifecycle: PENDING → claim → execute (mock dispatch, success) → SUCCEEDED.
 @pytest.mark.asyncio
-async def test_draft_approve_claim_execute_success(
+async def test_pending_claim_execute_success(
     pg_engine: AsyncEngine,
     clean_meta_tables,
     monkeypatch,
 ):
     payload = _unique_payload("pause_ad")
-    task_id = await create_draft_task(
+    task_id = await create_mutation_task(
         pg_engine,
         payload=payload,
         requested_by="test_ai",
     )
     assert task_id is not None
 
-    drafts = await list_drafts(pg_engine)
-    assert any(d.id == task_id for d in drafts)
-
-    # DRAFT создан без chat_id (через create_draft_task напрямую) — приближаем
-    # MCP-сценарий, для approve нужен admin_override.
-    approved = await approve_draft_task(
-        pg_engine,
-        task_id=task_id,
-        approved_by="test_user",
-        admin_override=True,
-    )
-    assert approved is True
-
-    claim = await claim_pending_task(pg_engine)
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
     assert not claim.queue_empty
     assert claim.task is not None
     assert claim.task.id == task_id
@@ -143,7 +173,7 @@ async def test_rate_limited_error_requeues_task(
     )
     assert task_id is not None
 
-    claim = await claim_pending_task(pg_engine)
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
     assert claim.task is not None
 
     async def _raise_rate_limited(client, p):
@@ -187,7 +217,7 @@ async def test_token_invalid_marks_failed_without_retry(
     )
     assert task_id is not None
 
-    claim = await claim_pending_task(pg_engine)
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
     assert claim.task is not None
 
     async def _raise_token_invalid(client, p):
@@ -203,7 +233,22 @@ async def test_token_invalid_marks_failed_without_retry(
     async with pg_engine.connect() as conn:
         row = (
             await conn.execute(
-                text("SELECT status, attempt_count, last_error FROM task_queue WHERE id = :i"),
+                text(
+                    """
+                    SELECT task.status, task.attempt_count, task.last_error,
+                           incident.status AS incident_status,
+                           (
+                               SELECT COUNT(*)
+                               FROM notification_events event
+                               WHERE event.incident_id = incident.id
+                                 AND event.event_type = 'worker_meta_token_invalid'
+                           ) AS event_count
+                    FROM task_queue task
+                    LEFT JOIN incidents incident
+                      ON incident.incident_key = 'meta:token-invalid'
+                    WHERE task.id = :i
+                    """
+                ),
                 {"i": task_id},
             )
         ).first()
@@ -211,6 +256,227 @@ async def test_token_invalid_marks_failed_without_retry(
     assert row[0] == "failed"  # сразу final, без retry
     assert row[1] == 0  # attempt_count не увеличился
     assert "TokenInvalidError" in (row[2] or "")
+    assert row.incident_status == "open"
+    assert row.event_count == 1
+
+
+@pytest.mark.asyncio
+async def test_token_invalid_rolls_back_terminal_task_when_card_projection_fails(
+    pg_engine: AsyncEngine,
+    clean_meta_tables,
+    monkeypatch,
+) -> None:
+    import apps.meta_api_worker.main as worker_main
+    import core.telegram.worker_notify as worker_notify
+
+    payload = _unique_payload("pause_ad")
+    task_id = await create_mutation_task(
+        pg_engine,
+        payload=payload,
+        requested_by="bot_auto",
+        status="pending",
+    )
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
+    assert claim.task is not None
+
+    async def raise_token_invalid(_client, _payload):
+        raise TokenInvalidError("Session expired", code=190)
+
+    async def fail_projection(*_args, **_kwargs):
+        raise RuntimeError("notification projection failed")
+
+    monkeypatch.setattr(worker_main, "dispatch_mutation", raise_token_invalid)
+    monkeypatch.setattr(
+        worker_notify,
+        "notify_recurring_incident_in_transaction",
+        fail_projection,
+    )
+
+    with pytest.raises(RuntimeError, match="notification projection failed"):
+        await process_one_task(pg_engine, claim.task, client=AsyncMock())
+
+    async with pg_engine.connect() as conn:
+        task_status, incident_count, event_count = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT
+                        (SELECT status FROM task_queue WHERE id = :task_id),
+                        (
+                            SELECT COUNT(*) FROM incidents
+                            WHERE incident_key = 'meta:token-invalid'
+                        ),
+                        (
+                            SELECT COUNT(*) FROM notification_events event
+                            JOIN incidents incident ON incident.id = event.incident_id
+                            WHERE incident.incident_key = 'meta:token-invalid'
+                        )
+                    """
+                ),
+                {"task_id": task_id},
+            )
+        ).one()
+
+    assert task_status == "running"
+    assert incident_count == 0
+    assert event_count == 0
+
+
+@pytest.mark.asyncio
+async def test_status_success_false_is_terminal_rejected(
+    pg_engine: AsyncEngine,
+    clean_meta_tables,
+):
+    payload = _unique_numeric_payload("pause_ad")
+    task_id = await create_mutation_task(
+        pg_engine,
+        payload=payload,
+        requested_by="operator:test",
+        status="pending",
+    )
+    assert task_id is not None
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
+    assert claim.task is not None
+
+    fake_client = AsyncMock()
+    fake_client.execute_graph_call = AsyncMock(return_value={"success": False})
+    await process_one_task(pg_engine, claim.task, client=fake_client)
+
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, attempt_count, result FROM task_queue WHERE id = :i"),
+                {"i": task_id},
+            )
+        ).first()
+    assert row is not None
+    assert row.status == "failed"
+    assert row.attempt_count == 0
+    assert row.result["outcome"] == "REJECTED"
+    fake_client.execute_graph_call.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_status_missing_ack_becomes_unknown_before_any_resend(
+    pg_engine: AsyncEngine,
+    clean_meta_tables,
+    monkeypatch,
+):
+    import apps.meta_api_worker.main as worker_main
+
+    monkeypatch.setattr(worker_main, "load_scanning_enabled", AsyncMock(return_value=True))
+    payload = _unique_numeric_payload("activate_ad")
+    task_id = await create_mutation_task(
+        pg_engine,
+        payload=payload,
+        requested_by="operator:test",
+        status="pending",
+    )
+    assert task_id is not None
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
+    assert claim.task is not None
+
+    fake_client = AsyncMock()
+    fake_client.execute_graph_call = AsyncMock(return_value={})
+    await process_one_task(pg_engine, claim.task, client=fake_client)
+
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, attempt_count, result FROM task_queue WHERE id = :i"),
+                {"i": task_id},
+            )
+        ).first()
+    assert row is not None
+    assert row.status == "retrying"
+    assert row.attempt_count == 1
+    assert row.result["outcome"] == "UNKNOWN"
+    assert row.result["reconcile_required"] is True
+    # The first processing pass performs exactly one write. The durable marker
+    # forces a status read before any possible resend on the next claim.
+    fake_client.execute_graph_call.assert_awaited_once()
+
+    reconcile_claim = await claim_browser_ready_mutation_task(
+        pg_engine,
+        lanes=("money",),
+    )
+    assert reconcile_claim.task is not None
+    assert reconcile_claim.task.id == task_id
+    fake_client.execute_graph_call.reset_mock()
+    fake_client.execute_graph_call.return_value = {"status": True}
+    await process_one_task(pg_engine, reconcile_claim.task, client=fake_client)
+
+    async with pg_engine.connect() as conn:
+        reconciled_row = (
+            await conn.execute(
+                text("SELECT status, attempt_count, result FROM task_queue WHERE id = :i"),
+                {"i": task_id},
+            )
+        ).first()
+    assert reconciled_row is not None
+    assert reconciled_row.status == "retrying"
+    assert reconciled_row.attempt_count == 2
+    assert reconciled_row.result["outcome"] == "UNKNOWN"
+    assert reconciled_row.result["reconcile_required"] is True
+    fake_client.execute_graph_call.assert_awaited_once()
+    assert fake_client.execute_graph_call.await_args.kwargs["method"] == "GET"
+
+
+@pytest.mark.parametrize(
+    ("graph_response", "expected_outcome"),
+    [
+        ({"success": False}, "REJECTED"),
+        ({}, "UNKNOWN"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_status_action_requires_exact_ack_and_routes_unknown_to_reconciliation(
+    pg_engine: AsyncEngine,
+    clean_meta_tables,
+    monkeypatch,
+    graph_response: dict[str, object],
+    expected_outcome: str,
+):
+    import apps.meta_api_worker.main as worker_main
+
+    monkeypatch.setattr(worker_main, "load_scanning_enabled", AsyncMock(return_value=True))
+    payload = _unique_numeric_payload("pause_ad")
+    payload = MetaMutationPayload(
+        mutation_kind=payload.mutation_kind,
+        target_id=payload.target_id,
+        params={"reason": "ack integration test"},
+        ad_account_id=payload.ad_account_id,
+    )
+    task_id = await create_mutation_task(
+        pg_engine,
+        payload=payload,
+        requested_by="operator:test",
+        status="pending",
+    )
+    assert task_id is not None
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
+    assert claim.task is not None
+
+    fake_client = AsyncMock()
+    fake_client.execute_graph_call = AsyncMock(return_value=graph_response)
+    await process_one_task(pg_engine, claim.task, client=fake_client)
+
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, attempt_count, result FROM task_queue WHERE id = :i"),
+                {"i": task_id},
+            )
+        ).first()
+    assert row is not None
+    assert row.status == ("failed" if expected_outcome == "REJECTED" else "retrying")
+    assert row.attempt_count == (0 if expected_outcome == "REJECTED" else 1)
+    assert row.result["outcome"] == expected_outcome
+    if expected_outcome == "UNKNOWN":
+        assert row.result["reconcile_required"] is True
+    # The ambiguous acknowledgement schedules a read-before-write
+    # reconciliation; this processing pass never sends the mutation twice.
+    fake_client.execute_graph_call.assert_awaited_once()
 
 
 # Повторное create_mutation_task с тем же idempotency_key → None (UNIQUE conflict без ошибки).
@@ -236,7 +502,7 @@ async def test_idempotency_dedup(pg_engine: AsyncEngine, clean_meta_tables):
 # cancel_task переводит PENDING → CANCELLED. Повторный cancel — no-op (rowcount=0).
 @pytest.mark.asyncio
 async def test_cancel_pending_task(pg_engine: AsyncEngine, clean_meta_tables):
-    payload = _unique_payload("pause_campaign")
+    payload = _unique_payload("pause_ad")
     task_id = await create_mutation_task(
         pg_engine,
         payload=payload,
@@ -265,10 +531,10 @@ async def test_cancel_pending_task(pg_engine: AsyncEngine, clean_meta_tables):
 # ====================== Reconcile ======================
 
 
-# reconcile_stuck_meta_running должен поднять running старше N секунд → retrying. Только meta_api_mutation.
+# Canonical reconciler должен поднять running старше N секунд → retrying.
 @pytest.mark.asyncio
 async def test_reconcile_stuck_running(pg_engine: AsyncEngine, clean_meta_tables):
-    payload = _unique_payload("activate_campaign")
+    payload = _unique_payload("activate_ad")
     task_id = await create_mutation_task(
         pg_engine,
         payload=payload,
@@ -289,7 +555,7 @@ async def test_reconcile_stuck_running(pg_engine: AsyncEngine, clean_meta_tables
             {"i": task_id},
         )
 
-    reconciled = await reconcile_stuck_meta_running(pg_engine, stuck_after_seconds=1800)
+    reconciled = await reconcile_stuck_running(pg_engine, stuck_after_seconds=1800)
     assert reconciled >= 1
 
     async with pg_engine.connect() as conn:
@@ -300,37 +566,6 @@ async def test_reconcile_stuck_running(pg_engine: AsyncEngine, clean_meta_tables
             )
         ).first()
     assert row[0] == "retrying"
-
-
-# cancel_stale_meta_drafts должен отменять draft старше 24h.
-@pytest.mark.asyncio
-async def test_cancel_stale_drafts(pg_engine: AsyncEngine, clean_meta_tables):
-    payload = _unique_payload("set_adset_budget")
-    task_id = await create_draft_task(
-        pg_engine,
-        payload=payload,
-        requested_by="ai",
-    )
-    assert task_id is not None
-
-    async with pg_engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE task_queue SET created_at = NOW() - INTERVAL '2 days' WHERE id = :i"),
-            {"i": task_id},
-        )
-
-    cancelled = await cancel_stale_meta_drafts(pg_engine, older_than_seconds=24 * 3600)
-    assert cancelled >= 1
-
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT status, last_error FROM task_queue WHERE id = :i"),
-                {"i": task_id},
-            )
-        ).first()
-    assert row[0] == "cancelled"
-    assert "draft expired" in row[1]
 
 
 # ====================== Audit log ======================
@@ -416,7 +651,9 @@ async def test_concurrent_claim_skip_locked(pg_engine: AsyncEngine, clean_meta_t
     )
     assert task_id is not None
 
-    claims = await asyncio.gather(*(claim_pending_task(pg_engine) for _ in range(5)))
+    claims = await asyncio.gather(
+        *(claim_browser_ready_mutation_task(pg_engine, lanes=("money",)) for _ in range(5))
+    )
     got = [c for c in claims if not c.queue_empty]
     assert len(got) == 1, "Task должна быть захвачена только одним claim"
     assert got[0].task.id == task_id

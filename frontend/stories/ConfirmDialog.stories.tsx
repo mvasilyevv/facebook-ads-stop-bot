@@ -17,7 +17,9 @@ export const Danger: Story = {
     const [open, setOpen] = useState(false);
     return (
       <>
-        <Button variant="danger" onClick={() => setOpen(true)}>Удалить кампанию</Button>
+        <Button variant="danger" onClick={() => setOpen(true)}>
+          Удалить кампанию
+        </Button>
         <ConfirmDialog
           open={open}
           onOpenChange={setOpen}
@@ -37,7 +39,9 @@ export const Approve: Story = {
     const [open, setOpen] = useState(false);
     return (
       <>
-        <Button variant="primary" onClick={() => setOpen(true)}>Одобрить черновик</Button>
+        <Button variant="primary" onClick={() => setOpen(true)}>
+          Одобрить черновик
+        </Button>
         <ConfirmDialog
           open={open}
           onOpenChange={setOpen}

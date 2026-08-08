@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Integration: observer race condition против telegram_poller / meta_api fsm_sync.
+"""Integration: observer race condition against CommandService / Meta API sync.
 
 Сценарий: пользователь успел кликнуть «Отключить» (state=claimed) или
 meta_api_worker выполнил pause_ad и sync_fsm_after_mutation установил state=disabled,
@@ -20,6 +20,8 @@ from sqlalchemy import text
 
 from core.observer.pipeline import process_scan_rows
 from core.scanner.models import ScannedAdRow
+
+pytestmark = pytest.mark.usefixtures("known_test_cabinet_timezones")
 
 
 @pytest_asyncio.fixture
@@ -57,7 +59,10 @@ async def offer_with_cpa(pg_engine, clean_concurrent_tables):
             {"i": offer_id, "c": code, "n": "Concurrent test offer"},
         )
         await conn.execute(
-            text("INSERT INTO offer_rules (offer_id, cpa_threshold) VALUES (:o, :cpa)"),
+            text(
+                "INSERT INTO offer_rules (offer_id, cpa_threshold, currency) "
+                "VALUES (:o, :cpa, 'USD')"
+            ),
             {"o": offer_id, "cpa": Decimal("10.00")},
         )
     return {"offer_id": offer_id, "code": code}
@@ -67,6 +72,8 @@ def _stop_row(*, code: str, fb_ad_id: str) -> ScannedAdRow:
     """ScannedAdRow триггерящий STOP (fast-stop по spend без deposits)."""
     return ScannedAdRow(
         fb_ad_id=fb_ad_id,
+        campaign_id=f"9{fb_ad_id}",
+        adset_id=f"8{fb_ad_id}",
         campaign_name=f"{code} | KE | promo",
         adset_name="ADS_CC",
         ad_name="AD_cc",
@@ -84,14 +91,13 @@ def _stop_row(*, code: str, fb_ad_id: str) -> ScannedAdRow:
 # Сценарий: ad уже в claimed — observer-scan со STOP-метриками НЕ затирает state
 @pytest.mark.asyncio
 async def test_observer_does_not_overwrite_claimed(pg_engine, offer_with_cpa) -> None:
-    fb_ad_id = f"230080{uuid.uuid4().hex[:6]}"
+    fb_ad_id = f"230080{uuid.uuid4().int % 1_000_000:06d}"
     row = _stop_row(code=offer_with_cpa["code"], fb_ad_id=fb_ad_id)
 
     # 1) первый scan переводит ад в stop_sent + создаёт outbox-task
-    await process_scan_rows(pg_engine, rows=[row], scan_id=1)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1)
 
-    # 2) пользователь кликнул «Отключить» — симулируем UPDATE через прямой SQL
-    #    (как сделал бы telegram_poller или disable_reconciler)
+    # 2) пользователь запросил «Отключить» — симулируем committed command state.
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
@@ -108,7 +114,7 @@ async def test_observer_does_not_overwrite_claimed(pg_engine, offer_with_cpa) ->
     # 3) следующий observer-scan видит ту же STOP-картинку и пробует переписать —
     #    WHERE-guard в apply_fsm_transition: NOT IN ('claimed','disabled') → no-op,
     #    state остаётся claimed (meta_api fsm_sync уже отработал)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=2)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=2)
 
     async with pg_engine.connect() as conn:
         state = (
@@ -128,10 +134,10 @@ async def test_observer_does_not_overwrite_claimed(pg_engine, offer_with_cpa) ->
 # может быть всё ещё «грязным» в Ads Manager если сканер успел увидеть до propagation)
 @pytest.mark.asyncio
 async def test_observer_does_not_overwrite_disabled(pg_engine, offer_with_cpa) -> None:
-    fb_ad_id = f"230081{uuid.uuid4().hex[:6]}"
+    fb_ad_id = f"230081{uuid.uuid4().int % 1_000_000:06d}"
     row = _stop_row(code=offer_with_cpa["code"], fb_ad_id=fb_ad_id)
 
-    await process_scan_rows(pg_engine, rows=[row], scan_id=10)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=10)
 
     async with pg_engine.begin() as conn:
         await conn.execute(
@@ -147,7 +153,7 @@ async def test_observer_does_not_overwrite_disabled(pg_engine, offer_with_cpa) -
         )
 
     # observer видит всё ещё STOP — затереть disabled нельзя (терминальное состояние)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=11)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=11)
 
     async with pg_engine.connect() as conn:
         state = (
@@ -167,10 +173,12 @@ async def test_observer_does_not_overwrite_disabled(pg_engine, offer_with_cpa) -
 # (WHERE-guard не блокирует normal/warning_sent/stop_sent — только claimed/disabled)
 @pytest.mark.asyncio
 async def test_observer_can_still_escalate_warning_to_stop(pg_engine, offer_with_cpa) -> None:
-    fb_ad_id = f"230082{uuid.uuid4().hex[:6]}"
+    fb_ad_id = f"230082{uuid.uuid4().int % 1_000_000:06d}"
     # сначала добиваемся warning_sent (lighter metrics), потом эскалируем
     warn_row = ScannedAdRow(
         fb_ad_id=fb_ad_id,
+        campaign_id=f"9{fb_ad_id}",
+        adset_id=f"8{fb_ad_id}",
         campaign_name=f"{offer_with_cpa['code']} | KE | promo",
         adset_name="ADS_CC",
         ad_name="AD_cc",
@@ -183,7 +191,7 @@ async def test_observer_can_still_escalate_warning_to_stop(pg_engine, offer_with
         ctr=Decimal("2.5"),
         impressions=5,  # >= guardrail_min_impressions=3
     )
-    await process_scan_rows(pg_engine, rows=[warn_row], scan_id=20)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[warn_row], scan_id=20)
 
     async with pg_engine.connect() as conn:
         state_before = (
@@ -196,6 +204,7 @@ async def test_observer_can_still_escalate_warning_to_stop(pg_engine, offer_with
     # эскалация полноценным STOP-row
     await process_scan_rows(
         pg_engine,
+        ad_account_id="123",
         rows=[_stop_row(code=offer_with_cpa["code"], fb_ad_id=fb_ad_id)],
         scan_id=21,
     )
@@ -213,12 +222,14 @@ async def test_observer_can_still_escalate_warning_to_stop(pg_engine, offer_with
 # Setup warning_sent делаем прямым SQL, чтобы не зависеть от точности порогов evaluator'а.
 @pytest.mark.asyncio
 async def test_warning_to_stop_persists_same_open_token(pg_engine, offer_with_cpa) -> None:
-    fb_ad_id = f"230083{uuid.uuid4().hex[:6]}"
+    fb_ad_id = f"230083{uuid.uuid4().int % 1_000_000:06d}"
     pre_token = uuid.uuid4()
 
     # 1) первый scan с нормой — создаст catalog + ad_alert_state='normal'
     normal_row = ScannedAdRow(
         fb_ad_id=fb_ad_id,
+        campaign_id=f"9{fb_ad_id}",
+        adset_id=f"8{fb_ad_id}",
         campaign_name=f"{offer_with_cpa['code']} | KE | promo",
         adset_name="ADS_CC",
         ad_name="AD_cc",
@@ -231,7 +242,7 @@ async def test_warning_to_stop_persists_same_open_token(pg_engine, offer_with_cp
         ctr=Decimal("3.0"),
         impressions=50,  # здоровые метрики → normal (deposit_stage, расход в норме)
     )
-    await process_scan_rows(pg_engine, rows=[normal_row], scan_id=30)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[normal_row], scan_id=30)
 
     # 2) вручную приводим состояние к warning_sent с известным open_state_token
     async with pg_engine.begin() as conn:
@@ -254,6 +265,7 @@ async def test_warning_to_stop_persists_same_open_token(pg_engine, offer_with_cp
     # 3) STOP-метрики → observer эскалирует warning_sent → stop_sent с тем же token
     await process_scan_rows(
         pg_engine,
+        ad_account_id="123",
         rows=[_stop_row(code=offer_with_cpa["code"], fb_ad_id=fb_ad_id)],
         scan_id=31,
     )

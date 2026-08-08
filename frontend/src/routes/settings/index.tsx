@@ -1,7 +1,7 @@
 /**
  * Settings-страница.
- * Разделы: Мониторинг / Telegram / Vision / Диагностика.
- * Диагностика объединяет runtime Observer, список воркеров и общий вердикт.
+ * Разделы: отображение, автоматизация и интеграции.
+ * Runtime-состояние находится на канонической странице `/system/sources`.
  * Каждый таб — отдельный компонент в components/settings/.
  */
 
@@ -9,17 +9,13 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Tabs, TabsList, TabsContent, type TabItem } from "@/components/ui/Tabs";
 import { ObserverTab } from "@/components/settings/ObserverTab";
-import { HealthTab } from "@/components/settings/HealthTab";
 import { DisplayTab } from "@/components/settings/DisplayTab";
 import { IntegrationsTab } from "@/components/settings/IntegrationsTab";
 
 export const Route = createFileRoute("/settings/")({
   component: SettingsPage,
   validateSearch: (search: Record<string, unknown>) => ({
-    tab:
-      typeof search.tab === "string" && TAB_VALUES.has(search.tab)
-        ? search.tab
-        : "display",
+    tab: typeof search.tab === "string" && TAB_VALUES.has(search.tab) ? search.tab : "display",
   }),
 });
 
@@ -27,7 +23,6 @@ const TAB_ITEMS: TabItem[] = [
   { value: "display", label: "Отображение" },
   { value: "automation", label: "Автоматизация" },
   { value: "integrations", label: "Интеграции" },
-  { value: "diagnostics", label: "Диагностика" },
 ];
 const TAB_VALUES = new Set(TAB_ITEMS.map((item) => item.value));
 
@@ -37,11 +32,7 @@ function SettingsPage() {
 
   return (
     <>
-      <PageHeader
-        eyebrowNum="05"
-        eyebrow="SYSTEM · КОНФИГУРАЦИЯ"
-        title="Настройки"
-      />
+      <PageHeader eyebrowNum="05" eyebrow="СИСТЕМА · КОНФИГУРАЦИЯ" title="Настройки" />
 
       <Tabs
         value={tab}
@@ -59,10 +50,6 @@ function SettingsPage() {
 
         <TabsContent value="integrations">
           <IntegrationsTab />
-        </TabsContent>
-
-        <TabsContent value="diagnostics">
-          <HealthTab />
         </TabsContent>
       </Tabs>
     </>

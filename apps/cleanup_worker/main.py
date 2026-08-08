@@ -8,48 +8,50 @@ import logging
 import os
 import signal
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from apps.cleanup_worker.worker import run_once
+from apps.cleanup_worker.worker import create_next_partition_if_missing, run_once
 from core.db import WORKER_ENGINE_KWARGS
+from core.worker_metrics import mark_worker_heartbeat
 
 logger = logging.getLogger("cleanup_worker")
 
-# Heartbeat — имя ДОЛЖНО совпадать с EXPECTED_WORKERS в health_watchdog.
 WORKER_NAME = "cleanup"
-HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
-HEARTBEAT_TTL_SECONDS = 60
+_METRICS_INTERVAL_SECONDS = 15.0
 
 # Час прогона (UTC), default 4:00
 _RUN_HOUR_UTC = int(os.environ.get("CLEANUP_WORKER_RUN_HOUR_UTC", "4"))
 
-# Корень для media-файлов (по умолчанию ./data/ad_library_media)
-_MEDIA_ROOT = Path(os.environ.get("AD_LIBRARY_MEDIA_ROOT", "./data/ad_library_media")).resolve()
 
-
-def _get_redis_url() -> str:
-    return os.environ.get("REDIS_URL", "redis://localhost:6380/0")
-
-
-async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
-    """Периодически пишет worker:heartbeat:cleanup с TTL 60s.
-
-    Параллельный таск — cleanup работает раз в сутки, но heartbeat нужен непрерывно
-    чтобы watchdog знал что процесс жив.
-    """
-    interval = HEARTBEAT_TTL_SECONDS / 2
+async def metrics_loop(stop: asyncio.Event) -> None:
+    """Refresh Prometheus even though cleanup itself runs only once per day."""
     while not stop.is_set():
+        mark_worker_heartbeat(WORKER_NAME)
         try:
-            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
-        except Exception:  # noqa: BLE001
-            logger.exception("cleanup heartbeat: ошибка записи в Redis")
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=interval)
+            await asyncio.wait_for(stop.wait(), timeout=_METRICS_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
             pass
+
+
+async def _initialize_partition_storage(
+    engine,
+    *,
+    run_cleanup_on_start: bool,
+) -> None:
+    """Create current/next partitions before any retention work or sleep.
+
+    The Alembic baseline deliberately owns only date-independent DEFAULT
+    partitions.  Every cleanup process therefore materializes the current and
+    next month as its first database operation; the DEFAULT partitions remain
+    the fail-safe route if the process is temporarily unavailable.
+    """
+
+    created = await create_next_partition_if_missing(engine, fail_on_error=True)
+    logger.info("Startup partition preparation complete: %s", created)
+    if run_cleanup_on_start:
+        logger.info("CLEANUP_RUN_ON_START=true → запуск сразу")
+        await run_once(engine)
 
 
 def _seconds_until_next_run(now: datetime) -> float:
@@ -75,20 +77,15 @@ async def main_loop(database_url: str) -> None:
         except (NotImplementedError, ValueError):
             pass
 
-    # Запускаем heartbeat — cleanup работает раз в сутки, но должен сигналить что жив.
-    hb_redis: redis_asyncio.Redis | None = None
-    hb_task: asyncio.Task | None = None
-    try:
-        hb_redis = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
-        hb_task = asyncio.create_task(heartbeat_loop(hb_redis, stop_event))
-    except Exception:
-        logger.warning("cleanup_worker: не удалось запустить heartbeat")
+    metrics_task = asyncio.create_task(metrics_loop(stop_event))
 
     try:
-        # При старте — сразу один прогон (для удобства dev)
-        if os.environ.get("CLEANUP_RUN_ON_START", "false").lower() == "true":
-            logger.info("CLEANUP_RUN_ON_START=true → запуск сразу")
-            await run_once(engine, media_root=_MEDIA_ROOT)
+        await _initialize_partition_storage(
+            engine,
+            run_cleanup_on_start=(
+                os.environ.get("CLEANUP_RUN_ON_START", "false").lower() == "true"
+            ),
+        )
 
         while not stop_event.is_set():
             now = datetime.now(timezone.utc)
@@ -108,24 +105,17 @@ async def main_loop(database_url: str) -> None:
                 break
 
             try:
-                await run_once(engine, media_root=_MEDIA_ROOT)
+                await run_once(engine)
             except Exception as exc:
                 logger.exception("run_once упал: %s", exc)
                 # Не падаем — спим до следующего запланированного прогона
     finally:
-        # Останавливаем heartbeat-таск.
         stop_event.set()
-        if hb_task is not None:
-            hb_task.cancel()
-            try:
-                await hb_task
-            except asyncio.CancelledError:
-                pass
-        if hb_redis is not None:
-            try:
-                await hb_redis.aclose()
-            except Exception:
-                pass
+        metrics_task.cancel()
+        try:
+            await metrics_task
+        except asyncio.CancelledError:
+            pass
         await engine.dispose()
         logger.info("cleanup_worker остановлен.")
 

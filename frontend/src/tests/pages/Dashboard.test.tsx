@@ -1,241 +1,196 @@
+import type { ComponentType, ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { OperatorRealtimeStatusProvider, type OperatorRealtimeStatus } from "@fb/operator-api";
+import { makeOperatorSnapshot } from "@fb/shared/operator/testFixture";
+
+const mockUseOperatorSnapshot = vi.fn();
+const mockScan = vi.fn();
+
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: (_path: string) => (options: { component: unknown }) => options,
-  useRouter: () => ({ navigate: vi.fn() }),
+  createFileRoute: () => (options: { component: ComponentType }) => options,
+  Link: ({ children, to, ...props }: { children: ReactNode; to: string }) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
-vi.mock("@/lib/api/dashboard", () => ({
-  useDashboardBatch: vi.fn(),
-  useEnableRecommendations: vi.fn(() => ({ data: [], isLoading: false })),
-  useConfirmEnableRecommendation: vi.fn(() => ({
-    mutate: vi.fn(),
-    isPending: false,
-    variables: undefined,
-  })),
+vi.mock("@/lib/api/operator", () => ({
+  useOperatorSnapshot: (...args: unknown[]) => mockUseOperatorSnapshot(...args),
+  useOperatorScanNow: () => ({ mutate: mockScan, isPending: false }),
+  operatorProblemMessage: (error: unknown) => (error instanceof Error ? error.message : "Ошибка"),
 }));
 
-vi.mock("@/lib/api/analytics", () => ({
-  useAnalyticsPerformance: vi.fn(() => ({
-    data: {
-      totals: {
-        spend: "123.45",
-        impressions: 2000,
-        clicks: 100,
-        registrations: 12,
-        ftds: 4,
-        confirmed_deposits: 3,
-        redeposits: 1,
-        revenue: "250.00",
-      },
-      total_live_budget: {
-        base_budget: "100.00",
-        stop_budget: "80.00",
-        base_delta: "23.45",
-        stop_delta: "43.45",
-      },
-      rows: [
-        {
-          id: "00000000-0000-0000-0000-000000000001",
-          name: "Campaign A",
-          offer_code: "OFF-A",
-          live_budget: { base_budget: "100.00", base_delta: "23.45" },
-        },
-      ],
-    },
-    isLoading: false,
-  })),
-  useAnalyticsLiveBudget: vi.fn(() => ({
-    data: { points: [] },
-    isLoading: false,
-  })),
+vi.mock("@/components/ui/toastStore", () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("@/lib/api/ads", () => ({
-  useDisableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
-  useEnableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
-}));
+import { Route } from "@/routes/index";
 
-vi.mock("@/lib/api/settings", () => ({
-  useObserverSettings: vi.fn(() => ({
-    data: {
-      is_scanning_enabled: true,
-      default_interval_seconds: 30,
-      auto_enable_recommendations: false,
-    },
-    isLoading: false,
-    isError: false,
-  })),
-  useToggleScanning: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
-  useObserverStatus: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
-  useHealthDetails: vi.fn(() => ({
-    data: {
-      workers: [{ name: "observer", status: "ONLINE" }],
-      observer_runtime: { status: "running" },
-      meta_api_channel: { status: "ONLINE" },
-      overall: "HEALTHY",
-    },
-    isLoading: false,
-    isError: false,
-  })),
-}));
+const Dashboard = (Route as unknown as { component: ComponentType }).component;
 
-vi.mock("@/lib/websocket/useRealtimeInvalidation", () => ({
-  useRealtimeInvalidation: vi.fn(() => undefined),
-}));
-
-vi.mock("@/lib/api/client", () => ({ apiSend: vi.fn().mockResolvedValue(undefined) }));
-
-import { useDashboardBatch } from "@/lib/api/dashboard";
-import { useHealthDetails, useObserverSettings } from "@/lib/api/settings";
-
-function makeBatch(overrides: Record<string, unknown> = {}) {
-  return {
-    stats: {
-      total_ads_monitored: 100,
-      ads_in_normal: 80,
-      ads_in_warning: 5,
-      ads_in_stop: 2,
-      ads_in_claimed: 1,
-      ads_in_disabled: 12,
-      active_incidents: 7,
-      last_scan_at: new Date().toISOString(),
-      last_scan_outcome: "ok",
-      scans_today: 42,
-      scans_today_with_errors: 0,
-      observer_status: "running",
-      pending_disable_tasks: 0,
-      pending_enable_tasks: 0,
-      failed_tasks_24h: 0,
-    },
-    recent_incidents: [],
-    recent_alerts: [],
-    recent_disable_tasks: [],
-    recent_enable_tasks: [],
-    enable_recommendations_pending: [],
-    ...overrides,
-  };
-}
-
-async function renderDashboard() {
-  const routeModule = await import("../../routes/index");
-  const Page = (routeModule.Route as unknown as { component: React.FC }).component;
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderDashboard(status: OperatorRealtimeStatus = "connected") {
   return render(
-    <QueryClientProvider client={client}>
-      <Page />
-    </QueryClientProvider>,
+    <OperatorRealtimeStatusProvider status={status}>
+      <Dashboard />
+    </OperatorRealtimeStatusProvider>,
   );
 }
 
-describe("operator Dashboard", () => {
+describe("operator dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(useDashboardBatch).mockReturnValue({
-      data: makeBatch(),
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: makeOperatorSnapshot(),
       isLoading: false,
       isError: false,
       error: null,
       refetch: vi.fn(),
-    } as never);
+    });
   });
 
-  it("shows attention status and live budget economics in the first viewport", async () => {
-    await renderDashboard();
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Что требует внимания");
-    expect(screen.getByText("ЭКОНОМИКА СЕГОДНЯ")).toBeInTheDocument();
-    expect(screen.getByText("РИСКИ И РЕШЕНИЯ")).toBeInTheDocument();
-    expect(screen.getByText("$123.45")).toBeInTheDocument();
-    expect(screen.getAllByText("+$23.45").length).toBeGreaterThan(0);
+  it("shows the action-first overview and confirmed money", () => {
+    renderDashboard();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Есть отклонения");
+    expect(screen.getByText("Расход и границы")).toBeInTheDocument();
+    expect(screen.getByText("CPL выше базы")).toBeInTheDocument();
+    expect(screen.getAllByText(/USD\s*18\.40/).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Сканировать" })).toBeInTheDocument();
   });
 
-  it("keeps ad states in a compact status strip", async () => {
-    await renderDashboard();
-    expect(screen.getByText("Норма").parentElement).toHaveTextContent("80");
-    expect(screen.getByText("Warning").parentElement).toHaveTextContent("5");
-    expect(screen.getAllByText("Stop")[0]?.parentElement).toHaveTextContent("2");
-    expect(screen.queryByText(/объявлений под контролем/i)).not.toBeInTheDocument();
-  });
-
-  it("shows manual auto-enable mode and recent automatic actions", async () => {
-    vi.mocked(useDashboardBatch).mockReturnValue({
-      data: makeBatch({
-        recent_enable_tasks: [
-          {
-            id: "task-1",
-            ad_name: "Recovered ad",
-            fb_ad_id: "123",
-            status: "SUCCEEDED",
-            requested_by: "auto_enable_recommendation_worker",
-            created_at: "2026-07-17T10:00:00Z",
-          },
-        ],
-      }),
+  it("never turns unavailable data into a green or zero state", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.system = {
+      ...snapshot.system,
+      state: "unavailable",
+      data: null,
+      issues: [
+        {
+          code: "HEARTBEATS_MISSING",
+          title: "Воркеры не отвечают",
+          detail: "Нет подтверждённых heartbeat.",
+          severity: "critical",
+          correlation_id: "corr-down",
+        },
+      ],
+    };
+    snapshot.economy = { ...snapshot.economy, state: "unavailable", data: null };
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
       isLoading: false,
       isError: false,
       error: null,
       refetch: vi.fn(),
-    } as never);
-    await renderDashboard();
-    expect(screen.getByText("Только вручную")).toBeInTheDocument();
-    expect(screen.getByText("Recovered ad")).toBeInTheDocument();
+    });
+
+    renderDashboard();
+    expect(screen.getAllByText("Источник недоступен").length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Состояние ещё не подтверждено",
+    );
+    expect(screen.queryByText("Активных рисков нет")).not.toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
-  it("shows paused monitoring without presenting it as healthy", async () => {
-    vi.mocked(useObserverSettings).mockReturnValue({
-      data: {
-        is_scanning_enabled: false,
-        default_interval_seconds: 30,
-        auto_enable_recommendations: false,
-      },
+  it("surfaces partial sections while retaining explicitly marked data", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.funnel = {
+      ...snapshot.funnel,
+      state: "partial",
+      issues: [
+        {
+          code: "TRACKER_DELAYED",
+          title: "Tracker задерживается",
+          detail: "Показана только подтверждённая часть воронки.",
+          severity: "warning",
+          correlation_id: "corr-tracker",
+        },
+      ],
+    };
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
       isLoading: false,
       isError: false,
-    } as never);
-    await renderDashboard();
-    expect(screen.getByText("Мониторинг на паузе")).toBeInTheDocument();
-    expect(screen.queryByText("Система в норме")).not.toBeInTheDocument();
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderDashboard();
+    expect(screen.getByText("Tracker задерживается")).toBeInTheDocument();
+    expect(screen.getByText("Клики")).toBeInTheDocument();
   });
 
-  it("surfaces a critical billing warning and leaves scan controls visible", async () => {
-    vi.mocked(useHealthDetails).mockReturnValue({
-      data: {
-        workers: [{ name: "observer", status: "ONLINE" }],
-        observer_runtime: { status: "running" },
-        meta_api_channel: { status: "ONLINE" },
-        critical_alerts: [
-          {
-            id: "shadow_spend:123",
-            kind: "shadow_spend",
-            severity: "CRITICAL",
-            title: "Meta списывает быстрее отчётности",
-            message: "Биллинг вырос.",
-            account_id: "123",
-            detected_at: new Date().toISOString(),
-            details: {},
-          },
-        ],
-        overall: "CRITICAL",
-      },
+  it("never paints degraded money context as a healthy overview", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.system.data!.severity = "ok";
+    snapshot.attention.data!.items = [];
+    snapshot.economy = { ...snapshot.economy, state: "partial" };
+    snapshot.meta = {
+      ...snapshot.meta,
+      currency: null,
+      currency_state: "mixed",
+    };
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
       isLoading: false,
       isError: false,
-    } as never);
-    await renderDashboard();
-    expect(screen.getByText("Meta списывает быстрее отчётности")).toBeInTheDocument();
-    expect(screen.getByText("ПОСЛЕДНИЙ СКАН")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Открыть Ads Manager" })).toBeInTheDocument();
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderDashboard();
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Денежный контекст требует проверки",
+    );
+    expect(screen.getAllByText("Данные неполные").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Активных рисков нет")).not.toBeInTheDocument();
   });
 
-  it("renders an actionable error state when the overview fails", async () => {
-    vi.mocked(useDashboardBatch).mockReturnValue({
+  it("does not render a server-provided action outside the internal allowlist", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.attention.data!.items[0]!.action = {
+      label: "Открыть",
+      href: "https://example.invalid/operator",
+    };
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderDashboard();
+
+    expect(screen.queryByRole("link", { name: /Открыть/ })).not.toBeInTheDocument();
+  });
+
+  it("renders an actionable unavailable state for request failures", () => {
+    mockUseOperatorSnapshot.mockReturnValue({
       data: undefined,
       isLoading: false,
       isError: true,
-      error: new Error("Network error"),
+      error: new Error("Network down"),
       refetch: vi.fn(),
-    } as never);
-    await renderDashboard();
-    expect(screen.getByRole("alert")).toHaveTextContent("Не удалось загрузить операторский обзор");
+    });
+    renderDashboard();
+    expect(screen.getByRole("alert")).toHaveTextContent("Операторский снимок недоступен");
+    expect(screen.getByRole("button", { name: "Повторить" })).toBeInTheDocument();
+  });
+
+  it("never presents a cached snapshot as current while realtime reconnects", () => {
+    renderDashboard("reconnecting");
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Состояние ещё не подтверждено",
+    );
+    expect(screen.getAllByText("Данные устарели").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Данные актуальны")).not.toBeInTheDocument();
+    expect(screen.queryByText("Активных рисков нет")).not.toBeInTheDocument();
+    expect(screen.queryByText("В работе")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Состояние не подтверждено").length).toBeGreaterThan(0);
   });
 });

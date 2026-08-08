@@ -21,7 +21,14 @@ from core.campaign_builder.uniquify import ConceptInput, build_uniquification_pl
 
 def _account() -> Account:
     """Минимальный валидный кабинет."""
-    return Account(act_id="123456789", page_id="111", pixel_id="222")
+    return Account(
+        act_id="123456789",
+        page_id="111",
+        pixel_id="222",
+        timezone_name="America/New_York",
+        currency="USD",
+        account_context_observed_at="2026-06-17T12:00:00+00:00",
+    )
 
 
 def _config(**overrides) -> CampaignConfig:
@@ -32,7 +39,7 @@ def _config(**overrides) -> CampaignConfig:
         destination_link="https://example.shop/x",
         start_date="2026-06-18",
         creo_root="~/Documents/FB_Agent_Creo/CR_GH",
-        budget=Budget(daily_cents=300, bid_amount_cents=500),
+        budget=Budget(currency="USD", daily_amount="3.00", bid_amount="5.00"),
         targeting=Targeting(countries=["GH"]),
         campaigns=[],
     )
