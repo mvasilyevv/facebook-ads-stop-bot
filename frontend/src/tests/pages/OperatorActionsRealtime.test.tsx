@@ -77,7 +77,7 @@ describe("web actions realtime projection", () => {
     expect(screen.getByText("Данные устарели")).toBeInTheDocument();
     expect(screen.getByText("Live-связь восстанавливается")).toBeInTheDocument();
     const actionList = screen.getByRole("list", {
-      name: "Последние действия",
+      name: "Очередь и история действий",
     });
     expect(within(actionList).getAllByText(/Результат уточняется/).length).toBeGreaterThan(0);
     expect(within(actionList).queryByText("Подтверждено")).not.toBeInTheDocument();

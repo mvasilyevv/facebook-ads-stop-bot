@@ -785,6 +785,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/operator/cabinets/{cabinet_id}/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Operator Cabinet Snapshot
+         * @description Return the canonical operator snapshot narrowed to one cabinet.
+         */
+        get: operations["get_operator_cabinet_snapshot_api_operator_cabinets__cabinet_id__snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/operator/actions": {
         parameters: {
             query?: never;
@@ -3272,6 +3292,32 @@ export interface components {
              */
             ends_at: string;
         };
+        /** OperatorCabinetLedgerRow */
+        OperatorCabinetLedgerRow: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Timezone */
+            timezone: string | null;
+            /** Currency */
+            currency?: string | null;
+            state: components["schemas"]["DataState"];
+            severity: components["schemas"]["OperatorSeverity"];
+            /** As Of */
+            as_of: string | null;
+            /** Freshness Seconds */
+            freshness_seconds: number | null;
+            cabinet_day: components["schemas"]["OperatorCabinetDay"] | null;
+            totals: components["schemas"]["OperatorEconomyTotals"];
+            /** Risk Label */
+            risk_label: string;
+            /** Risk Reason */
+            risk_reason: string | null;
+            /** Issues */
+            issues: components["schemas"]["OperatorIssue"][];
+            action: components["schemas"]["OperatorAttentionAction"];
+        };
         /** OperatorCommandResponse */
         OperatorCommandResponse: {
             /** Task Id */
@@ -3283,6 +3329,22 @@ export interface components {
             created: boolean;
             /** Correlation Id */
             correlation_id: string;
+        };
+        /** OperatorCurrencyGroup */
+        OperatorCurrencyGroup: {
+            /** Id */
+            id: string;
+            /** Currency */
+            currency?: string | null;
+            state: components["schemas"]["DataState"];
+            severity: components["schemas"]["OperatorSeverity"];
+            /** As Of */
+            as_of: string | null;
+            /** Freshness Seconds */
+            freshness_seconds: number | null;
+            totals: components["schemas"]["OperatorEconomyTotals"];
+            /** Cabinets */
+            cabinets: components["schemas"]["OperatorCabinetLedgerRow"][];
         };
         /** OperatorEconomyData */
         OperatorEconomyData: {
@@ -3408,6 +3470,11 @@ export interface components {
             /** Correlation Id */
             correlation_id: string | null;
         };
+        /** OperatorPortfolioData */
+        OperatorPortfolioData: {
+            /** Currency Groups */
+            currency_groups: components["schemas"]["OperatorCurrencyGroup"][];
+        };
         /**
          * OperatorScopeEvidence
          * @description Validated account context shared by operator and analytics responses.
@@ -3490,6 +3557,19 @@ export interface components {
             issues: components["schemas"]["OperatorIssue"][];
             data: components["schemas"]["OperatorFunnelData"] | null;
         };
+        /** OperatorSection[OperatorPortfolioData] */
+        OperatorSection_OperatorPortfolioData_: {
+            state: components["schemas"]["DataState"];
+            /** As Of */
+            as_of: string | null;
+            /** Freshness Seconds */
+            freshness_seconds: number | null;
+            /** Sources */
+            sources: string[];
+            /** Issues */
+            issues: components["schemas"]["OperatorIssue"][];
+            data: components["schemas"]["OperatorPortfolioData"] | null;
+        };
         /** OperatorSection[OperatorSystemData] */
         OperatorSection_OperatorSystemData_: {
             state: components["schemas"]["DataState"];
@@ -3512,6 +3592,7 @@ export interface components {
         OperatorSnapshot: {
             meta: components["schemas"]["OperatorSnapshotMeta"];
             attention: components["schemas"]["OperatorSection_OperatorAttentionData_"];
+            portfolio: components["schemas"]["OperatorSection_OperatorPortfolioData_"];
             economy: components["schemas"]["OperatorSection_OperatorEconomyData_"];
             funnel: components["schemas"]["OperatorSection_OperatorFunnelData_"];
             actions: components["schemas"]["OperatorSection_OperatorActionsData_"];
@@ -6272,6 +6353,103 @@ export interface operations {
             };
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorSnapshot"];
+                };
+            };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Permission denied */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Resource not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Command lifecycle conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Ad projection changed before enqueue */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Request validation failed */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Operator source unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+            /** @description Canonical API error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiProblem"];
+                };
+            };
+        };
+    };
+    get_operator_cabinet_snapshot_api_operator_cabinets__cabinet_id__snapshot_get: {
+        parameters: {
+            query?: {
+                window?: "today" | "24h" | "7d" | "30d";
+                timezone?: string | null;
+            };
+            header?: never;
+            path: {
+                cabinet_id: string;
+            };
             cookie?: never;
         };
         requestBody?: never;

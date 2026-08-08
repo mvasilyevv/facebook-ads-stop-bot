@@ -10,11 +10,7 @@
  * GET /offers/rules/preview ТОЧНО совпадает с реальными срабатываниями.
  */
 import { useEffect, useState } from "react";
-import {
-  isOfferCpaValid,
-  isOfferCurrencyValid,
-  type OfferRulesValues,
-} from "@fb/features/offers";
+import { isOfferCpaValid, isOfferCurrencyValid, type OfferRulesValues } from "@fb/features/offers";
 import { formatSpend } from "@fb/shared/format/number";
 import { Input } from "@/components/ui/Input";
 import { Slider } from "@/components/ui/Slider";
@@ -69,20 +65,12 @@ export function OfferRulesFields({ values, onChange, disabled }: Props) {
 
   return (
     <div className="flex flex-col gap-5">
-      <Input
-        id="offer-currency"
-        label="Валюта CPA"
-        placeholder="USD"
-        value={values.currency}
-        maxLength={3}
-        onChange={(event) =>
-          onChange({ currency: event.target.value.toUpperCase() })
-        }
-        disabled={disabled}
-        autoCapitalize="characters"
-        autoCorrect="off"
-        helpText="Трёхбуквенный ISO-код валюты рекламного кабинета, например USD, EUR или JPY."
-      />
+      <div className="border-y border-[var(--color-hairline)] px-1 py-3" role="status">
+        <div className="text-[12px] text-bg-8">Валюта бюджета</div>
+        <div className="mt-1 font-numeric text-[16px] text-bg-11">
+          {currencyValid ? "$ · доллар США" : "Нужна конфигурация USD"}
+        </div>
+      </div>
       <Input
         id="offer-cpa"
         type="text"
@@ -92,11 +80,7 @@ export function OfferRulesFields({ values, onChange, disabled }: Props) {
         value={values.cpa}
         onChange={(e) => onChange({ cpa: e.target.value })}
         disabled={disabled}
-        leftIcon={
-          <span className="text-[12px] text-bg-9">
-            {currencyValid ? values.currency.toUpperCase() : "ISO"}
-          </span>
-        }
+        leftIcon={<span className="text-[12px] text-bg-9">{currencyValid ? "$" : "!"}</span>}
         helpText="Целевая цена действия (FTD/депозит). От неё автоматически считаются стоп-пороги."
       />
 
@@ -147,7 +131,7 @@ function RulesPreview({
         style={{ padding: "var(--space-4)" }}
       >
         {!currencyValid
-          ? "Укажите валюту CPA трёхбуквенным ISO-кодом."
+          ? "Настройка оффера не в USD. Исправьте adoption bundle до запуска."
           : "Укажите CPA — покажу, при какой цене сработают стоп и warning по каждой метрике."}
       </div>
     );
@@ -197,8 +181,7 @@ function RulesPreview({
             <div key={s.rule} className="flex items-center justify-between text-[12px]">
               <span className="text-bg-10">{s.label}</span>
               <span className="font-display tabular-nums text-bg-11">
-                {formatSpend(s.stop_from, data.currency)}–
-                {formatSpend(s.stop_to, data.currency)}
+                {formatSpend(s.stop_from, data.currency)}–{formatSpend(s.stop_to, data.currency)}
               </span>
             </div>
           ))}

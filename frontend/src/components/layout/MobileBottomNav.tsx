@@ -38,7 +38,7 @@ export function MobileBottomNav() {
   return (
     <nav
       aria-label="Основная мобильная навигация"
-      className="fixed inset-x-0 bottom-0 z-50 border-t border-[var(--color-hairline-strong)] bg-bg-1/95 pb-[env(safe-area-inset-bottom,0px)] backdrop-blur-xl md:hidden"
+      className="fixed inset-x-0 bottom-0 z-50 border-t border-[var(--color-hairline-strong)] bg-bg-0 pb-[env(safe-area-inset-bottom,0px)] md:hidden"
     >
       <div className="grid grid-cols-4">
         {tabs.map((tab) => {

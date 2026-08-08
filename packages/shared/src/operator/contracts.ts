@@ -34,6 +34,12 @@ export type OperatorEconomyTotals =
   components["schemas"]["OperatorEconomyTotals"];
 export type OperatorSpendPoint = components["schemas"]["OperatorSpendPoint"];
 export type OperatorEconomyData = components["schemas"]["OperatorEconomyData"];
+export type OperatorCabinetLedgerRow =
+  components["schemas"]["OperatorCabinetLedgerRow"];
+export type OperatorCurrencyGroup =
+  components["schemas"]["OperatorCurrencyGroup"];
+export type OperatorPortfolioData =
+  components["schemas"]["OperatorPortfolioData"];
 export type OperatorFunnelStage = components["schemas"]["OperatorFunnelStage"];
 export type OperatorFunnelStageKey = OperatorFunnelStage["key"];
 export type OperatorFunnelData = components["schemas"]["OperatorFunnelData"];

@@ -109,6 +109,62 @@ async def test_operator_actions_keep_retrying_ambiguity_visible(pg_engine) -> No
 
 
 @pytest.mark.asyncio
+async def test_operator_actions_filter_two_cabinets_in_the_database(pg_engine) -> None:
+    suffix = uuid.uuid4().hex[:10]
+    account_a = str(int(suffix[:5], 16) + 1_000_000)
+    account_b = str(int(suffix[5:], 16) + 2_000_000)
+    task_ids: list[int] = []
+    try:
+        async with pg_engine.begin() as conn:
+            for account_id in (account_a, account_b):
+                task_id = await conn.scalar(
+                    text(
+                        """
+                        INSERT INTO task_queue (
+                            task_type, status, idempotency_key, payload, result,
+                            requested_by, lane, priority, available_at, deadline_at
+                        )
+                        VALUES (
+                            'meta_api_mutation', 'running', :idempotency_key,
+                            CAST(:payload AS JSONB), '{}'::JSONB,
+                            'operator:test', 'money', 100, NOW(), NOW() + INTERVAL '30 seconds'
+                        )
+                        RETURNING id
+                        """
+                    ),
+                    {
+                        "idempotency_key": f"operator-cabinet-scope-{suffix}-{account_id}",
+                        "payload": (
+                            '{"mutation_kind":"pause_ad","target_id":"scope-'
+                            f'{account_id}","ad_account_id":"act_{account_id}"}}'
+                        ),
+                    },
+                )
+                assert task_id is not None
+                task_ids.append(int(task_id))
+
+        visible, _, _ = await fetch_operator_actions(
+            pg_engine,
+            account_id=f"act_{account_a}",
+            limit=100,
+        )
+
+        visible_ids = {item["id"] for item in visible}
+        assert str(task_ids[0]) in visible_ids
+        assert str(task_ids[1]) not in visible_ids
+        assert {item["account_id"] for item in visible if item["id"] in visible_ids} >= {
+            f"act_{account_a}"
+        }
+    finally:
+        if task_ids:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
+                    text("DELETE FROM task_queue WHERE id = ANY(:task_ids)"),
+                    {"task_ids": task_ids},
+                )
+
+
+@pytest.mark.asyncio
 async def test_operator_ads_keep_terminal_unknown_as_active_action(pg_engine) -> None:
     """Ads remain action-blocked while a terminal Meta result is unresolved."""
     suffix = uuid.uuid4().hex[:10]

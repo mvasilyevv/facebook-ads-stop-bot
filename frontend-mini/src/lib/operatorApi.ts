@@ -32,6 +32,22 @@ export function useOperatorSnapshot(query: OperatorSnapshotQuery = {}) {
   );
 }
 
+export function useOperatorCabinetSnapshot(
+  cabinetId: string,
+  query: Omit<OperatorSnapshotQuery, "account_id"> = {},
+) {
+  return operatorApi.useQuery(
+    "get",
+    "/api/operator/cabinets/{cabinet_id}/snapshot",
+    { params: { path: { cabinet_id: cabinetId }, query } },
+    {
+      enabled: Boolean(cabinetId),
+      staleTime: 10_000,
+      retry: (count, error) => count < 2 && !isTerminalOperatorProblem(error),
+    },
+  );
+}
+
 export function useOperatorIncident(incidentId: string) {
   return operatorApi.useQuery(
     "get",
@@ -45,44 +61,53 @@ export function useOperatorIncident(incidentId: string) {
 export async function fetchOperatorSnapshotForRealtime(
   queryClient: QueryClient,
 ) {
-  const snapshotKey = ["get", "/api/operator/snapshot"] as const;
-  queryClient.removeQueries({ queryKey: snapshotKey, type: "inactive" });
-  await queryClient.cancelQueries({ queryKey: snapshotKey }, { silent: true });
-  await queryClient.invalidateQueries({
-    queryKey: snapshotKey,
-    refetchType: "none",
-  });
-  const hasActiveSnapshots =
-    queryClient
-      .getQueryCache()
-      .findAll({ queryKey: snapshotKey, type: "active" }).length > 0;
-  const snapshots = hasActiveSnapshots
-    ? await queryClient
-        .refetchQueries(
-          { queryKey: snapshotKey, type: "active", stale: true },
-          { throwOnError: true },
-        )
-        .then(() =>
-          queryClient
-            .getQueriesData<OperatorSnapshot>({ queryKey: snapshotKey })
-            .flatMap(([, value]) => (value ? [value] : [])),
-        )
-    : [
-        await queryClient.fetchQuery(
-          operatorApi.queryOptions(
-            "get",
-            "/api/operator/snapshot",
-            { params: { query: {} } },
-            { retry: false, staleTime: 0 },
-          ),
-        ),
-      ];
-  queryClient.removeQueries({ queryKey: snapshotKey, type: "inactive" });
-  if (snapshots.length === 0) {
-    throw new Error(
-      "active operator snapshots disappeared during reconciliation",
-    );
-  }
+  const snapshotKeys = [
+    ["get", "/api/operator/snapshot"] as const,
+    ["get", "/api/operator/cabinets/{cabinet_id}/snapshot"] as const,
+  ];
+  snapshotKeys.forEach((queryKey) =>
+    queryClient.removeQueries({ queryKey, type: "inactive" }),
+  );
+  await Promise.all(
+    snapshotKeys.map((queryKey) =>
+      queryClient.cancelQueries({ queryKey }, { silent: true }),
+    ),
+  );
+  await Promise.all(
+    snapshotKeys.map((queryKey) =>
+      queryClient.invalidateQueries({ queryKey, refetchType: "none" }),
+    ),
+  );
+  const activeQueries = snapshotKeys.flatMap((queryKey) =>
+    queryClient.getQueryCache().findAll({ queryKey, type: "active" }),
+  );
+  const canonicalSnapshotPromise = queryClient.fetchQuery(
+    operatorApi.queryOptions(
+      "get",
+      "/api/operator/snapshot",
+      { params: { query: {} } },
+      { retry: false, staleTime: 0 },
+    ),
+  );
+  await Promise.all([
+    canonicalSnapshotPromise,
+    ...snapshotKeys.map((queryKey) =>
+      queryClient.refetchQueries(
+        { queryKey, type: "active", stale: true },
+        { throwOnError: true },
+      ),
+    ),
+  ]);
+  const snapshots = [
+    await canonicalSnapshotPromise,
+    ...activeQueries.flatMap((query) => {
+      const value = queryClient.getQueryData<OperatorSnapshot>(query.queryKey);
+      return value ? [value] : [];
+    }),
+  ];
+  snapshotKeys.forEach((queryKey) =>
+    queryClient.removeQueries({ queryKey, type: "inactive" }),
+  );
   return oldestOperatorSnapshot(snapshots);
 }
 

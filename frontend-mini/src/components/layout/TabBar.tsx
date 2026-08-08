@@ -43,6 +43,7 @@ const MAIN_TABS: TabConfig[] = [
 
 /** Пути, на которых tab-bar СКРЫВАЕМ (detail/вложенные экраны). */
 const HIDDEN_ON: RegExp[] = [
+  /^\/cabinets\/.+$/,
   /^\/ads\/.+$/,
   /^\/actions\/.+$/,
   /^\/incidents\/.+$/,
@@ -75,8 +76,8 @@ export function TabBar() {
       aria-label="Навигация"
       className={cn(
         "fixed bottom-0 left-0 right-0 z-30",
-        "max-w-[480px] mx-auto",
-        "bg-bg-1/95 backdrop-blur-md",
+        "max-w-[560px] mx-auto",
+        "bg-bg-1",
         "border-t border-[var(--color-hairline-strong)]",
         "pb-[var(--tg-content-safe-bottom,env(safe-area-inset-bottom,0px))]",
         "pl-[var(--tg-content-safe-left,env(safe-area-inset-left,0px))]",

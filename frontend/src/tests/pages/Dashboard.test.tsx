@@ -53,10 +53,11 @@ describe("operator dashboard", () => {
 
   it("shows the action-first overview and confirmed money", () => {
     renderDashboard();
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Есть отклонения");
-    expect(screen.getByText("Расход и границы")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Сейчас");
+    expect(screen.getByText("Есть отклонения, требующие решения")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Портфель" })).toBeInTheDocument();
     expect(screen.getByText("CPL выше базы")).toBeInTheDocument();
-    expect(screen.getAllByText(/USD\s*18\.40/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/\$18\.40/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Сканировать" })).toBeInTheDocument();
   });
 
@@ -87,9 +88,7 @@ describe("operator dashboard", () => {
 
     renderDashboard();
     expect(screen.getAllByText("Источник недоступен").length).toBeGreaterThan(0);
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Состояние ещё не подтверждено",
-    );
+    expect(screen.getByText("Состояние ещё не подтверждено")).toBeInTheDocument();
     expect(screen.queryByText("Активных рисков нет")).not.toBeInTheDocument();
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
@@ -142,10 +141,10 @@ describe("operator dashboard", () => {
 
     renderDashboard();
 
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Денежный контекст требует проверки",
-    );
+    expect(screen.getByText("Денежный контекст требует проверки")).toBeInTheDocument();
     expect(screen.getAllByText("Данные неполные").length).toBeGreaterThan(0);
+    expect(screen.getByText("Валюта не подтверждена")).toBeInTheDocument();
+    expect(screen.queryByText("$47.80")).not.toBeInTheDocument();
     expect(screen.queryByText("Активных рисков нет")).not.toBeInTheDocument();
   });
 
@@ -165,7 +164,7 @@ describe("operator dashboard", () => {
 
     renderDashboard();
 
-    expect(screen.queryByRole("link", { name: /Открыть/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Открыть" })).not.toBeInTheDocument();
   });
 
   it("renders an actionable unavailable state for request failures", () => {
@@ -184,13 +183,12 @@ describe("operator dashboard", () => {
   it("never presents a cached snapshot as current while realtime reconnects", () => {
     renderDashboard("reconnecting");
 
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Состояние ещё не подтверждено",
-    );
+    expect(screen.getByText("Состояние ещё не подтверждено")).toBeInTheDocument();
     expect(screen.getAllByText("Данные устарели").length).toBeGreaterThan(0);
     expect(screen.queryByText("Данные актуальны")).not.toBeInTheDocument();
     expect(screen.queryByText("Активных рисков нет")).not.toBeInTheDocument();
     expect(screen.queryByText("В работе")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Состояние не подтверждено").length).toBeGreaterThan(0);
+    expect(screen.getByText("Выполняется")).toBeInTheDocument();
+    expect(screen.queryByText("Подтверждено")).not.toBeInTheDocument();
   });
 });

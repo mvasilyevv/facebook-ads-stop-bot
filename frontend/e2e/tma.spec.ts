@@ -11,26 +11,19 @@ test("@tma initializes always-dark shell and applies every Telegram safe area", 
 }) => {
   await page.goto("./");
 
-  await expect(page.getByRole("heading", { name: "Контроль" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Сейчас" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Навигация" })).toBeVisible();
-  const spendChart = page.getByRole("group", {
-    name: "Интерактивный график «Накопительный расход»",
-  });
-  const currentMarker = spendChart.locator("[data-current-time-marker]");
-  const currentMarkerLabel = spendChart.locator("[data-current-time-label]");
-  await expect(currentMarker).toBeVisible();
-  await expect(currentMarkerLabel).toHaveText("Сейчас");
-  const [spendChartBox, currentMarkerLabelBox] = await Promise.all([
-    spendChart.boundingBox(),
-    currentMarkerLabel.boundingBox(),
-  ]);
-  if (!spendChartBox || !currentMarkerLabelBox) {
-    throw new Error("TMA current marker geometry is unavailable");
-  }
-  expect(currentMarkerLabelBox.x).toBeGreaterThanOrEqual(spendChartBox.x);
-  expect(currentMarkerLabelBox.x + currentMarkerLabelBox.width).toBeLessThanOrEqual(
-    spendChartBox.x + spendChartBox.width,
-  );
+  await expect(page.getByText("FB Agent · оператор")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Портфель" })).toBeVisible();
+  await expect(page.getByText("$47.80")).toBeVisible();
+  await expect(
+    page.getByRole("group", {
+      name: "Интерактивный график «Накопительный расход»",
+    }),
+  ).toHaveCount(0);
+
+  const sectionOrder = await page.locator(".mini-ledger-section > header h2").allTextContents();
+  expect(sectionOrder).toEqual(["Требует внимания", "Портфель", "Действия", "Воронка"]);
 
   const shell = await page.locator("main").evaluate((node) => {
     const style = getComputedStyle(node);
@@ -174,7 +167,32 @@ test("@tma action route registers native BackButton and returns to dashboard", a
     ).__tmaHarness.backHandler?.();
   });
   await expect(page).toHaveURL(/\/tma\/$/);
-  await expect(page.getByRole("heading", { name: "Контроль" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Сейчас" })).toBeVisible();
+});
+
+test("@tma opens the typed cabinet ledger and uses native back navigation", async ({ page }) => {
+  await page.goto("./");
+
+  const cabinetRequest = page.waitForRequest((request) =>
+    request.url().includes("/api/operator/cabinets/123/snapshot"),
+  );
+  await page.getByRole("button", { name: /GH_CR2/ }).click();
+  await cabinetRequest;
+
+  await expect(page).toHaveURL(/\/tma\/cabinets\/123$/);
+  await expect(page.getByRole("heading", { name: "GH_CR2" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Навигация" })).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __tmaHarness: { backShowCalls: number };
+          }
+        ).__tmaHarness.backShowCalls,
+    ),
+  ).toBeGreaterThan(0);
+  await expectNoHorizontalPageScroll(page);
 });
 
 test("@tma campaign abort stays pending and uses the same two-tap lifecycle", async ({ page }) => {

@@ -1,42 +1,43 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   AlertTriangle,
-  CheckCircle2,
+  ArrowRight,
+  Check,
   CircleHelp,
+  Clock3,
   RefreshCw,
-  ShieldAlert,
+  X,
+  type LucideIcon,
 } from "lucide-react";
 
 import {
   ACTION_STATE_LABEL,
-  decimalToNumber,
-  severityForDataState,
+  DATA_STATE_LABEL,
+  SEVERITY_LABEL,
   snapshotForRealtimeState,
   snapshotHeadline,
   snapshotOverviewState,
-  workerStatusLabel,
 } from "@fb/shared/operator/viewModel";
-import {
-  currentMarkerLabelPosition,
-  serverSeriesMarker,
-} from "@fb/shared/operator/chartModel";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { formatSpend } from "@fb/shared/format/number";
-import { formatZonedTime } from "@fb/shared/format/time";
+import { formatZonedDateTime } from "@fb/shared/format/time";
 import type { components } from "@fb/shared/api/generated";
-import type {
-  DataState,
-  OperatorActionItem,
-  OperatorEconomyData,
-  OperatorSeverity,
-  OperatorSpendPoint,
-} from "@fb/shared/operator/contracts";
+import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import {
-  AccessibleChartFrame,
-  DataStateBadge,
-  OperatorSectionFrame,
-} from "@fb/operator-ui";
+  buildOperatorPortfolioScale,
+  operatorPortfolioScalePosition,
+} from "@fb/shared/operator/portfolioModel";
+import type {
+  OperatorActionItem,
+  OperatorAttentionItem,
+  OperatorCabinetLedgerRow,
+  OperatorCurrencyGroup,
+  OperatorFunnelData,
+  OperatorSection,
+  OperatorSeverity,
+  OperatorSnapshot,
+} from "@fb/shared/operator/contracts";
 
 import { Button } from "@/components/ui/Button";
 import { haptic, tgAlert } from "@/lib/tg";
@@ -46,31 +47,67 @@ import {
 } from "@/lib/transientNavigation";
 import {
   operatorProblemMessage,
+  useOperatorCabinetSnapshot,
   useOperatorScanNow,
   useOperatorSnapshot,
 } from "@/lib/operatorApi";
 
-const SEVERITY_VIEW: Record<
-  OperatorSeverity,
-  { Icon: typeof ShieldAlert; color: string }
-> = {
-  ok: { Icon: CheckCircle2, color: "var(--color-success)" },
-  warning: { Icon: AlertTriangle, color: "var(--color-warning)" },
-  critical: { Icon: ShieldAlert, color: "var(--color-danger)" },
-  unknown: { Icon: CircleHelp, color: "var(--color-bg-9)" },
+import "./operator-mini-ledger.css";
+
+const SEVERITY_ICON: Record<OperatorSeverity, LucideIcon> = {
+  ok: Check,
+  warning: AlertTriangle,
+  critical: AlertTriangle,
+  unknown: CircleHelp,
 };
 
-const SEVERITY_LABEL: Record<OperatorSeverity, string> = {
-  ok: "Исправно",
-  warning: "Внимание",
-  critical: "Критично",
-  unknown: "Не подтверждено",
+const ACTION_ICON: Record<OperatorActionItem["state"], LucideIcon> = {
+  queued: Clock3,
+  running: Clock3,
+  confirmed: Check,
+  failed: X,
+  cancelled: X,
+  unknown: CircleHelp,
 };
 
 export function OperatorMiniDashboard() {
+  const snapshotQuery = useOperatorSnapshot({ window: "today" });
+  return <OperatorMiniLedgerScreen snapshotQuery={snapshotQuery} />;
+}
+
+export function OperatorMiniCabinetDashboard({
+  cabinetId,
+}: {
+  cabinetId: string;
+}) {
+  const snapshotQuery = useOperatorCabinetSnapshot(cabinetId, {
+    window: "today",
+  });
+  return (
+    <OperatorMiniLedgerScreen
+      snapshotQuery={snapshotQuery}
+      cabinetId={cabinetId}
+    />
+  );
+}
+
+interface SnapshotQueryLike {
+  data?: OperatorSnapshot;
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+  refetch: () => unknown;
+}
+
+function OperatorMiniLedgerScreen({
+  snapshotQuery,
+  cabinetId,
+}: {
+  snapshotQuery: SnapshotQueryLike;
+  cabinetId?: string;
+}) {
   const navigate = useNavigate();
   const realtimeStatus = useOperatorRealtimeStatus();
-  const snapshotQuery = useOperatorSnapshot({ window: "today" });
   const scan = useOperatorScanNow();
   const [scanReceipt, setScanReceipt] = useState<
     components["schemas"]["ScanNowResponse"] | null
@@ -104,10 +141,17 @@ export function OperatorMiniDashboard() {
     realtimeStatus === "connected",
   );
   const headline = snapshotHeadline(snapshot);
-  const timezoneDegraded = snapshot.meta.cabinet_timezone_state !== "single";
-  const currencyUnknown = snapshot.meta.currency_state !== "single";
-  const systemDisplayState = snapshotOverviewState(snapshot);
-  const view = SEVERITY_VIEW[headline.severity];
+  const overviewState = snapshotOverviewState(snapshot);
+  const StatusIcon = SEVERITY_ICON[headline.severity];
+  const pageTitle = cabinetId
+    ? (snapshot.meta.account.name ?? `Кабинет ${cabinetId}`)
+    : "Сейчас";
+  const cabinetCurrencyLabel = confirmedOperatorCurrency(snapshot.meta)
+    ? "$"
+    : "USD не подтверждён";
+  const pageDetail = cabinetId
+    ? `${cabinetCurrencyLabel} · ${snapshot.meta.cabinet_timezone ?? "часовой пояс не подтверждён"}`
+    : "Деньги, расхождения и команды";
 
   const runScan = async () => {
     haptic.impact("medium");
@@ -136,279 +180,616 @@ export function OperatorMiniDashboard() {
     await navigate({ to: destination.to });
   };
 
+  const openCabinet = async (nextCabinetId: string) => {
+    haptic.selection();
+    await navigate({
+      to: "/cabinets/$cabinetId",
+      params: { cabinetId: nextCabinetId },
+    });
+  };
+
   return (
-    <div className="flex min-w-0 flex-col gap-4 px-4 pb-5 pt-3">
-      <header className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="font-display text-[12px] uppercase tracking-[.08em] text-bg-8">
-            Сейчас · {snapshot.meta.account.name ?? "кабинет"}
-          </div>
-          <h1 className="m-0 mt-2 font-display text-[30px] font-medium leading-[1.05] tracking-[-.03em] text-bg-11">
-            Контроль
-          </h1>
+    <div className="mini-ledger" aria-labelledby="mini-ledger-title">
+      <header className="mini-ledger__header">
+        <div>
+          <span className="mini-ledger__eyebrow">FB Agent · оператор</span>
+          <h1 id="mini-ledger-title">{pageTitle}</h1>
+          <p>{pageDetail}</p>
         </div>
-        <button
-          type="button"
-          className="inline-flex size-11 shrink-0 items-center justify-center rounded-[var(--radius-2)] bg-accent text-bg-0 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          aria-label="Сканировать сейчас"
-          disabled={scan.isPending}
-          onClick={() => void runScan()}
-        >
-          <RefreshCw
-            size={19}
-            className={scan.isPending ? "animate-spin" : ""}
-            aria-hidden="true"
-          />
-        </button>
+        <div className="mini-ledger__tools">
+          <button
+            type="button"
+            className="mini-proof"
+            onClick={() => void navigate({ to: "/system/sources" })}
+          >
+            <StatusIcon size={15} aria-hidden="true" />
+            <span>{miniStateLabel(overviewState)}</span>
+            <span>{freshnessLabel(snapshot.portfolio.freshness_seconds)}</span>
+          </button>
+          <button
+            type="button"
+            className="mini-scan"
+            aria-label="Сканировать сейчас"
+            disabled={scan.isPending}
+            onClick={() => void runScan()}
+          >
+            <RefreshCw
+              size={18}
+              className={scan.isPending ? "animate-spin" : ""}
+              aria-hidden="true"
+            />
+            <span>Сканировать</span>
+          </button>
+        </div>
       </header>
 
       {scanReceipt ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className="flex min-h-11 flex-col gap-3 rounded-[var(--radius-3)] border border-warning/40 bg-warning-bg p-4 text-bg-11"
-        >
+        <div role="status" aria-live="polite" className="mini-ledger__receipt">
           <div>
-            <strong className="text-[14px]">
-              Сканирование поставлено в очередь
-            </strong>
-            <div className="mt-1 font-display text-[12px] text-bg-9">
-              Задача #{scanReceipt.task_id}
-            </div>
+            <strong>Сканирование поставлено в очередь</strong>
+            <span>Задача #{scanReceipt.task_id}</span>
           </div>
           <Link
             to="/actions/$actionId"
             params={{ actionId: String(scanReceipt.task_id) }}
-            className="inline-flex min-h-11 items-center justify-center rounded-[var(--radius-2)] border border-warning/50 px-4 text-[14px] font-semibold text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            className="mini-ledger__inline-action"
           >
             Открыть выполнение
           </Link>
         </div>
       ) : null}
 
-      {timezoneDegraded ? (
-        <div
-          role="status"
-          className="flex min-h-11 items-start gap-3 rounded-[var(--radius-3)] border border-warning/40 bg-warning-bg p-4 text-[14px] leading-5 text-bg-11"
-        >
-          <AlertTriangle
-            className="mt-0.5 shrink-0 text-warning"
-            size={18}
-            aria-hidden="true"
-          />
-          <span>
-            {snapshot.meta.cabinet_timezone_state === "mixed"
-              ? "В выборке несколько часовых поясов; границы суток рассчитаны отдельно по кабинетам."
-              : "Часовой пояс кабинета неизвестен; границы суток оценочные."}
-          </span>
+      <div
+        className="mini-ledger__status"
+        data-severity={headline.severity}
+        role={headline.severity === "critical" ? "alert" : "status"}
+      >
+        <StatusIcon size={17} aria-hidden="true" />
+        <div>
+          <strong>{headline.title}</strong>
+          <p>{headline.detail}</p>
         </div>
-      ) : null}
-      {currencyUnknown ? (
-        <div
-          role="status"
-          className="flex min-h-11 items-start gap-3 rounded-[var(--radius-3)] border border-warning/40 bg-warning-bg p-4 text-[14px] leading-5 text-bg-11"
-        >
-          <AlertTriangle
-            className="mt-0.5 shrink-0 text-warning"
-            size={18}
-            aria-hidden="true"
-          />
-          <span>
-            {snapshot.meta.currency_state === "mixed"
-              ? "В выборке несколько валют; денежные значения скрыты."
-              : "Валюта кабинета не подтверждена; денежные значения скрыты."}
-          </span>
-        </div>
-      ) : null}
+        <span>
+          as_of{" "}
+          {formatDateTime(snapshot.meta.generated_at, snapshot.meta.timezone)}
+        </span>
+      </div>
 
-      <section
-        className="rounded-[var(--radius-3)] border border-[var(--color-hairline-strong)] bg-bg-1 p-4"
-        aria-label="Сводное состояние"
-      >
-        <div className="flex items-start gap-3">
-          <span
-            className="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-2)] bg-bg-2"
-            style={{ color: view.color }}
-          >
-            <view.Icon size={20} aria-hidden="true" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <DataStateBadge state={systemDisplayState} compact />
-            <h2 className="m-0 mt-3 text-[18px] leading-6 text-bg-11">
-              {headline.title}
-            </h2>
-            <p className="mt-1 text-[14px] leading-5 text-bg-9">
-              {headline.detail}
-            </p>
-          </div>
-        </div>
-        {snapshot.system.data ? (
-          <ul className="mt-4 grid grid-cols-2 gap-2" aria-label="Источники">
-            {snapshot.system.data.workers.slice(0, 4).map((worker) => (
-              <li
-                key={worker.id}
-                className="min-w-0 rounded-[var(--radius-2)] bg-bg-2 p-3"
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className="size-2 shrink-0 rounded-full"
-                    style={{
-                      background:
-                        SEVERITY_VIEW[
-                          severityForDataState(
-                            worker.severity,
-                            snapshot.system.state,
-                          )
-                        ].color,
-                    }}
-                    aria-hidden="true"
-                    data-severity={severityForDataState(
-                      worker.severity,
-                      snapshot.system.state,
-                    )}
-                  />
-                  <strong className="truncate text-[14px] text-bg-11">
-                    {worker.label}
-                  </strong>
-                </div>
-                <div className="mt-1 truncate text-[12px] text-bg-9">
-                  {snapshot.system.state === "stale" ||
-                  snapshot.system.state === "unavailable"
-                    ? "Состояние не подтверждено"
-                    : workerStatusLabel(worker.status)}
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </section>
-
-      <OperatorSectionFrame
-        section={snapshot.attention}
-        title="Требует внимания"
-        description="Критичные риски и решения."
-        empty={<MiniEmpty text="Активных сигналов нет." />}
-      >
-        {(attention) => (
-          <ol className="mt-3 divide-y divide-[var(--color-hairline)]">
-            {attention.items.slice(0, 4).map((item) => (
-              <li key={item.id} className="py-4 first:pt-2">
-                <div className="flex items-start gap-3">
-                  <span
-                    className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-2)] bg-bg-2"
-                    style={{ color: SEVERITY_VIEW[item.severity].color }}
-                    role="img"
-                    aria-label={SEVERITY_LABEL[item.severity]}
-                  >
-                    {(() => {
-                      const SeverityIcon = SEVERITY_VIEW[item.severity].Icon;
-                      return <SeverityIcon size={16} aria-hidden="true" />;
-                    })()}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <span className="font-display text-[12px] uppercase tracking-[.06em] text-bg-8">
-                      {SEVERITY_LABEL[item.severity]}
-                    </span>
-                    <strong className="text-[14px] text-bg-11">
-                      {item.title}
-                    </strong>
-                    <p className="mt-1 text-[14px] leading-5 text-bg-9">
-                      {item.summary}
-                    </p>
-                    {item.action ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void openAttentionAction(item.action!.href)
-                        }
-                        className="mt-3 inline-flex min-h-11 items-center rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] px-3 text-[14px] font-semibold text-bg-11"
-                      >
-                        {item.action.label}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ol>
-        )}
-      </OperatorSectionFrame>
-
-      <OperatorSectionFrame
-        section={snapshot.economy}
-        title="Расход"
-        description="Факт и границы суток кабинета."
-        empty={<MiniEmpty text="Расхода в выбранном периоде нет." />}
-      >
-        {(economy) => (
-          <MiniEconomy
-            economy={economy}
-            currency={snapshot.meta.currency ?? null}
-            timezone={snapshot.meta.timezone}
-            completeness={snapshot.economy.state}
-            asOf={snapshot.economy.as_of}
-            currentAt={snapshot.meta.generated_at}
-            sources={snapshot.economy.sources}
-          />
-        )}
-      </OperatorSectionFrame>
-
-      <OperatorSectionFrame
-        section={snapshot.funnel}
-        title="Воронка"
-        description="Meta → Tracker"
-        empty={<MiniEmpty text="Событий воронки пока нет." />}
-      >
-        {(funnel) => (
-          <ol
-            className="mt-3 grid grid-cols-2 gap-2"
-            aria-label="Этапы воронки"
-          >
-            {funnel.stages.map((stage) => (
-              <li
-                key={stage.key}
-                className="rounded-[var(--radius-2)] bg-bg-2 p-3"
-              >
-                <div className="text-[12px] font-semibold text-bg-9">
-                  {stage.label}
-                </div>
-                <div className="mt-1 font-display text-[22px] tabular-nums text-bg-11">
-                  {stage.count === null
-                    ? "—"
-                    : stage.count.toLocaleString("ru-RU")}
-                </div>
-                <div className="mt-1 text-[12px] text-bg-9">
-                  CR {stage.conversion === null ? "—" : `${stage.conversion}%`}
-                </div>
-                <div className="mt-1 text-[12px] text-bg-9">
-                  Стоимость{" "}
-                  {formatFunnelCost(stage.cost, snapshot.meta.currency ?? null)}
-                </div>
-              </li>
-            ))}
-          </ol>
-        )}
-      </OperatorSectionFrame>
-
-      <OperatorSectionFrame
-        section={snapshot.actions}
-        title="Действия"
-        description="Очередь и результат money-операций."
-        action={
-          <button
-            type="button"
-            className="min-h-11 rounded-[var(--radius-2)] px-2 text-[14px] font-semibold text-bg-10"
-            onClick={() => void navigate({ to: "/actions" })}
-          >
-            Все
-          </button>
-        }
-        empty={<MiniEmpty text="Активных действий нет." />}
-      >
-        {(actions) => <MiniActions items={actions.items.slice(0, 4)} />}
-      </OperatorSectionFrame>
+      <div className="mini-ledger__flow">
+        <MiniAttentionLedger
+          section={snapshot.attention}
+          timezone={snapshot.meta.timezone}
+          onAction={openAttentionAction}
+        />
+        <MiniPortfolioLedger
+          section={snapshot.portfolio}
+          timezone={snapshot.meta.timezone}
+          usdScopeConfirmed={
+            snapshot.meta.currency_state === "single" &&
+            snapshot.meta.currency === "USD"
+          }
+          onCabinet={openCabinet}
+        />
+        <MiniActionJournal section={snapshot.actions} />
+        <MiniFunnelLedger
+          section={snapshot.funnel}
+          currency={snapshot.meta.currency ?? null}
+          timezone={snapshot.meta.timezone}
+        />
+      </div>
     </div>
   );
+}
+
+function MiniAttentionLedger({
+  section,
+  timezone,
+  onAction,
+}: {
+  section: OperatorSnapshot["attention"];
+  timezone: string;
+  onAction: (href: string) => Promise<void>;
+}) {
+  const items = section.data?.items.slice(0, 5) ?? [];
+  return (
+    <MiniLedgerSection
+      className="mini-ledger-section--attention"
+      id="mini-attention-title"
+      title="Требует внимания"
+      detail={`${items.length} ${pluralReason(items.length)}`}
+      section={section}
+      timezone={timezone}
+    >
+      {!section.data ? (
+        <MiniLedgerEmpty text={DATA_STATE_LABEL[section.state]} />
+      ) : items.length === 0 ? (
+        <MiniLedgerEmpty text="Активных сигналов нет." />
+      ) : (
+        <ol className="mini-attention-list">
+          {items.map((item) => (
+            <MiniAttentionItem key={item.id} item={item} onAction={onAction} />
+          ))}
+        </ol>
+      )}
+    </MiniLedgerSection>
+  );
+}
+
+function MiniAttentionItem({
+  item,
+  onAction,
+}: {
+  item: OperatorAttentionItem;
+  onAction: (href: string) => Promise<void>;
+}) {
+  const Icon = SEVERITY_ICON[item.severity];
+  return (
+    <li className="mini-attention-item" data-severity={item.severity}>
+      <div className="mini-attention-item__head">
+        <span>{item.target.label ?? item.title}</span>
+        <span data-severity={item.severity}>
+          <Icon size={14} aria-hidden="true" />
+          {SEVERITY_LABEL[item.severity]}
+        </span>
+      </div>
+      <h3>{item.title}</h3>
+      <p>{item.summary}</p>
+      {item.reason ? <p>Причина: {item.reason}</p> : null}
+      {item.action ? (
+        <button type="button" onClick={() => void onAction(item.action!.href)}>
+          {item.action.label}
+          <ArrowRight size={14} aria-hidden="true" />
+        </button>
+      ) : null}
+    </li>
+  );
+}
+
+function MiniPortfolioLedger({
+  section,
+  timezone,
+  usdScopeConfirmed,
+  onCabinet,
+}: {
+  section: OperatorSnapshot["portfolio"];
+  timezone: string;
+  usdScopeConfirmed: boolean;
+  onCabinet: (cabinetId: string) => Promise<void>;
+}) {
+  const groups = section.data?.currency_groups ?? [];
+  return (
+    <MiniLedgerSection
+      className="mini-ledger-section--portfolio"
+      id="mini-portfolio-title"
+      title="Портфель"
+      detail="сегодня"
+      section={section}
+      timezone={timezone}
+    >
+      {!section.data ? (
+        <MiniLedgerEmpty text={DATA_STATE_LABEL[section.state]} />
+      ) : groups.length === 0 ? (
+        <MiniLedgerEmpty text="Кабинеты ещё не добавлены." />
+      ) : (
+        groups.map((group) => (
+          <MiniCurrencyGroup
+            key={group.id}
+            group={group}
+            usdScopeConfirmed={usdScopeConfirmed}
+            onCabinet={onCabinet}
+          />
+        ))
+      )}
+    </MiniLedgerSection>
+  );
+}
+
+function MiniCurrencyGroup({
+  group,
+  usdScopeConfirmed,
+  onCabinet,
+}: {
+  group: OperatorCurrencyGroup;
+  usdScopeConfirmed: boolean;
+  onCabinet: (cabinetId: string) => Promise<void>;
+}) {
+  const scale = buildOperatorPortfolioScale(group, usdScopeConfirmed);
+  const { usdConfirmed } = scale;
+  const totals = usdConfirmed
+    ? group.totals
+    : { spend: null, base: null, stop: null, base_delta: null };
+  return (
+    <div className="mini-ledger-group" data-state={group.state}>
+      {!usdConfirmed ? (
+        <div className="mini-ledger-group__currency-warning">
+          <AlertTriangle size={15} aria-hidden="true" />
+          Валюта не подтверждена; суммы скрыты
+        </div>
+      ) : null}
+      <dl className="mini-ledger-totals">
+        <MiniLedgerTotal label="Расход" value={totals.spend} />
+        <MiniLedgerTotal label="База" value={totals.base} />
+        <MiniLedgerTotal label="Стоп" value={totals.stop} stop />
+      </dl>
+      <div className="mini-ledger-axis" aria-hidden="true">
+        <span>$0</span>
+        <span>{formatScaleTick(scale.maximum / 2)}</span>
+        <span>{formatScaleTick(scale.maximum)}</span>
+      </div>
+      <div role="list" aria-label="Кабинеты">
+        {group.cabinets.map((cabinet) => (
+          <MiniCabinetRow
+            key={cabinet.id}
+            cabinet={cabinet}
+            scale={scale}
+            usdConfirmed={usdConfirmed}
+            onOpen={onCabinet}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MiniCabinetRow({
+  cabinet,
+  scale,
+  usdConfirmed,
+  onOpen,
+}: {
+  cabinet: OperatorCabinetLedgerRow;
+  scale: ReturnType<typeof buildOperatorPortfolioScale>;
+  usdConfirmed: boolean;
+  onOpen: (cabinetId: string) => Promise<void>;
+}) {
+  const Icon = SEVERITY_ICON[cabinet.severity];
+  const showScale =
+    usdConfirmed &&
+    cabinet.state !== "stale" &&
+    cabinet.state !== "unavailable" &&
+    cabinet.totals.spend !== null;
+  const actualPercent = operatorPortfolioScalePosition(
+    showScale ? cabinet.totals.spend : null,
+    scale,
+  );
+  const basePercent = operatorPortfolioScalePosition(
+    showScale ? cabinet.totals.base : null,
+    scale,
+  );
+  const stopPercent = operatorPortfolioScalePosition(
+    showScale ? cabinet.totals.stop : null,
+    scale,
+  );
+  return (
+    <div
+      className="mini-ledger-cabinet"
+      data-severity={cabinet.severity}
+      data-state={cabinet.state}
+      role="listitem"
+    >
+      <button type="button" onClick={() => void onOpen(cabinet.id)}>
+        <span className="mini-ledger-cabinet__identity">
+          <strong>{cabinet.name}</strong>
+          <small>
+            {usdConfirmed ? "$" : "валюта не подтверждена"} ·{" "}
+            {cabinet.timezone ?? "timezone не подтверждён"}
+          </small>
+        </span>
+        <span
+          className="mini-ledger-cabinet__state"
+          data-severity={cabinet.severity}
+        >
+          <Icon size={14} aria-hidden="true" />
+          {cabinet.risk_label}
+        </span>
+        <ArrowRight size={15} aria-hidden="true" />
+      </button>
+      <div className="mini-ledger-scale" data-state={cabinet.state}>
+        <span className="mini-ledger-scale__baseline" aria-hidden="true" />
+        {actualPercent !== null ? (
+          <>
+            <span
+              className="mini-ledger-scale__actual"
+              style={{ width: `${actualPercent}%` }}
+              aria-hidden="true"
+            />
+            <span
+              className="mini-ledger-scale__value"
+              data-align={actualPercent > 78 ? "end" : "start"}
+              style={{ left: `${actualPercent}%` }}
+            >
+              {formatUsd(cabinet.totals.spend)}
+            </span>
+          </>
+        ) : (
+          <span className="mini-ledger-scale__unknown">
+            {cabinet.state === "stale"
+              ? "снимок устарел"
+              : "данные не подтверждены"}
+          </span>
+        )}
+        {basePercent !== null ? (
+          <span
+            className="mini-ledger-scale__marker"
+            style={{ left: `${basePercent}%` }}
+            aria-hidden="true"
+          />
+        ) : null}
+        {stopPercent !== null ? (
+          <span
+            className="mini-ledger-scale__marker mini-ledger-scale__marker--stop"
+            style={{ left: `${stopPercent}%` }}
+            aria-hidden="true"
+          />
+        ) : null}
+        <span className="sr-only">
+          Расход {formatUsd(showScale ? cabinet.totals.spend : null)}, база{" "}
+          {formatUsd(showScale ? cabinet.totals.base : null)}, стоп{" "}
+          {formatUsd(showScale ? cabinet.totals.stop : null)}.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function MiniActionJournal({
+  section,
+}: {
+  section: OperatorSnapshot["actions"];
+}) {
+  const items = section.data?.items.slice(0, 5) ?? [];
+  return (
+    <MiniLedgerSection
+      className="mini-ledger-section--actions"
+      id="mini-actions-title"
+      title="Действия"
+      detail={`${items.filter(isActiveAction).length} выполняется`}
+      section={section}
+    >
+      {!section.data ? (
+        <MiniLedgerEmpty text={DATA_STATE_LABEL[section.state]} />
+      ) : items.length === 0 ? (
+        <MiniLedgerEmpty text="Активных действий нет." />
+      ) : (
+        <ol className="mini-action-journal">
+          {items.map((item) => {
+            const Icon = ACTION_ICON[item.state];
+            return (
+              <li key={item.id}>
+                <div className="mini-action-journal__head">
+                  <span>
+                    {item.title} · {item.target_label ?? "система"}
+                  </span>
+                  <span data-state={item.state}>
+                    <Icon size={14} aria-hidden="true" />
+                    {ACTION_STATE_LABEL[item.state]}
+                  </span>
+                </div>
+                {item.reason ? <p>{item.reason}</p> : null}
+                {isActiveAction(item) ? (
+                  <div
+                    className="mini-action-journal__progress"
+                    aria-hidden="true"
+                  />
+                ) : null}
+                <div className="mini-action-journal__meta">
+                  <span>Задача {item.public_id}</span>
+                  <span>{item.correlation_id.slice(0, 8)}</span>
+                </div>
+                <Link to="/actions/$actionId" params={{ actionId: item.id }}>
+                  Открыть действие
+                  <ArrowRight size={14} aria-hidden="true" />
+                </Link>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </MiniLedgerSection>
+  );
+}
+
+function MiniFunnelLedger({
+  section,
+  currency,
+  timezone,
+}: {
+  section: OperatorSnapshot["funnel"];
+  currency: string | null;
+  timezone: string;
+}) {
+  return (
+    <MiniLedgerSection
+      className="mini-ledger-section--funnel"
+      id="mini-funnel-title"
+      title="Воронка"
+      detail={
+        section.state === "ready"
+          ? "полные данные"
+          : DATA_STATE_LABEL[section.state]
+      }
+      section={section}
+      timezone={timezone}
+    >
+      {!section.data ? (
+        <MiniLedgerEmpty text={DATA_STATE_LABEL[section.state]} />
+      ) : (
+        <MiniFunnelStages
+          funnel={section.data}
+          currency={currency === "USD" ? "USD" : null}
+        />
+      )}
+    </MiniLedgerSection>
+  );
+}
+
+function MiniFunnelStages({
+  funnel,
+  currency,
+}: {
+  funnel: OperatorFunnelData;
+  currency: string | null;
+}) {
+  return (
+    <ol className="mini-ledger-funnel" aria-label="Короткая воронка">
+      {funnel.stages.map((stage) => (
+        <li key={stage.key}>
+          <span>{stage.label}</span>
+          <strong>
+            {stage.count === null ? "—" : stage.count.toLocaleString("ru-RU")}
+          </strong>
+          <small>
+            <span>
+              CR {stage.conversion === null ? "—" : `${stage.conversion}%`}
+            </span>
+            <span>{formatUsd(currency ? stage.cost : null)}</span>
+          </small>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function MiniLedgerSection<T>({
+  className,
+  id,
+  title,
+  detail,
+  section,
+  timezone,
+  children,
+}: {
+  className: string;
+  id: string;
+  title: string;
+  detail: string;
+  section: OperatorSection<T>;
+  timezone?: string;
+  children: ReactNode;
+}) {
+  // The root shell owns the single reconnect notice. Section rows keep their
+  // stale state without repeating the same transport cause four times.
+  const issue = section.issues.find(
+    (candidate) => candidate.code !== "REALTIME_RECONCILING",
+  );
+  const IssueIcon = issue ? SEVERITY_ICON[issue.severity] : null;
+  return (
+    <section
+      className={`mini-ledger-section ${className}`}
+      data-state={section.state}
+      aria-labelledby={id}
+    >
+      <header>
+        <div>
+          <h2 id={id}>{title}</h2>
+          <span>{detail}</span>
+        </div>
+        <div className="mini-ledger-section__proof">
+          <span>{section.sources.map(sourceLabel).join(" + ")}</span>
+          <span>
+            as_of{" "}
+            {section.as_of && timezone
+              ? formatDateTime(section.as_of, timezone)
+              : freshnessLabel(section.freshness_seconds)}
+          </span>
+        </div>
+      </header>
+      {issue && IssueIcon ? (
+        <div
+          className="mini-ledger-section__issue"
+          data-severity={issue.severity}
+          role="status"
+        >
+          <IssueIcon size={15} aria-hidden="true" />
+          <div>
+            <strong>{issue.title}</strong>
+            <span>{issue.detail}</span>
+          </div>
+        </div>
+      ) : null}
+      {children}
+    </section>
+  );
+}
+
+function MiniLedgerTotal({
+  label,
+  value,
+  stop = false,
+}: {
+  label: string;
+  value: string | null;
+  stop?: boolean;
+}) {
+  return (
+    <div data-stop={stop || undefined}>
+      <dt>{label}</dt>
+      <dd data-known={value !== null}>{formatUsd(value)}</dd>
+    </div>
+  );
+}
+
+function MiniLedgerEmpty({ text }: { text: string }) {
+  return <div className="mini-ledger-section__empty">{text}</div>;
+}
+
+function isActiveAction(item: OperatorActionItem): boolean {
+  return item.state === "queued" || item.state === "running";
+}
+
+function formatUsd(value: string | number | null): string {
+  return formatSpend(value, "USD").replace(/^USD\s*/, "$");
+}
+
+function formatScaleTick(value: number): string {
+  return `$${Math.round(value)}`;
+}
+
+function formatDateTime(value: string, timezone: string): string {
+  const formatted = formatZonedDateTime(value, timezone);
+  return formatted === "—" ? "не подтверждено" : formatted;
+}
+
+function freshnessLabel(seconds: number | null): string {
+  if (seconds === null) return "не подтверждено";
+  if (seconds < 60) return `${seconds} сек`;
+  return `${Math.max(1, Math.round(seconds / 60))} мин`;
+}
+
+function miniStateLabel(state: OperatorSnapshot["portfolio"]["state"]): string {
+  const labels = {
+    ready: "Актуально",
+    empty: "Пусто",
+    partial: "Неполные",
+    stale: "Устарели",
+    unavailable: "Недоступны",
+  } as const;
+  return labels[state];
+}
+
+function pluralReason(value: number): string {
+  const remainder100 = value % 100;
+  const remainder10 = value % 10;
+  if (remainder100 >= 11 && remainder100 <= 14) return "причин";
+  if (remainder10 === 1) return "причина";
+  if (remainder10 >= 2 && remainder10 <= 4) return "причины";
+  return "причин";
+}
+
+function sourceLabel(source: string): string {
+  const labels: Record<string, string> = {
+    meta: "Meta",
+    offer_rules: "правила",
+    meta_account_snapshot: "кабинеты",
+    tracker: "Tracker",
+    adsetpro: "Tracker",
+    observer: "Observer",
+    incidents: "инциденты",
+    task_queue: "CommandService",
+    worker_telemetry: "воркеры",
+    postgresql: "PostgreSQL",
+  };
+  return labels[source] ?? source.replaceAll("_", " ");
 }
 
 export function MiniActions({ items }: { items: OperatorActionItem[] }) {
@@ -441,414 +822,6 @@ export function MiniActions({ items }: { items: OperatorActionItem[] }) {
       ))}
     </ol>
   );
-}
-
-function formatFunnelCost(
-  value: string | null,
-  currency: string | null,
-): string {
-  return formatSpend(value, currency);
-}
-
-export function MiniEconomy({
-  economy,
-  currency,
-  timezone,
-  completeness,
-  asOf,
-  currentAt,
-  sources,
-}: {
-  economy: OperatorEconomyData;
-  currency: string | null;
-  timezone: string;
-  completeness: DataState;
-  asOf: string | null;
-  currentAt: string | null;
-  sources: string[];
-}) {
-  const valuesVisible = completeness !== "unavailable";
-  const totals = valuesVisible
-    ? economy.totals
-    : {
-        spend: null,
-        base: null,
-        stop: null,
-        base_delta: null,
-      };
-  const series = valuesVisible
-    ? economy.series
-    : economy.series.map((row) => ({
-        ...row,
-        actual: null,
-        base: null,
-        stop: null,
-      }));
-  return (
-    <>
-      <dl className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-2)] bg-[var(--color-hairline)]">
-        <MiniMoney label="Факт" value={totals.spend} currency={currency} />
-        <MiniMoney label="База" value={totals.base} currency={currency} />
-        <MiniMoney label="Stop" value={totals.stop} currency={currency} />
-        <MiniMoney
-          label="Δ базы"
-          value={totals.base_delta}
-          currency={currency}
-          signed
-        />
-      </dl>
-      <AccessibleChartFrame
-        title="Накопительный расход"
-        summary={
-          valuesVisible
-            ? spendSummary(series, currency, completeness)
-            : "Значения расхода и порогов не подтверждены и скрыты."
-        }
-        timezone={timezone}
-        asOf={asOf}
-        sources={sources}
-        completeness={completeness}
-        chart={
-          <MiniSpendPlot
-            rows={series}
-            currency={currency}
-            timezone={timezone}
-            currentAt={currentAt}
-            state={completeness}
-          />
-        }
-        table={
-          <MiniSpendTable
-            rows={series}
-            currency={currency}
-            timezone={timezone}
-          />
-        }
-      />
-    </>
-  );
-}
-
-function MiniSpendPlot({
-  rows,
-  currency,
-  timezone,
-  currentAt,
-  state,
-}: {
-  rows: OperatorSpendPoint[];
-  currency: string | null;
-  timezone: string;
-  currentAt: string | null;
-  state: DataState;
-}) {
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const width = 360;
-  const height = 140;
-  const values = rows
-    .flatMap((row) => [row.actual, row.base, row.stop].map(decimalToNumber))
-    .filter((value): value is number => value !== null);
-  if (!rows.length || !values.length)
-    return <MiniEmpty text="Точки графика не подтверждены." />;
-  const max = Math.max(...values, 1);
-  const paths = (key: "actual" | "base" | "stop") =>
-    makeSvgPaths(rows, key, width, height, max);
-  const timestamps = rows.map((row) => row.at);
-  const currentMarker = serverSeriesMarker(timestamps, currentAt);
-  const currentMarkerIndex =
-    currentMarker === null ? -1 : timestamps.indexOf(currentMarker);
-  const currentMarkerLeft =
-    currentMarkerIndex < 0
-      ? null
-      : currentMarkerIndex === rows.length - 1
-        ? "calc(100% - 1px)"
-        : currentMarkerIndex === 0
-          ? "1px"
-          : `${(currentMarkerIndex / (rows.length - 1)) * 100}%`;
-  const currentMarkerLabelSide =
-    currentMarker === null
-      ? null
-      : currentMarkerLabelPosition(timestamps, currentMarker);
-  const stopLineClass =
-    state === "ready"
-      ? "border-danger"
-      : state === "partial"
-        ? "border-warning"
-        : "border-bg-8";
-  const stopStroke =
-    state === "ready"
-      ? "var(--color-danger)"
-      : state === "partial"
-        ? "var(--color-warning)"
-        : "var(--color-bg-8)";
-  const activeRow = activeIndex === null ? null : (rows[activeIndex] ?? null);
-  return (
-    <div>
-      <ul
-        className="mb-3 flex flex-wrap gap-x-4 gap-y-2 text-[12px] text-bg-9"
-        aria-label="Обозначения графика"
-      >
-        <li className="inline-flex items-center gap-2">
-          <span className="h-0.5 w-5 bg-accent" aria-hidden="true" />
-          Факт
-        </li>
-        <li className="inline-flex items-center gap-2">
-          <span
-            className="w-5 border-t border-dashed border-bg-9"
-            aria-hidden="true"
-          />
-          База
-        </li>
-        <li className="inline-flex items-center gap-2">
-          <span
-            className={`w-5 border-t border-dashed ${stopLineClass}`}
-            aria-hidden="true"
-          />
-          Stop
-        </li>
-      </ul>
-      <div className="relative">
-        {currentMarkerLeft !== null ? (
-          <div
-            aria-hidden="true"
-            data-current-time-marker
-            className="pointer-events-none absolute inset-y-0 z-10 border-l border-dashed border-active"
-            style={{ left: currentMarkerLeft }}
-          >
-            <span
-              data-current-time-label
-              className={`absolute top-1 whitespace-nowrap rounded-sm bg-bg-1/90 px-1 text-[12px] leading-5 text-bg-9 ${
-                currentMarkerLabelSide === "insideTopLeft"
-                  ? "right-1.5"
-                  : "left-1.5"
-              }`}
-            >
-              Сейчас
-            </span>
-          </div>
-        ) : null}
-        <svg
-          viewBox={`0 0 ${width} ${height}`}
-          className="h-auto w-full"
-          preserveAspectRatio="none"
-          aria-hidden="true"
-          focusable="false"
-        >
-          {[35, 70, 105].map((y) => (
-            <line
-              key={y}
-              x1="0"
-              x2={width}
-              y1={y}
-              y2={y}
-              stroke="rgba(255,255,255,.07)"
-            />
-          ))}
-          {paths("stop").map((d) => (
-            <path
-              key={`stop-${d}`}
-              d={d}
-              fill="none"
-              stroke={stopStroke}
-              strokeWidth="1.5"
-              strokeDasharray="4 5"
-            />
-          ))}
-          {paths("base").map((d) => (
-            <path
-              key={`base-${d}`}
-              d={d}
-              fill="none"
-              stroke="var(--color-bg-9)"
-              strokeWidth="1.5"
-              strokeDasharray="5 5"
-            />
-          ))}
-          {paths("actual").map((d) => (
-            <path
-              key={`actual-${d}`}
-              d={d}
-              fill="none"
-              stroke="var(--color-accent)"
-              strokeWidth="2.5"
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
-        </svg>
-        {rows.map((row, index) => {
-          const rowValues = [row.actual, row.base, row.stop].map(
-            decimalToNumber,
-          );
-          const actual = rowValues[0];
-          const anchor = rowValues.find(
-            (value): value is number => value !== null,
-          );
-          if (anchor === undefined) return null;
-          const x =
-            rows.length === 1 ? width / 2 : (index / (rows.length - 1)) * width;
-          const y = height - 8 - (anchor / max) * (height - 16);
-          const label = `${formatTime(row.at, timezone)}. Факт ${money(row.actual, currency)}, база ${money(row.base, currency)}, stop ${money(row.stop, currency)}.`;
-          return (
-            <button
-              key={row.at}
-              type="button"
-              aria-label={label}
-              className="absolute flex size-11 touch-manipulation items-center justify-center rounded-full border border-transparent bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              style={{
-                left: `clamp(22px, ${(x / width) * 100}%, calc(100% - 22px))`,
-                top: `clamp(22px, ${(y / height) * 100}%, calc(100% - 22px))`,
-                transform: "translate(-50%, -50%)",
-              }}
-              onFocus={() => setActiveIndex(index)}
-              onPointerDown={() => setActiveIndex(index)}
-              onPointerEnter={() => setActiveIndex(index)}
-              onClick={() => setActiveIndex(index)}
-            >
-              {actual !== null ? (
-                <span
-                  aria-hidden="true"
-                  data-actual-marker
-                  className="size-2 rounded-full bg-accent"
-                  style={{
-                    boxShadow:
-                      activeIndex === index
-                        ? "0 0 0 3px var(--color-active)"
-                        : undefined,
-                  }}
-                />
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
-      <div
-        role="status"
-        aria-live="polite"
-        className="mt-2 min-h-11 rounded-[var(--radius-2)] bg-bg-2 px-3 py-2 text-[12px] leading-5 text-bg-9"
-      >
-        {activeRow
-          ? `${formatTime(activeRow.at, timezone)} · факт ${money(activeRow.actual, currency)} · база ${money(activeRow.base, currency)} · stop ${money(activeRow.stop, currency)}`
-          : "Коснитесь точки или выберите её с клавиатуры, чтобы увидеть значения."}
-      </div>
-    </div>
-  );
-}
-
-function spendSummary(
-  rows: OperatorSpendPoint[],
-  currency: string | null,
-  state: DataState,
-): string {
-  const latest = [...rows]
-    .reverse()
-    .find((row) =>
-      [row.actual, row.base, row.stop].some((value) => value !== null),
-    );
-  if (!latest) {
-    return "Подтверждённых точек нет. Пропуски не заменяются нулём.";
-  }
-  const prefix =
-    state === "ready"
-      ? "Последние подтверждённые значения"
-      : state === "partial"
-        ? "Последние доступные значения из неполного снимка"
-        : state === "stale"
-          ? "Последние доступные значения из устаревшего снимка"
-          : "Последние доступные значения";
-  return `${prefix}: факт ${money(latest.actual, currency)}, база ${money(latest.base, currency)}, stop ${money(latest.stop, currency)}. Пропуски показаны разрывами.`;
-}
-
-function makeSvgPaths(
-  rows: OperatorSpendPoint[],
-  key: "actual" | "base" | "stop",
-  width: number,
-  height: number,
-  max: number,
-): string[] {
-  const paths: string[] = [];
-  let current: string[] = [];
-  rows.forEach((row, index) => {
-    const value = decimalToNumber(row[key]);
-    if (value === null) {
-      if (current.length > 1) paths.push(current.join(" "));
-      current = [];
-      return;
-    }
-    const x =
-      rows.length === 1 ? width / 2 : (index / (rows.length - 1)) * width;
-    const y = height - 8 - (value / max) * (height - 16);
-    current.push(
-      `${current.length ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`,
-    );
-  });
-  if (current.length > 1) paths.push(current.join(" "));
-  return paths;
-}
-
-function MiniSpendTable({
-  rows,
-  currency,
-  timezone,
-}: {
-  rows: OperatorSpendPoint[];
-  currency: string | null;
-  timezone: string;
-}) {
-  return (
-    <table>
-      <caption className="sr-only">Расход по времени</caption>
-      <thead>
-        <tr>
-          <th>Время</th>
-          <th>Факт</th>
-          <th>База</th>
-          <th>Stop</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.at}>
-            <th scope="row">{formatTime(row.at, timezone)}</th>
-            <td>{money(row.actual, currency)}</td>
-            <td>{money(row.base, currency)}</td>
-            <td>{money(row.stop, currency)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function MiniMoney({
-  label,
-  value,
-  currency,
-  signed = false,
-}: {
-  label: string;
-  value: string | null;
-  currency: string | null;
-  signed?: boolean;
-}) {
-  const parsed = decimalToNumber(value);
-  const formatted = money(value, currency);
-  const confirmed = parsed !== null && formatted !== "—";
-  return (
-    <div className="bg-bg-2 p-3">
-      <dt className="text-[12px] font-semibold text-bg-9">{label}</dt>
-      <dd className="m-0 mt-1 font-display text-[18px] tabular-nums text-bg-11">
-        {!confirmed ? "—" : `${signed && parsed! > 0 ? "+" : ""}${formatted}`}
-      </dd>
-    </div>
-  );
-}
-
-function money(value: string | null, currency: string | null): string {
-  return formatSpend(value, currency);
-}
-
-function formatTime(value: string, timezone: string): string {
-  return formatZonedTime(value, timezone);
 }
 
 function MiniEmpty({ text }: { text: string }) {

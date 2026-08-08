@@ -160,6 +160,38 @@ class OperatorEconomyData(BaseModel):
     series: list[OperatorSpendPoint]
 
 
+class OperatorCabinetLedgerRow(BaseModel):
+    id: str
+    name: str
+    timezone: str | None
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    state: DataState
+    severity: OperatorSeverity
+    as_of: datetime | None
+    freshness_seconds: int | None = Field(..., ge=0)
+    cabinet_day: OperatorCabinetDay | None
+    totals: OperatorEconomyTotals
+    risk_label: str
+    risk_reason: str | None
+    issues: list[OperatorIssue]
+    action: OperatorAttentionAction
+
+
+class OperatorCurrencyGroup(BaseModel):
+    id: str
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    state: DataState
+    severity: OperatorSeverity
+    as_of: datetime | None
+    freshness_seconds: int | None = Field(..., ge=0)
+    totals: OperatorEconomyTotals
+    cabinets: list[OperatorCabinetLedgerRow]
+
+
+class OperatorPortfolioData(BaseModel):
+    currency_groups: list[OperatorCurrencyGroup]
+
+
 class OperatorFunnelStage(BaseModel):
     key: Literal["clicks", "registrations", "ftd", "confirmed_deposits"]
     label: str
@@ -214,6 +246,7 @@ class OperatorSystemData(BaseModel):
 class OperatorSnapshot(BaseModel):
     meta: OperatorSnapshotMeta
     attention: OperatorSection[OperatorAttentionData]
+    portfolio: OperatorSection[OperatorPortfolioData]
     economy: OperatorSection[OperatorEconomyData]
     funnel: OperatorSection[OperatorFunnelData]
     actions: OperatorSection[OperatorActionsData]

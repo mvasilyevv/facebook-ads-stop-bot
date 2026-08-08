@@ -53,8 +53,8 @@ export function BudgetLineChart({
       }),
     [data],
   );
-  const currency =
-    data?.scope.currency_state === "single" && data.scope.currency ? data.scope.currency : null;
+  const usdConfirmed = data?.scope.currency_state === "single" && data.scope.currency === "USD";
+  const currency = usdConfirmed ? "USD" : null;
 
   if (loading) return <Skeleton height={height + 150} className="w-full" />;
 
@@ -65,7 +65,7 @@ export function BudgetLineChart({
   const serverState: DataState = data?.state ?? (!points.length ? "empty" : "unavailable");
   const localState: DataState = serverState === "ready" && partial ? "partial" : serverState;
   const completeness = inheritAnalyticsState(localState, parentState);
-  const valuesAvailable = completeness !== "unavailable";
+  const valuesAvailable = completeness !== "unavailable" && usdConfirmed;
   const stopColor =
     completeness === "ready"
       ? "var(--color-danger)"
@@ -84,8 +84,9 @@ export function BudgetLineChart({
           points.map((point) => point.iso),
           new Date(currentMarker).toISOString(),
         );
-  const evidenceSummary =
-    completeness === "unavailable"
+  const evidenceSummary = !usdConfirmed
+    ? "Денежные ряды скрыты: рабочая валюта не подтверждена как USD."
+    : completeness === "unavailable"
       ? "Точки расхода, базы и stop-границы не подтверждены и скрыты."
       : !points.length
         ? "Линии появятся после первого подтверждённого скана текущих суток."
@@ -170,7 +171,8 @@ export function BudgetLineChart({
               connectNulls={false}
               stroke="var(--color-accent)"
               strokeWidth={2.2}
-              dot={false}
+              dot={{ r: 2.5, fill: "var(--color-accent)", strokeWidth: 0 }}
+              activeDot={{ r: 4, fill: "var(--color-accent)", strokeWidth: 0 }}
               isAnimationActive={false}
             />
             <Line

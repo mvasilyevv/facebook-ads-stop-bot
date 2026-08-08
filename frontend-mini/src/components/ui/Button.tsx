@@ -11,7 +11,7 @@ export type ButtonSize = "sm" | "md" | "lg";
 
 const VARIANT_STYLES: Record<ButtonVariant, string> = {
   primary:
-    "bg-[var(--color-accent)] text-[#0a0a0b] font-semibold hover:bg-[var(--color-accent-muted)] active:opacity-80",
+    "bg-[var(--color-accent)] text-bg-0 font-semibold hover:bg-[var(--color-accent-muted)] active:opacity-80",
   secondary:
     "border border-[var(--color-hairline-strong)] text-[var(--color-bg-11)] hover:border-[var(--color-bg-7)] active:opacity-80",
   ghost:

@@ -119,6 +119,7 @@ async def fetch_operator_actions(
     limit: int = 20,
     before_id: int | None = None,
     states: tuple[str, ...] = (),
+    account_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], int | None, datetime | None]:
     """Fetch action lifecycle rows with an immutable-id cursor."""
     clauses = ["TRUE"]
@@ -126,6 +127,19 @@ async def fetch_operator_actions(
     if before_id is not None:
         clauses.append("tq.id < :before_id")
         params["before_id"] = int(before_id)
+    if account_id:
+        clauses.append(
+            """
+            (CASE
+                WHEN NULLIF(tq.payload->>'account_id', '') IS NOT NULL
+                    THEN REGEXP_REPLACE(tq.payload->>'account_id', '^act_', '')
+                WHEN NULLIF(tq.payload->>'ad_account_id', '') IS NOT NULL
+                    THEN REGEXP_REPLACE(tq.payload->>'ad_account_id', '^act_', '')
+                ELSE c.ad_account_id
+             END) = :account_id
+            """
+        )
+        params["account_id"] = account_id.removeprefix("act_")
     public_states = {
         state
         for state in states
@@ -161,6 +175,8 @@ async def fetch_operator_actions(
                COALESCE(a.ad_name, tq.payload->>'target_id') AS target_label
         FROM task_queue tq
         LEFT JOIN fb_ads a ON a.fb_ad_id = tq.payload->>'target_id'
+        LEFT JOIN fb_adsets s ON s.id = a.adset_id
+        LEFT JOIN fb_campaigns c ON c.id = s.campaign_id
         WHERE {" AND ".join(clauses)}
         ORDER BY tq.id DESC
         LIMIT :limit

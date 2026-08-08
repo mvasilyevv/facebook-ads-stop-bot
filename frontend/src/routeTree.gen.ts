@@ -20,6 +20,7 @@ import { Route as ActionsIndexRouteImport } from './routes/actions/index'
 import { Route as SystemSourcesRouteImport } from './routes/system/sources'
 import { Route as OffersIdRouteImport } from './routes/offers/$id'
 import { Route as IncidentsIncidentIdRouteImport } from './routes/incidents/$incidentId'
+import { Route as CabinetsCabinetIdRouteImport } from './routes/cabinets/$cabinetId'
 import { Route as AdsFbAdIdRouteImport } from './routes/ads/$fbAdId'
 import { Route as ActionsActionIdRouteImport } from './routes/actions/$actionId'
 import { Route as CampaignsCreateIndexRouteImport } from './routes/campaigns/create/index'
@@ -79,6 +80,11 @@ const IncidentsIncidentIdRoute = IncidentsIncidentIdRouteImport.update({
   path: '/incidents/$incidentId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CabinetsCabinetIdRoute = CabinetsCabinetIdRouteImport.update({
+  id: '/cabinets/$cabinetId',
+  path: '/cabinets/$cabinetId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdsFbAdIdRoute = AdsFbAdIdRouteImport.update({
   id: '/ads/$fbAdId',
   path: '/ads/$fbAdId',
@@ -99,6 +105,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
   '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
   '/offers/$id': typeof OffersIdRoute
   '/system/sources': typeof SystemSourcesRoute
@@ -115,6 +122,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
   '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
   '/offers/$id': typeof OffersIdRoute
   '/system/sources': typeof SystemSourcesRoute
@@ -132,6 +140,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
   '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
   '/offers/$id': typeof OffersIdRoute
   '/system/sources': typeof SystemSourcesRoute
@@ -150,6 +159,7 @@ export interface FileRouteTypes {
     | '/'
     | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/cabinets/$cabinetId'
     | '/incidents/$incidentId'
     | '/offers/$id'
     | '/system/sources'
@@ -166,6 +176,7 @@ export interface FileRouteTypes {
     | '/'
     | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/cabinets/$cabinetId'
     | '/incidents/$incidentId'
     | '/offers/$id'
     | '/system/sources'
@@ -182,6 +193,7 @@ export interface FileRouteTypes {
     | '/'
     | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/cabinets/$cabinetId'
     | '/incidents/$incidentId'
     | '/offers/$id'
     | '/system/sources'
@@ -199,6 +211,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActionsActionIdRoute: typeof ActionsActionIdRoute
   AdsFbAdIdRoute: typeof AdsFbAdIdRoute
+  CabinetsCabinetIdRoute: typeof CabinetsCabinetIdRoute
   IncidentsIncidentIdRoute: typeof IncidentsIncidentIdRoute
   OffersIdRoute: typeof OffersIdRoute
   SystemSourcesRoute: typeof SystemSourcesRoute
@@ -291,6 +304,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IncidentsIncidentIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/cabinets/$cabinetId': {
+      id: '/cabinets/$cabinetId'
+      path: '/cabinets/$cabinetId'
+      fullPath: '/cabinets/$cabinetId'
+      preLoaderRoute: typeof CabinetsCabinetIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ads/$fbAdId': {
       id: '/ads/$fbAdId'
       path: '/ads/$fbAdId'
@@ -319,6 +339,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActionsActionIdRoute: ActionsActionIdRoute,
   AdsFbAdIdRoute: AdsFbAdIdRoute,
+  CabinetsCabinetIdRoute: CabinetsCabinetIdRoute,
   IncidentsIncidentIdRoute: IncidentsIncidentIdRoute,
   OffersIdRoute: OffersIdRoute,
   SystemSourcesRoute: SystemSourcesRoute,

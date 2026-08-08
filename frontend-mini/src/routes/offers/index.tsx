@@ -315,22 +315,17 @@ function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
 
   return (
     <div className="flex flex-col gap-5 pb-6">
+      <div
+        className="border-y border-[var(--color-hairline)] px-1 py-3"
+        role="status"
+      >
+        <div className="text-[12px] text-bg-8">Валюта бюджета</div>
+        <div className="mt-1 font-numeric text-[16px] text-bg-11">
+          {currencyValid ? "$ · доллар США" : "Нужна конфигурация USD"}
+        </div>
+      </div>
       <Input
-        label="Валюта CPA"
-        placeholder="USD"
-        maxLength={3}
-        value={values.currency}
-        onChange={(event) =>
-          setValues((previous) => ({
-            ...previous,
-            currency: event.target.value.toUpperCase(),
-          }))
-        }
-        autoCapitalize="characters"
-        autoCorrect="off"
-      />
-      <Input
-        label={`CPA ставка${currencyValid ? ` (${values.currency.toUpperCase()})` : ""}`}
+        label={`CPA ставка${currencyValid ? " ($)" : ""}`}
         placeholder="10"
         type="text"
         inputMode="decimal"
@@ -425,7 +420,7 @@ function RulesPreview({
     return (
       <div className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] p-3 text-[14px] leading-5 text-bg-9">
         {!currencyValid
-          ? "Укажите валюту CPA трёхбуквенным ISO-кодом."
+          ? "Настройка оффера не в USD. Исправьте adoption bundle до запуска."
           : "Укажите CPA — покажу, при какой цене сработают стоп и warning по каждой метрике."}
       </div>
     );

@@ -1,4 +1,3 @@
-<!-- SEED: established with the user before implementation; re-run $impeccable document once there's code to capture the actual tokens and components. -->
 ---
 name: FB Agent
 description: A dark precision ledger for safety-first iGaming operations.
@@ -21,6 +20,12 @@ The world is dark-first on web and always dark in TMA. Desktop and mobile share 
 - Registration marks, stamps, and state glyphs used as semantic proof.
 - Compact, legible density with a calm visual pulse.
 - No illustrative imagery; the operating record itself is the visual material.
+
+## Implemented Surfaces
+
+Web and TMA use one typed operator contract and the same ledger view-models, while each surface keeps a platform-native shell. The web shell uses the compact desktop rail and a responsive mobile bottom navigation. TMA is always dark, respects Telegram safe areas and viewport state, and uses its own lightweight mobile renderer rather than embedding or shrinking the desktop composition.
+
+The `Сейчас` route is the canonical portfolio ledger. Its primary composition is **«Шкала ведёт»**: freshness and source proof establish whether money can be trusted, a shared portfolio scale compares spend/base/stop, ranked attention explains the next operator decision, current actions expose their confirmed lifecycle, and the short funnel preserves conversion context. A typed cabinet link opens the cabinet drill-down with the same evidence semantics and cabinet-specific timezone.
 
 ## Colors
 
@@ -69,11 +74,30 @@ The palette is restrained: near-black graphite carries the surface, warm paper c
 
 **The Tabular Proof Rule.** Money, ratios, timestamps, and task numbers use tabular numerals and preserve their decimal alignment.
 
+**The Dollar Rule.** All company and cabinet budgets are denominated in US dollars. The interface uses `$` for trusted money values. A non-USD, mixed, or missing currency signal is a data-integrity problem: affected money is hidden and the state fails closed instead of converting, summing, or guessing.
+
 ## Layout
 
 The spatial grammar is a ruled ledger: stable columns and shared scales on desktop, vertical evidence strips on mobile. The first viewport prioritizes freshness and health, ranked attention, spend/base/stop, the short funnel, and current action lifecycle. Whitespace is measured in row rhythm, not empty card gutters.
 
 Desktop uses a compact navigation rail plus a wide evidence canvas: the shared portfolio scale leads, ranked attention occupies the first right rail, the funnel follows the scale, and action lifecycle follows attention. Mobile uses bottom navigation, safe-area-aware sticky actions, and one-column sections ordered attention → scale → actions → funnel without horizontal page scrolling. Touch targets are at least 44×44px.
+
+The responsive order is semantic rather than purely visual. On desktop the scale and attention can be compared side by side; on narrow screens attention comes first so an operator sees the reason and available action before supporting totals. Desktop tables become cards from the same row view-models on mobile and TMA; they are never compressed into page-level horizontal scrolling.
+
+## Data Visualization
+
+Charts are evidence views, not decorative KPI illustrations. Web uses Recharts over shared chart models; TMA uses a lightweight SVG renderer over those same models. Missing samples create visible gaps and are never plotted as zero.
+
+Every analytical chart is wrapped by `AccessibleChartFrame` and provides a title, timezone, source, `as_of`, completeness, a concise text summary, keyboard/touch tooltip behavior, and an HTML data table. Spend charts distinguish actual, base, stop, and current time; funnels show Clicks → Registrations → FTD → Confirmed deposits with count, conversion rate, and cost; dayparting is 7×24 on desktop and selected-day ×24 on mobile.
+
+## Performance Boundaries
+
+- Web initial JavaScript: no more than 250 KB gzip.
+- TMA initial JavaScript: no more than 160 KB gzip.
+- Fonts: no more than 100 KB total.
+- Operator snapshot: no more than 100 KB gzip.
+
+Commissioner is the single variable Cyrillic/Latin UI family, while JetBrains Mono is limited to measured values. Recharts is excluded from TMA, routes are lazy-loaded, and visual polish must not spend the operator's latency budget.
 
 ## Elevation & Depth
 

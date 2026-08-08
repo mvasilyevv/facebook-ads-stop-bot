@@ -1,48 +1,40 @@
-/**
- * Design tokens — ЕДИНЫЙ ИСТОЧНИК CSS для веба и mini app.
- * TS-зеркало — ./tokens.ts. Инвариант-тест сверяет весь public namespace и @theme.
- *
- * Направление 2026-06 «A+C» (см. сессию редизайна): тёмная airy-база (вариант A,
- * Linear-dark) + цветовое кодирование статусов (вариант C). Мягкие радиусы вместо
- * острых углов, яркая семантика (зелёный/красный/амбер) + тёплый амбер «активного».
- * Импортируется обоими фронтами: `import "@fb/shared/tokens.css"`.
- */
+/** FB Agent — «Точный журнал». CSS is mirrored by tokens.ts. */
 
 :root {
   /* ─── Surfaces — graphite scale (12 ступеней) ─────────────────────────── */
-  --color-bg-0: #0a0a0b; /* outer background, page */
-  --color-bg-1: #101012; /* card background */
-  --color-bg-2: #16161a; /* nested card / table row */
-  --color-bg-3: #1c1c21; /* hover state */
-  --color-bg-4: #232329; /* active / pressed */
-  --color-bg-5: #2c2c33; /* borders subtle */
-  --color-bg-6: #38383f; /* borders default */
-  --color-bg-7: #4a4a52; /* borders strong */
-  --color-bg-8: #888892; /* muted text, WCAG AA through bg-3 */
-  --color-bg-9: #92929c; /* secondary / placeholder text */
-  --color-bg-10: #a8a8b0; /* secondary text */
-  --color-bg-11: #e4e4e7; /* primary text */
+  --color-bg-0: #0b0d10;
+  --color-bg-1: #0e1114;
+  --color-bg-2: #14181b;
+  --color-bg-3: #1a1f22;
+  --color-bg-4: #202629;
+  --color-bg-5: #292f32;
+  --color-bg-6: #34383a;
+  --color-bg-7: #545a5d;
+  --color-bg-8: #858a8d;
+  --color-bg-9: #a09f9a;
+  --color-bg-10: #c3beb4;
+  --color-bg-11: #e7e1d5;
 
   /* ─── Accent — warm off-white (общий emphasis) ────────────────────────── */
-  --color-accent: #f5f1e8;
-  --color-accent-muted: #bdb8ab;
-  --color-accent-bg: #2a2823;
+  --color-accent: #b8a36a;
+  --color-accent-muted: #9f8e5e;
+  --color-accent-bg: #1d1a13;
 
   /* ─── Active — тёплый амбер (пульс/активная строка, вариант A) ─────────── */
-  --color-active: #e8b339;
-  --color-active-bg: #2a2412;
+  --color-active: #b8a36a;
+  --color-active-bg: #211c11;
 
   /* ─── Semantic — яркое кодирование статусов (вариант C) ────────────────── */
-  --color-success: #34d399;
-  --color-success-bg: #10241c;
-  --color-warning: #fbbf24;
-  --color-warning-bg: #2a2008;
-  --color-danger: #f87171;
-  --color-danger-bg: #2a1414;
-  --color-info: #60a5fa;
-  --color-info-bg: #0f1f33;
-  --color-hairline: rgba(255, 255, 255, 0.07);
-  --color-hairline-strong: rgba(255, 255, 255, 0.1);
+  --color-success: #86a77b;
+  --color-success-bg: #121a13;
+  --color-warning: #b8a36a;
+  --color-warning-bg: #211c11;
+  --color-danger: #c9554d;
+  --color-danger-bg: #281513;
+  --color-info: #91a0aa;
+  --color-info-bg: #151b1f;
+  --color-hairline: #292f32;
+  --color-hairline-strong: #34383a;
 
   /* ─── FSM-state colors (bound to alert_state enum, lowercase canon) ──────
    * Норма — зелёный (живёт штатно), Предупреждение — амбер, Стоп — красный,
@@ -55,13 +47,13 @@
   --fsm-disabled: var(--color-bg-8);
 
   /* ─── Typography ──────────────────────────────────────────────────────── */
-  --font-display: "JetBrains Mono", "SF Mono", "Menlo", ui-monospace, monospace;
-  --font-body: "Inter Tight", "SF Pro Text", system-ui, sans-serif;
+  --font-display: "Commissioner", "SF Pro Display", system-ui, sans-serif;
+  --font-body: "Commissioner", "SF Pro Text", system-ui, sans-serif;
   --font-numeric: "JetBrains Mono", tabular-nums, monospace;
 
   /* Size scale — §1.2.2 */
-  --text-display: 56px;
-  --text-title-1: 32px;
+  --text-display: 48px;
+  --text-title-1: 36px;
   --text-title-2: 22px;
   --text-title-3: 16px;
   --text-body: 16px;
@@ -83,10 +75,10 @@
 
   /* ─── Radius — мягкие углы (направление A+C) ──────────────────────────── */
   --radius-0: 0px;
-  --radius-1: 6px;
-  --radius-2: 10px;
-  --radius-3: 14px;
-  --radius-4: 18px;
+  --radius-1: 2px;
+  --radius-2: 4px;
+  --radius-3: 6px;
+  --radius-4: 8px;
   --radius-full: 9999px;
 
   /* ─── Motion — easings + durations (§1.7) ─────────────────────────────── */
@@ -98,10 +90,10 @@
   --dur-slow: 400ms;
 
   /* ─── Layout — responsive shell (§1.8) ───────────────────────────────── */
-  --sidebar-width: 240px;
+  --sidebar-width: 196px;
   --sidebar-width-collapsed: 64px;
   --topbar-height: 56px;
-  --content-padding-x: 32px;
+  --content-padding-x: 36px;
   --content-padding-y: 24px;
 
   /* ─── Z-index scale ───────────────────────────────────────────────────── */
@@ -127,36 +119,36 @@
  * (text-bg-11, bg-bg-1, border-bg-5, text-accent и т.д.).
  */
 @theme {
-  --color-bg-0: #0a0a0b;
-  --color-bg-1: #101012;
-  --color-bg-2: #16161a;
-  --color-bg-3: #1c1c21;
-  --color-bg-4: #232329;
-  --color-bg-5: #2c2c33;
-  --color-bg-6: #38383f;
-  --color-bg-7: #4a4a52;
-  --color-bg-8: #888892;
-  --color-bg-9: #92929c;
-  --color-bg-10: #a8a8b0;
-  --color-bg-11: #e4e4e7;
+  --color-bg-0: #0b0d10;
+  --color-bg-1: #0e1114;
+  --color-bg-2: #14181b;
+  --color-bg-3: #1a1f22;
+  --color-bg-4: #202629;
+  --color-bg-5: #292f32;
+  --color-bg-6: #34383a;
+  --color-bg-7: #545a5d;
+  --color-bg-8: #858a8d;
+  --color-bg-9: #a09f9a;
+  --color-bg-10: #c3beb4;
+  --color-bg-11: #e7e1d5;
 
-  --color-accent: #f5f1e8;
-  --color-accent-muted: #bdb8ab;
-  --color-accent-bg: #2a2823;
+  --color-accent: #b8a36a;
+  --color-accent-muted: #9f8e5e;
+  --color-accent-bg: #1d1a13;
 
-  --color-active: #e8b339;
-  --color-active-bg: #2a2412;
+  --color-active: #b8a36a;
+  --color-active-bg: #211c11;
 
-  --color-success: #34d399;
-  --color-success-bg: #10241c;
-  --color-warning: #fbbf24;
-  --color-warning-bg: #2a2008;
-  --color-danger: #f87171;
-  --color-danger-bg: #2a1414;
-  --color-info: #60a5fa;
-  --color-info-bg: #0f1f33;
-  --color-hairline: rgba(255, 255, 255, 0.07);
-  --color-hairline-strong: rgba(255, 255, 255, 0.1);
+  --color-success: #86a77b;
+  --color-success-bg: #121a13;
+  --color-warning: #b8a36a;
+  --color-warning-bg: #211c11;
+  --color-danger: #c9554d;
+  --color-danger-bg: #281513;
+  --color-info: #91a0aa;
+  --color-info-bg: #151b1f;
+  --color-hairline: #292f32;
+  --color-hairline-strong: #34383a;
 
   --color-fsm-normal: var(--color-success);
   --color-fsm-warning: var(--color-warning);
@@ -164,19 +156,19 @@
   --color-fsm-claimed: var(--color-info);
   --color-fsm-disabled: var(--color-bg-8);
 
-  --font-display: "JetBrains Mono", "SF Mono", "Menlo", ui-monospace, monospace;
-  --font-body: "Inter Tight", "SF Pro Text", system-ui, sans-serif;
+  --font-display: "Commissioner", "SF Pro Display", system-ui, sans-serif;
+  --font-body: "Commissioner", "SF Pro Text", system-ui, sans-serif;
   --font-numeric: "JetBrains Mono", tabular-nums, monospace;
 
   --radius-0: 0px;
-  --radius-1: 6px;
-  --radius-2: 10px;
-  --radius-3: 14px;
-  --radius-4: 18px;
+  --radius-1: 2px;
+  --radius-2: 4px;
+  --radius-3: 6px;
+  --radius-4: 8px;
 
-  --text-display: 56px;
+  --text-display: 48px;
   --text-display--line-height: 0.95;
-  --text-title-1: 32px;
+  --text-title-1: 36px;
   --text-title-1--line-height: 1.05;
   --text-title-2: 22px;
   --text-title-2--line-height: 1.15;

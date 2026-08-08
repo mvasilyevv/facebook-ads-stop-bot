@@ -286,7 +286,10 @@ export function snapshotForRealtimeState(
 ): OperatorSnapshot {
   if (realtimeConnected) {
     const actions = actionSectionForDataState(snapshot.actions);
-    return actions === snapshot.actions ? snapshot : { ...snapshot, actions };
+    const portfolio = portfolioSectionForDataState(snapshot.portfolio);
+    return actions === snapshot.actions && portfolio === snapshot.portfolio
+      ? snapshot
+      : { ...snapshot, actions, portfolio };
   }
 
   const staleSection = <T extends OperatorSection<unknown>>(section: T): T => {
@@ -304,14 +307,57 @@ export function snapshotForRealtimeState(
   };
 
   const actions = actionSectionForDataState(staleSection(snapshot.actions));
+  const portfolio = portfolioSectionForDataState(
+    staleSection(snapshot.portfolio),
+  );
   return {
     ...snapshot,
     attention: staleSection(snapshot.attention),
+    portfolio,
     economy: staleSection(snapshot.economy),
     funnel: staleSection(snapshot.funnel),
     actions,
     system: staleSection(snapshot.system),
   };
+}
+
+function portfolioSectionForDataState(
+  section: OperatorSnapshot["portfolio"],
+): OperatorSnapshot["portfolio"] {
+  if (!section.data) return section;
+  const currencyGroups = section.data.currency_groups.map((group) => {
+    const groupState =
+      section.state === "stale" || section.state === "unavailable"
+        ? rowStateForCollection(group.state, section.state)
+        : group.state;
+    const cabinets = group.cabinets.map((cabinet) => {
+      const state =
+        groupState === "stale" || groupState === "unavailable"
+          ? rowStateForCollection(cabinet.state, groupState)
+          : cabinet.state;
+      const severity = severityForDataState(cabinet.severity, state);
+      return state === cabinet.state && severity === cabinet.severity
+        ? cabinet
+        : { ...cabinet, state, severity };
+    });
+    const severity = severityForDataState(group.severity, groupState);
+    const rowsUnchanged = cabinets.every(
+      (cabinet, index) => cabinet === group.cabinets[index],
+    );
+    return groupState === group.state &&
+      severity === group.severity &&
+      rowsUnchanged
+      ? group
+      : { ...group, state: groupState, severity, cabinets };
+  });
+  if (
+    currencyGroups.every(
+      (group, index) => group === section.data?.currency_groups[index],
+    )
+  ) {
+    return section;
+  }
+  return { ...section, data: { currency_groups: currencyGroups } };
 }
 
 function actionSectionForDataState(
@@ -461,6 +507,7 @@ export function snapshotOverviewState(snapshot: OperatorSnapshot): DataState {
   const states = [
     snapshot.system?.state,
     snapshot.attention?.state,
+    snapshot.portfolio?.state,
     snapshot.economy?.state,
     snapshot.funnel?.state,
   ];

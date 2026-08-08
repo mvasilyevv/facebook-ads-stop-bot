@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -13,11 +13,18 @@ import apps.api.routers.ws as ws_router
 import core.config
 import core.db
 from apps.api.main import create_app
-from apps.api.routers.v1.operator import _ads_section_state
+from apps.api.routers.v1.operator import (
+    _ads_section_state,
+    _cabinet_risk,
+    _currency_groups,
+)
 from apps.api.routers.v1.schemas.operator import (
     ApiProblem,
     DataState,
+    OperatorAttentionAction,
     OperatorAttentionData,
+    OperatorCabinetLedgerRow,
+    OperatorEconomyTotals,
     OperatorSection,
 )
 from core.operator.queries import task_action_kind, task_action_state
@@ -92,6 +99,96 @@ def test_api_problem_never_omits_nullable_field_errors() -> None:
         "correlation_id",
         "field_errors",
     }
+
+
+def _cabinet_row(
+    *,
+    cabinet_id: str,
+    currency: str | None,
+    spend: str | None,
+    base: str | None,
+    stop: str | None,
+) -> OperatorCabinetLedgerRow:
+    return OperatorCabinetLedgerRow(
+        id=cabinet_id,
+        name=f"act_{cabinet_id}",
+        timezone="Europe/Kaliningrad",
+        currency=currency,
+        state=DataState.READY,
+        severity="ok",
+        as_of=datetime(2026, 7, 18, 10, 15, tzinfo=UTC),
+        freshness_seconds=15,
+        cabinet_day={
+            "starts_at": datetime(2026, 7, 17, 22, tzinfo=UTC),
+            "ends_at": datetime(2026, 7, 18, 22, tzinfo=UTC),
+        },
+        totals=OperatorEconomyTotals(
+            spend=spend,
+            base=base,
+            stop=stop,
+            base_delta=None,
+        ),
+        risk_label="В пределах порогов",
+        risk_reason=None,
+        issues=[],
+        action=OperatorAttentionAction(
+            label="Открыть кабинет",
+            href=f"/cabinets/{cabinet_id}",
+        ),
+    )
+
+
+def test_portfolio_groups_money_by_currency_and_preserves_known_zero() -> None:
+    groups = _currency_groups(
+        [
+            _cabinet_row(cabinet_id="1", currency="USD", spend="0.00", base="10.00", stop="20.00"),
+            _cabinet_row(cabinet_id="2", currency="USD", spend="5.00", base="10.00", stop="20.00"),
+            _cabinet_row(cabinet_id="3", currency="EUR", spend="7.00", base="8.00", stop="16.00"),
+        ]
+    )
+
+    assert [group.currency for group in groups] == ["EUR", "USD"]
+    assert groups[0].state == DataState.PARTIAL
+    assert groups[0].totals.spend is None
+    assert groups[0].cabinets[0].totals.spend is None
+    assert groups[1].totals.spend == "5.00"
+    assert groups[1].totals.base == "20.00"
+    assert groups[1].totals.stop == "40.00"
+
+
+def test_portfolio_group_total_is_unknown_when_one_cabinet_is_unknown() -> None:
+    [group] = _currency_groups(
+        [
+            _cabinet_row(cabinet_id="1", currency="USD", spend="5.00", base="10.00", stop="20.00"),
+            _cabinet_row(cabinet_id="2", currency="USD", spend=None, base="10.00", stop="20.00"),
+        ]
+    )
+
+    assert group.totals.spend is None
+    assert group.totals.base == "20.00"
+    assert group.totals.stop == "40.00"
+    assert group.totals.base_delta is None
+
+
+def test_cabinet_risk_keeps_stale_unknown_and_confirmed_stop_critical() -> None:
+    totals = OperatorEconomyTotals(spend="30.00", base="15.00", stop="30.00", base_delta="15.00")
+
+    stale = _cabinet_risk(
+        state=DataState.STALE,
+        totals=totals,
+        issues=[],
+        currency="USD",
+    )
+    confirmed = _cabinet_risk(
+        state=DataState.READY,
+        totals=totals,
+        issues=[],
+        currency="USD",
+    )
+
+    assert stale[0] == "unknown"
+    assert confirmed[0] == "critical"
+    assert "$30.00" in (confirmed[2] or "")
 
 
 @pytest.mark.asyncio
@@ -271,6 +368,240 @@ def test_operator_openapi_declares_typed_problem_responses() -> None:
         "cabinet_timezone_known",
         "missing_timezone_account_ids",
     } <= set(meta_schema["required"])
+
+    cabinet_operation = openapi["paths"]["/api/operator/cabinets/{cabinet_id}/snapshot"]["get"]
+    assert cabinet_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/OperatorSnapshot"
+    }
+
+
+@pytest.mark.asyncio
+async def test_cabinet_snapshot_isolates_actions_and_attention_to_one_cabinet(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 8, 8, 12, tzinfo=UTC)
+    cabinet_days = operator_router.CabinetDayResolution(
+        account_ids=("111",),
+        timezone_names={"111": "Europe/Kaliningrad"},
+        query_boundaries={"111": now.replace(hour=0)},
+        missing_account_ids=(),
+    )
+    currencies = operator_router.AccountCurrencyResolution(
+        account_ids=("111",),
+        currencies={"111": "USD"},
+        observed_at_by_account={"111": now},
+        missing_account_ids=(),
+    )
+    economy = OperatorSection(
+        state=DataState.READY,
+        as_of=now,
+        freshness_seconds=0,
+        sources=["meta"],
+        issues=[],
+        data=operator_router.OperatorEconomyData(
+            totals=OperatorEconomyTotals(
+                spend="10.00",
+                base="20.00",
+                stop="30.00",
+                base_delta="-10.00",
+            ),
+            series=[],
+        ),
+    )
+    funnel = OperatorSection(
+        state=DataState.READY,
+        as_of=now,
+        freshness_seconds=0,
+        sources=["tracker"],
+        issues=[],
+        data=operator_router.OperatorFunnelData(stages=[]),
+    )
+    portfolio = OperatorSection(
+        state=DataState.READY,
+        as_of=now,
+        freshness_seconds=0,
+        sources=["meta"],
+        issues=[],
+        data=operator_router.OperatorPortfolioData(currency_groups=[]),
+    )
+    system = OperatorSection(
+        state=DataState.PARTIAL,
+        as_of=now,
+        freshness_seconds=0,
+        sources=["cabinet_runtime"],
+        issues=[
+            operator_router.OperatorIssue(
+                code="foreign_cabinet_actor_failed",
+                title="Cabinet 222: actor завершился с ошибкой",
+                detail=None,
+                severity="critical",
+                correlation_id=None,
+            )
+        ],
+        data=operator_router.OperatorSystemData(
+            severity="critical",
+            monitoring_enabled=True,
+            last_scan_at=now,
+            next_scan_at=None,
+            workers=[],
+        ),
+    )
+    action_rows = [
+        {
+            "id": id_,
+            "public_id": f"#{id_}",
+            "kind": "pause",
+            "state": "running",
+            "title": "Отключение рекламы",
+            "target_label": f"ad-{account_id}",
+            "requested_at": now,
+            "updated_at": now,
+            "requested_by": "owner:test",
+            "reason": None,
+            "correlation_id": f"correlation-{id_}",
+            "account_id": account_id,
+            "currency": "USD",
+            "cabinet_timezone": "Europe/Kaliningrad",
+            "account_context_observed_at": now,
+            "account_context_issues": [],
+        }
+        for id_, account_id in (("1", "111"), ("2", "222"))
+    ]
+    incidents = [
+        {
+            "id": f"incident-{account_id}",
+            "severity": "warning",
+            "status": "open",
+            "title": f"Incident cabinet {account_id}",
+            "summary": f"cabinet {account_id}",
+            "resource_type": "account",
+            "resource_id": account_id,
+            "resource_label": f"act_{account_id}",
+            "opened_at": now,
+        }
+        for account_id in ("111", "222")
+    ]
+
+    async def scoped_actions(_engine, *, account_id=None, **_kwargs):
+        normalized = account_id.removeprefix("act_") if account_id else None
+        visible = [
+            row for row in action_rows if normalized is None or row["account_id"] == normalized
+        ]
+        return visible, None, now
+
+    async def scoped_incidents(_engine, *, account_id, **_kwargs):
+        normalized = account_id.removeprefix("act_") if account_id else None
+        return [
+            incident
+            for incident in incidents
+            if normalized is None or incident["resource_id"] == normalized
+        ]
+
+    monkeypatch.setattr(
+        operator_router,
+        "_analytics_sections",
+        AsyncMock(
+            return_value=(
+                economy,
+                funnel,
+                True,
+                now.replace(hour=0),
+                now,
+                cabinet_days,
+            )
+        ),
+    )
+    monkeypatch.setattr(operator_router, "_portfolio_section", AsyncMock(return_value=portfolio))
+    system_mock = AsyncMock(return_value=system)
+    monkeypatch.setattr(operator_router, "_system_section", system_mock)
+    actions_mock = AsyncMock(side_effect=scoped_actions)
+    monkeypatch.setattr(operator_router, "fetch_operator_actions", actions_mock)
+    monkeypatch.setattr(
+        operator_router,
+        "fetch_operator_incidents",
+        AsyncMock(side_effect=scoped_incidents),
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "fetch_operator_revision",
+        AsyncMock(return_value=(7, "revision-7")),
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "_account_meta",
+        AsyncMock(return_value={"id": "111", "name": "act_111"}),
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "resolve_account_currencies",
+        AsyncMock(return_value=currencies),
+    )
+
+    snapshot = await operator_router.get_operator_cabinet_snapshot(
+        engine=object(),
+        settings=SimpleNamespace(app_timezone="Europe/Kaliningrad"),
+        cabinet_id="111",
+        window="today",
+        timezone=None,
+    )
+
+    assert not isinstance(snapshot, operator_router.JSONResponse)
+    assert snapshot.actions.data is not None
+    assert [item.account_id for item in snapshot.actions.data.items] == ["111"]
+    assert snapshot.attention.data is not None
+    assert {item.id for item in snapshot.attention.data.items} == {
+        "incident-111",
+        "task:1",
+    }
+    assert snapshot.attention.state == DataState.READY
+    assert actions_mock.await_args.kwargs["account_id"] == "111"
+    assert system_mock.await_args.kwargs["account_id"] == "111"
+
+
+@pytest.mark.asyncio
+async def test_system_section_isolates_cabinet_runtime_evidence(monkeypatch) -> None:
+    now = datetime(2026, 8, 8, 12, tzinfo=UTC)
+    scan = {
+        "enabled": True,
+        "last_scan_at": now,
+        "next_scan_at": now + timedelta(seconds=30),
+        "last_scan_outcome": "success",
+        "actors": [
+            {
+                "ad_account_id": "111",
+                "stage": "idle",
+                "last_progress_at": now,
+                "last_snapshot_at": now,
+                "owner_instance": "observer-a",
+                "lease_expires_at": now + timedelta(seconds=30),
+                "error": None,
+            },
+            {
+                "ad_account_id": "222",
+                "stage": "error",
+                "last_progress_at": now,
+                "last_snapshot_at": now,
+                "owner_instance": "observer-b",
+                "lease_expires_at": now + timedelta(seconds=30),
+                "error": "foreign cabinet failure",
+            },
+        ],
+    }
+    scan_state = AsyncMock(return_value=scan)
+    configured_accounts = AsyncMock(return_value=["111", "222"])
+    monkeypatch.setattr(operator_router, "fetch_operator_scan_state", scan_state)
+    monkeypatch.setattr(operator_router, "resolve_scan_account_ids", configured_accounts)
+
+    section = await operator_router._system_section(
+        engine=object(),
+        now=now,
+        account_id="act_111",
+    )
+
+    assert section.data is not None
+    assert [worker.id for worker in section.data.workers] == ["observer:111"]
+    assert all("222" not in issue.title for issue in section.issues)
+    configured_accounts.assert_not_awaited()
 
 
 def test_operator_money_commands_distinguish_queued_from_existing_lifecycle() -> None:

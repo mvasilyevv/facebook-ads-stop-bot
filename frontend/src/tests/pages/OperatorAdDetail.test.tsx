@@ -154,7 +154,7 @@ describe("typed operator ad detail", () => {
     expect(screen.getByText("Цена регистрации").parentElement).toHaveTextContent("—");
   });
 
-  it("uses response scope for currency exponent and timezone context", () => {
+  it("keeps timezone evidence but hides money for a non-USD scope", () => {
     const data = response([
       makeAd({
         metrics: {
@@ -176,8 +176,9 @@ describe("typed operator ad detail", () => {
 
     renderDetail();
 
-    expect(screen.getByText("Расход").parentElement).toHaveTextContent(/KWD.*1\.234/);
-    expect(screen.getByText("CPC").parentElement).toHaveTextContent(/KWD.*0\.001/);
+    expect(screen.getByText("Расход").parentElement).toHaveTextContent("—");
+    expect(screen.getByText("CPC").parentElement).toHaveTextContent("—");
+    expect(document.body).not.toHaveTextContent(/KWD|1\.234|0\.001/);
     expect(screen.getByText("Часовой пояс").parentElement).toHaveTextContent("Asia/Tokyo");
     expect(screen.getByText("Данные на").parentElement).toHaveTextContent("19.07.2026, 19:00");
   });

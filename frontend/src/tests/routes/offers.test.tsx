@@ -37,12 +37,7 @@ describe("OfferCard", () => {
   // Рендер кода оффера
   it("отображает код оффера", () => {
     render(
-      <OfferCard
-        offer={makeOffer()}
-        onEditOffer={noop}
-        onEditRules={noop}
-        onDeactivate={noop}
-      />,
+      <OfferCard offer={makeOffer()} onEditOffer={noop} onEditRules={noop} onDeactivate={noop} />,
     );
     expect(screen.getByText("CR2")).toBeInTheDocument();
   });
@@ -71,9 +66,7 @@ describe("OfferCard", () => {
       />,
     );
     expect(screen.getByText("неактивен")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /деактивировать оффер/i }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /деактивировать оффер/i })).not.toBeInTheDocument();
   });
 
   it("отображает подтверждённую конфигурацию вместо legacy KPI", () => {
@@ -90,7 +83,7 @@ describe("OfferCard", () => {
         onDeactivate={noop}
       />,
     );
-    expect(screen.getByText(/USD.3\.50/)).toBeInTheDocument();
+    expect(screen.getByText(/\$3\.50/)).toBeInTheDocument();
     expect(screen.getByText("GH, KE")).toBeInTheDocument();
     expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.queryByText("Траты")).not.toBeInTheDocument();
@@ -150,12 +143,9 @@ describe("OfferCard", () => {
         onDeactivate={onDeactivate}
       />,
     );
-    await userEvent.click(
-      screen.getByRole("button", { name: /деактивировать оффер/i }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: /деактивировать оффер/i }));
     expect(onDeactivate).toHaveBeenCalledTimes(1);
   });
-
 });
 
 // ─── OfferFormModal тесты ─────────────────────────────────────────────────────
@@ -316,11 +306,7 @@ describe("OfferDeactivateManager", () => {
   // ConfirmDialog с confirmWord показывается
   it("требует ввести код оффера для подтверждения деактивации", () => {
     render(
-      <OfferDeactivateManager
-        offer={makeOffer({ code: "CR2" })}
-        open
-        onOpenChange={() => {}}
-      />,
+      <OfferDeactivateManager offer={makeOffer({ code: "CR2" })} open onOpenChange={() => {}} />,
     );
     // Поле ввода confirmWord
     expect(screen.getByPlaceholderText("CR2")).toBeInTheDocument();
@@ -328,11 +314,7 @@ describe("OfferDeactivateManager", () => {
 
   it("кнопка Деактивировать активна после ввода правильного кода", async () => {
     render(
-      <OfferDeactivateManager
-        offer={makeOffer({ code: "CR2" })}
-        open
-        onOpenChange={() => {}}
-      />,
+      <OfferDeactivateManager offer={makeOffer({ code: "CR2" })} open onOpenChange={() => {}} />,
     );
 
     // Вводим код
@@ -355,9 +337,7 @@ describe("OfferDeactivateManager", () => {
     );
 
     await userEvent.type(screen.getByPlaceholderText("CR2"), "CR2");
-    await userEvent.click(
-      screen.getByRole("button", { name: /^деактивировать$/i }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: /^деактивировать$/i }));
 
     expect(mockDeleteMutateAsync).toHaveBeenCalledWith("offer-uuid-1");
   });

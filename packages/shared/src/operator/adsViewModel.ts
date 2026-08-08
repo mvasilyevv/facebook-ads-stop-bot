@@ -1,5 +1,4 @@
 import type { OperatorActionState, OperatorScopeEvidence } from "./contracts";
-import { isSupportedCurrencyCode } from "../format/number";
 
 export type OperatorDeliveryKind = "active" | "inactive" | "unknown";
 
@@ -35,15 +34,14 @@ export function formatOperatorCount(value: number | null): string {
   return value === null ? "—" : value.toLocaleString("ru-RU");
 }
 
-/** Only a single, validated response scope may label operator money. */
+/** FB Agent budgets are USD-only; every other currency fails closed. */
 export function confirmedOperatorCurrency(
   scope:
     | Pick<OperatorScopeEvidence, "currency" | "currency_state">
     | null
     | undefined,
 ): string | null {
-  return scope?.currency_state === "single" &&
-    isSupportedCurrencyCode(scope.currency)
-    ? scope.currency
+  return scope?.currency_state === "single" && scope.currency === "USD"
+    ? "USD"
     : null;
 }

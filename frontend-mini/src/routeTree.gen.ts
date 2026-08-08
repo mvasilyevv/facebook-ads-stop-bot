@@ -20,6 +20,7 @@ import { Route as AdsIndexRouteImport } from './routes/ads/index'
 import { Route as ActionsIndexRouteImport } from './routes/actions/index'
 import { Route as SystemSourcesRouteImport } from './routes/system/sources'
 import { Route as IncidentsIncidentIdRouteImport } from './routes/incidents/$incidentId'
+import { Route as CabinetsCabinetIdRouteImport } from './routes/cabinets/$cabinetId'
 import { Route as AdsFbAdIdRouteImport } from './routes/ads/$fbAdId'
 import { Route as ActionsActionIdRouteImport } from './routes/actions/$actionId'
 
@@ -78,6 +79,11 @@ const IncidentsIncidentIdRoute = IncidentsIncidentIdRouteImport.update({
   path: '/incidents/$incidentId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CabinetsCabinetIdRoute = CabinetsCabinetIdRouteImport.update({
+  id: '/cabinets/$cabinetId',
+  path: '/cabinets/$cabinetId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdsFbAdIdRoute = AdsFbAdIdRouteImport.update({
   id: '/ads/$fbAdId',
   path: '/ads/$fbAdId',
@@ -94,6 +100,7 @@ export interface FileRoutesByFullPath {
   '/open': typeof OpenRoute
   '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
   '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
   '/system/sources': typeof SystemSourcesRoute
   '/actions/': typeof ActionsIndexRoute
@@ -109,6 +116,7 @@ export interface FileRoutesByTo {
   '/open': typeof OpenRoute
   '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
   '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
   '/system/sources': typeof SystemSourcesRoute
   '/actions': typeof ActionsIndexRoute
@@ -125,6 +133,7 @@ export interface FileRoutesById {
   '/open': typeof OpenRoute
   '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
   '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
   '/system/sources': typeof SystemSourcesRoute
   '/actions/': typeof ActionsIndexRoute
@@ -142,6 +151,7 @@ export interface FileRouteTypes {
     | '/open'
     | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/cabinets/$cabinetId'
     | '/incidents/$incidentId'
     | '/system/sources'
     | '/actions/'
@@ -157,6 +167,7 @@ export interface FileRouteTypes {
     | '/open'
     | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/cabinets/$cabinetId'
     | '/incidents/$incidentId'
     | '/system/sources'
     | '/actions'
@@ -172,6 +183,7 @@ export interface FileRouteTypes {
     | '/open'
     | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/cabinets/$cabinetId'
     | '/incidents/$incidentId'
     | '/system/sources'
     | '/actions/'
@@ -188,6 +200,7 @@ export interface RootRouteChildren {
   OpenRoute: typeof OpenRoute
   ActionsActionIdRoute: typeof ActionsActionIdRoute
   AdsFbAdIdRoute: typeof AdsFbAdIdRoute
+  CabinetsCabinetIdRoute: typeof CabinetsCabinetIdRoute
   IncidentsIncidentIdRoute: typeof IncidentsIncidentIdRoute
   SystemSourcesRoute: typeof SystemSourcesRoute
   ActionsIndexRoute: typeof ActionsIndexRoute
@@ -278,6 +291,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IncidentsIncidentIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/cabinets/$cabinetId': {
+      id: '/cabinets/$cabinetId'
+      path: '/cabinets/$cabinetId'
+      fullPath: '/cabinets/$cabinetId'
+      preLoaderRoute: typeof CabinetsCabinetIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ads/$fbAdId': {
       id: '/ads/$fbAdId'
       path: '/ads/$fbAdId'
@@ -300,6 +320,7 @@ const rootRouteChildren: RootRouteChildren = {
   OpenRoute: OpenRoute,
   ActionsActionIdRoute: ActionsActionIdRoute,
   AdsFbAdIdRoute: AdsFbAdIdRoute,
+  CabinetsCabinetIdRoute: CabinetsCabinetIdRoute,
   IncidentsIncidentIdRoute: IncidentsIncidentIdRoute,
   SystemSourcesRoute: SystemSourcesRoute,
   ActionsIndexRoute: ActionsIndexRoute,

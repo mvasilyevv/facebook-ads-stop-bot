@@ -2,7 +2,7 @@
  * Sidebar — full-height боковая навигация operator web.
  *
  * Структура:
- *   - Brand-хедер (56px): 26×26 accent-квадрат «FB» + «STOP BOT / operator».
+ *   - Brand-хедер (56px): registration-mark «FB» + «FB Agent / operator».
  *   - Сгруппированная навигация продукта и системы.
  *     Item: не менее 44px, icon + label + опциональный count-badge. Active = bg-2 fill +
  *     accent text + 3px accent left-bar.
@@ -10,7 +10,7 @@
  *
  * Count-badges (реальные данные):
  *   - Объявления: ads_in_warning + ads_in_stop (активные инциденты, из stats).
- * 240px expanded / 64px collapsed (state в Zustand).
+ * 196px expanded / 64px collapsed (state в Zustand).
  */
 
 import { Link, useRouterState } from "@tanstack/react-router";
@@ -53,7 +53,7 @@ interface NavGroup {
 const NAV_GROUPS: NavGroup[] = [
   {
     eyebrowNum: "01",
-    eyebrow: "OPERATE",
+    eyebrow: "ОПЕРАЦИИ",
     items: [
       { to: "/", label: "Сейчас", icon: LayoutDashboard },
       { to: "/actions", label: "Действия", icon: Activity, badgeKey: "actions" },
@@ -143,21 +143,18 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
         aria-current={opts.active ? "page" : undefined}
         title={collapsed ? item.label : undefined}
         className={cn(
-          "relative flex w-full items-center gap-[11px] no-underline transition-colors",
-          "min-h-11 rounded-[var(--radius-2)] py-2 text-[14px]",
+          "relative flex w-full items-center gap-[11px] border-l border-transparent no-underline transition-colors",
+          "min-h-11 py-2 text-[14px]",
           collapsed ? "justify-center px-0" : opts.child ? "pl-[42px] pr-5" : "px-5",
           opts.active
-            ? "bg-bg-2 text-accent"
+            ? "border-accent bg-bg-1 text-bg-11"
             : opts.muted
               ? "text-accent-muted hover:bg-bg-1"
               : "text-bg-10 hover:bg-bg-1 hover:text-bg-11",
         )}
       >
         {opts.active && (
-          <span
-            aria-hidden="true"
-            className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-accent"
-          />
+          <span aria-hidden="true" className="absolute -left-px inset-y-0 w-px bg-accent" />
         )}
         <item.icon size={opts.child ? 15 : 18} strokeWidth={1.6} aria-hidden="true" />
         {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
@@ -197,14 +194,14 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
       >
         <div
           aria-hidden="true"
-          className="flex size-[26px] shrink-0 items-center justify-center rounded-[var(--radius-1)] bg-accent"
+          className="flex size-[26px] shrink-0 items-center justify-center border border-accent bg-transparent"
         >
-          <span className="font-display text-[14px] font-bold text-bg-0">FB</span>
+          <span className="font-numeric text-[12px] font-bold text-accent">FB</span>
         </div>
         {!collapsed && (
           <div className="min-w-0">
             <div className="font-display text-[13px] font-semibold leading-[1.1] text-bg-11">
-              STOP BOT
+              FB Agent
             </div>
             <div className="text-[12px] tracking-[0.04em] text-bg-9">operator</div>
           </div>
@@ -266,7 +263,7 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
           <button
             type="button"
             onClick={onNavigate}
-            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] text-[14px] text-bg-10 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            className="inline-flex min-h-11 w-full items-center justify-center gap-2 border border-[var(--color-hairline-strong)] text-[14px] text-bg-10 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             <X size={15} aria-hidden="true" />
             Закрыть меню
@@ -276,7 +273,7 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
             type="button"
             onClick={toggleSidebar}
             aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
-            className="inline-flex size-11 items-center justify-center rounded-[var(--radius-2)] text-bg-9 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            className="inline-flex size-11 items-center justify-center text-bg-9 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             <PanelLeft size={16} aria-hidden="true" />
           </button>

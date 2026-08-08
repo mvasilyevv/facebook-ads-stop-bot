@@ -2939,6 +2939,156 @@
         }
       }
     },
+    "/api/operator/cabinets/{cabinet_id}/snapshot": {
+      "get": {
+        "tags": [
+          "operator"
+        ],
+        "summary": "Get Operator Cabinet Snapshot",
+        "description": "Return the canonical operator snapshot narrowed to one cabinet.",
+        "operationId": "get_operator_cabinet_snapshot_api_operator_cabinets__cabinet_id__snapshot_get",
+        "parameters": [
+          {
+            "name": "cabinet_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Cabinet Id"
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "today",
+                "24h",
+                "7d",
+                "30d"
+              ],
+              "type": "string",
+              "default": "today",
+              "title": "Window"
+            }
+          },
+          {
+            "name": "timezone",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timezone"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorSnapshot"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Command lifecycle conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Ad projection changed before enqueue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator source unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Canonical API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/operator/actions": {
       "get": {
         "tags": [
@@ -10336,6 +10486,126 @@
         ],
         "title": "OperatorCabinetDay"
       },
+      "OperatorCabinetLedgerRow": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DataState"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/OperatorSeverity"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "freshness_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freshness Seconds"
+          },
+          "cabinet_day": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperatorCabinetDay"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totals": {
+            "$ref": "#/components/schemas/OperatorEconomyTotals"
+          },
+          "risk_label": {
+            "type": "string",
+            "title": "Risk Label"
+          },
+          "risk_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Reason"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorIssue"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "action": {
+            "$ref": "#/components/schemas/OperatorAttentionAction"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "timezone",
+          "state",
+          "severity",
+          "as_of",
+          "freshness_seconds",
+          "cabinet_day",
+          "totals",
+          "risk_label",
+          "risk_reason",
+          "issues",
+          "action"
+        ],
+        "title": "OperatorCabinetLedgerRow"
+      },
       "OperatorCommandResponse": {
         "properties": {
           "task_id": {
@@ -10367,6 +10637,77 @@
           "correlation_id"
         ],
         "title": "OperatorCommandResponse"
+      },
+      "OperatorCurrencyGroup": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DataState"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/OperatorSeverity"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "freshness_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freshness Seconds"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/OperatorEconomyTotals"
+          },
+          "cabinets": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorCabinetLedgerRow"
+            },
+            "type": "array",
+            "title": "Cabinets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "state",
+          "severity",
+          "as_of",
+          "freshness_seconds",
+          "totals",
+          "cabinets"
+        ],
+        "title": "OperatorCurrencyGroup"
       },
       "OperatorEconomyData": {
         "properties": {
@@ -10777,6 +11118,22 @@
         ],
         "title": "OperatorIssue"
       },
+      "OperatorPortfolioData": {
+        "properties": {
+          "currency_groups": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorCurrencyGroup"
+            },
+            "type": "array",
+            "title": "Currency Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "currency_groups"
+        ],
+        "title": "OperatorPortfolioData"
+      },
       "OperatorScopeEvidence": {
         "properties": {
           "account_ids": {
@@ -11132,6 +11489,71 @@
         ],
         "title": "OperatorSection[OperatorFunnelData]"
       },
+      "OperatorSection_OperatorPortfolioData_": {
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/DataState"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "freshness_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freshness Seconds"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorIssue"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperatorPortfolioData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "as_of",
+          "freshness_seconds",
+          "sources",
+          "issues",
+          "data"
+        ],
+        "title": "OperatorSection[OperatorPortfolioData]"
+      },
       "OperatorSection_OperatorSystemData_": {
         "properties": {
           "state": {
@@ -11215,6 +11637,9 @@
           "attention": {
             "$ref": "#/components/schemas/OperatorSection_OperatorAttentionData_"
           },
+          "portfolio": {
+            "$ref": "#/components/schemas/OperatorSection_OperatorPortfolioData_"
+          },
           "economy": {
             "$ref": "#/components/schemas/OperatorSection_OperatorEconomyData_"
           },
@@ -11232,6 +11657,7 @@
         "required": [
           "meta",
           "attention",
+          "portfolio",
           "economy",
           "funnel",
           "actions",

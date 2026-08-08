@@ -12,7 +12,7 @@ export interface OfferRulesValues {
 
 export const DEFAULT_OFFER_RULES_VALUES: Readonly<OfferRulesValues> = {
   cpa: "",
-  currency: "",
+  currency: "USD",
   stop_percent_of_rule: 80,
   warning_percent_of_stop: 80,
 };
@@ -23,9 +23,11 @@ export function rulesValuesFromOut(
   if (!rules) return { ...DEFAULT_OFFER_RULES_VALUES };
   return {
     cpa: rules.cpa_threshold ?? "",
-    currency: rules.currency ?? "",
+    currency: rules.currency ?? "USD",
     stop_percent_of_rule: validPercentOrDefault(rules.stop_percent_of_rule),
-    warning_percent_of_stop: validPercentOrDefault(rules.warning_percent_of_stop),
+    warning_percent_of_stop: validPercentOrDefault(
+      rules.warning_percent_of_stop,
+    ),
   };
 }
 
@@ -40,12 +42,13 @@ export function rulesValuesToPayload(
     throw new Error("CPA должен быть положительной десятичной строкой");
   }
   if (cpa && !isOfferCurrencyValid(currency)) {
-    throw new Error("Для CPA нужен трёхбуквенный ISO-код валюты");
+    throw new Error("FB Agent поддерживает CPA только в USD");
   }
   return {
     cpa_threshold: cpa || null,
     currency: cpa ? currency : null,
-    frequency_threshold: frequency === undefined ? undefined : frequency || null,
+    frequency_threshold:
+      frequency === undefined ? undefined : frequency || null,
     stop_percent_of_rule: requiredPercent(values.stop_percent_of_rule),
     warning_percent_of_stop: requiredPercent(values.warning_percent_of_stop),
   };
@@ -60,7 +63,7 @@ export function isOfferCpaValid(value: string): boolean {
 }
 
 export function isOfferCurrencyValid(value: string): boolean {
-  return /^[A-Z]{3}$/.test(value.trim().toUpperCase());
+  return value.trim().toUpperCase() === "USD";
 }
 
 export function parseOfferAccountIds(raw: string): string[] | null {
@@ -80,7 +83,10 @@ export function parseOfferCountries(raw: string): string[] | null {
 export function buildOfferRulesBody(
   data: OfferRulesDraft,
 ): components["schemas"]["OfferRuleUpsertIn"] {
-  if (data.stop_percent_of_rule == null || data.warning_percent_of_stop == null) {
+  if (
+    data.stop_percent_of_rule == null ||
+    data.warning_percent_of_stop == null
+  ) {
     throw new Error("Не заданы обязательные проценты правила оффера");
   }
   return {

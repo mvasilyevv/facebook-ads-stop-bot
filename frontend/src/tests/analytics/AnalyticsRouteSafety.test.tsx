@@ -149,12 +149,12 @@ describe("analytics route fail-closed state", () => {
     {
       state: "partial" as const,
       fetching: false,
-      currencyLabel: "USD · снимок неполный",
+      currencyLabel: "$ · снимок неполный",
     },
     {
       state: "stale" as const,
       fetching: true,
-      currencyLabel: "USD · снимок устарел",
+      currencyLabel: "$ · снимок устарел",
     },
   ])(
     "keeps $state analytics values neutral and exposes snapshot freshness",
@@ -176,7 +176,7 @@ describe("analytics route fail-closed state", () => {
 
       expect(screen.getByTestId("analytics-freshness")).toHaveTextContent("свежесть 20 сек");
       expect(screen.getByText(currencyLabel)).toBeInTheDocument();
-      expect(screen.queryByText("USD · подтверждена")).not.toBeInTheDocument();
+      expect(screen.queryByText("$ · подтверждена")).not.toBeInTheDocument();
       expect(document.querySelectorAll(".text-success, .text-danger")).toHaveLength(0);
       expect(document.querySelectorAll('[data-source-status="good"]')).toHaveLength(0);
     },

@@ -1,7 +1,7 @@
 /**
  * TopBar — 56px, только над контентом.
  *
- * Слева: mono-breadcrumb «FB Stop Bot / <раздел>».
+ * Слева: breadcrumb «FB Agent / <раздел>».
  * Справа: search-кнопка с ⌘K → командная палитра, worker-chip (N/M, жёлтый при
  * down) и MV avatar.
  *
@@ -26,6 +26,7 @@ const ROUTE_CRUMB: Record<string, string> = {
   "/system/sources": "Источники и воркеры",
   "/remote-desktop": "Рабочий стол",
   "/settings": "Настройки",
+  "/cabinets": "Кабинет",
 };
 
 function getCrumb(pathname: string): string {
@@ -64,7 +65,7 @@ export function TopBar({ onOpenNavigation, navigationButtonRef }: TopBarProps) {
           className="flex min-w-0 items-center gap-2 whitespace-nowrap font-display text-[13px] text-bg-9"
         >
           <span aria-hidden="true" className="hidden sm:inline">
-            FB Stop Bot
+            FB Agent
           </span>
           <span aria-hidden="true" className="hidden text-bg-8 sm:inline">
             /

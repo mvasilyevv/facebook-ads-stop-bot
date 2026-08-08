@@ -3,11 +3,10 @@
  *
  * Раскладка: Sidebar (full-height, со своим brand-хедером 56px) слева,
  * справа — колонка из TopBar (56px) + scrolling main.
- * Grid: cols [sidebar | 1fr], rows [56px | 1fr]; Sidebar занимает обе строки.
+ * Grid: cols [196px sidebar | 1fr], rows [56px | 1fr]; Sidebar занимает обе строки.
  * Collapsed sidebar: 64px.
  *
- * main задаёт общий паддинг (px-10 py-8) — единый для всех страниц.
- * Dashboard рисует blueprint-фон внутри этого паддинга (decorative, masked to top).
+ * main задаёт общий tokenized padding — единый для всех страниц.
  */
 
 import { lazy, Suspense, type ReactNode, useEffect, useRef, useState } from "react";
@@ -79,7 +78,9 @@ export function Shell({ children }: ShellProps) {
       <div
         className={cn(
           "min-h-screen grid grid-cols-1 grid-rows-[56px_1fr]",
-          collapsed ? "md:grid-cols-[64px_1fr]" : "md:grid-cols-[240px_1fr]",
+          collapsed
+            ? "md:grid-cols-[var(--sidebar-width-collapsed)_minmax(0,1fr)]"
+            : "md:grid-cols-[var(--sidebar-width)_minmax(0,1fr)]",
         )}
       >
         <a
@@ -108,14 +109,14 @@ export function Shell({ children }: ShellProps) {
         <main
           id="main-content"
           tabIndex={-1}
-          className="col-start-1 row-start-2 min-w-0 overflow-x-hidden px-4 pb-[calc(80px+env(safe-area-inset-bottom,0px))] pt-5 sm:px-6 md:col-start-2 md:col-end-3 md:px-10 md:py-8"
+          className="col-start-1 row-start-2 min-w-0 overflow-x-hidden px-4 pb-[calc(80px+env(safe-area-inset-bottom,0px))] pt-5 sm:px-6 md:col-start-2 md:col-end-3 md:px-[var(--content-padding-x)] md:py-[var(--content-padding-y)]"
         >
           {realtimeStatus !== "connected" ? (
             <div
               role="status"
               aria-live="polite"
               data-state="stale"
-              className="mb-4 rounded-[var(--radius-2)] border border-warning/40 bg-warning-bg px-4 py-3 text-[14px] leading-5 text-bg-11"
+              className="mb-4 border-y border-warning/40 bg-warning-bg px-4 py-3 text-[14px] leading-5 text-bg-11"
             >
               Live-связь восстанавливается. Данные считаются устаревшими, денежные действия
               заблокированы до сверки снимка.

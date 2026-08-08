@@ -30,13 +30,11 @@ const PERCENT_FORMATTER = new Intl.NumberFormat("en-US", {
 const INT_FORMATTER = new Intl.NumberFormat("en-US");
 
 /** Whether the repository has a reviewed exponent for this currency. */
-export function isSupportedCurrencyCode(
-  value: unknown,
-): value is string {
+export function isSupportedCurrencyCode(value: unknown): value is string {
   return supportedCurrencyExponent(value) !== null;
 }
 
-/** Format a major-unit decimal with its explicit currency code. */
+/** Format a major-unit decimal. USD is the product currency and uses `$`. */
 export function formatSpend(
   value: number | string | null | undefined,
   currency: string | null | undefined,
@@ -53,7 +51,7 @@ export function formatSpend(
       formatter = new Intl.NumberFormat("en-US", {
         style: "currency",
         currency: normalizedCurrency,
-        currencyDisplay: "code",
+        currencyDisplay: normalizedCurrency === "USD" ? "narrowSymbol" : "code",
         minimumFractionDigits: exponent,
         maximumFractionDigits: exponent,
       });
@@ -116,7 +114,9 @@ export function formatPercent(value: number | null | undefined): string {
  * Процент из числа уже в процентах: 12.4 → "12.4%".
  * Используй для roi_percent, frequency_percent и подобных полей.
  */
-export function formatPercentValue(value: number | string | null | undefined): string {
+export function formatPercentValue(
+  value: number | string | null | undefined,
+): string {
   if (value == null || value === "") return "—";
   const n = typeof value === "string" ? Number.parseFloat(value) : value;
   if (Number.isNaN(n)) return "—";

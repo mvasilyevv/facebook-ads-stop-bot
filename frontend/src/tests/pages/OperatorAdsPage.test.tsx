@@ -174,7 +174,7 @@ describe("typed operator ads page", () => {
     expect(firstRow).toHaveTextContent("—");
   });
 
-  it("labels ad money with the confirmed response currency and ISO exponent", () => {
+  it("hides ad money when a supposedly single scope is not USD", () => {
     const data = response([
       makeAd("111", {
         metrics: {
@@ -193,8 +193,8 @@ describe("typed operator ads page", () => {
     renderPage();
 
     const firstRow = within(screen.getByRole("table")).getAllByRole("row")[1]!;
-    expect(firstRow).toHaveTextContent(/KWD.*1\.234/);
-    expect(firstRow.textContent).not.toMatch(/KWD\s*1\.230(?:\D|$)/);
+    expect(firstRow).not.toHaveTextContent(/KWD|1\.234/);
+    expect(firstRow).toHaveTextContent("—");
   });
 
   it("submits an operator search through route state", async () => {

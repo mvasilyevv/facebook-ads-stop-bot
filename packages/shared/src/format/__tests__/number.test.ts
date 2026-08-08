@@ -10,8 +10,8 @@ import {
 } from "../number";
 
 describe("formatSpend", () => {
-  it("formats a major-unit value with an explicit currency code", () => {
-    expect(formatSpend(1234.56, "USD")).toBe("USD\u00a01,234.56");
+  it("formats the product currency with the dollar symbol", () => {
+    expect(formatSpend(1234.56, "USD")).toBe("$1,234.56");
   });
 
   it("uses the ISO exponent instead of assuming two decimals", () => {
@@ -26,7 +26,7 @@ describe("formatSpend", () => {
 
   it("preserves exact decimal strings beyond Number.MAX_SAFE_INTEGER", () => {
     expect(formatSpend("9007199254740993.01", "USD")).toBe(
-      "USD\u00a09,007,199,254,740,993.01",
+      "$9,007,199,254,740,993.01",
     );
   });
 
@@ -50,17 +50,17 @@ describe("formatSpend", () => {
   });
 
   it("formats negative adjustments without losing the currency", () => {
-    expect(formatSpend(-50, "USD")).toBe("-USD\u00a050.00");
+    expect(formatSpend(-50, "USD")).toBe("-$50.00");
   });
 });
 
 describe("formatSpendPerUnit", () => {
   it("divides and rounds in minor units without Number coercion", () => {
     expect(formatSpendPerUnit("9007199254740993.01", 3, "USD")).toBe(
-      "USD\u00a03,002,399,751,580,331.00",
+      "$3,002,399,751,580,331.00",
     );
-    expect(formatSpendPerUnit("10.00", 3, "USD")).toBe("USD\u00a03.33");
-    expect(formatSpendPerUnit("10.00", 6, "USD")).toBe("USD\u00a01.67");
+    expect(formatSpendPerUnit("10.00", 3, "USD")).toBe("$3.33");
+    expect(formatSpendPerUnit("10.00", 6, "USD")).toBe("$1.67");
   });
 
   it("uses the confirmed currency exponent", () => {

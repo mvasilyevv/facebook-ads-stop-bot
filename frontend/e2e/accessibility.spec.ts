@@ -10,9 +10,8 @@ test("360px reflows without horizontal page scroll", async ({ page }, testInfo) 
   test.skip(testInfo.project.name !== "360px");
 
   await page.goto("/");
-  await expect(
-    page.getByRole("heading", { name: "Есть отклонения, требующие решения" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Сейчас" })).toBeVisible();
+  await expect(page.getByText("Есть отклонения, требующие решения")).toBeVisible();
   await expect(
     page.getByRole("navigation", { name: "Основная мобильная навигация" }),
   ).toBeVisible();
@@ -54,7 +53,7 @@ test("reduced-motion removes non-essential animation and transitions", async ({
   await page.goto("/");
 
   const motion = await page
-    .locator(".wp-dot")
+    .locator(".ledger-action-item__progress")
     .first()
     .evaluate((node) => {
       const style = getComputedStyle(node);

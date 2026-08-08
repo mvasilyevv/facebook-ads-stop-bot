@@ -11,7 +11,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Header, Query, Request, Response, status
+from fastapi import APIRouter, Header, Path, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
@@ -28,7 +28,9 @@ from apps.api.routers.v1.schemas.operator import (
     OperatorAttentionData,
     OperatorAttentionItem,
     OperatorAttentionTarget,
+    OperatorCabinetLedgerRow,
     OperatorCommandResponse,
+    OperatorCurrencyGroup,
     OperatorEconomyData,
     OperatorEconomyTotals,
     OperatorEventItem,
@@ -37,6 +39,7 @@ from apps.api.routers.v1.schemas.operator import (
     OperatorIncidentAckResponse,
     OperatorIncidentDetailResponse,
     OperatorIssue,
+    OperatorPortfolioData,
     OperatorScopeEvidence,
     OperatorSection,
     OperatorSeverity,
@@ -142,8 +145,16 @@ def _scope_evidence(
 
 
 def _currency_issue(currencies: AccountCurrencyResolution) -> OperatorIssue | None:
-    if currencies.state == "single":
+    if currencies.state == "single" and currencies.currency == "USD":
         return None
+    if currencies.state == "single":
+        return OperatorIssue(
+            code="currency_not_usd",
+            title="Кабинет настроен не в USD",
+            detail="FB Agent принимает денежные решения только для долларовых бюджетов.",
+            severity=OperatorSeverity.UNKNOWN,
+            correlation_id=None,
+        )
     if currencies.state == "mixed":
         return OperatorIssue(
             code="currency_mixed",
@@ -214,6 +225,188 @@ def _fail_closed_snapshot_money(
             }
         ),
     )
+
+
+_STATE_RANK: dict[DataState, int] = {
+    DataState.READY: 0,
+    DataState.EMPTY: 0,
+    DataState.PARTIAL: 1,
+    DataState.STALE: 2,
+    DataState.UNAVAILABLE: 3,
+}
+_SEVERITY_RANK: dict[OperatorSeverity, int] = {
+    OperatorSeverity.OK: 0,
+    OperatorSeverity.UNKNOWN: 1,
+    OperatorSeverity.WARNING: 2,
+    OperatorSeverity.CRITICAL: 3,
+}
+
+
+def _combined_data_state(states: list[DataState]) -> DataState:
+    if not states or all(state == DataState.EMPTY for state in states):
+        return DataState.EMPTY
+    if all(state == DataState.UNAVAILABLE for state in states):
+        return DataState.UNAVAILABLE
+    if all(state == DataState.STALE for state in states):
+        return DataState.STALE
+    if any(_STATE_RANK[state] > 0 for state in states):
+        return DataState.PARTIAL
+    return DataState.READY
+
+
+def _combined_severity(values: list[OperatorSeverity]) -> OperatorSeverity:
+    return max(values, key=_SEVERITY_RANK.__getitem__, default=OperatorSeverity.UNKNOWN)
+
+
+def _sum_complete_money(
+    cabinets: list[OperatorCabinetLedgerRow],
+    field: Literal["spend", "base", "stop"],
+) -> str | None:
+    values = [getattr(cabinet.totals, field) for cabinet in cabinets]
+    if not values or any(value is None for value in values):
+        return None
+    return _money(sum((Decimal(value) for value in values if value is not None), Decimal(0)))
+
+
+def _portfolio_totals(cabinets: list[OperatorCabinetLedgerRow]) -> OperatorEconomyTotals:
+    spend = _sum_complete_money(cabinets, "spend")
+    base = _sum_complete_money(cabinets, "base")
+    stop = _sum_complete_money(cabinets, "stop")
+    return OperatorEconomyTotals(
+        spend=spend,
+        base=base,
+        stop=stop,
+        base_delta=(
+            _money(Decimal(spend) - Decimal(base))
+            if spend is not None and base is not None
+            else None
+        ),
+    )
+
+
+def _unknown_money_totals() -> OperatorEconomyTotals:
+    return OperatorEconomyTotals(spend=None, base=None, stop=None, base_delta=None)
+
+
+def _usd_safe_portfolio_rows(
+    rows: list[OperatorCabinetLedgerRow],
+    currency: str | None,
+) -> list[OperatorCabinetLedgerRow]:
+    if currency == "USD":
+        return rows
+    issue = OperatorIssue(
+        code="currency_not_usd" if currency else "currency_unknown",
+        title="Кабинет настроен не в USD" if currency else "Валюта кабинета не подтверждена",
+        detail="Денежные суммы скрыты: FB Agent работает только с долларовыми бюджетами.",
+        severity=OperatorSeverity.UNKNOWN,
+        correlation_id=None,
+    )
+    safe_rows: list[OperatorCabinetLedgerRow] = []
+    for row in rows:
+        issues = (
+            row.issues
+            if any(item.code == issue.code for item in row.issues)
+            else [*row.issues, issue]
+        )
+        safe_rows.append(
+            row.model_copy(
+                update={
+                    "state": (
+                        DataState.PARTIAL
+                        if row.state in {DataState.READY, DataState.EMPTY}
+                        else row.state
+                    ),
+                    "severity": OperatorSeverity.UNKNOWN,
+                    "totals": _unknown_money_totals(),
+                    "risk_label": "Валюта не подтверждена",
+                    "risk_reason": issue.detail,
+                    "issues": issues,
+                }
+            )
+        )
+    return safe_rows
+
+
+def _cabinet_risk(
+    *,
+    state: DataState,
+    totals: OperatorEconomyTotals,
+    issues: list[OperatorIssue],
+    currency: str | None,
+) -> tuple[OperatorSeverity, str, str | None]:
+    if state == DataState.UNAVAILABLE:
+        return OperatorSeverity.UNKNOWN, "Данные недоступны", issues[0].title if issues else None
+    if state == DataState.STALE:
+        return OperatorSeverity.UNKNOWN, "Снимок устарел", issues[0].title if issues else None
+
+    spend = Decimal(totals.spend) if totals.spend is not None else None
+    base = Decimal(totals.base) if totals.base is not None else None
+    stop = Decimal(totals.stop) if totals.stop is not None else None
+
+    def money_label(value: Decimal) -> str:
+        return (
+            f"${value}" if currency == "USD" else f"{value} {currency}" if currency else str(value)
+        )
+
+    if spend is not None and stop is not None and spend >= stop:
+        return (
+            OperatorSeverity.CRITICAL,
+            "Stop-граница достигнута",
+            f"Факт {money_label(spend)} ≥ stop {money_label(stop)}",
+        )
+    if state == DataState.PARTIAL:
+        return (
+            OperatorSeverity.WARNING,
+            "Данные неполные",
+            issues[0].title if issues else "Часть доказательств ещё не подтверждена.",
+        )
+    if spend is None:
+        return OperatorSeverity.UNKNOWN, "Расход не подтверждён", None
+    if base is None or stop is None:
+        return OperatorSeverity.UNKNOWN, "Пороги не подтверждены", None
+    if spend >= base:
+        return (
+            OperatorSeverity.WARNING,
+            "Расход выше базы",
+            f"Факт {money_label(spend)} ≥ база {money_label(base)}",
+        )
+    return (
+        OperatorSeverity.OK,
+        "В пределах порогов",
+        f"До stop осталось {money_label(stop - spend)}",
+    )
+
+
+def _currency_groups(
+    cabinets: list[OperatorCabinetLedgerRow],
+) -> list[OperatorCurrencyGroup]:
+    grouped: dict[str | None, list[OperatorCabinetLedgerRow]] = {}
+    for cabinet in cabinets:
+        grouped.setdefault(cabinet.currency, []).append(cabinet)
+
+    groups: list[OperatorCurrencyGroup] = []
+    for currency, rows in sorted(
+        grouped.items(),
+        key=lambda item: (item[0] is None, item[0] or ""),
+    ):
+        rows = _usd_safe_portfolio_rows(rows, currency)
+        states = [row.state for row in rows]
+        groups.append(
+            OperatorCurrencyGroup(
+                id=currency or "unknown",
+                currency=currency,
+                state=_combined_data_state(states),
+                severity=_combined_severity([row.severity for row in rows]),
+                as_of=min((row.as_of for row in rows if row.as_of is not None), default=None),
+                freshness_seconds=max(
+                    (row.freshness_seconds for row in rows if row.freshness_seconds is not None),
+                    default=None,
+                ),
+                totals=_portfolio_totals(rows),
+                cabinets=rows,
+            )
+        )
+    return groups
 
 
 def _money(value: Any) -> str | None:
@@ -683,13 +876,160 @@ async def _analytics_sections(
     )
 
 
-async def _system_section(*, engine: Any, now: datetime) -> OperatorSection[OperatorSystemData]:
+async def _portfolio_section(
+    *,
+    engine: Any,
+    account_id: str | None,
+    window_name: Literal["today", "24h", "7d", "30d"],
+    now: datetime,
+) -> OperatorSection[OperatorPortfolioData]:
+    requested_id = account_id.removeprefix("act_") if account_id else None
+    if requested_id:
+        account_ids = [requested_id]
+    else:
+        scan_ids, catalog_days = await asyncio.gather(
+            resolve_scan_account_ids(engine),
+            resolve_cabinet_days(engine, now=now),
+        )
+        account_ids = sorted({*scan_ids, *catalog_days.account_ids})
+
+    async def build_row(cabinet_id: str) -> OperatorCabinetLedgerRow:
+        analytics_task = _analytics_sections(
+            engine=engine,
+            account_id=cabinet_id,
+            window_name=window_name,
+            now=now,
+        )
+        currency_task = resolve_account_currencies(
+            engine,
+            account_ids=[cabinet_id],
+            now=now,
+        )
+        (
+            (economy, funnel, _tracker_available, from_dt, to_dt, cabinet_days),
+            currencies,
+        ) = await asyncio.gather(analytics_task, currency_task)
+        economy, _ = _fail_closed_snapshot_money(
+            economy=economy,
+            funnel=funnel,
+            currencies=currencies,
+        )
+        totals = (
+            economy.data.totals
+            if economy.data is not None
+            else OperatorEconomyTotals(spend=None, base=None, stop=None, base_delta=None)
+        )
+        currency = currencies.currency
+        severity, risk_label, risk_reason = _cabinet_risk(
+            state=economy.state,
+            totals=totals,
+            issues=economy.issues,
+            currency=currency,
+        )
+        timezone_name = cabinet_days.timezone_names.get(cabinet_id)
+        cabinet_day = None
+        if timezone_name is not None:
+            cabinet_day = {
+                "starts_at": from_dt,
+                "ends_at": (
+                    cabinet_day_end_for_timezone(timezone_name, now)
+                    if window_name == "today"
+                    else to_dt
+                ),
+            }
+        return OperatorCabinetLedgerRow(
+            id=cabinet_id,
+            name=f"act_{cabinet_id}",
+            timezone=timezone_name,
+            currency=currency,
+            state=economy.state,
+            severity=severity,
+            as_of=economy.as_of,
+            freshness_seconds=economy.freshness_seconds,
+            cabinet_day=cabinet_day,
+            totals=totals,
+            risk_label=risk_label,
+            risk_reason=risk_reason,
+            issues=economy.issues,
+            action=OperatorAttentionAction(
+                label="Открыть кабинет",
+                href=f"/cabinets/{cabinet_id}",
+            ),
+        )
+
+    cabinets = list(await asyncio.gather(*(build_row(value) for value in account_ids)))
+    groups = _currency_groups(cabinets)
+    states = [cabinet.state for cabinet in cabinets]
+    issues: list[OperatorIssue] = []
+    unknown_currency_count = sum(cabinet.currency is None for cabinet in cabinets)
+    non_usd_count = sum(
+        cabinet.currency is not None and cabinet.currency != "USD" for cabinet in cabinets
+    )
+    if unknown_currency_count:
+        issues.append(
+            OperatorIssue(
+                code="portfolio_currency_unknown",
+                title="Не для всех кабинетов подтверждена валюта",
+                detail=f"Кабинетов без свежего currency evidence: {unknown_currency_count}.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    if non_usd_count:
+        issues.append(
+            OperatorIssue(
+                code="portfolio_currency_not_usd",
+                title="Есть кабинеты не в USD",
+                detail=f"Денежные суммы скрыты для кабинетов: {non_usd_count}.",
+                severity=OperatorSeverity.UNKNOWN,
+                correlation_id=None,
+            )
+        )
+    section_state = _combined_data_state(states)
+    if (unknown_currency_count or non_usd_count) and section_state in {
+        DataState.READY,
+        DataState.EMPTY,
+    }:
+        section_state = DataState.PARTIAL
+    return OperatorSection(
+        state=section_state,
+        as_of=min(
+            (cabinet.as_of for cabinet in cabinets if cabinet.as_of is not None),
+            default=None,
+        ),
+        freshness_seconds=max(
+            (
+                cabinet.freshness_seconds
+                for cabinet in cabinets
+                if cabinet.freshness_seconds is not None
+            ),
+            default=None,
+        ),
+        sources=["meta", "offer_rules", "meta_account_snapshot"],
+        issues=issues,
+        data=OperatorPortfolioData(currency_groups=groups),
+    )
+
+
+async def _system_section(
+    *,
+    engine: Any,
+    now: datetime,
+    account_id: str | None = None,
+) -> OperatorSection[OperatorSystemData]:
     scan = await fetch_operator_scan_state(engine)
-    expected_accounts = await resolve_scan_account_ids(engine)
+    requested_id = account_id.removeprefix("act_") if account_id else None
+    expected_accounts = [requested_id] if requested_id else await resolve_scan_account_ids(engine)
     issues: list[OperatorIssue] = []
     workers: list[OperatorWorkerState] = []
-    for actor in scan.get("actors", []):
-        account_id = str(actor.get("ad_account_id") or "unknown")
+    actors = [
+        actor
+        for actor in scan.get("actors", [])
+        if requested_id is None
+        or str(actor.get("ad_account_id") or "").removeprefix("act_") == requested_id
+    ]
+    for actor in actors:
+        actor_account_id = str(actor.get("ad_account_id") or "unknown").removeprefix("act_")
         activities = [
             value
             for key in ("last_progress_at", "last_snapshot_at")
@@ -725,8 +1065,8 @@ async def _system_section(*, engine: Any, now: datetime) -> OperatorSection[Oper
             status = "online"
         workers.append(
             OperatorWorkerState(
-                id=f"observer:{account_id}",
-                label=f"Observer · {account_id}",
+                id=f"observer:{actor_account_id}",
+                label=f"Observer · {actor_account_id}",
                 severity=severity,
                 status=status,
                 last_activity_at=last_activity,
@@ -736,7 +1076,7 @@ async def _system_section(*, engine: Any, now: datetime) -> OperatorSection[Oper
             issues.append(
                 OperatorIssue(
                     code="cabinet_actor_error",
-                    title=f"Cabinet {account_id}: scan actor завершился с ошибкой",
+                    title=f"Cabinet {actor_account_id}: scan actor завершился с ошибкой",
                     detail=str(error),
                     severity=OperatorSeverity.CRITICAL,
                     correlation_id=None,
@@ -746,7 +1086,7 @@ async def _system_section(*, engine: Any, now: datetime) -> OperatorSection[Oper
             issues.append(
                 OperatorIssue(
                     code="cabinet_actor_lease_expired",
-                    title=f"Cabinet {account_id}: lease истёк во время работы",
+                    title=f"Cabinet {actor_account_id}: lease истёк во время работы",
                     detail=stage,
                     severity=OperatorSeverity.CRITICAL,
                     correlation_id=None,
@@ -756,7 +1096,7 @@ async def _system_section(*, engine: Any, now: datetime) -> OperatorSection[Oper
             issues.append(
                 OperatorIssue(
                     code="cabinet_actor_stale",
-                    title=f"Cabinet {account_id}: actor не обновляет состояние",
+                    title=f"Cabinet {actor_account_id}: actor не обновляет состояние",
                     detail=None if activity_age is None else f"Возраст: {activity_age} с.",
                     severity=OperatorSeverity.UNKNOWN,
                     correlation_id=None,
@@ -924,6 +1264,7 @@ def _attention_section(
     actions: list[dict[str, Any]],
     system: OperatorSection[OperatorSystemData],
     now: datetime,
+    include_system_issues: bool = True,
 ) -> OperatorSection[OperatorAttentionData]:
     items = [_incident_attention_item(incident) for incident in incidents]
     for action in actions:
@@ -951,25 +1292,30 @@ def _attention_section(
                 action=OperatorAttentionAction(label="Открыть", href=f"/actions/{action['id']}"),
             )
         )
-    for issue in system.issues:
-        if issue.severity == OperatorSeverity.OK:
-            continue
-        items.append(
-            OperatorAttentionItem(
-                id=f"source:{issue.code}",
-                kind="source",
-                severity=issue.severity,
-                title=issue.title,
-                summary=issue.detail or "Откройте диагностику источников.",
-                reason=issue.code,
-                occurred_at=system.as_of or now,
-                target=OperatorAttentionTarget(kind="system", id=None, label="Система"),
-                action=OperatorAttentionAction(label="Диагностика", href="/system/sources"),
+    if include_system_issues:
+        for issue in system.issues:
+            if issue.severity == OperatorSeverity.OK:
+                continue
+            items.append(
+                OperatorAttentionItem(
+                    id=f"source:{issue.code}",
+                    kind="source",
+                    severity=issue.severity,
+                    title=issue.title,
+                    summary=issue.detail or "Откройте диагностику источников.",
+                    reason=issue.code,
+                    occurred_at=system.as_of or now,
+                    target=OperatorAttentionTarget(kind="system", id=None, label="Система"),
+                    action=OperatorAttentionAction(label="Диагностика", href="/system/sources"),
+                )
             )
-        )
     rank = {"critical": 0, "warning": 1, "unknown": 2, "ok": 3}
     items.sort(key=lambda item: (rank[item.severity], -item.occurred_at.timestamp(), item.id))
-    if system.state in {DataState.PARTIAL, DataState.STALE, DataState.UNAVAILABLE}:
+    if include_system_issues and system.state in {
+        DataState.PARTIAL,
+        DataState.STALE,
+        DataState.UNAVAILABLE,
+    }:
         state = DataState.PARTIAL
     else:
         state = DataState.READY if items else DataState.EMPTY
@@ -1098,8 +1444,14 @@ async def get_operator_snapshot(
             window_name=window,
             now=now,
         )
-        system_task = _system_section(engine=engine, now=now)
-        actions_task = fetch_operator_actions(engine, limit=20)
+        portfolio_task = _portfolio_section(
+            engine=engine,
+            account_id=account_id,
+            window_name=window,
+            now=now,
+        )
+        system_task = _system_section(engine=engine, now=now, account_id=account_id)
+        actions_task = fetch_operator_actions(engine, limit=20, account_id=account_id)
         incidents_task = fetch_operator_incidents(engine, account_id=account_id, limit=50)
         revision_task = fetch_operator_revision(engine)
         account_task = _account_meta(engine, account_id)
@@ -1109,6 +1461,7 @@ async def get_operator_snapshot(
         )
         (
             (economy, funnel, _tracker_available, from_dt, to_dt, cabinet_days),
+            portfolio,
             system,
             (
                 action_rows,
@@ -1121,6 +1474,7 @@ async def get_operator_snapshot(
             currencies,
         ) = await asyncio.gather(
             analytics_task,
+            portfolio_task,
             system_task,
             actions_task,
             incidents_task,
@@ -1155,6 +1509,7 @@ async def get_operator_snapshot(
         actions=action_rows,
         system=system,
         now=now,
+        include_system_issues=account_id is None,
     )
     cabinet_end = to_dt
     if window == "today":
@@ -1181,10 +1536,34 @@ async def get_operator_snapshot(
             cabinet_day={"starts_at": from_dt, "ends_at": cabinet_end},
         ),
         attention=attention,
+        portfolio=portfolio,
         economy=economy,
         funnel=funnel,
         actions=actions,
         system=system,
+    )
+
+
+@router.get(
+    "/cabinets/{cabinet_id}/snapshot",
+    response_model=OperatorSnapshot,
+    responses=_PROBLEM_RESPONSES,
+)
+async def get_operator_cabinet_snapshot(
+    engine: DepEngine,
+    settings: DepSettings,
+    cabinet_id: str = Path(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"),
+    window: Literal["today", "24h", "7d", "30d"] = Query(default="today"),
+    timezone: str | None = Query(default=None, min_length=1, max_length=64),
+) -> OperatorSnapshot | JSONResponse:
+    """Return the canonical operator snapshot narrowed to one cabinet."""
+
+    return await get_operator_snapshot(
+        engine=engine,
+        settings=settings,
+        account_id=cabinet_id,
+        window=window,
+        timezone=timezone,
     )
 
 

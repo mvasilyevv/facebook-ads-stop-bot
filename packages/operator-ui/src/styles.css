@@ -4,8 +4,8 @@
   align-items: center;
   gap: 8px;
   border: 1px solid var(--color-hairline-strong);
-  border-radius: var(--radius-full);
-  background: var(--color-bg-2);
+  border-radius: var(--radius-1);
+  background: transparent;
   padding: 4px 10px;
   color: var(--color-bg-10);
   font-size: 12px;
@@ -18,7 +18,7 @@
   width: 8px;
   height: 8px;
   flex: 0 0 auto;
-  border-radius: 50%;
+  border-radius: 1px;
   background: var(--color-bg-8);
 }
 
@@ -37,10 +37,13 @@
   align-items: flex-start;
   gap: 12px;
   margin: 16px 0;
-  border: 1px solid var(--color-hairline-strong);
+  border-top: 1px solid var(--color-hairline-strong);
+  border-right: 0;
+  border-bottom: 1px solid var(--color-hairline-strong);
+  border-left: 2px solid var(--color-bg-8);
   border-left-width: 3px;
-  border-radius: var(--radius-2);
-  background: var(--color-bg-2);
+  border-radius: 0;
+  background: var(--color-bg-1);
   padding: 12px 14px;
   color: var(--color-bg-10);
   font-size: 14px;
@@ -87,9 +90,10 @@
 
 .operator-section {
   min-width: 0;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-3);
-  background: var(--color-bg-1);
+  border-top: 1px solid var(--color-hairline-strong);
+  border-bottom: 1px solid var(--color-hairline-strong);
+  border-radius: 0;
+  background: var(--color-bg-0);
   padding: clamp(16px, 2.2vw, 24px);
 }
 

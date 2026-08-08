@@ -988,7 +988,8 @@ function currencyEvidenceStatus(
   state: DataState,
 ): "good" | "degraded" | "unknown" {
   if (state === "ready") {
-    if (scope.currency_state === "single" && scope.currency) return "good";
+    if (scope.currency_state === "single" && scope.currency === "USD") return "good";
+    if (scope.currency_state === "single" && scope.currency !== "USD") return "degraded";
     return scope.currency_state === "mixed" ? "degraded" : "unknown";
   }
   if (
@@ -1001,12 +1002,16 @@ function currencyEvidenceStatus(
 }
 
 function currencyEvidenceLabel(scope: AnalyticsPerformance["scope"], state: DataState): string {
-  if (scope.currency_state === "single" && scope.currency) {
-    if (state === "ready") return `${scope.currency} · подтверждена`;
-    if (state === "partial") return `${scope.currency} · снимок неполный`;
-    if (state === "stale") return `${scope.currency} · снимок устарел`;
-    if (state === "empty") return `${scope.currency} · пустой снимок`;
-    return `${scope.currency} · не подтверждена`;
+  if (scope.currency_state === "single" && scope.currency === "USD") {
+    const label = "$";
+    if (state === "ready") return `${label} · подтверждена`;
+    if (state === "partial") return `${label} · снимок неполный`;
+    if (state === "stale") return `${label} · снимок устарел`;
+    if (state === "empty") return `${label} · пустой снимок`;
+    return `${label} · не подтверждена`;
+  }
+  if (scope.currency_state === "single" && scope.currency !== "USD") {
+    return "валюта не USD · денежные итоги скрыты";
   }
   if (scope.currency_state === "mixed") {
     return state === "stale"
@@ -1068,7 +1073,7 @@ function signedCurrency(value: string | null | undefined, currency: string | nul
     : `${number > 0 ? "+" : ""}${formatted}`;
 }
 function confirmedCurrency(scope: AnalyticsPerformance["scope"] | undefined): string | null {
-  return scope?.currency_state === "single" && scope.currency ? scope.currency : null;
+  return scope?.currency_state === "single" && scope.currency === "USD" ? "USD" : null;
 }
 function integer(value?: number | null) {
   return value == null ? "—" : new Intl.NumberFormat("ru-RU").format(value);

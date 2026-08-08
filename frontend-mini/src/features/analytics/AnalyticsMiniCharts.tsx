@@ -10,7 +10,7 @@ import type {
 import { AccessibleChartFrame } from "@fb/operator-ui";
 
 import { Card } from "@/components/ui";
-import { MiniEconomy } from "@/features/operator/OperatorMiniDashboard";
+import { MiniEconomy } from "@/features/analytics/MiniEconomy";
 
 interface LiveBudgetChartProps {
   performance: AnalyticsPerformance;

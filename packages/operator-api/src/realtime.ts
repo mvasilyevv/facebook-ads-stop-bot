@@ -136,8 +136,7 @@ function snapshotCoversRevision(
 
 function eventRequiresActionBarrier(scopes: string[]): boolean {
   return (
-    scopes.length === 0 ||
-    scopes.some((scope) => !isNonActionScope(scope))
+    scopes.length === 0 || scopes.some((scope) => !isNonActionScope(scope))
   );
 }
 
@@ -201,6 +200,9 @@ export function useOperatorRealtime({
           queryClient.invalidateQueries({
             queryKey: ["get", "/api/operator/snapshot"],
           }),
+          queryClient.invalidateQueries({
+            queryKey: ["get", "/api/operator/cabinets/{cabinet_id}/snapshot"],
+          }),
         );
       }
       if (reconcileAll || scopeSet.has("task")) {
@@ -225,10 +227,7 @@ export function useOperatorRealtime({
       return Promise.all(invalidations);
     };
 
-    const invalidateCampaignRuns = (
-      scopes: string[],
-      reconcileAll = false,
-    ) => {
+    const invalidateCampaignRuns = (scopes: string[], reconcileAll = false) => {
       const campaignScopes = scopes.filter(isCampaignRunScope);
       if (!reconcileAll && campaignScopes.length === 0) {
         return Promise.resolve();
@@ -265,10 +264,7 @@ export function useOperatorRealtime({
       const pending = pendingExpectedRevision
         ? revisionNumber(pendingExpectedRevision)
         : null;
-      if (
-        expected !== null &&
-        (pending === null || expected > pending)
-      ) {
+      if (expected !== null && (pending === null || expected > pending)) {
         pendingExpectedRevision = expectedRevision;
       } else if (pendingExpectedRevision === null) {
         // The event validator has already rejected invalid revisions. Keeping
@@ -306,8 +302,7 @@ export function useOperatorRealtime({
         while (isCurrent()) {
           const revisionToCover = pendingExpectedRevision;
           pendingExpectedRevision = null;
-          const reconcileCampaignProjection =
-            pendingCampaignReconciliation;
+          const reconcileCampaignProjection = pendingCampaignReconciliation;
           pendingCampaignReconciliation = false;
           if (!revisionToCover) return;
 
@@ -410,10 +405,7 @@ export function useOperatorRealtime({
           lastSequence.current !== null &&
           event.sequence !== lastSequence.current + 1;
         lastSequence.current = event.sequence;
-        if (
-          event.type === "changed" &&
-          event.scopes.some(isCampaignRunScope)
-        ) {
+        if (event.type === "changed" && event.scopes.some(isCampaignRunScope)) {
           void invalidateCampaignRuns(event.scopes);
         }
 
@@ -423,8 +415,7 @@ export function useOperatorRealtime({
           event.type === "snapshot_required" ||
           event.type === "reconcile_required" ||
           event.type === "ping" ||
-          (event.type === "changed" &&
-            eventRequiresActionBarrier(event.scopes))
+          (event.type === "changed" && eventRequiresActionBarrier(event.scopes))
         ) {
           const reconcileCampaignProjection =
             needsReconciliation ||
@@ -444,11 +435,8 @@ export function useOperatorRealtime({
         // order, while snapshot_revision remains a lost-NOTIFY heartbeat cursor.
         if (event.type === "changed") {
           const campaignOnly =
-            event.scopes.length > 0 &&
-            event.scopes.every(isCampaignRunScope);
-          void Promise.all([
-            invalidate(event.scopes, false, !campaignOnly),
-          ]);
+            event.scopes.length > 0 && event.scopes.every(isCampaignRunScope);
+          void Promise.all([invalidate(event.scopes, false, !campaignOnly)]);
         }
       });
       connectedSocket.addEventListener("close", (event) => {

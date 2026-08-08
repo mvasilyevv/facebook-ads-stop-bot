@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeOperatorSnapshot } from "@fb/shared/operator/testFixture";
 
 const mockUseOperatorSnapshot = vi.fn();
+const mockUseOperatorCabinetSnapshot = vi.fn();
 const mockScan = vi.fn();
 const mockNavigate = vi.fn();
 const mockUseOperatorRealtimeStatus = vi.fn(() => "connected");
@@ -34,6 +35,8 @@ vi.mock("@tanstack/react-router", () => ({
 
 vi.mock("@/lib/operatorApi", () => ({
   useOperatorSnapshot: (...args: unknown[]) => mockUseOperatorSnapshot(...args),
+  useOperatorCabinetSnapshot: (...args: unknown[]) =>
+    mockUseOperatorCabinetSnapshot(...args),
   useOperatorScanNow: () => ({ mutateAsync: mockScan, isPending: false }),
   operatorProblemMessage: (error: unknown) =>
     error instanceof Error ? error.message : "Ошибка",
@@ -83,47 +86,46 @@ describe("TMA operator dashboard", () => {
     expect(window.location.href).not.toContain("ad-1");
   });
 
-  it("uses 44px native controls for chart touch and keyboard points", async () => {
+  it("keeps the action-first ledger order on the compact shell", () => {
     render(<Dashboard />);
-    const chartPoints = screen
-      .getAllByRole("button")
-      .filter((button) => button.getAttribute("aria-label")?.includes("Факт"));
-    const point = chartPoints.find((button) =>
-      button.querySelector("[data-actual-marker]"),
-    );
-    const unknownActualPoint = chartPoints.find((button) =>
-      button.getAttribute("aria-label")?.includes("Факт —"),
-    );
-
-    expect(point).toBeDefined();
-    expect(point).toHaveClass("size-11");
-    expect(unknownActualPoint).toBeDefined();
-    expect(
-      unknownActualPoint?.querySelector("[data-actual-marker]"),
-    ).toBeNull();
-    expect(
-      screen.getByRole("list", { name: "Обозначения графика" }),
-    ).toHaveTextContent("ФактБазаStop");
-    expect(document.querySelector("[data-current-time-marker]")).not.toBeNull();
-    expect(
-      document.querySelector("[data-current-time-label]"),
-    ).toHaveTextContent("Сейчас");
-    await userEvent.click(point!);
-    expect(screen.getByRole("status")).toHaveTextContent(/факт/i);
+    const headings = screen
+      .getAllByRole("heading", { level: 2 })
+      .map((heading) => heading.textContent);
+    expect(headings).toEqual([
+      "Требует внимания",
+      "Портфель",
+      "Действия",
+      "Воронка",
+    ]);
+    expect(screen.queryByText("Накопительный расход")).not.toBeInTheDocument();
   });
 
   it("renders action-first sections and the corrected scan control", () => {
     render(<Dashboard />);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Контроль",
+      "Сейчас",
     );
-    expect(screen.getByText("Требует внимания")).toBeInTheDocument();
+    expect(screen.getByText("FB Agent · оператор")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Требует внимания", level: 2 }),
+    ).toBeInTheDocument();
     expect(screen.getByText("CPL выше базы")).toBeInTheDocument();
-    expect(screen.getByLabelText("Внимание")).toBeInTheDocument();
-    expect(screen.getByText("Внимание")).toBeInTheDocument();
+    expect(screen.getAllByText("Требует внимания").length).toBeGreaterThan(1);
     expect(screen.getByLabelText("Сканировать сейчас")).toBeInTheDocument();
-    expect(screen.getByText(/Стоимость USD.*0\.44/)).toBeInTheDocument();
-    expect(screen.getByText(/Стоимость USD.*3\.68/)).toBeInTheDocument();
+    expect(screen.getByText("$47.80")).toBeInTheDocument();
+    expect(screen.getByText("$39.00")).toBeInTheDocument();
+    expect(screen.getByText("$45.00")).toBeInTheDocument();
+  });
+
+  it("opens a cabinet through the typed TMA route", async () => {
+    render(<Dashboard />);
+
+    await userEvent.click(screen.getByRole("button", { name: /GH_CR2/ }));
+
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: "/cabinets/$cabinetId",
+      params: { cabinetId: "123" },
+    });
   });
 
   it("keeps the 202 scan receipt and links to the queued action lifecycle", async () => {
@@ -152,8 +154,8 @@ describe("TMA operator dashboard", () => {
 
   it("labels stale data and does not present it as current", () => {
     const snapshot = makeOperatorSnapshot();
-    snapshot.economy = {
-      ...snapshot.economy,
+    snapshot.portfolio = {
+      ...snapshot.portfolio,
       state: "stale",
       issues: [
         {
@@ -174,7 +176,7 @@ describe("TMA operator dashboard", () => {
     });
     render(<Dashboard />);
     expect(screen.getByText("Meta давно не обновлялась")).toBeInTheDocument();
-    expect(screen.getAllByText(/Устарело/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/снимок устарел/i).length).toBeGreaterThan(0);
   });
 
   it("never paints degraded money context as a healthy overview", () => {
@@ -200,14 +202,17 @@ describe("TMA operator dashboard", () => {
     expect(
       screen.getByText("Денежный контекст требует проверки"),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Частично").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("Валюта не подтверждена; суммы скрыты"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("$47.80")).not.toBeInTheDocument();
     expect(screen.queryByText("Активных рисков нет")).not.toBeInTheDocument();
   });
 
-  it("neutralizes cached worker health when the system snapshot is stale", () => {
+  it("hides a stale cabinet scale instead of presenting it as current", () => {
     const snapshot = makeOperatorSnapshot();
-    snapshot.system = { ...snapshot.system, state: "stale" };
-    snapshot.meta = { ...snapshot.meta, cabinet_timezone_known: false };
+    snapshot.portfolio.data!.currency_groups[0]!.state = "stale";
+    snapshot.portfolio.data!.currency_groups[0]!.cabinets[0]!.state = "stale";
     mockUseOperatorSnapshot.mockReturnValue({
       data: snapshot,
       isLoading: false,
@@ -218,21 +223,10 @@ describe("TMA operator dashboard", () => {
 
     render(<Dashboard />);
 
-    expect(
-      screen.getByText("Состояние ещё не подтверждено"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Устарело")).toHaveAttribute(
-      "data-tone",
-      "neutral",
-    );
-    for (const label of ["Observer", "Browser agent"]) {
-      const worker = screen.getByText(label).closest("li");
-      expect(worker?.querySelector("[data-severity]")).toHaveAttribute(
-        "data-severity",
-        "unknown",
-      );
-      expect(worker).toHaveTextContent("Состояние не подтверждено");
-    }
+    const cabinet = screen.getByRole("button", {
+      name: /GH_CR2/,
+    }).parentElement;
+    expect(cabinet).toHaveTextContent("снимок устарел");
   });
 
   it("downgrades the complete cached snapshot while realtime is reconnecting", () => {
@@ -244,14 +238,7 @@ describe("TMA operator dashboard", () => {
       screen.getByText("Состояние ещё не подтверждено"),
     ).toBeInTheDocument();
     expect(screen.queryByText("Активных рисков нет")).not.toBeInTheDocument();
-    expect(screen.getAllByText(/Устарело/).length).toBeGreaterThan(0);
-    for (const label of ["Observer", "Browser agent"]) {
-      const worker = screen.getByText(label).closest("li");
-      expect(worker?.querySelector("[data-severity]")).toHaveAttribute(
-        "data-severity",
-        "unknown",
-      );
-    }
+    expect(screen.getAllByText(/снимок устарел/i).length).toBeGreaterThan(0);
   });
 
   it("renders a visible failure instead of legacy dashboard data", () => {

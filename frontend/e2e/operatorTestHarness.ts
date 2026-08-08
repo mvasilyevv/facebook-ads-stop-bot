@@ -4,6 +4,7 @@ import {
   makeOperatorScopeEvidence,
   makeOperatorSnapshot,
 } from "../../packages/shared/src/operator/testFixture";
+import { makeAnalyticsPerformanceFixture } from "../src/tests/analytics/analyticsFixture";
 
 const operatorScope = makeOperatorScopeEvidence();
 
@@ -238,6 +239,25 @@ export async function installOperatorHarness(
   await page.route("**/api/operator/snapshot**", async (route) => {
     await route.fulfill({ json: makeOperatorSnapshot() });
   });
+  await page.route("**/api/operator/cabinets/*/snapshot**", async (route) => {
+    const cabinetId = new URL(route.request().url()).pathname.split("/").at(-2) ?? "123";
+    const snapshot = makeOperatorSnapshot();
+    const group = snapshot.portfolio.data?.currency_groups[0];
+    const cabinet = group?.cabinets.find((candidate) => candidate.id === cabinetId);
+    if (group && cabinet) {
+      group.cabinets = [cabinet];
+      group.totals = cabinet.totals;
+      group.state = cabinet.state;
+      group.severity = cabinet.severity;
+      snapshot.portfolio.state = cabinet.state;
+      snapshot.portfolio.as_of = cabinet.as_of;
+      snapshot.portfolio.freshness_seconds = cabinet.freshness_seconds;
+      snapshot.meta.account = { id: cabinet.id, name: cabinet.name };
+      snapshot.meta.cabinet_timezone = cabinet.timezone;
+      snapshot.meta.cabinet_timezone_known = cabinet.timezone !== null;
+    }
+    await route.fulfill({ json: snapshot });
+  });
   await page.route("**/api/settings/observer/scan-now", async (route) => {
     await route.fulfill({ json: { ok: true } });
   });
@@ -302,6 +322,54 @@ export async function installOperatorHarness(
         total: 1,
         pages: 1,
       },
+    });
+  });
+  await page.route("**/api/analytics/performance**", async (route) => {
+    await route.fulfill({ json: makeAnalyticsPerformanceFixture() });
+  });
+  await page.route("**/api/analytics/live-budget**", async (route) => {
+    const performance = makeAnalyticsPerformanceFixture();
+    await route.fulfill({
+      json: {
+        state: "partial",
+        as_of: "2026-07-21T09:59:40Z",
+        freshness_seconds: 20,
+        issues: ["Одна точка Meta отсутствует"],
+        sources: performance.sources,
+        scope: performance.scope,
+        window: performance.window,
+        points: [
+          {
+            ts: "2026-07-21T08:00:00Z",
+            actual: "4.20",
+            base: "5.00",
+            stop: "10.00",
+            available_ads: 1,
+            unavailable_ads: 0,
+          },
+          {
+            ts: "2026-07-21T09:00:00Z",
+            actual: null,
+            base: "10.00",
+            stop: "20.00",
+            available_ads: 0,
+            unavailable_ads: 1,
+          },
+          {
+            ts: "2026-07-21T10:00:00Z",
+            actual: "18.40",
+            base: "15.00",
+            stop: "30.00",
+            available_ads: 1,
+            unavailable_ads: 0,
+          },
+        ],
+      },
+    });
+  });
+  await page.route("**/api/ai/pulse", async (route) => {
+    await route.fulfill({
+      json: { important: false, text: "", generated_at: "2026-07-21T10:00:00Z" },
     });
   });
   await page.route("**/api/tools/campaigns/presets", async (route) => {

@@ -76,8 +76,8 @@ describe("operator analytics semantics", () => {
       name: "Интерактивный график «Воронка»",
     });
     expect(visual).toHaveTextContent("42");
-    expect(visual).toHaveTextContent(/CR 11\.9% · стоимость USD.*3\.68/);
-    expect(visual).toHaveTextContent(/CR 20\.0% · стоимость USD.*18\.40/);
+    expect(visual).toHaveTextContent(/CR 11\.9% · стоимость \$.*3\.68/);
+    expect(visual).toHaveTextContent(/CR 20\.0% · стоимость \$.*18\.40/);
   });
 
   it("keeps three-decimal funnel cost exact for KWD", () => {
@@ -168,9 +168,50 @@ describe("operator analytics semantics", () => {
       name: "Почасовой расход, база, stop и доступность источников",
     });
     const row = within(table).getByText("10:00").closest("tr");
-    expect(row).toHaveTextContent(/USD.*18\.40/);
+    expect(row).toHaveTextContent(/\$.*18\.40/);
     expect(row).toHaveTextContent("—");
     expect(screen.getByText("Частично")).toBeInTheDocument();
+  });
+
+  it("hides monetary chart evidence when a single currency is not USD", () => {
+    const data: AnalyticsLiveBudgetSeries = {
+      state: "ready",
+      as_of: "2026-07-19T09:59:00Z",
+      freshness_seconds: 60,
+      issues: [],
+      sources: analyticsSources,
+      scope: {
+        ...makeOperatorScopeEvidence(),
+        currency: "EUR",
+      },
+      window: {
+        from_iso: "2026-07-19T00:00:00Z",
+        to_iso: "2026-07-19T10:00:00Z",
+        is_live: true,
+        timezone: "UTC",
+        timezone_known: true,
+        timezone_state: "single",
+        missing_timezone_account_ids: [],
+      },
+      points: [
+        {
+          ts: "2026-07-19T10:00:00Z",
+          actual: "18.40",
+          base: "15.00",
+          stop: "30.00",
+          available_ads: 1,
+          unavailable_ads: 0,
+        },
+      ],
+    };
+
+    render(<BudgetLineChart data={data} timezone="UTC" parentState="ready" />);
+
+    expect(
+      screen.getByText("Денежные ряды скрыты: рабочая валюта не подтверждена как USD."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/18\.40/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/EUR/)).not.toBeInTheDocument();
   });
 
   it("hides cached budget points when the parent snapshot is unavailable", () => {
@@ -207,7 +248,7 @@ describe("operator analytics semantics", () => {
     expect(
       screen.getByText("Точки расхода, базы и stop-границы не подтверждены и скрыты."),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/USD.*18\.40/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$.*18\.40/)).not.toBeInTheDocument();
     expect(
       screen.getByRole("table", {
         name: "Почасовой расход, база, stop и доступность источников",
@@ -368,7 +409,7 @@ describe("operator analytics semantics", () => {
     expect(screen.getAllByText("Campaign with cached metrics")).toHaveLength(2);
     expect(screen.getAllByText("act_1")).toHaveLength(2);
     expect(screen.queryByText("act_act_1")).not.toBeInTheDocument();
-    expect(screen.queryByText(/USD.*18\.40/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$.*18\.40/)).not.toBeInTheDocument();
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Источник недоступен").length).toBeGreaterThan(0);
   });

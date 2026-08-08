@@ -209,7 +209,7 @@ describe("TMA typed operator ad detail", () => {
     );
   });
 
-  it("uses response scope for exact money and timezone context", () => {
+  it("keeps timezone evidence but hides money for a non-USD scope", () => {
     const data = operatorAdsResponse(
       makeAd({
         metrics: {
@@ -231,12 +231,9 @@ describe("TMA typed operator ad detail", () => {
 
     renderDetail();
 
-    expect(screen.getByText("Расход").parentElement).toHaveTextContent(
-      /KWD.*1\.234/,
-    );
-    expect(screen.getByText("CPC").parentElement).toHaveTextContent(
-      /KWD.*0\.001/,
-    );
+    expect(screen.getByText("Расход").parentElement).toHaveTextContent("—");
+    expect(screen.getByText("CPC").parentElement).toHaveTextContent("—");
+    expect(document.body).not.toHaveTextContent(/KWD|1\.234|0\.001/);
     expect(screen.getByText("Часовой пояс").parentElement).toHaveTextContent(
       "Asia/Tokyo",
     );

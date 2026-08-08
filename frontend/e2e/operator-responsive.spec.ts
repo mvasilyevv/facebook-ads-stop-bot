@@ -9,38 +9,64 @@ test.beforeEach(async ({ page }) => {
 test("operator snapshot stays action-first and responsive", async ({ page }, testInfo) => {
   await page.goto("/");
 
-  await expect(
-    page.getByRole("heading", { name: "Есть отклонения, требующие решения" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Сейчас" })).toBeVisible();
+  await expect(page.getByText("Есть отклонения, требующие решения")).toBeVisible();
   await expect(page.getByRole("button", { name: "Сканировать" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Портфель" })).toBeVisible();
+  await expect(page.getByText("$47.80")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Открыть кабинет: GH_CR2" })).toBeVisible();
+
+  const layout = await page.locator(".operator-ledger__grid").evaluate((grid) => {
+    const rect = (selector: string) => {
+      const node = grid.querySelector<HTMLElement>(selector);
+      if (!node) throw new Error(`missing ${selector}`);
+      const box = node.getBoundingClientRect();
+      return { x: box.x, y: box.y };
+    };
+    return {
+      portfolio: rect(".ledger-section--portfolio"),
+      attention: rect(".ledger-section--attention"),
+      actions: rect(".ledger-section--actions"),
+      funnel: rect(".ledger-section--funnel"),
+    };
+  });
+  if (
+    testInfo.project.name === "360px" ||
+    testInfo.project.name === "390px" ||
+    testInfo.project.name === "430px" ||
+    testInfo.project.name === "768px"
+  ) {
+    expect(layout.attention.y).toBeLessThan(layout.portfolio.y);
+    expect(layout.portfolio.y).toBeLessThan(layout.actions.y);
+    expect(layout.actions.y).toBeLessThan(layout.funnel.y);
+  } else {
+    expect(Math.abs(layout.portfolio.y - layout.attention.y)).toBeLessThanOrEqual(2);
+    expect(layout.portfolio.x).toBeLessThan(layout.attention.x);
+  }
+
+  await page.goto("/analytics");
   const spendChart = page.getByRole("group", {
-    name: "Интерактивный график «Накопительный расход»",
+    name: "Интерактивный график «Расход, база и stop-граница»",
   });
   await expect(spendChart).toBeVisible();
-  // The chart renderer is code-split on the start route. A visible Suspense
-  // placeholder is not acceptance: prove that the real SVG chunk mounted.
-  await expect(spendChart.locator("svg")).toBeVisible();
+  await expect(spendChart.getByRole("application")).toBeVisible();
   const renderedLineWidths = await spendChart
     .locator(".recharts-line-curve")
     .evaluateAll((paths) => paths.map((path) => (path as SVGGraphicsElement).getBBox().width));
   expect(renderedLineWidths).toHaveLength(3);
-  expect(renderedLineWidths.slice(0, 2).every((width) => width > 100)).toBe(true);
-  // The fixture deliberately has a missing actual point between two known
-  // values. The line must remain broken, while both confirmed samples stay
-  // visible instead of disappearing because they are isolated.
+  expect(renderedLineWidths.slice(1).every((width) => width > 100)).toBe(true);
   await expect(spendChart.locator(".recharts-line-dots circle")).toHaveCount(2);
-  const markerLabel = spendChart.locator(".operator-current-marker-label");
-  await expect(markerLabel).toBeVisible();
-  const [chartBox, markerLabelBox] = await Promise.all([
-    spendChart.boundingBox(),
-    markerLabel.boundingBox(),
-  ]);
-  if (!chartBox || !markerLabelBox) throw new Error("current marker geometry is unavailable");
-  expect(markerLabelBox.x).toBeGreaterThanOrEqual(chartBox.x);
-  expect(markerLabelBox.x + markerLabelBox.width).toBeLessThanOrEqual(chartBox.x + chartBox.width);
+  await expect(spendChart.getByText("Сейчас", { exact: true })).toBeVisible();
 
-  await page.getByText("Данные графика", { exact: true }).click();
-  await expect(page.getByRole("table", { name: "Накопительный расход по времени" })).toBeVisible();
+  await spendChart
+    .locator("xpath=ancestor::figure")
+    .getByText("Данные графика", { exact: true })
+    .click();
+  await expect(
+    page.getByRole("table", {
+      name: "Почасовой расход, база, stop и доступность источников",
+    }),
+  ).toBeVisible();
 
   const overflow = await page.evaluate(() =>
     Math.max(0, document.documentElement.scrollWidth - document.documentElement.clientWidth),
@@ -71,6 +97,19 @@ test("operator snapshot stays action-first and responsive", async ({ page }, tes
   }
 });
 
+test("cabinet ledger opens a typed cabinet snapshot", async ({ page }) => {
+  const requestPromise = page.waitForRequest((request) =>
+    request.url().includes("/api/operator/cabinets/123/snapshot"),
+  );
+  await page.goto("/");
+  await page.getByRole("link", { name: "Открыть кабинет: GH_CR2" }).click();
+
+  expect((await requestPromise).method()).toBe("GET");
+  await expect(page).toHaveURL(/\/cabinets\/123$/);
+  await expect(page.getByRole("heading", { name: "GH_CR2" })).toBeVisible();
+  await expect(page.getByText("$ · Africa/Accra · контроль кабинета")).toBeVisible();
+});
+
 test("scan uses the canonical settings route", async ({ page }) => {
   const requestPromise = page.waitForRequest((request) =>
     request.url().endsWith("/api/settings/observer/scan-now"),
@@ -98,7 +137,7 @@ test("attention CTA lands on a real typed ad detail", async ({ page }) => {
 test("actions list opens the exact lifecycle instead of a truncated snapshot", async ({ page }) => {
   await page.goto("/actions");
   await expect(page.getByRole("heading", { name: "Действия" })).toBeVisible();
-  await page.getByRole("link", { name: /Отключение объявления/ }).click();
+  await page.getByRole("link", { name: "Открыть действие" }).click();
 
   await expect(page).toHaveURL(/\/actions\/1842$/);
   await expect(page.getByRole("heading", { name: "Отключение объявления" })).toBeVisible();

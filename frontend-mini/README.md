@@ -1,6 +1,6 @@
-# FB Stop Bot — Mini App (Telegram)
+# FB Agent — Mini App (Telegram)
 
-Telegram Mini App для FB Stop Bot. Мобильная адаптация основного интерфейса.
+Telegram Mini App для FB Agent. Мобильная операторская оболочка.
 
 Часть монорепо на **pnpm workspaces**. Установка зависимостей — `pnpm install` из корня репозитория.
 

@@ -76,7 +76,7 @@ export const LongNamesAndAmounts: Story = {
           act_987654321 · Extremely long cabinet name for stress testing operator layouts
         </h2>
         <div className="mt-5 font-display text-[clamp(24px,7vw,42px)] tabular-nums">
-          9 999 999,99 USD
+          $9 999 999.99
         </div>
         <p className="mt-2 text-[14px] text-bg-9">
           Длинное имя и крупная сумма не создают horizontal scroll.

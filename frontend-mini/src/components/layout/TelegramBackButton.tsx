@@ -12,6 +12,7 @@ import { registerBackButton, hideBackButton } from "@/lib/tg";
  * Черновики теперь основной таб (back не нужен).
  */
 const BACK_BUTTON_PATTERNS: RegExp[] = [
+  /^\/cabinets\/.+$/,
   /^\/ads\/.+$/,
   /^\/actions\/.+$/,
   /^\/incidents\/.+$/,

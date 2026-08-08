@@ -8,7 +8,7 @@ const SAFE_ATTENTION_ROUTES = new Set([
 ]);
 
 const SAFE_ATTENTION_DETAIL =
-  /^\/(?:ads|actions|incidents)\/[A-Za-z0-9_-]{1,160}$/;
+  /^\/(?:ads|actions|incidents|cabinets)\/[A-Za-z0-9_-]{1,160}$/;
 
 /**
  * Attention links are server-provided navigation hints, not arbitrary URLs.

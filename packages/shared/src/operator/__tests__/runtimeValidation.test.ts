@@ -68,6 +68,73 @@ function incidentResponse() {
 }
 
 describe("operator semantic runtime validation", () => {
+  it("validates portfolio snapshots through both typed snapshot routes", () => {
+    const snapshot = makeOperatorSnapshot();
+
+    expect(validateOperatorPayload("/api/operator/snapshot", snapshot)).toBe(
+      snapshot,
+    );
+    expect(
+      validateOperatorPayload("/api/operator/cabinets/123/snapshot", snapshot),
+    ).toBe(snapshot);
+  });
+
+  it("rejects contradictory or unsafe portfolio evidence", () => {
+    const snapshot = makeOperatorSnapshot();
+    const group = snapshot.portfolio.data!.currency_groups[0]!;
+    const cabinet = group.cabinets[0]!;
+
+    for (const currencyGroups of [
+      [
+        {
+          ...group,
+          cabinets: [{ ...cabinet, currency: "EUR" }],
+        },
+      ],
+      [
+        {
+          ...group,
+          id: "EUR",
+          currency: "EUR",
+          state: "partial",
+          totals: { spend: "18.40", base: null, stop: null, base_delta: null },
+          cabinets: [
+            {
+              ...cabinet,
+              currency: "EUR",
+              state: "partial",
+              totals: { spend: null, base: null, stop: null, base_delta: null },
+            },
+          ],
+        },
+      ],
+      [
+        {
+          ...group,
+          cabinets: [
+            {
+              ...cabinet,
+              action: {
+                label: "Открыть",
+                href: "https://example.invalid/cabinet",
+              },
+            },
+          ],
+        },
+      ],
+    ]) {
+      expect(() =>
+        validateOperatorPayload("/api/operator/snapshot", {
+          ...snapshot,
+          portfolio: {
+            ...snapshot.portfolio,
+            data: { currency_groups: currencyGroups },
+          },
+        }),
+      ).toThrow(OperatorPayloadValidationError);
+    }
+  });
+
   it("rejects ready snapshot sections without current evidence", () => {
     const snapshot = makeOperatorSnapshot();
 
@@ -315,14 +382,26 @@ describe("operator semantic runtime validation", () => {
     }
   });
 
-  it("accepts a reviewed backend currency absent from Intl.supportedValuesOf", () => {
+  it("keeps reviewed non-USD evidence only when money is hidden", () => {
     const valid = adsResponse();
     const payload = {
       ...valid,
+      state: "partial",
       scope: {
         ...valid.scope,
         currency: "VED",
       },
+      rows: [
+        {
+          ...valid.rows[0]!,
+          metrics: {
+            ...valid.rows[0]!.metrics,
+            spend: null,
+            cpc: null,
+            cost_per_registration: null,
+          },
+        },
+      ],
     };
 
     expect(validateOperatorPayload("/api/operator/ads", payload)).toBe(payload);

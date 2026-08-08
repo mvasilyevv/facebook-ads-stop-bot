@@ -67,7 +67,7 @@ describe("web route architecture", () => {
     );
     const packageJson = readFileSync(resolve(process.cwd(), "package.json"), "utf8");
 
-    expect(dashboard).toContain('import("./OperatorSpendChartPlot")');
+    expect(dashboard).not.toContain("OperatorSpendChartPlot");
     expect(dashboard).not.toContain('from "recharts"');
     expect(chartPlot).toContain('from "recharts"');
     expect(packageJson).toContain("--js-budget 250000 --js-headroom 20000");

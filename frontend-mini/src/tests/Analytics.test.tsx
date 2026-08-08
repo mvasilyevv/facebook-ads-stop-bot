@@ -99,18 +99,18 @@ describe("mobile performance analytics", () => {
       screen.getByRole("heading", { name: "Накопительный расход" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /Факт USD.*184\.20/ }),
+      screen.getByRole("button", { name: /Факт \$.*184\.20/ }),
     ).toBeInTheDocument();
     expect(screen.getAllByText("Воронка").length).toBeGreaterThanOrEqual(2);
     const funnel = screen.getByRole("list", { name: "Этапы воронки" });
     expect(
-      within(funnel).getByText(/CR — · стоимость USD.*0\.30/),
+      within(funnel).getByText(/CR — · стоимость \$.*0\.30/),
     ).toBeInTheDocument();
     expect(
-      within(funnel).getByText(/CR 11\.94% · стоимость USD.*2\.49/),
+      within(funnel).getByText(/CR 11\.94% · стоимость \$.*2\.49/),
     ).toBeInTheDocument();
     expect(
-      within(funnel).getByText(/CR 14\.86% · стоимость USD.*16\.75/),
+      within(funnel).getByText(/CR 14\.86% · стоимость \$.*16\.75/),
     ).toBeInTheDocument();
     expect(
       screen.getByText("GH_CR2: meta_api_mutation · выполнено"),
@@ -295,7 +295,7 @@ describe("mobile performance analytics", () => {
     expect(document.body).not.toHaveTextContent(/\bnull\b/i);
   });
 
-  it("keeps three-decimal funnel cost exact for KWD", () => {
+  it("hides non-USD funnel money even when the response is single-currency", () => {
     const kwd = makePerformanceFixture();
     kwd.scope = {
       ...kwd.scope,
@@ -318,8 +318,19 @@ describe("mobile performance analytics", () => {
       .getByRole("heading", { name: "Воронка", level: 2 })
       .closest("section");
     expect(funnel).not.toBeNull();
-    expect(funnel).toHaveTextContent(/KWD.*1\.234/);
-    expect(funnel).not.toHaveTextContent("KWD 1.230");
+    expect(funnel).not.toHaveTextContent(/KWD|1\.234/);
+    expect(funnel).toHaveTextContent(/стоимость —/i);
+    expect(document.body).toHaveTextContent(
+      "валюта не USD · денежные итоги скрыты",
+    );
+    const liveBudget = screen
+      .getByRole("heading", { name: "Накопительный расход" })
+      .closest("figure");
+    expect(liveBudget).not.toBeNull();
+    expect(liveBudget).toHaveTextContent(
+      "Денежные значения скрыты: рабочая валюта не подтверждена как USD.",
+    );
+    expect(liveBudget).not.toHaveTextContent(/184\.20|175\.00|250\.00/);
   });
 
   it("shows partial and stale evidence instead of a green/current projection", () => {
@@ -348,8 +359,8 @@ describe("mobile performance analytics", () => {
     expect(
       screen.getByText("Meta").closest("[data-source-status]"),
     ).toHaveAttribute("data-source-status", "degraded");
-    expect(screen.getByText(/USD · снимок неполный/)).toBeInTheDocument();
-    expect(screen.queryByText("USD · подтверждена")).not.toBeInTheDocument();
+    expect(screen.getByText(/\$ · снимок неполный/)).toBeInTheDocument();
+    expect(screen.queryByText("$ · подтверждена")).not.toBeInTheDocument();
     expect(screen.getAllByText(/Снимок · 42 сек назад/).length).toBeGreaterThan(
       0,
     );
@@ -372,8 +383,8 @@ describe("mobile performance analytics", () => {
       screen.getByText("AdSet.pro").closest("[data-source-status]"),
     ).toHaveAttribute("data-source-status", "unknown");
     expect(screen.getByText(/Сутки: снимок устарел/)).toBeInTheDocument();
-    expect(screen.getByText(/USD · снимок устарел/)).toBeInTheDocument();
-    expect(screen.queryByText("USD · подтверждена")).not.toBeInTheDocument();
+    expect(screen.getByText(/\$ · снимок устарел/)).toBeInTheDocument();
+    expect(screen.queryByText("$ · подтверждена")).not.toBeInTheDocument();
     for (const label of screen.getAllByText("Δ stop")) {
       expect(label.closest("div")?.querySelector("dd")).not.toHaveClass(
         "text-danger",

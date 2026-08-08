@@ -395,8 +395,11 @@ describe("operator realtime reconciliation", () => {
         ts: "2026-07-19T00:00:01Z",
       }),
     );
-    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledTimes(2);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["get", "/api/operator/snapshot"] });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["get", "/api/operator/cabinets/{cabinet_id}/snapshot"],
+    });
 
     invalidate.mockClear();
     act(() =>
@@ -408,23 +411,21 @@ describe("operator realtime reconciliation", () => {
         ts: "2026-07-19T00:00:02Z",
       }),
     );
-    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(invalidate).toHaveBeenCalledTimes(2);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["get", "/api/operator/snapshot"] });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["get", "/api/operator/cabinets/{cabinet_id}/snapshot"],
+    });
   });
 
   it("invalidates only the changed campaign run and run lists without polling", async () => {
     const client = new QueryClient();
-    const fetchSnapshot = vi
-      .fn<OperatorSnapshotFetcher>()
-      .mockResolvedValue(snapshot("r10"));
+    const fetchSnapshot = vi.fn<OperatorSnapshotFetcher>().mockResolvedValue(snapshot("r10"));
     const fetchActionProjections = vi
       .fn<OperatorActionProjectionFetcher>()
       .mockResolvedValue(undefined);
     render(
-      <Realtime
-        fetchActionProjections={fetchActionProjections}
-        fetchSnapshot={fetchSnapshot}
-      />,
+      <Realtime fetchActionProjections={fetchActionProjections} fetchSnapshot={fetchSnapshot} />,
       { wrapper: ({ children }) => <Harness client={client}>{children}</Harness> },
     );
     const socket = TestWebSocket.instances[0]!;
@@ -439,9 +440,7 @@ describe("operator realtime reconciliation", () => {
       }),
     );
     await waitFor(() =>
-      expect(screen.getByTestId("realtime-status")).toHaveTextContent(
-        "connected",
-      ),
+      expect(screen.getByTestId("realtime-status")).toHaveTextContent("connected"),
     );
     fetchSnapshot.mockClear();
     fetchActionProjections.mockClear();
@@ -494,9 +493,7 @@ describe("operator realtime reconciliation", () => {
       }),
     );
 
-    await waitFor(() =>
-      expect(client.getQueryState(listKey)?.isInvalidated).toBe(true),
-    );
+    await waitFor(() => expect(client.getQueryState(listKey)?.isInvalidated).toBe(true));
     expect(client.getQueryState(changedDetailKey)?.isInvalidated).toBe(true);
     expect(client.getQueryState(otherDetailKey)?.isInvalidated).toBe(false);
     expect(fetchSnapshot).not.toHaveBeenCalled();
@@ -518,9 +515,7 @@ describe("operator realtime reconciliation", () => {
       }),
     );
 
-    await waitFor(() =>
-      expect(client.getQueryState(listKey)?.isInvalidated).toBe(true),
-    );
+    await waitFor(() => expect(client.getQueryState(listKey)?.isInvalidated).toBe(true));
     expect(client.getQueryState(changedDetailKey)?.isInvalidated).toBe(true);
     expect(client.getQueryState(otherDetailKey)?.isInvalidated).toBe(false);
     await waitFor(() => expect(fetchSnapshot).toHaveBeenCalledOnce());

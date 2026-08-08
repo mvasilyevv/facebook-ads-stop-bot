@@ -165,11 +165,7 @@ function stringArray(value: unknown, endpoint: string, field: string): void {
   );
 }
 
-function ianaTimezone(
-  value: unknown,
-  endpoint: string,
-  field: string,
-): void {
+function ianaTimezone(value: unknown, endpoint: string, field: string): void {
   const timezone = string(value, endpoint, field);
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(0);
@@ -192,11 +188,7 @@ function contextEvidence(
   field: string,
 ): Record<string, unknown> {
   const scope = record(value, endpoint, field);
-  const accountIds = array(
-    scope.account_ids,
-    endpoint,
-    `${field}.account_ids`,
-  );
+  const accountIds = array(scope.account_ids, endpoint, `${field}.account_ids`);
   accountIds.forEach((item, index) => {
     const accountId = string(item, endpoint, `${field}.account_ids[${index}]`);
     if (!accountId.trim()) fail(endpoint, `${field}.account_ids[${index}]`);
@@ -205,11 +197,7 @@ function contextEvidence(
     fail(endpoint, `${field}.account_ids`);
   }
   ianaTimezone(scope.display_timezone, endpoint, `${field}.display_timezone`);
-  nullableString(
-    scope.cabinet_timezone,
-    endpoint,
-    `${field}.cabinet_timezone`,
-  );
+  nullableString(scope.cabinet_timezone, endpoint, `${field}.cabinet_timezone`);
   enumValue(
     scope.cabinet_timezone_state,
     CONTEXT_STATES,
@@ -240,11 +228,7 @@ function contextEvidence(
   );
 
   if (scope.cabinet_timezone_state === "single") {
-    ianaTimezone(
-      scope.cabinet_timezone,
-      endpoint,
-      `${field}.cabinet_timezone`,
-    );
+    ianaTimezone(scope.cabinet_timezone, endpoint, `${field}.cabinet_timezone`);
     if (accountIds.length === 0) fail(endpoint, `${field}.account_ids`);
   } else if (scope.cabinet_timezone !== null) {
     fail(endpoint, `${field}.cabinet_timezone`);
@@ -310,18 +294,11 @@ function actionItem(value: unknown, endpoint: string, field: string): void {
   nullableString(item.currency, endpoint, `${field}.currency`);
   if (item.currency !== null) {
     supportedCurrency(item.currency, endpoint, `${field}.currency`);
+    if (item.currency !== "USD") fail(endpoint, `${field}.currency`);
   }
-  nullableString(
-    item.cabinet_timezone,
-    endpoint,
-    `${field}.cabinet_timezone`,
-  );
+  nullableString(item.cabinet_timezone, endpoint, `${field}.cabinet_timezone`);
   if (item.cabinet_timezone !== null) {
-    ianaTimezone(
-      item.cabinet_timezone,
-      endpoint,
-      `${field}.cabinet_timezone`,
-    );
+    ianaTimezone(item.cabinet_timezone, endpoint, `${field}.cabinet_timezone`);
   }
   nullableIsoDate(
     item.account_context_observed_at,
@@ -403,6 +380,12 @@ function emptyFunnel(data: Record<string, unknown>): boolean {
   return Array.isArray(data.stages) && data.stages.length === 0;
 }
 
+function emptyPortfolio(data: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(data.currency_groups) && data.currency_groups.length === 0
+  );
+}
+
 function attentionItem(value: unknown, endpoint: string, field: string): void {
   const item = record(value, endpoint, field);
   string(item.id, endpoint, `${field}.id`);
@@ -435,10 +418,7 @@ function attentionData(value: unknown, endpoint: string, field: string): void {
 
 function economyData(value: unknown, endpoint: string, field: string): void {
   const data = record(value, endpoint, field);
-  const totals = record(data.totals, endpoint, `${field}.totals`);
-  for (const key of ["spend", "base", "stop", "base_delta"] as const) {
-    nullableDecimal(totals[key], endpoint, `${field}.totals.${key}`);
-  }
+  moneyTotals(data.totals, endpoint, `${field}.totals`);
   array(data.series, endpoint, `${field}.series`).forEach((value, index) => {
     const pointField = `${field}.series[${index}]`;
     const point = record(value, endpoint, pointField);
@@ -446,6 +426,154 @@ function economyData(value: unknown, endpoint: string, field: string): void {
     nullableDecimal(point.actual, endpoint, `${pointField}.actual`);
     nullableDecimal(point.base, endpoint, `${pointField}.base`);
     nullableDecimal(point.stop, endpoint, `${pointField}.stop`);
+  });
+}
+
+function moneyTotals(value: unknown, endpoint: string, field: string): void {
+  const totals = record(value, endpoint, field);
+  for (const key of ["spend", "base", "stop", "base_delta"] as const) {
+    nullableDecimal(totals[key], endpoint, `${field}.${key}`);
+  }
+}
+
+function hasKnownMoney(
+  value: unknown,
+  endpoint: string,
+  field: string,
+): boolean {
+  const totals = record(value, endpoint, field);
+  return ["spend", "base", "stop", "base_delta"].some(
+    (key) => totals[key] !== null,
+  );
+}
+
+function navigationAction(
+  value: unknown,
+  endpoint: string,
+  field: string,
+): void {
+  const action = record(value, endpoint, field);
+  string(action.label, endpoint, `${field}.label`);
+  const href = string(action.href, endpoint, `${field}.href`);
+  if (safeOperatorAttentionHref(href) === null) fail(endpoint, `${field}.href`);
+}
+
+function portfolioData(value: unknown, endpoint: string, field: string): void {
+  const data = record(value, endpoint, field);
+  const groups = array(
+    data.currency_groups,
+    endpoint,
+    `${field}.currency_groups`,
+  );
+  const groupIds = new Set<string>();
+  const cabinetIds = new Set<string>();
+
+  groups.forEach((value, groupIndex) => {
+    const groupField = `${field}.currency_groups[${groupIndex}]`;
+    const group = record(value, endpoint, groupField);
+    const groupId = string(group.id, endpoint, `${groupField}.id`);
+    if (!groupId || groupIds.has(groupId)) fail(endpoint, `${groupField}.id`);
+    groupIds.add(groupId);
+    nullableString(group.currency, endpoint, `${groupField}.currency`);
+    if (group.currency !== null) {
+      supportedCurrency(group.currency, endpoint, `${groupField}.currency`);
+      if (groupId !== group.currency) fail(endpoint, `${groupField}.id`);
+    } else if (groupId !== "unknown") {
+      fail(endpoint, `${groupField}.id`);
+    }
+    const dollarContext = group.currency === "USD";
+    enumValue(group.state, DATA_STATES, endpoint, `${groupField}.state`);
+    enumValue(group.severity, SEVERITIES, endpoint, `${groupField}.severity`);
+    nullableIsoDate(group.as_of, endpoint, `${groupField}.as_of`);
+    nullableInteger(
+      group.freshness_seconds,
+      endpoint,
+      `${groupField}.freshness_seconds`,
+    );
+    moneyTotals(group.totals, endpoint, `${groupField}.totals`);
+    if (
+      !dollarContext &&
+      (group.state === "ready" ||
+        group.state === "empty" ||
+        hasKnownMoney(group.totals, endpoint, `${groupField}.totals`))
+    ) {
+      fail(endpoint, `${groupField}.dollar_context`);
+    }
+    const cabinets = array(group.cabinets, endpoint, `${groupField}.cabinets`);
+    if (cabinets.length === 0) fail(endpoint, `${groupField}.cabinets`);
+    cabinets.forEach((value, cabinetIndex) => {
+      const cabinetField = `${groupField}.cabinets[${cabinetIndex}]`;
+      const cabinet = record(value, endpoint, cabinetField);
+      const cabinetId = string(cabinet.id, endpoint, `${cabinetField}.id`);
+      if (!cabinetId || cabinetIds.has(cabinetId)) {
+        fail(endpoint, `${cabinetField}.id`);
+      }
+      cabinetIds.add(cabinetId);
+      string(cabinet.name, endpoint, `${cabinetField}.name`);
+      nullableString(cabinet.timezone, endpoint, `${cabinetField}.timezone`);
+      if (cabinet.timezone !== null) {
+        ianaTimezone(cabinet.timezone, endpoint, `${cabinetField}.timezone`);
+      }
+      nullableString(cabinet.currency, endpoint, `${cabinetField}.currency`);
+      if (cabinet.currency !== group.currency) {
+        fail(endpoint, `${cabinetField}.currency`);
+      }
+      enumValue(cabinet.state, DATA_STATES, endpoint, `${cabinetField}.state`);
+      enumValue(
+        cabinet.severity,
+        SEVERITIES,
+        endpoint,
+        `${cabinetField}.severity`,
+      );
+      nullableIsoDate(cabinet.as_of, endpoint, `${cabinetField}.as_of`);
+      nullableInteger(
+        cabinet.freshness_seconds,
+        endpoint,
+        `${cabinetField}.freshness_seconds`,
+      );
+      if (cabinet.cabinet_day !== null) {
+        const day = record(
+          cabinet.cabinet_day,
+          endpoint,
+          `${cabinetField}.cabinet_day`,
+        );
+        isoDate(
+          day.starts_at,
+          endpoint,
+          `${cabinetField}.cabinet_day.starts_at`,
+        );
+        isoDate(day.ends_at, endpoint, `${cabinetField}.cabinet_day.ends_at`);
+        if (!isIncreasingTimestampRange(day.starts_at, day.ends_at)) {
+          fail(endpoint, `${cabinetField}.cabinet_day`);
+        }
+      }
+      moneyTotals(cabinet.totals, endpoint, `${cabinetField}.totals`);
+      if (
+        !dollarContext &&
+        (cabinet.state === "ready" ||
+          cabinet.state === "empty" ||
+          hasKnownMoney(cabinet.totals, endpoint, `${cabinetField}.totals`))
+      ) {
+        fail(endpoint, `${cabinetField}.dollar_context`);
+      }
+      string(cabinet.risk_label, endpoint, `${cabinetField}.risk_label`);
+      nullableString(
+        cabinet.risk_reason,
+        endpoint,
+        `${cabinetField}.risk_reason`,
+      );
+      array(cabinet.issues, endpoint, `${cabinetField}.issues`).forEach(
+        (item, issueIndex) =>
+          issue(item, endpoint, `${cabinetField}.issues[${issueIndex}]`),
+      );
+      navigationAction(cabinet.action, endpoint, `${cabinetField}.action`);
+      if (
+        cabinet.state === "ready" &&
+        (cabinet.as_of === null || cabinet.freshness_seconds === null)
+      ) {
+        fail(endpoint, `${cabinetField}.ready_evidence`);
+      }
+    });
   });
 }
 
@@ -532,11 +660,7 @@ function snapshot(value: unknown, endpoint: string): void {
     "$.meta.currency_observed_at",
   );
   if (meta.cabinet_timezone_state === "single") {
-    ianaTimezone(
-      meta.cabinet_timezone,
-      endpoint,
-      "$.meta.cabinet_timezone",
-    );
+    ianaTimezone(meta.cabinet_timezone, endpoint, "$.meta.cabinet_timezone");
   } else if (meta.cabinet_timezone !== null) {
     fail(endpoint, "$.meta.cabinet_timezone");
   }
@@ -558,11 +682,7 @@ function snapshot(value: unknown, endpoint: string): void {
   }
   if (meta.currency_state === "single") {
     supportedCurrency(meta.currency, endpoint, "$.meta.currency");
-    isoDate(
-      meta.currency_observed_at,
-      endpoint,
-      "$.meta.currency_observed_at",
-    );
+    isoDate(meta.currency_observed_at, endpoint, "$.meta.currency_observed_at");
   } else if (meta.currency !== null) {
     fail(endpoint, "$.meta.currency");
   }
@@ -587,11 +707,18 @@ function snapshot(value: unknown, endpoint: string): void {
     fail(endpoint, "$.meta.cabinet_day");
   }
   section(root.attention, endpoint, "$.attention", attentionData, emptyItems);
+  section(
+    root.portfolio,
+    endpoint,
+    "$.portfolio",
+    portfolioData,
+    emptyPortfolio,
+  );
   section(root.economy, endpoint, "$.economy", economyData, emptyEconomy);
   section(root.funnel, endpoint, "$.funnel", funnelData, emptyFunnel);
   section(root.actions, endpoint, "$.actions", actionsData, emptyItems);
   section(root.system, endpoint, "$.system", systemData);
-  if (meta.currency_state !== "single") {
+  if (meta.currency_state !== "single" || meta.currency !== "USD") {
     const economy = record(root.economy, endpoint, "$.economy");
     const funnel = record(root.funnel, endpoint, "$.funnel");
     if (economy.state === "ready" || funnel.state === "ready") {
@@ -608,16 +735,14 @@ function snapshot(value: unknown, endpoint: string): void {
         ["spend", "base", "stop", "base_delta"].some(
           (key) => totals[key] !== null,
         ) ||
-        array(
-          economyData.series,
-          endpoint,
-          "$.economy.data.series",
-        ).some((point) => {
-          const item = record(point, endpoint, "$.economy.data.series[*]");
-          return [item.actual, item.base, item.stop].some(
-            (amount) => amount !== null,
-          );
-        })
+        array(economyData.series, endpoint, "$.economy.data.series").some(
+          (point) => {
+            const item = record(point, endpoint, "$.economy.data.series[*]");
+            return [item.actual, item.base, item.stop].some(
+              (amount) => amount !== null,
+            );
+          },
+        )
       ) {
         fail(endpoint, "$.economy.data");
       }
@@ -646,9 +771,7 @@ function actionsResponse(value: unknown, endpoint: string): void {
   nullableInteger(root.freshness_seconds, endpoint, "$.freshness_seconds");
   stringArray(root.sources, endpoint, "$.sources");
   const issues = array(root.issues, endpoint, "$.issues");
-  issues.forEach((item, index) =>
-    issue(item, endpoint, `$.issues[${index}]`),
-  );
+  issues.forEach((item, index) => issue(item, endpoint, `$.issues[${index}]`));
   const items = array(root.items, endpoint, "$.items");
   items.forEach((item, index) =>
     actionItem(item, endpoint, `$.items[${index}]`),
@@ -728,9 +851,7 @@ function adsResponse(value: unknown, endpoint: string): void {
   nullableInteger(root.freshness_seconds, endpoint, "$.freshness_seconds");
   stringArray(root.sources, endpoint, "$.sources");
   const issues = array(root.issues, endpoint, "$.issues");
-  issues.forEach((item, index) =>
-    issue(item, endpoint, `$.issues[${index}]`),
-  );
+  issues.forEach((item, index) => issue(item, endpoint, `$.issues[${index}]`));
   const rows = array(root.rows, endpoint, "$.rows");
   rows.forEach((row, index) => adRow(row, endpoint, `$.rows[${index}]`));
   integer(root.page, endpoint, "$.page", 1);
@@ -767,7 +888,7 @@ function adsResponse(value: unknown, endpoint: string): void {
   ) {
     fail(endpoint, "$.state_rows");
   }
-  if (scope.currency_state !== "single") {
+  if (scope.currency_state !== "single" || scope.currency !== "USD") {
     if (root.state === "ready") fail(endpoint, "$.state");
     for (const rowValue of rows) {
       const row = record(rowValue, endpoint, "$.rows[*]");
@@ -799,9 +920,7 @@ function incidentDetailResponse(value: unknown, endpoint: string): void {
   integer(root.freshness_seconds, endpoint, "$.freshness_seconds");
   stringArray(root.sources, endpoint, "$.sources");
   const issues = array(root.issues, endpoint, "$.issues");
-  issues.forEach((item, index) =>
-    issue(item, endpoint, `$.issues[${index}]`),
-  );
+  issues.forEach((item, index) => issue(item, endpoint, `$.issues[${index}]`));
   ianaTimezone(root.timezone, endpoint, "$.timezone");
   bool(root.timezone_known, endpoint, "$.timezone_known");
   enumValue(root.status, INCIDENT_STATUSES, endpoint, "$.status");
@@ -855,8 +974,12 @@ export function validateOperatorPayload(
   endpoint: string,
   value: unknown,
 ): unknown {
-  if (endpoint === "/api/operator/snapshot") snapshot(value, endpoint);
-  else if (endpoint === "/api/operator/actions")
+  if (
+    endpoint === "/api/operator/snapshot" ||
+    /^\/api\/operator\/cabinets\/[^/]+\/snapshot$/.test(endpoint)
+  ) {
+    snapshot(value, endpoint);
+  } else if (endpoint === "/api/operator/actions")
     actionsResponse(value, endpoint);
   else if (endpoint === "/api/operator/ads") adsResponse(value, endpoint);
   else if (endpoint === "/api/operator/events") eventsResponse(value, endpoint);

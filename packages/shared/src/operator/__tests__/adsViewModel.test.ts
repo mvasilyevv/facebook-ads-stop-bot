@@ -32,13 +32,19 @@ describe("operator ad view model", () => {
     expect(formatOperatorCount(null)).toBe("—");
   });
 
-  it("returns currency only for a confirmed single-currency scope", () => {
+  it("returns currency only for a confirmed USD scope", () => {
+    expect(
+      confirmedOperatorCurrency({
+        currency_state: "single",
+        currency: "USD",
+      }),
+    ).toBe("USD");
     expect(
       confirmedOperatorCurrency({
         currency_state: "single",
         currency: "KWD",
       }),
-    ).toBe("KWD");
+    ).toBeNull();
     expect(
       confirmedOperatorCurrency({
         currency_state: "mixed",

@@ -931,18 +931,22 @@ function signedSpend(
 type CurrencyScope = AnalyticsPerformance["scope"];
 
 function confirmedCurrency(scope: CurrencyScope): string | null {
-  return scope.currency_state === "single" && scope.currency
-    ? scope.currency
+  return scope.currency_state === "single" && scope.currency === "USD"
+    ? "USD"
     : null;
 }
 
 function currencyEvidenceLabel(scope: CurrencyScope, state: DataState): string {
-  if (scope.currency_state === "single" && scope.currency) {
-    if (state === "ready") return `${scope.currency} · подтверждена`;
-    if (state === "partial") return `${scope.currency} · снимок неполный`;
-    if (state === "stale") return `${scope.currency} · снимок устарел`;
-    if (state === "empty") return `${scope.currency} · пустой снимок`;
-    return `${scope.currency} · не подтверждена`;
+  if (scope.currency_state === "single" && scope.currency === "USD") {
+    const label = "$";
+    if (state === "ready") return `${label} · подтверждена`;
+    if (state === "partial") return `${label} · снимок неполный`;
+    if (state === "stale") return `${label} · снимок устарел`;
+    if (state === "empty") return `${label} · пустой снимок`;
+    return `${label} · не подтверждена`;
+  }
+  if (scope.currency_state === "single" && scope.currency !== "USD") {
+    return "валюта не USD · денежные итоги скрыты";
   }
   if (scope.currency_state === "mixed") {
     return state === "stale"

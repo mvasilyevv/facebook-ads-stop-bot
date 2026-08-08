@@ -96,7 +96,7 @@ function MiniRealtimeNotice() {
       role="status"
       aria-live="polite"
       data-state="stale"
-      className="mx-4 mt-4 rounded-[var(--radius-2)] border border-warning/40 bg-warning-bg px-4 py-3 text-[14px] leading-5 text-bg-11"
+      className="mx-4 mt-4 border-y border-warning/40 bg-warning-bg px-3 py-3 text-[14px] leading-5 text-bg-11"
     >
       Live-связь восстанавливается. Данные устарели; денежные действия
       заблокированы до сверки снимка.

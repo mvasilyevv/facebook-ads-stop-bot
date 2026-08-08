@@ -89,7 +89,7 @@ function getTg(): TelegramWebApp | undefined {
 
 /**
  * Синхронизирует тему Telegram с editorial-monochrome (наш design canon).
- * Мы ИГНОРИРУЕМ themeParams TG — используем собственные CSS-токены (#0a0a0b).
+ * Мы ИГНОРИРУЕМ themeParams TG — используем собственные CSS-токены «Точного журнала».
  * Но вызываем tg.ready() и expand() — обязательно для Mini App.
  */
 export function initTheme(): () => void {
@@ -100,9 +100,9 @@ export function initTheme(): () => void {
     syncViewportCss();
     return () => {};
   }
-  tg.setHeaderColor?.("#0a0a0b");
-  tg.setBackgroundColor?.("#0a0a0b");
-  tg.setBottomBarColor?.("#101012");
+  tg.setHeaderColor?.("#0b0d10");
+  tg.setBackgroundColor?.("#0b0d10");
+  tg.setBottomBarColor?.("#0e1114");
   tg.ready();
   tg.expand();
   syncViewportCss();
