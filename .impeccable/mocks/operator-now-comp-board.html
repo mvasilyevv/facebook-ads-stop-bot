@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FB Agent · Точный журнал · Composition board</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; width: 100%; min-height: 100%; background: #080a0c; }
+      body { color: #e7e1d5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .board { width: 1672px; height: 941px; padding: 22px; background: #080a0c; overflow: hidden; }
+      .head { height: 56px; border-bottom: 1px solid #34383a; display: flex; align-items: flex-start; justify-content: space-between; }
+      .head strong { font-size: 20px; letter-spacing: -0.02em; }
+      .head span { color: #b8a36a; font: 12px/1.2 ui-monospace, monospace; letter-spacing: 0.06em; }
+      .frames { display: grid; grid-template-columns: 1248px 346px; gap: 28px; height: 827px; padding-top: 20px; }
+      .frame { min-width: 0; height: 100%; border: 1px solid #34383a; background: #0b0d10; position: relative; overflow: hidden; }
+      .frame-label { height: 31px; padding: 8px 10px 0; color: #858a8d; border-bottom: 1px solid #24282a; font: 11px/1 ui-monospace, monospace; }
+      .desktop img { display: block; width: 1246px; height: auto; }
+      .mobile-shot { position: relative; width: 344px; height: 794px; overflow: hidden; background: #0b0d10; }
+      .mobile-shot img { display: block; width: 390px; height: auto; transform: scale(0.882); transform-origin: 0 0; }
+      .crop { position: absolute; width: 11px; height: 11px; pointer-events: none; }
+      .crop.tl { left: -1px; top: -1px; border-left: 1px solid #b8a36a; border-top: 1px solid #b8a36a; }
+      .crop.br { right: -1px; bottom: -1px; border-right: 1px solid #b8a36a; border-bottom: 1px solid #b8a36a; }
+    </style>
+  </head>
+  <body>
+    <main class="board">
+      <header class="head"><strong id="title">A · Шкала ведёт</strong><span>ТОЧНЫЙ ЖУРНАЛ · ОДНИ ДАННЫЕ · 1440 / 390</span></header>
+      <div class="frames">
+        <section class="frame desktop"><div class="frame-label">WEB · 1440 × 900 · первый экран</div><img id="desktop" alt="Desktop composition" /><i class="crop tl"></i><i class="crop br"></i></section>
+        <section class="frame mobile"><div class="frame-label">MOBILE / TMA · 390 × 844</div><div class="mobile-shot"><img id="mobile" alt="Mobile composition" /></div><i class="crop tl"></i><i class="crop br"></i></section>
+      </div>
+    </main>
+    <script>
+      const options = {
+        a: { title: "A · Шкала ведёт", desktop: "operator-now-ledger-leads-desktop.png", mobile: "operator-now-ledger-leads-mobile.png" },
+        b: { title: "B · Внимание ведёт", desktop: "operator-now-attention-leads-desktop.png", mobile: "operator-now-attention-leads-mobile.png" },
+        c: { title: "C · Сверка и журнал", desktop: "operator-now-split-reconciliation-desktop.png", mobile: "operator-now-split-reconciliation-mobile.png" }
+      };
+      const key = new URLSearchParams(location.search).get("variant") || "a";
+      const option = options[key] || options.a;
+      document.querySelector("#title").textContent = option.title;
+      document.querySelector("#desktop").src = option.desktop;
+      document.querySelector("#mobile").src = option.mobile;
+    </script>
+  </body>
+</html>

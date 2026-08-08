@@ -1,0 +1,9 @@
+{
+  "id": "ledger-leads",
+  "direction": "Точный журнал",
+  "prompt": "Одна непрерывная шкала расхода ведет первый экран; кабинеты выровнены по Actual, Base и Stop, справа идут ranked attention и lifecycle действий. На мобильном attention предшествует шкале и кабинетным evidence strips.",
+  "renderer": "local-html-css",
+  "source": "operator-now-compositions.html?variant=a",
+  "viewports": ["1440x900", "390x844"],
+  "approved": true
+}

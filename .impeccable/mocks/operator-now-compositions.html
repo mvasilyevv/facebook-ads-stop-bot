@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FB Agent · Точный журнал · Композиции</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Commissioner:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d10;
+        --bg-raised: #101316;
+        --bg-selected: #171713;
+        --paper: #e7e1d5;
+        --paper-strong: #f2ede3;
+        --muted: #9a9992;
+        --ash: #858a8d;
+        --rule: #34383a;
+        --rule-soft: #24282a;
+        --brass: #b8a36a;
+        --danger: #c9554d;
+        --danger-soft: #2a1617;
+        --ok: #9da887;
+        --pending: #c3a65f;
+        --focus: #e7e1d5;
+        --sans: "Commissioner", sans-serif;
+        --mono: "JetBrains Mono", monospace;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--paper); }
+
+      body {
+        font-family: var(--sans);
+        font-size: 16px;
+        line-height: 1.4;
+        font-variant-numeric: tabular-nums;
+      }
+
+      button, a { font: inherit; }
+      button { color: inherit; }
+
+      :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+      .icons { position: fixed; width: 0; height: 0; overflow: hidden; }
+      .icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: square; stroke-linejoin: miter; flex: 0 0 auto; }
+
+      .app {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 204px minmax(0, 1fr);
+        background:
+          linear-gradient(var(--rule-soft) 1px, transparent 1px) 0 0 / 100% 48px,
+          var(--bg);
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        padding: 26px 18px 20px;
+        border-right: 1px solid var(--rule);
+        background: rgba(11, 13, 16, 0.97);
+        display: flex;
+        flex-direction: column;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 44px;
+        padding: 0 10px;
+        color: var(--paper-strong);
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+
+      .brand-mark {
+        width: 24px;
+        height: 24px;
+        position: relative;
+        border: 1px solid var(--brass);
+      }
+
+      .brand-mark::before,
+      .brand-mark::after {
+        content: "";
+        position: absolute;
+        background: var(--brass);
+      }
+
+      .brand-mark::before { width: 30px; height: 1px; left: -4px; top: 11px; }
+      .brand-mark::after { width: 1px; height: 30px; left: 11px; top: -4px; }
+
+      .nav { display: grid; gap: 4px; margin-top: 34px; }
+      .nav-label { color: var(--ash); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; padding: 14px 12px 6px; }
+
+      .nav-item {
+        min-height: 44px;
+        color: var(--muted);
+        text-decoration: none;
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        padding: 0 12px;
+        border: 1px solid transparent;
+      }
+
+      .nav-item[aria-current="page"] {
+        color: var(--paper-strong);
+        border-color: var(--rule);
+        background: var(--bg-selected);
+      }
+
+      .nav-item[aria-current="page"]::after {
+        content: "";
+        width: 6px;
+        height: 6px;
+        margin-left: auto;
+        background: var(--brass);
+      }
+
+      .owner {
+        margin-top: auto;
+        border-top: 1px solid var(--rule);
+        padding: 18px 10px 0;
+        display: grid;
+        gap: 3px;
+      }
+
+      .owner strong { font-size: 14px; }
+      .owner span { color: var(--ash); font: 12px/1.4 var(--mono); }
+
+      .main { min-width: 0; padding: 28px clamp(24px, 3vw, 48px) 44px; }
+
+      .masthead {
+        min-height: 66px;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 24px;
+        padding-bottom: 18px;
+        border-bottom: 1px solid var(--rule);
+      }
+
+      .masthead h1 { margin: 0; font-size: clamp(28px, 2.3vw, 38px); line-height: 1; letter-spacing: -0.03em; font-weight: 600; }
+      .masthead p { margin: 10px 0 0; color: var(--muted); max-width: 65ch; font-size: 14px; }
+      .masthead-right { display: flex; align-items: center; gap: 12px; }
+
+      .demo {
+        display: inline-flex;
+        align-items: center;
+        height: 28px;
+        padding: 0 8px;
+        border: 1px solid var(--brass);
+        color: var(--brass);
+        font: 600 11px/1 var(--mono);
+        letter-spacing: 0.1em;
+      }
+
+      .freshness {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 12px;
+        border: 1px solid var(--rule);
+        background: transparent;
+        color: var(--paper);
+        white-space: nowrap;
+        font-size: 14px;
+      }
+
+      .freshness .icon { color: var(--ok); }
+
+      .workspace { display: grid; gap: 18px; margin-top: 22px; }
+
+      .section {
+        position: relative;
+        min-width: 0;
+        border-top: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+        background: rgba(11, 13, 16, 0.82);
+      }
+
+      .section::before,
+      .section::after {
+        content: "";
+        position: absolute;
+        width: 9px;
+        height: 9px;
+        pointer-events: none;
+      }
+
+      .section::before { left: -1px; top: -1px; border-left: 1px solid var(--brass); border-top: 1px solid var(--brass); }
+      .section::after { right: -1px; bottom: -1px; border-right: 1px solid var(--brass); border-bottom: 1px solid var(--brass); }
+
+      .section-head {
+        min-height: 54px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 0 16px;
+        border-bottom: 1px solid var(--rule-soft);
+      }
+
+      .section-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+      .section-title h2 { margin: 0; color: var(--paper-strong); font-size: 17px; line-height: 1.2; letter-spacing: -0.015em; font-weight: 600; }
+      .section-title span { color: var(--ash); font: 12px/1.3 var(--mono); }
+      .source { color: var(--ash); font: 11px/1.4 var(--mono); white-space: nowrap; }
+
+      .portfolio { grid-area: portfolio; }
+      .attention { grid-area: attention; }
+      .actions { grid-area: actions; }
+      .funnel { grid-area: funnel; }
+
+      .register-summary {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        border-bottom: 1px solid var(--rule-soft);
+      }
+
+      .summary-cell { min-height: 74px; padding: 12px 16px; border-right: 1px solid var(--rule-soft); }
+      .summary-cell:last-child { border-right: 0; }
+      .summary-cell span { display: block; color: var(--ash); font-size: 12px; margin-bottom: 7px; }
+      .summary-cell strong { font: 600 clamp(20px, 2vw, 28px)/1 var(--mono); letter-spacing: -0.04em; color: var(--paper-strong); }
+      .summary-cell.stop strong { color: var(--danger); }
+
+      .scale-head,
+      .ledger-row {
+        display: grid;
+        grid-template-columns: minmax(142px, 0.75fr) minmax(360px, 2.4fr) minmax(108px, 0.55fr);
+        align-items: center;
+      }
+
+      .scale-head { min-height: 44px; color: var(--ash); font: 11px/1 var(--mono); border-bottom: 1px solid var(--rule-soft); }
+      .scale-head > :first-child, .ledger-name { padding-left: 16px; }
+      .scale-head > :last-child, .ledger-state { padding-right: 16px; text-align: right; }
+
+      .scale-labels { display: grid; grid-template-columns: repeat(5, 1fr); padding: 0 6px; }
+      .scale-labels span { text-align: right; }
+      .scale-labels span:first-child { text-align: left; }
+
+      .ledger-row { min-height: 78px; border-bottom: 1px solid var(--rule-soft); }
+      .ledger-row:last-child { border-bottom: 0; }
+      .ledger-row.danger { background: linear-gradient(90deg, rgba(201, 85, 77, 0.08), transparent 32%); }
+
+      .ledger-name { display: grid; gap: 4px; }
+      .ledger-name strong { font: 600 14px/1.2 var(--mono); color: var(--paper-strong); }
+      .ledger-name span { color: var(--ash); font-size: 12px; }
+
+      .ruler {
+        position: relative;
+        height: 50px;
+        margin: 0 6px;
+        border-left: 1px solid var(--rule);
+        border-right: 1px solid var(--rule);
+        background: linear-gradient(90deg, transparent calc(25% - 1px), var(--rule-soft) 25%, transparent calc(25% + 1px), transparent calc(50% - 1px), var(--rule-soft) 50%, transparent calc(50% + 1px), transparent calc(75% - 1px), var(--rule-soft) 75%, transparent calc(75% + 1px));
+      }
+
+      .ruler .actual {
+        position: absolute;
+        left: 0;
+        top: 20px;
+        width: var(--actual);
+        height: 2px;
+        background: var(--paper);
+      }
+
+      .ruler .actual::after { content: ""; position: absolute; right: -1px; top: -5px; width: 2px; height: 12px; background: var(--paper); }
+      .ruler .base, .ruler .stop { position: absolute; top: 8px; bottom: 8px; width: 1px; }
+      .ruler .base { left: var(--base); border-left: 1px dashed var(--brass); }
+      .ruler .stop { left: var(--stop); border-left: 1px dashed var(--danger); }
+      .ruler .value { position: absolute; left: min(calc(var(--actual) + 8px), 78%); top: 14px; color: var(--paper-strong); font: 600 12px/1 var(--mono); }
+
+      .ledger-row.danger .ruler::after {
+        content: "";
+        position: absolute;
+        left: calc(var(--stop) - 5px);
+        top: 3px;
+        width: 10px;
+        height: 44px;
+        border-top: 1px solid var(--danger);
+        border-bottom: 1px solid var(--danger);
+      }
+
+      .ruler.unknown { display: flex; align-items: center; color: var(--ash); font: 12px/1 var(--mono); }
+      .ruler.unknown::before { content: ""; width: 34%; border-top: 1px dashed var(--ash); margin-right: 10px; }
+
+      .status {
+        display: inline-flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 7px;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .status.danger { color: var(--danger); }
+      .status.ok { color: var(--ok); }
+      .status.pending { color: var(--pending); }
+      .status.unknown { color: var(--ash); }
+      .status .icon { width: 15px; height: 15px; }
+
+      .attention-list, .action-list { display: grid; }
+
+      .attention-item, .action-item {
+        min-height: 84px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--rule-soft);
+        display: grid;
+        gap: 8px;
+      }
+
+      .attention-item:last-child, .action-item:last-child { border-bottom: 0; }
+      .attention-item.danger { background: var(--danger-soft); }
+
+      .item-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      .item-top strong { font: 600 13px/1.2 var(--mono); color: var(--paper-strong); }
+      .attention-item p, .action-item p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+
+      .inline-action {
+        justify-self: start;
+        min-height: 44px;
+        border: 1px solid var(--rule);
+        background: transparent;
+        padding: 0 13px;
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        cursor: pointer;
+      }
+
+      .inline-action:hover { border-color: var(--paper); background: #15181a; }
+      .inline-action.danger { border-color: var(--danger); color: var(--paper-strong); }
+
+      .action-meta { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 10px; }
+      .action-meta code { color: var(--ash); font: 11px/1.3 var(--mono); }
+      .progress { height: 2px; background: var(--rule); overflow: hidden; }
+      .progress::before { content: ""; display: block; width: 63%; height: 100%; background: var(--pending); }
+
+      .funnel-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .funnel-step { min-height: 92px; padding: 14px 16px; border-right: 1px solid var(--rule-soft); position: relative; }
+      .funnel-step:last-child { border-right: 0; }
+      .funnel-step:not(:last-child)::after { content: ""; position: absolute; right: -5px; top: 31px; width: 9px; height: 9px; border-right: 1px solid var(--brass); border-top: 1px solid var(--brass); transform: rotate(45deg); background: var(--bg); }
+      .funnel-step span { display: block; color: var(--ash); font-size: 12px; }
+      .funnel-step strong { display: block; margin-top: 8px; color: var(--paper-strong); font: 600 21px/1 var(--mono); }
+      .funnel-step small { display: block; margin-top: 8px; color: var(--muted); font: 11px/1 var(--mono); }
+
+      .variant-a .workspace {
+        grid-template-columns: minmax(0, 1fr) minmax(290px, 330px);
+        grid-template-areas:
+          "portfolio attention"
+          "funnel actions";
+        align-items: start;
+      }
+
+      .variant-b .workspace {
+        grid-template-columns: minmax(330px, 0.78fr) minmax(0, 1.55fr);
+        grid-template-areas:
+          "attention portfolio"
+          "actions funnel";
+        align-items: start;
+      }
+
+      .variant-b .attention .section-head { min-height: 66px; }
+      .variant-b .attention-item:first-child { min-height: 142px; }
+      .variant-b .attention-item:first-child p { font-size: 15px; color: var(--paper); }
+
+      .variant-c .workspace {
+        grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.75fr);
+        grid-template-areas:
+          "portfolio actions"
+          "attention attention"
+          "funnel funnel";
+        align-items: start;
+      }
+
+      .variant-c .attention-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .variant-c .attention-item { border-right: 1px solid var(--rule-soft); }
+      .variant-c .attention-item:last-child { border-right: 0; }
+
+      .composition-tag {
+        position: fixed;
+        z-index: 20;
+        right: 18px;
+        bottom: 18px;
+        min-height: 36px;
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        padding: 0 10px;
+        color: var(--brass);
+        background: var(--bg);
+        border: 1px solid var(--brass);
+        font: 600 11px/1 var(--mono);
+        letter-spacing: 0.06em;
+      }
+
+      @media (max-width: 760px) {
+        body { font-size: 15px; }
+        .app { display: block; padding-bottom: 72px; background: var(--bg); }
+        .sidebar {
+          position: fixed;
+          z-index: 20;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          top: auto;
+          height: 68px;
+          padding: 0 max(8px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(8px, env(safe-area-inset-left));
+          border: 0;
+          border-top: 1px solid var(--rule);
+          display: block;
+        }
+
+        .brand, .nav-label, .owner { display: none; }
+        .nav { height: 100%; margin: 0; display: grid; grid-template-columns: repeat(4, 1fr); align-items: stretch; gap: 0; }
+        .nav-item { min-width: 0; min-height: 64px; padding: 7px 2px 5px; display: flex; flex-direction: column; justify-content: center; gap: 4px; border: 0; font-size: 11px; }
+        .nav-item:nth-of-type(5), .nav-item:nth-of-type(6) { display: none; }
+        .nav-item[aria-current="page"] { border-top: 1px solid var(--brass); background: var(--bg-selected); }
+        .nav-item[aria-current="page"]::after { display: none; }
+        .nav-item .icon { width: 19px; height: 19px; }
+
+        .main { padding: max(18px, env(safe-area-inset-top)) 14px 28px; }
+        .masthead { min-height: 92px; display: grid; grid-template-columns: 1fr auto; gap: 8px 10px; padding-bottom: 14px; }
+        .masthead h1 { font-size: 30px; }
+        .masthead p { grid-column: 1 / -1; margin-top: 0; font-size: 13px; }
+        .masthead-right { align-self: start; gap: 6px; }
+        .freshness { width: 44px; padding: 0; justify-content: center; }
+        .freshness span { display: none; }
+        .demo { display: none; }
+
+        .workspace,
+        .variant-a .workspace,
+        .variant-b .workspace,
+        .variant-c .workspace {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-areas: none;
+          gap: 14px;
+          margin-top: 16px;
+        }
+
+        .workspace > * { grid-area: auto; }
+        .variant-a .attention { order: 1; }
+        .variant-a .portfolio { order: 2; }
+        .variant-a .actions { order: 3; }
+        .variant-a .funnel { order: 4; }
+        .variant-b .attention { order: 1; }
+        .variant-b .portfolio { order: 2; }
+        .variant-b .actions { order: 3; }
+        .variant-b .funnel { order: 4; }
+        .variant-c .actions { order: 1; }
+        .variant-c .attention { order: 2; }
+        .variant-c .portfolio { order: 3; }
+        .variant-c .funnel { order: 4; }
+
+        .section-head { min-height: 52px; padding: 0 12px; }
+        .section-title { display: grid; gap: 2px; }
+        .section-title h2 { font-size: 16px; }
+        .source { display: none; }
+
+        .register-summary { grid-template-columns: repeat(3, 1fr); }
+        .summary-cell { min-height: 68px; padding: 11px 10px; }
+        .summary-cell strong { font-size: 17px; }
+
+        .scale-head { display: none; }
+        .ledger-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 13px 12px; min-height: 110px; }
+        .ledger-name { padding: 0; }
+        .ledger-state { padding: 0; }
+        .ruler { grid-column: 1 / -1; grid-row: 2; width: 100%; margin: 0; }
+
+        .variant-c .attention-list { grid-template-columns: 1fr; }
+        .variant-c .attention-item { border-right: 0; }
+        .attention-item, .action-item { padding: 13px 12px; }
+
+        .funnel-row { grid-template-columns: repeat(2, 1fr); }
+        .funnel-step { min-height: 82px; padding: 12px; border-bottom: 1px solid var(--rule-soft); }
+        .funnel-step:nth-child(2) { border-right: 0; }
+        .funnel-step:nth-child(2)::after { display: none; }
+        .funnel-step strong { font-size: 18px; }
+
+        .composition-tag { display: none; }
+      }
+    </style>
+  </head>
+  <body class="variant-a">
+    <svg class="icons" aria-hidden="true">
+      <symbol id="i-now" viewBox="0 0 24 24"><path d="M4 13h4l2-6 4 11 2-5h4"/><path d="M4 4v16h16"/></symbol>
+      <symbol id="i-actions" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></symbol>
+      <symbol id="i-ads" viewBox="0 0 24 24"><path d="M4 7h11l5-3v16l-5-3H4z"/><path d="M7 17v3h5v-3"/></symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V9M10 20V4M16 20v-7M22 20H2"/></symbol>
+      <symbol id="i-system" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><path d="M8 4v4M16 10v4M11 16v4"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 3 20h18z"/><path d="M12 9v5M12 17h.01"/></symbol>
+      <symbol id="i-unknown" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M9.8 9a2.4 2.4 0 0 1 4.5 1.2c0 2-2.3 2.2-2.3 4M12 17h.01"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    </svg>
+
+    <div class="app">
+      <aside class="sidebar" aria-label="Основная навигация">
+        <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>FB Agent</span></div>
+        <nav class="nav">
+          <a class="nav-item" href="#" aria-current="page"><svg class="icon"><use href="#i-now"/></svg><span>Сейчас</span></a>
+          <a class="nav-item" href="#"><svg class="icon"><use href="#i-actions"/></svg><span>Действия</span></a>
+          <a class="nav-item" href="#"><svg class="icon"><use href="#i-ads"/></svg><span>Реклама</span></a>
+          <a class="nav-item" href="#"><svg class="icon"><use href="#i-chart"/></svg><span>Аналитика</span></a>
+          <span class="nav-label">Управление</span>
+          <a class="nav-item" href="#"><svg class="icon"><use href="#i-system"/></svg><span>Система</span></a>
+          <a class="nav-item" href="#"><svg class="icon"><use href="#i-more"/></svg><span>Ещё</span></a>
+        </nav>
+        <div class="owner"><strong>Mark · Owner</strong><span>Europe/Kaliningrad</span></div>
+      </aside>
+
+      <main class="main">
+        <header class="masthead">
+          <div>
+            <h1>Сейчас</h1>
+            <p>Деньги, расхождения и выполняемые команды — одна проверяемая картина.</p>
+          </div>
+          <div class="masthead-right">
+            <span class="demo">ДЕМО</span>
+            <button class="freshness" type="button"><svg class="icon"><use href="#i-check"/></svg><span>Данные свежие · 18 сек</span></button>
+          </div>
+        </header>
+
+        <div class="workspace">
+          <section class="section portfolio">
+            <header class="section-head">
+              <div class="section-title"><h2>Портфель · USD</h2><span>сегодня · до 14:32</span></div>
+              <span class="source">observer · as_of 14:32:18</span>
+            </header>
+            <div class="register-summary">
+              <div class="summary-cell"><span>Расход</span><strong>$47.80</strong></div>
+              <div class="summary-cell"><span>База</span><strong>$39.00</strong></div>
+              <div class="summary-cell stop"><span>Стоп</span><strong>$45.00</strong></div>
+            </div>
+            <div class="scale-head">
+              <span>Кабинет</span>
+              <div class="scale-labels"><span>$0</span><span>$5</span><span>$10</span><span>$15</span><span>$20</span></div>
+              <span>Состояние</span>
+            </div>
+            <div class="ledger-row danger">
+              <div class="ledger-name"><strong>GH_CR2</strong><span>USD · Africa/Accra</span></div>
+              <div class="ruler" style="--actual:92%;--base:60%;--stop:75%"><span class="actual"></span><span class="base"></span><span class="stop"></span><span class="value">$18.40</span></div>
+              <div class="ledger-state"><span class="status danger"><svg class="icon"><use href="#i-alert"/></svg>Стоп превышен</span></div>
+            </div>
+            <div class="ledger-row">
+              <div class="ledger-name"><strong>PL_VIP</strong><span>USD · Europe/Warsaw</span></div>
+              <div class="ruler" style="--actual:68%;--base:75%;--stop:90%"><span class="actual"></span><span class="base"></span><span class="stop"></span><span class="value">$13.60</span></div>
+              <div class="ledger-state"><span class="status ok"><svg class="icon"><use href="#i-check"/></svg>В норме</span></div>
+            </div>
+            <div class="ledger-row">
+              <div class="ledger-name"><strong>ES_CORE</strong><span>USD · Europe/Madrid</span></div>
+              <div class="ruler unknown">— данных после 14:28 нет</div>
+              <div class="ledger-state"><span class="status unknown"><svg class="icon"><use href="#i-unknown"/></svg>Устарело</span></div>
+            </div>
+          </section>
+
+          <section class="section attention">
+            <header class="section-head">
+              <div class="section-title"><h2>Требует внимания</h2><span>2 причины</span></div>
+              <span class="source">по риску</span>
+            </header>
+            <div class="attention-list">
+              <article class="attention-item danger">
+                <div class="item-top"><strong>GH_CR2</strong><span class="status danger"><svg class="icon"><use href="#i-alert"/></svg>Критично</span></div>
+                <p>CPL $9.56 выше правила $3.00 ×3.2. Расход без первого депозита.</p>
+                <button class="inline-action danger" type="button">Открыть кабинет<svg class="icon"><use href="#i-arrow"/></svg></button>
+              </article>
+              <article class="attention-item">
+                <div class="item-top"><strong>ES_CORE</strong><span class="status unknown"><svg class="icon"><use href="#i-unknown"/></svg>Нет данных</span></div>
+                <p>Последний полный snapshot был 4 мин назад. Автопауза запрещена.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="section actions">
+            <header class="section-head">
+              <div class="section-title"><h2>Действия</h2><span>1 выполняется</span></div>
+              <span class="source">command service</span>
+            </header>
+            <div class="action-list">
+              <article class="action-item">
+                <div class="item-top"><strong>Пауза · GH_CR2</strong><span class="status pending"><svg class="icon"><use href="#i-clock"/></svg>Выполняется</span></div>
+                <p>3 объявления · сверка фактического статуса после команды</p>
+                <div class="progress" aria-label="Выполняется"></div>
+                <div class="action-meta"><code>Задача #1842 · 14:32:05</code><span class="source">не подтверждено</span></div>
+              </article>
+              <article class="action-item">
+                <div class="item-top"><strong>Пауза · BR_01</strong><span class="status ok"><svg class="icon"><use href="#i-check"/></svg>Подтверждено</span></div>
+                <div class="action-meta"><code>Задача #1841 · 14:26:41</code><span class="source">Meta · 14:26:44</span></div>
+              </article>
+            </div>
+          </section>
+
+          <section class="section funnel">
+            <header class="section-head">
+              <div class="section-title"><h2>Воронка</h2><span>полные данные · USD</span></div>
+              <span class="source">tracker + Meta · as_of 14:32</span>
+            </header>
+            <div class="funnel-row">
+              <div class="funnel-step"><span>Clicks</span><strong>1 842</strong><small>CPC $0.03</small></div>
+              <div class="funnel-step"><span>Регистрации</span><strong>214</strong><small>CR 11.6% · $0.22</small></div>
+              <div class="funnel-step"><span>FTD</span><strong>18</strong><small>CR 8.4% · $2.66</small></div>
+              <div class="funnel-step"><span>Депозиты</span><strong>16</strong><small>CR 88.9% · $2.99</small></div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <div class="composition-tag" id="composition-tag">A · ШКАЛА ВЕДЁТ</div>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const variant = ["a", "b", "c"].includes(params.get("variant")) ? params.get("variant") : "a";
+      document.body.className = `variant-${variant}`;
+      const labels = { a: "A · ШКАЛА ВЕДЁТ", b: "B · ВНИМАНИЕ ВЕДЁТ", c: "C · СВЕРКА И ЖУРНАЛ" };
+      document.querySelector("#composition-tag").textContent = labels[variant];
+    </script>
+  </body>
+</html>
