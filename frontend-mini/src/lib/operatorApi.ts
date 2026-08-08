@@ -3,7 +3,6 @@ import type {
   OperatorActionsQuery,
   OperatorAdRow,
   OperatorAdsQuery,
-  OperatorSnapshot,
   OperatorSnapshotQuery,
 } from "@fb/shared/operator/contracts";
 import { actionProjectionFromResponse } from "@fb/shared/operator/viewModel";
@@ -11,6 +10,7 @@ import {
   apiProblemMessage as formatApiProblem,
   isApiProblem,
   reconcileOperatorReadModels,
+  reconcileOperatorSnapshots,
 } from "@fb/operator-api";
 
 import { refreshTmaSession, tmaApi, tmaAuthenticatedFetch } from "./auth";
@@ -61,76 +61,16 @@ export function useOperatorIncident(incidentId: string) {
 export async function fetchOperatorSnapshotForRealtime(
   queryClient: QueryClient,
 ) {
-  const snapshotKeys = [
-    ["get", "/api/operator/snapshot"] as const,
-    ["get", "/api/operator/cabinets/{cabinet_id}/snapshot"] as const,
-  ];
-  snapshotKeys.forEach((queryKey) =>
-    queryClient.removeQueries({ queryKey, type: "inactive" }),
-  );
-  await Promise.all(
-    snapshotKeys.map((queryKey) =>
-      queryClient.cancelQueries({ queryKey }, { silent: true }),
-    ),
-  );
-  await Promise.all(
-    snapshotKeys.map((queryKey) =>
-      queryClient.invalidateQueries({ queryKey, refetchType: "none" }),
-    ),
-  );
-  const activeQueries = snapshotKeys.flatMap((queryKey) =>
-    queryClient.getQueryCache().findAll({ queryKey, type: "active" }),
-  );
-  const canonicalSnapshotPromise = queryClient.fetchQuery(
-    operatorApi.queryOptions(
-      "get",
-      "/api/operator/snapshot",
-      { params: { query: {} } },
-      { retry: false, staleTime: 0 },
-    ),
-  );
-  await Promise.all([
-    canonicalSnapshotPromise,
-    ...snapshotKeys.map((queryKey) =>
-      queryClient.refetchQueries(
-        { queryKey, type: "active", stale: true },
-        { throwOnError: true },
+  return reconcileOperatorSnapshots(queryClient, () =>
+    queryClient.fetchQuery(
+      operatorApi.queryOptions(
+        "get",
+        "/api/operator/snapshot",
+        { params: { query: {} } },
+        { retry: false, staleTime: 0 },
       ),
     ),
-  ]);
-  const snapshots = [
-    await canonicalSnapshotPromise,
-    ...activeQueries.flatMap((query) => {
-      const value = queryClient.getQueryData<OperatorSnapshot>(query.queryKey);
-      return value ? [value] : [];
-    }),
-  ];
-  snapshotKeys.forEach((queryKey) =>
-    queryClient.removeQueries({ queryKey, type: "inactive" }),
   );
-  return oldestOperatorSnapshot(snapshots);
-}
-
-function oldestOperatorSnapshot(
-  snapshots: OperatorSnapshot[],
-): OperatorSnapshot {
-  return snapshots.reduce((oldest, candidate) => {
-    const oldestRevision = operatorRevisionValue(oldest.meta.revision);
-    const candidateRevision = operatorRevisionValue(candidate.meta.revision);
-    if (candidateRevision === null) return candidate;
-    if (oldestRevision === null) return oldest;
-    return candidateRevision < oldestRevision ? candidate : oldest;
-  });
-}
-
-function operatorRevisionValue(revision: string): bigint | null {
-  const match = /^r([0-9a-f]+)$/.exec(revision);
-  if (!match) return null;
-  try {
-    return BigInt(`0x${match[1]}`);
-  } catch {
-    return null;
-  }
 }
 
 /** TMA-authenticated action projection barrier for the realtime money gate. */

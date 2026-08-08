@@ -123,12 +123,46 @@ describe("TMA actions realtime projection", () => {
   });
 
   it("restores confirmed output only after realtime reconciliation", () => {
+    const response = confirmedResponse();
+    response.items[0]!.reason = "Traceback: secret-host token=unsafe";
+    useOperatorAction.mockReturnValue({
+      data: actionProjectionFromResponse(response, "1842"),
+      isPending: false,
+      isError: false,
+    });
+
     renderWithRealtime(<MiniActionDetail actionId="1842" />, "connected");
 
+    expect(
+      screen.getByText("#1842 · Отключение объявления"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("#1842 · pause")).not.toBeInTheDocument();
     expect(screen.getByText("Актуально")).toBeInTheDocument();
     expect(screen.getByText("Подтверждено")).toBeInTheDocument();
     expect(
+      screen.getByText("Результат команды подтверждён."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Traceback|secret-host|token=unsafe/),
+    ).not.toBeInTheDocument();
+    expect(
       screen.queryByText("Live-связь восстанавливается"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not expose diagnostic correlation UUIDs", () => {
+    const response = confirmedResponse();
+    response.items[0]!.correlation_id = "8b8d0c93-15dc-46b4-8fe0-8da6bec3667f";
+    useOperatorAction.mockReturnValue({
+      data: actionProjectionFromResponse(response, "1842"),
+      isPending: false,
+      isError: false,
+    });
+
+    renderWithRealtime(<MiniActionDetail actionId="1842" />, "connected");
+
+    expect(
+      screen.queryByText("8b8d0c93-15dc-46b4-8fe0-8da6bec3667f"),
     ).not.toBeInTheDocument();
   });
 

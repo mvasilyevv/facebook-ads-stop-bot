@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   detailRefetch: vi.fn(),
   listRefetch: vi.fn(),
   resume: vi.fn(),
+  summaryError: null as string | null,
+  summaryStatus: "creating",
   toastError: vi.fn(),
   toastInfo: vi.fn(),
   toastSuccess: vi.fn(),
@@ -45,10 +47,10 @@ vi.mock("@/lib/api/campaigns", () => ({
         {
           id: "11111111-2222-3333-4444-555555555555",
           preset_id: null,
-          status: "creating",
+          status: mocks.summaryStatus,
           offer_code: "GH_CR2",
           idempotency_key: "campaign-run",
-          error: null,
+          error: mocks.summaryError,
           created_at: "2026-07-29T10:00:00Z",
           updated_at: "2026-07-29T10:01:00Z",
         },
@@ -81,9 +83,9 @@ function detail(overrides: Record<string, unknown> = {}): Record<string, unknown
     preset_id: null,
     status: "creating",
     config: {},
-    progress: { stage: "creating" },
+    progress: { stage: "creating", completed: null, total: null },
     created_meta_ids: {},
-    error: null,
+    failure_class: null,
     idempotency_key: "campaign-run",
     created_at: "2026-07-29T10:00:00Z",
     updated_at: "2026-07-29T10:01:00Z",
@@ -97,8 +99,6 @@ function detail(overrides: Record<string, unknown> = {}): Record<string, unknown
       external_started: false,
       cancel_requested_at: null,
       deadline_at: "2026-07-29T10:03:00Z",
-      correlation_id: "correlation-id",
-      result: null,
     },
     controls: {
       abort: { available: true, reason: "abort_available" },
@@ -117,6 +117,8 @@ describe("CampaignRunsHistory command lifecycle", () => {
     vi.clearAllMocks();
     globalThis.localStorage.clear();
     mocks.detail = detail();
+    mocks.summaryError = null;
+    mocks.summaryStatus = "creating";
     mocks.detailRefetch.mockResolvedValue({ data: mocks.detail });
     mocks.listRefetch.mockResolvedValue({ data: undefined });
     mocks.abort.mockResolvedValue({
@@ -169,6 +171,18 @@ describe("CampaignRunsHistory command lifecycle", () => {
   it("renders only server-authorized controls and explains unavailable actions in human terms", async () => {
     mocks.detail = detail({
       status: "failed",
+      failure_class: "safe_retry",
+      task: {
+        id: 1842,
+        state: "failed",
+        queue_status: "failed",
+        outcome: "REJECTED",
+        attempt_count: 1,
+        max_attempts: 3,
+        external_started: false,
+        cancel_requested_at: null,
+        deadline_at: null,
+      },
       controls: {
         abort: { available: false, reason: "run_already_failed" },
         resume: {
@@ -183,6 +197,7 @@ describe("CampaignRunsHistory command lifecycle", () => {
     await openRun(user);
     expect(screen.queryByRole("button", { name: "Запросить остановку" })).toBeNull();
     expect(screen.getByText("Запуск уже завершился ошибкой.")).toBeVisible();
+    expect(screen.getByText("Доступен безопасный повтор")).toBeVisible();
     expect(screen.queryByText("run_already_failed")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Безопасно повторить" }));
@@ -226,6 +241,51 @@ describe("CampaignRunsHistory command lifecycle", () => {
       screen.getByText("Повтор заблокирован: задача могла начать изменения в Meta."),
     ).toBeVisible();
     expect(screen.queryByText("UNKNOWN")).toBeNull();
+    expect(screen.queryByText("Задача #1842")).toBeNull();
+  });
+
+  it("replaces backend diagnostics and arbitrary progress with safe lifecycle facts", async () => {
+    mocks.summaryStatus = "failed";
+    mocks.summaryError = "Traceback: database password leaked";
+    mocks.detail = detail({
+      status: "failed",
+      failure_class: "manual_review",
+      error: "partial_fail: ValueError('secret')",
+      progress: {
+        stage: "failed",
+        outcome: "UNKNOWN",
+        reason: "partial_or_ack_lost",
+        internal_trace: "8b8d0c93-15dc-46b4-8fe0-8da6bec3667f",
+      },
+      created_meta_ids: { campaigns: ["101"] },
+      task: {
+        id: 1842,
+        state: "unknown",
+        queue_status: "failed",
+        outcome: "UNKNOWN",
+        attempt_count: 1,
+        max_attempts: 3,
+        external_started: true,
+        cancel_requested_at: null,
+        deadline_at: null,
+        result: { exception: "database password" },
+      },
+    });
+    const user = userEvent.setup();
+    render(<CampaignRunsHistory />);
+
+    expect(
+      screen.getByText("Запуск завершился ошибкой. Откройте детали для безопасных действий."),
+    ).toBeVisible();
+    await openRun(user);
+
+    expect(
+      screen.queryByText(/Traceback|partial_fail|partial_or_ack_lost|internal_trace/),
+    ).toBeNull();
+    expect(screen.queryByText("database password")).toBeNull();
+    expect(screen.queryByText("8b8d0c93-15dc-46b4-8fe0-8da6bec3667f")).toBeNull();
+    expect(screen.queryByText("Задача #1842")).toBeNull();
+    expect(screen.getByRole("alert", { name: "Требуется ручная сверка" })).toBeVisible();
   });
 
   it("reuses one idempotency key when an ambiguous request is replayed", async () => {

@@ -9,12 +9,24 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
-import { formatSpend } from "@fb/shared/format/number";
-import { formatZonedDateTime } from "@fb/shared/format/time";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
+import { operatorActionStateReason } from "@fb/shared/operator/actionLabels";
 import { safeOperatorAttentionHref } from "@fb/shared/operator/attentionNavigation";
+import {
+  formatOperatorDateTime as formatDateTime,
+  formatOperatorFreshness as freshnessLabel,
+  formatOperatorScaleTick as formatScaleTick,
+  formatOperatorUsd as formatUsd,
+  isActiveOperatorAction as isActiveAction,
+  operatorAttentionCopy,
+  operatorCabinetTimezone,
+  operatorLedgerTimezone,
+  operatorReasonNoun as pluralReason,
+  operatorSourceLabel as sourceLabel,
+} from "@fb/shared/operator/ledgerSemantics";
 import {
   buildOperatorPortfolioScale,
   operatorPortfolioScalePosition,
@@ -113,12 +125,13 @@ function OperatorLedgerScreen({
   const overviewState = snapshotOverviewState(snapshot);
   const headline = snapshotHeadline(snapshot);
   const StatusIcon = SEVERITY_ICON[headline.severity];
+  const cabinetTimezone = cabinetId ? operatorCabinetTimezone(snapshot, cabinetId) : null;
+  const displayTimezone = operatorLedgerTimezone(snapshot, cabinetId);
+  const usdScopeConfirmed = confirmedOperatorCurrency(snapshot.meta) === "USD";
   const pageTitle = cabinetId ? (snapshot.meta.account.name ?? `Кабинет ${cabinetId}`) : "Сейчас";
-  const cabinetCurrencyLabel = confirmedOperatorCurrency(snapshot.meta)
-    ? "$"
-    : "USD не подтверждён";
+  const cabinetCurrencyLabel = usdScopeConfirmed ? "$" : "USD не подтверждён";
   const pageDescription = cabinetId
-    ? `${cabinetCurrencyLabel} · ${snapshot.meta.cabinet_timezone ?? "часовой пояс не подтверждён"} · контроль кабинета`
+    ? `${cabinetCurrencyLabel} · ${cabinetTimezone ?? "часовой пояс не подтверждён"} · контроль кабинета`
     : "Деньги, расхождения и выполняемые команды — одна проверяемая картина.";
 
   const scanNow = () => {
@@ -132,21 +145,21 @@ function OperatorLedgerScreen({
       <header className="operator-ledger__header">
         <div>
           {cabinetId ? (
-            <a className="operator-ledger__back" href="/">
+            <Link className="operator-ledger__back" to="/">
               <ArrowLeft size={14} aria-hidden="true" /> Портфель
-            </a>
+            </Link>
           ) : null}
           <h1 id="operator-ledger-title">{pageTitle}</h1>
           <p>{pageDescription}</p>
         </div>
         <div className="operator-ledger__header-tools">
-          <a className="ledger-proof-stamp" href="/system/sources">
+          <Link className="ledger-proof-stamp" to="/system/sources">
             <StatusIcon size={16} aria-hidden="true" />
             <span>{DATA_STATE_LABEL[overviewState]}</span>
             <span className="ledger-proof-stamp__time">
               {freshnessLabel(snapshot.portfolio.freshness_seconds)}
             </span>
-          </a>
+          </Link>
           <Button
             variant="secondary"
             size="lg"
@@ -171,17 +184,25 @@ function OperatorLedgerScreen({
           <p>{headline.detail}</p>
         </div>
         <span className="ledger-proof-stamp__time">
-          as_of {formatDateTime(snapshot.meta.generated_at, snapshot.meta.timezone)}
+          as_of {formatDateTime(snapshot.meta.generated_at, displayTimezone)}
         </span>
       </div>
 
       <div className="operator-ledger__grid">
-        <PortfolioLedger section={snapshot.portfolio} snapshot={snapshot} />
-        <AttentionLedger section={snapshot.attention} timezone={snapshot.meta.timezone} />
+        <PortfolioLedger
+          section={snapshot.portfolio}
+          snapshot={snapshot}
+          timezone={displayTimezone}
+        />
+        <AttentionLedger
+          section={snapshot.attention}
+          timezone={displayTimezone}
+          usdScopeConfirmed={usdScopeConfirmed}
+        />
         <FunnelLedger
           section={snapshot.funnel}
           currency={snapshot.meta.currency ?? null}
-          timezone={snapshot.meta.timezone}
+          timezone={displayTimezone}
         />
         <ActionJournal section={snapshot.actions} />
       </div>
@@ -192,9 +213,11 @@ function OperatorLedgerScreen({
 function PortfolioLedger({
   section,
   snapshot,
+  timezone,
 }: {
   section: OperatorSnapshot["portfolio"];
   snapshot: OperatorSnapshot;
+  timezone: string | null;
 }) {
   const groups = section.data?.currency_groups ?? [];
   return (
@@ -208,7 +231,7 @@ function PortfolioLedger({
         title="Портфель"
         detail={snapshot.meta.window === "today" ? "сегодня" : snapshot.meta.window}
         section={section}
-        timezone={snapshot.meta.timezone}
+        timezone={timezone}
       />
       <LedgerSectionIssue section={section} />
       {!section.data ? (
@@ -273,9 +296,9 @@ function CurrencyLedgerGroup({
       <div className="ledger-axis" aria-hidden="true">
         <span>Кабинет</span>
         <span className="ledger-axis__ticks">
-          {scale.ticks.map((tick) => (
-            <span key={tick}>{formatScaleTick(tick)}</span>
-          ))}
+          {scale.usdConfirmed
+            ? scale.ticks.map((tick) => <span key={tick}>{formatScaleTick(tick)}</span>)
+            : null}
         </span>
         <span style={{ textAlign: "right" }}>Состояние</span>
       </div>
@@ -310,7 +333,6 @@ function CabinetLedgerRow({
   usdConfirmed: boolean;
 }) {
   const Icon = SEVERITY_ICON[cabinet.severity];
-  const href = safeOperatorAttentionHref(cabinet.action.href);
   const showScale =
     usdConfirmed &&
     cabinet.state !== "stale" &&
@@ -331,13 +353,17 @@ function CabinetLedgerRow({
       role="listitem"
     >
       <div className="ledger-cabinet__identity">
-        <a href={href ?? "/"} aria-label={`${cabinet.action.label}: ${cabinet.name}`}>
+        <Link
+          to="/cabinets/$cabinetId"
+          params={{ cabinetId: cabinet.id }}
+          aria-label={`${cabinet.action.label}: ${cabinet.name}`}
+        >
           <strong>{cabinet.name}</strong>
           <span>
             {usdConfirmed ? "$" : "валюта не подтверждена"} ·{" "}
             {cabinet.timezone ?? "timezone не подтверждён"}
           </span>
-        </a>
+        </Link>
       </div>
       <div className="ledger-scale" data-state={cabinet.state}>
         <span className="ledger-scale__baseline" aria-hidden="true" />
@@ -394,9 +420,11 @@ function CabinetLedgerRow({
 function AttentionLedger({
   section,
   timezone,
+  usdScopeConfirmed,
 }: {
   section: OperatorSnapshot["attention"];
-  timezone: string;
+  timezone: string | null;
+  usdScopeConfirmed: boolean;
 }) {
   const items = section.data?.items.slice(0, 5) ?? [];
   return (
@@ -420,7 +448,12 @@ function AttentionLedger({
       ) : (
         <ol className="ledger-attention-list">
           {items.map((item) => (
-            <AttentionLedgerItem key={item.id} item={item} timezone={timezone} />
+            <AttentionLedgerItem
+              key={item.id}
+              item={item}
+              timezone={timezone}
+              usdScopeConfirmed={usdScopeConfirmed}
+            />
           ))}
         </ol>
       )}
@@ -431,25 +464,35 @@ function AttentionLedger({
 function AttentionLedgerItem({
   item,
   timezone,
+  usdScopeConfirmed,
 }: {
   item: OperatorAttentionItem;
-  timezone: string;
+  timezone: string | null;
+  usdScopeConfirmed: boolean;
 }) {
   const Icon = SEVERITY_ICON[item.severity];
   const href = item.action ? safeOperatorAttentionHref(item.action.href) : null;
+  const copy = operatorAttentionCopy(item, usdScopeConfirmed);
   return (
     <li className="ledger-attention-item" data-severity={item.severity}>
       <div className="ledger-attention-item__head">
-        <span className="ledger-attention-item__target">{item.target.label ?? item.title}</span>
+        <span className="ledger-attention-item__target">
+          {item.target.label ?? "Объект не указан"}
+        </span>
         <span className="ledger-attention-item__severity" data-severity={item.severity}>
           <Icon size={14} aria-hidden="true" />
           {SEVERITY_LABEL[item.severity]}
         </span>
       </div>
-      <h3>{item.title}</h3>
-      <p>{item.summary}</p>
-      {item.reason ? <p>Причина: {item.reason}</p> : null}
-      {item.action && href ? (
+      <h3>{copy.title}</h3>
+      {copy.summary ? <p>{copy.summary}</p> : null}
+      {copy.reason ? <p>Причина: {copy.reason}</p> : null}
+      {item.action && href === "/system/sources" ? (
+        <Link className="ledger-attention-item__action" to="/system/sources">
+          {item.action.label}
+          <ArrowRight size={14} aria-hidden="true" />
+        </Link>
+      ) : item.action && href ? (
         <a className="ledger-attention-item__action" href={href}>
           {item.action.label}
           <ArrowRight size={14} aria-hidden="true" />
@@ -503,18 +546,21 @@ export function ActionList({ items }: { items: OperatorActionItem[] }) {
                 {ACTION_STATE_LABEL[item.state]}
               </span>
             </div>
-            {item.reason ? <p>{item.reason}</p> : null}
+            <p>{operatorActionStateReason(item.state)}</p>
             {item.state === "running" || item.state === "queued" ? (
               <div className="ledger-action-item__progress" aria-hidden="true" />
             ) : null}
             <div className="ledger-action-item__meta">
               <span>Задача {item.public_id}</span>
-              <span>{item.correlation_id.slice(0, 8)}</span>
             </div>
-            <a className="ledger-action-item__link" href={`/actions/${item.id}`}>
+            <Link
+              className="ledger-action-item__link"
+              to="/actions/$actionId"
+              params={{ actionId: item.id }}
+            >
               Открыть действие
               <ArrowRight size={14} aria-hidden="true" />
-            </a>
+            </Link>
           </li>
         );
       })}
@@ -529,7 +575,7 @@ function FunnelLedger({
 }: {
   section: OperatorSnapshot["funnel"];
   currency: string | null;
-  timezone: string;
+  timezone: string | null;
 }) {
   return (
     <section
@@ -590,7 +636,7 @@ function LedgerSectionHeader<T>({
   title: string;
   detail: string;
   section: OperatorSection<T>;
-  timezone?: string;
+  timezone?: string | null;
 }) {
   return (
     <header className="ledger-section__header">
@@ -602,7 +648,7 @@ function LedgerSectionHeader<T>({
         <span>{section.sources.map(sourceLabel).join(" + ")}</span>
         <span>
           as_of{" "}
-          {section.as_of && timezone
+          {section.as_of
             ? formatDateTime(section.as_of, timezone)
             : freshnessLabel(section.freshness_seconds)}
         </span>
@@ -674,52 +720,4 @@ function OperatorDashboardSkeleton() {
       </div>
     </div>
   );
-}
-
-function isActiveAction(item: OperatorActionItem): boolean {
-  return item.state === "queued" || item.state === "running";
-}
-
-function formatUsd(value: string | number | null): string {
-  return formatSpend(value, "USD").replace(/^USD\s*/, "$");
-}
-
-function formatScaleTick(value: number): string {
-  return `$${Math.round(value)}`;
-}
-
-function formatDateTime(value: string, timezone: string): string {
-  const formatted = formatZonedDateTime(value, timezone);
-  return formatted === "—" ? "не подтверждено" : formatted;
-}
-
-function freshnessLabel(seconds: number | null): string {
-  if (seconds === null) return "не подтверждено";
-  if (seconds < 60) return `${seconds} сек`;
-  return `${Math.max(1, Math.round(seconds / 60))} мин`;
-}
-
-function pluralReason(value: number): string {
-  const remainder100 = value % 100;
-  const remainder10 = value % 10;
-  if (remainder100 >= 11 && remainder100 <= 14) return "причин";
-  if (remainder10 === 1) return "причина";
-  if (remainder10 >= 2 && remainder10 <= 4) return "причины";
-  return "причин";
-}
-
-function sourceLabel(source: string): string {
-  const labels: Record<string, string> = {
-    meta: "Meta",
-    offer_rules: "правила",
-    meta_account_snapshot: "кабинеты",
-    tracker: "Tracker",
-    adsetpro: "Tracker",
-    observer: "Observer",
-    incidents: "инциденты",
-    task_queue: "CommandService",
-    worker_telemetry: "воркеры",
-    postgresql: "PostgreSQL",
-  };
-  return labels[source] ?? source.replaceAll("_", " ");
 }

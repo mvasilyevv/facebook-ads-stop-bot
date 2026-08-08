@@ -370,6 +370,7 @@
 }
 
 .mini-attention-item button,
+.mini-attention-item a,
 .mini-action-journal a {
   display: inline-flex;
   min-height: 44px;

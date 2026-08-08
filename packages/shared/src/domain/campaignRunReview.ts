@@ -13,8 +13,46 @@ export interface CampaignMetaIdGroup {
 
 interface CampaignRunReviewInput {
   status: string;
-  progress?: Record<string, unknown> | null;
+  failure_class?: unknown;
+  task?: {
+    state?: unknown;
+    outcome?: unknown;
+  } | null;
+  controls?: {
+    resume?: {
+      available?: unknown;
+      reason?: unknown;
+    };
+  } | null;
   created_meta_ids?: Record<string, unknown> | null;
+  /** Legacy/untrusted fields are accepted only so callers can prove they are ignored. */
+  progress?: unknown;
+  error?: unknown;
+}
+
+export type CampaignRunFailureClass =
+  | "manual_review"
+  | "safe_retry"
+  | "invalid_config"
+  | "invalid_media"
+  | "unavailable";
+
+export type CampaignRunRecoveryAction =
+  | "review_meta"
+  | "resume"
+  | "fix_config"
+  | "restore_media"
+  | "refresh";
+
+export interface CampaignRunFailurePresentation {
+  category: CampaignRunFailureClass;
+  title: string;
+  reason: string;
+  action: {
+    kind: CampaignRunRecoveryAction;
+    label: string;
+    available: boolean;
+  };
 }
 
 export type CampaignRunTaskState =
@@ -199,20 +237,158 @@ export function campaignMetaIdGroups(
 export function campaignRunRequiresManualReview(
   run: CampaignRunReviewInput,
 ): boolean {
-  if (run.status !== "failed") return false;
+  return campaignRunFailurePresentation(run)?.category === "manual_review";
+}
 
-  const progress = run.progress ?? {};
-  if (String(progress.outcome ?? "").toUpperCase() === "UNKNOWN") return true;
+const FAILURE_CLASSES = new Set<CampaignRunFailureClass>([
+  "manual_review",
+  "safe_retry",
+  "invalid_config",
+  "invalid_media",
+  "unavailable",
+]);
 
-  const created = run.created_meta_ids ?? {};
-  const groups = campaignMetaIdGroups(created);
+const INVALID_MEDIA_REASONS = new Set([
+  "invalid_media_checkpoint",
+  "media_checkpoint_missing",
+  "media_checkpoint_empty",
+  "media_checkpoint_incomplete",
+]);
+
+function hasCreatedMetaEvidence(
+  value: Record<string, unknown> | null | undefined,
+): boolean {
+  const created = value ?? {};
   return (
-    groups.some((group) => group.ids.length > 0) ||
+    campaignMetaIdGroups(created).some((group) => group.ids.length > 0) ||
     CAMPAIGN_META_GROUPS.some(
       ({ key }) =>
         Object.hasOwn(created, key) && !isScalarIdCheckpoint(created[key]),
     )
   );
+}
+
+function campaignRunFailureClass(
+  run: CampaignRunReviewInput,
+): CampaignRunFailureClass | null {
+  if (run.status !== "failed") return null;
+
+  const resumeReason =
+    typeof run.controls?.resume?.reason === "string"
+      ? run.controls.resume.reason
+      : "";
+  const taskOutcome =
+    typeof run.task?.outcome === "string"
+      ? run.task.outcome.toUpperCase()
+      : null;
+  const taskState = typeof run.task?.state === "string" ? run.task.state : null;
+
+  if (
+    hasCreatedMetaEvidence(run.created_meta_ids) ||
+    taskOutcome === "UNKNOWN" ||
+    taskState === "unknown" ||
+    resumeReason === "external_boundary_crossed" ||
+    resumeReason === "created_meta_objects_present"
+  ) {
+    return "manual_review";
+  }
+  if (!run.task || resumeReason === "campaign_task_missing") {
+    return "unavailable";
+  }
+  if (taskOutcome !== "REJECTED") {
+    return "manual_review";
+  }
+  if (
+    run.failure_class === "invalid_config" ||
+    resumeReason === "invalid_config_checkpoint"
+  ) {
+    return "invalid_config";
+  }
+  if (
+    run.failure_class === "invalid_media" ||
+    INVALID_MEDIA_REASONS.has(resumeReason)
+  ) {
+    return "invalid_media";
+  }
+  if (run.controls?.resume?.available === true) return "safe_retry";
+  if (
+    typeof run.failure_class === "string" &&
+    FAILURE_CLASSES.has(run.failure_class as CampaignRunFailureClass)
+  ) {
+    return run.failure_class as CampaignRunFailureClass;
+  }
+  return "unavailable";
+}
+
+export function campaignRunFailurePresentation(
+  run: CampaignRunReviewInput,
+): CampaignRunFailurePresentation | null {
+  const category = campaignRunFailureClass(run);
+  if (!category) return null;
+
+  if (category === "manual_review") {
+    return {
+      category,
+      title: "Требуется ручная сверка",
+      reason:
+        "Meta могла принять часть изменений. Не повторяйте запуск до сверки созданных объектов.",
+      action: {
+        kind: "review_meta",
+        label: "Сверить объекты в Ads Manager",
+        available: true,
+      },
+    };
+  }
+  if (category === "safe_retry") {
+    return {
+      category,
+      title: "Доступен безопасный повтор",
+      reason:
+        "Сервер подтвердил отказ до первого изменения в Meta и сохранил точку повтора.",
+      action: {
+        kind: "resume",
+        label: "Безопасно повторить",
+        available: run.controls?.resume?.available === true,
+      },
+    };
+  }
+  if (category === "invalid_config") {
+    return {
+      category,
+      title: "Исправьте настройки запуска",
+      reason:
+        "Сохранённая конфигурация не прошла проверку. Проверьте кабинет, структуру и параметры кампании.",
+      action: {
+        kind: "fix_config",
+        label: "Вернуться к настройкам",
+        available: true,
+      },
+    };
+  }
+  if (category === "invalid_media") {
+    return {
+      category,
+      title: "Восстановите набор креативов",
+      reason:
+        "Сохранённые медиа отсутствуют или не прошли проверку. Загрузите креативы заново перед новым запуском.",
+      action: {
+        kind: "restore_media",
+        label: "Загрузить креативы заново",
+        available: true,
+      },
+    };
+  }
+  return {
+    category,
+    title: "Безопасный повтор недоступен",
+    reason:
+      "Состояние запуска или контрольная точка не подтверждены. Обновите данные и проверьте исходные настройки.",
+    action: {
+      kind: "refresh",
+      label: "Обновить данные запуска",
+      available: true,
+    },
+  };
 }
 
 export function adsManagerCampaignUrl(

@@ -12,13 +12,13 @@ import hashlib
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from core.meta_api.account_tz import validated_timezone_name
+from core.meta_api.account_tz import currency_evidence_is_fresh, validated_timezone_name
 from core.meta_api.identity import require_ad_account_id
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
@@ -86,7 +86,7 @@ class CommandIdentityError(ValueError):
 
 
 class CommandPreconditionError(RuntimeError):
-    """The operator acted on an ad row that changed before enqueue."""
+    """The command target does not satisfy the locked enqueue preconditions."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,6 +433,21 @@ class CommandService:
                 action_kind=action_kind,
                 delivery_status=delivery_for_guard,
             )
+            try:
+                target_account_id = require_ad_account_id(target.ad_account_id)
+            except ValueError as exc:
+                raise CommandIdentityError(
+                    f"ad {target_id} has no explicit ad_account_id; command rejected"
+                ) from exc
+            target_currency = validated_currency_code(getattr(target, "currency", None))
+            currency_observed_at = getattr(target, "currency_observed_at", None)
+            if target_currency != "USD" or not currency_evidence_is_fresh(
+                currency_observed_at,
+                now=datetime.now(UTC),
+            ):
+                raise CommandPreconditionError(
+                    f"ad {target_id} requires confirmed USD currency before enqueue"
+                )
             has_status_divergence = _is_reconciled_confirmed(
                 latest
             ) and not _delivery_matches_result(
@@ -449,28 +464,11 @@ class CommandService:
             )
             if transaction_authorizer is not None:
                 await transaction_authorizer(conn, divergence_incident_key)
-            try:
-                target_account_id = require_ad_account_id(target.ad_account_id)
-            except ValueError as exc:
-                raise CommandIdentityError(
-                    f"ad {target_id} has no explicit ad_account_id; command rejected"
-                ) from exc
-            target_currency = validated_currency_code(getattr(target, "currency", None))
             target_timezone = validated_timezone_name(getattr(target, "cabinet_timezone", None))
             context_issues: list[str] = []
-            if target_currency is None:
-                context_issues.append("currency_unknown")
             if target_timezone is None:
                 context_issues.append("cabinet_timezone_unknown")
-            context_observed_at = (
-                target.currency_observed_at.isoformat()
-                if target_currency is not None
-                and isinstance(
-                    getattr(target, "currency_observed_at", None),
-                    datetime,
-                )
-                else None
-            )
+            context_observed_at = currency_observed_at.isoformat()
 
             # A confirmed task with post-command evidence is no longer a
             # barrier.  If the evidence contradicts its requested state, bind a

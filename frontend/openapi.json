@@ -1581,7 +1581,7 @@
           "campaigns"
         ],
         "summary": "Get Run",
-        "description": "Детали запуска: конфиг-снимок, прогресс, созданные Meta-ID, ошибка.",
+        "description": "Return bounded progress, lifecycle evidence and safe control guidance.",
         "operationId": "get_run_api_tools_campaigns_runs__run_id__get",
         "parameters": [
           {
@@ -12371,10 +12371,6 @@
             "type": "boolean",
             "title": "Created"
           },
-          "correlation_id": {
-            "type": "string",
-            "title": "Correlation Id"
-          },
           "reason": {
             "type": "string",
             "title": "Reason"
@@ -12388,7 +12384,6 @@
           "state",
           "run_status",
           "created",
-          "correlation_id",
           "reason"
         ],
         "title": "RunCommandOut",
@@ -12465,25 +12460,30 @@
             "title": "Config"
           },
           "progress": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Progress"
+            "$ref": "#/components/schemas/RunProgressOut"
           },
           "created_meta_ids": {
             "additionalProperties": true,
             "type": "object",
             "title": "Created Meta Ids"
           },
-          "error": {
+          "failure_class": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "manual_review",
+                  "safe_retry",
+                  "invalid_config",
+                  "invalid_media",
+                  "unavailable"
+                ]
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Error"
+            "title": "Failure Class"
           },
           "idempotency_key": {
             "anyOf": [
@@ -12526,7 +12526,7 @@
           "config",
           "progress",
           "created_meta_ids",
-          "error",
+          "failure_class",
           "idempotency_key",
           "created_at",
           "updated_at",
@@ -12535,6 +12535,53 @@
         ],
         "title": "RunDetailOut",
         "description": "Details plus the latest task and safe control availability."
+      },
+      "RunProgressOut": {
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "uniquifying",
+              "uploading",
+              "creating",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Stage"
+          },
+          "completed": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stage"
+        ],
+        "title": "RunProgressOut",
+        "description": "Bounded operator progress; arbitrary worker checkpoint keys stay private."
       },
       "RunSummaryOut": {
         "properties": {
@@ -12588,17 +12635,6 @@
             ],
             "title": "Idempotency Key"
           },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
-          },
           "created_at": {
             "type": "string",
             "title": "Created At"
@@ -12615,7 +12651,6 @@
           "status",
           "offer_code",
           "idempotency_key",
-          "error",
           "created_at",
           "updated_at"
         ],
@@ -12731,22 +12766,6 @@
               }
             ],
             "title": "Completed At"
-          },
-          "correlation_id": {
-            "type": "string",
-            "title": "Correlation Id"
-          },
-          "result": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Result"
           }
         },
         "type": "object",
@@ -12763,9 +12782,7 @@
           "deadline_at",
           "created_at",
           "updated_at",
-          "completed_at",
-          "correlation_id",
-          "result"
+          "completed_at"
         ],
         "title": "RunTaskOut",
         "description": "Latest durable campaign task and its authoritative action lifecycle."

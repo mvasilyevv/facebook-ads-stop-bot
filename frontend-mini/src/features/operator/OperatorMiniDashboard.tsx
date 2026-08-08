@@ -20,10 +20,21 @@ import {
   snapshotOverviewState,
 } from "@fb/shared/operator/viewModel";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
-import { formatSpend } from "@fb/shared/format/number";
-import { formatZonedDateTime } from "@fb/shared/format/time";
 import type { components } from "@fb/shared/api/generated";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
+import { operatorActionStateReason } from "@fb/shared/operator/actionLabels";
+import {
+  formatOperatorDateTime as formatDateTime,
+  formatOperatorFreshness as freshnessLabel,
+  formatOperatorScaleTick as formatScaleTick,
+  formatOperatorUsd as formatUsd,
+  isActiveOperatorAction as isActiveAction,
+  operatorAttentionCopy,
+  operatorCabinetTimezone,
+  operatorLedgerTimezone,
+  operatorReasonNoun as pluralReason,
+  operatorSourceLabel as sourceLabel,
+} from "@fb/shared/operator/ledgerSemantics";
 import {
   buildOperatorPortfolioScale,
   operatorPortfolioScalePosition,
@@ -143,14 +154,17 @@ function OperatorMiniLedgerScreen({
   const headline = snapshotHeadline(snapshot);
   const overviewState = snapshotOverviewState(snapshot);
   const StatusIcon = SEVERITY_ICON[headline.severity];
+  const cabinetTimezone = cabinetId
+    ? operatorCabinetTimezone(snapshot, cabinetId)
+    : null;
+  const displayTimezone = operatorLedgerTimezone(snapshot, cabinetId);
+  const usdScopeConfirmed = confirmedOperatorCurrency(snapshot.meta) === "USD";
   const pageTitle = cabinetId
     ? (snapshot.meta.account.name ?? `Кабинет ${cabinetId}`)
     : "Сейчас";
-  const cabinetCurrencyLabel = confirmedOperatorCurrency(snapshot.meta)
-    ? "$"
-    : "USD не подтверждён";
+  const cabinetCurrencyLabel = usdScopeConfirmed ? "$" : "USD не подтверждён";
   const pageDetail = cabinetId
-    ? `${cabinetCurrencyLabel} · ${snapshot.meta.cabinet_timezone ?? "часовой пояс не подтверждён"}`
+    ? `${cabinetCurrencyLabel} · ${cabinetTimezone ?? "часовой пояс не подтверждён"}`
     : "Деньги, расхождения и команды";
 
   const runScan = async () => {
@@ -197,15 +211,11 @@ function OperatorMiniLedgerScreen({
           <p>{pageDetail}</p>
         </div>
         <div className="mini-ledger__tools">
-          <button
-            type="button"
-            className="mini-proof"
-            onClick={() => void navigate({ to: "/system/sources" })}
-          >
+          <Link className="mini-proof" to="/system/sources">
             <StatusIcon size={15} aria-hidden="true" />
             <span>{miniStateLabel(overviewState)}</span>
             <span>{freshnessLabel(snapshot.portfolio.freshness_seconds)}</span>
-          </button>
+          </Link>
           <button
             type="button"
             className="mini-scan"
@@ -250,31 +260,28 @@ function OperatorMiniLedgerScreen({
           <p>{headline.detail}</p>
         </div>
         <span>
-          as_of{" "}
-          {formatDateTime(snapshot.meta.generated_at, snapshot.meta.timezone)}
+          as_of {formatDateTime(snapshot.meta.generated_at, displayTimezone)}
         </span>
       </div>
 
       <div className="mini-ledger__flow">
         <MiniAttentionLedger
           section={snapshot.attention}
-          timezone={snapshot.meta.timezone}
+          timezone={displayTimezone}
+          usdScopeConfirmed={usdScopeConfirmed}
           onAction={openAttentionAction}
         />
         <MiniPortfolioLedger
           section={snapshot.portfolio}
-          timezone={snapshot.meta.timezone}
-          usdScopeConfirmed={
-            snapshot.meta.currency_state === "single" &&
-            snapshot.meta.currency === "USD"
-          }
+          timezone={displayTimezone}
+          usdScopeConfirmed={usdScopeConfirmed}
           onCabinet={openCabinet}
         />
         <MiniActionJournal section={snapshot.actions} />
         <MiniFunnelLedger
           section={snapshot.funnel}
           currency={snapshot.meta.currency ?? null}
-          timezone={snapshot.meta.timezone}
+          timezone={displayTimezone}
         />
       </div>
     </div>
@@ -284,10 +291,12 @@ function OperatorMiniLedgerScreen({
 function MiniAttentionLedger({
   section,
   timezone,
+  usdScopeConfirmed,
   onAction,
 }: {
   section: OperatorSnapshot["attention"];
-  timezone: string;
+  timezone: string | null;
+  usdScopeConfirmed: boolean;
   onAction: (href: string) => Promise<void>;
 }) {
   const items = section.data?.items.slice(0, 5) ?? [];
@@ -307,7 +316,12 @@ function MiniAttentionLedger({
       ) : (
         <ol className="mini-attention-list">
           {items.map((item) => (
-            <MiniAttentionItem key={item.id} item={item} onAction={onAction} />
+            <MiniAttentionItem
+              key={item.id}
+              item={item}
+              usdScopeConfirmed={usdScopeConfirmed}
+              onAction={onAction}
+            />
           ))}
         </ol>
       )}
@@ -317,25 +331,33 @@ function MiniAttentionLedger({
 
 function MiniAttentionItem({
   item,
+  usdScopeConfirmed,
   onAction,
 }: {
   item: OperatorAttentionItem;
+  usdScopeConfirmed: boolean;
   onAction: (href: string) => Promise<void>;
 }) {
   const Icon = SEVERITY_ICON[item.severity];
+  const copy = operatorAttentionCopy(item, usdScopeConfirmed);
   return (
     <li className="mini-attention-item" data-severity={item.severity}>
       <div className="mini-attention-item__head">
-        <span>{item.target.label ?? item.title}</span>
+        <span>{item.target.label ?? "Объект не указан"}</span>
         <span data-severity={item.severity}>
           <Icon size={14} aria-hidden="true" />
           {SEVERITY_LABEL[item.severity]}
         </span>
       </div>
-      <h3>{item.title}</h3>
-      <p>{item.summary}</p>
-      {item.reason ? <p>Причина: {item.reason}</p> : null}
-      {item.action ? (
+      <h3>{copy.title}</h3>
+      {copy.summary ? <p>{copy.summary}</p> : null}
+      {copy.reason ? <p>Причина: {copy.reason}</p> : null}
+      {item.action?.href === "/system/sources" ? (
+        <Link to="/system/sources">
+          {item.action.label}
+          <ArrowRight size={14} aria-hidden="true" />
+        </Link>
+      ) : item.action ? (
         <button type="button" onClick={() => void onAction(item.action!.href)}>
           {item.action.label}
           <ArrowRight size={14} aria-hidden="true" />
@@ -352,7 +374,7 @@ function MiniPortfolioLedger({
   onCabinet,
 }: {
   section: OperatorSnapshot["portfolio"];
-  timezone: string;
+  timezone: string | null;
   usdScopeConfirmed: boolean;
   onCabinet: (cabinetId: string) => Promise<void>;
 }) {
@@ -411,11 +433,13 @@ function MiniCurrencyGroup({
         <MiniLedgerTotal label="База" value={totals.base} />
         <MiniLedgerTotal label="Стоп" value={totals.stop} stop />
       </dl>
-      <div className="mini-ledger-axis" aria-hidden="true">
-        <span>$0</span>
-        <span>{formatScaleTick(scale.maximum / 2)}</span>
-        <span>{formatScaleTick(scale.maximum)}</span>
-      </div>
+      {scale.usdConfirmed ? (
+        <div className="mini-ledger-axis" aria-hidden="true">
+          <span>$0</span>
+          <span>{formatScaleTick(scale.maximum / 2)}</span>
+          <span>{formatScaleTick(scale.maximum)}</span>
+        </div>
+      ) : null}
       <div role="list" aria-label="Кабинеты">
         {group.cabinets.map((cabinet) => (
           <MiniCabinetRow
@@ -565,7 +589,7 @@ function MiniActionJournal({
                     {ACTION_STATE_LABEL[item.state]}
                   </span>
                 </div>
-                {item.reason ? <p>{item.reason}</p> : null}
+                <p>{operatorActionStateReason(item.state)}</p>
                 {isActiveAction(item) ? (
                   <div
                     className="mini-action-journal__progress"
@@ -574,7 +598,6 @@ function MiniActionJournal({
                 ) : null}
                 <div className="mini-action-journal__meta">
                   <span>Задача {item.public_id}</span>
-                  <span>{item.correlation_id.slice(0, 8)}</span>
                 </div>
                 <Link to="/actions/$actionId" params={{ actionId: item.id }}>
                   Открыть действие
@@ -596,7 +619,7 @@ function MiniFunnelLedger({
 }: {
   section: OperatorSnapshot["funnel"];
   currency: string | null;
-  timezone: string;
+  timezone: string | null;
 }) {
   return (
     <MiniLedgerSection
@@ -664,7 +687,7 @@ function MiniLedgerSection<T>({
   title: string;
   detail: string;
   section: OperatorSection<T>;
-  timezone?: string;
+  timezone?: string | null;
   children: ReactNode;
 }) {
   // The root shell owns the single reconnect notice. Section rows keep their
@@ -688,7 +711,7 @@ function MiniLedgerSection<T>({
           <span>{section.sources.map(sourceLabel).join(" + ")}</span>
           <span>
             as_of{" "}
-            {section.as_of && timezone
+            {section.as_of
               ? formatDateTime(section.as_of, timezone)
               : freshnessLabel(section.freshness_seconds)}
           </span>
@@ -733,29 +756,6 @@ function MiniLedgerEmpty({ text }: { text: string }) {
   return <div className="mini-ledger-section__empty">{text}</div>;
 }
 
-function isActiveAction(item: OperatorActionItem): boolean {
-  return item.state === "queued" || item.state === "running";
-}
-
-function formatUsd(value: string | number | null): string {
-  return formatSpend(value, "USD").replace(/^USD\s*/, "$");
-}
-
-function formatScaleTick(value: number): string {
-  return `$${Math.round(value)}`;
-}
-
-function formatDateTime(value: string, timezone: string): string {
-  const formatted = formatZonedDateTime(value, timezone);
-  return formatted === "—" ? "не подтверждено" : formatted;
-}
-
-function freshnessLabel(seconds: number | null): string {
-  if (seconds === null) return "не подтверждено";
-  if (seconds < 60) return `${seconds} сек`;
-  return `${Math.max(1, Math.round(seconds / 60))} мин`;
-}
-
 function miniStateLabel(state: OperatorSnapshot["portfolio"]["state"]): string {
   const labels = {
     ready: "Актуально",
@@ -765,31 +765,6 @@ function miniStateLabel(state: OperatorSnapshot["portfolio"]["state"]): string {
     unavailable: "Недоступны",
   } as const;
   return labels[state];
-}
-
-function pluralReason(value: number): string {
-  const remainder100 = value % 100;
-  const remainder10 = value % 10;
-  if (remainder100 >= 11 && remainder100 <= 14) return "причин";
-  if (remainder10 === 1) return "причина";
-  if (remainder10 >= 2 && remainder10 <= 4) return "причины";
-  return "причин";
-}
-
-function sourceLabel(source: string): string {
-  const labels: Record<string, string> = {
-    meta: "Meta",
-    offer_rules: "правила",
-    meta_account_snapshot: "кабинеты",
-    tracker: "Tracker",
-    adsetpro: "Tracker",
-    observer: "Observer",
-    incidents: "инциденты",
-    task_queue: "CommandService",
-    worker_telemetry: "воркеры",
-    postgresql: "PostgreSQL",
-  };
-  return labels[source] ?? source.replaceAll("_", " ");
 }
 
 export function MiniActions({ items }: { items: OperatorActionItem[] }) {

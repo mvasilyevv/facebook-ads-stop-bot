@@ -1006,7 +1006,10 @@ describe("CampaignRunsHistory", () => {
     render(wrap(<CampaignRunsHistory />));
     const errEls = screen.getAllByText("Ошибка");
     expect(errEls.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Meta API timeout")).toBeInTheDocument();
+    expect(
+      screen.getByText("Запуск завершился ошибкой. Откройте детали для безопасных действий."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Meta API timeout")).not.toBeInTheDocument();
   });
 
   it("доступны только допустимые действия запуска", () => {

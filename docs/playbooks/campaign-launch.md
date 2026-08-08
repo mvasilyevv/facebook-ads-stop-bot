@@ -80,7 +80,7 @@ Web UI показывает:
 
 - stage и процент progress;
 - количество подготовленных, загруженных и созданных объектов;
-- correlation ID;
+- публичный номер задачи, если он есть; correlation ID остаётся только в логах;
 - deadline и freshness последнего update;
 - конкретную ошибку без raw traceback/secret;
 - доступные `resume`, `abort` или manual reconciliation только если backend

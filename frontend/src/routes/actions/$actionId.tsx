@@ -2,6 +2,10 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeft, CheckCircle2, CircleHelp, Clock3, Loader2, XCircle } from "lucide-react";
 
 import { ACTION_STATE_LABEL, actionForRealtimeState } from "@fb/shared/operator/viewModel";
+import {
+  operatorActionKindLabel,
+  operatorActionStateReason,
+} from "@fb/shared/operator/actionLabels";
 import { formatZonedDateTime, timezoneEvidenceLabel } from "@fb/shared/format/time";
 import type { OperatorActionItem } from "@fb/shared/operator/contracts";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
@@ -60,7 +64,7 @@ function ActionDetailPage() {
       <header className="rounded-[var(--radius-3)] border border-[var(--color-hairline-strong)] bg-bg-1 p-5 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="font-display text-[12px] uppercase tracking-[.08em] text-bg-8">
-            {action.public_id} · {action.kind}
+            {action.public_id} · {operatorActionKindLabel(action.kind)}
           </span>
           <div className="flex flex-wrap items-center gap-2">
             {projection ? <DataStateBadge state={projection.state} /> : null}
@@ -115,16 +119,15 @@ function ActionDetailPage() {
             )}
           />
           <Detail label="Инициатор" value={action.requested_by ?? "не указан"} />
-          <Detail label="Correlation ID" value={action.correlation_id} mono />
         </dl>
-        {action.reason ? (
-          <div className="mt-4 rounded-[var(--radius-2)] bg-bg-2 p-4">
-            <div className="text-[12px] font-semibold uppercase tracking-[.06em] text-bg-8">
-              Результат / причина
-            </div>
-            <p className="m-0 mt-2 break-words text-[14px] leading-6 text-bg-10">{action.reason}</p>
+        <div className="mt-4 rounded-[var(--radius-2)] bg-bg-2 p-4">
+          <div className="text-[12px] font-semibold uppercase tracking-[.06em] text-bg-8">
+            Состояние команды
           </div>
-        ) : null}
+          <p className="m-0 mt-2 break-words text-[14px] leading-6 text-bg-10">
+            {operatorActionStateReason(action.state)}
+          </p>
+        </div>
       </section>
     </article>
   );
@@ -174,13 +177,11 @@ function LifecycleRail({ state }: { state: OperatorActionItem["state"] }) {
   );
 }
 
-function Detail({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 bg-bg-2 p-4">
       <dt className="text-[12px] font-semibold uppercase tracking-[.05em] text-bg-8">{label}</dt>
-      <dd className={`m-0 mt-2 break-all text-[14px] text-bg-11 ${mono ? "font-display" : ""}`}>
-        {value}
-      </dd>
+      <dd className="m-0 mt-2 break-all text-[14px] text-bg-11">{value}</dd>
     </div>
   );
 }

@@ -8,6 +8,7 @@ from unittest.mock import ANY, AsyncMock
 
 import pytest
 
+from core.commands import CommandPreconditionError
 from core.models.telegram.notification import TelegramActionToken, TelegramNavigationToken
 from core.telegram.action_tokens import (
     ActionTokenClaim,
@@ -462,6 +463,60 @@ async def test_opaque_callback_keeps_ambiguous_task_creation_retryable(monkeypat
         )
 
     complete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_opaque_callback_treats_command_precondition_as_deterministic_rejection(
+    monkeypatch,
+) -> None:
+    import core.telegram.handlers.alerts as alerts
+
+    token_id = uuid.uuid4()
+    monkeypatch.setattr(
+        alerts,
+        "claim_action_token",
+        AsyncMock(
+            return_value=ActionTokenClaim(
+                status="claimed",
+                token_id=token_id,
+                action_kind="pause_ad",
+                target_type="fb_ad",
+                target_id="123",
+                target_payload={},
+            )
+        ),
+    )
+    complete = AsyncMock(return_value=True)
+    monkeypatch.setattr(alerts, "complete_action_token", complete)
+
+    class _CommandService:
+        def __init__(self, engine) -> None:
+            self.engine = engine
+
+        async def enqueue_ad_action(self, **_kwargs):
+            raise CommandPreconditionError("confirmed USD currency is required")
+
+    monkeypatch.setattr(alerts, "CommandService", _CommandService)
+    client = AsyncMock()
+    engine = _HandlerEngine()
+
+    await handle_action_callback(
+        engine=engine,
+        client=client,
+        cq_id="callback-currency-rejected",
+        raw_token="A" * 22,
+        chat_id=7,
+        telegram_user_id=8,
+        username="owner",
+        bot_generation=1,
+    )
+
+    complete.assert_awaited_once_with(
+        engine,
+        token_id=token_id,
+        failure_code="command_rejected",
+    )
+    assert client.answer_callback_query.await_args.kwargs["text"] == ("Действие больше недоступно")
 
 
 @pytest.mark.asyncio

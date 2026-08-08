@@ -10,6 +10,7 @@ import {
   campaignMetaIdGroups,
   campaignRunCommandLifecycle,
   campaignRunControlReason,
+  campaignRunFailurePresentation,
   campaignRunRequiresManualReview,
   campaignRunTaskLifecycle,
   completeOperatorCommandIntent,
@@ -155,7 +156,7 @@ export const CampaignRunsHistory: FC = () => {
             data-testid="campaign-runs-desktop-header"
             className="hidden gap-3 border-b border-[var(--color-hairline)] bg-bg-2 px-4 py-2.5 md:grid md:grid-cols-[minmax(0,1fr)_120px_140px]"
           >
-            {["Оффер / ID", "Статус", "Создан"].map((h) => (
+            {["Оффер", "Статус", "Создан"].map((h) => (
               <div
                 key={h}
                 className="font-display text-[12px] tracking-[0.12em] uppercase text-bg-8"
@@ -206,7 +207,7 @@ const RunRow: FC<RunRowProps> = ({ run, onRefresh }) => {
         data-testid="campaign-run-card"
         className="flex flex-col gap-3 px-4 py-3 transition-colors hover:bg-bg-2 md:grid md:grid-cols-[minmax(0,1fr)_120px_140px] md:items-center"
       >
-        {/* Оффер + id */}
+        {/* Оффер */}
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <button
@@ -222,18 +223,11 @@ const RunRow: FC<RunRowProps> = ({ run, onRefresh }) => {
               {run.offer_code ?? "—"}
             </span>
           </div>
-          <div className="ml-[50px] truncate font-mono text-[12px] text-bg-8" title={run.id}>
-            {run.id}
-          </div>
-          {run.error && (
-            <div
-              className="ml-[50px] truncate text-[12px] text-danger"
-              title={run.error}
-              role="alert"
-            >
-              {run.error}
+          {run.status === "failed" ? (
+            <div className="ml-[50px] truncate text-[12px] text-danger" role="alert">
+              Запуск завершился ошибкой. Откройте детали для безопасных действий.
             </div>
-          )}
+          ) : null}
           <div className="ml-[50px] mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 md:hidden">
             <span
               className={cn(
@@ -241,7 +235,7 @@ const RunRow: FC<RunRowProps> = ({ run, onRefresh }) => {
                 statusColor(run.status as RunStatus),
               )}
             >
-              {RUN_STATUS_LABELS[run.status as RunStatus] ?? run.status}
+              {RUN_STATUS_LABELS[run.status as RunStatus] ?? "Статус не подтверждён"}
             </span>
             <span className="text-[12px] text-bg-8">{createdAt}</span>
           </div>
@@ -254,7 +248,7 @@ const RunRow: FC<RunRowProps> = ({ run, onRefresh }) => {
             statusColor(run.status as RunStatus),
           )}
         >
-          {RUN_STATUS_LABELS[run.status as RunStatus] ?? run.status}
+          {RUN_STATUS_LABELS[run.status as RunStatus] ?? "Статус не подтверждён"}
         </div>
 
         {/* Дата */}
@@ -301,6 +295,7 @@ function RunExpandedDetails({
     (group) => group.ids.length > 0,
   );
   const manualReviewRequired = campaignRunRequiresManualReview(run);
+  const failure = campaignRunFailurePresentation(run);
   const commandBusy = abortMutation.isPending || resumeMutation.isPending;
 
   async function executeCommand(action: CampaignRunControlAction) {
@@ -370,6 +365,7 @@ function RunExpandedDetails({
   return (
     <div className="mx-4 mb-3 mt-0 space-y-4 rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 p-4 text-[12px] text-bg-8">
       <CampaignRunTaskLifecycle task={run.task} />
+      {failure ? <CampaignRunFailureGuidance failure={failure} /> : null}
       <CampaignRunControls
         runId={runId}
         controls={run.controls}
@@ -393,20 +389,6 @@ function RunExpandedDetails({
           {commandError}
         </div>
       ) : null}
-      {/* Прогресс */}
-      {run.progress && Object.keys(run.progress).length > 0 && (
-        <div>
-          <span className="font-display text-[12px] uppercase tracking-wider text-bg-8 block mb-1">
-            Прогресс
-          </span>
-          {Object.entries(run.progress).map(([k, v]) => (
-            <div key={k} className="flex min-w-0 gap-2 font-mono text-[12px]">
-              <span className="shrink-0 text-bg-8">{k}:</span>
-              <span className="min-w-0 break-all text-bg-10">{String(v)}</span>
-            </div>
-          ))}
-        </div>
-      )}
       {manualReviewRequired ? (
         <CampaignRunManualReview createdMetaIds={run.created_meta_ids ?? {}} />
       ) : null}
@@ -431,6 +413,26 @@ function RunExpandedDetails({
 }
 
 type RunTask = NonNullable<import("@/lib/api/campaigns").RunDetailOut["task"]>;
+
+function CampaignRunFailureGuidance({
+  failure,
+}: {
+  failure: NonNullable<ReturnType<typeof campaignRunFailurePresentation>>;
+}) {
+  return (
+    <section
+      role="status"
+      data-failure-class={failure.category}
+      className="rounded-[var(--radius-2)] border border-warning/35 bg-warning-bg p-3"
+    >
+      <p className="font-medium text-[13px] text-bg-11">{failure.title}</p>
+      <p className="mt-1 text-[12px] leading-5 text-bg-9">{failure.reason}</p>
+      <p className="mt-2 text-[12px] font-medium text-bg-10">
+        Следующий шаг: {failure.action.label}.
+      </p>
+    </section>
+  );
+}
 
 const TASK_BADGE_VARIANT: Record<CampaignRunTaskState, BadgeVariant> = {
   queued: "warning",
@@ -483,7 +485,6 @@ function CampaignRunTaskLifecycle({ task }: { task: RunTask | null }) {
           />
           {lifecycle.label}
         </Badge>
-        <span className="font-mono text-[12px] text-bg-8">Задача #{task.id}</span>
         <span className="text-[12px] text-bg-8">
           Попыток: {task.attempt_count} из {task.max_attempts}
         </span>

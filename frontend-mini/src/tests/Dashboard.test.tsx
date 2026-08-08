@@ -53,6 +53,7 @@ vi.mock("@/lib/tg", () => ({
 }));
 
 import { Route } from "@/routes/index";
+import { OperatorMiniCabinetDashboard } from "@/features/operator/OperatorMiniDashboard";
 import { readResolvedNavigation } from "@/lib/transientNavigation";
 
 const Dashboard = (Route as unknown as { component: ComponentType }).component;
@@ -63,6 +64,13 @@ describe("TMA operator dashboard", () => {
     window.sessionStorage.clear();
     mockUseOperatorRealtimeStatus.mockReturnValue("connected");
     mockUseOperatorSnapshot.mockReturnValue({
+      data: makeOperatorSnapshot(),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    mockUseOperatorCabinetSnapshot.mockReturnValue({
       data: makeOperatorSnapshot(),
       isLoading: false,
       isError: false,
@@ -115,6 +123,158 @@ describe("TMA operator dashboard", () => {
     expect(screen.getByText("$47.80")).toBeInTheDocument();
     expect(screen.getByText("$39.00")).toBeInTheDocument();
     expect(screen.getByText("$45.00")).toBeInTheDocument();
+    expect(screen.getAllByText("$0").length).toBeGreaterThan(0);
+    expect(screen.getByText("$20")).toBeInTheDocument();
+  });
+
+  it("does not expose action correlation UUIDs", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.actions.data!.items[0]!.correlation_id =
+      "8b8d0c93-15dc-46b4-8fe0-8da6bec3667f";
+    snapshot.actions.data!.items[0]!.reason =
+      "Traceback: secret-host token=unsafe";
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<Dashboard />);
+
+    expect(screen.getByText("Задача #1842")).toBeInTheDocument();
+    expect(
+      screen.getByText("Команда выполняется; итог ещё не подтверждён."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("8b8d0c93")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Traceback|secret-host|token=unsafe/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("uses the selected cabinet timezone on the cabinet route", () => {
+    render(<OperatorMiniCabinetDashboard cabinetId="123" />);
+
+    expect(screen.getAllByText(/\$ · Africa\/Accra/).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/18\.07\.2026, 10:1[45]/).length,
+    ).toBeGreaterThan(0);
+    expect(mockUseOperatorCabinetSnapshot).toHaveBeenCalledWith("123", {
+      window: "today",
+    });
+  });
+
+  it("keeps cabinet timestamps unconfirmed when timezone evidence is missing", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.portfolio.data!.currency_groups[0]!.cabinets[0]!.timezone = null;
+    snapshot.meta.cabinet_timezone = null;
+    snapshot.meta.cabinet_timezone_known = false;
+    snapshot.meta.cabinet_timezone_state = "unknown";
+    mockUseOperatorCabinetSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<OperatorMiniCabinetDashboard cabinetId="123" />);
+
+    expect(
+      screen.getByRole("heading", { level: 1 }).parentElement,
+    ).toHaveTextContent("часовой пояс не подтверждён");
+    expect(
+      screen.getAllByText(/as_of\s+не подтверждено/).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByText(/18\.07\.2026, 12:1[45]/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("uses typed source links and hides source/action attention internals", () => {
+    const snapshot = makeOperatorSnapshot();
+    const incident = snapshot.attention.data!.items[0]!;
+    snapshot.attention.data!.items = [
+      incident,
+      {
+        ...incident,
+        id: "source:unsafe",
+        kind: "source",
+        title: "Источник требует проверки",
+        summary: "raw_source.connection_refused",
+        reason: "cabinet_actor_error",
+        action: { label: "Диагностика", href: "/system/sources" },
+      },
+      {
+        ...incident,
+        id: "task:unsafe",
+        kind: "action",
+        title: "Команда требует сверки",
+        summary: "#42 · failed",
+        reason: "raw worker exception",
+        action: { label: "Открыть", href: "/actions/42" },
+      },
+    ];
+    snapshot.attention.sources.push("private_backend_identifier");
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<Dashboard />);
+
+    expect(screen.getByText("CPL $9.56 при базе $3.00.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Причина: Расход растёт без FTD"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("raw_source.connection_refused"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("cabinet_actor_error")).not.toBeInTheDocument();
+    expect(screen.queryByText("#42 · failed")).not.toBeInTheDocument();
+    expect(screen.queryByText("raw worker exception")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("private backend identifier"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/Источник данных/)).toBeInTheDocument();
+    expect(
+      screen
+        .getAllByRole("link")
+        .some((link) => link.getAttribute("href") === "/system/sources"),
+    ).toBe(true);
+  });
+
+  it("hides incident money copy until the snapshot confirms USD", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.meta = {
+      ...snapshot.meta,
+      currency: null,
+      currency_state: "mixed",
+    };
+    snapshot.attention.data!.items[0]!.target.label = null;
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<Dashboard />);
+
+    expect(screen.getByText("Сигнал требует проверки")).toBeInTheDocument();
+    expect(screen.getByText("Объект не указан")).toBeInTheDocument();
+    expect(screen.queryByText("CPL выше базы")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("CPL $9.56 при базе $3.00."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Причина: Расход растёт без FTD"),
+    ).not.toBeInTheDocument();
   });
 
   it("opens a cabinet through the typed TMA route", async () => {
@@ -206,6 +366,8 @@ describe("TMA operator dashboard", () => {
       screen.getByText("Валюта не подтверждена; суммы скрыты"),
     ).toBeInTheDocument();
     expect(screen.queryByText("$47.80")).not.toBeInTheDocument();
+    expect(screen.queryByText("$0")).not.toBeInTheDocument();
+    expect(screen.queryByText("$1")).not.toBeInTheDocument();
     expect(screen.queryByText("Активных рисков нет")).not.toBeInTheDocument();
   });
 

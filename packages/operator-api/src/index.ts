@@ -40,7 +40,9 @@ export type {
 export {
   OPERATOR_REALTIME_READ_MODEL_PATHS,
   reconcileOperatorReadModels,
+  reconcileOperatorSnapshots,
 } from "./reconciliation";
+export type { OperatorCanonicalSnapshotFetcher } from "./reconciliation";
 export {
   OperatorRealtimeStatusProvider,
   useOperatorRealtimeStatus,

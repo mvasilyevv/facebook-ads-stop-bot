@@ -57,6 +57,7 @@ describe("operator action projection reconciliation", () => {
 
   afterEach(() => {
     for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
+    vi.unstubAllGlobals();
   });
 
   it("drops inactive filtered caches and waits for the active filtered ads read", async () => {
@@ -243,6 +244,13 @@ describe("operator action projection reconciliation", () => {
       defaultOptions: { queries: { retry: false } },
     });
     queryClient.setQueryData(INACTIVE_SEVEN_DAY_SNAPSHOT_KEY, snapshot("r1"));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(snapshot("r3")), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
     const activeSnapshotRead = vi.fn().mockResolvedValue(snapshot("r2"));
     const observer = new QueryObserver(queryClient, {
       queryKey: ACTIVE_TODAY_SNAPSHOT_KEY,
@@ -254,7 +262,9 @@ describe("operator action projection reconciliation", () => {
 
     const reconciled = await fetchOperatorSnapshotForRealtime(queryClient);
 
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(activeSnapshotRead).toHaveBeenCalledOnce();
+    // The lagging active variant keeps the barrier on its older revision.
     expect(reconciled.meta.revision).toBe("r2");
     expect(queryClient.getQueryData(INACTIVE_SEVEN_DAY_SNAPSHOT_KEY)).toBeUndefined();
     expect(

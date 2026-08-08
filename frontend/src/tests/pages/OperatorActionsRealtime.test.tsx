@@ -97,11 +97,39 @@ describe("web actions realtime projection", () => {
   });
 
   it("keeps server-confirmed lifecycle visible after reconciliation", () => {
+    const response = confirmedResponse();
+    response.items[0]!.reason = "Traceback: secret-host token=unsafe";
+    useOperatorAction.mockReturnValue({
+      data: actionProjectionFromResponse(response, "1842"),
+      isPending: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
     renderWithRealtime(<ActionDetailPage />, "connected");
 
+    expect(screen.getByText("#1842 · Отключение объявления")).toBeInTheDocument();
+    expect(screen.queryByText("#1842 · pause")).not.toBeInTheDocument();
     expect(screen.getAllByText("Подтверждено").length).toBeGreaterThan(0);
+    expect(screen.getByText("Результат команды подтверждён.")).toBeInTheDocument();
+    expect(screen.queryByText(/Traceback|secret-host|token=unsafe/)).not.toBeInTheDocument();
     expect(screen.getByText("Данные актуальны")).toBeInTheDocument();
     expect(screen.queryByText("Live-связь восстанавливается")).not.toBeInTheDocument();
+  });
+
+  it("does not expose diagnostic correlation UUIDs", () => {
+    const response = confirmedResponse();
+    response.items[0]!.correlation_id = "8b8d0c93-15dc-46b4-8fe0-8da6bec3667f";
+    useOperatorAction.mockReturnValue({
+      data: actionProjectionFromResponse(response, "1842"),
+      isPending: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    renderWithRealtime(<ActionDetailPage />, "connected");
+
+    expect(screen.queryByText("8b8d0c93-15dc-46b4-8fe0-8da6bec3667f")).not.toBeInTheDocument();
   });
 
   it("formats lifecycle timestamps with immutable action timezone evidence", () => {

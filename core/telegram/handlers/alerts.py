@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from core.commands.service import (
     CommandConflictError,
     CommandNotFoundError,
+    CommandPreconditionError,
     CommandService,
 )
 from core.incidents.service import (
@@ -350,7 +351,12 @@ async def handle_action_callback(
     except TelegramActionAuthorityLost:
         await _answer(client, cq_id, "Бот отключён или действие относится к старой версии")
         return
-    except (CommandNotFoundError, CommandConflictError, ValueError) as exc:
+    except (
+        CommandNotFoundError,
+        CommandConflictError,
+        CommandPreconditionError,
+        ValueError,
+    ) as exc:
         logger.warning(
             "opaque Telegram action rejected (kind=%s, reason=%s)",
             mutation_kind,

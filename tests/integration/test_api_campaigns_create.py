@@ -14,6 +14,7 @@ ASGITransport (без живого HTTP-сервера). Каждый тест �
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 
 import pytest
@@ -441,6 +442,7 @@ async def test_list_runs(pg_engine, fake_redis_client, clean_campaigns):
     assert len(rows) == 1
     assert rows[0]["offer_code"] == "GH_CR"
     assert rows[0]["status"] == "queued"
+    assert "error" not in rows[0]
 
 
 # get_run отдаёт детали со снимком config; 404 для несуществующего.
@@ -455,11 +457,132 @@ async def test_get_run_detail(pg_engine, fake_redis_client, clean_campaigns):
         assert resp.status_code == 200
         detail = resp.json()
         assert detail["config"]["offer_code"] == "GH_CR"
-        assert detail["progress"] == {}
+        assert detail["progress"] == {
+            "stage": "queued",
+            "completed": None,
+            "total": None,
+        }
         assert detail["created_meta_ids"] == {}
+        assert detail["failure_class"] is None
+        assert "error" not in detail
+        assert "result" not in detail["task"]
+        assert "correlation_id" not in detail["task"]
 
         missing = await ac.get(f"/api/tools/campaigns/runs/{uuid.uuid4()}")
         assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_run_detail_projects_real_worker_progress_counts(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        launched = (
+            await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
+        ).json()
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    UPDATE campaign_run
+                    SET status = 'creating',
+                        progress = CAST(:progress AS jsonb)
+                    WHERE id = :run_id
+                    """
+                ),
+                {
+                    "run_id": uuid.UUID(launched["run_id"]),
+                    "progress": json.dumps(
+                        {
+                            "stage": "creating",
+                            "campaigns_done": 1,
+                            "adsets_done": 2,
+                            "uploads_done": 4,
+                            "creatives_done": 3,
+                            "ads_done": 2,
+                            "total_ads": 6,
+                        }
+                    ),
+                },
+            )
+
+        detail = (await ac.get(f"/api/tools/campaigns/runs/{launched['run_id']}")).json()
+
+    assert detail["progress"] == {"stage": "creating", "completed": 2, "total": 6}
+
+
+@pytest.mark.asyncio
+async def test_run_detail_projects_raw_failure_to_bounded_operator_evidence(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    secret = "Traceback token=top-secret 8b8d0c93-15dc-46b4-8fe0-8da6bec3667f"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        launched = (
+            await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
+        ).json()
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    UPDATE campaign_run
+                    SET status = 'failed',
+                        error = :secret,
+                        progress = CAST(:progress AS jsonb)
+                    WHERE id = :run_id
+                    """
+                ),
+                {
+                    "run_id": uuid.UUID(launched["run_id"]),
+                    "secret": secret,
+                    "progress": json.dumps(
+                        {
+                            "stage": "failed",
+                            "ads_done": 2,
+                            "total_ads": 3,
+                            "reason": "partial_or_ack_lost",
+                            "internal_trace": secret,
+                        }
+                    ),
+                },
+            )
+            await conn.execute(
+                text(
+                    """
+                    UPDATE task_queue
+                    SET status = 'failed',
+                        result = CAST(:result AS jsonb),
+                        last_error = :secret
+                    WHERE id = :task_id
+                    """
+                ),
+                {
+                    "task_id": launched["task_id"],
+                    "secret": secret,
+                    "result": json.dumps(
+                        {
+                            "outcome": "UNKNOWN",
+                            "reconcile_required": True,
+                            "reason": "partial_or_ack_lost",
+                            "exception": secret,
+                        }
+                    ),
+                },
+            )
+
+        detail = (await ac.get(f"/api/tools/campaigns/runs/{launched['run_id']}")).json()
+
+    assert detail["failure_class"] == "manual_review"
+    assert detail["progress"] == {"stage": "failed", "completed": 2, "total": 3}
+    serialized = json.dumps(detail)
+    assert secret not in serialized
+    assert "partial_or_ack_lost" not in serialized
+    assert "exception" not in serialized
 
 
 @pytest.mark.asyncio

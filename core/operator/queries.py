@@ -49,6 +49,21 @@ def task_action_state(status: str, result: Any) -> str:
     return "failed"
 
 
+def task_action_reason(state: str) -> str:
+    """Return deterministic operator copy without exposing task diagnostics."""
+    return {
+        "queued": "Команда принята и ожидает выполнения.",
+        "running": "Команда выполняется; итог ещё не подтверждён.",
+        "confirmed": "Результат команды подтверждён.",
+        "failed": "Команда завершилась ошибкой. Проверьте состояние перед повтором.",
+        "cancelled": "Команда отменена.",
+        "unknown": "Результат команды требует сверки. Не повторяйте действие вслепую.",
+    }.get(
+        state,
+        "Состояние команды требует сверки. Не повторяйте действие вслепую.",
+    )
+
+
 def task_action_kind(task_type: str, payload: Any) -> str:
     body = _json(payload)
     mutation = str(body.get("mutation_kind") or "")
@@ -80,22 +95,19 @@ def _task_item(row: Any) -> dict[str, Any]:
     payload = _json(row.payload)
     result = _json(row.result)
     kind = task_action_kind(str(row.task_type), payload)
+    state = task_action_state(str(row.status), result)
     target = row.target_label or payload.get("target_id") or payload.get("ad_id")
     return {
         "id": str(row.id),
         "public_id": f"#{row.id}",
         "kind": kind,
-        "state": task_action_state(str(row.status), result),
+        "state": state,
         "title": _task_title(kind),
         "target_label": str(target) if target else None,
         "requested_at": row.created_at,
         "updated_at": row.updated_at,
         "requested_by": str(row.requested_by) if row.requested_by else None,
-        "reason": (
-            str(result.get("reason"))
-            if result.get("reason")
-            else (str(row.last_error) if row.last_error else None)
-        ),
+        "reason": task_action_reason(state),
         "correlation_id": str(row.correlation_id),
         "account_id": (
             str(payload.get("account_id") or payload.get("ad_account_id"))
@@ -369,24 +381,42 @@ async def fetch_operator_incident(
     return dict(row._mapping) if row is not None else None
 
 
-async def fetch_operator_scan_state(engine: AsyncEngine) -> dict[str, Any]:
-    """Read DB-authoritative scan freshness and actor stages."""
+async def fetch_operator_scan_state(
+    engine: AsyncEngine,
+    *,
+    account_id: str | None = None,
+) -> dict[str, Any]:
+    """Read DB-authoritative scan freshness and actor stages for one scope."""
+    params = {"account_id": account_id}
     async with engine.connect() as conn:
         row = (
             await conn.execute(
                 text(
                     """
+                    WITH latest_scan AS (
+                      SELECT started_at, outcome
+                      FROM scan_runs
+                      WHERE started_at >= NOW() - INTERVAL '7 days'
+                        AND (
+                          CAST(:account_id AS TEXT) IS NULL
+                          OR ad_account_id = CAST(:account_id AS TEXT)
+                        )
+                      ORDER BY started_at DESC, id DESC
+                      LIMIT 1
+                    )
                     SELECT
-                      (SELECT started_at FROM scan_runs
-                       WHERE started_at >= NOW() - INTERVAL '7 days'
-                       ORDER BY started_at DESC LIMIT 1) AS last_scan_at,
-                      (SELECT outcome FROM scan_runs
-                       WHERE started_at >= NOW() - INTERVAL '7 days'
-                       ORDER BY started_at DESC LIMIT 1) AS last_scan_outcome,
-                      (SELECT MIN(next_scan_at) FROM cabinet_runtime) AS next_scan_at,
+                      (SELECT started_at FROM latest_scan) AS last_scan_at,
+                      (SELECT outcome FROM latest_scan) AS last_scan_outcome,
+                      (
+                        SELECT MIN(next_scan_at)
+                        FROM cabinet_runtime
+                        WHERE CAST(:account_id AS TEXT) IS NULL
+                           OR ad_account_id = CAST(:account_id AS TEXT)
+                      ) AS next_scan_at,
                       (SELECT BOOL_OR(is_scanning_enabled) FROM observer_config) AS enabled
                     """
-                )
+                ),
+                params,
             )
         ).one()
         actors = (
@@ -398,9 +428,12 @@ async def fetch_operator_scan_state(engine: AsyncEngine) -> dict[str, Any]:
                            lease_expires_at, stage, last_progress_at,
                            last_snapshot_at, last_error_code AS error
                     FROM cabinet_runtime
+                    WHERE CAST(:account_id AS TEXT) IS NULL
+                       OR ad_account_id = CAST(:account_id AS TEXT)
                     ORDER BY ad_account_id
                     """
-                    )
+                    ),
+                    params,
                 )
             )
             .mappings()
@@ -763,5 +796,6 @@ __all__ = [
     "fetch_operator_revision",
     "fetch_operator_scan_state",
     "task_action_kind",
+    "task_action_reason",
     "task_action_state",
 ]

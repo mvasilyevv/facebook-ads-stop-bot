@@ -45,7 +45,8 @@ const SUCCEEDED_RUN = {
   config: {},
   progress: {
     stage: "succeeded",
-    ads: "ad-1,ad-2,ad-3,ad-4,ad-5,ad-6",
+    completed: 6,
+    total: 6,
   },
   created_meta_ids: {
     campaigns: "campaign-1",
@@ -53,7 +54,7 @@ const SUCCEEDED_RUN = {
     ads: "ad-1,ad-2,ad-3,ad-4,ad-5,ad-6",
     creatives: "creative-1,creative-2,creative-3,creative-4,creative-5,creative-6",
   },
-  error: null,
+  failure_class: null,
   idempotency_key: "campaign:test",
   created_at: "2026-07-13T20:00:00Z",
   updated_at: "2026-07-13T20:01:00Z",
@@ -89,6 +90,7 @@ describe("WizardStep7Launch — успешный залив", () => {
     const details = container.querySelector("details");
     expect(details).not.toHaveAttribute("open");
     expect(screen.getByText("Технические детали")).toBeInTheDocument();
+    expect(screen.queryByText("1a6bb9a5-d83b-4652-b791-428a588a1be0")).not.toBeInTheDocument();
 
     const adsManagerLink = screen.getByRole("link", { name: "Открыть в Ads Manager" });
     expect(adsManagerLink).toHaveAttribute("href", expect.stringContaining("campaign-1"));
@@ -101,10 +103,12 @@ describe("WizardStep7Launch — успешный залив", () => {
     mocks.runDetail = {
       ...SUCCEEDED_RUN,
       status: "failed",
+      failure_class: "manual_review",
       progress: {
         stage: "failed",
         outcome: "UNKNOWN",
         reason: "partial_or_ack_lost",
+        internal_trace: "8b8d0c93-15dc-46b4-8fe0-8da6bec3667f",
       },
       created_meta_ids: {
         campaigns: ["101"],
@@ -113,6 +117,13 @@ describe("WizardStep7Launch — успешный залив", () => {
         creatives: [],
       },
       error: "partial_fail: ответ Meta неоднозначен",
+      task: {
+        state: "unknown",
+        outcome: "UNKNOWN",
+      },
+      controls: {
+        resume: { available: false, reason: "external_boundary_crossed" },
+      },
     };
 
     render(
@@ -134,5 +145,8 @@ describe("WizardStep7Launch — успешный залив", () => {
       "href",
       "https://www.facebook.com/adsmanager/manage/campaigns?ids=101",
     );
+    expect(screen.getByText(/Meta могла принять часть изменений/)).toBeInTheDocument();
+    expect(screen.queryByText(/partial_fail|partial_or_ack_lost|internal_trace/)).toBeNull();
+    expect(screen.queryByText("8b8d0c93-15dc-46b4-8fe0-8da6bec3667f")).toBeNull();
   });
 });

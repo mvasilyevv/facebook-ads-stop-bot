@@ -27,7 +27,7 @@ from apps.api.routers.v1.schemas.operator import (
     OperatorEconomyTotals,
     OperatorSection,
 )
-from core.operator.queries import task_action_kind, task_action_state
+from core.operator.queries import _task_item, task_action_kind, task_action_state
 
 
 def test_campaign_run_notify_scope_preserves_only_a_valid_opaque_id() -> None:
@@ -76,6 +76,59 @@ def test_action_state_contract(status, result, expected) -> None:
 )
 def test_action_kind_contract(task_type, payload, expected) -> None:
     assert task_action_kind(task_type, payload) == expected
+
+
+@pytest.mark.parametrize(
+    ("status", "result", "expected_reason"),
+    [
+        ("pending", {"reason": "raw pending detail"}, "Команда принята и ожидает выполнения."),
+        (
+            "running",
+            {"reason": "raw running detail"},
+            "Команда выполняется; итог ещё не подтверждён.",
+        ),
+        (
+            "succeeded",
+            {"outcome": "CONFIRMED", "reason": "raw success detail"},
+            "Результат команды подтверждён.",
+        ),
+        (
+            "failed",
+            {"outcome": "REJECTED", "reason": "Traceback: secret-host"},
+            "Команда завершилась ошибкой. Проверьте состояние перед повтором.",
+        ),
+        ("cancelled", {}, "Команда отменена."),
+        (
+            "succeeded",
+            {"outcome": "UNKNOWN", "reason": "internal_reconcile_code"},
+            "Результат команды требует сверки. Не повторяйте действие вслепую.",
+        ),
+    ],
+)
+def test_task_item_derives_safe_reason_from_public_lifecycle(
+    status, result, expected_reason
+) -> None:
+    raw_last_error = "password=unsafe database.internal"
+    item = _task_item(
+        SimpleNamespace(
+            id=42,
+            task_type="meta_api_mutation",
+            status=status,
+            payload={"mutation_kind": "pause_ad", "target_id": "ad-1"},
+            result=result,
+            target_label="Ad",
+            created_at=datetime(2026, 8, 8, 10, tzinfo=UTC),
+            updated_at=datetime(2026, 8, 8, 10, 1, tzinfo=UTC),
+            requested_by="operator:web",
+            last_error=raw_last_error,
+            correlation_id="00000000-0000-0000-0000-000000000042",
+        )
+    )
+
+    assert item["reason"] == expected_reason
+    assert raw_last_error not in item["reason"]
+    if raw_result_reason := result.get("reason"):
+        assert str(raw_result_reason) not in item["reason"]
 
 
 def test_operator_section_fields_are_required_even_when_nullable() -> None:
@@ -601,7 +654,48 @@ async def test_system_section_isolates_cabinet_runtime_evidence(monkeypatch) -> 
     assert section.data is not None
     assert [worker.id for worker in section.data.workers] == ["observer:111"]
     assert all("222" not in issue.title for issue in section.issues)
+    assert scan_state.await_args.kwargs == {"account_id": "111"}
     configured_accounts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_system_section_never_exposes_raw_cabinet_actor_error(monkeypatch) -> None:
+    now = datetime(2026, 8, 8, 12, tzinfo=UTC)
+    raw_error = "secret-host.internal:5432 connection refused token=unsafe"
+    monkeypatch.setattr(
+        operator_router,
+        "fetch_operator_scan_state",
+        AsyncMock(
+            return_value={
+                "enabled": True,
+                "last_scan_at": now,
+                "next_scan_at": None,
+                "last_scan_outcome": "error",
+                "actors": [
+                    {
+                        "ad_account_id": "111",
+                        "stage": "error",
+                        "last_progress_at": now,
+                        "last_snapshot_at": now,
+                        "owner_instance": "observer-a",
+                        "lease_expires_at": now + timedelta(seconds=30),
+                        "error": raw_error,
+                    }
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "resolve_scan_account_ids",
+        AsyncMock(return_value=["111"]),
+    )
+
+    section = await operator_router._system_section(engine=object(), now=now)
+
+    issue = next(item for item in section.issues if item.code == "cabinet_actor_error")
+    assert raw_error not in (issue.detail or "")
+    assert "secret-host" not in section.model_dump_json()
 
 
 def test_operator_money_commands_distinguish_queued_from_existing_lifecycle() -> None:

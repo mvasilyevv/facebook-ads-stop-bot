@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   refetchDetail: vi.fn(),
   refetchRuns: vi.fn(),
   resume: vi.fn(),
+  summaryError: null as string | null,
+  summaryStatus: "queued",
 }));
 
 vi.mock("@/lib/operatorApi", () => ({
@@ -21,10 +23,10 @@ vi.mock("@/lib/operatorApi", () => ({
       {
         id: "11111111-2222-3333-4444-555555555555",
         preset_id: null,
-        status: "queued",
+        status: mocks.summaryStatus,
         offer_code: "GH_CR2",
         idempotency_key: "run-key",
-        error: null,
+        error: mocks.summaryError,
         created_at: "2026-07-21T10:00:00Z",
         updated_at: "2026-07-21T10:01:00Z",
       },
@@ -76,7 +78,7 @@ const CREATING_RUN = {
   config: { offer_code: "GH_CR2" },
   progress: { stage: "creating", completed: 2, total: 3 },
   created_meta_ids: { campaigns: ["1"], adsets: ["2", "3"] },
-  error: null,
+  failure_class: null,
   idempotency_key: "run-key",
   created_at: "2026-07-21T10:00:00Z",
   updated_at: "2026-07-21T10:02:00Z",
@@ -90,8 +92,6 @@ const CREATING_RUN = {
     external_started: false,
     cancel_requested_at: null,
     deadline_at: "2026-07-21T10:05:00Z",
-    correlation_id: "correlation-id",
-    result: null,
   },
   controls: {
     abort: { available: true, reason: "abort_available" },
@@ -104,6 +104,8 @@ describe("TMA campaign runs progress-only surface", () => {
     vi.clearAllMocks();
     globalThis.localStorage.clear();
     mocks.detail = CREATING_RUN;
+    mocks.summaryError = null;
+    mocks.summaryStatus = "queued";
     mocks.abort.mockResolvedValue({
       action: "abort",
       run_id: CREATING_RUN.id,
@@ -138,12 +140,12 @@ describe("TMA campaign runs progress-only surface", () => {
     ).toBeNull();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Открыть запуск #11111111" }),
+      screen.getByRole("button", { name: "Открыть запуск GH_CR2" }),
     );
     expect(
-      screen.getByRole("region", { name: "Детали запуска #11111111" }),
+      screen.getByRole("region", { name: "Детали запуска" }),
     ).toBeVisible();
-    expect(screen.getByText("creating")).toBeVisible();
+    expect(screen.getAllByText("Создание").length).toBeGreaterThan(0);
     expect(screen.getByText("Кампании: 1")).toBeVisible();
     expect(screen.getByText("Группы: 2")).toBeVisible();
     expect(screen.getByText("Всего").parentElement).toHaveClass("col-span-2");
@@ -152,7 +154,7 @@ describe("TMA campaign runs progress-only surface", () => {
   it("submits cooperative abort on the second tap and keeps queued distinct from success", async () => {
     render(<RunsHistory />);
     fireEvent.click(
-      screen.getByRole("button", { name: "Открыть запуск #11111111" }),
+      screen.getByRole("button", { name: "Открыть запуск GH_CR2" }),
     );
     fireEvent.click(
       screen.getByRole("button", { name: "Запросить остановку" }),
@@ -182,6 +184,14 @@ describe("TMA campaign runs progress-only surface", () => {
     mocks.detail = {
       ...CREATING_RUN,
       status: "failed",
+      failure_class: "safe_retry",
+      created_meta_ids: {},
+      task: {
+        ...CREATING_RUN.task,
+        state: "failed",
+        queue_status: "failed",
+        outcome: "REJECTED",
+      },
       controls: {
         abort: { available: false, reason: "run_already_failed" },
         resume: {
@@ -192,13 +202,14 @@ describe("TMA campaign runs progress-only surface", () => {
     };
     render(<RunsHistory />);
     fireEvent.click(
-      screen.getByRole("button", { name: "Открыть запуск #11111111" }),
+      screen.getByRole("button", { name: "Открыть запуск GH_CR2" }),
     );
 
     expect(
       screen.queryByRole("button", { name: "Запросить остановку" }),
     ).toBeNull();
     expect(screen.getByText("Запуск уже завершился ошибкой.")).toBeVisible();
+    expect(screen.getByText("Доступен безопасный повтор")).toBeVisible();
     expect(screen.queryByText("run_already_failed")).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "Безопасно повторить" }),
@@ -231,7 +242,7 @@ describe("TMA campaign runs progress-only surface", () => {
     };
     render(<RunsHistory />);
     fireEvent.click(
-      screen.getByRole("button", { name: "Открыть запуск #11111111" }),
+      screen.getByRole("button", { name: "Открыть запуск GH_CR2" }),
     );
 
     expect(screen.getByText("Результат неизвестен")).toBeVisible();
@@ -244,6 +255,7 @@ describe("TMA campaign runs progress-only surface", () => {
       ),
     ).toBeVisible();
     expect(screen.queryByText("UNKNOWN")).toBeNull();
+    expect(screen.queryByText("Задача #1842")).toBeNull();
   });
 
   it("replays an ambiguous abort with the same durable idempotency key", async () => {
@@ -261,7 +273,7 @@ describe("TMA campaign runs progress-only surface", () => {
       });
     render(<RunsHistory />);
     fireEvent.click(
-      screen.getByRole("button", { name: "Открыть запуск #11111111" }),
+      screen.getByRole("button", { name: "Открыть запуск GH_CR2" }),
     );
     const button = screen.getByRole("button", {
       name: "Запросить остановку",
@@ -291,10 +303,14 @@ describe("TMA campaign runs progress-only surface", () => {
     mocks.detail = {
       ...CREATING_RUN,
       status: "failed",
+      failure_class: "manual_review",
       progress: {
         stage: "failed",
+        completed: 2,
+        total: 3,
         outcome: "UNKNOWN",
         reason: "partial_or_ack_lost",
+        internal_trace: "8b8d0c93-15dc-46b4-8fe0-8da6bec3667f",
       },
       created_meta_ids: {
         campaigns: ["101"],
@@ -303,11 +319,19 @@ describe("TMA campaign runs progress-only surface", () => {
         creatives: [],
       },
       error: "partial_fail: проверь Meta вручную",
+      task: {
+        ...CREATING_RUN.task,
+        state: "unknown",
+        queue_status: "failed",
+        outcome: "UNKNOWN",
+        external_started: true,
+        result: { exception: "database password" },
+      },
     };
 
     render(<RunsHistory />);
     fireEvent.click(
-      screen.getByRole("button", { name: "Открыть запуск #11111111" }),
+      screen.getByRole("button", { name: "Открыть запуск GH_CR2" }),
     );
 
     const alert = screen.getByRole("alert", {
@@ -327,5 +351,31 @@ describe("TMA campaign runs progress-only surface", () => {
     expect(mocks.openLink).toHaveBeenCalledWith(
       "https://www.facebook.com/adsmanager/manage/campaigns?ids=101",
     );
+    expect(
+      screen.getByText(/Meta могла принять часть изменений/),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(
+        /partial_fail|partial_or_ack_lost|internal_trace|database password/,
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByText("8b8d0c93-15dc-46b4-8fe0-8da6bec3667f"),
+    ).toBeNull();
+    expect(screen.queryByText("Задача #1842")).toBeNull();
+  });
+
+  it("replaces list-level backend errors with a localized diagnostic", () => {
+    mocks.summaryStatus = "failed";
+    mocks.summaryError = "Traceback: database password leaked";
+
+    render(<RunsHistory />);
+
+    expect(
+      screen.getByText(
+        "Запуск завершился ошибкой. Откройте детали для безопасных действий.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/Traceback|database password/)).toBeNull();
   });
 });

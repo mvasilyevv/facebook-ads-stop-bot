@@ -5,6 +5,7 @@ import {
   campaignMetaIdGroups,
   campaignRunCommandLifecycle,
   campaignRunControlReason,
+  campaignRunFailurePresentation,
   campaignRunRequiresManualReview,
   campaignRunTaskLifecycle,
 } from "../campaignRunReview";
@@ -14,7 +15,8 @@ describe("campaignRunReview", () => {
     expect(
       campaignRunRequiresManualReview({
         status: "failed",
-        progress: { outcome: "UNKNOWN", reason: "partial_or_ack_lost" },
+        failure_class: "manual_review",
+        task: { state: "unknown", outcome: "UNKNOWN" },
         created_meta_ids: { campaigns: [], adsets: [], ads: [], creatives: [] },
       }),
     ).toBe(true);
@@ -27,7 +29,13 @@ describe("campaignRunReview", () => {
     expect(
       campaignRunRequiresManualReview({
         status: "failed",
-        progress: { outcome: "REJECTED" },
+        task: { state: "failed", outcome: "REJECTED" },
+        controls: {
+          resume: {
+            available: true,
+            reason: "pre_external_checkpoint_available",
+          },
+        },
         created_meta_ids: {
           campaigns: [],
           adsets: [],
@@ -39,7 +47,7 @@ describe("campaignRunReview", () => {
     expect(
       campaignRunRequiresManualReview({
         status: "failed",
-        progress: { outcome: "REJECTED" },
+        task: { state: "failed", outcome: "REJECTED" },
         created_meta_ids: { campaigns: { unexpected: "101" } },
       }),
     ).toBe(true);
@@ -109,5 +117,102 @@ describe("campaignRunReview", () => {
         true,
       ),
     ).toContain("Можно безопасно повторить");
+  });
+
+  it.each([
+    {
+      expected: "manual_review",
+      run: {
+        status: "failed",
+        task: { state: "unknown", outcome: "UNKNOWN" },
+        controls: {
+          resume: { available: false, reason: "external_boundary_crossed" },
+        },
+      },
+    },
+    {
+      expected: "safe_retry",
+      run: {
+        status: "failed",
+        failure_class: "safe_retry",
+        task: { state: "failed", outcome: "REJECTED" },
+        controls: {
+          resume: {
+            available: true,
+            reason: "pre_external_checkpoint_available",
+          },
+        },
+      },
+    },
+    {
+      expected: "invalid_config",
+      run: {
+        status: "failed",
+        failure_class: "invalid_config",
+        task: { state: "failed", outcome: "REJECTED" },
+        controls: {
+          resume: { available: false, reason: "invalid_config_checkpoint" },
+        },
+      },
+    },
+    {
+      expected: "invalid_media",
+      run: {
+        status: "failed",
+        failure_class: "invalid_media",
+        task: { state: "failed", outcome: "REJECTED" },
+        controls: {
+          resume: { available: false, reason: "media_checkpoint_missing" },
+        },
+      },
+    },
+    {
+      expected: "unavailable",
+      run: {
+        status: "failed",
+        failure_class: "unavailable",
+        task: { state: "failed", outcome: "REJECTED" },
+        controls: {
+          resume: {
+            available: false,
+            reason: "checkpoint_reason_not_resumable",
+          },
+        },
+      },
+    },
+  ])(
+    "classifies $expected with a concrete localized action",
+    ({ run, expected }) => {
+      const presentation = campaignRunFailurePresentation(run);
+
+      expect(presentation?.category).toBe(expected);
+      expect(presentation?.reason.length).toBeGreaterThan(20);
+      expect(presentation?.action.label.length).toBeGreaterThan(5);
+      expect(presentation?.action.available).toBe(true);
+    },
+  );
+
+  it("ignores raw error, progress and task-result shaped diagnostics", () => {
+    const presentation = campaignRunFailurePresentation({
+      status: "failed",
+      failure_class: "safe_retry",
+      task: { state: "failed", outcome: "REJECTED" },
+      controls: {
+        resume: {
+          available: true,
+          reason: "pre_external_checkpoint_available",
+        },
+      },
+      error: "Traceback: token=secret",
+      progress: {
+        reason: "internal_reason",
+        task_result: { exception: "database password" },
+      },
+    });
+
+    expect(JSON.stringify(presentation)).not.toMatch(
+      /Traceback|token=secret|internal_reason|database password/,
+    );
+    expect(presentation?.category).toBe("safe_retry");
   });
 });

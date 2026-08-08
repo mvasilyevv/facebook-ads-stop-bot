@@ -74,6 +74,7 @@ from core.meta_api.account_tz import (
     AccountCurrencyResolution,
     CabinetDayResolution,
     cabinet_day_end_for_timezone,
+    canonical_account_id,
     resolve_account_currencies,
     resolve_cabinet_days,
 )
@@ -1017,8 +1018,8 @@ async def _system_section(
     now: datetime,
     account_id: str | None = None,
 ) -> OperatorSection[OperatorSystemData]:
-    scan = await fetch_operator_scan_state(engine)
-    requested_id = account_id.removeprefix("act_") if account_id else None
+    requested_id = canonical_account_id(account_id) if account_id else None
+    scan = await fetch_operator_scan_state(engine, account_id=requested_id)
     expected_accounts = [requested_id] if requested_id else await resolve_scan_account_ids(engine)
     issues: list[OperatorIssue] = []
     workers: list[OperatorWorkerState] = []
@@ -1077,7 +1078,7 @@ async def _system_section(
                 OperatorIssue(
                     code="cabinet_actor_error",
                     title=f"Cabinet {actor_account_id}: scan actor завершился с ошибкой",
-                    detail=str(error),
+                    detail="Scan actor сообщил внутреннюю ошибку; проверьте источник данных.",
                     severity=OperatorSeverity.CRITICAL,
                     correlation_id=None,
                 )

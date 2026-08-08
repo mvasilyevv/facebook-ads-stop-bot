@@ -59,6 +59,7 @@ from apps.api.routers.v1.schemas.campaigns_create import (
     RunControlOptionOut,
     RunControlsOut,
     RunDetailOut,
+    RunProgressOut,
     RunSummaryOut,
     RunTaskOut,
     UploadConceptsOut,
@@ -87,6 +88,7 @@ from core.commands import (
     principal_scoped_idempotency_key,
 )
 from core.commands.campaign_runs import (
+    CampaignRunControls,
     campaign_run_controls,
     campaign_task_state,
 )
@@ -865,6 +867,78 @@ def _normalized_task_result(value: object) -> dict[str, object]:
     return {}
 
 
+_CAMPAIGN_RUN_STATUSES = {
+    "queued",
+    "uniquifying",
+    "uploading",
+    "creating",
+    "succeeded",
+    "failed",
+    "cancelled",
+}
+_INVALID_MEDIA_CONTROL_REASONS = {
+    "invalid_media_checkpoint",
+    "media_checkpoint_missing",
+    "media_checkpoint_empty",
+    "media_checkpoint_incomplete",
+}
+
+
+def _public_run_progress(*, run_status: str, value: object) -> RunProgressOut:
+    """Project an arbitrary worker checkpoint into bounded operator facts."""
+
+    checkpoint = value if isinstance(value, dict) else {}
+    raw_stage = str(checkpoint.get("stage") or "")
+    stage = raw_stage if raw_stage in _CAMPAIGN_RUN_STATUSES else run_status
+
+    def non_negative_int(key: str) -> int | None:
+        raw = checkpoint.get(key)
+        return raw if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0 else None
+
+    # ``core.campaign_builder.execute._ProgressState.snapshot`` is the durable
+    # worker checkpoint contract.  Keep its internal field names out of the API
+    # while preserving the one stable, monotonic unit it exposes: completed ads.
+    completed = non_negative_int("ads_done")
+    total = non_negative_int("total_ads")
+    if completed is not None and total is not None and completed > total:
+        completed = None
+        total = None
+    return RunProgressOut(stage=stage, completed=completed, total=total)
+
+
+def _campaign_run_failure_class(
+    *,
+    run_status: str,
+    task_outcome: str | None,
+    task_state: str | None,
+    task_reason: str,
+    external_started: bool,
+    controls: CampaignRunControls,
+) -> str | None:
+    """Classify a terminal run without exposing raw worker diagnostics."""
+
+    if run_status != "failed":
+        return None
+    resume = controls.resume
+    resume_reason = str(resume.reason)
+    if task_state is None or resume_reason == "campaign_task_missing":
+        return "unavailable"
+    if (
+        task_outcome != "REJECTED"
+        or task_state == "unknown"
+        or external_started
+        or resume_reason in {"external_boundary_crossed", "created_meta_objects_present"}
+    ):
+        return "manual_review"
+    if task_reason == "invalid_config" or resume_reason == "invalid_config_checkpoint":
+        return "invalid_config"
+    if resume_reason in _INVALID_MEDIA_CONTROL_REASONS:
+        return "invalid_media"
+    if resume.available:
+        return "safe_retry"
+    return "unavailable"
+
+
 @router.get("/tools/campaigns/runs", response_model=list[RunSummaryOut])
 async def list_runs(
     engine: DepEngine,
@@ -884,7 +958,7 @@ async def list_runs(
     query = f"""
         SELECT id::text AS id, preset_id::text AS preset_id, status,
                config->>'offer_code' AS offer_code,
-               idempotency_key, error,
+               idempotency_key,
                created_at::text AS created_at, updated_at::text AS updated_at
         FROM campaign_run
         {where}
@@ -907,7 +981,7 @@ async def list_runs(
 
 @router.get("/tools/campaigns/runs/{run_id}", response_model=RunDetailOut)
 async def get_run(run_id: str, engine: DepEngine) -> RunDetailOut:
-    """Детали запуска: конфиг-снимок, прогресс, созданные Meta-ID, ошибка."""
+    """Return bounded progress, lifecycle evidence and safe control guidance."""
     try:
         rid = uuid.UUID(run_id)
     except ValueError as exc:
@@ -923,7 +997,6 @@ async def get_run(run_id: str, engine: DepEngine) -> RunDetailOut:
                            run.config,
                            run.progress,
                            run.created_meta_ids,
-                           run.error,
                            run.idempotency_key,
                            run.created_at::text AS created_at,
                            run.updated_at::text AS updated_at,
@@ -963,6 +1036,10 @@ async def get_run(run_id: str, engine: DepEngine) -> RunDetailOut:
     if row is None:
         raise HTTPException(status_code=404, detail=f"Запуск id={run_id} не найден")
     values = dict(row._mapping)
+    public_progress = _public_run_progress(
+        run_status=str(values["status"]),
+        value=values.pop("progress"),
+    )
     result = _normalized_task_result(values.pop("task_result"))
     task: RunTaskOut | None = None
     task_context: dict[str, object] | None = None
@@ -977,15 +1054,19 @@ async def get_run(run_id: str, engine: DepEngine) -> RunDetailOut:
     task_created_at = values.pop("task_created_at")
     task_updated_at = values.pop("task_updated_at")
     task_completed_at = values.pop("task_completed_at")
-    correlation_id = values.pop("correlation_id")
+    values.pop("correlation_id")
+    task_state: str | None = None
+    outcome: str | None = None
+    task_reason = str(result.get("reason") or "")
     if task_id is not None and task_status is not None:
         raw_outcome = str(result.get("outcome") or "").upper()
         outcome = "UNKNOWN" if result.get("reconcile_required") is True else raw_outcome
         if outcome not in {"CONFIRMED", "REJECTED", "UNKNOWN"}:
             outcome = None
+        task_state = campaign_task_state(status=str(task_status), result=result)
         task = RunTaskOut(
             id=int(task_id),
-            state=campaign_task_state(status=str(task_status), result=result),
+            state=task_state,
             queue_status=str(task_status),
             outcome=outcome,
             attempt_count=int(attempt_count or 0),
@@ -997,8 +1078,6 @@ async def get_run(run_id: str, engine: DepEngine) -> RunDetailOut:
             created_at=task_created_at,
             updated_at=task_updated_at,
             completed_at=task_completed_at,
-            correlation_id=str(correlation_id),
-            result=result or None,
         )
         task_context = {
             "task_status": str(task_status),
@@ -1016,6 +1095,15 @@ async def get_run(run_id: str, engine: DepEngine) -> RunDetailOut:
     )
     return RunDetailOut(
         **values,
+        progress=public_progress,
+        failure_class=_campaign_run_failure_class(
+            run_status=str(values["status"]),
+            task_outcome=outcome,
+            task_state=task_state,
+            task_reason=task_reason,
+            external_started=external_started_at is not None,
+            controls=controls,
+        ),
         task=task,
         controls=RunControlsOut(
             abort=RunControlOptionOut(
@@ -1097,7 +1185,6 @@ async def _run_control_command(
         state=receipt.state,
         run_status=receipt.run_status,
         created=receipt.created,
-        correlation_id=str(receipt.correlation_id),
         reason=receipt.reason,
     )
 

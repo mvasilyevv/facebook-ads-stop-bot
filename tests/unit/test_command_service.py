@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -93,8 +93,12 @@ async def test_existing_connection_is_reused_without_nested_transaction(monkeypa
                 _Result(
                     SimpleNamespace(
                         ad_account_id="act_42",
+                        ad_name="Ad",
                         delivery_status="ACTIVE",
                         metrics_as_of=None,
+                        cabinet_timezone="UTC",
+                        currency="USD",
+                        currency_observed_at=datetime.now(UTC),
                     )
                 ),
                 _Result(SimpleNamespace(idempotency_key="bound")),
@@ -162,6 +166,115 @@ async def test_missing_catalog_account_rejects_without_enqueue(monkeypatch) -> N
         )
 
     create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action_kind", "delivery_status", "currency", "currency_observed_at"),
+    [
+        ("pause_ad", "ACTIVE", "EUR", datetime.now(UTC)),
+        ("activate_ad", "PAUSED", "EUR", datetime.now(UTC)),
+        ("pause_ad", "ACTIVE", None, None),
+        ("activate_ad", "PAUSED", None, None),
+        ("pause_ad", "ACTIVE", "USD", datetime.now(UTC) - timedelta(hours=25)),
+        ("activate_ad", "PAUSED", "USD", datetime.now(UTC) + timedelta(minutes=6)),
+        ("pause_ad", "ACTIVE", "USD", datetime.now()),
+    ],
+)
+async def test_operator_command_requires_confirmed_usd_before_enqueue(
+    monkeypatch,
+    action_kind,
+    delivery_status,
+    currency,
+    currency_observed_at,
+) -> None:
+    connection = SimpleNamespace(
+        scalar=AsyncMock(return_value=False),
+        execute=AsyncMock(
+            side_effect=[
+                _Result(),
+                _Result(),
+                _Result(),
+                _Result(),
+                _Result(
+                    SimpleNamespace(
+                        ad_account_id="42",
+                        ad_name="Ad",
+                        delivery_status=delivery_status,
+                        metrics_as_of=None,
+                        cabinet_timezone="UTC",
+                        currency=currency,
+                        currency_observed_at=currency_observed_at,
+                    )
+                ),
+            ]
+        ),
+    )
+    create = AsyncMock()
+    monkeypatch.setattr(service_module, "create_mutation_task", create)
+
+    with pytest.raises(CommandPreconditionError, match="confirmed USD"):
+        await CommandService(SimpleNamespace()).enqueue_ad_action(
+            action_kind=action_kind,
+            fb_ad_id="230011223344",
+            requested_by="operator:web",
+            idempotency_key=(f"web:{action_kind}:currency:{currency or 'missing'}"),
+            connection=connection,
+        )
+
+    create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action_kind", "delivery_status"),
+    [("pause_ad", "ACTIVE"), ("activate_ad", "PAUSED")],
+)
+async def test_operator_command_enqueues_with_confirmed_usd(
+    monkeypatch,
+    action_kind,
+    delivery_status,
+) -> None:
+    observed_at = datetime.now(UTC)
+    connection = SimpleNamespace(
+        scalar=AsyncMock(return_value=False),
+        execute=AsyncMock(
+            side_effect=[
+                _Result(),
+                _Result(),
+                _Result(),
+                _Result(),
+                _Result(
+                    SimpleNamespace(
+                        ad_account_id="42",
+                        ad_name="Ad",
+                        delivery_status=delivery_status,
+                        metrics_as_of=None,
+                        cabinet_timezone="UTC",
+                        currency="USD",
+                        currency_observed_at=observed_at,
+                    )
+                ),
+                _Result(SimpleNamespace(idempotency_key="bound")),
+            ]
+        ),
+    )
+    create = AsyncMock(return_value=735)
+    monkeypatch.setattr(service_module, "create_mutation_task", create)
+
+    receipt = await CommandService(SimpleNamespace()).enqueue_ad_action(
+        action_kind=action_kind,
+        fb_ad_id="230011223344",
+        requested_by="operator:web",
+        idempotency_key=f"web:{action_kind}:currency:usd",
+        connection=connection,
+    )
+
+    assert receipt.task_id == 735
+    payload = create.await_args.kwargs["payload"]
+    assert payload.currency == "USD"
+    assert payload.account_context_observed_at == observed_at.isoformat()
+    assert "currency_unknown" not in payload.account_context_issues
 
 
 @pytest.mark.asyncio

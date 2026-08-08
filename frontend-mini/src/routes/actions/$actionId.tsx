@@ -5,6 +5,10 @@ import {
   actionForRealtimeState,
 } from "@fb/shared/operator/viewModel";
 import {
+  operatorActionKindLabel,
+  operatorActionStateReason,
+} from "@fb/shared/operator/actionLabels";
+import {
   formatZonedDateTime,
   timezoneEvidenceLabel,
 } from "@fb/shared/format/time";
@@ -53,7 +57,7 @@ export function MiniActionDetail({ actionId }: { actionId: string }) {
     <article className="px-4 pb-6 pt-4">
       <header className="rounded-[var(--radius-3)] border border-[var(--color-hairline-strong)] bg-bg-1 p-4">
         <div className="font-display text-[12px] uppercase tracking-[.08em] text-bg-8">
-          {action.public_id} · {action.kind}
+          {action.public_id} · {operatorActionKindLabel(action.kind)}
         </div>
         <h1 className="m-0 mt-3 font-display text-[26px] leading-8 text-bg-11">
           {action.title}
@@ -112,32 +116,22 @@ export function MiniActionDetail({ actionId }: { actionId: string }) {
           )}
         />
         <Row label="Инициатор" value={action.requested_by ?? "не указан"} />
-        <Row label="Correlation" value={action.correlation_id} mono />
-        {action.reason ? (
-          <Row label="Результат / причина" value={action.reason} />
-        ) : null}
+        <Row
+          label="Состояние команды"
+          value={operatorActionStateReason(action.state)}
+        />
       </dl>
     </article>
   );
 }
 
-function Row({
-  label,
-  value,
-  mono = false,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="p-4">
       <dt className="text-[12px] font-semibold uppercase tracking-[.05em] text-bg-8">
         {label}
       </dt>
-      <dd
-        className={`m-0 mt-2 break-all text-[14px] leading-5 text-bg-11 ${mono ? "font-display" : ""}`}
-      >
+      <dd className="m-0 mt-2 break-all text-[14px] leading-5 text-bg-11">
         {value}
       </dd>
     </div>

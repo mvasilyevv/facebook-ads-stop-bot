@@ -9,7 +9,7 @@
  */
 
 import { type FC, useState } from "react";
-import { campaignRunRequiresManualReview } from "@fb/shared";
+import { campaignRunFailurePresentation, campaignRunRequiresManualReview } from "@fb/shared";
 import {
   Rocket,
   CheckCircle,
@@ -110,7 +110,7 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
               role="alert"
               className="text-[12px] text-danger bg-danger/10 border border-danger/30 rounded-[var(--radius-2)] px-3 py-2"
             >
-              {launchMut.error instanceof Error ? launchMut.error.message : "Ошибка запуска залива"}
+              Не удалось поставить запуск в очередь. Проверьте соединение и повторите попытку.
             </div>
           )}
           <Button
@@ -159,6 +159,7 @@ function RunProgress({ runId, onFinish }: RunProgressProps) {
   const failed = status === "failed";
   const cancelled = status === "cancelled";
   const manualReviewRequired = campaignRunRequiresManualReview(run);
+  const failure = campaignRunFailurePresentation(run);
 
   return (
     <div className="space-y-5 min-w-0">
@@ -186,11 +187,16 @@ function RunProgress({ runId, onFinish }: RunProgressProps) {
           )}
           <div className="min-w-0">
             <div className="font-medium">{RUN_STATUS_LABELS[status]}</div>
-            {run.error && (
+            {failure ? (
               <div className="mt-0.5 text-[12px] font-normal opacity-80 break-words">
-                {run.error}
+                <strong>{failure.title}.</strong> {failure.reason} Следующий шаг:{" "}
+                {failure.action.label}.
               </div>
-            )}
+            ) : cancelled ? (
+              <div className="mt-0.5 text-[12px] font-normal opacity-80 break-words">
+                Запуск отменён. Перед новым запуском обновите данные и проверьте созданные объекты.
+              </div>
+            ) : null}
           </div>
         </div>
       )}
@@ -199,11 +205,7 @@ function RunProgress({ runId, onFinish }: RunProgressProps) {
         <CampaignRunManualReview createdMetaIds={run.created_meta_ids ?? {}} />
       ) : null}
 
-      <TechnicalDetails
-        runId={runId}
-        progress={succeeded ? null : run.progress}
-        ids={run.created_meta_ids ?? {}}
-      />
+      <TechnicalDetails ids={run.created_meta_ids ?? {}} />
     </div>
   );
 }
@@ -375,20 +377,11 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   );
 }
 
-function TechnicalDetails({
-  runId,
-  progress,
-  ids,
-}: {
-  runId: string;
-  progress: Record<string, unknown> | null;
-  ids: Record<string, unknown>;
-}) {
+function TechnicalDetails({ ids }: { ids: Record<string, unknown> }) {
   const groups = META_GROUPS.map((group) => ({
     ...group,
     ids: normalizeMetaIds(ids[group.key]),
   })).filter((group) => group.ids.length > 0);
-  const hasProgress = progress && Object.keys(progress).length > 0;
 
   return (
     <details className="group border-t border-[var(--color-hairline)] pt-1">
@@ -398,20 +391,9 @@ function TechnicalDetails({
           className="transition-transform duration-150 group-open:rotate-180"
         />
         Технические детали
-        <span className="ml-auto font-mono text-[12px] text-bg-8">run {runId.slice(0, 8)}</span>
       </summary>
 
       <div className="pb-2 pt-1 space-y-3">
-        <div className="flex items-center gap-2 rounded-[var(--radius-2)] bg-bg-1 px-3 py-2">
-          <span className="font-display text-[12px] tracking-wider uppercase text-bg-8">
-            Run ID
-          </span>
-          <code className="min-w-0 flex-1 truncate font-mono text-[12px] text-bg-10" title={runId}>
-            {runId}
-          </code>
-          <CopyButton value={runId} label="Run ID" />
-        </div>
-
         {groups.map((group) => {
           const value = group.ids.join(", ");
           return (
@@ -429,19 +411,6 @@ function TechnicalDetails({
             </div>
           );
         })}
-
-        {hasProgress && (
-          <div className="rounded-[var(--radius-2)] bg-bg-1 divide-y divide-[var(--color-hairline)]">
-            {Object.entries(progress).map(([key, value]) => (
-              <div key={key} className="grid grid-cols-[auto,minmax(0,1fr)] gap-3 px-3 py-2">
-                <span className="font-mono text-[12px] text-bg-8">{key}</span>
-                <span className="min-w-0 text-right font-mono text-[12px] text-bg-9 break-all">
-                  {String(value)}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </details>
   );

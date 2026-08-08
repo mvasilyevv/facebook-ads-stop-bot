@@ -444,6 +444,13 @@ CampaignActionState = Literal[
     "cancelled",
     "unknown",
 ]
+CampaignRunFailureClass = Literal[
+    "manual_review",
+    "safe_retry",
+    "invalid_config",
+    "invalid_media",
+    "unavailable",
+]
 
 
 class RunSummaryOut(BaseModel):
@@ -456,9 +463,16 @@ class RunSummaryOut(BaseModel):
     status: CampaignRunStatus
     offer_code: str | None
     idempotency_key: str | None
-    error: str | None
     created_at: str
     updated_at: str
+
+
+class RunProgressOut(BaseModel):
+    """Bounded operator progress; arbitrary worker checkpoint keys stay private."""
+
+    stage: CampaignRunStatus
+    completed: int | None = Field(default=None, ge=0)
+    total: int | None = Field(default=None, ge=0)
 
 
 class RunTaskOut(BaseModel):
@@ -477,8 +491,6 @@ class RunTaskOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
-    correlation_id: str
-    result: dict[str, Any] | None
 
 
 class RunControlOptionOut(BaseModel):
@@ -502,9 +514,9 @@ class RunDetailOut(BaseModel):
     preset_id: str | None
     status: CampaignRunStatus
     config: dict[str, Any]
-    progress: dict[str, Any]
+    progress: RunProgressOut
     created_meta_ids: dict[str, Any]
-    error: str | None
+    failure_class: CampaignRunFailureClass | None
     idempotency_key: str | None
     created_at: str
     updated_at: str
@@ -521,5 +533,4 @@ class RunCommandOut(BaseModel):
     state: CampaignActionState
     run_status: CampaignRunStatus
     created: bool
-    correlation_id: str
     reason: str

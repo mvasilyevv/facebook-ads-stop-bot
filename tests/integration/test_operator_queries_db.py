@@ -551,6 +551,92 @@ async def test_operator_scan_state_uses_cabinet_runtime_schema(pg_engine) -> Non
 
 
 @pytest.mark.asyncio
+async def test_operator_scan_state_isolates_cabinet_freshness_outcome_and_schedule(
+    pg_engine,
+) -> None:
+    suffix = int(uuid.uuid4().hex[:12], 16)
+    account_a = str(suffix % 8_000_000_000 + 1_000_000_000)
+    account_b = str((suffix + 1) % 8_000_000_000 + 1_000_000_000)
+    observed_at = datetime.now(UTC).replace(microsecond=0)
+    scan_a_at = observed_at - timedelta(minutes=2)
+    scan_b_at = observed_at - timedelta(minutes=1)
+    next_a_at = observed_at + timedelta(minutes=10)
+    next_b_at = observed_at + timedelta(minutes=1)
+    account_ids = [account_a, account_b]
+
+    try:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO cabinet_runtime (
+                        ad_account_id, lease_token, stage, next_scan_at,
+                        last_progress_at, last_snapshot_at, last_error_code
+                    )
+                    VALUES
+                      (:account_a, 1, 'idle', :next_a_at, :scan_a_at, :scan_a_at, NULL),
+                      (:account_b, 1, 'error', :next_b_at, :scan_b_at, :scan_b_at, 'foreign_error')
+                    """
+                ),
+                {
+                    "account_a": account_a,
+                    "account_b": account_b,
+                    "scan_a_at": scan_a_at,
+                    "scan_b_at": scan_b_at,
+                    "next_a_at": next_a_at,
+                    "next_b_at": next_b_at,
+                },
+            )
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO scan_runs (
+                        scan_id, started_at, finished_at, outcome, ad_account_id
+                    )
+                    VALUES
+                      (
+                        nextval('scan_runs_id_seq'), :scan_a_at, :scan_a_at,
+                        'success', :account_a
+                      ),
+                      (
+                        nextval('scan_runs_id_seq'), :scan_b_at, :scan_b_at,
+                        'error', :account_b
+                      )
+                    """
+                ),
+                {
+                    "account_a": account_a,
+                    "account_b": account_b,
+                    "scan_a_at": scan_a_at,
+                    "scan_b_at": scan_b_at,
+                },
+            )
+
+        state = await fetch_operator_scan_state(pg_engine, account_id=account_a)
+
+        assert state["last_scan_at"] == scan_a_at
+        assert state["last_scan_outcome"] == "success"
+        assert state["next_scan_at"] == next_a_at
+        assert [actor["ad_account_id"] for actor in state["actors"]] == [account_a]
+        assert all(actor["error"] != "foreign_error" for actor in state["actors"])
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "DELETE FROM scan_runs WHERE ad_account_id = ANY(CAST(:account_ids AS text[]))"
+                ),
+                {"account_ids": account_ids},
+            )
+            await conn.execute(
+                text(
+                    "DELETE FROM cabinet_runtime "
+                    "WHERE ad_account_id = ANY(CAST(:account_ids AS text[]))"
+                ),
+                {"account_ids": account_ids},
+            )
+
+
+@pytest.mark.asyncio
 async def test_operator_revision_advances_after_committed_write(pg_engine) -> None:
     account_id = f"revision_{uuid.uuid4().hex[:16]}"
     progress_at = datetime.now(UTC) + timedelta(days=30)

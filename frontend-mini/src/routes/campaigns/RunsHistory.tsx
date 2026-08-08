@@ -4,6 +4,7 @@ import {
   campaignMetaIdGroups,
   campaignRunCommandLifecycle,
   campaignRunControlReason,
+  campaignRunFailurePresentation,
   campaignRunRequiresManualReview,
   campaignRunTaskLifecycle,
   completeOperatorCommandIntent,
@@ -67,17 +68,13 @@ function runBadgeVariant(
 function formatDate(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime())
-    ? iso
+    ? "дата не подтверждена"
     : date.toLocaleString("ru-RU", {
         day: "2-digit",
         month: "2-digit",
         hour: "2-digit",
         minute: "2-digit",
       });
-}
-
-function publicRunId(id: string): string {
-  return `#${id.slice(0, 8)}`;
 }
 
 function resultCounts(run: CampaignRunDetail): Array<[string, number]> {
@@ -87,22 +84,36 @@ function resultCounts(run: CampaignRunDetail): Array<[string, number]> {
 }
 
 function progressFacts(
-  progress: Record<string, unknown>,
+  progress: CampaignRunDetail["progress"],
 ): Array<[string, string]> {
-  const labels: Record<string, string> = {
-    stage: "Этап",
-    campaign_index: "Кампания",
-    adset_index: "Группа",
-    ad_index: "Объявление",
-    completed: "Готово",
-    total: "Всего",
+  const facts: Array<[string, string]> = [];
+  const stageLabels: Record<string, string> = {
+    queued: "В очереди",
+    uniquifying: "Уникализация",
+    uploading: "Загрузка",
+    creating: "Создание",
+    succeeded: "Готово",
+    failed: "Ошибка",
+    cancelled: "Отменён",
   };
-  return Object.entries(progress)
-    .filter(([, value]) =>
-      ["string", "number", "boolean"].includes(typeof value),
-    )
-    .slice(0, 6)
-    .map(([key, value]) => [labels[key] ?? key, String(value)]);
+  const stageLabel = stageLabels[progress.stage];
+  if (stageLabel) {
+    facts.push(["Этап", stageLabel]);
+  }
+  for (const [key, label] of [
+    ["completed", "Готово"],
+    ["total", "Всего"],
+  ] as const) {
+    const value = progress[key];
+    if (
+      typeof value === "number" &&
+      Number.isSafeInteger(value) &&
+      value >= 0
+    ) {
+      facts.push([label, String(value)]);
+    }
+  }
+  return facts;
 }
 
 function ManualReviewRequired({ run }: { run: CampaignRunDetail }) {
@@ -196,6 +207,7 @@ function RunDetail({
   const manualReviewRequired = run
     ? campaignRunRequiresManualReview(run)
     : false;
+  const failure = run ? campaignRunFailurePresentation(run) : null;
   const commandBusy = abortMutation.isPending || resumeMutation.isPending;
 
   async function executeCommand(action: CampaignRunControlAction) {
@@ -266,14 +278,14 @@ function RunDetail({
 
   return (
     <section
-      aria-label={`Детали запуска ${publicRunId(runId)}`}
+      aria-label="Детали запуска"
       className="rounded-[var(--radius-3)] border border-accent/30 bg-bg-1 p-4"
     >
       <div className="flex min-h-11 items-center justify-between gap-3">
         <div>
           <Eyebrow>ХОД ВЫПОЛНЕНИЯ</Eyebrow>
-          <p className="mt-1 font-mono text-[12px] text-bg-9">
-            {publicRunId(runId)}
+          <p className="mt-1 text-[12px] text-bg-9">
+            {run ? formatDate(run.created_at) : "Запуск кампании"}
           </p>
         </div>
         <button
@@ -305,6 +317,8 @@ function RunDetail({
           </div>
 
           <CampaignRunTaskLifecycle task={run.task} />
+
+          {failure ? <CampaignRunFailureGuidance failure={failure} /> : null}
 
           <CampaignRunControls
             runId={runId}
@@ -372,15 +386,6 @@ function RunDetail({
               </div>
             </div>
           ) : null}
-
-          {run.error ? (
-            <div
-              role="alert"
-              className="rounded-[var(--radius-2)] border border-danger/40 bg-danger-bg p-3 text-[13px] leading-5 text-danger"
-            >
-              {run.error}
-            </div>
-          ) : null}
         </div>
       ) : null}
     </section>
@@ -388,6 +393,26 @@ function RunDetail({
 }
 
 type RunTask = NonNullable<CampaignRunDetail["task"]>;
+
+function CampaignRunFailureGuidance({
+  failure,
+}: {
+  failure: NonNullable<ReturnType<typeof campaignRunFailurePresentation>>;
+}) {
+  return (
+    <section
+      role="status"
+      data-failure-class={failure.category}
+      className="rounded-[var(--radius-2)] border border-warning/40 bg-warning/10 p-3"
+    >
+      <p className="text-[13px] font-semibold text-bg-11">{failure.title}</p>
+      <p className="mt-1 text-[13px] leading-5 text-bg-9">{failure.reason}</p>
+      <p className="mt-2 text-[12px] font-semibold text-bg-10">
+        Следующий шаг: {failure.action.label}.
+      </p>
+    </section>
+  );
+}
 
 const TASK_BADGE_VARIANT: Record<CampaignRunTaskState, BadgeVariant> = {
   queued: "warning",
@@ -447,9 +472,6 @@ function CampaignRunTaskLifecycle({ task }: { task: RunTask | null }) {
           />
           {lifecycle.label}
         </Badge>
-        <span className="font-mono text-[12px] text-bg-8">
-          Задача #{task.id}
-        </span>
       </div>
       <p className="mt-2 text-[13px] leading-5 text-bg-9">
         {lifecycle.description}
@@ -617,7 +639,7 @@ function RunCard({
       <button
         type="button"
         aria-expanded={selected}
-        aria-label={`Открыть запуск ${publicRunId(run.id)}`}
+        aria-label={`Открыть запуск ${run.offer_code ?? formatDate(run.created_at)}`}
         onClick={onOpen}
         className="flex min-h-16 w-full items-center justify-between gap-3 px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
       >
@@ -632,8 +654,8 @@ function RunCard({
               </span>
             ) : null}
           </span>
-          <span className="mt-1 block font-mono text-[12px] text-bg-8">
-            {publicRunId(run.id)} · {formatDate(run.created_at)}
+          <span className="mt-1 block text-[12px] text-bg-8">
+            {formatDate(run.created_at)}
           </span>
         </span>
         <ChevronDown
@@ -646,9 +668,9 @@ function RunCard({
         />
       </button>
 
-      {run.error ? (
+      {run.status === "failed" ? (
         <p className="line-clamp-2 px-4 pb-3 text-[13px] leading-5 text-danger">
-          {run.error}
+          Запуск завершился ошибкой. Откройте детали для безопасных действий.
         </p>
       ) : null}
     </article>

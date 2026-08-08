@@ -502,7 +502,7 @@ export interface paths {
         };
         /**
          * Get Run
-         * @description Детали запуска: конфиг-снимок, прогресс, созданные Meta-ID, ошибка.
+         * @description Return bounded progress, lifecycle evidence and safe control guidance.
          */
         get: operations["get_run_api_tools_campaigns_runs__run_id__get"];
         put?: never;
@@ -3869,8 +3869,6 @@ export interface components {
             run_status: "queued" | "uniquifying" | "uploading" | "creating" | "succeeded" | "failed" | "cancelled";
             /** Created */
             created: boolean;
-            /** Correlation Id */
-            correlation_id: string;
             /** Reason */
             reason: string;
         };
@@ -3907,16 +3905,13 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
-            /** Progress */
-            progress: {
-                [key: string]: unknown;
-            };
+            progress: components["schemas"]["RunProgressOut"];
             /** Created Meta Ids */
             created_meta_ids: {
                 [key: string]: unknown;
             };
-            /** Error */
-            error: string | null;
+            /** Failure Class */
+            failure_class: ("manual_review" | "safe_retry" | "invalid_config" | "invalid_media" | "unavailable") | null;
             /** Idempotency Key */
             idempotency_key: string | null;
             /** Created At */
@@ -3925,6 +3920,21 @@ export interface components {
             updated_at: string;
             task: components["schemas"]["RunTaskOut"] | null;
             controls: components["schemas"]["RunControlsOut"];
+        };
+        /**
+         * RunProgressOut
+         * @description Bounded operator progress; arbitrary worker checkpoint keys stay private.
+         */
+        RunProgressOut: {
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "queued" | "uniquifying" | "uploading" | "creating" | "succeeded" | "failed" | "cancelled";
+            /** Completed */
+            completed?: number | null;
+            /** Total */
+            total?: number | null;
         };
         /**
          * RunSummaryOut
@@ -3944,8 +3954,6 @@ export interface components {
             offer_code: string | null;
             /** Idempotency Key */
             idempotency_key: string | null;
-            /** Error */
-            error: string | null;
             /** Created At */
             created_at: string;
             /** Updated At */
@@ -3994,12 +4002,6 @@ export interface components {
             updated_at: string;
             /** Completed At */
             completed_at: string | null;
-            /** Correlation Id */
-            correlation_id: string;
-            /** Result */
-            result: {
-                [key: string]: unknown;
-            } | null;
         };
         /**
          * ScanNowResponse
