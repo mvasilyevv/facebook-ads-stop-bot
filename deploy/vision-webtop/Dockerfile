@@ -29,7 +29,7 @@ RUN node /opt/fb-agent-kasm/apply-patch.mjs /src/kasmweb \
 FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
 
 ARG KASMVNC_VERSION=1.5.0
-ARG KASMVNC_DEB_SHA256=f599fe02e2175b9817b6165f74a5d2bebdc73118dde9181ba3410963bed7ae1
+ARG KASMVNC_DEB_SHA256=f599fe02e2175b9817b6165f74a5d2bebdc73118dde9181ba3410963bed7ae1e
 ARG VISION_VERSION=3.6.8
 ARG VISION_DEB_URL=https://vision-releases.s3.eu-north-1.amazonaws.com/v3.6.8/linux-deb/vision_3.6.8_amd64.deb
 ARG VISION_DEB_SHA256=b0040ba8feac569d86b4b6a1ab9269837c8b0a2d2c5a26657b591395f4bbb762

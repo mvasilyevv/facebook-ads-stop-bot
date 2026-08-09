@@ -36,7 +36,7 @@ def test_immutable_image_pins_kasmvnc_vision_and_first_party_client() -> None:
     assert "KASMVNC_VERSION=1.5.0" in dockerfile
     assert "KASMVNC_SOURCE_COMMIT=17265facc40ab50db5740cdf0d12c61173edafc9" in dockerfile
     assert "KASM_NOVNC_SOURCE_COMMIT=475ecfa5356579ef222983c7ce4619a7576a3bce" in dockerfile
-    assert "f599fe02e2175b9817b6165f74a5d2bebdc73118dde9181ba3410963bed7ae1" in dockerfile
+    assert "f599fe02e2175b9817b6165f74a5d2bebdc73118dde9181ba3410963bed7ae1e" in dockerfile
     assert "sha256sum --check --strict" in dockerfile
     assert "COPY --from=kasm-client-builder" in dockerfile
     assert "KasmVNC 1.5.0" in notices
