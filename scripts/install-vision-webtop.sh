@@ -465,11 +465,9 @@ if [[ -n "$ROLLBACK_ENV_FILE" ]]; then
     || die "Vision rollback environment must be a mode-600 regular file"
 fi
 
-for key in DESKTOP_WEBTOP_IMAGE; do
-  image="$(dotenv_value "$key")"
-  [[ "$image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] \
-    || die "$key must be an immutable image@sha256 reference"
-done
+image="$(dotenv_value DESKTOP_WEBTOP_IMAGE)"
+[[ "$image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] \
+  || die "DESKTOP_WEBTOP_IMAGE must be an immutable image@sha256 reference"
 PLATFORM_NETWORK="$(dotenv_value PLATFORM_NETWORK)"
 PLATFORM_NETWORK="${PLATFORM_NETWORK:-fb_agent_safety_first_platform}"
 [[ "$PLATFORM_NETWORK" == "fb_agent_safety_first_platform" ]] \

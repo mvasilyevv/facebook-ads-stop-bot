@@ -217,7 +217,7 @@ terminate_supervised_child() {
     # group. If it establishes the group concurrently, send exactly one group
     # TERM as soon as that identity becomes observable.
     kill -TERM "$ACTIVE_CHILD_PID" >/dev/null 2>&1 || true
-    for attempt in 1 2 3 4 5; do
+    for _ in 1 2 3 4 5; do
       kill -0 "$ACTIVE_CHILD_PID" >/dev/null 2>&1 || break
       observed_pgid="$(
         ps -o pgid= -p "$ACTIVE_CHILD_PID" 2>/dev/null \
@@ -674,11 +674,12 @@ rollback_parent_release() {
           "desktop_candidate_pending_forward_reconciliation"
         ;;
       previous_pending|absent_pending)
-        load_cutover_deadline \
-          && cutover_remaining_seconds >/dev/null \
-          && converge_pending_desktop_rollback \
-          || preserve_ambiguous_desktop_release \
+        if ! load_cutover_deadline \
+          || ! cutover_remaining_seconds >/dev/null \
+          || ! converge_pending_desktop_rollback; then
+          preserve_ambiguous_desktop_release \
             "desktop_previous_pending_rollback_nonconvergent"
+        fi
         desktop_outcome="$(desktop_release_outcome)"
         ;;
       previous_final|absent_final) ;;

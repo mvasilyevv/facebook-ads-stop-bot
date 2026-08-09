@@ -472,7 +472,7 @@ class TelegramCommandReply(BigIntPrimaryKey, Timestamp, Base):
             ondelete="CASCADE",
             name="fk_telegram_command_reply_update_generation",
         ),
-        CheckConstraint("bot_generation > 0", name="telegram_command_reply_bot_generation"),
+        CheckConstraint("bot_generation > 0", name="telegram_command_reply_bot_gen"),
         CheckConstraint("ordinal >= 0", name="telegram_command_reply_ordinal"),
         CheckConstraint("chat_id <> 0", name="telegram_command_reply_chat"),
         CheckConstraint(

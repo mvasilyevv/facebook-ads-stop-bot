@@ -262,8 +262,8 @@ browser_maintenance_quiescence_state() {
   local command_timeout=""
   container="$(browser_maintenance_postgres_container)"
   [[ -n "$container" ]] || return 1
-  # shellcheck disable=SC2016 # POSTGRES_* expands in the container shell.
   command_timeout="$(browser_maintenance_timeout_cap 20)" || return 1
+  # shellcheck disable=SC2016 # POSTGRES_* expands in the container shell.
   state="$(timeout --signal=TERM "$command_timeout" \
     docker exec "$container" sh -eu -c \
     'exec psql --no-psqlrc --quiet --tuples-only --no-align \
@@ -306,13 +306,12 @@ browser_maintenance_wait_for_quiescence() {
   local global_remaining=""
   deadline=$((SECONDS + BROWSER_MAINTENANCE_QUIESCENCE_WAIT_SECONDS))
   while :; do
-    browser_maintenance_assert_held \
-      && browser_maintenance_renew \
-      && browser_maintenance_assert_held \
-      || {
-        printf 'ERROR: browser maintenance lease was lost while waiting for quiescence\n' >&2
-        return 1
-      }
+    if ! browser_maintenance_assert_held \
+      || ! browser_maintenance_renew \
+      || ! browser_maintenance_assert_held; then
+      printf 'ERROR: browser maintenance lease was lost while waiting for quiescence\n' >&2
+      return 1
+    fi
     state="$(browser_maintenance_quiescence_state)" \
       || {
         printf 'ERROR: browser maintenance quiescence could not be read\n' >&2
@@ -396,8 +395,8 @@ browser_maintenance_release() {
   browser_maintenance_require_owner || return 1
   container="$(browser_maintenance_postgres_container)"
   [[ -n "$container" ]] || return 1
-  # shellcheck disable=SC2016 # Positional/env values expand in the container shell.
   command_timeout="$(browser_maintenance_timeout_cap 20)" || return 1
+  # shellcheck disable=SC2016 # Positional/env values expand in the container shell.
   if ! released="$(timeout --signal=TERM "$command_timeout" \
     docker exec "$container" sh -eu -c \
     'exec psql --no-psqlrc --quiet --tuples-only --no-align \

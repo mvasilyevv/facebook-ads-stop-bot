@@ -198,10 +198,8 @@ release_id="$(sed -n 's/^RELEASE_ID=//p' "$RELEASE_ENV" | tail -n 1)"
   && "$release_id" != "." && "$release_id" != ".." ]] \
   || die "release manifest has invalid RELEASE_ID"
 desktop_webtop_image="$(sed -n 's/^DESKTOP_WEBTOP_IMAGE=//p' "$RELEASE_ENV" | tail -n 1)"
-for image in "$desktop_webtop_image"; do
-  [[ "$image" =~ ^[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64}$ ]] \
-    || die "desktop release image is not digest-pinned"
-done
+[[ "$desktop_webtop_image" =~ ^[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64}$ ]] \
+  || die "desktop release image is not digest-pinned"
 
 remote_release="$ROOT_DIR/releases/$release_id"
 readonly -a RSYNC_EXCLUDES=(

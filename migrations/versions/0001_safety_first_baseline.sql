@@ -1244,7 +1244,7 @@ CREATE TABLE public.telegram_command_replies (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_telegram_command_replies_telegram_command_reply_attempts CHECK ((attempt_count >= 0)),
-    CONSTRAINT ck_telegram_command_replies_telegram_command_reply_bot__421d CHECK ((bot_generation > 0)),
+    CONSTRAINT ck_telegram_command_replies_telegram_command_reply_bot_gen CHECK ((bot_generation > 0)),
     CONSTRAINT ck_telegram_command_replies_telegram_command_reply_chat CHECK ((chat_id <> 0)),
     CONSTRAINT ck_telegram_command_replies_telegram_command_reply_max_attempts CHECK ((max_attempts > 0)),
     CONSTRAINT ck_telegram_command_replies_telegram_command_reply_message CHECK (((telegram_message_id IS NULL) OR (telegram_message_id > 0))),
