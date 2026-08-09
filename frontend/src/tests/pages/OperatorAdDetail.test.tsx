@@ -12,6 +12,7 @@ import { useToastStore } from "@/components/ui/toastStore";
 
 const navigate = vi.fn();
 let fbAdId = "120211984573_8761";
+const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => ({
@@ -134,6 +135,11 @@ describe("typed operator ad detail", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    if (originalLocalStorage) {
+      Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
+    } else {
+      Reflect.deleteProperty(globalThis, "localStorage");
+    }
   });
 
   it("renders exact typed identity, hierarchy and cabinet-day context", () => {
@@ -273,9 +279,13 @@ describe("typed operator ad detail", () => {
   });
 
   it("fails closed and explains how to recover when durable intent storage is unavailable", async () => {
-    vi.spyOn(globalThis.localStorage, "getItem").mockImplementation(() => {
-      throw new Error("storage blocked");
-    });
+    installLocalStorage(
+      makeStorage({
+        getItem: () => {
+          throw new Error("storage blocked");
+        },
+      }),
+    );
     const user = userEvent.setup();
     renderDetail();
 
@@ -297,7 +307,7 @@ describe("typed operator ad detail", () => {
   it("opens the committed lifecycle and warns against retry when intent cleanup fails", async () => {
     fbAdId = "cleanup-failure-ad";
     mockAds(response());
-    vi.spyOn(globalThis.localStorage, "removeItem").mockImplementation(() => undefined);
+    installLocalStorage(makeStorage({ removeItem: () => undefined }));
     const user = userEvent.setup();
     renderDetail();
 
@@ -474,3 +484,26 @@ describe("typed operator ad detail", () => {
     expect(screen.getByText("Объявление не найдено")).toBeInTheDocument();
   });
 });
+
+function installLocalStorage(storage: Storage): void {
+  Object.defineProperty(globalThis, "localStorage", {
+    value: storage,
+    configurable: true,
+    writable: true,
+  });
+}
+
+function makeStorage(overrides: Partial<Storage> = {}): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => void values.delete(key),
+    setItem: (key, value) => void values.set(key, String(value)),
+    ...overrides,
+  };
+}

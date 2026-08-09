@@ -11,11 +11,9 @@ test("campaign abort is a two-tap pending command with an accessible touch targe
 }) => {
   await page.goto("/campaigns/create");
 
-  // Compact/mobile is action-first and opens run history directly; desktop
-  // keeps creation and history as explicit tabs. Exercise the real route in
-  // both shells before asserting the shared run controls.
-  const historyTab = page.getByRole("button", { name: "История запусков" });
-  if (await historyTab.isVisible()) await historyTab.click();
+  // Web keeps creation and history as explicit tabs at every viewport. Let the
+  // server draft hydrate, then select the history tab through its real role.
+  await page.getByRole("tab", { name: "История", exact: true }).click();
 
   await page.getByRole("button", { name: "Развернуть детали" }).click();
   await expect(page.getByText("Выполняется", { exact: true })).toBeVisible();

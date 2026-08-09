@@ -141,7 +141,7 @@ test("actions list opens the exact lifecycle instead of a truncated snapshot", a
 
   await expect(page).toHaveURL(/\/actions\/1842$/);
   await expect(page.getByRole("heading", { name: "Отключение объявления" })).toBeVisible();
-  await expect(page.getByText("Выполняется")).toBeVisible();
+  await expect(page.getByText("Выполняется", { exact: true })).toBeVisible();
 });
 
 test("pause command is queued and redirects to its lifecycle", async ({ page }) => {

@@ -35,12 +35,13 @@ export const operatorAd = {
 } as const;
 
 export const campaignRunId = "11111111-2222-3333-4444-555555555555";
+export const campaignRunOfferCode = "GH_CR2";
 
 const campaignRunSummary = {
   id: campaignRunId,
   preset_id: null,
   status: "creating",
-  offer_code: "GH_CR2",
+  offer_code: campaignRunOfferCode,
   idempotency_key: "campaign-run-e2e",
   error: null,
   created_at: "2026-07-29T10:00:00Z",
@@ -239,6 +240,14 @@ export async function installOperatorHarness(
   await page.route("**/api/operator/snapshot**", async (route) => {
     await route.fulfill({ json: makeOperatorSnapshot() });
   });
+  await page.route("**/api/operator/preferences/display**", async (route) => {
+    await route.fulfill({
+      json: {
+        timezone_name: "Europe/Kaliningrad",
+        updated_at: "2026-07-18T10:15:00Z",
+      },
+    });
+  });
   await page.route("**/api/operator/cabinets/*/snapshot**", async (route) => {
     const cabinetId = new URL(route.request().url()).pathname.split("/").at(-2) ?? "123";
     const snapshot = makeOperatorSnapshot();
@@ -374,6 +383,13 @@ export async function installOperatorHarness(
   });
   await page.route("**/api/tools/campaigns/presets", async (route) => {
     await route.fulfill({ json: [] });
+  });
+  await page.route("**/api/tools/campaigns/draft**", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: { draft: null } });
+      return;
+    }
+    await route.fallback();
   });
   await page.route("**/api/tools/campaigns/runs**", async (route) => {
     const request = route.request();

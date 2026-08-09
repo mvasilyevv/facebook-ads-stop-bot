@@ -200,7 +200,6 @@ terminate_supervised_child() {
   local wait_deadline=0
   local now=0
   local observed_pgid=""
-  local attempt=0
   [[ -n "$ACTIVE_CHILD_PID" && -n "$ACTIVE_CHILD_PGID" ]] || return 0
   observed_pgid="$(
     ps -o pgid= -p "$ACTIVE_CHILD_PID" 2>/dev/null \

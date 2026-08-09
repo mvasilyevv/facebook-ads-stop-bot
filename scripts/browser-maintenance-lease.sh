@@ -193,8 +193,8 @@ browser_maintenance_renew() {
   browser_maintenance_require_owner || return 1
   container="$(browser_maintenance_postgres_container)"
   [[ -n "$container" ]] || return 1
-  # shellcheck disable=SC2016 # Positional/env values expand in the container shell.
   command_timeout="$(browser_maintenance_timeout_cap 20)" || return 1
+  # shellcheck disable=SC2016 # Positional/env values expand in the container shell.
   renewed="$(timeout --signal=TERM "$command_timeout" \
     docker exec "$container" sh -eu -c \
     'exec psql --no-psqlrc --quiet --tuples-only --no-align \
@@ -235,8 +235,8 @@ browser_maintenance_assert_held() {
   fi
   container="$(browser_maintenance_postgres_container)"
   [[ -n "$container" ]] || return 1
-  # shellcheck disable=SC2016 # Positional/env values expand in the container shell.
   command_timeout="$(browser_maintenance_timeout_cap 20)" || return 1
+  # shellcheck disable=SC2016 # Positional/env values expand in the container shell.
   held="$(timeout --signal=TERM "$command_timeout" \
     docker exec "$container" sh -eu -c \
     'exec psql --no-psqlrc --quiet --tuples-only --no-align \

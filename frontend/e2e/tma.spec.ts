@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { campaignRunId, installOperatorHarness } from "./operatorTestHarness";
+import { campaignRunId, campaignRunOfferCode, installOperatorHarness } from "./operatorTestHarness";
 
 test.beforeEach(async ({ page }) => {
   await installOperatorHarness(page, { telegram: true });
@@ -198,7 +198,7 @@ test("@tma opens the typed cabinet ledger and uses native back navigation", asyn
 test("@tma campaign abort stays pending and uses the same two-tap lifecycle", async ({ page }) => {
   await page.goto("./campaigns");
 
-  await page.getByRole("button", { name: "Открыть запуск #11111111" }).click();
+  await page.getByRole("button", { name: `Открыть запуск ${campaignRunOfferCode}` }).click();
   await expect(page.getByText("Выполняется", { exact: true })).toBeVisible();
   const abort = page.getByRole("button", { name: "Запросить остановку" });
   const abortBox = await abort.boundingBox();

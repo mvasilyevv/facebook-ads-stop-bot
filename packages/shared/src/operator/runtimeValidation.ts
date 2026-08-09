@@ -913,6 +913,12 @@ function commandResponse(value: unknown, endpoint: string): void {
   string(root.correlation_id, endpoint, "$.correlation_id");
 }
 
+function displayPreferenceResponse(value: unknown, endpoint: string): void {
+  const root = record(value, endpoint, "$");
+  ianaTimezone(root.timezone_name, endpoint, "$.timezone_name");
+  isoDate(root.updated_at, endpoint, "$.updated_at");
+}
+
 function incidentItem(
   value: unknown,
   endpoint: string,
@@ -1084,6 +1090,8 @@ export function validateOperatorPayload(
     incidentAckResponse(value, endpoint);
   } else if (/^\/api\/operator\/incidents\/[^/]+$/.test(endpoint)) {
     incidentDetailResponse(value, endpoint);
+  } else if (endpoint === "/api/operator/preferences/display") {
+    displayPreferenceResponse(value, endpoint);
   } else if (endpoint.startsWith("/api/operator/")) {
     fail(endpoint, "$.unvalidated_endpoint");
   }

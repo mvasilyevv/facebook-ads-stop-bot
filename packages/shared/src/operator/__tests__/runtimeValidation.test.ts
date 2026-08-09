@@ -84,6 +84,28 @@ function incidentResponse() {
 }
 
 describe("operator semantic runtime validation", () => {
+  it("accepts only a confirmed IANA display preference", () => {
+    const endpoint = "/api/operator/preferences/display";
+    const preference = {
+      timezone_name: "Europe/Kaliningrad",
+      updated_at: "2026-07-18T10:15:00Z",
+    };
+
+    expect(validateOperatorPayload(endpoint, preference)).toBe(preference);
+    expect(() =>
+      validateOperatorPayload(endpoint, {
+        ...preference,
+        timezone_name: "Mars/Olympus",
+      }),
+    ).toThrow(OperatorPayloadValidationError);
+    expect(() =>
+      validateOperatorPayload(endpoint, {
+        ...preference,
+        updated_at: "not-a-timestamp",
+      }),
+    ).toThrow(OperatorPayloadValidationError);
+  });
+
   it("validates portfolio snapshots through both typed snapshot routes", () => {
     const snapshot = makeOperatorSnapshot();
 
