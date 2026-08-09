@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from core.campaign_drafts import CampaignDraftState
 from core.campaign_drafts.repository import (
+    CampaignDraftConflictError,
     CampaignDraftTooLargeError,
     _serialized_state,
 )
@@ -114,3 +115,14 @@ def test_campaign_draft_serialization_is_bounded() -> None:
     object.__setattr__(state.goal, "ad_text_primary", "я" * 200_000)
     with pytest.raises(CampaignDraftTooLargeError):
         _serialized_state(state)
+
+
+def test_campaign_draft_conflict_supports_exception_traceback_protocol() -> None:
+    conflict = CampaignDraftConflictError(expected_revision=3, actual_revision=4)
+
+    # Async transaction context managers reassign __traceback__ while
+    # propagating an exception. Domain exceptions must permit that protocol.
+    conflict.__traceback__ = None
+
+    assert conflict.expected_revision == 3
+    assert conflict.actual_revision == 4

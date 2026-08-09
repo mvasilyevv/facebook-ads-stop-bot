@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -13,10 +12,16 @@ from core.campaign_drafts.contracts import CampaignDraftDocument, CampaignDraftS
 MAX_CAMPAIGN_DRAFT_BYTES = 256 * 1024
 
 
-@dataclass(frozen=True, slots=True)
 class CampaignDraftConflictError(RuntimeError):
-    expected_revision: int
-    actual_revision: int | None
+    """Optimistic-lock conflict that remains a valid mutable Python exception."""
+
+    def __init__(self, expected_revision: int, actual_revision: int | None) -> None:
+        self.expected_revision = expected_revision
+        self.actual_revision = actual_revision
+        super().__init__(
+            "campaign draft revision conflict: "
+            f"expected={expected_revision}, actual={actual_revision}"
+        )
 
 
 class CampaignDraftTooLargeError(ValueError):
