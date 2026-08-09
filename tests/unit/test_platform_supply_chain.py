@@ -99,6 +99,20 @@ def test_ui_evidence_is_a_release_gate() -> None:
     assert "needs: [test, web-test, ui-evidence, platform-config]" in build_base
 
 
+def test_pull_requests_run_verification_without_publishing() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    triggers = text.split("\njobs:\n", maxsplit=1)[0]
+
+    assert "pull_request:\n    branches: [main]" in triggers
+    for job in ("test", "web-test", "ui-evidence", "platform-config"):
+        assert "github.event_name != 'pull_request'" not in _job_block(text, job)
+    for job in ("build-base", "build", "build-desktop", "release-manifest"):
+        assert "if: github.event_name != 'pull_request'" in _job_block(text, job)
+
+    deploy = _job_block(text, "deploy")
+    assert "github.ref == 'refs/heads/main'" in deploy
+
+
 def test_external_docker_bases_are_digest_pinned() -> None:
     direct_base_files = (
         "docker/Dockerfile.python-base",
