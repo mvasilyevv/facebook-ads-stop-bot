@@ -312,7 +312,7 @@ async def test_active_offer_without_account_link_fails_closed_before_campaign_wr
         )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "Выбранный кабинет не привязан к офферу"
+    assert response.json()["message"] == "Выбранный кабинет не привязан к офферу"
     assert await _campaign_write_counts(pg_engine) == (0, 0, 0, 0)
 
 
