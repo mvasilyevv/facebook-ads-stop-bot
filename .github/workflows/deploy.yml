@@ -137,7 +137,7 @@ jobs:
           API_KEY: ci_api_key
           ANTHROPIC_API_KEY: ci_anthropic_key
           OPENAI_API_KEY: ci_openai_key
-        run: pytest tests/ -x --timeout=30 -q
+        run: pytest tests/ --timeout=30 -q
 
   web-test:
     name: Frontend и browser-agent (lint + typecheck + tests)

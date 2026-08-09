@@ -265,7 +265,7 @@ async def test_spend_cap_reached_stop_fires(pg_engine, grace_offer) -> None:
     assert tasks == 1
 
 
-async def test_currency_change_clears_grace_before_rule_decision(
+async def test_currency_change_clears_grace_and_blocks_non_usd_autopause(
     pg_engine,
     grace_offer,
 ) -> None:
@@ -309,11 +309,13 @@ async def test_currency_change_clears_grace_before_rule_decision(
         cycle_ts=cycle_ts,
     )
 
-    assert result.row_errors == []
+    assert result.row_errors == [f"{fb_ad_id}:CommandPreconditionError"]
     assert result.rows_grace_suppressed == 0
+    assert result.alerts_stop == 0
+    assert result.disable_tasks_created == 0
     state, tasks = await _fsm_and_tasks(pg_engine)
-    assert state == "stop_sent"
-    assert tasks == 1
+    assert state in (None, "normal")
+    assert tasks == 0
     async with pg_engine.connect() as conn:
         cleared = (
             await conn.execute(
@@ -331,4 +333,34 @@ async def test_currency_change_clears_grace_before_rule_decision(
                 )
             )
         ).one()
+        false_stop_side_effects = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT
+                      (
+                        SELECT COUNT(*)
+                        FROM alert_events AS event
+                        JOIN fb_ads AS ad ON ad.id = event.ad_id
+                        WHERE ad.fb_ad_id = :fb_ad_id
+                      ) AS alert_events,
+                      (
+                        SELECT COUNT(*)
+                        FROM incidents
+                        WHERE resource_type = 'ad'
+                          AND resource_id = :fb_ad_id
+                      ) AS incidents,
+                      (
+                        SELECT COUNT(*)
+                        FROM notification_events AS event
+                        JOIN incidents AS incident ON incident.id = event.incident_id
+                        WHERE incident.resource_type = 'ad'
+                          AND incident.resource_id = :fb_ad_id
+                      ) AS notifications
+                    """
+                ),
+                {"fb_ad_id": fb_ad_id},
+            )
+        ).one()
     assert tuple(cleared) == (None, None, None, None, None, None)
+    assert tuple(false_stop_side_effects) == (0, 0, 0)

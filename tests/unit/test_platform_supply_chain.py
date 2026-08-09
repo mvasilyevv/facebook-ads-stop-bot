@@ -73,6 +73,8 @@ def test_backend_ci_uses_the_production_frozen_dependency_graph() -> None:
     assert "uv sync --frozen --extra dev" in test_job
     assert 'echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"' in test_job
     assert 'pip install -e ".[dev]"' not in test_job
+    assert "pytest tests/ --timeout=30 -q" in test_job
+    assert "pytest tests/ -x" not in test_job
 
 
 def test_every_published_image_has_provenance_and_sbom() -> None:
