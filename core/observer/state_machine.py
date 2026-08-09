@@ -228,7 +228,7 @@ def decide(inp: FsmInput) -> FsmTransition:
 def should_reopen_disabled(current_state: AlertState, delivery_status: str | None) -> bool:
     """True если ад в `disabled`, но снова ACTIVE в кабинете → нужен reopen в `normal`.
 
-    Реактивация ВНЕ бота (вручную в Ads Manager или autostart bulk-activate) не проходит
+    Реактивация вне FB Agent (вручную в Ads Manager) не проходит
     через подтверждённую activate-команду, поэтому FSM остаётся `disabled` —
     и decide() для disabled+STOP ничего не делает. Убыточный реактивированный ад крутится
     без стопа (H3). Обнаружив ACTIVE delivery у disabled-ада, observer сбрасывает FSM в

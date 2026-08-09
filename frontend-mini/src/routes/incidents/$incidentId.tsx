@@ -1,13 +1,21 @@
 import { useState } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 
 import { formatZonedDateTime } from "@fb/shared/format/time";
 import type { OperatorSeverity } from "@fb/shared/operator/contracts";
+import {
+  OPERATOR_INCIDENT_STATUS_LABEL,
+  operatorIncidentCopy,
+  operatorIncidentDataState,
+  operatorIncidentTargetLabel,
+} from "@fb/shared/operator/incidentViewModel";
+import { useOperatorRealtimeStatus } from "@fb/operator-api";
+import { operatorSourceLabel } from "@fb/shared/operator/ledgerSemantics";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 
 import { Button } from "@/components/ui/Button";
 import {
-  operatorProblemMessage,
+  operatorIncidentProblemMessage,
   useAcknowledgeOperatorIncident,
   useOperatorIncident,
 } from "@/lib/operatorApi";
@@ -23,9 +31,9 @@ function MiniIncidentDetailRoute() {
 }
 
 export function MiniIncidentDetail({ incidentId }: { incidentId: string }) {
-  const navigate = useNavigate();
   const incidentQuery = useOperatorIncident(incidentId);
   const acknowledge = useAcknowledgeOperatorIncident();
+  const realtimeStatus = useOperatorRealtimeStatus();
   const [actionError, setActionError] = useState<string | null>(null);
   const detail = incidentQuery.data;
   const incident = detail?.incident;
@@ -42,7 +50,7 @@ export function MiniIncidentDetail({ incidentId }: { incidentId: string }) {
         role="alert"
         className="m-4 rounded-[var(--radius-2)] bg-danger-bg p-4 text-[14px] text-danger"
       >
-        {operatorProblemMessage(incidentQuery.error)}
+        {operatorIncidentProblemMessage(incidentQuery.error)}
       </div>
     );
   if (!detail || !incident)
@@ -65,12 +73,16 @@ export function MiniIncidentDetail({ incidentId }: { incidentId: string }) {
         },
       });
       await incidentQuery.refetch();
-      await navigate({ to: "/" });
     } catch (error) {
-      setActionError(operatorProblemMessage(error));
+      setActionError(operatorIncidentProblemMessage(error));
     }
   };
-  const severityTone = incidentSeverityTone(incident.severity);
+  const displayState = operatorIncidentDataState(
+    detail.state,
+    realtimeStatus === "connected" && !incidentQuery.isError,
+  );
+  const severityTone = incidentSeverityTone(incident.severity, displayState);
+  const copy = operatorIncidentCopy(incident, detail.scope);
 
   return (
     <article className="px-4 pb-6 pt-4">
@@ -80,43 +92,44 @@ export function MiniIncidentDetail({ incidentId }: { incidentId: string }) {
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <MiniSeverityBadge severity={incident.severity} />
-          <DataStateBadge state={detail.state} compact />
+          <DataStateBadge state={displayState} compact />
         </div>
         <h1 className="m-0 mt-3 font-display text-[26px] leading-8 text-bg-11">
-          {incident.title}
+          {copy.title}
         </h1>
-        <p className="mt-2 text-[14px] leading-5 text-bg-10">
-          {incident.summary}
-        </p>
+        {copy.summary ? (
+          <p className="mt-2 text-[14px] leading-5 text-bg-10">
+            {copy.summary}
+          </p>
+        ) : null}
       </header>
-      {detail.state !== "ready" ? (
+      {displayState !== "ready" ? (
         <div className="mt-4">
-          <DataStateNotice state={detail.state} issues={detail.issues} />
+          <DataStateNotice state={displayState} issues={detail.issues} />
         </div>
       ) : null}
       <dl className="mt-4 divide-y divide-[var(--color-hairline)] rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1">
-        <Row
-          label="Объект"
-          value={
-            incident.target.label ?? incident.target.id ?? incident.target.kind
-          }
-        />
+        <Row label="Объект" value={operatorIncidentTargetLabel(incident)} />
         <Row
           label="Открыт"
-          value={formatZonedDateTime(
-            incident.occurred_at,
-            detail.timezone,
-          )}
+          value={formatZonedDateTime(incident.occurred_at, detail.timezone)}
         />
-        <Row label="Причина" value={incident.reason ?? "не указана"} />
-        <Row label="Статус" value={incidentStatusLabel(detail.status)} />
+        <Row label="Причина" value={copy.reason ?? "не подтверждена"} />
+        <Row
+          label="Статус"
+          value={OPERATOR_INCIDENT_STATUS_LABEL[incident.status]}
+        />
         <Row
           label="Данные на"
           value={formatZonedDateTime(detail.as_of, detail.timezone)}
         />
         <Row
           label="Источник"
-          value={detail.sources.length ? detail.sources.join(", ") : "не подтверждён"}
+          value={
+            detail.sources.length
+              ? detail.sources.map(operatorSourceLabel).join(", ")
+              : "не подтверждён"
+          }
         />
       </dl>
       {!detail.timezone_known ? (
@@ -135,7 +148,7 @@ export function MiniIncidentDetail({ incidentId }: { incidentId: string }) {
           {actionError}
         </p>
       ) : null}
-      {detail.status === "open" ? (
+      {incident.status === "open" ? (
         <Button
           fullWidth
           className="mt-4 min-h-11"
@@ -149,16 +162,6 @@ export function MiniIncidentDetail({ incidentId }: { incidentId: string }) {
   );
 }
 
-function incidentStatusLabel(status: string): string {
-  return {
-    open: "Открыт",
-    acknowledged: "Получение подтверждено",
-    executing: "Действие выполняется",
-    resolved: "Разрешён",
-    failed: "Завершён с ошибкой",
-  }[status] ?? "Не подтверждено";
-}
-
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="p-4">
@@ -170,7 +173,13 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function incidentSeverityTone(severity: OperatorSeverity): { surface: string } {
+function incidentSeverityTone(
+  severity: OperatorSeverity,
+  state: "ready" | "empty" | "partial" | "stale" | "unavailable",
+): { surface: string } {
+  if (state !== "ready") {
+    return { surface: "border-warning/35 bg-warning-bg" };
+  }
   if (severity === "critical") {
     return { surface: "border-danger/35 bg-danger-bg" };
   }

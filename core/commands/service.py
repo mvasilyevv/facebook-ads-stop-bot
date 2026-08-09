@@ -42,7 +42,6 @@ _ACTION_RESULT_STATUSES: dict[str, frozenset[str]] = {
     "activate_ad": _ACTIVE_DELIVERY_STATUSES,
 }
 _SAFETY_COMPENSATION_SOURCE_PARAM = {
-    "autostart_reconciliation": "supersedes_autostart_task_id",
     "activation_without_grace": "supersedes_activation_task_id",
 }
 
@@ -181,10 +180,7 @@ class CommandService:
         *,
         fb_ad_id: str,
         idempotency_key: str,
-        reason: Literal[
-            "autostart_reconciliation",
-            "activation_without_grace",
-        ],
+        reason: Literal["activation_without_grace"],
         source_task_id: int,
         observed_delivery_status: str,
         correlation_id: uuid.UUID | None = None,
@@ -194,8 +190,8 @@ class CommandService:
         """Reassert PAUSE after a worker's direct post-boundary Meta read.
 
         This is deliberately separate from the shared operator command entry
-        point. Only the two safety recovery flows can supply the proof, and
-        they may supersede terminal command barriers but never active work.
+        point. Only activation-grace recovery can supply the proof, and it may
+        supersede terminal command barriers but never active work.
         """
 
         source_param = _SAFETY_COMPENSATION_SOURCE_PARAM.get(reason)

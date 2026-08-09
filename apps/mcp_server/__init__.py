@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MCP-сервер для FB Stop Bot.
+"""MCP-сервер для FB Agent.
 
 Экспонирует наши AI tools и набор JSON-снимков как ресурсы через
 Model Context Protocol (https://modelcontextprotocol.io). Транспорт — stdio,

@@ -20,8 +20,6 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 # Воркер-процессы + mcp, создающие собственный движок (НЕ через core.db.get_engine).
 _WORKER_ENGINE_FILES = [
     "apps/health_watchdog/main.py",
-    "apps/cabinet_scheduler/main.py",
-    "apps/enable_recommendation_worker/main.py",
     "apps/tracker_reconciliation_worker/main.py",
     "apps/digest_scheduler/main.py",
     "apps/reconciler_worker/main.py",

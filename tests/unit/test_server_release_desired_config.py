@@ -95,14 +95,12 @@ def test_same_release_retry_after_desired_rotation_fails_without_mutation(
     (scripts / "server-platform-release.sh").chmod(0o755)
 
     webtop = "registry.example/webtop@sha256:" + "a" * 64
-    kasm = "registry.example/kasm@sha256:" + "b" * 64
     release_env = release / "release-images.env"
     _write_env(
         release_env,
         {
             "RELEASE_ID": "repeat-release",
             "DESKTOP_WEBTOP_IMAGE": webtop,
-            "DESKTOP_KASMVNC_IMAGE": kasm,
         },
     )
     desired = shared / ".env"
@@ -177,8 +175,6 @@ def test_same_release_retry_after_desired_rotation_fails_without_mutation(
             str(production),
             "--desktop-webtop-image",
             webtop,
-            "--desktop-kasmvnc-image",
-            kasm,
         ],
         check=True,
         capture_output=True,

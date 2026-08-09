@@ -75,6 +75,16 @@ def _app(
     async def _telegram_settings():
         return {"activation_command": "/start owner-capability"}
 
+    @app.get("/api/operator/preferences/display")
+    async def _operator_display_preference(request: Request):
+        return {
+            "owner_id": getattr(
+                request.state,
+                "operator_owner_telegram_user_id",
+                None,
+            )
+        }
+
     @app.post("/api/v1/postback/adsetpro")
     async def _postback():
         return {"ok": True}
@@ -137,6 +147,32 @@ def test_telegram_admin_reads_require_owner_auth() -> None:
         .status_code
         == 403
     )
+
+
+def test_operator_preferences_are_owner_only_and_bind_server_identity() -> None:
+    path = "/api/operator/preferences/display"
+    assert _app().get(path).status_code == 401
+    assert (
+        _app(tma_role="recipient")
+        .get(path, headers={"Authorization": "Bearer valid-tma-token"})
+        .status_code
+        == 403
+    )
+    assert _app(tma_role="owner").get(
+        path, headers={"Authorization": "Bearer valid-tma-token"}
+    ).json() == {"owner_id": 424242}
+
+    panel = _app().get(
+        path,
+        headers={
+            "X-API-Key": _KEY,
+            "X-Verified-Operator-Principal": "panel:424242",
+        },
+    )
+    assert panel.json() == {"owner_id": 424242}
+
+    # An API key alone is infrastructure authority, not an owner identity.
+    assert _app().get(path, headers={"X-API-Key": _KEY}).json() == {"owner_id": None}
     assert (
         _app(tma_role="owner")
         .get(path, headers={"Authorization": "Bearer valid-tma-token"})

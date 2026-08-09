@@ -29,7 +29,7 @@
   --color-success-bg: #121a13;
   --color-warning: #b8a36a;
   --color-warning-bg: #211c11;
-  --color-danger: #c9554d;
+  --color-danger: #cf6259;
   --color-danger-bg: #281513;
   --color-info: #91a0aa;
   --color-info-bg: #151b1f;
@@ -143,7 +143,7 @@
   --color-success-bg: #121a13;
   --color-warning: #b8a36a;
   --color-warning-bg: #211c11;
-  --color-danger: #c9554d;
+  --color-danger: #cf6259;
   --color-danger-bg: #281513;
   --color-info: #91a0aa;
   --color-info-bg: #151b1f;
@@ -185,15 +185,81 @@
 }
 
 /* ─── Shared interface motion ─────────────────────────────────────────────── */
-@keyframes fbFade { from { opacity: 0; } to { opacity: 1; } }
-@keyframes fbSlideIn { from { transform: translateX(24px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-@keyframes fbRise { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-@keyframes fbMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-@keyframes fbSlideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes fbFlash { 0% { background: var(--color-accent-bg); } 100% { background: transparent; } }
-@keyframes fbBarSweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(0); } }
-@keyframes fbSpin { to { transform: rotate(360deg); } }
-@keyframes fbSheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes fbFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes fbSlideIn {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+@keyframes fbRise {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@keyframes fbMarquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+@keyframes fbSlideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fbFlash {
+  0% {
+    background: var(--color-accent-bg);
+  }
+  100% {
+    background: transparent;
+  }
+}
+@keyframes fbBarSweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+@keyframes fbSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes fbSheetUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
 @keyframes fbPulse {
   0% {
     box-shadow: 0 0 0 0 currentColor;
@@ -208,11 +274,19 @@
     opacity: 1;
   }
 }
-.feed-row-new { animation: fbSlideDown 0.4s var(--ease-out), fbFlash 1.8s var(--ease-out); }
-.wp-dot { animation: fbPulse 2.4s var(--ease-out) infinite; }
+.feed-row-new {
+  animation:
+    fbSlideDown 0.4s var(--ease-out),
+    fbFlash 1.8s var(--ease-out);
+}
+.wp-dot {
+  animation: fbPulse 2.4s var(--ease-out) infinite;
+}
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }

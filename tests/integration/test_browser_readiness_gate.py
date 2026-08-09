@@ -85,7 +85,7 @@ async def _seed_task(pg_engine) -> int:
             "ad_account_id": "123",
             "params": {},
         },
-        requested_by="test",
+        requested_by="bot_auto_stop",
         lane="money",
     )
     assert task_id is not None

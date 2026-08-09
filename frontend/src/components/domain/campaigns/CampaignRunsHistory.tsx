@@ -147,7 +147,7 @@ export const CampaignRunsHistory: FC = () => {
         <EmptyState
           icon={<RefreshCw size={28} />}
           title="Запусков нет"
-          description="Создайте первую кампанию в desktop-интерфейсе."
+          description="Создайте первую кампанию — её ход появится в журнале."
         />
       ) : (
         <div className="border border-[var(--color-hairline)] rounded-[var(--radius-3)] overflow-hidden">

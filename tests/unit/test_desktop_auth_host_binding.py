@@ -40,6 +40,7 @@ async def test_ticket_and_session_are_bound_to_desktop_hostname(monkeypatch):
         telegram_user_id=1001,
         source="web_panel",
         expected_hostname="desktop.adpulse.su",
+        presentation="desktop",
         ttl=300,
     )
     async with AsyncClient(
@@ -60,6 +61,7 @@ async def test_ticket_and_session_are_bound_to_desktop_hostname(monkeypatch):
         telegram_user_id=1001,
         source="web_panel",
         expected_hostname="desktop.adpulse.su",
+        presentation="desktop",
         ttl=300,
     )
     async with AsyncClient(
@@ -85,5 +87,6 @@ async def test_ticket_and_session_are_bound_to_desktop_hostname(monkeypatch):
     assert "Path=/" in cookie and "Secure" in cookie and "HttpOnly" in cookie
     assert verified.status_code == 200
     assert verified.headers["x-desktop-transport"] == "kasm"
+    assert verified.headers["x-desktop-presentation"] == "desktop"
     assert cross_host.status_code == 303
     await redis.aclose()

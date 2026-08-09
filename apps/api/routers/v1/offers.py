@@ -38,6 +38,7 @@ from apps.api.routers.v1.schemas.offers import (
     RuleThresholdPreview,
     SpendRangePreview,
 )
+from core.ad_account_catalog import ad_account_catalog
 from core.models.catalog.offer import Offer
 from core.models.catalog.offer_rule import OfferRule
 from core.money import (
@@ -89,6 +90,10 @@ async def list_offers(
             stmt = stmt.where(o.c.is_active.is_(True))
         result = await conn.execute(stmt)
         rows = result.mappings().all()
+        account_ids_by_offer = await ad_account_catalog.list_by_offer(
+            conn,
+            offer_ids=(row["id"] for row in rows),
+        )
 
     return [
         OfferOut(
@@ -98,7 +103,7 @@ async def list_offers(
             vertical=row["vertical"],
             pixel_id=row["pixel_id"],
             is_active=row["is_active"],
-            ad_account_ids=list(row["ad_account_ids"] or []),
+            ad_account_ids=account_ids_by_offer.get(row["id"], []),
             countries=list(row["countries"] or []),
             cpa_threshold=row["cpa_threshold"],
             currency=row["currency"],
@@ -130,8 +135,6 @@ async def create_offer(
                 vertical=body.vertical,
                 pixel_id=(body.pixel_id or None),
                 is_active=body.is_active,
-                # Мульти-кабинет: валидация (min 1, числовые ID) — в OfferCreateIn.
-                ad_account_ids=body.ad_account_ids,
                 # Гео оффера (ISO-2 upper) — для дерайва визарда.
                 countries=body.countries,
             )
@@ -142,7 +145,6 @@ async def create_offer(
                 Offer.__table__.c.vertical,
                 Offer.__table__.c.pixel_id,
                 Offer.__table__.c.is_active,
-                Offer.__table__.c.ad_account_ids,
                 Offer.__table__.c.countries,
                 Offer.__table__.c.created_at,
                 Offer.__table__.c.updated_at,
@@ -150,6 +152,12 @@ async def create_offer(
         )
         try:
             result = await conn.execute(stmt)
+            row = result.mappings().one()
+            account_ids = await ad_account_catalog.replace_offer_accounts(
+                conn,
+                offer_id=row["id"],
+                account_ids=body.ad_account_ids,
+            )
         except IntegrityError as exc:
             err_str = str(exc).lower()
             if "unique" in err_str or "duplicate" in err_str:
@@ -158,7 +166,6 @@ async def create_offer(
                     detail=f"Оффер с кодом '{body.code}' уже существует",
                 ) from exc
             raise
-        row = result.mappings().one()
 
     return OfferOut(
         id=row["id"],
@@ -167,7 +174,7 @@ async def create_offer(
         vertical=row["vertical"],
         pixel_id=row["pixel_id"],
         is_active=row["is_active"],
-        ad_account_ids=list(row["ad_account_ids"] or []),
+        ad_account_ids=list(account_ids),
         countries=list(row["countries"] or []),
         created_at=row["created_at"].isoformat() if row["created_at"] else None,
         updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,
@@ -195,9 +202,6 @@ async def update_offer(
         updates["pixel_id"] = body.pixel_id or None
     if body.is_active is not None:
         updates["is_active"] = body.is_active
-    # Мульти-кабинет: None — не трогаем, список — замена (валидация в OfferUpdateIn).
-    if body.ad_account_ids is not None:
-        updates["ad_account_ids"] = body.ad_account_ids
     # Гео: None — не трогаем; список (в т.ч. пустой) — замена (нормализация в OfferUpdateIn).
     if body.countries is not None:
         updates["countries"] = body.countries
@@ -223,7 +227,6 @@ async def update_offer(
                     Offer.__table__.c.vertical,
                     Offer.__table__.c.pixel_id,
                     Offer.__table__.c.is_active,
-                    Offer.__table__.c.ad_account_ids,
                     Offer.__table__.c.countries,
                     Offer.__table__.c.created_at,
                     Offer.__table__.c.updated_at,
@@ -234,6 +237,19 @@ async def update_offer(
             if row is None:
                 raise HTTPException(status_code=404, detail="Оффер не найден")
 
+        if body.ad_account_ids is not None:
+            account_ids = list(
+                await ad_account_catalog.replace_offer_accounts(
+                    conn,
+                    offer_id=row["id"],
+                    account_ids=body.ad_account_ids,
+                )
+            )
+        else:
+            account_ids = (await ad_account_catalog.list_by_offer(conn, offer_ids=[row["id"]])).get(
+                row["id"], []
+            )
+
     return OfferOut(
         id=row["id"],
         code=row["code"],
@@ -241,7 +257,7 @@ async def update_offer(
         vertical=row["vertical"],
         pixel_id=row["pixel_id"],
         is_active=row["is_active"],
-        ad_account_ids=list(row["ad_account_ids"] or []),
+        ad_account_ids=account_ids,
         countries=list(row["countries"] or []),
         created_at=row["created_at"].isoformat() if row["created_at"] else None,
         updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,

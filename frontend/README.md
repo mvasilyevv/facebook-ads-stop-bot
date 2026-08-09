@@ -1,6 +1,6 @@
-# FB Stop Bot — Frontend (web)
+# FB Agent — Frontend (web)
 
-Production-grade web-интерфейс FB Stop Bot.
+Production-grade web-интерфейс FB Agent.
 
 Calm-industrial operator console с responsive web и mobile action flows.
 Токены и обязательные data states задаются общими packages; документ
@@ -167,6 +167,6 @@ sequence и snapshot revision; gap вызывает одно snapshot reconcilia
 Реализованы responsive «Сейчас», lifecycle «Действия», «Реклама», analytics,
 campaign runs, incidents, offers, settings, sources и remote desktop.
 Mobile использует cards из тех же row view-models, а не сжатые desktop tables.
-Campaign creation остаётся desktop-first.
+Campaign creation полностью доступен в responsive web и TMA через platform-native layouts.
 
 Storybook 10 запускает stories и a11y в headless Chromium. Playwright проверяет 360, 390, 430, 768, 1280, 1440 и 1920 px без horizontal page scroll.

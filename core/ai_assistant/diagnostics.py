@@ -42,7 +42,6 @@ _LOG_HINTS_BY_KEY: dict[str, str] = {
     "telegram_updates": "telegram_update_worker.log",
     "telegram": "telegram_delivery_worker.log",
     "meta_api": "meta_api_worker.log",
-    "enable_recommendation": "enable_recommendation_worker.log",
     "browser_agent": "browser_agent.log",
 }
 

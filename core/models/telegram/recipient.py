@@ -57,5 +57,11 @@ class TelegramRecipient(UUIDPrimaryKey, CreatedAtOnly, Base):
             "chat_id",
             postgresql_where=text("revoked_at IS NULL"),
         ),
+        Index(
+            "uq_telegram_recipients_single_active_owner",
+            "role",
+            unique=True,
+            postgresql_where=text("role = 'owner' AND revoked_at IS NULL"),
+        ),
         Index("ix_recipients_role", "role"),
     )

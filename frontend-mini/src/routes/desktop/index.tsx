@@ -34,7 +34,9 @@ function RemoteDesktopPage() {
     setConnectionError(null);
     setIsConnecting(true);
     try {
-      const { data: payload, response } = await tmaFetchApi.POST("/api/desktop/launch");
+      const { data: payload, response } = await tmaFetchApi.POST("/api/desktop/launch", {
+        body: { presentation: "mobile" },
+      });
       if (!response.ok || !payload?.url) {
         throw new Error("Сервер вернул некорректный билет рабочего стола.");
       }

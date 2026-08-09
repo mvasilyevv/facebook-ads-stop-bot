@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Unit-тесты асимметричного стоп-флага (is_scanning_enabled как глобальный стоп).
 
-Семантика: пауза сканирования глушит ВКЛЮЧАЮЩИЕ/тратящие действия (autostart-activate,
-enable-toggle, активирующие mutations, enable-рекомендации), но РАЗРЕШАЕТ выключающие
-(disable-toggle, pause_*/bulk pause) — они снижают риск открута. Проверяем каждый гейт
+Семантика: пауза сканирования глушит ВКЛЮЧАЮЩИЕ/тратящие действия
+(активирующие mutations), но РАЗРЕШАЕТ выключающие (pause_*/bulk pause) — они
+снижают риск открута. Проверяем каждый гейт
 в изоляции (monkeypatch модульного load_scanning_enabled, без БД).
 """
 
@@ -16,8 +16,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import apps.cabinet_scheduler.main as cab
-import apps.enable_recommendation_worker.main as ereco
 import apps.meta_api_worker.main as meta
 from core.meta_api.schemas import MetaMutationPayload
 from core.observer.queries import load_scanning_enabled
@@ -105,7 +103,7 @@ def test_is_activating_bulk_pause_false() -> None:
     assert meta._is_activating_mutation(p) is False
 
 
-# bulk_status_change с action=activate — включающая (главный путь autostart)
+# bulk_status_change с action=activate — включающая ручная операция
 def test_is_activating_bulk_activate_true() -> None:
     p = MetaMutationPayload(
         ad_account_id="123",
@@ -124,41 +122,6 @@ def test_is_activating_duplicate_true() -> None:
         target_id="new",
     )
     assert meta._is_activating_mutation(p) is True
-
-
-# ====================== cabinet_scheduler ======================
-
-
-# На паузе run_one_tick ничего не делает: не читает autostart-конфиг, не создаёт
-# задачу и не ставит durable observer scan.
-@pytest.mark.asyncio
-async def test_cabinet_tick_paused_does_nothing(monkeypatch) -> None:
-    monkeypatch.setattr(cab, "load_scanning_enabled", AsyncMock(return_value=False))
-    spy_cfg = AsyncMock()
-    spy_create = AsyncMock()
-    spy_scan = AsyncMock()
-    monkeypatch.setattr(cab, "read_autostart_config", spy_cfg)
-    monkeypatch.setattr(cab, "create_mutation_task", spy_create)
-    monkeypatch.setattr(cab, "enqueue_observer_scan", spy_scan)
-
-    now = datetime(2026, 6, 5, 6, 0, tzinfo=timezone.utc)
-    summary = await cab.run_one_tick(engine=object(), now=now)
-
-    assert summary["outcome"] == "scanning_paused"
-    spy_cfg.assert_not_awaited()
-    spy_create.assert_not_awaited()
-    spy_scan.assert_not_awaited()
-
-
-# При включённом сканировании гейт не мешает — управление уходит дальше в обычный путь
-@pytest.mark.asyncio
-async def test_cabinet_tick_enabled_proceeds(monkeypatch) -> None:
-    monkeypatch.setattr(cab, "load_scanning_enabled", AsyncMock(return_value=True))
-    monkeypatch.setattr(cab, "read_autostart_config", AsyncMock(return_value={"enabled": False}))
-    now = datetime(2026, 6, 5, 6, 0, tzinfo=timezone.utc)
-    summary = await cab.run_one_tick(engine=object(), now=now)
-
-    assert summary["outcome"] == "disabled"
 
 
 # ====================== meta_api_worker (process_one_task) ======================
@@ -211,7 +174,7 @@ async def test_meta_activate_paused_requeued(monkeypatch) -> None:
     spy_exec.assert_not_awaited()
 
 
-# bulk activate (главный путь autostart) на паузе → requeue, не исполняется
+# Ручной bulk activate на паузе → requeue, не исполняется
 @pytest.mark.asyncio
 async def test_meta_bulk_activate_paused_requeued(monkeypatch) -> None:
     monkeypatch.setattr(meta, "load_scanning_enabled", AsyncMock(return_value=False))
@@ -224,7 +187,7 @@ async def test_meta_bulk_activate_paused_requeued(monkeypatch) -> None:
         11,
         {
             "mutation_kind": "bulk_status_change",
-            "target_id": "autostart:1",
+            "target_id": "owner-bulk:1",
             "ad_account_id": "456",
             "params": {"action": "activate", "ad_ids": ["1"]},
         },
@@ -292,20 +255,3 @@ async def test_meta_pause_cancelled_before_external_call_never_executes(monkeypa
         lease_token=6,
     )
     spy_exec.assert_not_awaited()
-
-
-# ====================== enable_recommendation_worker (run_once) ======================
-
-
-# На паузе run_once пропускает цикл: fetch_candidates не вызывается, в counts есть метка
-@pytest.mark.asyncio
-async def test_enable_reco_paused_skips(monkeypatch) -> None:
-    monkeypatch.setattr(ereco, "load_scanning_enabled", AsyncMock(return_value=False))
-    spy_fetch = AsyncMock()
-    monkeypatch.setattr(ereco, "fetch_candidates", spy_fetch)
-
-    out = await ereco.run_once(object())
-
-    assert out.get("skipped_paused") == 1
-    assert out["candidates"] == 0
-    spy_fetch.assert_not_awaited()

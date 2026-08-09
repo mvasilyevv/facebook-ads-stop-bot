@@ -39,7 +39,7 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
-BASELINE_ASSET_SHA256 = "fe302ed9e5c7d67f59a9d7f2bc8985cff65734fdc9d1f01b4af546e574b3f3b7"
+BASELINE_ASSET_SHA256 = "270a3b71b02569cc85c3aefbb39d4c308da9f944ba2b5f5444c693608ae64e26"
 BASELINE_RETENTION_POLICY: dict[str, str] = {
     "ad_metrics": "90 days",
     "alert_events": "365 days",
@@ -50,7 +50,6 @@ BASELINE_RETENTION_POLICY: dict[str, str] = {
     "task_queue_failed": "90 days",
     "adset_duplicate_previews_expired": "immediate",
     "browser_operation_capabilities_expired": "immediate",
-    "enable_recommendations": "30 days",
     "telegram_invites_expired": "30 days",
     "operator_revision_events": "7 days",
     "incidents_terminal": "365 days",

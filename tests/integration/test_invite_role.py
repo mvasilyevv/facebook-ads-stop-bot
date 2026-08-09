@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import text
 
-from apps.api.routers.v1.settings_telegram import delete_telegram_recipient
 from core.telegram.service import consume_invite_and_create_recipient, find_active_invite
 
 
@@ -167,6 +166,39 @@ async def test_owner_invite_has_exactly_one_concurrent_consumer(pg_engine) -> No
 
 
 @pytest.mark.asyncio
+async def test_second_owner_invite_is_not_consumed_while_owner_is_active(pg_engine) -> None:
+    first_code = f"OWNER1{uuid.uuid4().hex[:16]}"
+    second_code = f"OWNER2{uuid.uuid4().hex[:16]}"
+    chat_ids = (9_990_111, 9_990_112)
+    try:
+        await _create_owner_invite(pg_engine, first_code)
+        await _create_owner_invite(pg_engine, second_code)
+        first = await consume_invite_and_create_recipient(
+            pg_engine,
+            code=first_code,
+            chat_id=chat_ids[0],
+            telegram_user_id=chat_ids[0],
+            username="owner",
+            display_name="Owner",
+        )
+        second = await consume_invite_and_create_recipient(
+            pg_engine,
+            code=second_code,
+            chat_id=chat_ids[1],
+            telegram_user_id=chat_ids[1],
+            username="second-owner",
+            display_name="Second owner",
+        )
+
+        assert first is not None and first.role == "owner"
+        assert second is None
+        assert await find_active_invite(pg_engine, second_code) is not None
+    finally:
+        await _cleanup(pg_engine, first_code, chat_ids)
+        await _cleanup(pg_engine, second_code, chat_ids)
+
+
+@pytest.mark.asyncio
 async def test_recipient_invite_cannot_demote_existing_owner(pg_engine) -> None:
     code = f"RECIPIENT{uuid.uuid4().hex[:16]}"
     chat_id = 9_990_151
@@ -283,65 +315,3 @@ async def test_owner_invite_promotes_active_recipient(pg_engine) -> None:
         assert role == "owner"
     finally:
         await _cleanup(pg_engine, code, (chat_id,))
-
-
-@pytest.mark.asyncio
-async def test_concurrent_revoke_and_recipient_invite_preserve_an_owner(pg_engine) -> None:
-    code = f"ROSTERRACE{uuid.uuid4().hex[:16]}"
-    revoked_owner_id = uuid.uuid4()
-    revoked_owner_chat = 9_990_154
-    remaining_owner_chat = 9_990_155
-    try:
-        async with pg_engine.begin() as conn:
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO telegram_recipients
-                        (id, chat_id, telegram_user_id, username, role)
-                    VALUES
-                        (:revoked_id, :revoked_chat, :revoked_chat, 'owner-a', 'owner'),
-                        (gen_random_uuid(), :remaining_chat, :remaining_chat, 'owner-b', 'owner')
-                    """
-                ),
-                {
-                    "revoked_id": revoked_owner_id,
-                    "revoked_chat": revoked_owner_chat,
-                    "remaining_chat": remaining_owner_chat,
-                },
-            )
-        await _create_invite(pg_engine, code, role="recipient")
-
-        deleted, invite_result = await asyncio.gather(
-            delete_telegram_recipient(str(revoked_owner_id), pg_engine),
-            consume_invite_and_create_recipient(
-                pg_engine,
-                code=code,
-                chat_id=remaining_owner_chat,
-                telegram_user_id=remaining_owner_chat,
-                username="owner-b-updated",
-                display_name="Owner B",
-            ),
-        )
-
-        assert deleted.id == str(revoked_owner_id)
-        assert invite_result is not None and invite_result.role == "owner"
-        async with pg_engine.connect() as conn:
-            active_owner_count = await conn.scalar(
-                text(
-                    """
-                    SELECT COUNT(*)
-                    FROM telegram_recipients
-                    WHERE chat_id = ANY(:chat_ids)
-                      AND role = 'owner'
-                      AND revoked_at IS NULL
-                    """
-                ),
-                {"chat_ids": [revoked_owner_chat, remaining_owner_chat]},
-            )
-        assert active_owner_count == 1
-    finally:
-        await _cleanup(
-            pg_engine,
-            code,
-            (revoked_owner_chat, remaining_owner_chat),
-        )

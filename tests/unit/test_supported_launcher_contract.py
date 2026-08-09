@@ -77,7 +77,6 @@ def test_money_workers_exist_only_in_production_compose() -> None:
         "observer",
         "autopause_worker",
         "meta_api",
-        "cabinet_scheduler",
         "campaign_creator",
     }
     assert money_services.isdisjoint(local_services)
@@ -94,6 +93,63 @@ def test_money_workers_exist_only_in_production_compose() -> None:
         production_services["meta_api"]["environment"]["META_API_WORKER_LANES"]
         == "interactive,bulk,background"
     )
+
+
+def test_forbidden_auto_activate_runtime_is_physically_absent() -> None:
+    forbidden_paths = (
+        "apps/cabinet_scheduler",
+        "apps/enable_recommendation_worker",
+        "run_cabinet_scheduler.py",
+        "run_enable_recommendation_worker.py",
+        "apps/api/routers/v1/settings_cabinet_autostart.py",
+        "apps/api/routers/v1/schemas/cabinet_autostart.py",
+        "core/scheduler/cabinet_autostart.py",
+        "core/enable_reco/__init__.py",
+        "core/enable_reco/analyzer.py",
+        "core/enable_reco/confirmation.py",
+        "core/models/observer/ad_auto_enable_disabled.py",
+        "core/models/tasks/enable_recommendation.py",
+    )
+
+    assert not [relative for relative in forbidden_paths if (ROOT / relative).exists()]
+
+    runtime_sources = (
+        "deploy/compose/docker-compose.app.yml",
+        "scripts/bluegreen-worker-handoff.sh",
+        "scripts/platform-compose.sh",
+        "scripts/reconcile-platform-release.sh",
+        "scripts/platform-network-inventory.py",
+        "docker/worker-entrypoint.sh",
+        "docker/Dockerfile.workers",
+        "apps/api/routers/v1/settings_observer.py",
+        "apps/api/routers/v1/schemas/settings_observer.py",
+        "apps/meta_api_worker/main.py",
+        "core/commands/service.py",
+        "core/meta_api/bulk.py",
+        "core/meta_api/client.py",
+        "core/models/settings/observer_config.py",
+        "migrations/versions/0001_safety_first_baseline.sql",
+    )
+    forbidden_contracts = (
+        "cabinet_autostart",
+        "cabinet_scheduler",
+        "enable_recommendation_worker",
+        "auto_enable_recommendations",
+        "enable_recommendations",
+        "ad_auto_enable_disabled",
+        "/auto-enable",
+        "activation_guards",
+        "autostart_reconciliation",
+        "bulk_execution_ad_ids",
+        "bulk_guard_rejected",
+        "guarded_autostart",
+        "locked_autostart",
+        "supersedes_autostart_task_id",
+    )
+    combined = "\n".join(
+        (ROOT / relative).read_text(encoding="utf-8") for relative in runtime_sources
+    )
+    assert not [contract for contract in forbidden_contracts if contract in combined]
 
 
 def test_worker_metrics_document_describes_container_only_runtime() -> None:

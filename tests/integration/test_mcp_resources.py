@@ -26,6 +26,7 @@ from apps.mcp_server.resources import (
     URI_RECENT_ALERTS,
     URI_SCHEMA_OVERVIEW,
 )
+from core.ad_account_catalog import ad_account_catalog
 
 
 @pytest_asyncio.fixture
@@ -37,6 +38,11 @@ async def seeded_offer(pg_engine: AsyncEngine):
         await conn.execute(
             text("INSERT INTO offers (id, code, name, is_active) VALUES (:i, :c, :n, true)"),
             {"i": offer_id, "c": code, "n": f"Test resource {suffix}"},
+        )
+        await ad_account_catalog.replace_offer_accounts(
+            conn,
+            offer_id=offer_id,
+            account_ids=["98765001"],
         )
     yield code
     async with pg_engine.begin() as conn:
@@ -110,6 +116,8 @@ async def test_read_resource_offers_returns_seeded_code(
     assert payload["uri"] == URI_OFFERS
     codes = {item["code"] for item in payload["items"]}
     assert seeded_offer in codes
+    seeded = next(item for item in payload["items"] if item["code"] == seeded_offer)
+    assert seeded["ad_account_ids"] == ["98765001"]
 
 
 # read_resource schema-overview — Markdown содержит хоть один реально зарегистрированный tool.
@@ -126,7 +134,7 @@ async def test_read_resource_schema_overview_lists_tools(
     contents = await _read_resource(app, URI_SCHEMA_OVERVIEW)
     assert contents[0].mimeType == "text/markdown"
     body = contents[0].text
-    assert "FB Stop Bot" in body
+    assert "FB Agent" in body
     # get_active_offers — стабильный READ_ONLY tool, должен быть упомянут.
     assert "get_active_offers" in body
     # MCP was deliberately reduced to diagnostics and creative assistance.

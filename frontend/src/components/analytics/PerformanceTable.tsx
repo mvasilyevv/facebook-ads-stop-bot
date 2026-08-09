@@ -2,8 +2,14 @@ import { Fragment, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 
+import {
+  ANALYTICS_PRESETS,
+  analyticsColumnsForPreset,
+  analyticsMetricsForRow,
+  type AnalyticsMetricView,
+} from "@fb/shared/analytics/presentation";
+import type { AnalyticsPreset } from "@fb/shared/analytics/routeState";
 import type { AnalyticsPerformanceRow } from "@fb/shared";
-import { formatSpend } from "@fb/shared/format/number";
 import type { DataState } from "@fb/shared/operator/contracts";
 import { inheritAnalyticsState } from "@fb/shared/analytics/state";
 import { DATA_STATE_DESCRIPTION, DATA_STATE_LABEL } from "@fb/shared/operator/viewModel";
@@ -12,25 +18,16 @@ import { DataStateBadge } from "@fb/operator-ui";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useAnalyticsPerformance, type AnalyticsPerformanceParams } from "@/lib/api/analytics";
 
-type Preset = "economy" | "funnel" | "delivery";
-type MetricView = { label: string; value: string; tone?: "danger" | "success" | "accent" };
-
-const count = new Intl.NumberFormat("ru-RU");
-
 interface PerformanceTableProps {
   rows?: AnalyticsPerformanceRow[];
   loading?: boolean;
   parentState?: DataState;
   currency: string | null;
   params: AnalyticsPerformanceParams;
+  preset: AnalyticsPreset;
+  onPreset: (preset: AnalyticsPreset) => void;
   onSort: (sort: NonNullable<AnalyticsPerformanceParams["sort"]>) => void;
 }
-
-const PRESETS: Array<{ value: Preset; label: string }> = [
-  { value: "economy", label: "Экономика" },
-  { value: "funnel", label: "Воронка" },
-  { value: "delivery", label: "Доставка" },
-];
 
 export function PerformanceTable({
   rows,
@@ -38,10 +35,11 @@ export function PerformanceTable({
   parentState = "ready",
   currency,
   params,
+  preset,
+  onPreset,
   onSort,
 }: PerformanceTableProps) {
-  const [preset, setPreset] = useState<Preset>("economy");
-  const columns = columnsFor(preset);
+  const columns = analyticsColumnsForPreset(preset);
 
   return (
     <div data-testid="analytics-performance-table">
@@ -50,12 +48,12 @@ export function PerformanceTable({
         role="group"
         aria-label="Набор колонок аналитики"
       >
-        {PRESETS.map((item) => (
+        {ANALYTICS_PRESETS.map((item) => (
           <button
             key={item.value}
             type="button"
             aria-pressed={preset === item.value}
-            onClick={() => setPreset(item.value)}
+            onClick={() => onPreset(item.value)}
             className={`min-h-11 shrink-0 rounded-full border px-4 text-[14px] font-semibold ${
               preset === item.value
                 ? "border-accent bg-accent-bg text-accent"
@@ -158,7 +156,7 @@ function ExpandableRow({
   row: AnalyticsPerformanceRow;
   params: AnalyticsPerformanceParams;
   depth: number;
-  preset: Preset;
+  preset: AnalyticsPreset;
   parentState: DataState;
   currency: string | null;
 }) {
@@ -182,7 +180,7 @@ function ExpandableRow({
         </th>
         {visibleMetricsFor(effectiveRow, preset, currency).map((metric) => (
           <td
-            key={metric.label}
+            key={metric.key}
             className={`whitespace-nowrap px-3 py-3 text-right font-display tabular-nums ${toneClass(metric.tone)}`}
           >
             {metric.value}
@@ -225,7 +223,7 @@ function MobileExpandableRow({
   row: AnalyticsPerformanceRow;
   params: AnalyticsPerformanceParams;
   depth: number;
-  preset: Preset;
+  preset: AnalyticsPreset;
   parentState: DataState;
   currency: string | null;
 }) {
@@ -244,7 +242,7 @@ function MobileExpandableRow({
         />
         <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-5">
           {visibleMetricsFor(effectiveRow, preset, currency).map((metric) => (
-            <div key={metric.label}>
+            <div key={metric.key}>
               <dt className="text-[12px] text-bg-8">{metric.label}</dt>
               <dd
                 className={`mt-1 font-display text-[16px] tabular-nums ${toneClass(metric.tone)}`}
@@ -383,105 +381,12 @@ function ObjectCell({
   );
 }
 
-function columnsFor(
-  preset: Preset,
-): Array<{ key: string; label: string; sort?: NonNullable<AnalyticsPerformanceParams["sort"]> }> {
-  if (preset === "funnel")
-    return [
-      { key: "clicks", label: "Клики", sort: "clicks" },
-      { key: "reg", label: "Рег.", sort: "registrations" },
-      { key: "ftd", label: "FTD", sort: "ftds" },
-      { key: "dep", label: "Деп.", sort: "confirmed_deposits" },
-      { key: "click-reg", label: "Click→Reg" },
-      { key: "reg-ftd", label: "Reg→FTD" },
-    ];
-  if (preset === "delivery")
-    return [
-      { key: "impr", label: "Показы" },
-      { key: "clicks", label: "Клики", sort: "clicks" },
-      { key: "cpc", label: "CPC" },
-      { key: "ctr", label: "CTR" },
-      { key: "spend", label: "Расход", sort: "spend" },
-      { key: "base", label: "База" },
-    ];
-  return [
-    { key: "spend", label: "Расход", sort: "spend" },
-    { key: "revenue", label: "Выручка", sort: "revenue" },
-    { key: "cost-reg", label: "Цена рег." },
-    { key: "cost-ftd", label: "Цена FTD" },
-    { key: "roi", label: "ROI" },
-    { key: "delta", label: "Δ базы", sort: "base_delta" },
-  ];
-}
-
-function metricsFor(
-  row: AnalyticsPerformanceRow,
-  preset: Preset,
-  currency: string | null,
-): MetricView[] {
-  const budget = row.live_budget;
-  const delta = numberValue(budget?.base_delta);
-  const roi = numberValue(row.roi_pct);
-  if (preset === "funnel")
-    return [
-      { label: "Клики", value: integer(row.clicks) },
-      {
-        label: "Регистрации",
-        value: integer(row.registrations),
-        tone: row.registrations === null ? undefined : "accent",
-      },
-      {
-        label: "FTD",
-        value: integer(row.ftds),
-        tone: row.ftds === null ? undefined : "accent",
-      },
-      {
-        label: "Депозиты",
-        value: integer(row.confirmed_deposits),
-        tone: row.confirmed_deposits === null ? undefined : "accent",
-      },
-      { label: "Click→Reg", value: percent(row.click_registration_cr_pct) },
-      { label: "Reg→FTD", value: percent(row.registration_ftd_cr_pct) },
-    ];
-  if (preset === "delivery")
-    return [
-      { label: "Показы", value: integer(row.impressions) },
-      { label: "Клики", value: integer(row.clicks) },
-      { label: "CPC", value: formatSpend(row.cpc, currency) },
-      { label: "CTR", value: percent(row.ctr_pct) },
-      { label: "Расход", value: formatSpend(row.spend, currency) },
-      { label: "База", value: formatSpend(budget?.base_budget, currency) },
-    ];
-  return [
-    { label: "Расход", value: formatSpend(row.spend, currency) },
-    { label: "Выручка", value: formatSpend(row.revenue, currency) },
-    {
-      label: "Цена регистрации",
-      value: formatSpend(row.cost_per_registration, currency),
-    },
-    {
-      label: "Цена FTD",
-      value: formatSpend(row.cost_per_ftd, currency),
-    },
-    {
-      label: "ROI",
-      value: percent(row.roi_pct, true),
-      tone: roi === null ? undefined : roi < 0 ? "danger" : "success",
-    },
-    {
-      label: "Δ базы",
-      value: delta === null ? "—" : signedMoney(budget?.base_delta ?? null, currency),
-      tone: delta === null ? undefined : delta > 0 ? "danger" : "success",
-    },
-  ];
-}
-
 function visibleMetricsFor(
   row: AnalyticsPerformanceRow,
-  preset: Preset,
+  preset: AnalyticsPreset,
   currency: string | null,
-): MetricView[] {
-  const metrics = metricsFor(row, preset, currency);
+): AnalyticsMetricView[] {
+  const metrics = analyticsMetricsForRow(row, preset, currency);
   if (row.state === "unavailable") {
     return metrics.map((metric) => ({ ...metric, value: "—", tone: undefined }));
   }
@@ -528,34 +433,17 @@ function Sortable({
   );
 }
 
-function numberValue(value?: string | null): number | null {
-  const parsed = value == null ? null : Number(value);
-  return parsed === null || !Number.isFinite(parsed) ? null : parsed;
-}
-
 function accountLabel(value: string): string {
   return value.startsWith("act_") ? value : `act_${value}`;
-}
-function signedMoney(value: string | null, currency: string | null): string {
-  const parsed = numberValue(value);
-  const formatted = formatSpend(value, currency);
-  return parsed === null || formatted === "—" ? "—" : `${parsed > 0 ? "+" : ""}${formatted}`;
 }
 function childCurrency(
   scope: { currency_state: string; currency?: string | null } | undefined,
   parentCurrency: string | null,
 ): string | null {
-  const candidate = scope?.currency_state === "single" && scope.currency ? scope.currency : null;
+  const candidate = scope?.currency_state === "single" && scope.currency === "USD" ? "USD" : null;
   return candidate === parentCurrency ? candidate : null;
 }
-function integer(value: number | null | undefined): string {
-  return value == null ? "—" : count.format(value);
-}
-function percent(value?: string | null, signed = false): string {
-  const parsed = numberValue(value);
-  return parsed === null ? "—" : `${signed && parsed > 0 ? "+" : ""}${parsed.toFixed(2)}%`;
-}
-function toneClass(tone?: MetricView["tone"]): string {
+function toneClass(tone?: AnalyticsMetricView["tone"]): string {
   return tone === "danger"
     ? "text-danger"
     : tone === "success"

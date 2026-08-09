@@ -188,6 +188,50 @@ jobs:
           npm run lint --prefix services/browser-agent
           npm test --prefix services/browser-agent
 
+  ui-evidence:
+    name: UI evidence (Storybook a11y + Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: pnpm 11.6.0
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.6.0
+
+      - name: Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Установка frontend-зависимостей
+        run: pnpm install --frozen-lockfile
+
+      - name: Установка Playwright browser runtimes
+        run: pnpm --filter fb-stop-bot-frontend exec playwright install --with-deps chromium firefox webkit
+
+      - name: Storybook build и accessibility tests
+        run: |
+          pnpm --filter fb-stop-bot-frontend build-storybook
+          pnpm --filter fb-stop-bot-frontend test:storybook
+
+      - name: Playwright responsive и functional acceptance
+        run: pnpm --filter fb-stop-bot-frontend test:e2e
+
+      - name: Сохранить Playwright diagnostics при ошибке
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-diagnostics-${{ github.sha }}
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
   platform-config:
     name: Platform contracts (Compose + observability + shell)
     runs-on: ubuntu-latest
@@ -241,7 +285,7 @@ jobs:
   build-base:
     name: Production artifact — python-base
     runs-on: ubuntu-latest
-    needs: [test, web-test, platform-config]
+    needs: [test, web-test, ui-evidence, platform-config]
     permissions:
       contents: read
       packages: write
@@ -298,9 +342,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=python-base
           provenance: mode=max
           sbom: true
-          tags: |
-            ${{ env.IMAGE_BASE }}-python-base:${{ github.sha }}
-            ${{ env.IMAGE_BASE }}-python-base:latest
+          tags: ${{ env.IMAGE_BASE }}-python-base:${{ github.sha }}
 
   # ─────────────────────────────────────────────
   # JOB 2b: остальные образы (после python-base).
@@ -407,9 +449,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.image_suffix }}
           provenance: mode=max
           sbom: true
-          tags: |
-            ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:${{ github.sha }}
-            ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:latest
+          tags: ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:${{ github.sha }}
 
       # Не-Python образы (browser-agent/frontend/mini-app) — без base и pb2.
       - name: Сборка и push — ${{ matrix.name }}
@@ -423,14 +463,12 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.image_suffix }}
           provenance: mode=max
           sbom: true
-          tags: |
-            ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:${{ github.sha }}
-            ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:latest
+          tags: ${{ env.IMAGE_BASE }}-${{ matrix.image_suffix }}:${{ github.sha }}
 
-  # Vision webtop and its Kasm transport are independent production artifacts.
-  # The server never rebuilds them and accepts only immutable digests.
+  # Vision, KasmVNC and the first-party client form one immutable artifact.
+  # The server never rebuilds it and accepts only an immutable digest.
   build-desktop:
-    name: Production artifacts — Vision + KasmVNC
+    name: Production artifact — Vision desktop
     runs-on: ubuntu-latest
     needs: [test, web-test]
     permissions:
@@ -438,7 +476,6 @@ jobs:
       packages: write
     outputs:
       webtop_image_ref: ${{ steps.artifact.outputs.webtop_image_ref }}
-      kasm_image_ref: ${{ steps.artifact.outputs.kasm_image_ref }}
 
     steps:
       - name: Checkout
@@ -454,7 +491,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Сборка и push — Vision webtop
+      - name: Сборка и push — Vision desktop
         id: build_webtop
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -467,31 +504,14 @@ jobs:
           sbom: true
           tags: ${{ env.IMAGE_BASE }}-vision-webtop:${{ github.sha }}
 
-      - name: Сборка и push — KasmVNC sidecar
-        id: build_kasm
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: deploy/kasmvnc-sidecar
-          file: deploy/kasmvnc-sidecar/Dockerfile
-          push: true
-          cache-from: type=gha,scope=kasmvnc-sidecar
-          cache-to: type=gha,mode=max,scope=kasmvnc-sidecar
-          provenance: mode=max
-          sbom: true
-          tags: ${{ env.IMAGE_BASE }}-kasmvnc-sidecar:${{ github.sha }}
-
       - name: Зафиксировать immutable reference
         id: artifact
         env:
           WEBTOP_IMAGE_NAME: ${{ env.IMAGE_BASE }}-vision-webtop
           WEBTOP_IMAGE_DIGEST: ${{ steps.build_webtop.outputs.digest }}
-          KASM_IMAGE_NAME: ${{ env.IMAGE_BASE }}-kasmvnc-sidecar
-          KASM_IMAGE_DIGEST: ${{ steps.build_kasm.outputs.digest }}
         run: |
           test -n "$WEBTOP_IMAGE_DIGEST"
-          test -n "$KASM_IMAGE_DIGEST"
           printf 'webtop_image_ref=%s@%s\n' "$WEBTOP_IMAGE_NAME" "$WEBTOP_IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
-          printf 'kasm_image_ref=%s@%s\n' "$KASM_IMAGE_NAME" "$KASM_IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
 
   release-manifest:
     name: Immutable application release manifest
@@ -520,7 +540,6 @@ jobs:
           --image-base "${IMAGE_BASE}"
           --tag "${GITHUB_SHA}"
           --desktop-webtop-image "${{ needs.build-desktop.outputs.webtop_image_ref }}"
-          --desktop-kasmvnc-image "${{ needs.build-desktop.outputs.kasm_image_ref }}"
           --output release-images.env
 
       - name: Upload immutable release manifest

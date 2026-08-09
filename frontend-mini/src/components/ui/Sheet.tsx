@@ -5,7 +5,7 @@
  * prefers-reduced-motion: анимация отключается.
  */
 import * as Dialog from "@radix-ui/react-dialog";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 
@@ -17,6 +17,7 @@ interface SheetProps {
   eyebrow?: string;
   children: ReactNode;
   className?: string;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
 export function Sheet({
@@ -26,6 +27,7 @@ export function Sheet({
   eyebrow,
   children,
   className,
+  returnFocusRef,
 }: SheetProps) {
   return (
     <Dialog.Root
@@ -47,6 +49,11 @@ export function Sheet({
         {/* Сам sheet — снизу, без radius-top */}
         <Dialog.Content
           aria-describedby={undefined}
+          onCloseAutoFocus={(event) => {
+            if (!returnFocusRef?.current) return;
+            event.preventDefault();
+            returnFocusRef.current.focus();
+          }}
           className={cn(
             "fixed bottom-0 z-50 flex flex-col",
             "left-[max(var(--tg-content-safe-left,0px),env(safe-area-inset-left))]",

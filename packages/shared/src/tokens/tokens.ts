@@ -37,7 +37,7 @@ export const colors = {
   successBg: "#121a13",
   warning: "#b8a36a",
   warningBg: "#211c11",
-  danger: "#c9554d",
+  danger: "#cf6259",
   dangerBg: "#281513",
   info: "#91a0aa",
   infoBg: "#151b1f",

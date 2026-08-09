@@ -2,6 +2,7 @@ import type {
   OperatorActionsQuery,
   OperatorAdRow,
   OperatorAdsQuery,
+  OperatorIncidentsQuery,
   OperatorSnapshotQuery,
 } from "@fb/shared/operator/contracts";
 import type { operations } from "@fb/shared/api/generated";
@@ -11,6 +12,7 @@ import {
   isApiProblem,
   reconcileOperatorReadModels,
   reconcileOperatorSnapshots,
+  safeApiProblemMessage,
 } from "@fb/operator-api";
 import { type QueryClient } from "@tanstack/react-query";
 
@@ -64,6 +66,15 @@ export function useOperatorIncident(incidentId: string) {
     "/api/operator/incidents/{incident_id}",
     { params: { path: { incident_id: incidentId } } },
     { enabled: Boolean(incidentId), staleTime: 5_000 },
+  );
+}
+
+export function useOperatorIncidents(query: OperatorIncidentsQuery = {}) {
+  return operatorApi.useQuery(
+    "get",
+    "/api/operator/incidents",
+    { params: { query } },
+    { staleTime: 5_000 },
   );
 }
 
@@ -231,6 +242,10 @@ export function useAcknowledgeOperatorIncident() {
 
 export function operatorProblemMessage(error: unknown): string {
   return formatApiProblem(error, "Операторский снимок недоступен");
+}
+
+export function operatorIncidentProblemMessage(error: unknown): string {
+  return safeApiProblemMessage(error, "Журнал инцидентов временно недоступен");
 }
 
 function isTerminalOperatorProblem(error: unknown): boolean {

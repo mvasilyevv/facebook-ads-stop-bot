@@ -6,20 +6,35 @@ import type {
   AnalyticsLiveBudgetSeries,
   AnalyticsPerformance,
 } from "@fb/shared";
+import type { AnalyticsRouteSearch } from "@fb/shared/analytics/routeState";
 import { makeOperatorScopeEvidence } from "@fb/shared/operator/testFixture";
+
+const { navigate, routeSearch } = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  routeSearch: {
+    tab: "uploads",
+    period: "today",
+    preset: "economy",
+    sort: "spend",
+    direction: "desc",
+    page: 1,
+  },
+}));
 
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: unknown }) => ({
     ...options,
     component: options.component,
+    useSearch: () => routeSearch,
   }),
   Link: ({ children }: { children: React.ReactNode }) => children,
-  useNavigate: () => vi.fn(),
+  useNavigate: () => navigate,
 }));
 
 const mockRealtimeStatus = vi.fn(() => "connected");
 vi.mock("@fb/operator-api", () => ({
   useOperatorRealtimeStatus: () => mockRealtimeStatus(),
+  safeApiProblemMessage: () => "Timezone отображения недоступен",
 }));
 
 vi.mock("@/lib/tg", () => ({
@@ -44,6 +59,11 @@ vi.mock("@/lib/operatorApi", () => ({
     error instanceof Error ? error.message : "Аналитика недоступна",
 }));
 
+const mockUseOperatorDisplayPreference = vi.fn();
+vi.mock("@/lib/settingsApi", () => ({
+  useOperatorDisplayPreference: () => mockUseOperatorDisplayPreference(),
+}));
+
 import { Route } from "@/routes/analytics/index";
 
 const AnalyticsPage = (Route as unknown as { component: ComponentType })
@@ -57,6 +77,20 @@ const daypartRefetch = vi.fn();
 describe("mobile performance analytics", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.assign(routeSearch, {
+      tab: "uploads",
+      period: "today",
+      preset: "economy",
+      sort: "spend",
+      direction: "desc",
+      page: 1,
+      from_date: undefined,
+      to_date: undefined,
+      account_id: undefined,
+      offer_id: undefined,
+      campaign_id: undefined,
+      search: undefined,
+    });
     mockRealtimeStatus.mockReturnValue("connected");
     mockUsePerformance.mockReturnValue(
       queryResult(makePerformanceFixture(), performanceRefetch),
@@ -70,6 +104,16 @@ describe("mobile performance analytics", () => {
     mockUseDaypart.mockReturnValue(
       queryResult(makeDaypartFixture(), daypartRefetch),
     );
+    mockUseOperatorDisplayPreference.mockReturnValue({
+      data: {
+        timezone_name: "Europe/Kaliningrad",
+        updated_at: "2026-08-09T10:00:00Z",
+      },
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
   });
 
   it("renders source evidence and responsive campaign cards without a desktop table", () => {
@@ -90,6 +134,39 @@ describe("mobile performance analytics", () => {
     const cards = screen.getByTestId("performance-cards");
     expect(within(cards).queryByRole("table")).not.toBeInTheDocument();
     expect(within(cards).getAllByRole("article")).toHaveLength(2);
+  });
+
+  it("fails closed when the server display timezone is unavailable", () => {
+    mockUseOperatorDisplayPreference.mockReturnValue({
+      data: undefined,
+      isPending: false,
+      isError: true,
+      error: new Error(
+        "traceback postgres://secret 00000000-0000-0000-0000-000000000099",
+      ),
+      refetch: vi.fn(),
+    });
+
+    render(<AnalyticsPage />);
+
+    expect(
+      screen.getByText("Timezone отображения недоступен"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/traceback|postgres|00000000-/i),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Campaign Alpha")).not.toBeInTheDocument();
+  });
+
+  it("does not send the presentation timezone into server analytics boundaries", () => {
+    render(<AnalyticsPage />);
+
+    expect(mockUsePerformance).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        timezone: expect.anything(),
+        timezone_name: expect.anything(),
+      }),
+    );
   });
 
   it("renders live thresholds, the funnel and the typed event feed", () => {
@@ -156,31 +233,39 @@ describe("mobile performance analytics", () => {
     expect(today).toHaveClass("min-h-11");
 
     fireEvent.click(screen.getByRole("button", { name: "7 дней" }));
-    expect(mockUsePerformance).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        period: "7d",
-        level: "campaign",
-        page: 1,
-        page_size: 20,
-      }),
+    expect(lastNavigation()).toEqual(
+      expect.objectContaining({ period: "7d", page: 1 }),
     );
 
     fireEvent.change(screen.getByLabelText("Поиск в аналитике"), {
       target: { value: "alpha" },
     });
-    expect(mockUsePerformance).toHaveBeenLastCalledWith(
-      expect.objectContaining({ search: "alpha" }),
+    expect(lastNavigation()).toEqual(
+      expect.objectContaining({ search: "alpha", page: 1 }),
     );
 
     fireEvent.change(screen.getByLabelText("Кабинет"), {
       target: { value: "act_1" },
     });
-    expect(mockUsePerformance).toHaveBeenLastCalledWith(
+    expect(lastNavigation()).toEqual(
       expect.objectContaining({
         account_id: "act_1",
         offer_id: undefined,
         campaign_id: undefined,
+        page: 1,
       }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Сортировка"), {
+      target: { value: "ftds" },
+    });
+    expect(lastNavigation()).toEqual(
+      expect.objectContaining({ sort: "ftds", page: 1 }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Воронка" }));
+    expect(lastNavigation()).toEqual(
+      expect.objectContaining({ preset: "funnel", page: 1 }),
     );
   });
 
@@ -538,6 +623,16 @@ describe("mobile performance analytics", () => {
     ).toBeGreaterThan(0);
   });
 });
+
+function lastNavigation(): AnalyticsRouteSearch {
+  const call = navigate.mock.calls.at(-1)?.[0] as
+    | {
+        search: (previous: AnalyticsRouteSearch) => AnalyticsRouteSearch;
+      }
+    | undefined;
+  if (!call) throw new Error("Expected analytics navigation");
+  return call.search(routeSearch as AnalyticsRouteSearch);
+}
 
 function queryResult<T>(data: T, refetch: () => void) {
   return {

@@ -3,7 +3,6 @@
 
 router — handle_update диспатчит обновления по доменам:
 - onboarding: /start, /help
-- autostart: owner-scoped schedule configuration
 - alerts: recipient-bound opaque incident/action callbacks
 """
 

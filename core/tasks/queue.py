@@ -171,20 +171,26 @@ def _row_to_task(row: Any) -> Task:
     )
 
 
-def infer_task_lane(task_type: str, payload: dict[str, Any]) -> str:
+def infer_task_lane(
+    task_type: str,
+    payload: dict[str, Any],
+    *,
+    requested_by: str = "",
+) -> str:
     """Choose the durable scheduler lane from business semantics."""
     mutation_kind = str(payload.get("mutation_kind") or "")
     requested_action = str(payload.get("action") or "")
-    if task_type == "meta_api_mutation" and mutation_kind in {
-        "pause_ad",
-        "activate_ad",
-        "bulk_status_change",
-    }:
+    if (
+        task_type == "meta_api_mutation"
+        and mutation_kind == "pause_ad"
+        and requested_by == "bot_auto_stop"
+    ):
         return "money"
     if task_type == "campaign_create" or (
         task_type == "meta_api_mutation"
         and mutation_kind
         in {
+            "bulk_status_change",
             "duplicate_adset_structure",
         }
     ):
@@ -228,7 +234,11 @@ async def create_task(
         raise ValueError(f"Unknown task_type: {task_type}")
     if status not in TASK_STATUSES:
         raise ValueError(f"Unknown status: {status}")
-    effective_lane = lane or infer_task_lane(task_type, payload)
+    effective_lane = lane or infer_task_lane(
+        task_type,
+        payload,
+        requested_by=requested_by,
+    )
     if effective_lane not in TASK_LANES:
         raise ValueError(f"Unknown task lane: {effective_lane}")
     now = datetime.now(timezone.utc)

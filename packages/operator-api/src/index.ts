@@ -27,8 +27,18 @@ export {
   dataOrThrow,
   isApiProblem,
   noContentOrThrow,
+  safeApiProblemMessage,
 } from "./result";
 export type { GeneratedApiResult } from "./result";
+export {
+  createOperatorDisplayPreferenceHooks,
+  isOperatorDisplayTimezoneCandidate,
+  OPERATOR_DISPLAY_PREFERENCE_QUERY_KEY,
+} from "./displayPreferences";
+export type {
+  OperatorDisplayPreference,
+  OperatorDisplayPreferenceUpdate,
+} from "./displayPreferences";
 export { useOperatorRealtime } from "./realtime";
 export type {
   OperatorActionProjectionFetcher,

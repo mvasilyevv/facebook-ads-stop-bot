@@ -7,10 +7,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { Offer, OfferRules } from "@fb/shared";
 
+const routeState = vi.hoisted(() => ({ filter: "all", role: "owner" }));
+
 // Мок роутера
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => (options: { component: ComponentType }) => options,
+  createFileRoute: () => (options: { component: ComponentType }) => ({
+    ...options,
+    useSearch: () => ({ filter: routeState.filter }),
+  }),
   useNavigate: () => vi.fn(),
+}));
+
+vi.mock("@/lib/auth", () => ({
+  getStoredRole: () => routeState.role,
 }));
 
 // Мок TG
@@ -91,6 +100,8 @@ const OffersTestWrapper = (Route as unknown as { component: ComponentType })
 
 describe("OffersPage", () => {
   beforeEach(() => {
+    routeState.filter = "all";
+    routeState.role = "owner";
     mockUseOffers.mockReturnValue({
       data: MOCK_OFFERS,
       isLoading: false,
@@ -132,6 +143,26 @@ describe("OffersPage", () => {
     render(<OffersTestWrapper />);
     expect(screen.getAllByText("Активен").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Выключен").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps the web active-state filter in typed URL state", () => {
+    routeState.filter = "inactive";
+    render(<OffersTestWrapper />);
+    expect(screen.queryByText("GH_AVI")).not.toBeInTheDocument();
+    expect(screen.getByText("NG_CR2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Выключенные" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("is read-only for a notification recipient", () => {
+    routeState.role = "recipient";
+    render(<OffersTestWrapper />);
+    expect(
+      screen.getByText(/каталог доступен только для чтения/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Новый/i })).toBeDisabled();
   });
 
   // Клик по офферу открывает bottom sheet с деталями
@@ -249,6 +280,8 @@ describe("OffersPage", () => {
     const card = screen.getByRole("button", { name: /Оффер GH_AVI/i });
     fireEvent.click(card);
     fireEvent.click(screen.getByText("Выключить"));
+    expect(screen.getByText("Подтвердить выключение")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Подтвердить выключение"));
 
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith({

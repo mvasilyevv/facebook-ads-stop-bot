@@ -38,6 +38,8 @@ from apps.api.routers.v1.schemas.operator import (
     OperatorFunnelStage,
     OperatorIncidentAckResponse,
     OperatorIncidentDetailResponse,
+    OperatorIncidentItem,
+    OperatorIncidentsResponse,
     OperatorIssue,
     OperatorPortfolioData,
     OperatorScopeEvidence,
@@ -84,6 +86,7 @@ from core.operator.queries import (
     fetch_operator_ads,
     fetch_operator_events,
     fetch_operator_incident,
+    fetch_operator_incident_page,
     fetch_operator_incidents,
     fetch_operator_revision,
     fetch_operator_scan_state,
@@ -1259,6 +1262,76 @@ def _incident_attention_item(incident: dict[str, Any]) -> OperatorAttentionItem:
     )
 
 
+def _incident_requires_usd_evidence(incident: dict[str, Any]) -> bool:
+    facts_value = incident.get("facts")
+    facts = facts_value if isinstance(facts_value, dict) else {}
+    return bool(
+        incident.get("ad_account_id")
+        or str(incident.get("resource_type") or "") in {"ad", "fb_ad", "campaign", "account"}
+        or any(key in facts for key in ("currency", "currency_state", "metrics", "risk_ratio"))
+    )
+
+
+def _incident_public_reason(incident: dict[str, Any]) -> str | None:
+    facts_value = incident.get("facts")
+    facts = facts_value if isinstance(facts_value, dict) else {}
+    direct = facts.get("risk")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()[:240]
+    card = facts.get("card")
+    if isinstance(card, dict):
+        nested = card.get("risk")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()[:240]
+    return None
+
+
+def _incident_item(
+    incident: dict[str, Any],
+    *,
+    usd_scope_confirmed: bool,
+) -> OperatorIncidentItem:
+    resource_type = str(incident.get("resource_type") or "system")
+    kind = (
+        "ad"
+        if resource_type in {"ad", "fb_ad"}
+        else "campaign"
+        if resource_type == "campaign"
+        else "account"
+        if resource_type == "account"
+        else "system"
+    )
+    requires_usd_evidence = _incident_requires_usd_evidence(incident)
+    money_copy_visible = not requires_usd_evidence or usd_scope_confirmed
+    raw_title = str(incident.get("title") or "").strip()
+    raw_summary = str(incident.get("summary") or "").strip()
+    return OperatorIncidentItem(
+        id=str(incident["id"]),
+        severity=incident["severity"],
+        status=incident["status"],
+        title=(
+            raw_title or "Инцидент требует проверки"
+            if money_copy_visible
+            else "Денежный сигнал требует проверки"
+        ),
+        summary=(
+            (raw_summary or None)
+            if money_copy_visible
+            else "Валюта кабинета не подтверждена. Денежные детали скрыты."
+        ),
+        reason=_incident_public_reason(incident) if money_copy_visible else None,
+        occurred_at=incident["opened_at"],
+        account_id=(str(incident["ad_account_id"]) if incident.get("ad_account_id") else None),
+        target=OperatorAttentionTarget(
+            kind=kind,
+            id=str(incident.get("resource_id")) if incident.get("resource_id") else None,
+            label=(str(incident.get("resource_label")) if incident.get("resource_label") else None),
+        ),
+        action=OperatorAttentionAction(label="Открыть", href=f"/incidents/{incident['id']}"),
+        requires_usd_evidence=requires_usd_evidence,
+    )
+
+
 def _attention_section(
     *,
     incidents: list[dict[str, Any]],
@@ -1576,12 +1649,22 @@ async def get_operator_cabinet_snapshot(
 async def get_operator_actions(
     engine: DepEngine,
     settings: DepSettings,
+    account_id: str | None = Query(default=None, min_length=1, max_length=64),
     limit: int = Query(default=30, ge=1, le=100),
     before_id: int | None = Query(default=None, ge=1),
     state: list[str] = Query(default_factory=list),
 ) -> OperatorActionsResponse | JSONResponse:
     now = datetime.now(UTC)
     correlation_id = str(uuid.uuid4())
+    requested_account_id = canonical_account_id(account_id) if account_id else None
+    if account_id is not None and not requested_account_id:
+        return _problem(
+            status_code=422,
+            code="invalid_account_id",
+            message="Выберите корректный рекламный кабинет",
+            correlation_id=correlation_id,
+        )
+    account_scope = [requested_account_id] if requested_account_id else None
     try:
         (
             (items, next_cursor, as_of),
@@ -1593,9 +1676,10 @@ async def get_operator_actions(
                 limit=limit,
                 before_id=before_id,
                 states=tuple(state),
+                account_id=requested_account_id,
             ),
-            resolve_cabinet_days(engine),
-            resolve_account_currencies(engine),
+            resolve_cabinet_days(engine, account_ids=account_scope),
+            resolve_account_currencies(engine, account_ids=account_scope),
         )
     except Exception:  # noqa: BLE001
         logger.exception("operator actions failed correlation_id=%s", correlation_id)
@@ -1912,6 +1996,97 @@ async def activate_operator_ad(
 
 
 @router.get(
+    "/incidents",
+    response_model=OperatorIncidentsResponse,
+    responses=_PROBLEM_RESPONSES,
+)
+async def get_operator_incidents(
+    engine: DepEngine,
+    settings: DepSettings,
+    account_id: str | None = Query(default=None, min_length=1, max_length=64),
+    severity: list[Literal["ok", "warning", "critical", "unknown"]] = Query(default_factory=list),
+    incident_status: list[
+        Literal["open", "acknowledged", "executing", "resolved", "failed"]
+    ] = Query(default_factory=list, alias="status"),
+    page: int = Query(default=1, ge=1, le=10_000),
+    page_size: int = Query(default=30, ge=10, le=100),
+) -> OperatorIncidentsResponse | JSONResponse:
+    """Return the complete incident journal with explicit cabinet evidence."""
+
+    now = datetime.now(UTC)
+    correlation_id = str(uuid.uuid4())
+    requested_account_id = canonical_account_id(account_id) if account_id else None
+    if account_id is not None and (
+        not requested_account_id
+        or not requested_account_id.isascii()
+        or not requested_account_id.isdigit()
+    ):
+        return _problem(
+            status_code=422,
+            code="invalid_account_id",
+            message="Выберите корректный рекламный кабинет",
+            correlation_id=correlation_id,
+        )
+    account_scope = [requested_account_id] if requested_account_id else None
+    try:
+        (incident_rows, total), cabinet_days, currencies = await asyncio.gather(
+            fetch_operator_incident_page(
+                engine,
+                account_id=requested_account_id,
+                severities=tuple(severity),
+                statuses=tuple(incident_status),
+                page=page,
+                page_size=page_size,
+            ),
+            resolve_cabinet_days(engine, account_ids=account_scope, now=now),
+            resolve_account_currencies(engine, account_ids=account_scope, now=now),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("operator incidents failed correlation_id=%s", correlation_id)
+        return _problem(
+            status_code=503,
+            code="operator_incidents_unavailable",
+            message="Журнал инцидентов временно недоступен",
+            correlation_id=correlation_id,
+        )
+
+    usd_scope_confirmed = currencies.state == "single" and currencies.currency == "USD"
+    items = [_incident_item(row, usd_scope_confirmed=usd_scope_confirmed) for row in incident_rows]
+    has_suppressed_money = any(
+        item.requires_usd_evidence and not usd_scope_confirmed for item in items
+    )
+    issues: list[OperatorIssue] = []
+    if has_suppressed_money:
+        currency_issue = _currency_issue(currencies)
+        if currency_issue is not None:
+            issues.append(currency_issue)
+    state_value = (
+        DataState.EMPTY
+        if total == 0
+        else DataState.PARTIAL
+        if has_suppressed_money
+        else DataState.READY
+    )
+    return OperatorIncidentsResponse(
+        state=state_value,
+        as_of=now,
+        freshness_seconds=0,
+        sources=["incidents", "meta_account_snapshot"],
+        issues=issues,
+        scope=_scope_evidence(
+            cabinet_days=cabinet_days,
+            currencies=currencies,
+            display_timezone=settings.app_timezone,
+        ),
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        pages=(total + page_size - 1) // page_size if total else 0,
+    )
+
+
+@router.get(
     "/incidents/{incident_id}",
     response_model=OperatorIncidentDetailResponse,
     responses=_PROBLEM_RESPONSES,
@@ -1944,24 +2119,39 @@ async def get_operator_incident(
             correlation_id=correlation_id,
         )
 
-    account_id = str(incident.get("ad_account_id") or "").strip()
+    account_id = str(incident.get("ad_account_id") or "").strip().removeprefix("act_")
+    account_scope = [account_id] if account_id else None
+    try:
+        cabinet_days, currencies = await asyncio.gather(
+            resolve_cabinet_days(engine, account_ids=account_scope, now=now),
+            resolve_account_currencies(engine, account_ids=account_scope, now=now),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "operator incident evidence failed correlation_id=%s",
+            correlation_id,
+        )
+        return _problem(
+            status_code=503,
+            code="incident_evidence_unavailable",
+            message="Доказательства инцидента временно недоступны",
+            correlation_id=correlation_id,
+        )
+
+    status_value = str(incident.get("status") or "")
+    if status_value not in {"open", "acknowledged", "executing", "resolved", "failed"}:
+        return _problem(
+            status_code=503,
+            code="incident_status_invalid",
+            message="Состояние инцидента не подтверждено",
+            correlation_id=correlation_id,
+        )
+
     timezone_name = settings.app_timezone
     timezone_known = True
     issues: list[OperatorIssue] = []
     if account_id:
-        try:
-            cabinet_days = await resolve_cabinet_days(
-                engine,
-                account_ids=[account_id],
-                now=now,
-            )
-        except Exception:  # noqa: BLE001
-            cabinet_days = None
-        persisted_timezone = (
-            cabinet_days.timezone_names.get(account_id.removeprefix("act_"))
-            if cabinet_days is not None
-            else None
-        )
+        persisted_timezone = cabinet_days.timezone_names.get(account_id)
         if persisted_timezone:
             timezone_name = persisted_timezone
         else:
@@ -1973,28 +2163,30 @@ async def get_operator_incident(
                     title="Часовой пояс кабинета не подтверждён",
                     detail="Время показано в UTC; денежные действия остаются fail-closed.",
                     severity=OperatorSeverity.UNKNOWN,
-                    correlation_id=correlation_id,
+                    correlation_id=None,
                 )
             )
 
-    status_value = str(incident.get("status") or "")
-    if status_value not in {"open", "acknowledged", "executing", "resolved", "failed"}:
-        return _problem(
-            status_code=503,
-            code="incident_status_invalid",
-            message="Состояние инцидента не подтверждено",
-            correlation_id=correlation_id,
-        )
+    usd_scope_confirmed = currencies.state == "single" and currencies.currency == "USD"
+    incident_item = _incident_item(incident, usd_scope_confirmed=usd_scope_confirmed)
+    if incident_item.requires_usd_evidence and not usd_scope_confirmed:
+        currency_issue = _currency_issue(currencies)
+        if currency_issue is not None:
+            issues.append(currency_issue)
     return OperatorIncidentDetailResponse(
-        state=DataState.READY if timezone_known else DataState.PARTIAL,
+        state=DataState.READY if not issues else DataState.PARTIAL,
         as_of=now,
         freshness_seconds=0,
         sources=["incidents", "meta_account_snapshot"],
         issues=issues,
         timezone=timezone_name,
         timezone_known=timezone_known,
-        status=status_value,  # type: ignore[arg-type]
-        incident=_incident_attention_item(incident),
+        scope=_scope_evidence(
+            cabinet_days=cabinet_days,
+            currencies=currencies,
+            display_timezone=settings.app_timezone,
+        ),
+        incident=incident_item,
     )
 
 

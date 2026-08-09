@@ -2,6 +2,7 @@ const SAFE_ATTENTION_ROUTES = new Set([
   "/",
   "/actions",
   "/ads",
+  "/incidents",
   "/analytics",
   "/settings",
   "/system/sources",

@@ -1,6 +1,7 @@
 import type { DataState } from "@fb/shared/operator/contracts";
-import { formatSpendPerUnit } from "@fb/shared/format/number";
+import { buildAnalyticsFunnelModel } from "@fb/shared/analytics/chartModel";
 import { AccessibleChartFrame } from "@fb/operator-ui";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 interface FunnelChartProps {
   clicks: number | null;
@@ -29,54 +30,86 @@ export function FunnelChart({
   completeness,
   sources,
 }: FunnelChartProps) {
-  const stages = [
-    { label: "Клики", value: clicks },
-    { label: "Регистрации", value: registrations },
-    { label: "FTD", value: ftds },
-    { label: "Подтверждённые депозиты", value: confirmedDeposits },
-  ].map((stage, index, values) => {
-    const previous = values[index - 1]?.value ?? null;
-    return {
-      ...stage,
-      cr:
-        previous !== null && previous > 0 && stage.value !== null
-          ? (stage.value / previous) * 100
-          : null,
-      cost: formatSpendPerUnit(spend, stage.value, currency),
-    };
-  });
-  const knownValues = stages.flatMap((stage) => (stage.value === null ? [] : [stage.value]));
-  const max = Math.max(...knownValues, 1);
+  const valuesVisible = completeness !== "unavailable";
+  const stages = buildAnalyticsFunnelModel(
+    {
+      spend: valuesVisible ? spend : null,
+      clicks: valuesVisible ? clicks : null,
+      registrations: valuesVisible ? registrations : null,
+      ftds: valuesVisible ? ftds : null,
+      confirmed_deposits: valuesVisible ? confirmedDeposits : null,
+    },
+    currency === "USD" ? "USD" : null,
+  );
+  const knownValues = stages.flatMap((stage) => (stage.count === null ? [] : [stage.count]));
   const summary = knownValues.length
     ? `Клики ${formatCount(clicks)}, регистрации ${formatCount(registrations)}, FTD ${formatCount(ftds)}, подтверждённые депозиты ${formatCount(confirmedDeposits)}.`
     : "Данные воронки не подтверждены источниками.";
 
   const chart = (
-    <div className="flex flex-col gap-3" role="group" aria-label="Воронка Meta в Tracker">
-      {stages.map((stage) => (
-        <div
-          key={stage.label}
-          className="grid grid-cols-[minmax(100px,1fr)_minmax(70px,2fr)_minmax(56px,auto)] items-center gap-x-3 gap-y-1"
+    <div className="grid gap-4">
+      <div className="h-[220px] min-w-0">
+        <ResponsiveContainer
+          width="100%"
+          height="100%"
+          minWidth={0}
+          minHeight={220}
+          initialDimension={{ width: 420, height: 220 }}
         >
-          <span className="row-span-2 text-[14px] text-bg-9">{stage.label}</span>
-          <div className="h-6 overflow-hidden rounded-[var(--radius-1)] bg-bg-2" aria-hidden="true">
-            {stage.value !== null ? (
-              <div
-                className="h-full rounded-[var(--radius-1)] bg-accent transition-[width] duration-300 motion-reduce:transition-none"
-                style={{ width: `${Math.max((stage.value / max) * 100, stage.value ? 2 : 0)}%` }}
-              />
-            ) : (
-              <div className="h-full w-full bg-[repeating-linear-gradient(135deg,var(--color-bg-3),var(--color-bg-3)_4px,transparent_4px,transparent_8px)]" />
-            )}
-          </div>
-          <span className="text-right font-display text-[14px] tabular-nums text-bg-11">
-            {formatCount(stage.value)}
-          </span>
-          <span className="col-span-2 col-start-2 min-w-0 text-right text-[12px] leading-4 tabular-nums text-bg-8">
-            CR {stage.cr === null ? "—" : `${stage.cr.toFixed(1)}%`} · стоимость {stage.cost}
-          </span>
-        </div>
-      ))}
+          <BarChart
+            accessibilityLayer
+            data={stages.map((stage) => ({ ...stage, plotValue: stage.count }))}
+            layout="vertical"
+            margin={{ top: 4, right: 12, bottom: 4, left: 0 }}
+          >
+            <CartesianGrid horizontal={false} stroke="var(--color-hairline)" />
+            <XAxis type="number" hide domain={[0, "dataMax"]} />
+            <YAxis
+              type="category"
+              dataKey="label"
+              width={132}
+              axisLine={false}
+              tickLine={false}
+              tick={{ fill: "var(--color-bg-9)", fontSize: 12 }}
+            />
+            <Tooltip
+              formatter={(value) => [
+                typeof value === "number" ? count.format(value) : "—",
+                "Количество",
+              ]}
+              contentStyle={{
+                background: "var(--color-bg-1)",
+                border: "1px solid var(--color-hairline-strong)",
+                borderRadius: "var(--radius-2)",
+                fontSize: 14,
+              }}
+            />
+            <Bar
+              dataKey="plotValue"
+              fill="var(--color-accent)"
+              radius={[0, 3, 3, 0]}
+              isAnimationActive={false}
+            />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <ol className="grid gap-2" aria-label="Этапы воронки">
+        {stages.map((stage) => (
+          <li
+            key={stage.key}
+            className="grid grid-cols-[minmax(110px,1fr)_auto] gap-x-3 border-t border-[var(--color-hairline)] pt-2 text-[14px]"
+          >
+            <span className="text-bg-9">{stage.label}</span>
+            <strong className="font-display tabular-nums text-bg-11">
+              {formatCount(stage.count)}
+            </strong>
+            <span className="col-span-2 text-right text-[12px] tabular-nums text-bg-8">
+              CR {stage.conversion === null ? "—" : `${stage.conversion.toFixed(1)}%`} · стоимость{" "}
+              {stage.cost}
+            </span>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 
@@ -93,10 +126,10 @@ export function FunnelChart({
       </thead>
       <tbody>
         {stages.map((stage) => (
-          <tr key={stage.label}>
+          <tr key={stage.key}>
             <th scope="row">{stage.label}</th>
-            <td>{formatCount(stage.value)}</td>
-            <td>{stage.cr === null ? "—" : `${stage.cr.toFixed(2)}%`}</td>
+            <td>{formatCount(stage.count)}</td>
+            <td>{stage.conversion === null ? "—" : `${stage.conversion.toFixed(2)}%`}</td>
             <td>{stage.cost}</td>
           </tr>
         ))}

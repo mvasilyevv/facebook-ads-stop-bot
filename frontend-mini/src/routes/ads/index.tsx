@@ -1,46 +1,76 @@
-import { useState, type FormEvent } from "react";
-import { createFileRoute } from "@tanstack/react-router";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
 
-import type {
-  OperatorAdsQuery,
-  OperatorSeverity,
-} from "@fb/shared/operator/contracts";
+import type { OperatorSeverity } from "@fb/shared/operator/contracts";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
+import {
+  operatorCabinetOptions,
+  parseOperatorAdsRouteSearch,
+  type OperatorAdsDirection,
+  type OperatorAdsRouteSearch,
+  type OperatorAdsSort,
+  type OperatorCabinetOption,
+} from "@fb/shared/operator/routeFilters";
 import { adsForRealtimeState } from "@fb/shared/operator/viewModel";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import { MiniHeader } from "@/components/layout/MiniHeader";
 import { Button, EmptyState, ErrorState, Skeleton } from "@/components/ui";
+import { Sheet } from "@/components/ui/Sheet";
 import { MiniOperatorAdCard } from "@/features/operator/OperatorAds";
-import { operatorProblemMessage, useOperatorAds } from "@/lib/operatorApi";
+import {
+  operatorProblemMessage,
+  useOperatorAds,
+  useOperatorSnapshot,
+} from "@/lib/operatorApi";
 import { haptic } from "@/lib/tg";
 
-type AdsSort = NonNullable<OperatorAdsQuery["sort"]>;
+export const Route = createFileRoute("/ads/")({
+  component: AdsPage,
+  validateSearch: parseOperatorAdsRouteSearch,
+});
 
-export const Route = createFileRoute("/ads/")({ component: AdsPage });
-
-const FILTERS: Array<{ value?: OperatorSeverity; label: string }> = [
-  { label: "Все" },
+const SEVERITIES: Array<{ value: OperatorSeverity | ""; label: string }> = [
+  { value: "", label: "Все состояния" },
   { value: "critical", label: "Опасность" },
   { value: "warning", label: "Внимание" },
   { value: "ok", label: "Норма" },
   { value: "unknown", label: "Неизвестно" },
 ];
 
+const SORTS: Array<{ value: OperatorAdsSort; label: string }> = [
+  { value: "updated", label: "Обновление" },
+  { value: "spend", label: "Расход" },
+  { value: "clicks", label: "Клики" },
+  { value: "registrations", label: "Регистрации" },
+  { value: "ftd", label: "FTD" },
+  { value: "name", label: "Название" },
+];
+
 function AdsPage() {
+  const search = Route.useSearch();
+  const navigate = useNavigate({ from: "/ads/" });
   const realtimeStatus = useOperatorRealtimeStatus();
-  const [draftSearch, setDraftSearch] = useState("");
-  const [search, setSearch] = useState("");
-  const [severity, setSeverity] = useState<OperatorSeverity | undefined>();
-  const [sort, setSort] = useState<AdsSort>("updated");
-  const [page, setPage] = useState(1);
+  const [draftSearch, setDraftSearch] = useState(search.q ?? "");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filterTriggerRef = useRef<HTMLButtonElement>(null);
+  const snapshot = useOperatorSnapshot({ window: "today" });
+  const cabinets = operatorCabinetOptions(snapshot.data);
+  const page = search.page ?? 1;
   const query = useOperatorAds({
-    search: search || undefined,
-    severity,
-    sort,
-    direction: "desc",
+    search: search.q,
+    account_id: search.account_id,
+    severity: search.severity,
+    sort: search.sort ?? "updated",
+    direction: search.direction ?? "desc",
     page,
     page_size: 30,
   });
@@ -58,11 +88,27 @@ function AdsPage() {
     realtimeStatus === "connected" &&
     !query.isError &&
     displayState === "empty";
+  const activeFilterCount =
+    Number(Boolean(search.q)) +
+    Number(Boolean(search.account_id)) +
+    Number(Boolean(search.severity)) +
+    Number(Boolean(search.sort && search.sort !== "updated")) +
+    Number(Boolean(search.direction && search.direction !== "desc"));
+
+  useEffect(() => setDraftSearch(search.q ?? ""), [search.q]);
+
+  function patchSearch(next: Partial<OperatorAdsRouteSearch>) {
+    haptic.selection();
+    void navigate({
+      search: (previous) => ({ ...previous, ...next }),
+      replace: true,
+    });
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    setPage(1);
-    setSearch(draftSearch.trim());
+    patchSearch({ q: draftSearch.trim() || undefined, page: undefined });
+    setFiltersOpen(false);
   }
 
   return (
@@ -76,76 +122,41 @@ function AdsPage() {
         }
       />
 
-      <section
-        aria-label="Фильтры объявлений"
-        className="border-b border-[var(--color-hairline)] px-4 py-3"
-      >
-        <form onSubmit={submit} className="flex gap-2">
-          <label className="relative min-w-0 flex-1">
-            <span className="sr-only">Поиск объявлений</span>
-            <Search
-              aria-hidden="true"
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-bg-8"
-              size={16}
-            />
-            <input
-              type="search"
-              value={draftSearch}
-              onChange={(event) => setDraftSearch(event.target.value)}
-              placeholder="Название, кампания или ID"
-              className="min-h-11 w-full rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 pl-10 pr-3 text-[16px] text-bg-11 outline-none placeholder:text-bg-8 focus:border-accent"
-            />
-          </label>
-          <Button type="submit" variant="secondary" className="min-h-11">
-            Найти
-          </Button>
-        </form>
-
-        <div
-          className="mt-3 flex gap-2 overflow-x-auto pb-1"
-          role="group"
-          aria-label="Фильтр по риску"
+      <div className="border-b border-[var(--color-hairline)] px-4 py-3">
+        <Button
+          ref={filterTriggerRef}
+          type="button"
+          variant="secondary"
+          fullWidth
+          aria-label="Открыть фильтры объявлений"
+          aria-haspopup="dialog"
+          aria-expanded={filtersOpen}
+          onClick={() => {
+            haptic.selection();
+            setFiltersOpen(true);
+          }}
         >
-          {FILTERS.map((filter) => (
-            <button
-              key={filter.label}
-              type="button"
-              aria-pressed={filter.value === severity}
-              onClick={() => {
-                haptic.selection();
-                setSeverity(filter.value);
-                setPage(1);
-              }}
-              className={`min-h-11 shrink-0 rounded-full border px-4 text-[14px] font-semibold ${
-                filter.value === severity
-                  ? "border-accent bg-accent-bg text-accent"
-                  : "border-[var(--color-hairline-strong)] bg-bg-1 text-bg-9"
-              }`}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
+          <Filter size={16} aria-hidden="true" />
+          Фильтры{activeFilterCount ? ` · ${activeFilterCount}` : ""}
+        </Button>
+      </div>
 
-        <label className="mt-3 flex min-h-11 items-center justify-between gap-3 text-[14px] text-bg-9">
-          <span>Сортировка</span>
-          <select
-            value={sort}
-            onChange={(event) => {
-              setSort(event.target.value as AdsSort);
-              setPage(1);
-            }}
-            className="min-h-11 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 px-3 text-[14px] text-bg-11"
-          >
-            <option value="updated">Обновление</option>
-            <option value="spend">Расход</option>
-            <option value="clicks">Клики</option>
-            <option value="registrations">Регистрации</option>
-            <option value="ftd">FTD</option>
-            <option value="name">Название</option>
-          </select>
-        </label>
-      </section>
+      <Sheet
+        open={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        eyebrow="УПРАВЛЕНИЕ"
+        title="Фильтры объявлений"
+        returnFocusRef={filterTriggerRef}
+      >
+        <AdsFilterFields
+          search={search}
+          draftSearch={draftSearch}
+          cabinets={cabinets}
+          onDraftSearch={setDraftSearch}
+          onChange={patchSearch}
+          onSubmit={submit}
+        />
+      </Sheet>
 
       {payload && displayState && displayState !== "ready" ? (
         <div className="px-4 pt-3">
@@ -198,7 +209,7 @@ function AdsPage() {
           <Button
             variant="secondary"
             disabled={page <= 1 || query.isFetching}
-            onClick={() => setPage((value) => value - 1)}
+            onClick={() => patchSearch({ page: page - 1 })}
           >
             <ChevronLeft aria-hidden="true" size={16} /> Назад
           </Button>
@@ -208,12 +219,136 @@ function AdsPage() {
           <Button
             variant="secondary"
             disabled={page >= displayPayload.pages || query.isFetching}
-            onClick={() => setPage((value) => value + 1)}
+            onClick={() => patchSearch({ page: page + 1 })}
           >
             Далее <ChevronRight aria-hidden="true" size={16} />
           </Button>
         </nav>
       ) : null}
     </div>
+  );
+}
+
+function AdsFilterFields({
+  search,
+  draftSearch,
+  cabinets,
+  onDraftSearch,
+  onChange,
+  onSubmit,
+}: {
+  search: OperatorAdsRouteSearch;
+  draftSearch: string;
+  cabinets: OperatorCabinetOption[];
+  onDraftSearch: (value: string) => void;
+  onChange: (next: Partial<OperatorAdsRouteSearch>) => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  return (
+    <form onSubmit={onSubmit} className="grid gap-4 pb-4">
+      <label className="grid gap-1.5 text-[14px] text-bg-9">
+        <span>Поиск объявлений</span>
+        <span className="relative block">
+          <Search
+            aria-hidden="true"
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-bg-8"
+            size={16}
+          />
+          <input
+            type="search"
+            aria-label="Поиск объявлений"
+            value={draftSearch}
+            onChange={(event) => onDraftSearch(event.target.value)}
+            placeholder="Название, кампания или ID"
+            className="min-h-11 w-full rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 pl-10 pr-3 text-[16px] text-bg-11 outline-none placeholder:text-bg-8 focus:border-accent"
+          />
+        </span>
+      </label>
+      <FilterSelect
+        label="Кабинет"
+        value={search.account_id ?? ""}
+        onChange={(value) =>
+          onChange({ account_id: value || undefined, page: undefined })
+        }
+      >
+        <option value="">Все кабинеты</option>
+        {cabinets.map((cabinet) => (
+          <option key={cabinet.value} value={cabinet.value}>
+            {cabinet.label}
+          </option>
+        ))}
+      </FilterSelect>
+      <FilterSelect
+        label="Риск"
+        value={search.severity ?? ""}
+        onChange={(value) =>
+          onChange({
+            severity: (value || undefined) as OperatorSeverity | undefined,
+            page: undefined,
+          })
+        }
+      >
+        {SEVERITIES.map((severity) => (
+          <option key={severity.value || "all"} value={severity.value}>
+            {severity.label}
+          </option>
+        ))}
+      </FilterSelect>
+      <FilterSelect
+        label="Сортировка"
+        value={search.sort ?? "updated"}
+        onChange={(value) =>
+          onChange({ sort: value as OperatorAdsSort, page: undefined })
+        }
+      >
+        {SORTS.map((sort) => (
+          <option key={sort.value} value={sort.value}>
+            {sort.label}
+          </option>
+        ))}
+      </FilterSelect>
+      <FilterSelect
+        label="Направление"
+        value={search.direction ?? "desc"}
+        onChange={(value) =>
+          onChange({
+            direction: value as OperatorAdsDirection,
+            page: undefined,
+          })
+        }
+      >
+        <option value="desc">По убыванию</option>
+        <option value="asc">По возрастанию</option>
+      </FilterSelect>
+      <Button type="submit" fullWidth>
+        Применить поиск
+      </Button>
+    </form>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label className="grid gap-1.5 text-[14px] text-bg-9">
+      <span>{label}</span>
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-h-11 w-full rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 px-3 text-[16px] text-bg-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        {children}
+      </select>
+    </label>
   );
 }

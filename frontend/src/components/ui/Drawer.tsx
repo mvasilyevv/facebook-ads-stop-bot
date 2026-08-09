@@ -5,7 +5,7 @@
  */
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import { type ReactNode } from "react";
+import { type ReactNode, type RefObject } from "react";
 import { cn } from "@/lib/utils/cn";
 
 interface DrawerProps {
@@ -20,6 +20,7 @@ interface DrawerProps {
   /** Слот для footer с кнопками действий. */
   footer?: ReactNode;
   children: ReactNode;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
 export function Drawer({
@@ -31,6 +32,7 @@ export function Drawer({
   width = 640,
   footer,
   children,
+  returnFocusRef,
 }: DrawerProps) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -51,6 +53,11 @@ export function Drawer({
           )}
           // aria-describedby нужен для Radix, если description не задан
           aria-describedby={description ? undefined : "drawer-desc-hidden"}
+          onCloseAutoFocus={(event) => {
+            if (!returnFocusRef?.current) return;
+            event.preventDefault();
+            returnFocusRef.current.focus();
+          }}
         >
           {/* Скрытый span для Radix a11y когда description пустой */}
           {!description && (

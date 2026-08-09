@@ -26,7 +26,7 @@ def test_registry_permissions_are_job_scoped() -> None:
     for job in ("release-manifest", "deploy"):
         assert "packages: read" in _job_block(text, job)
 
-    for job in ("test", "web-test", "platform-config"):
+    for job in ("test", "web-test", "ui-evidence", "platform-config"):
         assert "packages:" not in _job_block(text, job)
 
 
@@ -69,9 +69,34 @@ def test_ci_full_pytest_uses_complete_test_only_secret_contract() -> None:
 def test_every_published_image_has_provenance_and_sbom() -> None:
     text = WORKFLOW.read_text()
     build_steps = text.count("uses: docker/build-push-action@")
-    assert build_steps == 5
+    assert build_steps == 4
     assert text.count("provenance: mode=max") == build_steps
     assert text.count("sbom: true") == build_steps
+
+
+def test_production_workflow_does_not_publish_mutable_image_tags() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert not re.search(
+        r"(?m)^\s+\$\{\{ env\.IMAGE_BASE \}\}[^\n]*:latest\s*$",
+        text,
+    )
+    assert "docker-image://${{ env.IMAGE_BASE }}-python-base:${{ github.sha }}" in text
+    assert "Resolve all production images to digests" in text
+    assert "./scripts/create-release-manifest.sh" in text
+
+
+def test_ui_evidence_is_a_release_gate() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    evidence = _job_block(text, "ui-evidence")
+    build_base = _job_block(text, "build-base")
+
+    assert "pnpm install --frozen-lockfile" in evidence
+    assert "playwright install --with-deps chromium firefox webkit" in evidence
+    assert "build-storybook" in evidence
+    assert "test:storybook" in evidence
+    assert "test:e2e" in evidence
+    assert "needs: [test, web-test, ui-evidence, platform-config]" in build_base
 
 
 def test_external_docker_bases_are_digest_pinned() -> None:
@@ -81,7 +106,6 @@ def test_external_docker_bases_are_digest_pinned() -> None:
         "docker/Dockerfile.frontend",
         "docker/Dockerfile.mini-app",
         "deploy/vision-webtop/Dockerfile",
-        "deploy/kasmvnc-sidecar/Dockerfile",
     )
     digest = re.compile(r"@sha256:[0-9a-f]{64}(?:\s|$)")
     for relative in direct_base_files:

@@ -457,6 +457,10 @@ function AttentionLedger({
           ))}
         </ol>
       )}
+      <Link className="ledger-attention-item__action min-h-11 px-5" to="/incidents">
+        Все инциденты
+        <ArrowRight size={14} aria-hidden="true" />
+      </Link>
     </section>
   );
 }

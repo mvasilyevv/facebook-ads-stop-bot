@@ -80,7 +80,7 @@ async def test_capability_signing_rechecks_live_database_fence_and_cancel(
             "ad_account_id": "123",
             "params": {},
         },
-        requested_by="test",
+        requested_by="bot_auto_stop",
         lane="money",
     )
     claim = await claim_browser_ready_task(

@@ -3,7 +3,7 @@
 # Выбирает нужный воркер по переменной WORKER_TYPE и делает exec на run_<name>.py.
 #
 # Имена WORKER_TYPE согласованы с root local и deploy/compose service contracts.
-# Полный production-набор — 13 воркеров плюс one-shot migrator.
+# Полный production-набор — 11 воркеров плюс one-shot migrator.
 # DOM-каналы disable/enable удалены (отключение/включение идёт через meta_api → Marketing API).
 
 set -e
@@ -42,17 +42,9 @@ case "${WORKER_TYPE}" in
     # Durable stuck-task/snapshot checks + live network probe Marketing API.
     exec python run_health_watchdog.py
     ;;
-  enable_recommendation)
-    # Рекомендации на включение восстановившихся объявлений.
-    exec python run_enable_recommendation_worker.py
-    ;;
   digest_scheduler)
     # Ежедневный TG-дайджест (09:00 UTC, catch-up).
     exec python run_digest_scheduler.py
-    ;;
-  cabinet_scheduler)
-    # MONEY-КРИТИЧНО: автостарт кабинета по расписанию (bulk activate по датам в названии).
-    exec python run_cabinet_scheduler.py
     ;;
   tracker_reconciliation_worker)
     # Durable postback processing + provider reconciliation.
@@ -72,8 +64,7 @@ case "${WORKER_TYPE}" in
     echo "ОШИБКА: неизвестный WORKER_TYPE='${WORKER_TYPE}'"
     echo "Допустимые значения:"
     echo "  observer, telegram_delivery, telegram_updates, cleanup, reconciler, autopause, meta_api, health_watchdog,"
-    echo "  enable_recommendation, digest_scheduler, cabinet_scheduler, tracker_reconciliation_worker,"
-    echo "  campaign_creator, migrate"
+    echo "  digest_scheduler, tracker_reconciliation_worker, campaign_creator, migrate"
     exit 1
     ;;
 esac

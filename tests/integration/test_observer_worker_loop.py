@@ -22,12 +22,23 @@ from apps.observer_worker.main import (
     main_loop,
     run_one_cycle,
 )
+from core.ad_account_catalog import ad_account_catalog
 from core.scanner.models import (
     SCANNER_METRICS_CONTRACT_REVISION,
     ScannedAdRow,
 )
 
 pytestmark = pytest.mark.usefixtures("known_test_cabinet_timezones")
+
+
+async def _replace_offer_accounts(conn, *, code: str, account_ids: list[str]) -> None:
+    offer_id = await conn.scalar(text("SELECT id FROM offers WHERE code = :code"), {"code": code})
+    assert offer_id is not None
+    await ad_account_catalog.replace_offer_accounts(
+        conn,
+        offer_id=offer_id,
+        account_ids=account_ids,
+    )
 
 
 def _row(fb_ad_id: str = "230011", **overrides) -> ScannedAdRow:
@@ -114,12 +125,10 @@ async def offer_cr2(pg_engine, clean_obs_tables):
     offer_id = uuid.uuid4()
     async with pg_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO offers (id, code, name, is_active, ad_account_ids) "
-                "VALUES (:i, 'CR2', 'CR2', TRUE, ARRAY['111'])"
-            ),
+            text("INSERT INTO offers (id, code, name, is_active) VALUES (:i, 'CR2', 'CR2', TRUE)"),
             {"i": offer_id},
         )
+        await _replace_offer_accounts(conn, code="CR2", account_ids=["111"])
         await conn.execute(
             text(
                 "INSERT INTO offer_rules (offer_id, cpa_threshold, currency) VALUES (:o, :c, 'USD')"
@@ -338,9 +347,7 @@ async def test_unknown_cabinet_timezone_creates_no_money_or_fsm_state(
     import apps.observer_worker.main as obs_main
 
     async with pg_engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE offers SET ad_account_ids = ARRAY['999'] WHERE code = 'CR2'")
-        )
+        await _replace_offer_accounts(conn, code="CR2", account_ids=["999"])
         await conn.execute(text("DELETE FROM meta_account_snapshot WHERE account_id = '999'"))
     monkeypatch.setattr(obs_main, "notify_recurring_incident", AsyncMock(return_value=True))
     monkeypatch.setattr(obs_main, "resolve_recurring_incident", AsyncMock(return_value=True))
@@ -522,15 +529,20 @@ async def test_multi_cabinet_sequential_scan(
 
     # Привязываем кабинеты к офферам: CR2 → 111; второй оффер → 222 + 111 (дедуп union).
     async with pg_engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE offers SET ad_account_ids = ARRAY['111'] WHERE code = 'CR2'")
-        )
-        await conn.execute(
-            text(
-                "INSERT INTO offers (id, code, name, is_active, ad_account_ids) "
-                "VALUES (:i, 'CR9', 'CR9', TRUE, ARRAY['222', '111'])"
-            ),
-            {"i": uuid.uuid4()},
+        await _replace_offer_accounts(conn, code="CR2", account_ids=["111"])
+        second_offer_id = (
+            await conn.execute(
+                text(
+                    "INSERT INTO offers (id, code, name, is_active) "
+                    "VALUES (:i, 'CR9', 'CR9', TRUE) RETURNING id"
+                ),
+                {"i": uuid.uuid4()},
+            )
+        ).scalar_one()
+        await ad_account_catalog.replace_offer_accounts(
+            conn,
+            offer_id=second_offer_id,
+            account_ids=["222", "111"],
         )
         # Money-гард R4: мульти-каб (>1 кабинета) без owner_campaign_tag скан пропускает —
         # задаём тег (совпадает с 'MV' в campaign_name строк _row()).
@@ -588,9 +600,7 @@ async def test_multi_cabinet_error_is_partial_and_does_not_break_others(
     monkeypatch.setattr(obs_main, "ACCOUNT_SCAN_PAUSE_SECONDS", 0.0)
 
     async with pg_engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE offers SET ad_account_ids = ARRAY['111', '222'] WHERE code = 'CR2'")
-        )
+        await _replace_offer_accounts(conn, code="CR2", account_ids=["111", "222"])
         # Money-гард R4: мульти-каб без owner_campaign_tag скан пропускает — задаём тег.
         await conn.execute(
             text(
@@ -624,9 +634,7 @@ async def test_scan_without_explicit_cabinet_is_blocked(
     pg_engine, ensure_observer_config_enabled, offer_cr2
 ) -> None:
     async with pg_engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE offers SET ad_account_ids = ARRAY[]::text[] WHERE code = 'CR2'")
-        )
+        await _replace_offer_accounts(conn, code="CR2", account_ids=[])
     gate = _FakeGate(
         ScanCycleOutput(
             rows=[_row()],

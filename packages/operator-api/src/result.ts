@@ -48,6 +48,18 @@ export function apiProblemMessage(
     : value.message;
 }
 
+/**
+ * Operator-facing errors expose recovery copy only. Correlation identifiers
+ * remain available to diagnostics, but are never rendered as raw UUIDs.
+ */
+export function safeApiProblemMessage(
+  value: unknown,
+  fallback = "Данные временно недоступны",
+): string {
+  const payload = value instanceof GeneratedApiError ? value.payload : value;
+  return isApiProblem(payload) ? payload.message : fallback;
+}
+
 export function isApiProblem(value: unknown): value is ApiProblem {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Partial<ApiProblem>;

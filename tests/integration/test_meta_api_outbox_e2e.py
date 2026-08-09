@@ -123,7 +123,7 @@ async def test_pending_claim_execute_success(
     )
     assert task_id is not None
 
-    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("interactive",))
     assert not claim.queue_empty
     assert claim.task is not None
     assert claim.task.id == task_id
@@ -168,7 +168,7 @@ async def test_rate_limited_error_requeues_task(
     task_id = await create_mutation_task(
         pg_engine,
         payload=payload,
-        requested_by="bot_auto",
+        requested_by="bot_auto_stop",
         status="pending",
     )
     assert task_id is not None
@@ -212,7 +212,7 @@ async def test_token_invalid_marks_failed_without_retry(
     task_id = await create_mutation_task(
         pg_engine,
         payload=payload,
-        requested_by="bot_auto",
+        requested_by="bot_auto_stop",
         status="pending",
     )
     assert task_id is not None
@@ -273,7 +273,7 @@ async def test_token_invalid_rolls_back_terminal_task_when_card_projection_fails
     task_id = await create_mutation_task(
         pg_engine,
         payload=payload,
-        requested_by="bot_auto",
+        requested_by="bot_auto_stop",
         status="pending",
     )
     claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
@@ -335,7 +335,7 @@ async def test_status_success_false_is_terminal_rejected(
         status="pending",
     )
     assert task_id is not None
-    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("interactive",))
     assert claim.task is not None
 
     fake_client = AsyncMock()
@@ -373,7 +373,7 @@ async def test_status_missing_ack_becomes_unknown_before_any_resend(
         status="pending",
     )
     assert task_id is not None
-    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("interactive",))
     assert claim.task is not None
 
     fake_client = AsyncMock()
@@ -398,7 +398,7 @@ async def test_status_missing_ack_becomes_unknown_before_any_resend(
 
     reconcile_claim = await claim_browser_ready_mutation_task(
         pg_engine,
-        lanes=("money",),
+        lanes=("interactive",),
     )
     assert reconcile_claim.task is not None
     assert reconcile_claim.task.id == task_id
@@ -454,7 +454,7 @@ async def test_status_action_requires_exact_ack_and_routes_unknown_to_reconcilia
         status="pending",
     )
     assert task_id is not None
-    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("interactive",))
     assert claim.task is not None
 
     fake_client = AsyncMock()
@@ -486,13 +486,13 @@ async def test_idempotency_dedup(pg_engine: AsyncEngine, clean_meta_tables):
     first = await create_mutation_task(
         pg_engine,
         payload=payload,
-        requested_by="bot_auto",
+        requested_by="operator:test",
         status="pending",
     )
     second = await create_mutation_task(
         pg_engine,
         payload=payload,
-        requested_by="bot_auto",
+        requested_by="operator:test",
         status="pending",
     )
     assert first is not None
@@ -538,7 +538,7 @@ async def test_reconcile_stuck_running(pg_engine: AsyncEngine, clean_meta_tables
     task_id = await create_mutation_task(
         pg_engine,
         payload=payload,
-        requested_by="bot",
+        requested_by="operator:test",
     )
     assert task_id is not None
 
@@ -647,12 +647,12 @@ async def test_concurrent_claim_skip_locked(pg_engine: AsyncEngine, clean_meta_t
     task_id = await create_mutation_task(
         pg_engine,
         payload=payload,
-        requested_by="bot",
+        requested_by="operator:test",
     )
     assert task_id is not None
 
     claims = await asyncio.gather(
-        *(claim_browser_ready_mutation_task(pg_engine, lanes=("money",)) for _ in range(5))
+        *(claim_browser_ready_mutation_task(pg_engine, lanes=("bulk",)) for _ in range(5))
     )
     got = [c for c in claims if not c.queue_empty]
     assert len(got) == 1, "Task должна быть захвачена только одним claim"

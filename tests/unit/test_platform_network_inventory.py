@@ -386,7 +386,6 @@ def test_desktop_producers_emit_exact_vision_plane_inventory_labels() -> None:
     assert "FB_AGENT_VISION_RELEASE_ID" in installer
     for contract in (
         "DESKTOP_WEBTOP_IMAGE",
-        "DESKTOP_KASMVNC_IMAGE",
         "FB_AGENT_BOOTSTRAP_CLUSTER_ID",
         "com.docker.compose.project",
         "com.docker.compose.service",
@@ -397,6 +396,7 @@ def test_desktop_producers_emit_exact_vision_plane_inventory_labels() -> None:
     ):
         assert contract in boot_consumer
     assert "fb_agent_vision" in boot_consumer
-    assert "kasmvnc" in boot_consumer
-    assert ".HostConfig.NetworkMode" in boot_consumer
     assert "healthy" in boot_consumer
+    for retired in ("DESKTOP_KASMVNC_IMAGE", "kasmvnc-sidecar", "kasmxproxy"):
+        assert retired not in installer
+        assert retired not in boot_consumer

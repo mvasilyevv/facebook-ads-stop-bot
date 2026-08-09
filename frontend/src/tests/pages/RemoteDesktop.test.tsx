@@ -55,7 +55,9 @@ describe("RemoteDesktopPage", () => {
     render(<RemoteDesktopPage />);
 
     await waitFor(() => {
-      expect(post).toHaveBeenCalledWith("/api/desktop/launch");
+      expect(post).toHaveBeenCalledWith("/api/desktop/launch", {
+        body: { presentation: "desktop" },
+      });
       expect(replace).toHaveBeenCalledWith(
         "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
       );

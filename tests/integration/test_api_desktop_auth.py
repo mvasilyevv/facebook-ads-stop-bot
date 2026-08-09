@@ -94,7 +94,7 @@ async def _set_panel_owner_cookie(client: AsyncClient, engine, owner_id: int) ->
 
 
 @pytest.mark.asyncio
-async def test_web_owner_launch_has_documented_no_body_contract(
+async def test_web_owner_launch_requires_documented_presentation_contract(
     pg_engine, fake_redis_client, desktop_users
 ):
     owner_id, _ = desktop_users
@@ -103,7 +103,11 @@ async def test_web_owner_launch_has_documented_no_body_contract(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
     ) as client:
         await _set_panel_owner_cookie(client, pg_engine, owner_id)
-        response = await client.post("/api/desktop/launch", headers=_web_headers())
+        response = await client.post(
+            "/api/desktop/launch",
+            headers=_web_headers(),
+            json={"presentation": "desktop"},
+        )
 
     assert response.status_code == 200
     assert response.json()["url"].startswith(
@@ -114,7 +118,7 @@ async def test_web_owner_launch_has_documented_no_body_contract(
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["referrer-policy"] == "no-referrer"
     operation = app.openapi()["paths"]["/api/desktop/launch"]["post"]
-    assert "requestBody" not in operation
+    assert operation["requestBody"]["required"] is True
 
 
 @pytest.mark.asyncio
@@ -135,7 +139,9 @@ async def test_web_launch_validates_exact_origin_and_api_key(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
     ) as client:
-        response = await client.post("/api/desktop/launch", headers=headers)
+        response = await client.post(
+            "/api/desktop/launch", headers=headers, json={"presentation": "desktop"}
+        )
     assert response.status_code == status
 
 
@@ -155,7 +161,11 @@ async def test_web_launch_uses_explicit_owner_and_rejects_revocation(
                 text("UPDATE telegram_recipients SET revoked_at=NOW() WHERE telegram_user_id=:uid"),
                 {"uid": owner_id},
             )
-        response = await client.post("/api/desktop/launch", headers=_web_headers())
+        response = await client.post(
+            "/api/desktop/launch",
+            headers=_web_headers(),
+            json={"presentation": "desktop"},
+        )
     assert response.status_code == 401
 
 
@@ -185,10 +195,14 @@ async def test_tma_bearer_launch_records_real_owner_and_rejects_recipient(
         transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
     ) as client:
         launched = await client.post(
-            "/api/desktop/launch", headers={"Authorization": f"Bearer {owner_token}"}
+            "/api/desktop/launch",
+            headers={"Authorization": f"Bearer {owner_token}"},
+            json={"presentation": "mobile"},
         )
         denied = await client.post(
-            "/api/desktop/launch", headers={"Authorization": f"Bearer {recipient_token}"}
+            "/api/desktop/launch",
+            headers={"Authorization": f"Bearer {recipient_token}"},
+            json={"presentation": "mobile"},
         )
 
     assert launched.status_code == 200
@@ -196,6 +210,7 @@ async def test_tma_bearer_launch_records_real_owner_and_rejects_recipient(
     grant = await consume_desktop_ticket(fake_redis_client, ticket)
     assert grant.telegram_user_id == owner_id
     assert grant.source == "telegram_mini_app"
+    assert grant.presentation == "mobile"
     assert denied.status_code == 403
 
 
@@ -207,6 +222,7 @@ async def test_redeem_cookie_verify_logout_and_replay(pg_engine, fake_redis_clie
         telegram_user_id=owner_id,
         source="telegram_mini_app",
         expected_hostname="desktop.adpulse.su",
+        presentation="mobile",
         ttl=300,
     )
     app = _app(pg_engine, fake_redis_client, _settings(owner_id))
@@ -221,6 +237,7 @@ async def test_redeem_cookie_verify_logout_and_replay(pg_engine, fake_redis_clie
             headers={**cookie_header, "Remote-User": "attacker"},
             follow_redirects=False,
         )
+        profile = await client.get("/desktop-auth/profile", headers=cookie_header)
         logged_out = await client.post(
             "/desktop/logout", headers=cookie_header, follow_redirects=False
         )
@@ -238,6 +255,10 @@ async def test_redeem_cookie_verify_logout_and_replay(pg_engine, fake_redis_clie
     assert "Max-Age=43200" in cookie
     assert verified.status_code == 200
     assert verified.headers["remote-user"] == "adpulse-desktop"
+    assert verified.headers["x-desktop-presentation"] == "mobile"
+    assert profile.status_code == 200
+    assert profile.json() == {"presentation": "mobile"}
+    assert profile.headers["cache-control"] == "no-store"
     assert logged_out.status_code == 303
     assert denied.status_code == 303
     assert replay.status_code == 403
@@ -255,6 +276,7 @@ async def test_revoke_invalidates_warm_desktop_session_on_next_verify(
         telegram_user_id=owner_id,
         source="telegram_mini_app",
         expected_hostname="desktop.adpulse.su",
+        presentation="mobile",
         ttl=300,
     )
     app = _app(pg_engine, fake_redis_client, _settings(owner_id))
@@ -286,7 +308,7 @@ async def test_revoke_invalidates_warm_desktop_session_on_next_verify(
 
     assert denied.status_code == 303
     assert denied.headers["location"].startswith("https://app.adpulse.su/remote-desktop")
-    assert not await fake_redis_client.keys("desktop_access:v4:session:*")
+    assert not await fake_redis_client.keys("desktop_access:v5:session:*")
 
 
 @pytest.mark.asyncio

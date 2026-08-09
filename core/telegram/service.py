@@ -426,6 +426,15 @@ async def consume_invite_and_create_recipient(
                       AND used_at IS NULL
                       AND revoked_at IS NULL
                       AND expires_at > clock_timestamp()
+                      AND (
+                          role <> 'owner'
+                          OR NOT EXISTS (
+                              SELECT 1
+                              FROM telegram_recipients r
+                              WHERE r.role = 'owner'
+                                AND r.revoked_at IS NULL
+                          )
+                      )
                     RETURNING id, role
                     """
                 ),

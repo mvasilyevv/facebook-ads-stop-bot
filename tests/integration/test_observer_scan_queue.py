@@ -159,11 +159,11 @@ async def test_dependency_barrier_is_not_claimed_until_every_child_is_terminal(
             idempotency_key=f"test-observer-scan:{uuid.uuid4()}:{suffix}",
             payload={
                 "mutation_kind": "bulk_status_change",
-                "target_id": f"autostart:{suffix}",
+                "target_id": f"auto-pause:{suffix}",
                 "ad_account_id": "123",
-                "params": {"action": "activate", "ad_ids": ["238001"]},
+                "params": {"action": "pause", "ad_ids": ["238001"]},
             },
-            requested_by="test_observer_scan",
+            requested_by="bot_auto_stop",
             lane="money",
         )
         assert task_id is not None

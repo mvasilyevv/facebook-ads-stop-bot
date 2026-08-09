@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
-from core.domain import AlertStage, EnableRecommendationLevel
+from core.domain import AlertStage
 from core.money import require_exact_currency_amount
 from core.rules.labels import rule_label
 from core.rules.types import RuleContext, RuleEvaluation, RuleHit
@@ -61,26 +61,6 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
         warning_hits=(final_hit,),
         stop_hits=(),
     )
-
-
-def determine_enable_recommendation_level(
-    row: ScannedAdRow,
-    ctx: RuleContext,
-    *,
-    stop_evaluation: RuleEvaluation | None = None,
-) -> EnableRecommendationLevel | None:
-    """Возвращает безопасный уровень рекомендации на включение для OFF-объявления."""
-    evaluation = stop_evaluation or evaluate_stop_rules(row, ctx)
-
-    if _has_enable_data_gap(row):
-        return None
-    if evaluation.stage == AlertStage.STOP:
-        return None
-    if evaluation.stage == AlertStage.WARNING:
-        return EnableRecommendationLevel.WARNING
-    if not _has_safe_enable_recovery_signal(row):
-        return None
-    return EnableRecommendationLevel.OK
 
 
 def _evaluate_funnel_ladder(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
@@ -543,14 +523,6 @@ def _should_apply_registration_spend_guardrail(row: ScannedAdRow, ctx: RuleConte
     return _exact_derived_money(row.cost_per_registration) <= ctx.cpr_stop_threshold
 
 
-def _has_enable_data_gap(row: ScannedAdRow) -> bool:
-    if row.clicks > 0 and row.cpc is None:
-        return True
-    if row.leads > 0 and row.cost_per_lead is None:
-        return True
-    return row.registrations > 0 and row.cost_per_registration is None
-
-
 def _has_confirmed_deposit_signal(row: ScannedAdRow, ctx: RuleContext) -> bool:
     """Депозит подтверждаем ТОЛЬКО по данным трекера AdSet.pro (external_deposits >= 1).
 
@@ -560,21 +532,6 @@ def _has_confirmed_deposit_signal(row: ScannedAdRow, ctx: RuleContext) -> bool:
     защиту от no-dep guardrail'ов) только когда AdSet.pro прислал depositное событие.
     """
     return ctx.external_deposits >= 1
-
-
-def _has_safe_enable_recovery_signal(row: ScannedAdRow) -> bool:
-    """Проверяет только неконсистентные сигналы; решение о resume идёт по метрикам."""
-    if row.deposits > 0 and row.registrations <= 0:
-        return False
-    if (
-        Decimal(row.spend) <= Decimal("0")
-        and row.clicks <= 0
-        and row.leads <= 0
-        and row.registrations <= 0
-        and row.deposits <= 0
-    ):
-        return False
-    return True
 
 
 def _percent_of_cpa(cpa: Decimal, percent: Decimal) -> Decimal:

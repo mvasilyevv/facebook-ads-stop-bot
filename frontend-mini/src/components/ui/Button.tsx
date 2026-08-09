@@ -3,7 +3,7 @@
  * Тач-цель ≥ 44px (min-h-[44px]).
  * Варианты: primary (accent off-white), secondary (border), ghost, danger.
  */
-import type { ButtonHTMLAttributes } from "react";
+import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
@@ -33,46 +33,52 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   fullWidth?: boolean;
 }
 
-export function Button({
-  variant = "primary",
-  size = "md",
-  loading = false,
-  fullWidth = false,
-  disabled,
-  className,
-  children,
-  ...rest
-}: ButtonProps) {
-  const isDisabled = disabled || loading;
-  return (
-    <button
-      {...rest}
-      disabled={isDisabled}
-      aria-busy={loading || undefined}
-      data-loading={loading || undefined}
-      className={cn(
-        // базовые стили
-        "inline-flex items-center justify-center gap-2",
-        "rounded-[var(--radius-2)]",
-        "font-body transition-opacity",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]",
-        // размер
-        SIZE_STYLES[size],
-        // вариант
-        VARIANT_STYLES[variant],
-        // состояния
-        isDisabled && "opacity-40 cursor-not-allowed pointer-events-none",
-        fullWidth && "w-full",
-        className,
-      )}
-    >
-      {loading && (
-        <span
-          aria-hidden
-          className="inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"
-        />
-      )}
-      {children}
-    </button>
-  );
-}
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
+  function Button(
+    {
+      variant = "primary",
+      size = "md",
+      loading = false,
+      fullWidth = false,
+      disabled,
+      className,
+      children,
+      ...rest
+    },
+    ref,
+  ) {
+    const isDisabled = disabled || loading;
+    return (
+      <button
+        ref={ref}
+        {...rest}
+        disabled={isDisabled}
+        aria-busy={loading || undefined}
+        data-loading={loading || undefined}
+        className={cn(
+          // базовые стили
+          "inline-flex items-center justify-center gap-2",
+          "rounded-[var(--radius-2)]",
+          "font-body transition-opacity",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]",
+          // размер
+          SIZE_STYLES[size],
+          // вариант
+          VARIANT_STYLES[variant],
+          // состояния
+          isDisabled && "opacity-40 cursor-not-allowed pointer-events-none",
+          fullWidth && "w-full",
+          className,
+        )}
+      >
+        {loading && (
+          <span
+            aria-hidden
+            className="inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"
+          />
+        )}
+        {children}
+      </button>
+    );
+  },
+);

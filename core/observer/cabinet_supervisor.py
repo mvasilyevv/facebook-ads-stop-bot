@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from core.deadlines import bind_absolute_deadline
+from core.meta_api.identity import require_ad_account_id
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ async def acquire_cabinet_lease(
                     SET owner_instance = EXCLUDED.owner_instance,
                         lease_token = cabinet_runtime.lease_token + 1,
                         lease_expires_at = EXCLUDED.lease_expires_at,
+                        next_scan_at = NULL,
                         last_progress_at = NOW(),
                         stage = 'claimed',
                         last_error_code = NULL
@@ -70,6 +72,43 @@ async def acquire_cabinet_lease(
     if row is None:
         return None
     return CabinetLease(ad_account_id, owner_instance, int(row.lease_token))
+
+
+async def publish_next_scan_at(
+    engine: AsyncEngine,
+    *,
+    ad_account_ids: Sequence[str],
+    next_scan_at: datetime,
+) -> int:
+    """Publish the actual in-process wake-up deadline for idle cabinets.
+
+    The projection is deliberately written only after the current scan has
+    released its lease.  A concurrently claimed cabinet is therefore never
+    overwritten by a stale scheduler.  Claiming the next actor clears the
+    projection again, so UI cannot present a scheduled scan as still pending
+    while work is already running.
+    """
+    if next_scan_at.tzinfo is None or next_scan_at.utcoffset() is None:
+        raise ValueError("next_scan_at must be timezone-aware")
+    accounts = sorted({require_ad_account_id(value) for value in ad_account_ids})
+    if not accounts:
+        return 0
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                UPDATE cabinet_runtime
+                SET next_scan_at = :next_scan_at
+                WHERE ad_account_id = ANY(:accounts)
+                  AND owner_instance IS NULL
+                """
+            ),
+            {
+                "accounts": accounts,
+                "next_scan_at": next_scan_at,
+            },
+        )
+    return int(result.rowcount or 0)
 
 
 async def update_cabinet_progress(
@@ -351,6 +390,7 @@ __all__ = [
     "CabinetSupervisor",
     "acquire_cabinet_lease",
     "assert_cabinet_lease",
+    "publish_next_scan_at",
     "release_cabinet_lease",
     "update_cabinet_progress",
 ]

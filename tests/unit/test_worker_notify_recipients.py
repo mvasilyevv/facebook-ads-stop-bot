@@ -68,69 +68,6 @@ async def test_autostop_alert_engine_path_uses_recurring_incident(monkeypatch) -
     spy_notify.assert_awaited_once()
 
 
-# =================== enable_reco ===================
-
-
-def _fake_candidate() -> object:
-    """Минимальный CandidateRow для теста durable notification."""
-    import datetime as dt
-
-    from apps.enable_recommendation_worker.main import CandidateRow
-
-    return CandidateRow(
-        ad_id=uuid.uuid4(),
-        fb_ad_id="ACT_123_456",
-        ad_name="Test Ad",
-        campaign_name="Test Campaign",
-        adset_name="Test AdSet",
-        alert_state="disabled",
-        last_transition_at=dt.datetime(2026, 6, 1, 0, 0, tzinfo=dt.timezone.utc),
-        snoozed_until=None,
-        offer_code="CR2",
-        cpa_threshold=None,
-    )
-
-
-def _fake_decision():
-    from core.enable_reco.analyzer import RecommendationDecision
-
-    return RecommendationDecision(recommend=True, level="warning", skip_reason=None, snapshot={})
-
-
-# enable_reco: business worker commits through the durable owner outbox facade.
-@pytest.mark.asyncio
-async def test_enable_reco_notification_uses_durable_outbox() -> None:
-    from apps.enable_recommendation_worker.main import enqueue_recommendation_notification
-
-    connection = MagicMock()
-    notify = AsyncMock(return_value=True)
-    with patch(
-        "apps.enable_recommendation_worker.main.notify_owners_in_transaction",
-        notify,
-    ):
-        result = await enqueue_recommendation_notification(
-            connection,
-            candidate=_fake_candidate(),
-            decision=_fake_decision(),
-            recommendation_id=uuid.uuid4(),
-        )
-
-    assert result is True
-    notify.assert_awaited_once()
-    assert notify.await_args.kwargs["event_type"] == "enable_recommendation"
-    assert notify.await_args.kwargs["severity"] == "warning"
-
-
-def test_enable_reco_runtime_has_no_telegram_client_factory() -> None:
-    import inspect
-
-    import apps.enable_recommendation_worker.main as worker
-
-    source = inspect.getsource(worker)
-    assert "TelegramBotClient" not in source
-    assert "_default_tg_factory" not in source
-
-
 # =================== digest ===================
 
 

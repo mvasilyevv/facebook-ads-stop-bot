@@ -27,28 +27,24 @@ def test_ci_desktop_digests_flow_only_through_the_immutable_manifest() -> None:
     workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
 
     assert "DESKTOP_WEBTOP_IMAGE" in manifest
-    assert "DESKTOP_KASMVNC_IMAGE" in manifest
     assert "--desktop-webtop-image" in manifest
-    assert "--desktop-kasmvnc-image" in manifest
     assert "desktop_webtop_image" in script
-    assert "desktop_kasmvnc_image" in script
     assert "BROWSER_AGENT_IMAGE" in desktop_release
     assert "docker-compose.desktop-agent.yml" in desktop_release
     assert "build-desktop:" in workflow
     assert "deploy/vision-webtop/Dockerfile" in workflow
-    assert "deploy/kasmvnc-sidecar/Dockerfile" in workflow
     assert "${{ steps.build_webtop.outputs.digest }}" in workflow
-    assert "${{ steps.build_kasm.outputs.digest }}" in workflow
     assert (
         '--desktop-webtop-image "${{ needs.build-desktop.outputs.webtop_image_ref }}"' in workflow
     )
-    assert '--desktop-kasmvnc-image "${{ needs.build-desktop.outputs.kasm_image_ref }}"' in workflow
     assert (
         "DESKTOP_WEBTOP_IMAGE: ${{ needs.build-desktop.outputs.webtop_image_ref }}" not in workflow
     )
-    assert (
-        "DESKTOP_KASMVNC_IMAGE: ${{ needs.build-desktop.outputs.kasm_image_ref }}" not in workflow
-    )
+    for retired in ("DESKTOP_KASMVNC_IMAGE", "kasmvnc-sidecar", "kasmxproxy"):
+        assert retired not in manifest
+        assert retired not in script
+        assert retired not in desktop_release
+        assert retired not in workflow
     assert "DOCKER_CONFIG='$DEPLOY_DOCKER_CONFIG' docker login ghcr.io" in workflow
 
 

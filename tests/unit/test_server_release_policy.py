@@ -3,12 +3,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 VISION_IMAGE = "ghcr.io/example/vision-webtop@sha256:" + "a" * 64
-KASMVNC_IMAGE = "ghcr.io/example/kasmvnc@sha256:" + "c" * 64
 BROWSER_IMAGE = "ghcr.io/example/browser-agent@sha256:" + "d" * 64
 CLUSTER_ID = "b" * 32
 RELEASE_ID = "release-123"
 WEBTOP_ID = "1" * 64
-KASMVNC_ID = "2" * 64
 BROWSER_ID = "3" * 64
 
 
@@ -49,7 +47,6 @@ def _desktop_state(tmp_path: Path) -> Path:
     release_env.write_text(
         f"RELEASE_ID={RELEASE_ID}\n"
         f"DESKTOP_WEBTOP_IMAGE={VISION_IMAGE}\n"
-        f"DESKTOP_KASMVNC_IMAGE={KASMVNC_IMAGE}\n"
         f"BROWSER_AGENT_IMAGE={BROWSER_IMAGE}\n"
     )
     release_env.chmod(0o600)
@@ -60,22 +57,17 @@ def _desktop_state(tmp_path: Path) -> Path:
 
 def _vision_wait_environment(
     tmp_path: Path,
-    observed_webtop_identity: str,
-    observed_kasm_identity: str,
+    observed_identity: str,
 ) -> dict[str, str]:
     _desktop_state(tmp_path)
     docker = tmp_path / "docker"
     docker.write_text(
         "#!/usr/bin/env bash\n"
         'target="${!#}"\n'
-        'if [[ "$1" == "ps" ]]; then\n'
-        f"  printf '%s\\n' '{KASMVNC_ID}'\n"
-        'elif [[ "$target" == "vision-webtop" && "$*" == *\'{{.Id}}\'* ]]; then\n'
+        'if [[ "$target" == "vision-webtop" && "$*" == *\'{{.Id}}\'* ]]; then\n'
         f"  printf '%s\\n' '{WEBTOP_ID}'\n"
         'elif [[ "$target" == "vision-webtop" ]]; then\n'
-        f"  printf '%s\\n' '{observed_webtop_identity}'\n"
-        f'elif [[ "$target" == "{KASMVNC_ID}" ]]; then\n'
-        f"  printf '%s\\n' '{observed_kasm_identity}'\n"
+        f"  printf '%s\\n' '{observed_identity}'\n"
         "else\n"
         "  exit 1\n"
         "fi\n"
@@ -89,63 +81,46 @@ def _vision_wait_environment(
     }
 
 
-def _vision_identities(
+def _vision_identity(
     *,
     cluster_id: str = CLUSTER_ID,
-    kasm_image: str = KASMVNC_IMAGE,
-    kasm_network_mode: str = f"container:{WEBTOP_ID}",
-    kasm_ipc_mode: str = f"container:{WEBTOP_ID}",
-    webtop_running: str = "true",
-    webtop_health: str = "healthy",
-) -> tuple[str, str]:
-    webtop = (
-        f"/vision-webtop|{webtop_running}|{webtop_health}|{VISION_IMAGE}|"
-        f"fb_agent_vision|webtop|true|{cluster_id}|vision|{RELEASE_ID}"
+    image: str = VISION_IMAGE,
+    release_id: str = RELEASE_ID,
+    running: str = "true",
+    health: str = "healthy",
+) -> str:
+    return (
+        f"/vision-webtop|{running}|{health}|{image}|"
+        f"fb_agent_vision|webtop|true|{cluster_id}|vision|{release_id}"
     )
-    kasm = (
-        f"true|healthy|{kasm_image}|fb_agent_vision|kasmvnc|true|"
-        f"{cluster_id}|vision|{RELEASE_ID}|{kasm_network_mode}|{kasm_ipc_mode}"
-    )
-    return webtop, kasm
 
 
 def _run_installer_identity_check(
     *,
-    kasm_network_mode: str = f"container:{WEBTOP_ID}",
-    kasm_ipc_mode: str = f"container:{WEBTOP_ID}",
+    cluster_id: str = CLUSTER_ID,
+    image: str = VISION_IMAGE,
+    release_id: str = RELEASE_ID,
+    health: str = "healthy",
 ) -> subprocess.CompletedProcess[str]:
     installer = (ROOT / "scripts" / "install-vision-webtop.sh").read_text()
     function = installer.split("vision_identity_is_exact() {", 1)[1].split(
         "\n}\n\nassert_browser_agent_absent",
         1,
     )[0]
-    webtop_inspection = f"true|{VISION_IMAGE}|true|{CLUSTER_ID}|vision|{RELEASE_ID}"
-    kasm_inspection = (
-        f"true|{KASMVNC_IMAGE}|true|{CLUSTER_ID}|vision|{RELEASE_ID}|"
-        f"{kasm_network_mode}|{kasm_ipc_mode}"
-    )
+    inspection = f"true|{health}|{image}|true|{cluster_id}|vision|{release_id}"
     harness = f"""
 compose_with_env() {{
-  if [[ "${{!#}}" == webtop ]]; then
-    printf '%s\\n' '{WEBTOP_ID}'
-  else
-    printf '%s\\n' '{KASMVNC_ID}'
-  fi
+  printf '%s\\n' '{WEBTOP_ID}'
 }}
 dotenv_value() {{
   case "$1" in
     DESKTOP_WEBTOP_IMAGE) printf '%s\\n' '{VISION_IMAGE}' ;;
-    DESKTOP_KASMVNC_IMAGE) printf '%s\\n' '{KASMVNC_IMAGE}' ;;
     FB_AGENT_BOOTSTRAP_CLUSTER_ID) printf '%s\\n' '{CLUSTER_ID}' ;;
     *) return 1 ;;
   esac
 }}
 docker() {{
-  if [[ "${{!#}}" == '{WEBTOP_ID}' ]]; then
-    printf '%s\\n' '{webtop_inspection}'
-  else
-    printf '%s\\n' '{kasm_inspection}'
-  fi
+  printf '%s\\n' '{inspection}'
 }}
 vision_identity_is_exact() {{{function}
 }}
@@ -296,7 +271,7 @@ def _browser_recreate_environment(tmp_path: Path) -> tuple[dict[str, str], Path]
     runtime_state = tmp_path / "browser-runtime-state"
     runtime_state.write_text("stale\n")
     docker_log = tmp_path / "docker.log"
-    webtop_identity, kasm_identity = _vision_identities()
+    webtop_identity = _vision_identity()
     current_browser = _browser_identity(f"container:{WEBTOP_ID}")
     stale_browser = _browser_identity("container:" + "9" * 64)
     docker = tmp_path / "docker"
@@ -305,8 +280,6 @@ def _browser_recreate_environment(tmp_path: Path) -> tuple[dict[str, str], Path]
         'target="${!#}"\n'
         'if [[ "$1" == "ps" && "$*" == *\'com.docker.compose.service=postgres\'* ]]; then\n'
         "  printf '%s\\n' 'postgres-review fb_agent_infra'\n"
-        'elif [[ "$1" == "ps" && "$*" == *\'com.docker.compose.service=kasmvnc\'* ]]; then\n'
-        f"  printf '%s\\n' '{KASMVNC_ID}'\n"
         'elif [[ "$1" == "exec" && "$2" == "postgres-review" ]]; then\n'
         '  sql="$(tee /dev/null)"\n'
         "  if [[ \"$sql\" == *'UPDATE system_config'* ]]; then\n"
@@ -322,8 +295,6 @@ def _browser_recreate_environment(tmp_path: Path) -> tuple[dict[str, str], Path]
         f"  printf '%s\\n' '{WEBTOP_ID}'\n"
         'elif [[ "$1" == "inspect" && "$target" == "vision-webtop" ]]; then\n'
         f"  printf '%s\\n' '{webtop_identity}'\n"
-        f'elif [[ "$1" == "inspect" && "$target" == "{KASMVNC_ID}" ]]; then\n'
-        f"  printf '%s\\n' '{kasm_identity}'\n"
         f'elif [[ "$1" == "inspect" && "$target" == "{BROWSER_ID}" ]]; then\n'
         '  if [[ "$(<"$FAKE_RUNTIME_STATE")" == "current" ]]; then\n'
         f"    printf '%s\\n' '{current_browser}'\n"
@@ -411,9 +382,8 @@ def test_systemd_keeps_app_and_desktop_lifecycles_independent() -> None:
     assert desktop_unit.index("ExecStartPre=") < desktop_unit.index("ExecStart=")
 
 
-def test_vision_namespace_wait_script_accepts_running_container(tmp_path) -> None:
-    webtop, kasm = _vision_identities()
-    env = _vision_wait_environment(tmp_path, webtop, kasm)
+def test_vision_wait_script_accepts_exact_running_container(tmp_path) -> None:
+    env = _vision_wait_environment(tmp_path, _vision_identity())
 
     result = subprocess.run(
         ["bash", str(ROOT / "scripts" / "wait-for-vision-container.sh")],
@@ -424,15 +394,14 @@ def test_vision_namespace_wait_script_accepts_running_container(tmp_path) -> Non
     )
 
     assert result.returncode == 0
-    assert "Exact committed Vision/Kasm namespace is healthy" in result.stdout
+    assert "Exact committed Vision desktop is healthy" in result.stdout
 
 
-def test_vision_namespace_wait_script_fails_closed_at_timeout(tmp_path) -> None:
-    webtop, kasm = _vision_identities(
-        webtop_running="false",
-        webtop_health="starting",
+def test_vision_wait_script_fails_closed_at_timeout(tmp_path) -> None:
+    env = _vision_wait_environment(
+        tmp_path,
+        _vision_identity(running="false", health="starting"),
     )
-    env = _vision_wait_environment(tmp_path, webtop, kasm)
 
     result = subprocess.run(
         ["bash", str(ROOT / "scripts" / "wait-for-vision-container.sh")],
@@ -446,9 +415,11 @@ def test_vision_namespace_wait_script_fails_closed_at_timeout(tmp_path) -> None:
     assert "did not become healthy" in result.stderr
 
 
-def test_vision_namespace_wait_script_rejects_running_foreign_identity(tmp_path) -> None:
-    webtop, kasm = _vision_identities(cluster_id="e" * 32)
-    env = _vision_wait_environment(tmp_path, webtop, kasm)
+def test_vision_wait_script_rejects_running_foreign_cluster(tmp_path) -> None:
+    env = _vision_wait_environment(
+        tmp_path,
+        _vision_identity(cluster_id="e" * 32),
+    )
 
     result = subprocess.run(
         ["bash", str(ROOT / "scripts" / "wait-for-vision-container.sh")],
@@ -462,11 +433,13 @@ def test_vision_namespace_wait_script_rejects_running_foreign_identity(tmp_path)
     assert "did not become healthy" in result.stderr
 
 
-def test_vision_namespace_wait_script_rejects_wrong_kasm_image(tmp_path) -> None:
-    webtop, kasm = _vision_identities(
-        kasm_image="ghcr.io/example/kasmvnc@sha256:" + "f" * 64,
+def test_vision_wait_script_rejects_wrong_image(tmp_path) -> None:
+    env = _vision_wait_environment(
+        tmp_path,
+        _vision_identity(
+            image="ghcr.io/example/vision-webtop@sha256:" + "f" * 64,
+        ),
     )
-    env = _vision_wait_environment(tmp_path, webtop, kasm)
 
     result = subprocess.run(
         ["bash", str(ROOT / "scripts" / "wait-for-vision-container.sh")],
@@ -477,12 +450,14 @@ def test_vision_namespace_wait_script_rejects_wrong_kasm_image(tmp_path) -> None
     )
 
     assert result.returncode != 0
-    assert "Vision/Kasm namespace did not become healthy" in result.stderr
+    assert "Vision desktop did not become healthy" in result.stderr
 
 
-def test_vision_namespace_wait_script_rejects_stale_kasm_namespace(tmp_path) -> None:
-    webtop, kasm = _vision_identities(kasm_network_mode="container:" + "9" * 64)
-    env = _vision_wait_environment(tmp_path, webtop, kasm)
+def test_vision_wait_script_rejects_wrong_release_label(tmp_path) -> None:
+    env = _vision_wait_environment(
+        tmp_path,
+        _vision_identity(release_id="stale-release"),
+    )
 
     result = subprocess.run(
         ["bash", str(ROOT / "scripts" / "wait-for-vision-container.sh")],
@@ -493,19 +468,17 @@ def test_vision_namespace_wait_script_rejects_stale_kasm_namespace(tmp_path) -> 
     )
 
     assert result.returncode != 0
-    assert "Vision/Kasm namespace did not become healthy" in result.stderr
+    assert "Vision desktop did not become healthy" in result.stderr
 
 
-def test_installer_identity_accepts_exact_kasm_namespace() -> None:
+def test_installer_identity_accepts_exact_desktop() -> None:
     result = _run_installer_identity_check()
 
     assert result.returncode == 0, result.stderr
 
 
-def test_installer_identity_rejects_stale_kasm_namespace() -> None:
-    result = _run_installer_identity_check(
-        kasm_network_mode="container:" + "9" * 64,
-    )
+def test_installer_identity_rejects_foreign_desktop() -> None:
+    result = _run_installer_identity_check(release_id="stale-release")
 
     assert result.returncode != 0
 
@@ -562,11 +535,9 @@ def test_verified_desktop_consumers_accept_pinned_canonical_state_directory(
     )
     assert browser.returncode == 0, browser.stderr
 
-    webtop_identity, kasm_identity = _vision_identities()
     vision_env = _vision_wait_environment(
         vision_root,
-        webtop_identity,
-        kasm_identity,
+        _vision_identity(),
     )
     vision_pinned_state = vision_root / "root" / "shared" / "desktop-states" / "committed"
     vision_env.update(

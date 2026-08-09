@@ -42,7 +42,9 @@ describe("Mini App RemoteDesktopPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Подключиться" }));
 
-    expect(post).toHaveBeenCalledWith("/api/desktop/launch");
+    expect(post).toHaveBeenCalledWith("/api/desktop/launch", {
+      body: { presentation: "mobile" },
+    });
     expect(openLink).toHaveBeenCalledWith(
       "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
     );

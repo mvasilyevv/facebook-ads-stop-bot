@@ -2,9 +2,15 @@ import type { ComponentType } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { makeOperatorScopeEvidence } from "@fb/shared/operator/testFixture";
+
 const useOperatorIncident = vi.fn();
 const navigate = vi.fn();
 const acknowledgeMutate = vi.fn();
+
+vi.mock("@fb/operator-api", () => ({
+  useOperatorRealtimeStatus: () => "connected",
+}));
 
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => ({
@@ -20,6 +26,7 @@ vi.mock("@/lib/operatorApi", () => ({
     mutateAsync: acknowledgeMutate,
     isPending: false,
   }),
+  operatorIncidentProblemMessage: () => "Не удалось подтвердить получение",
   operatorProblemMessage: () => "Инцидент недоступен",
 }));
 
@@ -41,17 +48,19 @@ describe("TMA typed incident detail", () => {
         issues: [],
         timezone: "UTC",
         timezone_known: true,
-        status: "failed",
+        scope: makeOperatorScopeEvidence(),
         incident: {
           id: "incident:incident-51",
-          kind: "incident",
           severity: "critical",
+          status: "failed",
           title: "Инцидент за пределами top-50",
           summary: "Детальная проекция загружена напрямую.",
           reason: "threshold",
           occurred_at: "2026-07-27T09:00:00Z",
           target: { kind: "system", id: null, label: "Система" },
-          action: null,
+          account_id: null,
+          action: { label: "Открыть", href: "/incidents/incident-51" },
+          requires_usd_evidence: false,
         },
       },
       isPending: false,
@@ -101,11 +110,45 @@ describe("TMA typed incident detail", () => {
     ).toBeInTheDocument();
   });
 
+  it("suppresses monetary detail copy without confirmed USD", () => {
+    const current = useOperatorIncident();
+    useOperatorIncident.mockReturnValue({
+      ...current,
+      data: {
+        ...current.data,
+        state: "partial",
+        scope: {
+          ...current.data.scope,
+          currency: null,
+          currency_state: "unknown",
+          currency_observed_at: null,
+          missing_currency_account_ids: ["123"],
+        },
+        incident: {
+          ...current.data.incident,
+          title: "Spend $18.40 выше stop",
+          summary: "CPL $9.56",
+          requires_usd_evidence: true,
+        },
+      },
+    });
+
+    render(<IncidentDetail />);
+
+    expect(
+      screen.getByRole("heading", { name: "Денежный сигнал требует проверки" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/\$18\.40/)).not.toBeInTheDocument();
+  });
+
   it("keeps a failed acknowledgement visible instead of navigating away", async () => {
     const current = useOperatorIncident();
     useOperatorIncident.mockReturnValue({
       ...current,
-      data: { ...current.data, status: "open" },
+      data: {
+        ...current.data,
+        incident: { ...current.data.incident, status: "open" },
+      },
     });
     acknowledgeMutate.mockRejectedValue(new Error("network"));
 
@@ -116,7 +159,7 @@ describe("TMA typed incident detail", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "Инцидент недоступен",
+        "Не удалось подтвердить получение",
       );
     });
     expect(navigate).not.toHaveBeenCalled();

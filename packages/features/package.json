@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./offers": "./src/offers.ts"
+    "./campaigns": "./src/campaigns.ts",
+    "./offers": "./src/offers.ts",
+    "./settings": "./src/settings.ts"
   },
   "scripts": {
     "test": "vitest run",

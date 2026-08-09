@@ -3,8 +3,8 @@
 
 Повторный container/manual launch мог поднять ДВА экземпляра одного воркера на
 одной очереди. `FOR UPDATE SKIP LOCKED` спасал от двойного claim, но оба процесса
-жили: двойной poll, дублирующие TG-алерты (health_watchdog), двойной
-cabinet_scheduler. Эксклюзивный fcntl-lock на файле в /tmp гарантирует один
+жили: двойной poll и дублирующие TG-алерты (health_watchdog). Эксклюзивный
+fcntl-lock на файле в /tmp гарантирует один
 экземпляр — второй процесс видит занятый lock и завершается с exit 0.
 
 The file lock prevents accidental duplicate processes inside one container or

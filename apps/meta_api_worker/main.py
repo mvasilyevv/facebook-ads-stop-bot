@@ -31,7 +31,7 @@ import os
 import signal
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from sqlalchemy import text
@@ -47,14 +47,7 @@ from core.db import WORKER_ENGINE_KWARGS
 from core.deadlines import bind_absolute_deadline
 from core.meta_api.audit import AuditedMetaApiClient
 from core.meta_api.autostop_alert import maybe_alert_autostop_channel_down
-from core.meta_api.bulk import (
-    GuardedAutostartExecution,
-    guarded_autostart_execution_boundary,
-    is_guarded_autostart_activation,
-    locked_autostart_targets,
-    merge_guarded_bulk_result,
-    revalidate_autostart_activation_guards,
-)
+from core.meta_api.bulk import locked_status_targets
 from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import (
     AmbiguousResultError,
@@ -192,7 +185,6 @@ _TASK_TOUCH_INTERVAL_SECONDS = _resolve_touch_interval(
 
 # requested_by авто-стопа (observer → pause_ad). Совпадает с writers._create_pause_mutation.
 _AUTO_STOP_REQUESTED_BY = "bot_auto_stop"
-_SAFETY_COMPENSATION_AUTOSTART = "autostart_reconciliation"
 _SAFETY_COMPENSATION_ENABLE_GRACE = "activation_without_grace"
 
 
@@ -207,13 +199,9 @@ def _is_safety_compensation(payload: MetaMutationPayload) -> bool:
 
     if payload.mutation_kind != "pause_ad":
         return False
-    reason = payload.params.get("safety_compensation")
-    if reason == _SAFETY_COMPENSATION_AUTOSTART:
-        source_task_id = payload.params.get("supersedes_autostart_task_id")
-    elif reason == _SAFETY_COMPENSATION_ENABLE_GRACE:
-        source_task_id = payload.params.get("supersedes_activation_task_id")
-    else:
+    if payload.params.get("safety_compensation") != _SAFETY_COMPENSATION_ENABLE_GRACE:
         return False
+    source_task_id = payload.params.get("supersedes_activation_task_id")
     return (
         isinstance(source_task_id, int)
         and not isinstance(source_task_id, bool)
@@ -1052,10 +1040,7 @@ async def _reconcile_unknown_bulk_status(
         "pause": "PAUSED",
         "paused": "PAUSED",
     }.get(action)
-    stored = task.result if isinstance(task.result, dict) else {}
-    raw_execution_ids = stored.get("bulk_execution_ad_ids")
-    if not isinstance(raw_execution_ids, list):
-        raw_execution_ids = payload.params.get("ad_ids")
+    raw_execution_ids = payload.params.get("ad_ids")
     execution_ids = tuple(
         sorted(
             {
@@ -1064,11 +1049,6 @@ async def _reconcile_unknown_bulk_status(
                 if str(ad_id).strip()
             }
         )
-    )
-    guard_rejected = (
-        stored.get("bulk_guard_rejected")
-        if isinstance(stored.get("bulk_guard_rejected"), dict)
-        else {}
     )
     if desired is None or not execution_ids:
         await mark_task_failed(
@@ -1079,7 +1059,6 @@ async def _reconcile_unknown_bulk_status(
                 "outcome": "UNKNOWN",
                 "reconcile_required": False,
                 "per_ad": [],
-                "guard_rejected": guard_rejected,
             },
             lease_owner=task.lease_owner,
             lease_token=task.lease_token,
@@ -1088,8 +1067,7 @@ async def _reconcile_unknown_bulk_status(
 
     per_ad: list[dict[str, Any]] = []
     confirmed_ids: list[str] = []
-    async with locked_autostart_targets(engine, ad_ids=execution_ids) as target_locks:
-        generation_rejections: dict[str, str] = {}
+    async with locked_status_targets(engine, ad_ids=execution_ids) as target_locks:
         if target_locks.busy_ad_id is not None:
             await defer_unknown_reconciliation(
                 engine,
@@ -1097,49 +1075,38 @@ async def _reconcile_unknown_bulk_status(
                 error=(f"bulk status reconciliation target lock busy: {target_locks.busy_ad_id}"),
             )
             return True
-        else:
-            try:
-                entries = [
-                    make_batch_entry(
-                        method="GET",
-                        relative_url=f"{ad_id}?fields=status,effective_status",
-                    )
-                    for ad_id in execution_ids
-                ]
-                with bind_absolute_deadline(task.deadline_at):
-                    response = await client.execute_graph_call(
-                        method="POST",
-                        endpoint="/",
-                        query_params={"batch": build_batch_payload(entries)},
-                        timeout_ms=10_000,
-                        ad_account_id=payload.ad_account_id,
-                    )
-                parsed = parse_batch_response(
-                    response,
-                    expected_count=len(execution_ids),
+        try:
+            entries = [
+                make_batch_entry(
+                    method="GET",
+                    relative_url=f"{ad_id}?fields=status,effective_status",
                 )
-            except Exception as exc:  # noqa: BLE001 — read failure is terminal UNKNOWN
-                parsed = [
-                    {
-                        "index": index,
-                        "success": False,
-                        "code": 0,
-                        "body": None,
-                        "error": type(exc).__name__,
-                    }
-                    for index in range(len(execution_ids))
-                ]
+                for ad_id in execution_ids
+            ]
+            with bind_absolute_deadline(task.deadline_at):
+                response = await client.execute_graph_call(
+                    method="POST",
+                    endpoint="/",
+                    query_params={"batch": build_batch_payload(entries)},
+                    timeout_ms=10_000,
+                    ad_account_id=payload.ad_account_id,
+                )
+            parsed = parse_batch_response(
+                response,
+                expected_count=len(execution_ids),
+            )
+        except Exception as exc:  # noqa: BLE001 — read failure is terminal UNKNOWN
+            parsed = [
+                {
+                    "index": index,
+                    "success": False,
+                    "code": 0,
+                    "body": None,
+                    "error": type(exc).__name__,
+                }
+                for index in range(len(execution_ids))
+            ]
 
-            if is_guarded_autostart_activation(payload):
-                async with target_locks.connection.begin():
-                    current_guards = await revalidate_autostart_activation_guards(
-                        target_locks.connection,
-                        payload=payload,
-                        task_id=int(task.id),
-                    )
-                generation_rejections = dict(current_guards.rejected_by_ad_id)
-
-        compensation_ids: list[str] = []
         for index, ad_id in enumerate(execution_ids):
             item = parsed[index] if index < len(parsed) else {}
             body = item.get("body") if isinstance(item, dict) else None
@@ -1147,12 +1114,10 @@ async def _reconcile_unknown_bulk_status(
             effective_raw = body.get("effective_status") if isinstance(body, dict) else None
             configured = configured_raw.strip().upper() if isinstance(configured_raw, str) else None
             effective = effective_raw.strip().upper() if isinstance(effective_raw, str) else None
-            newer_generation_reason = generation_rejections.get(ad_id)
             if (
                 item.get("success") is True
                 and configured in _CONFIGURED_META_STATUS_VALUES
                 and configured == desired
-                and newer_generation_reason is None
             ):
                 confirmed_ids.append(ad_id)
                 per_ad.append(
@@ -1165,9 +1130,7 @@ async def _reconcile_unknown_bulk_status(
                 )
                 continue
 
-            if newer_generation_reason is not None:
-                reason = f"superseded_by_newer_generation:{newer_generation_reason}"
-            elif isinstance(item, dict):
+            if isinstance(item, dict):
                 reason = str(item.get("error") or "desired_configured_status_not_confirmed")
             else:
                 reason = "missing_reconciliation_result"
@@ -1180,102 +1143,6 @@ async def _reconcile_unknown_bulk_status(
                     "reason": reason,
                 }
             )
-            if (
-                desired == "ACTIVE"
-                and configured == "ACTIVE"
-                and newer_generation_reason is not None
-                and (
-                    newer_generation_reason.startswith("fsm_state:")
-                    or ":pause_ad" in newer_generation_reason
-                    or "bulk_status_change:pause" in newer_generation_reason
-                )
-            ):
-                compensation_ids.append(ad_id)
-
-        if compensation_ids and target_locks.busy_ad_id is None:
-            raw_external_deadline = stored.get("bulk_external_deadline_at")
-            not_before = datetime.now(UTC)
-            if isinstance(raw_external_deadline, str):
-                try:
-                    parsed_deadline = datetime.fromisoformat(raw_external_deadline)
-                    if parsed_deadline.tzinfo is None:
-                        parsed_deadline = parsed_deadline.replace(tzinfo=UTC)
-                    not_before = max(not_before, parsed_deadline + timedelta(seconds=5))
-                except ValueError:
-                    logger.error(
-                        "invalid bulk_external_deadline_at task=%s; safety PAUSE stays immediate",
-                        task.id,
-                    )
-            async with target_locks.connection.begin():
-                conn = target_locks.connection
-                command_service = CommandService(engine)
-                for ad_id in sorted(set(compensation_ids)):
-                    receipt = await command_service.enqueue_verified_pause_compensation(
-                        fb_ad_id=ad_id,
-                        idempotency_key=f"autostart-reconcile-pause:{task.id}:{ad_id}",
-                        reason=_SAFETY_COMPENSATION_AUTOSTART,
-                        source_task_id=int(task.id),
-                        observed_delivery_status="ACTIVE",
-                        max_attempts=15,
-                        connection=conn,
-                    )
-                    if receipt.created:
-                        await conn.execute(
-                            text(
-                                """
-                                UPDATE task_queue
-                                SET available_at = GREATEST(available_at, :not_before),
-                                    deadline_at = GREATEST(
-                                        deadline_at,
-                                        :not_before + INTERVAL '30 seconds'
-                                    ),
-                                    updated_at = NOW()
-                                WHERE id = :task_id
-                                  AND status IN ('pending', 'retrying')
-                                """
-                            ),
-                            {
-                                "task_id": receipt.task_id,
-                                "not_before": not_before,
-                            },
-                        )
-                    # The original reconciliation scan must not overtake a
-                    # safety reassertion discovered by read-after-UNKNOWN.
-                    # Extend its durable dependency barrier in the same
-                    # transaction that creates/reuses the compensation task.
-                    await conn.execute(
-                        text(
-                            """
-                            UPDATE task_queue AS scan
-                            SET payload = jsonb_set(
-                                    scan.payload,
-                                    '{dependency_task_ids}',
-                                    (scan.payload->'dependency_task_ids')
-                                        || jsonb_build_array(
-                                            CAST(:compensation_task_id AS BIGINT)
-                                        )
-                                ),
-                                updated_at = NOW()
-                            WHERE scan.task_type = 'observer_scan'
-                              AND scan.status IN ('pending', 'retrying')
-                              AND scan.payload @> '{"dependency_state":"waiting"}'::jsonb
-                              AND scan.payload->'dependency_task_ids'
-                                    @> jsonb_build_array(
-                                        CAST(:source_task_id AS BIGINT)
-                                    )
-                              AND NOT (
-                                  scan.payload->'dependency_task_ids'
-                                    @> jsonb_build_array(
-                                        CAST(:compensation_task_id AS BIGINT)
-                                    )
-                              )
-                            """
-                        ),
-                        {
-                            "source_task_id": int(task.id),
-                            "compensation_task_id": receipt.task_id,
-                        },
-                    )
 
         unknown_ids = [str(item["id"]) for item in per_ad if item.get("outcome") == "UNKNOWN"]
         result = {
@@ -1286,11 +1153,8 @@ async def _reconcile_unknown_bulk_status(
             "modified_ids": confirmed_ids,
             "confirmed_ids": confirmed_ids,
             "unknown_ids": unknown_ids,
-            "guard_rejected": dict(sorted(guard_rejected.items())),
-            "generation_rejected": dict(sorted(generation_rejections.items())),
-            "safety_compensation_ids": sorted(set(compensation_ids)),
             "succeeded": len(confirmed_ids),
-            "failed": len(unknown_ids) + len(guard_rejected),
+            "failed": len(unknown_ids),
             "per_ad": per_ad,
         }
         if unknown_ids:
@@ -1497,12 +1361,9 @@ async def _execute_and_finalize_mutation(
     *,
     client: MetaApiClient,
     prepared_grace: PreparedEnableGrace | None,
-    guarded_execution: GuardedAutostartExecution | None = None,
 ) -> None:
     """Execute one already-crossed mutation and project its terminal state."""
     result = await _execute_with_touch(engine, task, payload, client=client)
-    if guarded_execution is not None:
-        result = merge_guarded_bulk_result(result or {}, guarded_execution)
     assessment = assess_mutation_result(payload, result)
     if assessment.state == "invalid":
         failure_result = {
@@ -1688,8 +1549,7 @@ async def process_one_task(
     # (activate/bulk activate/create/duplicate/budget/...), пропуская только
     # ВЫКЛЮЧАЮЩИЕ (pause_*, bulk pause) — они снижают риск открута. Отложенная
     # задача уходит в retry и исполнится после снятия паузы; если пауза длится
-    # дольше лимита попыток — зафейлится (autostart, инициированный до паузы,
-    # осознанно отменяется пользовательским стопом).
+    # дольше лимита попыток, команда завершается ошибкой вместо скрытого запуска.
     if _is_activating_mutation(payload) and not await load_scanning_enabled(engine):
         retried = await requeue_task(
             engine,
@@ -1817,64 +1677,6 @@ async def process_one_task(
 
     external_boundary_crossed = False
     try:
-        if is_guarded_autostart_activation(payload):
-            async with guarded_autostart_execution_boundary(
-                engine,
-                task=task,
-                payload=payload,
-            ) as guarded:
-                if guarded.control_reason is not None:
-                    if guarded.control_reason == "cancel_requested":
-                        await mark_cancelled(
-                            engine,
-                            task_id=task.id,
-                            reason="cancelled before guarded external call",
-                            lease_owner=task.lease_owner,
-                            lease_token=task.lease_token,
-                        )
-                    else:
-                        await mark_task_failed(
-                            engine,
-                            task_id=task.id,
-                            error=(
-                                "guarded command rejected before external call: "
-                                f"{guarded.control_reason}"
-                            ),
-                            result={
-                                "outcome": "REJECTED",
-                                "reason": guarded.control_reason,
-                            },
-                            lease_owner=task.lease_owner,
-                            lease_token=task.lease_token,
-                        )
-                    return
-                if not guarded.external_started or guarded.payload is None:
-                    await mark_task_failed(
-                        engine,
-                        task_id=task.id,
-                        error="autostart activation rejected by per-ad execution guards",
-                        result={
-                            "outcome": "REJECTED",
-                            "reason": "activation_guard",
-                            "requested_ids": list(guarded.requested_ad_ids),
-                            "modified_ids": [],
-                            "guard_rejected": dict(sorted(guarded.rejected_by_ad_id.items())),
-                        },
-                        lease_owner=task.lease_owner,
-                        lease_token=task.lease_token,
-                    )
-                    return
-                external_boundary_crossed = True
-                await _execute_and_finalize_mutation(
-                    engine,
-                    task,
-                    guarded.payload,
-                    client=client,
-                    prepared_grace=prepared_grace,
-                    guarded_execution=guarded,
-                )
-                return
-
         if not await _cross_external_mutation_boundary(engine, task, payload):
             logger.info(
                 "meta_api: task id=%s отменена/закрыта до внешнего вызова kind=%s target=%s",

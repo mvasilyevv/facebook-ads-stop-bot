@@ -2,6 +2,11 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Activity, Database, RefreshCw, Search } from "lucide-react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { AnalyticsPerformance } from "@fb/shared";
+import {
+  parseAnalyticsRouteSearch,
+  type AnalyticsPeriod,
+  type AnalyticsRouteSearch,
+} from "@fb/shared/analytics/routeState";
 import { formatSpend } from "@fb/shared/format/number";
 import { timezoneEvidenceLabel } from "@fb/shared/format/time";
 import {
@@ -10,7 +15,7 @@ import {
 } from "@fb/shared/analytics/windowSafety";
 import type { DataState } from "@fb/shared/operator/contracts";
 import { DataStateBadge } from "@fb/operator-ui";
-import { useOperatorRealtimeStatus } from "@fb/operator-api";
+import { safeApiProblemMessage, useOperatorRealtimeStatus } from "@fb/operator-api";
 import {
   analyticsPerformanceState,
   effectiveAnalyticsState,
@@ -33,38 +38,21 @@ import {
   type AnalyticsPerformanceParams,
 } from "@/lib/api/analytics";
 import { useOperatorEvents } from "@/lib/api/operator";
-import { formatDisplayDate, formatDisplayDateTime, resolveDisplayTimeZone } from "@/lib/timezone";
-import { useUiStore } from "@/stores/ui";
+import { useOperatorDisplayPreference } from "@/lib/api/settings";
+import { formatDisplayDate, formatDisplayDateTime } from "@/lib/timezone";
 
-type PeriodKey = "today" | "7d" | "30d" | "custom";
+type PeriodKey = AnalyticsPeriod;
 export const Route = createFileRoute("/analytics/")({
   component: AnalyticsPage,
-  validateSearch: (search: Record<string, unknown>) => ({
-    tab: search.tab === "events" ? ("events" as const) : ("uploads" as const),
-    period: (["today", "7d", "30d", "custom"] as const).includes(search.period as PeriodKey)
-      ? (search.period as PeriodKey)
-      : ("today" as const),
-    from_date: typeof search.from_date === "string" ? search.from_date : undefined,
-    to_date: typeof search.to_date === "string" ? search.to_date : undefined,
-    account_id: typeof search.account_id === "string" ? search.account_id : undefined,
-    offer_id: typeof search.offer_id === "string" ? search.offer_id : undefined,
-    campaign_id: typeof search.campaign_id === "string" ? search.campaign_id : undefined,
-    search: typeof search.search === "string" ? search.search : undefined,
-    sort: typeof search.sort === "string" ? search.sort : "spend",
-    direction: search.direction === "asc" ? ("asc" as const) : ("desc" as const),
-    page: typeof search.page === "number" && search.page > 0 ? search.page : 1,
-    event_level: typeof search.event_level === "string" ? search.event_level : undefined,
-    task_result: typeof search.task_result === "string" ? search.task_result : undefined,
-  }),
+  validateSearch: parseAnalyticsRouteSearch,
 });
 
-type AnalyticsSearch = ReturnType<typeof Route.useSearch>;
+type AnalyticsSearch = AnalyticsRouteSearch;
 
 function AnalyticsPage() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: "/analytics/" });
-  const configuredTimeZone = useUiStore((state) => state.displayTimeZone);
-  const displayTimeZone = resolveDisplayTimeZone(configuredTimeZone);
+  const displayPreferenceQ = useOperatorDisplayPreference();
   const realtimeStatus = useOperatorRealtimeStatus();
   const performanceParams: AnalyticsPerformanceParams = {
     period: search.period,
@@ -92,7 +80,6 @@ function AnalyticsPage() {
         refreshing: performanceQ.isFetching,
       })
     : "unavailable";
-  const timeZone = performanceData ? performanceData.scope.display_timezone : displayTimeZone;
   const budgetQ = useAnalyticsLiveBudget(
     {
       account_id: search.account_id,
@@ -165,6 +152,47 @@ function AnalyticsPage() {
     event.preventDefault();
     selectTab(next, true);
   };
+
+  if (displayPreferenceQ.isPending) {
+    return (
+      <div className="min-w-0">
+        <PageHeader
+          eyebrowNum="05"
+          eyebrow="PERFORMANCE · META × TRACKER"
+          title="Аналитика"
+          subtitle="Загружаем timezone профиля владельца"
+        />
+        <Card padded className="p-5">
+          <p role="status" className="m-0 text-[14px] text-bg-8">
+            Подготавливаем подписи времени…
+          </p>
+        </Card>
+      </div>
+    );
+  }
+
+  if (displayPreferenceQ.isError || !displayPreferenceQ.data) {
+    return (
+      <div className="min-w-0">
+        <PageHeader
+          eyebrowNum="05"
+          eyebrow="PERFORMANCE · META × TRACKER"
+          title="Аналитика"
+          subtitle="Timezone отображения не подтверждён сервером"
+        />
+        <ErrorState
+          title="Не удалось подготовить подписи времени. Данные не показаны в другом timezone."
+          error={safeApiProblemMessage(
+            displayPreferenceQ.error,
+            "Откройте настройки отображения или повторите запрос",
+          )}
+          onRetry={() => void displayPreferenceQ.refetch()}
+        />
+      </div>
+    );
+  }
+
+  const timeZone = displayPreferenceQ.data.timezone_name;
 
   return (
     <div className="min-w-0">
@@ -261,10 +289,12 @@ function AnalyticsPage() {
               daypartQ={daypartQ}
               params={performanceParams}
               period={search.period}
+              preset={search.preset}
               timeZone={timeZone}
               windowSafety={windowSafety}
               performanceState={performanceState}
               onSort={handleSort}
+              onPreset={(preset) => setSearch({ preset, page: 1 })}
               onPage={(page) => setSearch({ page })}
             />
           )}
@@ -295,10 +325,12 @@ function UploadsView({
   daypartQ,
   params,
   period,
+  preset,
   timeZone,
   windowSafety,
   performanceState,
   onSort,
+  onPreset,
   onPage,
 }: {
   performanceQ: ReturnType<typeof useAnalyticsPerformance>;
@@ -306,10 +338,12 @@ function UploadsView({
   daypartQ: ReturnType<typeof useAnalyticsDaypart>;
   params: AnalyticsPerformanceParams;
   period: PeriodKey;
+  preset: AnalyticsSearch["preset"];
   timeZone: string;
   windowSafety: AnalyticsWindowSafety;
   performanceState: DataState;
   onSort: (sort: NonNullable<AnalyticsPerformanceParams["sort"]>) => void;
+  onPreset: (preset: AnalyticsSearch["preset"]) => void;
   onPage: (page: number) => void;
 }) {
   const data = performanceQ.data;
@@ -478,6 +512,8 @@ function UploadsView({
           parentState={completeness}
           currency={currency}
           params={params}
+          preset={preset}
+          onPreset={onPreset}
           onSort={onSort}
         />
         {data && data.pagination.pages > 1 ? (

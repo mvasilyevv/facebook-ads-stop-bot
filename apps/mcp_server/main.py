@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Точка входа MCP-сервера FB Stop Bot (stdio transport).
+"""Точка входа MCP-сервера FB Agent (stdio transport).
 
 Регистрирует:
 - list_tools / call_tool — поверх core.ai_assistant.tools.GLOBAL_REGISTRY
@@ -50,7 +50,7 @@ _RATE_LIMIT_PER_HOUR = _DEFAULT_MAX_PER_HOUR
 # Краткая версия schema-overview: контекст + money-правила. Полная инструкция —
 # ресурс fb-stop-bot://schema-overview.
 _SERVER_INSTRUCTIONS = (
-    "FB Stop Bot — мониторинг и авто-стоп убыточной рекламы Facebook Ads. "
+    "FB Agent — мониторинг и авто-стоп убыточной рекламы Facebook Ads. "
     "Здесь реальные деньги: не выдумывай данные, при сомнении читай ресурсы "
     "(fb-stop-bot://offers, recent-alerts, schema-overview — "
     "в последнем полная инструкция).\n\n"
@@ -59,7 +59,7 @@ _SERVER_INSTRUCTIONS = (
     "отключены. Давай анализ и рекомендации, изменения рекламы пользователь делает сам.\n"
     "2. «Что отключить?» = read-only анализ (get_recent_alerts, get_offer_performance, "
     "get_tracker_stats) + рекомендация, без постановки mutation-задач.\n"
-    "3. Мульти-кабинет: офферы привязаны к ad_account_ids; активный оффер без "
+    "3. Мульти-кабинет: API показывает привязки как ad_account_ids; активный оффер без "
     "кабинетов не сканируется — подсвечивай это как проблему.\n"
     "4. Расхождение метрик Meta (spend) и трекера AdSet.pro (депозиты/ROI) — "
     "нормальный attribution gap, упоминай его в сравнениях."

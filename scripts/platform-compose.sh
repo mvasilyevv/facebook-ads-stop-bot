@@ -34,8 +34,8 @@ readonly NETWORK_INVENTORY="$CURRENT_DIR/scripts/platform-network-inventory.py"
 
 readonly -a WORKERS=(
   observer autopause_worker meta_api telegram_delivery_worker telegram_update_worker
-  cleanup reconciler health_watchdog enable_recommendation digest_scheduler
-  cabinet_scheduler tracker_reconciliation_worker campaign_creator
+  cleanup reconciler health_watchdog digest_scheduler tracker_reconciliation_worker
+  campaign_creator
 )
 readonly -a APP_SERVICES=(api frontend mini-app "${WORKERS[@]}")
 

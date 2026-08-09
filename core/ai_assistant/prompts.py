@@ -75,7 +75,7 @@ def load_skill(name: str) -> str:
         raise PromptNotFoundError(f"skill {name!r} не найден ({path})") from exc
 
 
-SYSTEM_PROMPT_DIAGNOSTICS = """Ты — диагностический ассистент FB Stop Bot.
+SYSTEM_PROMPT_DIAGNOSTICS = """Ты — диагностический ассистент FB Agent.
 
 Тебе пришёл критический алерт о том, что авто-восстановление не помогло.
 На вход получишь:

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { vi } from "vitest";
 
 import type {
   AnalyticsDaypart,
@@ -80,7 +81,7 @@ describe("operator analytics semantics", () => {
     expect(visual).toHaveTextContent(/CR 20\.0% · стоимость \$.*18\.40/);
   });
 
-  it("keeps three-decimal funnel cost exact for KWD", () => {
+  it("hides funnel money when the working currency is not USD", () => {
     render(
       <FunnelChart
         clicks={1}
@@ -99,8 +100,8 @@ describe("operator analytics semantics", () => {
     const visual = screen.getByRole("group", {
       name: "Интерактивный график «Воронка»",
     });
-    expect(visual).toHaveTextContent(/KWD.*1\.234/);
-    expect(visual).not.toHaveTextContent("KWD 1.230");
+    expect(visual).not.toHaveTextContent(/KWD|1\.234/);
+    expect(visual).toHaveTextContent(/стоимость —/);
   });
 
   it("exposes chart summary, timezone and an HTML data table", () => {
@@ -321,7 +322,8 @@ describe("operator analytics semantics", () => {
   });
 
   it("keeps exactly seven desktop columns for every analytics preset", () => {
-    render(
+    const onPreset = vi.fn();
+    const table = (preset: "economy" | "funnel" | "delivery") => (
       <PerformanceTable
         rows={[]}
         currency="USD"
@@ -333,9 +335,12 @@ describe("operator analytics semantics", () => {
           page: 1,
           page_size: 50,
         }}
+        preset={preset}
+        onPreset={onPreset}
         onSort={() => {}}
-      />,
+      />
     );
+    const view = render(table("economy"));
 
     expect(
       screen.getByRole("table", {
@@ -344,8 +349,12 @@ describe("operator analytics semantics", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByRole("columnheader")).toHaveLength(7);
     fireEvent.click(screen.getByRole("button", { name: "Воронка" }));
+    expect(onPreset).toHaveBeenLastCalledWith("funnel");
+    view.rerender(table("funnel"));
     expect(screen.getAllByRole("columnheader")).toHaveLength(7);
     fireEvent.click(screen.getByRole("button", { name: "Доставка" }));
+    expect(onPreset).toHaveBeenLastCalledWith("delivery");
+    view.rerender(table("delivery"));
     expect(screen.getAllByRole("columnheader")).toHaveLength(7);
   });
 
@@ -401,6 +410,8 @@ describe("operator analytics semantics", () => {
             page: 1,
             page_size: 50,
           }}
+          preset="economy"
+          onPreset={() => {}}
           onSort={() => {}}
         />
       </QueryClientProvider>,

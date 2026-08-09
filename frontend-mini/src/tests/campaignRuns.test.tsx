@@ -130,11 +130,10 @@ describe("TMA campaign runs progress-only surface", () => {
     mocks.refetchRuns.mockResolvedValue(undefined);
   });
 
-  it("shows progress and results without exposing creation or clone controls", () => {
+  it("shows progress and results without exposing clone or cleanup controls", () => {
     render(<RunsHistory />);
 
-    expect(screen.getByText("Создание доступно на desktop")).toBeVisible();
-    expect(screen.queryByText(/визард/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Ход выполнения")).toBeVisible();
     expect(
       screen.queryByRole("button", { name: /запустить|клонировать|cleanup/i }),
     ).toBeNull();

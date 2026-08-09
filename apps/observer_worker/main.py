@@ -29,6 +29,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
+from urllib.parse import parse_qs, urlsplit
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -57,6 +58,7 @@ from core.observer.cabinet_supervisor import (
     CabinetLease,
     CabinetSupervisor,
     assert_cabinet_lease,
+    publish_next_scan_at,
 )
 from core.observer.pipeline import CycleResult, process_scan_rows
 from core.observer.queries import (
@@ -113,6 +115,7 @@ OBSERVER_LOGIN_REQUIRED_INCIDENT_PREFIX = "observer:login_required:"
 OBSERVER_TIMEZONE_UNKNOWN_INCIDENT_PREFIX = "observer:cabinet_timezone_unknown:"
 OBSERVER_CURRENCY_UNKNOWN_INCIDENT_PREFIX = "observer:cabinet_currency_unknown:"
 OBSERVER_OFFER_CURRENCY_INCIDENT_PREFIX = "observer:offer_currency_mismatch:"
+OBSERVER_CABINET_TAB_UNAVAILABLE_INCIDENT_PREFIX = "observer:cabinet_tab_unavailable:"
 
 # Money-гард R4: мульти-каб (>1 кабинета) без owner_tag → скан остановлен ради безопасности
 # (иначе авто-стоп чужой рекламы в shared-кабинете).
@@ -556,7 +559,7 @@ def _aggregate_cycle_summary(per_account: list[dict]) -> dict:
 
 
 # Module-level: набор кабинетов, для которого уже выполнена подготовка (вкладки открыты).
-# При смене набора (активирован новый оффер / поменялись ad_account_ids) — переподготовка.
+# При смене набора (активирован оффер / изменились offer-account links) — переподготовка.
 # None = подготовка ещё не выполнялась (первый цикл после старта процесса).
 _prepared_accounts: frozenset[str] | None = None
 
@@ -565,6 +568,59 @@ def _reset_prepared_accounts() -> None:
     """Сброс флага подготовки (для тестов / форс-переподготовки)."""
     global _prepared_accounts
     _prepared_accounts = None
+
+
+def _cabinet_tab_is_confirmed(result: dict, *, account_id: str) -> bool:
+    """Trust only an exact Ads Manager URL for the requested cabinet."""
+    if result.get("opened") is not True:
+        return False
+    if str(result.get("ad_account_id") or "").removeprefix("act_") != account_id:
+        return False
+    try:
+        parsed = urlsplit(str(result.get("url") or ""))
+    except ValueError:
+        return False
+    if parsed.scheme.lower() != "https":
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    hostname = (parsed.hostname or "").lower()
+    pathname = parsed.path.lower()
+    is_facebook_host = hostname == "facebook.com" or hostname.endswith(".facebook.com")
+    has_ads_manager_path = pathname == "/adsmanager" or pathname.startswith("/adsmanager/")
+    if not (is_facebook_host and has_ads_manager_path):
+        return False
+    return parse_qs(parsed.query).get("act") == [account_id]
+
+
+async def _sync_cabinet_tab_incident(
+    engine: AsyncEngine,
+    *,
+    account_id: str,
+    confirmed: bool,
+) -> None:
+    incident_key = f"{OBSERVER_CABINET_TAB_UNAVAILABLE_INCIDENT_PREFIX}{account_id}"
+    if confirmed:
+        await resolve_recurring_incident(
+            engine,
+            incident_key=incident_key,
+            audience="all",
+            summary=f"Вкладка кабинета {account_id} снова подтверждена.",
+        )
+        return
+    await notify_recurring_incident(
+        engine,
+        incident_key=incident_key,
+        audience="all",
+        event_type="observer_cabinet_tab_unavailable",
+        severity="critical",
+        title="Кабинет не открыт в Ads Manager",
+        summary=f"Кабинет: {account_id}",
+        risk="Скан и автоматическое отключение недоступны",
+        lines=["Бот не смог открыть и подтвердить вкладку автоматически"],
+        resource_type="ad_account",
+        resource_id=account_id,
+    )
 
 
 async def _prepare_workspace(
@@ -589,6 +645,7 @@ async def _prepare_workspace(
     msg = f"Подготавливаю рабочее место: открываю кабинеты ({n})…"
     logger.info("observer: %s [%s]", msg, ", ".join(accounts))
 
+    results: list[dict] = []
     try:
         from core.deadlines import bind_absolute_deadline
 
@@ -601,17 +658,39 @@ async def _prepare_workspace(
                 results = await gate.open_cabinet_tabs(accounts)
     except Exception:
         logger.exception("observer: фаза подготовки — open_cabinet_tabs упал")
-        return  # не блокируем скан
+        # The per-cabinet scan will retry its role page, but browser blindness
+        # must be visible immediately instead of waiting for a failure streak.
 
-    opened = [r for r in results if r.get("opened")]
-    failed = [r for r in results if not r.get("opened")]
+    result_by_account = {
+        str(result.get("ad_account_id") or "").removeprefix("act_"): result for result in results
+    }
+    confirmed: list[dict] = []
+    failed: list[dict] = []
+    for account_id in accounts:
+        result = result_by_account.get(account_id) or {
+            "ad_account_id": account_id,
+            "opened": False,
+            "url": "",
+            "error": "cabinet_tab_not_confirmed",
+        }
+        is_confirmed = _cabinet_tab_is_confirmed(result, account_id=account_id)
+        await _sync_cabinet_tab_incident(
+            engine,
+            account_id=account_id,
+            confirmed=is_confirmed,
+        )
+        (confirmed if is_confirmed else failed).append(result)
     if failed:
         logger.warning(
-            "observer: не открылись кабинеты: %s",
-            ", ".join(f"{r.get('ad_account_id')}({r.get('error', '')})" for r in failed),
+            "observer: не подтверждены вкладки кабинетов: %s",
+            ", ".join(str(r.get("ad_account_id") or "-") for r in failed),
         )
-    logger.info("observer: подготовка завершена — открыто %d/%d кабинетов", len(opened), n)
-    if opened:
+    logger.info(
+        "observer: подготовка завершена — подтверждено %d/%d кабинетов",
+        len(confirmed),
+        n,
+    )
+    if len(confirmed) == n:
         _prepared_accounts = current
 
 
@@ -647,7 +726,7 @@ async def run_one_cycle(
 ) -> dict:
     """Один полный цикл observer'а. Возвращает summary для логов/тестов.
 
-    Scan set = union offers.ad_account_ids активных офферов. Каждый кабинет
+    Scan set = union нормализованных связей активных офферов с кабинетами. Каждый кабинет
     получает собственный actor/lease и scan_run; ошибка одного кабинета не
     прерывает остальные. Пустой scan set останавливается fail-closed: текущая
     вкладка браузера никогда не используется как неявный кабинет.
@@ -694,7 +773,7 @@ async def run_one_cycle(
     orphan_offers = await list_offers_without_accounts(engine)
     if orphan_offers:
         logger.warning(
-            "observer: офферы без ad_account_ids не сканируются: %s",
+            "observer: офферы без привязанных кабинетов не сканируются: %s",
             ", ".join(orphan_offers),
         )
 
@@ -1163,6 +1242,22 @@ async def main_loop(
                 target_period_seconds=target_period,
                 elapsed_seconds=cycle_elapsed,
             )
+            scanned_account_ids = [
+                require_ad_account_id(account["ad_account_id"])
+                for account in summary.get("accounts", [])
+                if isinstance(account, dict) and account.get("ad_account_id")
+            ]
+            if scanned_account_ids:
+                try:
+                    await publish_next_scan_at(
+                        engine,
+                        ad_account_ids=scanned_account_ids,
+                        next_scan_at=datetime.now(timezone.utc) + timedelta(seconds=sleep_for),
+                    )
+                except Exception:
+                    # This is an operator projection, not scheduling authority:
+                    # the durable queue remains authoritative and must continue.
+                    logger.exception("observer: failed to publish cabinet next_scan_at")
             logger.info(
                 "observer: режим=%s период=%.0fс (база=%.0f, цикл=%.1f, sleep=%.1f)",
                 scan_mode,

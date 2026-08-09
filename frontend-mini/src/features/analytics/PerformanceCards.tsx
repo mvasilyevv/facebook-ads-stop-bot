@@ -1,9 +1,10 @@
-import type { AnalyticsPerformanceRow } from "@fb/shared";
 import {
-  formatInt,
-  formatPercentValue,
-  formatSpend,
-} from "@fb/shared/format/number";
+  analyticsMetricsForRow,
+  type AnalyticsMetricTone,
+} from "@fb/shared/analytics/presentation";
+import type { AnalyticsPreset } from "@fb/shared/analytics/routeState";
+import type { AnalyticsPerformanceRow } from "@fb/shared";
+import { formatSpend } from "@fb/shared/format/number";
 import { timezoneEvidenceLabel } from "@fb/shared/format/time";
 import type { DataState } from "@fb/shared/operator/contracts";
 import { inheritAnalyticsState } from "@fb/shared/analytics/state";
@@ -21,12 +22,14 @@ export function PerformanceCards({
   rows,
   parentState,
   period,
+  preset,
   currency,
   onFocusCampaign,
 }: {
   rows: AnalyticsPerformanceRow[];
   parentState: DataState;
   period: AnalyticsPeriod;
+  preset: AnalyticsPreset;
   currency: string | null;
   onFocusCampaign: (campaignId: string) => void;
 }) {
@@ -54,6 +57,14 @@ export function PerformanceCards({
         const state = inheritAnalyticsState(row.state, parentState);
         const valuesAvailable = state !== "unavailable";
         const confirmedTone = state === "ready";
+        const metrics = analyticsMetricsForRow(row, preset, currency).map(
+          (metric) =>
+            valuesAvailable
+              ? state === "ready"
+                ? metric
+                : { ...metric, tone: undefined }
+              : { ...metric, value: "—", tone: undefined },
+        );
         return (
           <article
             key={row.id}
@@ -80,12 +91,12 @@ export function PerformanceCards({
               <div
                 role={state === "unavailable" ? "alert" : "status"}
                 className={cn(
-                  "mx-4 mt-3 rounded-[var(--radius-2)] border-l-[3px] bg-bg-1 px-3 py-2 text-[12px] leading-5 text-bg-9",
+                  "mx-4 mt-3 rounded-[var(--radius-2)] border bg-bg-1 px-3 py-2 text-[12px] leading-5 text-bg-9",
                   state === "partial"
-                    ? "border border-warning/25 border-l-warning"
+                    ? "border-warning/25"
                     : state === "unavailable"
-                      ? "border border-danger/25 border-l-danger"
-                      : "border border-[var(--color-hairline)] border-l-bg-8",
+                      ? "border-danger/25"
+                      : "border-[var(--color-hairline)]",
                 )}
               >
                 <strong className="text-bg-11">
@@ -95,37 +106,15 @@ export function PerformanceCards({
               </div>
             ) : null}
 
-            <dl className="grid grid-cols-3 p-2">
-              <CardMetric
-                label="Расход"
-                value={valuesAvailable ? formatSpend(row.spend, currency) : "—"}
-              />
-              <CardMetric
-                label="Клики"
-                value={valuesAvailable ? formatInt(row.clicks) : "—"}
-              />
-              <CardMetric
-                label="Рег."
-                value={valuesAvailable ? formatInt(row.registrations) : "—"}
-                accent={confirmedTone}
-              />
-              <CardMetric
-                label="FTD"
-                value={valuesAvailable ? formatInt(row.ftds) : "—"}
-                accent={confirmedTone}
-              />
-              <CardMetric
-                label="Цена FTD"
-                value={
-                  valuesAvailable
-                    ? formatSpend(row.cost_per_ftd, currency)
-                    : "—"
-                }
-              />
-              <CardMetric
-                label="ROI"
-                value={valuesAvailable ? formatPercentValue(row.roi_pct) : "—"}
-              />
+            <dl className="grid grid-cols-2 p-2 sm:grid-cols-3">
+              {metrics.map((metric) => (
+                <CardMetric
+                  key={metric.key}
+                  label={metric.label}
+                  value={metric.value}
+                  tone={metric.tone}
+                />
+              ))}
             </dl>
 
             {period === "today" ? (
@@ -169,13 +158,11 @@ export function PerformanceCards({
 function CardMetric({
   label,
   value,
-  accent = false,
-  danger = false,
+  tone,
 }: {
   label: string;
   value: string;
-  accent?: boolean;
-  danger?: boolean;
+  tone?: AnalyticsMetricTone;
 }) {
   return (
     <div className="min-w-0 rounded-[var(--radius-2)] px-2 py-3">
@@ -185,7 +172,13 @@ function CardMetric({
       <dd
         className={cn(
           "m-0 mt-1 truncate font-display text-[16px] tabular-nums",
-          danger ? "text-danger" : accent ? "text-active" : "text-bg-11",
+          tone === "danger"
+            ? "text-danger"
+            : tone === "success"
+              ? "text-success"
+              : tone === "accent"
+                ? "text-active"
+                : "text-bg-11",
         )}
       >
         {value}
@@ -234,8 +227,7 @@ function BudgetEvidence({
       <CardMetric
         label="Δ stop"
         value={signedSpend(row.live_budget.stop_delta, currency)}
-        accent={confirmedTone && !overStop}
-        danger={confirmedTone && overStop}
+        tone={confirmedTone ? (overStop ? "danger" : "accent") : undefined}
       />
     </dl>
   );

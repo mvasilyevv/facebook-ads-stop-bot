@@ -16,8 +16,23 @@ function makeIncidentDetail() {
     issues: [],
     timezone: "Europe/Kaliningrad",
     timezone_known: true,
-    status: "open",
-    incident,
+    scope: makeOperatorScopeEvidence(),
+    incident: {
+      id: incident.id,
+      severity: incident.severity,
+      status: "open",
+      title: incident.title,
+      summary: incident.summary,
+      reason: incident.reason,
+      occurred_at: incident.occurred_at,
+      account_id: "123",
+      target: incident.target,
+      action: {
+        label: "Открыть",
+        href: `/incidents/${incident.id}`,
+      },
+      requires_usd_evidence: true,
+    },
   };
 }
 
@@ -64,6 +79,7 @@ describe("operator response runtime guards", () => {
     "/api/operator/snapshot",
     "/api/operator/actions",
     "/api/operator/ads",
+    "/api/operator/incidents",
     "/api/operator/incidents/2b80da44-ea54-4aeb-8f83-8101d8f58ee6",
     "/api/operator/incidents/2b80da44-ea54-4aeb-8f83-8101d8f58ee6/ack",
   ])("rejects malformed %s payload without retryable rendering crashes", (path) => {
@@ -92,7 +108,13 @@ describe("operator response runtime guards", () => {
     [
       "detail status",
       "/api/operator/incidents/2b80da44-ea54-4aeb-8f83-8101d8f58ee6",
-      () => ({ ...makeIncidentDetail(), status: "closed" }),
+      () => {
+        const detail = makeIncidentDetail();
+        return {
+          ...detail,
+          incident: { ...detail.incident, status: "closed" },
+        };
+      },
     ],
     [
       "nested incident target",

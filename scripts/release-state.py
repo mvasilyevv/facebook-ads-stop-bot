@@ -612,7 +612,6 @@ def _desktop_digest_inputs(
     for key in (
         "BROWSER_AGENT_IMAGE",
         "DESKTOP_WEBTOP_IMAGE",
-        "DESKTOP_KASMVNC_IMAGE",
     ):
         if not IMMUTABLE_IMAGE.fullmatch(_dotenv_value(release_content, key)):
             _die(f"desktop state {key} is not digest-pinned")

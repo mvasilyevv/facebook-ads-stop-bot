@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Tasks-домен: unified outbox + enable_recommendation event log."""
+"""Tasks-домен: unified durable queue and command receipts."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from core.models.tasks.browser_operation_capability_use import (
 )
 from core.models.tasks.browser_operation_lease import BrowserOperationLease
 from core.models.tasks.command_receipt import CommandIdempotencyReceipt
-from core.models.tasks.enable_recommendation import EnableRecommendation
 from core.models.tasks.task_queue import TaskQueue
 
 __all__ = [
@@ -17,6 +16,5 @@ __all__ = [
     "BrowserOperationCapabilityUse",
     "BrowserOperationLease",
     "CommandIdempotencyReceipt",
-    "EnableRecommendation",
     "TaskQueue",
 ]

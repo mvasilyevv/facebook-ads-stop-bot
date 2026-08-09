@@ -104,7 +104,7 @@ async def test_general_worker_cannot_claim_money_lane(pg_engine, clean_safety_ta
         task_type="meta_api_mutation",
         idempotency_key=f"money-isolation-{uuid.uuid4()}",
         payload=_pause_payload("ad-money"),
-        requested_by="test",
+        requested_by="bot_auto_stop",
     )
     assert task_id is not None
 
@@ -137,7 +137,7 @@ async def test_crash_before_external_gets_fresh_deadline_and_stale_fence_is_reje
         task_type="meta_api_mutation",
         idempotency_key=f"crash-before-send-{uuid.uuid4()}",
         payload=_pause_payload("ad-before"),
-        requested_by="test",
+        requested_by="bot_auto_stop",
         max_attempts=3,
     )
     assert task_id is not None
@@ -206,7 +206,7 @@ async def test_crash_after_status_send_requires_reconciliation_before_retry(
         task_type="meta_api_mutation",
         idempotency_key=f"crash-after-send-{uuid.uuid4()}",
         payload=_pause_payload("ad-after"),
-        requested_by="test",
+        requested_by="bot_auto_stop",
     )
     assert task_id is not None
     owner = uuid.uuid4()
@@ -300,7 +300,7 @@ async def test_deadline_before_claim_is_rejected_not_unknown(pg_engine, clean_sa
         task_type="meta_api_mutation",
         idempotency_key=f"expired-before-claim-{uuid.uuid4()}",
         payload=_pause_payload("ad-expired"),
-        requested_by="test",
+        requested_by="bot_auto_stop",
         deadline_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     assert task_id is not None
@@ -330,7 +330,7 @@ async def test_external_boundary_atomically_rejects_new_cancel_or_expired_deadli
         task_type="meta_api_mutation",
         idempotency_key=f"boundary-{boundary_change}-{uuid.uuid4()}",
         payload=_pause_payload(target_id),
-        requested_by="test",
+        requested_by="bot_auto_stop",
         lane="money",
     )
     assert task_id is not None
@@ -385,7 +385,7 @@ async def test_cancel_after_unknown_waits_for_verified_status_read(
         task_type="meta_api_mutation",
         idempotency_key=f"cancel-unknown-{uuid.uuid4()}",
         payload=_pause_payload("ad-cancel-unknown"),
-        requested_by="test",
+        requested_by="bot_auto_stop",
         max_attempts=5,
     )
     assert task_id is not None
@@ -453,7 +453,7 @@ async def test_expired_reconciliation_deadline_stays_unknown(
         task_type="meta_api_mutation",
         idempotency_key=f"expired-unknown-{uuid.uuid4()}",
         payload=_pause_payload("ad-expired-unknown"),
-        requested_by="test",
+        requested_by="bot_auto_stop",
     )
     assert task_id is not None
     claim = await claim_next_task(
@@ -501,7 +501,7 @@ async def test_expired_lease_respects_max_attempts(pg_engine, clean_safety_tasks
         task_type="meta_api_mutation",
         idempotency_key=f"max-attempts-{uuid.uuid4()}",
         payload=_pause_payload("ad-max"),
-        requested_by="test",
+        requested_by="bot_auto_stop",
         max_attempts=1,
     )
     assert task_id is not None
@@ -540,7 +540,7 @@ async def test_ambiguous_last_attempt_gets_one_read_reconciliation_claim(
         task_type="meta_api_mutation",
         idempotency_key=f"last-attempt-unknown-{uuid.uuid4()}",
         payload=_pause_payload("ad-last-attempt"),
-        requested_by="test",
+        requested_by="bot_auto_stop",
         max_attempts=1,
     )
     assert task_id is not None
@@ -606,7 +606,7 @@ async def test_last_attempt_verified_not_applied_is_terminal_without_resend(
         task_type="meta_api_mutation",
         idempotency_key=f"last-attempt-not-applied-{uuid.uuid4()}",
         payload=_pause_payload("ad-last-not-applied"),
-        requested_by="test",
+        requested_by="bot_auto_stop",
         max_attempts=1,
     )
     assert task_id is not None
@@ -687,15 +687,15 @@ async def test_stuck_bulk_last_attempt_still_gets_read_reconciliation(
             "ad_account_id": "123",
             "params": {"action": "activate", "ad_ids": ["ad-bulk-last"]},
         },
-        requested_by="cabinet_autostart",
+        requested_by="owner:test-bulk-activate",
         max_attempts=1,
-        lane="money",
+        lane="bulk",
     )
     assert task_id is not None
     claim = await claim_next_task(
         pg_engine,
         task_type="meta_api_mutation",
-        lanes=("money",),
+        lanes=("bulk",),
         worker_id=uuid.uuid4(),
         lease_seconds=5,
     )
@@ -706,9 +706,7 @@ async def test_stuck_bulk_last_attempt_still_gets_read_reconciliation(
                 """
                 UPDATE task_queue
                 SET external_started_at = NOW(),
-                    result = jsonb_build_object(
-                        'bulk_execution_ad_ids', jsonb_build_array('ad-bulk-last')
-                    ),
+                    result = jsonb_build_object('diagnostic_marker', 'preserved'),
                     lease_expires_at = NOW() - INTERVAL '1 second'
                 WHERE id = :task_id
                 """
@@ -727,4 +725,4 @@ async def test_stuck_bulk_last_attempt_still_gets_read_reconciliation(
     assert row.status == "retrying"
     assert row.attempt_count == 1
     assert row.result["reconcile_required"] is True
-    assert row.result["bulk_execution_ad_ids"] == ["ad-bulk-last"]
+    assert row.result["diagnostic_marker"] == "preserved"

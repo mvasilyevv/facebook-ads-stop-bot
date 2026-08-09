@@ -891,7 +891,6 @@ python3 "$SCRIPT_DIR/prepare_production_env.py" \
   --output "$expected_app_env" \
   --public-url "https://app.adpulse.su" \
   --desktop-webtop-image "$(dotenv_value "$RELEASE_ENV" DESKTOP_WEBTOP_IMAGE)" \
-  --desktop-kasmvnc-image "$(dotenv_value "$RELEASE_ENV" DESKTOP_KASMVNC_IMAGE)" \
   >/dev/null
 cmp -s -- "$expected_app_env" "$APP_ENV" \
   || die "desired effective production config changed after immutable release render"
@@ -1065,7 +1064,7 @@ route_app_env="$active_app_env"
 APP_ENV_OVERRIDE="$route_app_env" "$SCRIPT_DIR/install-server-units.sh" \
   --caddy-only --sync-scope none
 
-# Vision/Kasm/browser-agent is independently versioned, but a semantic contract
+# Vision desktop/browser-agent is independently versioned, but a semantic contract
 # change is committed only after the matching application release. Runtime
 # inventory is still checked before any candidate is allowed near cutover.
 if [[ "$FIRST_RELEASE" == false ]]; then

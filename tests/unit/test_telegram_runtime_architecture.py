@@ -16,9 +16,7 @@ ACTIVE_BUSINESS_PACKAGES = (
     "apps/cleanup_worker",
     "apps/reconciler_worker",
     "apps/health_watchdog",
-    "apps/enable_recommendation_worker",
     "apps/digest_scheduler",
-    "apps/cabinet_scheduler",
     "apps/tracker_reconciliation_worker",
     "apps/campaign_creator_worker",
 )

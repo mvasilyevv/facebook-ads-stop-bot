@@ -18,6 +18,7 @@ from core.operator.queries import (
     fetch_operator_actions,
     fetch_operator_ads,
     fetch_operator_incident,
+    fetch_operator_incident_page,
     fetch_operator_incidents,
     fetch_operator_revision,
     fetch_operator_scan_state,
@@ -516,6 +517,74 @@ async def test_operator_incident_detail_is_not_limited_by_attention_feed(pg_engi
             await conn.execute(
                 text("DELETE FROM incidents WHERE id = ANY(:incident_ids)"),
                 {"incident_ids": incident_ids},
+            )
+
+
+@pytest.mark.asyncio
+async def test_operator_incident_page_filters_cabinet_and_uses_stable_uuid_order(
+    pg_engine,
+) -> None:
+    account_id = str(int(uuid.uuid4().hex[:12], 16))
+    other_account_id = str(int(uuid.uuid4().hex[:12], 16))
+    incident_ids = sorted([uuid.uuid4(), uuid.uuid4()])
+    excluded_ids = [uuid.uuid4(), uuid.uuid4()]
+    opened_at = datetime.now(UTC).replace(microsecond=0)
+    suffix = uuid.uuid4().hex[:10]
+    try:
+        async with pg_engine.begin() as conn:
+            for index, incident_id in enumerate([*incident_ids, *excluded_ids]):
+                is_visible = index < len(incident_ids)
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO incidents (
+                            id, incident_key, resource_type, resource_id,
+                            ad_account_id, severity, status, title, opened_at
+                        )
+                        VALUES (
+                            :id, :incident_key, 'ad', :resource_id,
+                            :account_id, :severity, :status, :title, :opened_at
+                        )
+                        """
+                    ),
+                    {
+                        "id": incident_id,
+                        "incident_key": f"operator-page:{suffix}:{index}",
+                        "resource_id": f"ad-{suffix}-{index}",
+                        "account_id": account_id if is_visible else other_account_id,
+                        "severity": "warning" if index != 3 else "critical",
+                        "status": "open" if index != 2 else "resolved",
+                        "title": f"Operator page {index}",
+                        "opened_at": opened_at,
+                    },
+                )
+
+        first_page, total = await fetch_operator_incident_page(
+            pg_engine,
+            account_id=account_id,
+            severities=("warning",),
+            statuses=("open",),
+            page=1,
+            page_size=1,
+        )
+        second_page, second_total = await fetch_operator_incident_page(
+            pg_engine,
+            account_id=account_id,
+            severities=("warning",),
+            statuses=("open",),
+            page=2,
+            page_size=1,
+        )
+
+        assert total == second_total == 2
+        assert [row["id"] for row in first_page] == [incident_ids[0]]
+        assert [row["id"] for row in second_page] == [incident_ids[1]]
+        assert all(row["ad_account_id"] == account_id for row in [*first_page, *second_page])
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM incidents WHERE id = ANY(:incident_ids)"),
+                {"incident_ids": [*incident_ids, *excluded_ids]},
             )
 
 

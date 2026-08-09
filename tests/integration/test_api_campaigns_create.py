@@ -224,7 +224,7 @@ async def test_launch_creates_run_and_task(pg_engine, fake_redis_client, clean_c
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/tools/campaigns/launch", json={"config": _valid_config()})
-    assert resp.status_code == 201
+    assert resp.status_code == 202
     out = resp.json()
     run_id = out["run_id"]
     assert out["status"] == "queued"
@@ -966,8 +966,8 @@ async def test_launch_allocates_continuing_code_start(
             "/api/tools/campaigns/launch", json={"config": _cfg_with_refs("2099-01-02")}
         )
 
-    assert r1.status_code == 201
-    assert r2.status_code == 201
+    assert r1.status_code == 202
+    assert r2.status_code == 202
     run_id1 = r1.json()["run_id"]
     run_id2 = r2.json()["run_id"]
     assert run_id1 != run_id2  # разные конфиги → разные run'ы

@@ -129,6 +129,36 @@ class OperatorAttentionData(BaseModel):
     items: list[OperatorAttentionItem]
 
 
+class OperatorIncidentItem(BaseModel):
+    """Safe incident projection for list and detail operator surfaces."""
+
+    id: str
+    severity: OperatorSeverity
+    status: Literal["open", "acknowledged", "executing", "resolved", "failed"]
+    title: str
+    summary: str | None
+    reason: str | None
+    occurred_at: datetime
+    account_id: str | None
+    target: OperatorAttentionTarget
+    action: OperatorAttentionAction
+    requires_usd_evidence: bool
+
+
+class OperatorIncidentsResponse(BaseModel):
+    state: DataState
+    as_of: datetime
+    freshness_seconds: int = Field(ge=0)
+    sources: list[str]
+    issues: list[OperatorIssue]
+    scope: OperatorScopeEvidence
+    items: list[OperatorIncidentItem]
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1, le=100)
+    total: int = Field(ge=0)
+    pages: int = Field(ge=0)
+
+
 class OperatorIncidentDetailResponse(BaseModel):
     state: DataState
     as_of: datetime
@@ -137,8 +167,8 @@ class OperatorIncidentDetailResponse(BaseModel):
     issues: list[OperatorIssue]
     timezone: str
     timezone_known: bool
-    status: Literal["open", "acknowledged", "executing", "resolved", "failed"]
-    incident: OperatorAttentionItem
+    scope: OperatorScopeEvidence
+    incident: OperatorIncidentItem
 
 
 class OperatorEconomyTotals(BaseModel):
@@ -210,6 +240,7 @@ class OperatorActionItem(BaseModel):
     kind: Literal["pause", "activate", "scan", "create", "duplicate", "other"]
     state: OperatorActionState
     title: str
+    target_id: str | None = None
     target_label: str | None
     requested_at: datetime
     updated_at: datetime

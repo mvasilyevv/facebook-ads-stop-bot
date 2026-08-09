@@ -300,21 +300,6 @@ async def delete_expired_browser_operation_capabilities(engine: AsyncEngine) -> 
         return int(result.rowcount or 0)
 
 
-async def delete_enable_recommendations(
-    engine: AsyncEngine, policy: dict[str, str], *, now: datetime | None = None
-) -> int:
-    retention = policy.get("enable_recommendations", "30 days")
-    if is_special(retention):
-        return 0
-    cutoff = cutoff_datetime(retention, now=now)
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text("DELETE FROM enable_recommendations WHERE created_at < :cutoff"),
-            {"cutoff": cutoff},
-        )
-        return result.rowcount or 0
-
-
 async def delete_expired_invites(
     engine: AsyncEngine, policy: dict[str, str], *, now: datetime | None = None
 ) -> int:
@@ -625,14 +610,6 @@ async def run_once(engine: AsyncEngine) -> dict[str, Any]:
             exc,
         )
         counts["browser_operation_capabilities_deleted_error"] = str(exc)
-
-    try:
-        counts["enable_recommendations_deleted"] = await delete_enable_recommendations(
-            engine, policy
-        )
-    except Exception as exc:
-        logger.exception("delete_enable_recommendations failed: %s", exc)
-        counts["enable_recommendations_deleted_error"] = str(exc)
 
     try:
         counts["telegram_invites_deleted"] = await delete_expired_invites(engine, policy)

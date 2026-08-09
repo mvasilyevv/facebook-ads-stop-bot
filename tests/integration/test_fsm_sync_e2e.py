@@ -200,24 +200,34 @@ async def test_activate_ad_success_sets_normal(pg_engine, ad_with_state, monkeyp
         mutation_kind="activate_ad", target_id=fb_ad_id, params={}, ad_account_id="123"
     )
     await _run_one(
-        pg_engine, payload, idem=f"auto:activate_ad:{fb_ad_id}:t1", monkeypatch=monkeypatch
+        pg_engine,
+        payload,
+        idem=f"owner-confirmed:activate_ad:{fb_ad_id}:t1",
+        monkeypatch=monkeypatch,
     )
 
     assert await _read_alert_state(pg_engine, fb_ad_id) == "normal"
 
 
-# bulk activate (autostart) success → каждый ad из ad_ids переходит в normal
+# Owner-confirmed bulk activate success → каждый ad из ad_ids переходит в normal
 @pytest.mark.asyncio
-async def test_bulk_activate_sets_normal(pg_engine, ad_with_state, monkeypatch) -> None:
+async def test_owner_confirmed_bulk_activate_sets_normal(
+    pg_engine, ad_with_state, monkeypatch
+) -> None:
     fb_ad_id, seed = ad_with_state
     await seed("disabled")
 
     payload = MetaMutationPayload(
         mutation_kind="bulk_status_change",
-        target_id="autostart:1",
+        target_id="owner-confirmed:1",
         params={"ad_ids": [fb_ad_id], "action": "activate"},
         ad_account_id="123",
     )
-    await _run_one(pg_engine, payload, idem=f"autostart:bulk:{fb_ad_id}", monkeypatch=monkeypatch)
+    await _run_one(
+        pg_engine,
+        payload,
+        idem=f"owner-confirmed:bulk:{fb_ad_id}",
+        monkeypatch=monkeypatch,
+    )
 
     assert await _read_alert_state(pg_engine, fb_ad_id) == "normal"

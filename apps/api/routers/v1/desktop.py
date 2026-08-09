@@ -6,14 +6,17 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import datetime, timezone
-from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from apps.api.deps import DepEngine, DepRedis, DepSettings
 from apps.api.routers.panel_auth import resolve_panel_session
-from apps.api.routers.v1.schemas.desktop import DesktopLaunchResponse, DesktopTransportsResponse
+from apps.api.routers.v1.schemas.desktop import (
+    DesktopLaunchRequest,
+    DesktopLaunchResponse,
+    DesktopTransportsResponse,
+)
 from apps.api.routers.v1.tma import get_tma_principal
 from core.auth.desktop_access import (
     DesktopAccessError,
@@ -102,14 +105,14 @@ async def list_desktop_transports(
     },
 )
 async def launch_desktop(
+    payload: DesktopLaunchRequest,
     request: Request,
     response: Response,
     engine: DepEngine,
     redis: DepRedis,
     settings: DepSettings,
-    transport: Literal["active", "kasm"] = "active",
 ) -> DesktopLaunchResponse:
-    """Issue one single-use desktop URL. The request intentionally has no body."""
+    """Issue one single-use URL bound to a predefined presentation profile."""
     response.headers.update(_NO_STORE)
     public_origin, expected_hostname = _desktop_origin(settings)
     telegram_user_id, source = await _resolve_launch_identity(request, engine, settings)
@@ -119,6 +122,7 @@ async def launch_desktop(
             telegram_user_id=telegram_user_id,
             source=source,
             expected_hostname=expected_hostname,
+            presentation=payload.presentation,
             ttl=settings.desktop_access_ticket_ttl_seconds,
         )
         url = build_desktop_launch_url(public_origin, ticket)

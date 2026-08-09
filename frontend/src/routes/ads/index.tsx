@@ -1,31 +1,29 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
 
-import type { OperatorAdsQuery, OperatorSeverity } from "@fb/shared/operator/contracts";
+import type { OperatorSeverity } from "@fb/shared/operator/contracts";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
+import {
+  operatorCabinetOptions,
+  parseOperatorAdsRouteSearch,
+  type OperatorAdsDirection,
+  type OperatorAdsRouteSearch,
+  type OperatorAdsSort,
+  type OperatorCabinetOption,
+} from "@fb/shared/operator/routeFilters";
 import { adsForRealtimeState } from "@fb/shared/operator/viewModel";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import { Eyebrow } from "@/components/data/Eyebrow";
 import { Button } from "@/components/ui/Button";
+import { Drawer } from "@/components/ui/Drawer";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { OperatorAdCards, OperatorAdsTable } from "@/features/operator/OperatorAds";
-import { operatorProblemMessage, useOperatorAds } from "@/lib/api/operator";
-
-type AdsSort = NonNullable<OperatorAdsQuery["sort"]>;
-type AdsDirection = NonNullable<OperatorAdsQuery["direction"]>;
-
-interface AdsSearch {
-  q?: string;
-  severity?: OperatorSeverity;
-  sort?: AdsSort;
-  direction?: AdsDirection;
-  page?: number;
-}
+import { operatorProblemMessage, useOperatorAds, useOperatorSnapshot } from "@/lib/api/operator";
 
 const SEVERITIES: Array<{ value: OperatorSeverity | ""; label: string }> = [
   { value: "", label: "Все состояния" },
@@ -35,7 +33,7 @@ const SEVERITIES: Array<{ value: OperatorSeverity | ""; label: string }> = [
   { value: "unknown", label: "Неизвестно" },
 ];
 
-const SORTS: Array<{ value: AdsSort; label: string }> = [
+const SORTS: Array<{ value: OperatorAdsSort; label: string }> = [
   { value: "updated", label: "Обновление" },
   { value: "spend", label: "Расход" },
   { value: "clicks", label: "Клики" },
@@ -46,13 +44,7 @@ const SORTS: Array<{ value: AdsSort; label: string }> = [
 
 export const Route = createFileRoute("/ads/")({
   component: AdsPage,
-  validateSearch: (raw: Record<string, unknown>): AdsSearch => ({
-    q: typeof raw.q === "string" && raw.q.trim() ? raw.q.slice(0, 200) : undefined,
-    severity: isSeverity(raw.severity) ? raw.severity : undefined,
-    sort: isSort(raw.sort) ? raw.sort : undefined,
-    direction: raw.direction === "asc" || raw.direction === "desc" ? raw.direction : undefined,
-    page: positiveInt(raw.page),
-  }),
+  validateSearch: parseOperatorAdsRouteSearch,
 });
 
 function AdsPage() {
@@ -60,9 +52,14 @@ function AdsPage() {
   const navigate = useNavigate({ from: "/ads/" });
   const realtimeStatus = useOperatorRealtimeStatus();
   const [draftSearch, setDraftSearch] = useState(search.q ?? "");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filterTriggerRef = useRef<HTMLButtonElement>(null);
+  const snapshot = useOperatorSnapshot({ window: "today" });
+  const cabinets = operatorCabinetOptions(snapshot.data);
   const page = search.page ?? 1;
   const query = useOperatorAds({
     search: search.q,
+    account_id: search.account_id,
     severity: search.severity,
     sort: search.sort ?? "updated",
     direction: search.direction ?? "desc",
@@ -77,14 +74,23 @@ function AdsPage() {
   const displayRows = displayPayload?.rows;
   const currency = confirmedOperatorCurrency(displayPayload?.scope);
   const hasConfirmedCount = displayState === "ready" || displayState === "empty";
+  const activeFilterCount =
+    Number(Boolean(search.q)) +
+    Number(Boolean(search.account_id)) +
+    Number(Boolean(search.severity)) +
+    Number(Boolean(search.sort && search.sort !== "updated")) +
+    Number(Boolean(search.direction && search.direction !== "desc"));
 
-  function patchSearch(next: Partial<AdsSearch>) {
+  useEffect(() => setDraftSearch(search.q ?? ""), [search.q]);
+
+  function patchSearch(next: Partial<OperatorAdsRouteSearch>) {
     void navigate({ search: (previous) => ({ ...previous, ...next }), replace: true });
   }
 
   function submitSearch(event: FormEvent) {
     event.preventDefault();
     patchSearch({ q: draftSearch.trim() || undefined, page: undefined });
+    setFiltersOpen(false);
   }
 
   if (query.isError && !payload) {
@@ -121,67 +127,52 @@ function AdsPage() {
         </div>
       </header>
 
+      <div className="mb-4 md:hidden">
+        <Button
+          ref={filterTriggerRef}
+          type="button"
+          variant="secondary"
+          className="min-h-11 w-full"
+          leftIcon={<Filter aria-hidden="true" />}
+          aria-label="Открыть фильтры объявлений"
+          aria-haspopup="dialog"
+          aria-expanded={filtersOpen}
+          onClick={() => setFiltersOpen(true)}
+        >
+          Фильтры{activeFilterCount ? ` · ${activeFilterCount}` : ""}
+        </Button>
+        <Drawer
+          open={filtersOpen}
+          onOpenChange={setFiltersOpen}
+          title="Фильтры объявлений"
+          description="Поиск, кабинет, риск и сортировка"
+          width={480}
+          returnFocusRef={filterTriggerRef}
+        >
+          <AdsFilterFields
+            search={search}
+            draftSearch={draftSearch}
+            cabinets={cabinets}
+            onDraftSearch={setDraftSearch}
+            onChange={patchSearch}
+            onSubmit={submitSearch}
+            stacked
+          />
+        </Drawer>
+      </div>
+
       <section
         aria-label="Фильтры объявлений"
-        className="mb-4 rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-4"
+        className="mb-4 hidden rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-4 md:block"
       >
-        <form
+        <AdsFilterFields
+          search={search}
+          draftSearch={draftSearch}
+          cabinets={cabinets}
+          onDraftSearch={setDraftSearch}
+          onChange={patchSearch}
           onSubmit={submitSearch}
-          className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_190px_190px_150px_auto]"
-        >
-          <label className="relative block">
-            <span className="sr-only">Поиск по объявлениям</span>
-            <Search
-              aria-hidden="true"
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-bg-8"
-              size={16}
-            />
-            <input
-              value={draftSearch}
-              onChange={(event) => setDraftSearch(event.target.value)}
-              placeholder="Название, кампания или ID"
-              className="min-h-11 w-full rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-0 pl-10 pr-3 text-[16px] text-bg-11 outline-none placeholder:text-bg-8 focus:border-accent focus:ring-1 focus:ring-accent"
-            />
-          </label>
-          <Select
-            label="Риск"
-            value={search.severity ?? ""}
-            onChange={(value) =>
-              patchSearch({
-                severity: (value || undefined) as OperatorSeverity | undefined,
-                page: undefined,
-              })
-            }
-          >
-            {SEVERITIES.map((item) => (
-              <option key={item.value || "all"} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </Select>
-          <Select
-            label="Сортировка"
-            value={search.sort ?? "updated"}
-            onChange={(value) => patchSearch({ sort: value as AdsSort, page: undefined })}
-          >
-            {SORTS.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </Select>
-          <Select
-            label="Направление"
-            value={search.direction ?? "desc"}
-            onChange={(value) => patchSearch({ direction: value as AdsDirection, page: undefined })}
-          >
-            <option value="desc">По убыванию</option>
-            <option value="asc">По возрастанию</option>
-          </Select>
-          <Button type="submit" variant="primary" className="min-h-11">
-            Найти
-          </Button>
-        </form>
+        />
       </section>
 
       {displayPayload && displayState && displayState !== "ready" ? (
@@ -256,7 +247,7 @@ function Select({
   label: string;
   value: string;
   onChange: (value: string) => void;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <label>
@@ -273,22 +264,101 @@ function Select({
   );
 }
 
-function isSeverity(value: unknown): value is OperatorSeverity {
-  return value === "ok" || value === "warning" || value === "critical" || value === "unknown";
-}
-
-function isSort(value: unknown): value is AdsSort {
+function AdsFilterFields({
+  search,
+  draftSearch,
+  cabinets,
+  onDraftSearch,
+  onChange,
+  onSubmit,
+  stacked = false,
+}: {
+  search: OperatorAdsRouteSearch;
+  draftSearch: string;
+  cabinets: OperatorCabinetOption[];
+  onDraftSearch: (value: string) => void;
+  onChange: (next: Partial<OperatorAdsRouteSearch>) => void;
+  onSubmit: (event: FormEvent) => void;
+  stacked?: boolean;
+}) {
   return (
-    value === "name" ||
-    value === "spend" ||
-    value === "clicks" ||
-    value === "registrations" ||
-    value === "ftd" ||
-    value === "updated"
+    <form
+      onSubmit={onSubmit}
+      className={
+        stacked
+          ? "grid gap-4"
+          : "grid gap-3 lg:grid-cols-[minmax(240px,1fr)_180px_160px_180px_150px_auto]"
+      }
+    >
+      <label className="relative block">
+        <span className="sr-only">Поиск по объявлениям</span>
+        <Search
+          aria-hidden="true"
+          className="absolute left-3 top-1/2 -translate-y-1/2 text-bg-8"
+          size={16}
+        />
+        <input
+          value={draftSearch}
+          onChange={(event) => onDraftSearch(event.target.value)}
+          placeholder="Название, кампания или ID"
+          className="min-h-11 w-full rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-0 pl-10 pr-3 text-[16px] text-bg-11 outline-none placeholder:text-bg-8 focus:border-accent focus:ring-1 focus:ring-accent"
+        />
+      </label>
+      <Select
+        label="Кабинет"
+        value={search.account_id ?? ""}
+        onChange={(value) => onChange({ account_id: value || undefined, page: undefined })}
+      >
+        <option value="">Все кабинеты</option>
+        {cabinets.map((cabinet) => (
+          <option key={cabinet.value} value={cabinet.value}>
+            {cabinet.label}
+          </option>
+        ))}
+      </Select>
+      <Select
+        label="Риск"
+        value={search.severity ?? ""}
+        onChange={(value) =>
+          onChange({
+            severity: (value || undefined) as OperatorSeverity | undefined,
+            page: undefined,
+          })
+        }
+      >
+        {SEVERITIES.map((item) => (
+          <option key={item.value || "all"} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </Select>
+      <Select
+        label="Сортировка"
+        value={search.sort ?? "updated"}
+        onChange={(value) => onChange({ sort: value as OperatorAdsSort, page: undefined })}
+      >
+        {SORTS.map((item) => (
+          <option key={item.value} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </Select>
+      <Select
+        label="Направление"
+        value={search.direction ?? "desc"}
+        onChange={(value) =>
+          onChange({
+            direction: value as OperatorAdsDirection,
+            page: undefined,
+          })
+        }
+      >
+        <option value="desc">По убыванию</option>
+        <option value="asc">По возрастанию</option>
+      </Select>
+      <Button type="submit" variant="primary" className="min-h-11">
+        Найти
+      </Button>
+    </form>
   );
-}
-
-function positiveInt(value: unknown): number | undefined {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }

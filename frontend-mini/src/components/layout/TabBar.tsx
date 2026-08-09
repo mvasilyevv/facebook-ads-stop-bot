@@ -25,19 +25,18 @@ interface TabConfig {
 
 const MAIN_TABS: TabConfig[] = [
   { to: "/", label: "Сейчас", Icon: LayoutGrid },
-  { to: "/actions", label: "Действия", Icon: Activity },
+  {
+    to: "/actions",
+    label: "Действия",
+    Icon: Activity,
+    extra: ["/incidents"],
+  },
   { to: "/ads", label: "Реклама", Icon: Megaphone },
   {
     to: "/settings",
     label: "Ещё",
     Icon: MoreHorizontal,
-    extra: [
-      "/offers",
-      "/system",
-      "/desktop",
-      "/campaigns",
-      "/analytics",
-    ],
+    extra: ["/offers", "/system", "/desktop", "/campaigns", "/analytics"],
   },
 ];
 

@@ -3,7 +3,7 @@ description: Аудит кодовой базы (backend + frontend) на баг
 argument-hint: "[scope: all | backend | frontend | <путь/glob>]  (по умолчанию all)"
 ---
 
-Ты — ведущий ревьюер кодовой базы **FB Stop Bot** (мониторинг FB Ads + авто-стоп + создание кампаний). Запусти аудит на баги и улучшения и собери ранжированный отчёт. **Это read-only расследование: ничего не чинь, не запускай интеграционные тесты на живой БД, не коммить.**
+Ты — ведущий ревьюер кодовой базы **FB Agent** (мониторинг FB Ads + авто-стоп + создание кампаний). Запусти аудит на баги и улучшения и собери ранжированный отчёт. **Это read-only расследование: ничего не чинь, не запускай интеграционные тесты на живой БД, не коммить.**
 
 Scope из аргумента: `$ARGUMENTS` (пусто → `all`).
 
@@ -36,7 +36,7 @@ Scope из аргумента: `$ARGUMENTS` (пусто → `all`).
 Домены и рекомендуемые модели:
 - **B1** `core/observer` + `core/rules` + `core/scanner` — детект, FSM, стоп-правила, evaluator → **opus**
 - **B2** `core/meta_api` + `core/tasks` + `apps/meta_api_worker` — мутации, batch-encode, идемпотентность, draft-ACL, outbox → **opus**
-- **B3** `apps/*_worker` (observer/autopause/meta_api/cabinet_scheduler/reconciler/telegram/digest/cleanup/health_watchdog/tracker_reconciliation/enable_recommendation/campaign_creator) — heartbeat, race, graceful shutdown, scheduler-окна → **opus**
+- **B3** `apps/*_worker` (observer/autopause/meta_api/reconciler/telegram/digest/cleanup/health_watchdog/tracker_reconciliation/campaign_creator) — heartbeat, race, graceful shutdown, scheduler-окна → **opus**
 - **B4** `apps/api` (FastAPI routers v1) — endpoints, SQL, partition-pruning, валидация, security, partial-failure → **sonnet**
 - **B5** `core/models` + `migrations` + `core/dashboard` + `core/adset_pro` — схема, индексы, партиции, агрегации спенда, дедуп ingest → **opus** (money-агрегации)
 - **F1** `frontend/` (новый TS strict) — React 19, TanStack, типы, god-components → **sonnet**
@@ -44,7 +44,7 @@ Scope из аргумента: `$ARGUMENTS` (пусто → `all`).
 - **X** `tests/` + cross-cutting (`core/crypto.py`, `core/config.py`, `core/ai_assistant`, `services/browser-agent/src`) — shape-vs-semantics, security, gRPC TS → **opus** (security) / **sonnet**
 
 Каждому агенту дай ЭТОТ промпт-контракт:
-> Проанализируй <домен/пути> кодовой базы FB Stop Bot на баги и улучшения. Приоритет — money-баги, partition-pruning, race conditions, ACL/security (см. классы выше). Read-only: НЕ меняй файлы, НЕ запускай тесты на живой БД (можно `ruff check`, статический анализ, чтение). Верни СТРОГО список находок, каждая: `severity` (CRIT/HIGH/MID/LOW), `файл:строка`, `проблема` (1-2 фразы), `impact` (особенно денежный/безопасность), `fix` (конкретно как чинить, кратко), `confidence` (high/med/low). Без воды, без пересказа архитектуры. Если в зоне чисто — так и скажи.
+> Проанализируй <домен/пути> кодовой базы FB Agent на баги и улучшения. Приоритет — money-баги, partition-pruning, race conditions, ACL/security (см. классы выше). Read-only: НЕ меняй файлы, НЕ запускай тесты на живой БД (можно `ruff check`, статический анализ, чтение). Верни СТРОГО список находок, каждая: `severity` (CRIT/HIGH/MID/LOW), `файл:строка`, `проблема` (1-2 фразы), `impact` (особенно денежный/безопасность), `fix` (конкретно как чинить, кратко), `confidence` (high/med/low). Без воды, без пересказа архитектуры. Если в зоне чисто — так и скажи.
 
 Severity:
 - **CRIT** — потеря/слив денег, незаглушенный убыточный ад, утечка секрета, порча данных, дубль необратимого действия.

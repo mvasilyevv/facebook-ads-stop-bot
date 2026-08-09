@@ -1,15 +1,23 @@
 import { useState } from "react";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeft, ShieldCheck } from "lucide-react";
 
 import { formatZonedDateTime } from "@fb/shared/format/time";
 import type { OperatorSeverity } from "@fb/shared/operator/contracts";
+import {
+  OPERATOR_INCIDENT_STATUS_LABEL,
+  operatorIncidentCopy,
+  operatorIncidentDataState,
+  operatorIncidentTargetLabel,
+} from "@fb/shared/operator/incidentViewModel";
+import { useOperatorRealtimeStatus } from "@fb/operator-api";
+import { operatorSourceLabel } from "@fb/shared/operator/ledgerSemantics";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 
 import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/ErrorState";
 import {
-  operatorProblemMessage,
+  operatorIncidentProblemMessage,
   useAcknowledgeOperatorIncident,
   useOperatorIncident,
 } from "@/lib/api/operator";
@@ -19,9 +27,9 @@ export const Route = createFileRoute("/incidents/$incidentId")({ component: Inci
 
 function IncidentDetailPage() {
   const { incidentId } = Route.useParams();
-  const navigate = useNavigate();
   const incidentQuery = useOperatorIncident(incidentId);
   const acknowledge = useAcknowledgeOperatorIncident();
+  const realtimeStatus = useOperatorRealtimeStatus();
   const [actionError, setActionError] = useState<string | null>(null);
   const detail = incidentQuery.data;
   const incident = detail?.incident;
@@ -30,7 +38,7 @@ function IncidentDetailPage() {
     return (
       <ErrorState
         title="Инцидент недоступен"
-        error={operatorProblemMessage(incidentQuery.error)}
+        error={operatorIncidentProblemMessage(incidentQuery.error)}
         onRetry={() => void incidentQuery.refetch()}
       />
     );
@@ -59,20 +67,24 @@ function IncidentDetailPage() {
         },
       });
       await incidentQuery.refetch();
-      await navigate({ to: "/" });
     } catch (error) {
-      setActionError(operatorProblemMessage(error));
+      setActionError(operatorIncidentProblemMessage(error));
     }
   };
-  const severityTone = incidentSeverityTone(incident.severity);
+  const displayState = operatorIncidentDataState(
+    detail.state,
+    realtimeStatus === "connected" && !incidentQuery.isError,
+  );
+  const severityTone = incidentSeverityTone(incident.severity, displayState);
+  const copy = operatorIncidentCopy(incident, detail.scope);
 
   return (
     <article className="mx-auto max-w-3xl">
       <Link
-        to="/"
+        to="/incidents"
         className="mb-5 inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] px-2 text-[14px] font-semibold text-bg-9 hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-accent"
       >
-        <ArrowLeft size={16} aria-hidden="true" /> Сейчас
+        <ArrowLeft size={16} aria-hidden="true" /> Все инциденты
       </Link>
       <header
         data-severity={incident.severity}
@@ -81,42 +93,37 @@ function IncidentDetailPage() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <OperatorSeverityBadge severity={incident.severity} />
-            <span className="font-display text-[12px] uppercase tracking-[.08em] text-bg-8">
-              incident
-            </span>
+            <span className="text-[14px] text-bg-9">{operatorIncidentTargetLabel(incident)}</span>
           </div>
-          <DataStateBadge state={detail.state} compact />
+          <DataStateBadge state={displayState} compact />
         </div>
         <h1 className="m-0 mt-4 font-display text-[clamp(26px,4vw,38px)] font-medium leading-tight text-bg-11">
-          {incident.title}
+          {copy.title}
         </h1>
-        <p className="mt-3 text-[16px] leading-6 text-bg-10">{incident.summary}</p>
+        {copy.summary ? (
+          <p className="mt-3 text-[16px] leading-6 text-bg-10">{copy.summary}</p>
+        ) : null}
       </header>
-      {detail.state !== "ready" ? (
+      {displayState !== "ready" ? (
         <div className="mt-5">
-          <DataStateNotice state={detail.state} issues={detail.issues} />
+          <DataStateNotice state={displayState} issues={detail.issues} />
         </div>
       ) : null}
       <section className="mt-5 rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5 sm:p-6">
         <h2 className="m-0 font-display text-[20px] text-bg-11">Контекст</h2>
         <dl className="mt-4 grid gap-px overflow-hidden rounded-[var(--radius-2)] bg-[var(--color-hairline)] sm:grid-cols-2">
-          <Item
-            label="Объект"
-            value={incident.target.label ?? incident.target.id ?? incident.target.kind}
-          />
-          <Item
-            label="Открыт"
-            value={formatZonedDateTime(incident.occurred_at, detail.timezone)}
-          />
-          <Item label="Причина" value={incident.reason ?? "не указана"} />
-          <Item label="Статус" value={incidentStatusLabel(detail.status)} />
-          <Item
-            label="Данные на"
-            value={formatZonedDateTime(detail.as_of, detail.timezone)}
-          />
+          <Item label="Объект" value={operatorIncidentTargetLabel(incident)} />
+          <Item label="Открыт" value={formatZonedDateTime(incident.occurred_at, detail.timezone)} />
+          <Item label="Причина" value={copy.reason ?? "не подтверждена"} />
+          <Item label="Статус" value={OPERATOR_INCIDENT_STATUS_LABEL[incident.status]} />
+          <Item label="Данные на" value={formatZonedDateTime(detail.as_of, detail.timezone)} />
           <Item
             label="Источник"
-            value={detail.sources.length ? detail.sources.join(", ") : "не подтверждён"}
+            value={
+              detail.sources.length
+                ? detail.sources.map(operatorSourceLabel).join(", ")
+                : "не подтверждён"
+            }
           />
         </dl>
         {!detail.timezone_known ? (
@@ -135,7 +142,7 @@ function IncidentDetailPage() {
             {actionError}
           </p>
         ) : null}
-        {detail.status === "open" ? (
+        {incident.status === "open" ? (
           <Button
             variant="secondary"
             size="lg"
@@ -152,16 +159,6 @@ function IncidentDetailPage() {
   );
 }
 
-function incidentStatusLabel(status: string): string {
-  return {
-    open: "Открыт",
-    acknowledged: "Получение подтверждено",
-    executing: "Действие выполняется",
-    resolved: "Разрешён",
-    failed: "Завершён с ошибкой",
-  }[status] ?? "Не подтверждено";
-}
-
 function Item({ label, value }: { label: string; value: string }) {
   return (
     <div className="bg-bg-2 p-4">
@@ -171,7 +168,13 @@ function Item({ label, value }: { label: string; value: string }) {
   );
 }
 
-function incidentSeverityTone(severity: OperatorSeverity): { surface: string } {
+function incidentSeverityTone(
+  severity: OperatorSeverity,
+  state: "ready" | "empty" | "partial" | "stale" | "unavailable",
+): { surface: string } {
+  if (state !== "ready") {
+    return { surface: "border-warning/35 bg-warning-bg" };
+  }
   if (severity === "critical") {
     return { surface: "border-danger/35 bg-danger-bg" };
   }

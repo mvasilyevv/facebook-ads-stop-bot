@@ -22,7 +22,6 @@ readonly ACTIVE_STATE VERIFIED_RUNTIME
 readonly DESKTOP_STATES_DIR="$STATE_DIR/desktop-states"
 readonly VISION_CONTAINER="vision-webtop"
 readonly VISION_COMPOSE_PROJECT="fb_agent_vision"
-readonly KASMVNC_COMPOSE_SERVICE="kasmvnc"
 readonly TIMEOUT_SECONDS="${VISION_WAIT_TIMEOUT_SECONDS:-180}"
 readonly POLL_SECONDS="${VISION_WAIT_INTERVAL_SECONDS:-2}"
 
@@ -111,65 +110,35 @@ done
 
 expected_image="$(dotenv_value "$release_env" DESKTOP_WEBTOP_IMAGE)" \
   || die "committed Vision image is missing"
-expected_kasm_image="$(dotenv_value "$release_env" DESKTOP_KASMVNC_IMAGE)" \
-  || die "committed KasmVNC image is missing"
 expected_release="$(dotenv_value "$release_env" RELEASE_ID)" \
   || die "committed Vision release identity is missing"
 expected_cluster="$(dotenv_value "$app_env" FB_AGENT_BOOTSTRAP_CLUSTER_ID)" \
   || die "committed bootstrap cluster identity is missing"
 [[ "$expected_image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] \
   || die "committed Vision image is not digest-pinned"
-[[ "$expected_kasm_image" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] \
-  || die "committed KasmVNC image is not digest-pinned"
 [[ "$expected_release" =~ ^[A-Za-z0-9._-]{1,128}$ ]] \
   || die "committed Vision release identity is invalid"
 [[ "$expected_cluster" =~ ^[0-9a-f]{32}$ ]] \
   || die "committed bootstrap cluster identity is invalid"
 
 expected_webtop_identity="$(
-  printf '/%s|true|healthy|%s|fb_agent_vision|webtop|true|%s|vision|%s' \
+  printf '/%s|true|healthy|%s|%s|webtop|true|%s|vision|%s' \
     "$VISION_CONTAINER" \
     "$expected_image" \
+    "$VISION_COMPOSE_PROJECT" \
     "$expected_cluster" \
     "$expected_release"
 )"
 readonly expected_webtop_identity
 readonly DEADLINE=$((SECONDS + TIMEOUT_SECONDS))
 while :; do
-  webtop_id="$(
-    docker inspect --format '{{.Id}}' "$VISION_CONTAINER" 2>/dev/null
-  )" || webtop_id=""
   observed_webtop_identity="$(
     docker inspect --format \
       '{{.Name}}|{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}|{{.Config.Image}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{index .Config.Labels "com.fb-agent.managed"}}|{{index .Config.Labels "com.fb-agent.cluster-id"}}|{{index .Config.Labels "com.fb-agent.purpose"}}|{{index .Config.Labels "com.fb-agent.release"}}' \
       "$VISION_CONTAINER" 2>/dev/null
   )" || observed_webtop_identity=""
-  kasmvnc_container_id="$(
-    docker ps -a \
-      --filter "label=com.docker.compose.project=${VISION_COMPOSE_PROJECT}" \
-      --filter "label=com.docker.compose.service=${KASMVNC_COMPOSE_SERVICE}" \
-      --format '{{.ID}}' 2>/dev/null
-  )" || kasmvnc_container_id=""
-  observed_kasm_identity=""
-  if [[ -n "$webtop_id" && "$webtop_id" != *$'\n'* \
-    && -n "$kasmvnc_container_id" && "$kasmvnc_container_id" != *$'\n'* ]]; then
-    observed_kasm_identity="$(
-      docker inspect --format \
-        '{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}|{{.Config.Image}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{index .Config.Labels "com.fb-agent.managed"}}|{{index .Config.Labels "com.fb-agent.cluster-id"}}|{{index .Config.Labels "com.fb-agent.purpose"}}|{{index .Config.Labels "com.fb-agent.release"}}|{{.HostConfig.NetworkMode}}|{{.HostConfig.IpcMode}}' \
-        "$kasmvnc_container_id" 2>/dev/null
-    )" || observed_kasm_identity=""
-  fi
-  expected_kasm_identity="$(
-    printf 'true|healthy|%s|fb_agent_vision|kasmvnc|true|%s|vision|%s|container:%s|container:%s' \
-      "$expected_kasm_image" \
-      "$expected_cluster" \
-      "$expected_release" \
-      "$webtop_id" \
-      "$webtop_id"
-  )"
-  if [[ "$observed_webtop_identity" == "$expected_webtop_identity" \
-    && "$observed_kasm_identity" == "$expected_kasm_identity" ]]; then
-    printf 'Exact committed Vision/Kasm namespace is healthy: %s\n' \
+  if [[ "$observed_webtop_identity" == "$expected_webtop_identity" ]]; then
+    printf 'Exact committed Vision desktop is healthy: %s\n' \
       "$VISION_CONTAINER"
     exit 0
   fi
@@ -179,6 +148,6 @@ while :; do
   sleep "$POLL_SECONDS"
 done
 
-printf 'ERROR: exact committed Vision/Kasm namespace did not become healthy within %ss: %s\n' \
+printf 'ERROR: exact committed Vision desktop did not become healthy within %ss: %s\n' \
   "$TIMEOUT_SECONDS" "$VISION_CONTAINER" >&2
 exit 1

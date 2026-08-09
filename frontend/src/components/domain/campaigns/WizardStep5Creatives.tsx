@@ -12,6 +12,7 @@
  */
 
 import { type FC } from "react";
+import { validateCampaignCreatives } from "@fb/features/campaigns";
 import type { WizardCreatives, UploadedConcept } from "@/stores/campaignWizard";
 import type { CampaignStructure } from "@/lib/api/campaigns";
 import { CreativeUploadZone } from "./CreativeUploadZone";
@@ -106,7 +107,5 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
 // ─── Валидация ────────────────────────────────────────────────────────────────
 
 export function validateCreatives(values: WizardCreatives): string | null {
-  if (values.concepts.length === 0) return "Загрузите хотя бы один концепт";
-  if (!values.upload_id) return "Концепты не загружены на сервер";
-  return null;
+  return validateCampaignCreatives(values);
 }

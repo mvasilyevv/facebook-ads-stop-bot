@@ -41,7 +41,10 @@ export function DaypartDayChart({
   );
   const [metric, setMetric] = useState<DaypartMetric>("ftds");
   const weekday = requestedWeekday;
-  const hours = selectedDayHours(data.cells, weekday);
+  const hours = selectedDayHours(
+    state === "empty" || state === "unavailable" ? [] : data.cells,
+    weekday,
+  );
   const values = hours.map((hour) => hour[metric]);
   const knownValues = values.filter((value): value is number => value !== null);
   const unknownCount = 24 - knownValues.length;
@@ -50,16 +53,6 @@ export function DaypartDayChart({
     WEEKDAYS.find((day) => day.id === weekday)?.label ?? "Выбранный день";
   const metricLabel =
     METRICS.find((option) => option.id === metric)?.label ?? "FTD";
-
-  if (state === "empty" || state === "unavailable") {
-    return (
-      <AnalyticsStateNotice
-        state={state}
-        issue={data.issues[0]}
-        testId="daypart-state"
-      />
-    );
-  }
 
   return (
     <div className="grid gap-3">
@@ -135,12 +128,18 @@ export function DaypartDayChart({
         ]}
         completeness={state}
         chart={
-          <HourlyBars
-            values={values}
-            maximum={maximum}
-            metricLabel={metricLabel}
-            state={state}
-          />
+          state === "empty" || state === "unavailable" ? (
+            <p className="m-0 py-8 text-center text-[14px] text-bg-9">
+              Почасовые значения не подтверждены.
+            </p>
+          ) : (
+            <HourlyBars
+              values={values}
+              maximum={maximum}
+              metricLabel={metricLabel}
+              state={state}
+            />
+          )
         }
         table={
           <table>
@@ -173,8 +172,11 @@ export function DaypartDayChart({
 }
 
 function effectiveSourceLabel(status: string, state: DataState): string {
+  if (state === "ready") return sourceStatusLabel(status);
+  if (state === "partial") return "снимок неполный";
   if (state === "stale") return "снимок устарел";
-  return sourceStatusLabel(status);
+  if (state === "empty") return "пустой снимок";
+  return "не подтверждено";
 }
 
 function HourlyBars({
@@ -340,12 +342,12 @@ export function AnalyticsStateNotice({
       data-state={state}
       data-testid={testId}
       className={cn(
-        "rounded-[var(--radius-2)] border-l-[3px] bg-bg-2 px-4 py-3 text-[14px]",
+        "rounded-[var(--radius-2)] border bg-bg-2 px-4 py-3 text-[14px]",
         state === "partial"
-          ? "border border-warning/30 border-l-warning"
+          ? "border-warning/30"
           : state === "unavailable"
-            ? "border border-danger/30 border-l-danger"
-            : "border border-[var(--color-hairline-strong)] border-l-bg-8",
+            ? "border-danger/30"
+            : "border-[var(--color-hairline-strong)]",
       )}
     >
       <div className="flex items-center justify-between gap-3">
@@ -364,7 +366,7 @@ function hourLabel(hour: number): string {
 }
 
 function daypartSummary(
-  state: Extract<DataState, "ready" | "partial" | "stale">,
+  state: DataState,
   metricLabel: string,
   availableHours: number,
 ): string {
@@ -375,6 +377,12 @@ function daypartSummary(
   }
   if (state === "partial") {
     return `${metricLabel}: доступно ${availableHours} из 24 часов в неполном снимке; значения нельзя считать полными.`;
+  }
+  if (state === "empty") {
+    return `${metricLabel}: сервер подтвердил пустое окно; значения не заменяются нулём.`;
+  }
+  if (state === "unavailable") {
+    return `${metricLabel}: источник не подтвердил почасовые данные.`;
   }
   return `${metricLabel}: доступно ${availableHours} из 24 часов в устаревшем снимке; значения не считаются текущими.`;
 }

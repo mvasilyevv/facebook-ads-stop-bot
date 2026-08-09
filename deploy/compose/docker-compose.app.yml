@@ -242,30 +242,11 @@ services:
       <<: *runtime-environment
       WORKER_TYPE: health_watchdog
 
-  enable_recommendation:
-    <<: *worker-common
-    environment:
-      <<: *runtime-environment
-      WORKER_TYPE: enable_recommendation
-
   digest_scheduler:
     <<: *worker-common
     environment:
       <<: *runtime-environment
       WORKER_TYPE: digest_scheduler
-
-  cabinet_scheduler:
-    <<: *worker-common
-    stop_grace_period: 60s
-    environment:
-      <<: *runtime-environment
-      WORKER_TYPE: cabinet_scheduler
-    labels:
-      <<: *runtime-labels
-      com.fb-agent.metrics: "true"
-      com.fb-agent.metrics.port: "9464"
-      com.fb-agent.service: cabinet_scheduler
-      com.fb-agent.money: "true"
 
   tracker_reconciliation_worker:
     <<: *worker-common

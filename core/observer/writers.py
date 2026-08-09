@@ -783,7 +783,7 @@ async def reopen_reactivated_alert_state(
 
     apply_fsm_transition защищает `disabled` WHERE-guard'ом (observer не затирает
     терминальные). Но если ад снова ACTIVE в кабинете (реактивирован вручную в Ads
-    Manager или autostart bulk-activate — МИМО enable-пути), FSM застревает в disabled
+    Manager — мимо подтверждённого enable-пути), FSM застревает в disabled
     и повторный STOP не сработает (убыточный ад крутится). Это явный reopen: возвращаем
     в normal + обнуляем snooze/token/stage, чтобы следующий decide() стартовал чистый
     инцидент.

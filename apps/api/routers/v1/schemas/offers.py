@@ -93,8 +93,13 @@ class OfferOut(BaseModel):
     updated_at: str | None = None
 
     @classmethod
-    def from_orm_offer(cls, offer: object) -> "OfferOut":
-        """Маппит ORM-объект Offer в OfferOut с учётом доступных полей."""
+    def from_orm_offer(
+        cls,
+        offer: object,
+        *,
+        ad_account_ids: list[str],
+    ) -> "OfferOut":
+        """Map an ORM offer plus its explicitly loaded normalized membership."""
         return cls(
             id=offer.id,  # type: ignore[attr-defined]
             code=offer.code,  # type: ignore[attr-defined]
@@ -102,7 +107,7 @@ class OfferOut(BaseModel):
             vertical=offer.vertical,  # type: ignore[attr-defined]
             pixel_id=getattr(offer, "pixel_id", None),
             is_active=offer.is_active,  # type: ignore[attr-defined]
-            ad_account_ids=list(getattr(offer, "ad_account_ids", None) or []),
+            ad_account_ids=sorted(ad_account_ids),
             countries=list(getattr(offer, "countries", None) or []),
             created_at=offer.created_at.isoformat() if offer.created_at else None,  # type: ignore[attr-defined]
             updated_at=offer.updated_at.isoformat() if offer.updated_at else None,  # type: ignore[attr-defined]

@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 
 import type { AnalyticsDaypart } from "@fb/shared";
+import type { DataState } from "@fb/shared/operator/contracts";
 
 import { DaypartHeatmap } from "../src/components/analytics/DaypartHeatmap";
 
@@ -39,11 +40,16 @@ const data: AnalyticsDaypart = {
   ],
 };
 
-function AnalyticsEvidenceStates() {
+function AnalyticsEvidenceStates({ parentState }: { parentState: DataState }) {
+  const storyData: AnalyticsDaypart = {
+    ...data,
+    state: parentState,
+    issues: parentState === "ready" ? [] : data.issues,
+  };
   return (
     <main className="min-h-screen bg-bg-0 p-4 text-bg-11 sm:p-8">
       <div className="mx-auto max-w-6xl rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5">
-        <DaypartHeatmap data={data} windowState="ready" />
+        <DaypartHeatmap data={storyData} parentState={parentState} />
       </div>
     </main>
   );
@@ -52,6 +58,7 @@ function AnalyticsEvidenceStates() {
 const meta = {
   title: "Analytics/Evidence states",
   component: AnalyticsEvidenceStates,
+  args: { parentState: "partial" },
   parameters: { layout: "fullscreen" },
 } satisfies Meta<typeof AnalyticsEvidenceStates>;
 
@@ -59,3 +66,6 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const SparseKnownZeroAndUnknown: Story = {};
+export const Ready: Story = { args: { parentState: "ready" } };
+export const Stale: Story = { args: { parentState: "stale" } };
+export const Unavailable: Story = { args: { parentState: "unavailable" } };

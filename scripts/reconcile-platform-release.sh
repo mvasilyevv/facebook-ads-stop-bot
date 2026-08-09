@@ -298,8 +298,8 @@ stop_state_services() {
   export PGBACKREST_CONFIG_FILE="$PGBACKREST_CONFIG"
   local -a services=(
     api frontend mini-app observer autopause_worker meta_api telegram_delivery_worker
-    telegram_update_worker cleanup reconciler health_watchdog enable_recommendation
-    digest_scheduler cabinet_scheduler tracker_reconciliation_worker campaign_creator
+    telegram_update_worker cleanup reconciler health_watchdog digest_scheduler
+    tracker_reconciliation_worker campaign_creator
   )
   run_bounded "stop_uncommitted_${color}" \
     docker compose -p "fb_agent_${color}" --env-file "$release_env" \

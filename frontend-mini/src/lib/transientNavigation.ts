@@ -7,6 +7,7 @@ type TmaAttentionRoute =
   | "/"
   | "/actions"
   | "/ads"
+  | "/incidents"
   | "/analytics"
   | "/settings"
   | "/system/sources";
@@ -19,6 +20,7 @@ const SAFE_ATTENTION_ROUTES: readonly TmaAttentionRoute[] = [
   "/",
   "/actions",
   "/ads",
+  "/incidents",
   "/analytics",
   "/settings",
   "/system/sources",

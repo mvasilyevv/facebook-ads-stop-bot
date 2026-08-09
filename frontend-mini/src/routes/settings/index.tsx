@@ -1,366 +1,313 @@
-/**
- * SettingsPage («Ещё») — конфигурация + навигация к вторичным экранам.
- * Канон: MiniHeader (eyebrowNum) → РАЗДЕЛЫ → OBSERVER → TELEGRAM → VISION.
- */
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
-  ChevronRight,
-  Heart,
-  FileText,
   BarChart3,
-  MonitorUp,
+  ChevronRight,
+  FileText,
+  Heart,
   ListChecks,
+  MonitorUp,
 } from "lucide-react";
+
+import { Badge, Sheet } from "@/components/ui";
+import { Eyebrow } from "@/components/data";
+import { MiniHeader } from "@/components/layout/MiniHeader";
+import { DisplaySettings } from "@/features/settings/DisplaySettings";
+import { ObserverSettings } from "@/features/settings/ObserverSettings";
+import { TelegramSettings } from "@/features/settings/TelegramSettings";
+import { VisionSettings } from "@/features/settings/VisionSettings";
 import {
-  useTelegramSettings,
+  useObserverSettings,
+  useOperatorDisplayPreference,
   useTelegramNotificationDiagnostics,
+  useTelegramSettings,
   useVisionSettings,
 } from "@/lib/api";
+import { getStoredRole } from "@/lib/auth";
 import { haptic } from "@/lib/tg";
-import { MiniHeader } from "@/components/layout/MiniHeader";
-import { Eyebrow } from "@/components/data";
-import { Badge, Skeleton, ErrorState } from "@/components/ui";
-import { cn } from "@/lib/cn";
+
+const SETTINGS_SECTIONS = [
+  "display",
+  "observer",
+  "telegram",
+  "vision",
+] as const;
+type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+interface SettingsSearch {
+  section?: SettingsSection;
+}
 
 export const Route = createFileRoute("/settings/")({
+  validateSearch: (search: Record<string, unknown>): SettingsSearch => ({
+    section: SETTINGS_SECTIONS.includes(search.section as SettingsSection)
+      ? (search.section as SettingsSection)
+      : undefined,
+  }),
   component: SettingsPage,
 });
 
-// ─── Field-строка: label + control, border-b ─────────────────────────────
-
-interface FieldRowProps {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-  noBorder?: boolean;
-}
-
-function FieldRow({ label, hint, children, noBorder = false }: FieldRowProps) {
-  return (
-    <div
-      className={cn(
-        "flex items-center justify-between gap-3 min-h-[44px] py-2.5",
-        !noBorder && "border-b border-[var(--color-hairline)]",
-      )}
-    >
-      <div className="min-w-0">
-        <p className="text-[13px] text-bg-11 leading-tight">{label}</p>
-        {hint && (
-          <p className="text-[12px] text-bg-8 mt-0.5 leading-tight">{hint}</p>
-        )}
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  );
-}
-
-// ─── Секция-обёртка: Eyebrow + контент ────────────────────────────────────
-
-interface SectionProps {
-  eyebrow: string;
-  num?: string;
-  children: React.ReactNode;
-}
-
-function Section({ eyebrow, num, children }: SectionProps) {
-  return (
-    <section>
-      <Eyebrow num={num} className="mb-2.5 flex">
-        {eyebrow}
-      </Eyebrow>
-      <div className="border border-[var(--color-hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)]">
-        {children}
-      </div>
-    </section>
-  );
-}
-
-// ─── Навигационная строка-ссылка ──────────────────────────────────────────
-
-interface NavRowProps {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  noBorder?: boolean;
-}
-
-function NavRow({ icon, label, onClick, noBorder = false }: NavRowProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "w-full flex items-center gap-3 min-h-[44px] py-2.5 text-left",
-        "active:bg-bg-2 transition-colors",
-        !noBorder && "border-b border-[var(--color-hairline)]",
-      )}
-    >
-      <span className="text-bg-9 shrink-0">{icon}</span>
-      <span className="flex-1 text-[14px] text-bg-11">{label}</span>
-      <ChevronRight
-        size={16}
-        strokeWidth={1.5}
-        className="shrink-0 text-bg-8"
-      />
-    </button>
-  );
-}
-
-// ─── Секция TELEGRAM ──────────────────────────────────────────────────────
-
-function TelegramSection() {
-  const { data, isLoading, isError, error, refetch } = useTelegramSettings();
-  const diagnosticsQuery = useTelegramNotificationDiagnostics();
-
-  if (isLoading) {
-    return (
-      <Section eyebrow="TELEGRAM" num="07">
-        <div className="py-2 space-y-3">
-          <Skeleton className="h-11 w-full" />
-          <Skeleton className="h-11 w-full" />
-        </div>
-      </Section>
-    );
-  }
-
-  if (isError) {
-    return (
-      <Section eyebrow="TELEGRAM" num="07">
-        <ErrorState message={String(error)} onRetry={() => void refetch()} />
-      </Section>
-    );
-  }
-
-  const diagnostics = diagnosticsQuery.data;
-  const activeOutbox = diagnostics
-    ? [
-        diagnostics.inbox_counts,
-        diagnostics.delivery_counts,
-        diagnostics.command_reply_counts,
-      ].reduce(
-        (total, counts) =>
-          total +
-          (counts.pending ?? 0) +
-          (counts.retry ?? 0) +
-          (counts.leased ?? 0),
-        0,
-      )
-    : null;
-  const failedOutbox = diagnostics
-    ? [
-        diagnostics.inbox_counts,
-        diagnostics.delivery_counts,
-        diagnostics.command_reply_counts,
-      ].reduce(
-        (total, counts) => total + (counts.dead ?? 0) + (counts.unknown ?? 0),
-        0,
-      )
-    : null;
-
-  return (
-    <Section eyebrow="TELEGRAM" num="07">
-      <FieldRow label="Токен">
-        <Badge variant="neutral">
-          {data?.is_authorized ? "Настроен" : "Не настроен"}
-        </Badge>
-      </FieldRow>
-
-      {data?.bot_username ? (
-        <FieldRow label="Бот">
-          <span className="font-mono text-[12px] text-bg-10">
-            @{data.bot_username}
-          </span>
-        </FieldRow>
-      ) : null}
-
-      <FieldRow label="Webhook">
-        <Badge
-          variant={
-            diagnostics?.webhook_state === "unconfigured"
-              ? "warning"
-              : "neutral"
-          }
-        >
-          {diagnosticsQuery.isError
-            ? "Недоступен"
-            : diagnostics?.webhook_state === "configured"
-              ? "Настроен"
-              : diagnostics?.webhook_state === "unconfigured"
-                ? "Не настроен"
-                : "Проверка…"}
-        </Badge>
-      </FieldRow>
-
-      <FieldRow label="Gateway">
-        <Badge
-          variant={
-            diagnostics?.gateway_state === "auth_error" ? "failed" : "neutral"
-          }
-        >
-          {diagnosticsQuery.isError
-            ? "Недоступен"
-            : diagnostics?.gateway_state === "configured"
-              ? "Настроен"
-              : diagnostics?.gateway_state === "auth_error"
-                ? "Ошибка авторизации"
-                : diagnostics?.gateway_state === "unconfigured"
-                  ? "Не настроен"
-                  : "Проверка…"}
-        </Badge>
-      </FieldRow>
-
-      <FieldRow label="Outbox" noBorder>
-        <Badge
-          variant={
-            diagnostics?.outbox_state === "degraded"
-              ? "failed"
-              : diagnostics?.outbox_state === "active"
-                ? "warning"
-                : diagnostics?.outbox_state === "idle"
-                  ? "done"
-                  : "neutral"
-          }
-        >
-          {diagnosticsQuery.isError
-            ? "Недоступен"
-            : diagnostics?.outbox_state === "degraded"
-              ? `${failedOutbox ?? 0} ошибок`
-              : diagnostics?.outbox_state === "active"
-                ? `${activeOutbox ?? 0} в работе`
-                : diagnostics?.outbox_state === "idle"
-                  ? "Очередь пуста"
-                  : "Проверка…"}
-        </Badge>
-      </FieldRow>
-    </Section>
-  );
-}
-
-// ─── Секция VISION ────────────────────────────────────────────────────────
-
-function VisionSection() {
-  const { data, isLoading, isError, error, refetch } = useVisionSettings();
-
-  if (isLoading) {
-    return (
-      <Section eyebrow="VISION" num="08">
-        <div className="py-2 space-y-3">
-          <Skeleton className="h-11 w-full" />
-        </div>
-      </Section>
-    );
-  }
-
-  if (isError) {
-    return (
-      <Section eyebrow="VISION" num="08">
-        <ErrorState message={String(error)} onRetry={() => void refetch()} />
-      </Section>
-    );
-  }
-
-  const statusVariant =
-    data?.channel_status === "READY"
-      ? "running"
-      : data?.channel_status === "DEGRADED" ||
-          data?.channel_status === "UNAVAILABLE"
-        ? "warning"
-        : "neutral";
-  const statusLabel =
-    data?.channel_status === "READY"
-      ? "Канал готов"
-      : data?.channel_status === "DEGRADED"
-        ? "Канал деградирован"
-        : data?.channel_status === "UNAVAILABLE"
-          ? "Канал недоступен"
-          : data?.has_token
-            ? "Статус не подтверждён"
-            : "Не настроен";
-
-  return (
-    <Section eyebrow="VISION" num="08">
-      <FieldRow label="Browser channel">
-        <Badge variant={statusVariant}>{statusLabel}</Badge>
-      </FieldRow>
-
-      {data?.profile_id ? (
-        <FieldRow label="Profile ID" noBorder>
-          <span className="font-mono text-[12px] text-bg-9 truncate max-w-[120px]">
-            {data.profile_id}
-          </span>
-        </FieldRow>
-      ) : (
-        <FieldRow label="Profile ID" noBorder>
-          <span className="text-[12px] text-bg-8">—</span>
-        </FieldRow>
-      )}
-    </Section>
-  );
-}
-
-// ─── SettingsPage ─────────────────────────────────────────────────────────
+const SECTION_TITLES: Record<SettingsSection, string> = {
+  display: "Отображение",
+  observer: "Observer",
+  telegram: "Telegram",
+  vision: "Vision и desktop",
+};
 
 function SettingsPage() {
   const navigate = useNavigate();
+  const { section } = Route.useSearch();
+  const canEdit = getStoredRole() === "owner";
+  const displayPreferenceQuery = useOperatorDisplayPreference(canEdit);
+  const observerQuery = useObserverSettings();
+  const telegramQuery = useTelegramSettings();
+  const diagnosticsQuery = useTelegramNotificationDiagnostics();
+  const visionQuery = useVisionSettings();
 
-  const navTo = (to: string) => {
+  function openSection(next: SettingsSection) {
     haptic.selection();
-    void navigate({ to: to as "/" });
-  };
+    void navigate({ to: "/settings", search: { section: next } });
+  }
+
+  function closeSection() {
+    void navigate({ to: "/settings", search: {} });
+  }
+
+  function navTo(
+    to:
+      | "/desktop"
+      | "/analytics"
+      | "/system/sources"
+      | "/campaigns"
+      | "/offers",
+  ) {
+    haptic.selection();
+    void navigate({ to });
+  }
+
+  const observerStatus = observerQuery.isError
+    ? { label: "Недоступен", variant: "warning" as const }
+    : observerQuery.data?.is_scanning_enabled
+      ? { label: "Сканирует", variant: "neutral" as const }
+      : { label: "Остановлен", variant: "warning" as const };
+  const telegramStatus = telegramQuery.isError
+    ? { label: "Недоступен", variant: "warning" as const }
+    : telegramQuery.data?.is_authorized
+      ? diagnosticsQuery.data?.outbox_state === "degraded"
+        ? { label: "Деградация", variant: "failed" as const }
+        : { label: "Настроен", variant: "neutral" as const }
+      : { label: "Не настроен", variant: "warning" as const };
+  const visionStatus = visionQuery.isError
+    ? { label: "Недоступен", variant: "warning" as const }
+    : visionQuery.data?.channel_status === "READY"
+      ? { label: "Готов", variant: "neutral" as const }
+      : visionQuery.data?.channel_status === "DEGRADED"
+        ? { label: "Деградация", variant: "warning" as const }
+        : visionQuery.data?.channel_status === "UNAVAILABLE"
+          ? { label: "Недоступен", variant: "warning" as const }
+          : { label: "Не подтверждён", variant: "neutral" as const };
 
   return (
-    <div className="flex flex-col min-h-full pb-20">
+    <div className="flex min-h-full flex-col pb-[max(96px,var(--tg-content-safe-bottom,0px),env(safe-area-inset-bottom))]">
       <MiniHeader
         eyebrowNum="05"
-        eyebrow="СИСТЕМА · МОБИЛЬНЫЙ ДОСТУП"
+        eyebrow="СИСТЕМА · КОНФИГУРАЦИЯ"
         title="Ещё"
       />
 
-      <div className="flex flex-col gap-5 p-4">
-        {/* ── РАЗДЕЛЫ ── */}
-        <section>
-          <Eyebrow num="05" className="mb-2.5 flex">
-            РАЗДЕЛЫ
-          </Eyebrow>
-          <div className="border border-[var(--color-hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)]">
+      <div className="flex flex-col gap-7 px-4 py-5">
+        {!canEdit ? (
+          <p
+            role="status"
+            className="m-0 border-y border-[var(--color-hairline)] py-3 text-[14px] leading-5 text-warning"
+          >
+            Этот запуск доступен только для чтения. Изменения настроек разрешены
+            владельцу.
+          </p>
+        ) : null}
+
+        <section aria-labelledby="settings-controls-heading">
+          <h2 id="settings-controls-heading" className="m-0 mb-2.5">
+            <Eyebrow num="05" className="flex">
+              НАСТРОЙКИ
+            </Eyebrow>
+          </h2>
+          <div className="border-y border-[var(--color-hairline)]">
+            <SectionButton
+              label="Отображение"
+              detail={
+                !canEdit
+                  ? "Только владелец"
+                  : displayPreferenceQuery.isPending
+                    ? "Загрузка…"
+                    : (displayPreferenceQuery.data?.timezone_name ??
+                      "Недоступно")
+              }
+              status={
+                <Badge
+                  variant={
+                    !canEdit || displayPreferenceQuery.isError
+                      ? "warning"
+                      : "neutral"
+                  }
+                >
+                  {!canEdit
+                    ? "Только owner"
+                    : displayPreferenceQuery.isError
+                      ? "Недоступно"
+                      : "Web + TMA"}
+                </Badge>
+              }
+              onClick={() => openSection("display")}
+            />
+            <SectionButton
+              label="Observer"
+              detail="Интервал, теги, allowlist и scan-now"
+              status={
+                <Badge variant={observerStatus.variant}>
+                  {observerStatus.label}
+                </Badge>
+              }
+              onClick={() => openSection("observer")}
+            />
+            <SectionButton
+              label="Telegram"
+              detail="Бот, получатели, preferences и диагностика"
+              status={
+                <Badge variant={telegramStatus.variant}>
+                  {telegramStatus.label}
+                </Badge>
+              }
+              onClick={() => openSection("telegram")}
+            />
+            <SectionButton
+              label="Vision и desktop"
+              detail="Профиль, секретный токен и переподключение"
+              status={
+                <Badge variant={visionStatus.variant}>
+                  {visionStatus.label}
+                </Badge>
+              }
+              onClick={() => openSection("vision")}
+              noBorder
+            />
+          </div>
+        </section>
+
+        <section aria-labelledby="settings-routes-heading">
+          <h2 id="settings-routes-heading" className="m-0 mb-2.5">
+            <Eyebrow className="flex">РАЗДЕЛЫ</Eyebrow>
+          </h2>
+          <div className="border-y border-[var(--color-hairline)]">
             <NavRow
-              icon={<MonitorUp size={16} strokeWidth={1.5} />}
+              icon={<MonitorUp size={17} />}
               label="Рабочий стол"
               onClick={() => navTo("/desktop")}
             />
             <NavRow
-              icon={<BarChart3 size={16} strokeWidth={1.5} />}
+              icon={<BarChart3 size={17} />}
               label="Аналитика"
               onClick={() => navTo("/analytics")}
             />
             <NavRow
-              icon={<Heart size={16} strokeWidth={1.5} />}
+              icon={<Heart size={17} />}
               label="Источники и воркеры"
               onClick={() => navTo("/system/sources")}
             />
             <NavRow
-              icon={<ListChecks size={16} strokeWidth={1.5} />}
+              icon={<ListChecks size={17} />}
               label="Запуски кампаний"
               onClick={() => navTo("/campaigns")}
             />
             <NavRow
-              icon={<FileText size={16} strokeWidth={1.5} />}
+              icon={<FileText size={17} />}
               label="Офферы"
               onClick={() => navTo("/offers")}
               noBorder
             />
           </div>
         </section>
-
-        <p className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-4 text-[14px] leading-5 text-bg-9">
-          Здесь доступны диагностика и оперативные экраны. Редкие настройки
-          сканирования, кабинетов и расписаний изменяются в web-панели.
-        </p>
-
-        {/* Read-only diagnostics. Configuration remains desktop-first. */}
-        <TelegramSection />
-        <VisionSection />
       </div>
+
+      <Sheet
+        open={section !== undefined}
+        onClose={closeSection}
+        eyebrow="СИСТЕМА · НАСТРОЙКИ"
+        title={section ? SECTION_TITLES[section] : "Настройки"}
+      >
+        {section === "display" ? <DisplaySettings canEdit={canEdit} /> : null}
+        {section === "observer" ? <ObserverSettings canEdit={canEdit} /> : null}
+        {section === "telegram" ? <TelegramSettings canEdit={canEdit} /> : null}
+        {section === "vision" ? <VisionSettings canEdit={canEdit} /> : null}
+      </Sheet>
     </div>
+  );
+}
+
+function SectionButton({
+  label,
+  detail,
+  status,
+  onClick,
+  noBorder = false,
+}: {
+  label: string;
+  detail: string;
+  status: React.ReactNode;
+  onClick: () => void;
+  noBorder?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex min-h-[64px] w-full items-center gap-3 py-3 text-left active:bg-bg-2 ${
+        noBorder ? "" : "border-b border-[var(--color-hairline)]"
+      }`}
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block text-[15px] font-medium text-bg-11">
+          {label}
+        </span>
+        <span className="mt-1 block break-words text-[13px] leading-5 text-bg-8">
+          {detail}
+        </span>
+      </span>
+      <span className="flex max-w-[45%] shrink-0 items-center gap-2">
+        {status}
+        <ChevronRight size={16} aria-hidden="true" className="text-bg-8" />
+      </span>
+    </button>
+  );
+}
+
+function NavRow({
+  icon,
+  label,
+  onClick,
+  noBorder = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  noBorder?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex min-h-11 w-full items-center gap-3 py-2.5 text-left active:bg-bg-2 ${
+        noBorder ? "" : "border-b border-[var(--color-hairline)]"
+      }`}
+    >
+      <span className="shrink-0 text-bg-9" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="flex-1 text-[14px] text-bg-11">{label}</span>
+      <ChevronRight
+        size={16}
+        aria-hidden="true"
+        className="shrink-0 text-bg-8"
+      />
+    </button>
   );
 }

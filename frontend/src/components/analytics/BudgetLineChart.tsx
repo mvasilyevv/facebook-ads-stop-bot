@@ -13,6 +13,7 @@ import {
 
 import type { AnalyticsLiveBudgetSeries } from "@fb/shared";
 import { formatSpend } from "@fb/shared/format/number";
+import { buildSpendChartModel } from "@fb/shared/analytics/chartModel";
 import { currentMarkerLabelPosition } from "@fb/shared/operator/chartModel";
 import type { DataState } from "@fb/shared/operator/contracts";
 import { inheritAnalyticsState } from "@fb/shared/analytics/state";
@@ -36,32 +37,29 @@ export function BudgetLineChart({
   timezone,
   parentState,
 }: BudgetLineChartProps) {
-  const points = useMemo(
+  const chartModel = useMemo(
     () =>
-      (data?.points ?? []).map((point) => {
-        return {
-          ts: new Date(point.ts).getTime(),
-          iso: point.ts,
-          // Actual is emitted only when Meta has a latest ad snapshot. Budget
-          // availability controls base/stop independently and must not erase spend.
-          actual: decimal(point.actual),
-          base: decimal(point.base),
-          stop: decimal(point.stop),
-          available: point.available_ads,
-          unavailable: point.unavailable_ads,
-        };
-      }),
+      buildSpendChartModel(
+        (data?.points ?? []).map((point) => ({
+          at: point.ts,
+          actual: point.actual,
+          base: point.base,
+          stop: point.stop,
+        })),
+        data?.as_of ?? null,
+      ),
     [data],
   );
+  const points = chartModel.points;
   const usdConfirmed = data?.scope.currency_state === "single" && data.scope.currency === "USD";
   const currency = usdConfirmed ? "USD" : null;
 
   if (loading) return <Skeleton height={height + 150} className="w-full" />;
 
-  const hasKnownValue = points.some(
-    (point) => point.actual !== null || point.base !== null || point.stop !== null,
+  const hasKnownValue = chartModel.hasKnownValue;
+  const partial = (data?.points ?? []).some(
+    (point) => point.available_ads === 0 || point.unavailable_ads > 0,
   );
-  const partial = points.some((point) => point.available === 0 || point.unavailable > 0);
   const serverState: DataState = data?.state ?? (!points.length ? "empty" : "unavailable");
   const localState: DataState = serverState === "ready" && partial ? "partial" : serverState;
   const completeness = inheritAnalyticsState(localState, parentState);
@@ -74,14 +72,14 @@ export function BudgetLineChart({
         : "var(--color-bg-8)";
   const latest = [...points].reverse().find((point) => point.actual !== null);
   const currentMarker = serverTimeMarker(
-    points.map((point) => point.ts),
+    points.map((point) => point.timestamp),
     data?.as_of ?? null,
   );
   const currentMarkerLabel =
     currentMarker === null
       ? "insideTopLeft"
       : currentMarkerLabelPosition(
-          points.map((point) => point.iso),
+          points.map((point) => point.at),
           new Date(currentMarker).toISOString(),
         );
   const evidenceSummary = !usdConfirmed
@@ -119,7 +117,7 @@ export function BudgetLineChart({
           >
             <CartesianGrid vertical={false} stroke="var(--color-hairline)" />
             <XAxis
-              dataKey="ts"
+              dataKey="timestamp"
               type="number"
               scale="time"
               domain={["dataMin", "dataMax"]}
@@ -217,15 +215,15 @@ export function BudgetLineChart({
         </tr>
       </thead>
       <tbody>
-        {points.map((point) => (
-          <tr key={point.iso}>
-            <th scope="row">{formatDisplayTime(new Date(point.ts), {}, timezone)}</th>
+        {points.map((point, index) => (
+          <tr key={point.at}>
+            <th scope="row">{formatDisplayTime(new Date(point.timestamp), {}, timezone)}</th>
             <td>{valuesAvailable ? money(point.actual, currency) : "—"}</td>
             <td>{valuesAvailable ? money(point.base, currency) : "—"}</td>
             <td>{valuesAvailable ? money(point.stop, currency) : "—"}</td>
             <td>
               {valuesAvailable
-                ? `${point.available} доступно · ${point.unavailable} недоступно`
+                ? `${data?.points[index]?.available_ads ?? 0} доступно · ${data?.points[index]?.unavailable_ads ?? 0} недоступно`
                 : "не подтверждено"}
             </td>
           </tr>
@@ -255,12 +253,6 @@ export function serverTimeMarker(points: number[], asOf: string | null): number 
   const earliest = valid[0]!;
   const latest = valid[valid.length - 1]!;
   return Math.max(earliest, Math.min(latest, serverTimestamp));
-}
-
-function decimal(value: string | null): number | null {
-  if (value === null) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function sourceLabels(data: AnalyticsLiveBudgetSeries | undefined, state: DataState): string[] {

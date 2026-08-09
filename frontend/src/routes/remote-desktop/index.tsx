@@ -59,7 +59,9 @@ function RemoteDesktopPage() {
 
     void (async () => {
       try {
-        const { data: payload, response } = await generatedFetchApi.POST("/api/desktop/launch");
+        const { data: payload, response } = await generatedFetchApi.POST("/api/desktop/launch", {
+          body: { presentation: "desktop" },
+        });
         if (!response.ok || !payload?.url) {
           throw new Error("Сервер вернул некорректный билет рабочего стола.");
         }

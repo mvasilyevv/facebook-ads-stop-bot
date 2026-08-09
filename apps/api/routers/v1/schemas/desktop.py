@@ -9,6 +9,12 @@ from typing import Literal
 from pydantic import BaseModel
 
 
+class DesktopLaunchRequest(BaseModel):
+    """Platform-selected presentation profile carried into the desktop session."""
+
+    presentation: Literal["desktop", "mobile"]
+
+
 class DesktopLaunchResponse(BaseModel):
     """A short-lived, single-use URL that establishes a desktop session."""
 
@@ -24,4 +30,4 @@ class DesktopTransportsResponse(BaseModel):
     available: list[Literal["kasm"]]
 
 
-__all__ = ["DesktopLaunchResponse", "DesktopTransportsResponse"]
+__all__ = ["DesktopLaunchRequest", "DesktopLaunchResponse", "DesktopTransportsResponse"]

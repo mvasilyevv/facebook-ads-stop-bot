@@ -54,63 +54,57 @@ async def test_get_observer_settings_returns_defaults(
     data = resp.json()
     assert data["is_scanning_enabled"] is False
     assert isinstance(data["default_interval_seconds"], int)
-    assert data["auto_enable_recommendations"] is False
     assert "warning_percent_of_stop" not in data
     assert "cpc_warning_percent" not in data
     assert "cpl_warning_percent" not in data
     assert "cpr_warning_percent" not in data
 
 
-# PUT обновляет поля, последующий GET отражает изменения.
+# PATCH /interval обновляет только интервал, последующий GET отражает изменение.
 @pytest.mark.asyncio
-async def test_put_observer_settings_persists(pg_engine, fake_redis_client, clean_observer_config):
+async def test_patch_observer_interval_persists(
+    pg_engine, fake_redis_client, clean_observer_config
+):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    body = {
-        "is_scanning_enabled": False,
-        "default_interval_seconds": 120,
-        "auto_enable_recommendations": True,
-    }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        put_resp = await ac.put("/api/settings/observer", json=body)
-        assert put_resp.status_code == 200
+        patch_resp = await ac.patch(
+            "/api/settings/observer/interval",
+            json={"default_interval_seconds": 120},
+        )
+        assert patch_resp.status_code == 200
 
         get_resp = await ac.get("/api/settings/observer")
     assert get_resp.status_code == 200
     data = get_resp.json()
     assert data["is_scanning_enabled"] is False
     assert data["default_interval_seconds"] == 120
-    assert data["auto_enable_recommendations"] is True
 
 
-# PUT с interval_seconds=10 (меньше допустимого минимума 30) → 422.
+# PATCH /interval с 10 (меньше допустимого минимума 30) → 422.
 @pytest.mark.asyncio
-async def test_put_observer_settings_validates_interval(
+async def test_patch_observer_interval_validates_minimum(
     pg_engine, fake_redis_client, clean_observer_config
 ):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    body = {
-        "is_scanning_enabled": True,
-        "default_interval_seconds": 10,
-        "auto_enable_recommendations": False,
-    }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.put("/api/settings/observer", json=body)
+        resp = await ac.patch(
+            "/api/settings/observer/interval",
+            json={"default_interval_seconds": 10},
+        )
     assert resp.status_code == 422
 
 
-# PUT с interval_seconds=700 (больше максимума 600) → 422.
+# PATCH /interval с 700 (больше максимума 600) → 422.
 @pytest.mark.asyncio
-async def test_put_observer_settings_validates_interval_max(
+async def test_patch_observer_interval_validates_maximum(
     pg_engine, fake_redis_client, clean_observer_config
 ):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    body = {
-        "is_scanning_enabled": True,
-        "default_interval_seconds": 700,
-        "auto_enable_recommendations": False,
-    }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.put("/api/settings/observer", json=body)
+        resp = await ac.patch(
+            "/api/settings/observer/interval",
+            json={"default_interval_seconds": 700},
+        )
     assert resp.status_code == 422
 
 
@@ -134,8 +128,6 @@ async def test_patch_scanning_changes_only_scanning_flag(
         get_after = await ac.get("/api/settings/observer")
     data_after = get_after.json()
     assert data_after["is_scanning_enabled"] is False
-    # auto_enable_recommendations не должно измениться.
-    assert data_after["auto_enable_recommendations"] is False
 
 
 # Гейт включения: нельзя включить скан, когда мониторить нечего → 409 с причиной, флаг off.
@@ -175,28 +167,6 @@ async def test_patch_scanning_enable_allowed_when_monitored(
         resp = await ac.patch("/api/settings/observer/scanning", json={"enabled": True})
         assert resp.status_code == 200
         assert resp.json()["is_scanning_enabled"] is True
-
-
-# PATCH /auto-enable меняет baseline-колонку auto_enable_recommendations.
-@pytest.mark.asyncio
-async def test_patch_auto_enable_toggles_column(
-    pg_engine, fake_redis_client, clean_observer_config
-):
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # Включаем auto-enable.
-        resp_on = await ac.patch("/api/settings/observer/auto-enable", json={"enabled": True})
-        assert resp_on.status_code == 200
-        assert resp_on.json()["auto_enable_recommendations"] is True
-
-        # Выключаем.
-        resp_off = await ac.patch("/api/settings/observer/auto-enable", json={"enabled": False})
-        assert resp_off.status_code == 200
-        assert resp_off.json()["auto_enable_recommendations"] is False
-
-        # GET должен видеть последнее значение.
-        get_resp = await ac.get("/api/settings/observer")
-    assert get_resp.json()["auto_enable_recommendations"] is False
 
 
 # POST /scan-now создаёт durable interactive task без Redis control-path.
@@ -360,49 +330,6 @@ async def test_refresh_campaigns_is_blocked_by_browser_maintenance(
     client_ctor.assert_not_called()
 
 
-# PUT с is_scanning_enabled=true проходит гейт «нечего сканировать» → 409 (аудит 2026-07-12, C-1).
-@pytest.mark.asyncio
-async def test_put_gates_scanning_enable_when_nothing_monitored(
-    pg_engine, fake_redis_client, clean_observer_config, monkeypatch
-):
-    async def _always_blocked(engine, campaign_ids):
-        return "Нет активных офферов с кабинетами — сканировать нечего."
-
-    monkeypatch.setattr("core.observer.accounts.scan_nothing_monitored_reason", _always_blocked)
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    body = {
-        "is_scanning_enabled": True,
-        "default_interval_seconds": 60,
-        "auto_enable_recommendations": False,
-    }
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.put("/api/settings/observer", json=body)
-        assert resp.status_code == 409
-        # Флаг НЕ включился — GET отражает прежнее состояние.
-        g = await ac.get("/api/settings/observer")
-        assert g.json()["is_scanning_enabled"] is False
-
-
-# PUT с is_scanning_enabled=false гейт не зовёт — выключение всегда разрешено (C-1).
-@pytest.mark.asyncio
-async def test_put_disable_scanning_skips_gate(
-    pg_engine, fake_redis_client, clean_observer_config, monkeypatch
-):
-    async def _always_blocked(engine, campaign_ids):
-        return "Нет активных офферов с кабинетами — сканировать нечего."
-
-    monkeypatch.setattr("core.observer.accounts.scan_nothing_monitored_reason", _always_blocked)
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    body = {
-        "is_scanning_enabled": False,
-        "default_interval_seconds": 60,
-        "auto_enable_recommendations": False,
-    }
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.put("/api/settings/observer", json=body)
-        assert resp.status_code == 200
-
-
 # PATCH /owner-tag меняет ТОЛЬКО тег, остальные поля не трогает (анти лост-апдейт, C-1).
 @pytest.mark.asyncio
 async def test_patch_owner_tag_touches_only_tag(
@@ -410,14 +337,10 @@ async def test_patch_owner_tag_touches_only_tag(
 ):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # Подготовка: известное состояние остальных полей через PUT (скан выключен).
-        await ac.put(
-            "/api/settings/observer",
-            json={
-                "is_scanning_enabled": False,
-                "default_interval_seconds": 120,
-                "auto_enable_recommendations": True,
-            },
+        # Подготовка: известный интервал через точечный PATCH.
+        await ac.patch(
+            "/api/settings/observer/interval",
+            json={"default_interval_seconds": 120},
         )
         r = await ac.patch(
             "/api/settings/observer/owner-tag", json={"owner_campaign_tag": "MV,ABC"}
@@ -428,7 +351,6 @@ async def test_patch_owner_tag_touches_only_tag(
         # Остальные поля не изменились.
         assert data["is_scanning_enabled"] is False
         assert data["default_interval_seconds"] == 120
-        assert data["auto_enable_recommendations"] is True
 
 
 # PATCH /owner-tag с пустой строкой нормализуется в null (фильтр выключен).

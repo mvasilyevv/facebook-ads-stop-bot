@@ -400,7 +400,7 @@ python3 -m py_compile "$PROJECT_DIR/scripts/configure-telegram-webhook.py"
 for dockerfile in \
   docker/Dockerfile.python-base docker/Dockerfile.browser-agent \
   docker/Dockerfile.frontend docker/Dockerfile.mini-app \
-  deploy/vision-webtop/Dockerfile deploy/kasmvnc-sidecar/Dockerfile; do
+  deploy/vision-webtop/Dockerfile; do
   while IFS= read -r from_line; do
     [[ "$from_line" =~ @sha256:[0-9a-f]{64}([[:space:]]|$) ]] \
       || die "$dockerfile contains non-immutable base: $from_line"

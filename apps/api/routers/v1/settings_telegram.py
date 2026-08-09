@@ -119,6 +119,16 @@ async def _load_config(session: AsyncSession) -> TelegramConfig | None:
 
 async def _load_active_owner_invite(session: AsyncSession) -> _InviteSnapshot | None:
     """Вернуть последний действующий owner-инвайт, не создавая новый на GET."""
+    active_owner = await session.scalar(
+        select(func.count())
+        .select_from(TelegramRecipient)
+        .where(
+            TelegramRecipient.role == "owner",
+            TelegramRecipient.revoked_at.is_(None),
+        )
+    )
+    if int(active_owner or 0) > 0:
+        return None
     invite = await session.scalar(
         select(TelegramInvite)
         .where(
@@ -146,10 +156,20 @@ async def _ensure_active_owner_invite(engine: AsyncEngine) -> _InviteSnapshot:
     остаётся один актуальный owner-инвайт вместо пачки равноценных секретов.
     """
     async with AsyncSession(engine) as session, session.begin():
-        await session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
-            {"lock_key": "telegram:active_owner_invite"},
+        await lock_owner_roster(session)
+        active_owner = await session.scalar(
+            select(func.count())
+            .select_from(TelegramRecipient)
+            .where(
+                TelegramRecipient.role == "owner",
+                TelegramRecipient.revoked_at.is_(None),
+            )
         )
+        if int(active_owner or 0) > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Владелец уже подключён; новые owner-ссылки запрещены",
+            )
         current = await _load_active_owner_invite(session)
         if current is not None:
             return current

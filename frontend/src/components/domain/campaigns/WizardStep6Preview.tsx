@@ -8,6 +8,7 @@
  */
 
 import { type FC, useEffect } from "react";
+import { safeApiProblemMessage } from "@fb/operator-api";
 import {
   CheckCircle,
   AlertCircle,
@@ -120,9 +121,10 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({ config, previe
               className="flex items-center gap-2 text-[12px] text-danger bg-danger/10 border border-danger/30 rounded-[var(--radius-2)] px-3 py-2"
             >
               <AlertCircle size={13} className="shrink-0" />
-              {validateMut.error instanceof Error
-                ? validateMut.error.message
-                : "Ошибка валидации конфига"}
+              {safeApiProblemMessage(
+                validateMut.error,
+                "Не удалось подтвердить план. Проверьте контекст кабинета и повторите.",
+              )}
             </div>
           )}
 

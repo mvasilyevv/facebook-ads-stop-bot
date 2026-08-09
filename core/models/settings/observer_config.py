@@ -31,11 +31,6 @@ class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
         nullable=False,
         server_default="false",
     )
-    auto_enable_recommendations: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        server_default="false",
-    )
     # Owner-scoping: теги владельца в названии кампании. Поддерживает НЕСКОЛЬКО тегов
     # через запятую (например, "MV" или "MV,ABC,XYZ"). Если задан — observer обрабатывает
     # ТОЛЬКО кампании, чьё название/объявление содержит ЛЮБОЙ из тегов (word-boundary),

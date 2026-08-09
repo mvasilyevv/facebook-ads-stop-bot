@@ -52,6 +52,13 @@ export type OperatorCommandResponse =
   components["schemas"]["OperatorCommandResponse"];
 export type OperatorIncidentAckResponse =
   components["schemas"]["OperatorIncidentAckResponse"];
+export type OperatorIncidentItem =
+  components["schemas"]["OperatorIncidentItem"];
+export type OperatorIncidentsResponse =
+  components["schemas"]["OperatorIncidentsResponse"];
+export type OperatorIncidentDetailResponse =
+  components["schemas"]["OperatorIncidentDetailResponse"];
+export type OperatorIncidentStatus = OperatorIncidentItem["status"];
 export type OperatorWorkerState = components["schemas"]["OperatorWorkerState"];
 export type OperatorSystemData = components["schemas"]["OperatorSystemData"];
 export type OperatorSnapshot = components["schemas"]["OperatorSnapshot"];
@@ -64,4 +71,7 @@ export type OperatorActionsQuery = NonNullable<
 >;
 export type OperatorAdsQuery = NonNullable<
   operations["get_operator_ads_api_operator_ads_get"]["parameters"]["query"]
+>;
+export type OperatorIncidentsQuery = NonNullable<
+  operations["get_operator_incidents_api_operator_incidents_get"]["parameters"]["query"]
 >;

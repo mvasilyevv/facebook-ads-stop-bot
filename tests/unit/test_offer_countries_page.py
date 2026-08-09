@@ -101,12 +101,11 @@ def test_offer_out_contains_offer_fields() -> None:
         vertical="gambling",
         pixel_id="999000",
         is_active=True,
-        ad_account_ids=["123", "456"],
         countries=["DE", "KE"],
         created_at=now,
         updated_at=now,
     )
-    out = OfferOut.from_orm_offer(fake)
+    out = OfferOut.from_orm_offer(fake, ad_account_ids=["456", "123"])
     assert out.pixel_id == "999000"
     assert out.ad_account_ids == ["123", "456"]
     assert out.countries == ["DE", "KE"]
@@ -126,12 +125,11 @@ def test_offer_out_missing_countries_defaults_empty() -> None:
         vertical=None,
         pixel_id=None,
         is_active=True,
-        ad_account_ids=None,
         countries=None,
         created_at=now,
         updated_at=now,
     )
-    out = OfferOut.from_orm_offer(fake)
+    out = OfferOut.from_orm_offer(fake, ad_account_ids=[])
     assert out.countries == []
 
 
@@ -162,6 +160,14 @@ class _FakeResult:
         return self._row
 
 
+class _FakeMembershipResult:
+    def __init__(self, rows: list[tuple[uuid.UUID, str]]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[tuple[uuid.UUID, str]]:
+        return self._rows
+
+
 class _FakeConn:
     """Перехватывает execute: запоминает values insert/update, возвращает каноническую строку."""
 
@@ -169,7 +175,7 @@ class _FakeConn:
         self._captured = captured
         self._row = row
 
-    async def execute(self, stmt: Any, params: Any = None) -> _FakeResult:
+    async def execute(self, stmt: Any, params: Any = None) -> Any:
         # Пытаемся вытащить values из INSERT/UPDATE-конструкции (compile params).
         compiled = getattr(stmt, "compile", None)
         if compiled is not None:
@@ -177,7 +183,14 @@ class _FakeConn:
                 self._captured.update(dict(stmt.compile().params))
             except Exception:  # noqa: BLE001 — best-effort, не все stmt компилируются
                 pass
+        if str(stmt).lstrip().startswith("SELECT") and "offer_ad_accounts" in str(stmt):
+            return _FakeMembershipResult(
+                [(self._row["id"], account_id) for account_id in self._row["ad_account_ids"]]
+            )
         return _FakeResult(self._row)
+
+    async def scalar(self, stmt: Any) -> uuid.UUID:
+        return self._row["id"]
 
 
 class _FakeBeginCtx:

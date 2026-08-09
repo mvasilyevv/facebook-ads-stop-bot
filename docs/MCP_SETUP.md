@@ -1,6 +1,6 @@
-# MCP-сервер FB Stop Bot — настройка Claude Desktop
+# MCP-сервер FB Agent — настройка Claude Desktop
 
-Этот документ описывает, как подключить FB Stop Bot к Claude Desktop через
+Этот документ описывает, как подключить FB Agent к Claude Desktop через
 [Model Context Protocol](https://modelcontextprotocol.io) и общаться с ботом
 голосом/текстом из десктоп-приложения Anthropic, минуя Telegram.
 
@@ -35,7 +35,7 @@ Rate-limit: **30 запросов в час** на client_key `mcp:claude-deskto
 ## 2. Требования
 
 - macOS, Claude Desktop ≥ 1.0 ([скачать](https://claude.ai/download))
-- FB Stop Bot развёрнут локально: Postgres (`docker-compose up -d`) и,
+- FB Agent развёрнут локально: Postgres (`docker-compose up -d`) и,
   опционально, `services/browser-agent` для Marketing API tools
 - Установлен Python venv: `.venv/bin/python` существует
 - Установлена зависимость `mcp`:

@@ -1,0 +1,82 @@
+---
+desktop:
+  resolution:
+    width: 1366
+    height: 768
+  allow_resize: false
+  pixel_depth: 24
+  gpu:
+    hw3d: false
+
+network:
+  protocol: http
+  interface: 0.0.0.0
+  websocket_port: 8444
+  use_ipv4: true
+  use_ipv6: false
+  udp:
+    public_ip: 127.0.0.1
+  ssl:
+    require_ssl: false
+
+user_session:
+  session_type: shared
+  new_session_disconnects_existing_exclusive_session: false
+  concurrent_connections_prompt: false
+  idle_timeout: never
+
+keyboard:
+  ignore_numlock: false
+  raw_keyboard: false
+
+pointer:
+  enabled: true
+
+runtime_configuration:
+  allow_client_to_override_kasm_server_settings: false
+  allow_override_standard_vnc_server_settings: false
+  allow_override_list: []
+
+logging:
+  log_writer_name: all
+  log_dest: stdout
+  level: 30
+
+data_loss_prevention:
+  clipboard:
+    delay_between_operations: none
+    allow_mimetypes:
+      - text/plain
+    server_to_client:
+      enabled: true
+      size: 262144
+      primary_clipboard_enabled: false
+    client_to_server:
+      enabled: true
+      size: 262144
+  keyboard:
+    enabled: true
+    rate_limit: unlimited
+  logging:
+    level: off
+
+encoding:
+  max_frame_rate: 30
+  video_encoding_mode:
+    max_resolution:
+      width: 1366
+      height: 768
+
+server:
+  http:
+    httpd_directory: /usr/share/kasmvnc/www
+  advanced:
+    kasm_password_file: /run/kasmvnc/.kasmpasswd
+    x_authority_file: auto
+  auto_shutdown:
+    no_user_session_timeout: never
+    active_user_session_timeout: never
+    inactive_user_session_timeout: never
+
+command_line:
+  prompt: false

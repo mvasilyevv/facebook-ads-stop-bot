@@ -1,31 +1,73 @@
-FROM lscr.io/linuxserver/webtop:ubuntu-xfce@sha256:f106549e832cd9b548263d45f81020afd96c4b090a56e1d420e34ce8e4cb36a0
+FROM node:22-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS kasm-client-builder
 
+ARG KASMVNC_SOURCE_COMMIT=17265facc40ab50db5740cdf0d12c61173edafc9
+ARG KASM_NOVNC_SOURCE_COMMIT=475ecfa5356579ef222983c7ce4619a7576a3bce
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git init /src \
+    && git -C /src remote add origin https://github.com/kasmtech/KasmVNC.git \
+    && git -C /src fetch --depth 1 origin "${KASMVNC_SOURCE_COMMIT}" \
+    && git -C /src checkout --detach FETCH_HEAD \
+    && test "$(git -C /src rev-parse HEAD)" = "${KASMVNC_SOURCE_COMMIT}" \
+    && git -C /src submodule update --init --depth 1 kasmweb \
+    && test "$(git -C /src/kasmweb rev-parse HEAD)" = "${KASM_NOVNC_SOURCE_COMMIT}"
+
+WORKDIR /src/kasmweb
+COPY kasm-client/package.json kasm-client/package-lock.json ./
+RUN npm ci --ignore-scripts
+
+COPY kasm-client/apply-patch.mjs /opt/fb-agent-kasm/apply-patch.mjs
+COPY kasm-client/fb-agent-client.js app/fb-agent-client.js
+COPY kasm-client/fb-agent-client.css app/styles/fb-agent-client.css
+COPY kasm-client/vite.config.js vite.config.js
+RUN node /opt/fb-agent-kasm/apply-patch.mjs /src/kasmweb \
+    && npm run build
+
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
+
+ARG KASMVNC_VERSION=1.5.0
+ARG KASMVNC_DEB_SHA256=f599fe02e2175b9817b6165f74a5d2bebdc73118dde9181ba3410963bed7ae1
 ARG VISION_VERSION=3.6.8
 ARG VISION_DEB_URL=https://vision-releases.s3.eu-north-1.amazonaws.com/v3.6.8/linux-deb/vision_3.6.8_amd64.deb
 ARG VISION_DEB_SHA256=b0040ba8feac569d86b4b6a1ab9269837c8b0a2d2c5a26657b591395f4bbb762
 
+ENV DEBIAN_FRONTEND=noninteractive \
+    DISPLAY=:1 \
+    HOME=/config \
+    XDG_CONFIG_HOME=/config/.config \
+    XDG_CACHE_HOME=/config/.cache
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl wmctrl x11-utils \
-    && curl --fail --location --retry 4 --output /tmp/vision.deb "$VISION_DEB_URL" \
-    && echo "$VISION_DEB_SHA256  /tmp/vision.deb" | sha256sum --check --strict \
+        ca-certificates curl dbus-x11 fonts-dejavu-core fonts-liberation2 gosu locales \
+        procps tini thunar wmctrl x11-utils xfce4-panel xfce4-session xfce4-terminal \
+        xfdesktop4 xfwm4 \
+    && curl --fail --location --retry 4 --output /tmp/kasmvncserver.deb \
+      "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/kasmvncserver_noble_${KASMVNC_VERSION}_amd64.deb" \
+    && echo "${KASMVNC_DEB_SHA256}  /tmp/kasmvncserver.deb" | sha256sum --check --strict \
+    && apt-get install -y --no-install-recommends /tmp/kasmvncserver.deb \
+    && curl --fail --location --retry 4 --output /tmp/vision.deb "${VISION_DEB_URL}" \
+    && echo "${VISION_DEB_SHA256}  /tmp/vision.deb" | sha256sum --check --strict \
     && apt-get install -y --no-install-recommends /tmp/vision.deb \
-    && test "$(dpkg-query -W -f='${Version}' vision)" = "$VISION_VERSION" \
-    && rm -f /tmp/vision.deb \
+    && test "$(dpkg-query -W -f='${Version}' vision)" = "${VISION_VERSION}" \
+    && groupadd --gid 1000 vision \
+    && useradd --uid 1000 --gid 1000 --home-dir /config --shell /bin/bash vision \
+    && locale-gen en_US.UTF-8 ru_RU.UTF-8 \
+    && rm -f /tmp/kasmvncserver.deb /tmp/vision.deb \
     && rm -rf /var/lib/apt/lists/*
 
-COPY vision-service-run /etc/s6-overlay/s6-rc.d/svc-vision/run
-COPY vision-window-fit-run /etc/s6-overlay/s6-rc.d/svc-vision-window-fit/run
-RUN install -d /etc/s6-overlay/s6-rc.d/svc-vision/dependencies.d \
-    /etc/s6-overlay/s6-rc.d/svc-vision-window-fit/dependencies.d \
-    /etc/s6-overlay/s6-rc.d/user/contents.d \
-    && printf 'longrun\n' >/etc/s6-overlay/s6-rc.d/svc-vision/type \
-    && printf 'longrun\n' >/etc/s6-overlay/s6-rc.d/svc-vision-window-fit/type \
-    && touch /etc/s6-overlay/s6-rc.d/svc-vision/dependencies.d/svc-xorg \
-    /etc/s6-overlay/s6-rc.d/svc-vision/dependencies.d/svc-de \
-    /etc/s6-overlay/s6-rc.d/svc-vision/dependencies.d/init-services \
-    /etc/s6-overlay/s6-rc.d/svc-vision-window-fit/dependencies.d/svc-vision \
-    /etc/s6-overlay/s6-rc.d/user/contents.d/svc-vision \
-    /etc/s6-overlay/s6-rc.d/user/contents.d/svc-vision-window-fit \
-    && chmod 0755 /etc/s6-overlay/s6-rc.d/svc-vision/run \
-    /etc/s6-overlay/s6-rc.d/svc-vision-window-fit/run
+COPY --from=kasm-client-builder /src/kasmweb/dist/ /usr/share/kasmvnc/www/
+COPY kasmvnc.yaml /etc/kasmvnc/kasmvnc.yaml
+COPY entrypoint.sh healthcheck.sh vision-window-fit.sh /usr/local/bin/
+COPY THIRD_PARTY_NOTICES.md /usr/share/doc/fb-agent-vision-desktop/THIRD_PARTY_NOTICES.md
+
+RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh \
+      /usr/local/bin/vision-window-fit.sh \
+    && install -d -m 0700 /run/kasmvnc
+
+EXPOSE 50051/tcp 8444/tcp
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]

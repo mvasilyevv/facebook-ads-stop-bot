@@ -34,7 +34,6 @@ def _valid_values() -> dict[str, str]:
         "TMA_SESSION_SECRET": "t" * 48,
         "ADSETPRO_POSTBACK_SECRET": "p" * 48,
         "DESKTOP_WEBTOP_IMAGE": "registry.example/webtop@sha256:" + "a" * 64,
-        "DESKTOP_KASMVNC_IMAGE": "registry.example/kasm@sha256:" + "b" * 64,
         "DESKTOP_OWNER_TELEGRAM_USER_ID": "911436108",
         "DESKTOP_PUBLIC_ORIGIN": "https://desktop.adpulse.su",
         "BROWSER_AUTHORITY_CONSUME_URL": ENV.BROWSER_AUTHORITY_CONSUME_URL,
@@ -69,6 +68,7 @@ def test_render_removes_retired_runtime_keys() -> None:
             "X_PANEL_RECOVERY_KEY=retired",
             "DESKTOP_ACTIVE_TRANSPORT=retired",
             "DESKTOP_KASM_ENABLED=true",
+            "DESKTOP_KASMVNC_IMAGE=retired",
             "VISION_X_TOKEN=must-not-survive",
             "VISION_PROFILE_ID=must-not-survive",
             "BROWSER_MAINTENANCE_CAPABILITY_SECRET=must-not-survive",
@@ -96,6 +96,7 @@ def test_render_removes_retired_runtime_keys() -> None:
     assert "X_PANEL_RECOVERY_KEY" not in rendered
     assert "DESKTOP_ACTIVE_TRANSPORT" not in rendered
     assert "DESKTOP_KASM_ENABLED" not in rendered
+    assert "DESKTOP_KASMVNC_IMAGE" not in rendered
     assert "VISION_X_TOKEN" not in rendered
     assert "VISION_PROFILE_ID" not in rendered
     for key in ENV.PRIVATE_BROWSER_KEYS:
@@ -163,13 +164,11 @@ def test_validate_rejects_missing_or_misdirected_telegram_oidc() -> None:
 def test_validate_rejects_invalid_desktop_secrets() -> None:
     values = _valid_values()
     values["DESKTOP_WEBTOP_IMAGE"] = "registry.example/webtop:latest"
-    values["DESKTOP_KASMVNC_IMAGE"] = "registry.example/kasm:latest"
     values["DESKTOP_KASM_SERVICE_PASSWORD"] = "short"
 
     errors = ENV.validate(values)
 
     assert "DESKTOP_WEBTOP_IMAGE must be an immutable image@sha256 reference" in errors
-    assert "DESKTOP_KASMVNC_IMAGE must be an immutable image@sha256 reference" in errors
     assert "DESKTOP_KASM_SERVICE_PASSWORD must be at least 32 characters" in errors
 
 

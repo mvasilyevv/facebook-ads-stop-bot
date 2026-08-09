@@ -1,5 +1,6 @@
 /** Generated OpenAPI API layer for the campaign creator. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { CampaignWizardCampaign } from "@fb/features/campaigns";
 import type { components } from "@fb/shared/api/generated";
 import { GeneratedApiError, dataOrThrow, noContentOrThrow } from "@fb/operator-api";
 import { generatedApi, generatedFetchApi } from "./generatedClient";
@@ -8,7 +9,7 @@ export type PresetOut = components["schemas"]["PresetOut"];
 export type PresetIn = components["schemas"]["PresetIn"];
 export type UploadedConceptOut = components["schemas"]["UploadedConceptOut"];
 export type UploadConceptsOut = components["schemas"]["UploadConceptsOut"];
-export type CampaignStructure = components["schemas"]["CampaignStructureIn"];
+export type CampaignStructure = CampaignWizardCampaign;
 export type AdTextConfig = components["schemas"]["AdTextIn"];
 export type CampaignConfig = components["schemas"]["CampaignConfigIn"];
 export type AdsetPlanOut = components["schemas"]["AdsetPlanOut"];
@@ -22,6 +23,9 @@ export type RunCommandOut = components["schemas"]["RunCommandOut"];
 export type RunStatus = RunSummaryOut["status"];
 export type AdAccountContextOut = components["schemas"]["AdAccountContextResponse"];
 export type AdAccountPagesOut = components["schemas"]["AdAccountPagesResponse"];
+export type CampaignDraftDocument = components["schemas"]["CampaignDraftDocument"];
+export type CampaignDraftEnvelope = components["schemas"]["CampaignDraftEnvelope"];
+export type CampaignDraftPutIn = components["schemas"]["CampaignDraftPutIn"];
 
 export const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   queued: "В очереди",
@@ -40,6 +44,33 @@ export function shouldRetryVisionMetadata(failureCount: number, error: unknown):
 
 export function visionMetadataRetryDelay(attemptIndex: number): number {
   return Math.min(1_000 * 2 ** attemptIndex, 4_000);
+}
+
+export function useCampaignDraft() {
+  return generatedApi.useQuery(
+    "get",
+    "/api/tools/campaigns/draft",
+    {},
+    { staleTime: 0, retry: false },
+  );
+}
+
+export function useSaveCampaignDraft() {
+  return useMutation({
+    mutationFn: (body: CampaignDraftPutIn) =>
+      dataOrThrow(generatedFetchApi.PUT("/api/tools/campaigns/draft", { body })),
+  });
+}
+
+export function useDeleteCampaignDraft() {
+  return useMutation({
+    mutationFn: (expectedRevision: number) =>
+      noContentOrThrow(
+        generatedFetchApi.DELETE("/api/tools/campaigns/draft", {
+          params: { query: { expected_revision: expectedRevision } },
+        }),
+      ),
+  });
 }
 
 export function useAdAccountContext() {

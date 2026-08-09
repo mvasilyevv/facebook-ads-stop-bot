@@ -68,6 +68,7 @@ from apps.api.routers.v1.schemas.campaigns_create import (
     ValidatePlanOut,
 )
 from apps.api.schemas.problem import ApiProblem
+from core.ad_account_catalog import ad_account_catalog
 from core.campaign_builder.account_context import (
     CampaignAccountContext,
     CampaignAccountContextError,
@@ -79,6 +80,14 @@ from core.campaign_builder.creative_ledger import (
     allocate_code_span,
     peek_next_seq,
     reconcile_offer_seq,
+)
+from core.campaign_drafts import (
+    CampaignDraftConflictError,
+    CampaignDraftDocument,
+    CampaignDraftEnvelope,
+    CampaignDraftPutIn,
+    CampaignDraftTooLargeError,
+    campaign_drafts,
 )
 from core.commands import (
     CampaignRunControlUnavailableError,
@@ -244,7 +253,7 @@ async def _require_offer_scope(
                 await conn.execute(
                     text(
                         """
-                    SELECT offer.ad_account_ids,
+                    SELECT offer.id,
                            rule.cpa_threshold,
                            rule.currency
                     FROM offers AS offer
@@ -259,15 +268,17 @@ async def _require_offer_scope(
             .mappings()
             .first()
         )
+        account_is_configured = False
+        if row is not None:
+            account_is_configured = await ad_account_catalog.offer_has_account(
+                conn,
+                offer_id=row["id"],
+                account_id=account_context.account_id,
+            )
     if row is None:
         return
 
-    configured_accounts = {
-        str(value or "").strip().removeprefix("act_")
-        for value in (row["ad_account_ids"] or [])
-        if str(value or "").strip()
-    }
-    if configured_accounts and account_context.account_id not in configured_accounts:
+    if not account_is_configured:
         raise HTTPException(
             status_code=409,
             detail="Выбранный кабинет не привязан к офферу",
@@ -308,6 +319,12 @@ async def _campaign_config_from_request(
         )
         raise HTTPException(status_code=status_code, detail=message) from exc
 
+    if context.currency != "USD" or context.currency_exponent != 2:
+        raise HTTPException(
+            status_code=409,
+            detail="Создание кампаний доступно только для кабинета с подтверждённой валютой USD",
+        )
+
     await _require_offer_scope(
         engine,
         offer_code=body.config.offer_code,
@@ -321,6 +338,77 @@ async def _campaign_config_from_request(
         currency=context.currency,
         account_context_observed_at=context.observed_at,
     )
+
+
+# ─────────────────────────────── owner draft ────────────────────────────────
+
+
+def _raise_draft_conflict(exc: CampaignDraftConflictError) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Черновик изменился в другой сессии; загрузите актуальную версию",
+    ) from exc
+
+
+@router.get(
+    "/tools/campaigns/draft",
+    response_model=CampaignDraftEnvelope,
+    responses={403: {"model": ApiProblem}, 409: {"model": ApiProblem}},
+)
+async def get_campaign_draft(response: Response, engine: DepEngine) -> CampaignDraftEnvelope:
+    """Return the one owner draft; absence is an explicit null document."""
+
+    response.headers["Cache-Control"] = "no-store"
+    async with engine.connect() as conn:
+        draft = await campaign_drafts.load(conn)
+    return CampaignDraftEnvelope(draft=draft)
+
+
+@router.put(
+    "/tools/campaigns/draft",
+    response_model=CampaignDraftDocument,
+    responses={403: {"model": ApiProblem}, 409: {"model": ApiProblem}},
+)
+async def put_campaign_draft(
+    body: CampaignDraftPutIn,
+    response: Response,
+    engine: DepEngine,
+) -> CampaignDraftDocument:
+    """Create or update the owner draft with optimistic revision CAS."""
+
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        async with engine.begin() as conn:
+            return await campaign_drafts.save(
+                conn,
+                expected_revision=body.expected_revision,
+                state=body.state,
+            )
+    except CampaignDraftConflictError as exc:
+        _raise_draft_conflict(exc)
+    except CampaignDraftTooLargeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Черновик превышает допустимый размер",
+        ) from exc
+
+
+@router.delete(
+    "/tools/campaigns/draft",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={403: {"model": ApiProblem}, 409: {"model": ApiProblem}},
+)
+async def delete_campaign_draft(
+    engine: DepEngine,
+    expected_revision: int = Query(ge=0),
+) -> None:
+    """Delete only the exact owner draft revision."""
+
+    try:
+        async with engine.begin() as conn:
+            await campaign_drafts.delete(conn, expected_revision=expected_revision)
+    except CampaignDraftConflictError as exc:
+        _raise_draft_conflict(exc)
 
 
 # ─────────────────────────────── presets ────────────────────────────────
@@ -687,12 +775,16 @@ async def validate_config(body: ValidateIn, engine: DepEngine) -> ValidatePlanOu
 # ─────────────────────────────── launch ────────────────────────────────
 
 
-@router.post("/tools/campaigns/launch", response_model=LaunchOut, status_code=201)
+@router.post(
+    "/tools/campaigns/launch",
+    response_model=LaunchOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
     """Создать campaign_run(queued) + task_queue(campaign_create) в одной транзакции.
 
     Money-safety: idempotency_key (по конфигу) общий для run и задачи. Повторный
-    launch того же конфига → находим существующий run, ничего не дублируем (200-shape).
+    launch того же конфига → находим существующий run, ничего не дублируем (202-shape).
     Воркер по run_id грузит CampaignRun и исполняет залив.
     """
     # Нормализуем канонический плоский вход в доменный CampaignConfig.
@@ -762,12 +854,17 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
                     {"ik": ikey, "tt": CAMPAIGN_TASK_TYPE},
                 )
             ).first()
+            draft_cleared = await campaign_drafts.clear_if_revision(
+                conn,
+                revision=body.draft_revision,
+            )
             logger.info("campaign launch idempotent: run_id=%s ikey=%s", existing.id, ikey)
             return LaunchOut(
                 run_id=existing.id,
                 task_id=int(task_row.id) if task_row else None,
                 status=existing.status,
                 idempotency_key=ikey,
+                draft_cleared=draft_cleared,
             )
 
         run_id = run_row.id
@@ -824,12 +921,21 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
             ).first()
             task_id = int(existing_task.id) if existing_task else None
 
+        # A queued response is not Meta success.  It is nevertheless safe to
+        # clear this exact revision now: campaign_run contains the immutable
+        # canonical config and the worker task is committed in this transaction.
+        draft_cleared = await campaign_drafts.clear_if_revision(
+            conn,
+            revision=body.draft_revision,
+        )
+
     logger.info("campaign launch: run_id=%s task_id=%s ikey=%s", run_id, task_id, ikey)
     return LaunchOut(
         run_id=run_id,
         task_id=task_id,
         status="queued",
         idempotency_key=ikey,
+        draft_cleared=draft_cleared,
     )
 
 

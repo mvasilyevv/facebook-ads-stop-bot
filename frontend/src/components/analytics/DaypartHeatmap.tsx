@@ -1,13 +1,19 @@
 import { useMemo, useState, type KeyboardEvent } from "react";
 
+import {
+  ANALYTICS_WEEKDAYS,
+  daypartCellMap,
+  daypartMetricValue,
+  type DaypartMetric,
+} from "@fb/shared/analytics/chartModel";
 import type { AnalyticsDaypart } from "@fb/shared";
 import type { DataState } from "@fb/shared/operator/contracts";
 import { inheritAnalyticsState } from "@fb/shared/analytics/state";
 import { AccessibleChartFrame } from "@fb/operator-ui";
 
-type Metric = "clicks" | "registrations" | "ftds";
+type Metric = DaypartMetric;
 
-const DAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+const DAYS = ANALYTICS_WEEKDAYS.map((day) => day.short);
 const LABELS: Record<Metric, string> = {
   clicks: "Клики",
   registrations: "Регистрации",
@@ -30,10 +36,7 @@ export function DaypartHeatmap({
     () => (completeness === "unavailable" ? [] : data.cells),
     [completeness, data.cells],
   );
-  const map = useMemo(
-    () => new Map(visibleCells.map((cell) => [`${cell.weekday}:${cell.hour}`, cell])),
-    [visibleCells],
-  );
+  const map = useMemo(() => daypartCellMap(visibleCells), [visibleCells]);
   const values = visibleCells
     .map((cell) => cell[metric])
     .filter((value): value is number => value !== null && Number.isFinite(value));
@@ -108,7 +111,7 @@ export function DaypartHeatmap({
             weekday={selectedDay}
             day={DAYS[selectedDay - 1] ?? "День"}
             hour={hour}
-            value={cellValue(map, selectedDay, hour, metric)}
+            value={daypartMetricValue(map, selectedDay, hour, metric)}
             metric={metric}
             max={max}
             onInspect={setActiveCell}
@@ -236,7 +239,7 @@ function DayRow({
           weekday={weekday}
           day={day}
           hour={hour}
-          value={cellValue(cells, weekday, hour, metric)}
+          value={daypartMetricValue(cells, weekday, hour, metric)}
           metric={metric}
           max={max}
           onInspect={onInspect}
@@ -330,18 +333,6 @@ function moveCellFocus(
   if (!target || target === event.currentTarget) return;
   event.preventDefault();
   target.focus();
-}
-
-function cellValue(
-  cells: Map<string, AnalyticsDaypart["cells"][number]>,
-  weekday: number,
-  hour: number,
-  metric: Metric,
-): number | null {
-  const cell = cells.get(`${weekday}:${hour}`);
-  if (!cell) return null;
-  const value = cell[metric];
-  return value !== null && Number.isFinite(value) ? value : null;
 }
 
 function hourLabel(hour: number): string {

@@ -325,6 +325,13 @@ function MiniAttentionLedger({
           ))}
         </ol>
       )}
+      <Link
+        to="/incidents"
+        className="mini-ledger__inline-action mx-4 min-h-11"
+      >
+        Все инциденты
+        <ArrowRight size={14} aria-hidden="true" />
+      </Link>
     </MiniLedgerSection>
   );
 }

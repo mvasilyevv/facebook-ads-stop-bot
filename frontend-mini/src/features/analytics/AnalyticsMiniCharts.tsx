@@ -1,8 +1,12 @@
+import { useState } from "react";
 import type {
   AnalyticsLiveBudgetSeries,
   AnalyticsPerformance,
 } from "@fb/shared";
-import { formatSpendPerUnit } from "@fb/shared/format/number";
+import {
+  buildAnalyticsFunnelModel,
+  type AnalyticsFunnelStageModel,
+} from "@fb/shared/analytics/chartModel";
 import type {
   DataState,
   OperatorEconomyData,
@@ -72,36 +76,17 @@ export function FunnelSummary({
   currency,
 }: FunnelSummaryProps) {
   const totals = performance.totals;
-  const rawStages = [
-    { key: "clicks" as const, label: "Клики", count: totals.clicks },
-    {
-      key: "registrations" as const,
-      label: "Регистрации",
-      count: totals.registrations,
-    },
-    { key: "ftd" as const, label: "FTD", count: totals.ftds },
-    {
-      key: "confirmed_deposits" as const,
-      label: "Подтверждённые депозиты",
-      count: totals.confirmed_deposits,
-    },
-  ];
-  const stages = rawStages.map((stage, index) => {
-    const previous = rawStages[index - 1]?.count ?? null;
-    return {
-      ...stage,
-      conversion:
-        previous != null && previous > 0 && stage.count != null
-          ? ((stage.count / previous) * 100).toFixed(2)
-          : null,
-      cost: formatSpendPerUnit(totals.spend, stage.count, currency),
-    };
-  });
-  const known = stages.flatMap((stage) =>
-    stage.count == null ? [] : [stage.count],
-  );
-  const max = Math.max(...known, 1);
   const valuesVisible = completeness !== "unavailable";
+  const stages = buildAnalyticsFunnelModel(
+    {
+      spend: valuesVisible ? totals.spend : null,
+      clicks: valuesVisible ? totals.clicks : null,
+      registrations: valuesVisible ? totals.registrations : null,
+      ftds: valuesVisible ? totals.ftds : null,
+      confirmed_deposits: valuesVisible ? totals.confirmed_deposits : null,
+    },
+    currency === "USD" ? "USD" : null,
+  );
   const summary = valuesVisible
     ? stages
         .map((stage) => `${stage.label}: ${formatCount(stage.count)}`)
@@ -117,43 +102,7 @@ export function FunnelSummary({
         asOf={performance.as_of}
         sources={sourceLabels(completeness)}
         completeness={completeness}
-        chart={
-          <ol className="grid gap-3" aria-label="Этапы воронки">
-            {stages.map((stage) => (
-              <li
-                key={stage.key}
-                className="grid grid-cols-[minmax(96px,1fr)_minmax(72px,1.5fr)_auto] items-center gap-x-2 gap-y-1"
-              >
-                <span className="text-[13px] leading-5 text-bg-9">
-                  {stage.label}
-                </span>
-                <span
-                  className="h-5 overflow-hidden rounded-[var(--radius-1)] bg-bg-2"
-                  aria-hidden="true"
-                >
-                  {valuesVisible && stage.count != null ? (
-                    <span
-                      className="block h-full rounded-[var(--radius-1)] bg-accent"
-                      style={{
-                        width: `${Math.max((stage.count / max) * 100, stage.count ? 2 : 0)}%`,
-                      }}
-                    />
-                  ) : null}
-                </span>
-                <span className="min-w-11 text-right font-display text-[14px] tabular-nums text-bg-11">
-                  {valuesVisible ? formatCount(stage.count) : "—"}
-                </span>
-                <span className="col-span-2 col-start-2 min-w-0 text-right text-[12px] leading-4 tabular-nums text-bg-9">
-                  CR{" "}
-                  {valuesVisible && stage.conversion != null
-                    ? `${stage.conversion}%`
-                    : "—"}{" "}
-                  · стоимость {valuesVisible ? stage.cost : "—"}
-                </span>
-              </li>
-            ))}
-          </ol>
-        }
+        chart={<MiniFunnelPlot stages={stages} valuesVisible={valuesVisible} />}
         table={
           <table>
             <caption className="sr-only">
@@ -174,7 +123,7 @@ export function FunnelSummary({
                   <td>{valuesVisible ? formatCount(stage.count) : "—"}</td>
                   <td>
                     {valuesVisible && stage.conversion != null
-                      ? `${stage.conversion}%`
+                      ? `${stage.conversion.toFixed(2)}%`
                       : "—"}
                   </td>
                   <td>{valuesVisible ? stage.cost : "—"}</td>
@@ -185,6 +134,97 @@ export function FunnelSummary({
         }
       />
     </Card>
+  );
+}
+
+function MiniFunnelPlot({
+  stages,
+  valuesVisible,
+}: {
+  stages: AnalyticsFunnelStageModel[];
+  valuesVisible: boolean;
+}) {
+  const [selected, setSelected] = useState(0);
+  const maximum = Math.max(
+    ...stages.flatMap((stage) => (stage.count === null ? [] : [stage.count])),
+    1,
+  );
+  const active = stages[selected] ?? null;
+  return (
+    <div className="grid gap-3">
+      <svg
+        viewBox="0 0 360 112"
+        className="block h-auto w-full"
+        role="img"
+        aria-label="Сравнение этапов воронки по общей шкале"
+      >
+        {stages.map((stage, index) => {
+          const y = 8 + index * 27;
+          const width =
+            stage.count === null
+              ? 0
+              : Math.max((stage.count / maximum) * 336, stage.count ? 4 : 2);
+          return stage.count === null ? (
+            <rect
+              key={stage.key}
+              x="12"
+              y={y}
+              width="336"
+              height="16"
+              rx="2"
+              fill="transparent"
+              stroke="var(--color-bg-8)"
+              strokeDasharray="3 3"
+            />
+          ) : (
+            <rect
+              key={stage.key}
+              x="12"
+              y={y}
+              width={width}
+              height="16"
+              rx="2"
+              fill="var(--color-accent)"
+              opacity={selected === index ? 1 : 0.72}
+            />
+          );
+        })}
+      </svg>
+      <div
+        role="status"
+        aria-live="polite"
+        className="min-h-11 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 px-3 py-2 text-[12px] leading-5 text-bg-9"
+      >
+        {active
+          ? `${active.label}: ${formatCount(active.count)} · CR ${active.conversion === null ? "—" : `${active.conversion.toFixed(2)}%`} · стоимость ${active.cost}`
+          : "Выберите этап воронки."}
+      </div>
+      <ol className="grid gap-1" aria-label="Этапы воронки">
+        {stages.map((stage, index) => (
+          <li key={stage.key}>
+            <button
+              type="button"
+              onFocus={() => setSelected(index)}
+              onPointerDown={() => setSelected(index)}
+              onClick={() => setSelected(index)}
+              className="grid min-h-11 w-full grid-cols-[minmax(100px,1fr)_auto] items-center gap-x-3 rounded-[var(--radius-2)] px-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <span className="text-[13px] text-bg-9">{stage.label}</span>
+              <strong className="font-display text-[14px] tabular-nums text-bg-11">
+                {valuesVisible ? formatCount(stage.count) : "—"}
+              </strong>
+              <span className="col-span-2 text-right text-[12px] tabular-nums text-bg-9">
+                CR{" "}
+                {valuesVisible && stage.conversion !== null
+                  ? `${stage.conversion.toFixed(2)}%`
+                  : "—"}{" "}
+                · стоимость {valuesVisible ? stage.cost : "—"}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 

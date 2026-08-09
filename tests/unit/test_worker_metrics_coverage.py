@@ -91,9 +91,7 @@ def test_alerts_fail_unknown_when_expected_series_disappear() -> None:
         "cleanup",
         "reconciler",
         "health_watchdog",
-        "enable_reco",
         "digest_scheduler",
-        "cabinet_scheduler",
         "tracker_reconciliation_worker",
         "campaign_creator",
     }

@@ -150,8 +150,19 @@ async def test_create_offer_happy_path(pg_engine, fake_redis_client, clean_offer
 
     # Проверяем в БД
     async with pg_engine.connect() as conn:
-        row = await conn.execute(text("SELECT code FROM offers WHERE code = 'TST_NEW'"))
-        assert row.scalar_one() == "TST_NEW"
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT offer.code, link.account_id
+                    FROM offers AS offer
+                    JOIN offer_ad_accounts AS link ON link.offer_id = offer.id
+                    WHERE offer.code = 'TST_NEW'
+                    """
+                )
+            )
+        ).one()
+        assert row == ("TST_NEW", "111222333")
 
 
 # Дубликат code должен возвращать 409 Conflict.
@@ -250,6 +261,55 @@ async def test_update_offer_happy_path(pg_engine, fake_redis_client, clean_offer
     assert data["name"] == "UPD_TST"  # PUT не обновляет name — всегда = code
     assert data["vertical"] == "betting"
     assert data["code"] == "UPD_TST"  # code не изменился
+
+
+@pytest.mark.asyncio
+async def test_offer_api_round_trips_and_replaces_normalized_accounts_atomically(
+    pg_engine,
+    fake_redis_client,
+    clean_offers,
+) -> None:
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        created = await ac.post(
+            "/api/offers",
+            json={"code": "ACCOUNT_REPLACE", "ad_account_ids": ["222", "111"]},
+        )
+        assert created.status_code == 201
+        offer_id = created.json()["id"]
+        assert created.json()["ad_account_ids"] == ["111", "222"]
+
+        updated = await ac.put(
+            f"/api/offers/{offer_id}",
+            json={"vertical": "casino", "ad_account_ids": ["333", "111", "333"]},
+        )
+        listed = await ac.get("/api/offers")
+
+    assert updated.status_code == 200
+    assert updated.json()["vertical"] == "casino"
+    assert updated.json()["ad_account_ids"] == ["111", "333"]
+    listed_offer = next(item for item in listed.json() if item["id"] == offer_id)
+    assert listed_offer["ad_account_ids"] == ["111", "333"]
+
+    async with pg_engine.connect() as conn:
+        persisted = (
+            (
+                await conn.execute(
+                    text(
+                        """
+                    SELECT link.account_id
+                    FROM offer_ad_accounts AS link
+                    WHERE link.offer_id = :offer_id
+                    ORDER BY link.account_id
+                    """
+                    ),
+                    {"offer_id": uuid.UUID(offer_id)},
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert persisted == ["111", "333"]
 
 
 # PUT несуществующего оффера → 404.

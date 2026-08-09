@@ -440,8 +440,7 @@ render_desktop_env() {
   python3 "$SCRIPT_DIR/prepare_production_env.py" \
     --input "$input" \
     --output "$output" \
-    --desktop-webtop-image "$(dotenv_value "$manifest" DESKTOP_WEBTOP_IMAGE)" \
-    --desktop-kasmvnc-image "$(dotenv_value "$manifest" DESKTOP_KASMVNC_IMAGE)"
+    --desktop-webtop-image "$(dotenv_value "$manifest" DESKTOP_WEBTOP_IMAGE)"
 }
 
 install_desktop_units() {
@@ -716,7 +715,7 @@ for file in "$RELEASE_ENV" "$APP_ENV" "$COMPOSE_FILE"; do
 done
 [[ "$(stat -Lc '%a' "$RELEASE_ENV")" == "600" ]] || die "$RELEASE_ENV must have mode 600"
 [[ "$(stat -Lc '%a' "$APP_ENV")" == "600" ]] || die "$APP_ENV must have mode 600"
-for key in BROWSER_AGENT_IMAGE DESKTOP_WEBTOP_IMAGE DESKTOP_KASMVNC_IMAGE; do
+for key in BROWSER_AGENT_IMAGE DESKTOP_WEBTOP_IMAGE; do
   validate_image "$RELEASE_ENV" "$key"
 done
 release_id="$(dotenv_value "$RELEASE_ENV" RELEASE_ID)"
@@ -749,7 +748,7 @@ if [[ -e "$ACTIVE_DESKTOP_STATE" || -L "$ACTIVE_DESKTOP_STATE" ]]; then
   PREVIOUS_MANIFEST="$PREVIOUS_STATE/release-images.env"
   PREVIOUS_APP_ENV="$PREVIOUS_STATE/app.env"
   PREVIOUS_RELEASE_DIR="$(readlink -f "$PREVIOUS_STATE/release")"
-  for key in BROWSER_AGENT_IMAGE DESKTOP_WEBTOP_IMAGE DESKTOP_KASMVNC_IMAGE; do
+  for key in BROWSER_AGENT_IMAGE DESKTOP_WEBTOP_IMAGE; do
     validate_image "$PREVIOUS_MANIFEST" "$key"
   done
   previous_release_id="$(dotenv_value "$PREVIOUS_MANIFEST" RELEASE_ID)"
@@ -808,8 +807,6 @@ if [[ "$PREFLIGHT_ONLY" == true ]]; then
   run_browser_compose "$PROJECT_DIR" "$RELEASE_ENV" "$APP_ENV" pull browser-agent
   run_before_deadline "desktop_webtop_pull" \
     docker pull "$(dotenv_value "$RELEASE_ENV" DESKTOP_WEBTOP_IMAGE)"
-  run_before_deadline "desktop_kasmvnc_pull" \
-    docker pull "$(dotenv_value "$RELEASE_ENV" DESKTOP_KASMVNC_IMAGE)"
   if [[ -z "$PREVIOUS_STATE" ]]; then
     "$SCRIPT_DIR/install-vision-webtop.sh" \
       --profile-seed-dir "$PROFILE_SEED_DIR" \
@@ -865,7 +862,7 @@ case "$pending_desktop_transaction" in
       PREVIOUS_MANIFEST="$PREVIOUS_STATE/release-images.env"
       PREVIOUS_APP_ENV="$PREVIOUS_STATE/app.env"
       PREVIOUS_RELEASE_DIR="$(readlink -f "$PREVIOUS_STATE/release")"
-      for key in BROWSER_AGENT_IMAGE DESKTOP_WEBTOP_IMAGE DESKTOP_KASMVNC_IMAGE; do
+      for key in BROWSER_AGENT_IMAGE DESKTOP_WEBTOP_IMAGE; do
         validate_image "$PREVIOUS_MANIFEST" "$key"
       done
       previous_release_id="$(dotenv_value "$PREVIOUS_MANIFEST" RELEASE_ID)"
@@ -984,7 +981,7 @@ rollback() {
     fi
   fi
   if [[ -n "$PREVIOUS_MANIFEST" ]]; then
-    log "restoring the previous Vision/Kasm/browser-agent image set"
+    log "restoring the previous Vision desktop/browser-agent image set"
     if [[ "$rollback_failed" == false ]]; then
       run_before_deadline "previous_vision_restore" env \
         FB_AGENT_VISION_RELEASE_ID="$previous_release_id" \

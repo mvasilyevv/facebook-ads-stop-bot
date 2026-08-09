@@ -15,7 +15,6 @@ import { useState } from "react";
 const mockObserverData = {
   is_scanning_enabled: true,
   default_interval_seconds: 60,
-  auto_enable_recommendations: false,
   owner_campaign_tag: "MV",
   act_via_api: true,
   campaign_ids: [],
@@ -25,9 +24,9 @@ const mockObserverData = {
   cpr_warning_percent: null,
 };
 
-const mockUpdateObserver = vi.fn().mockResolvedValue(mockObserverData);
 const mockToggleScanning = vi.fn().mockResolvedValue(mockObserverData);
-const mockToggleAutoEnable = vi.fn().mockResolvedValue(mockObserverData);
+const mockUpdateObserverInterval = vi.fn().mockResolvedValue(mockObserverData);
+const mockScanNow = vi.fn().mockResolvedValue({ status: "queued" });
 const mockCreateOwnerInvite = vi.fn().mockResolvedValue({
   code: "OWNER123",
   expires_at: "2026-07-17T08:00:00Z",
@@ -43,21 +42,29 @@ vi.mock("@/lib/api/settings", () => ({
     error: null,
     refetch: vi.fn(),
   }),
-  useUpdateObserverSettings: () => ({
-    mutateAsync: mockUpdateObserver,
-    isPending: false,
-  }),
   useToggleScanning: () => ({
     mutateAsync: mockToggleScanning,
     isPending: false,
   }),
-  useToggleAutoEnable: () => ({
-    mutateAsync: mockToggleAutoEnable,
+  useUpdateObserverInterval: () => ({
+    mutateAsync: mockUpdateObserverInterval,
     isPending: false,
   }),
-  useAutoEnableExclusions: () => ({ data: [], isLoading: false, error: null }),
-  useRemoveAutoEnableExclusion: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useObserverCampaigns: () => ({ data: [], isLoading: false }),
+  useUpdateOwnerTag: () => ({
+    mutateAsync: vi.fn().mockResolvedValue(mockObserverData),
+    isPending: false,
+  }),
+  useScanObserverNow: () => ({
+    mutateAsync: mockScanNow,
+    isPending: false,
+  }),
+  useObserverCampaigns: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
   useRefreshObserverCampaigns: () => ({
     mutateAsync: vi.fn().mockResolvedValue([]),
     isPending: false,
@@ -107,6 +114,36 @@ vi.mock("@/lib/api/settings", () => ({
     isPending: false,
   }),
   useDeleteTelegramToken: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({}),
+    isPending: false,
+  }),
+  useUpdateTelegramWebAppUrl: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({}),
+    isPending: false,
+  }),
+  useTelegramRecipients: () => ({
+    data: { recipients: [], total: 0 },
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+  useCreateTelegramRecipientInvite: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({}),
+    isPending: false,
+  }),
+  useTelegramRecipientPreferences: () => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+  useUpdateTelegramRecipientPreferences: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({}),
+    isPending: false,
+  }),
+  useDeleteTelegramRecipient: () => ({
     mutateAsync: vi.fn().mockResolvedValue({}),
     isPending: false,
   }),
@@ -203,24 +240,39 @@ describe("ObserverTab", () => {
   // Отображает switch сканирования
   it("рендерит switch сканирования", () => {
     render(wrap(<ObserverTab />));
-    expect(screen.getByRole("switch", { name: "Включить сканирование" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", { name: "Остановить периодическое сканирование" }),
+    ).toBeInTheDocument();
   });
 
   // Switch в положении ON когда is_scanning_enabled=true
   it("switch ON когда is_scanning_enabled=true", () => {
     render(wrap(<ObserverTab />));
-    expect(screen.getByRole("switch", { name: "Включить сканирование" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    expect(
+      screen.getByRole("switch", { name: "Остановить периодическое сканирование" }),
+    ).toHaveAttribute("aria-checked", "true");
   });
 
   // Клик на switch вызывает точечный PATCH useToggleScanning (не partial PUT — фикс бага 422)
   it("клик toggle вызывает useToggleScanning с новым значением", async () => {
     const user = userEvent.setup();
     render(wrap(<ObserverTab />));
-    await user.click(screen.getByRole("switch", { name: "Включить сканирование" }));
+    await user.click(screen.getByRole("switch", { name: "Остановить периодическое сканирование" }));
     expect(mockToggleScanning).toHaveBeenCalledWith(false);
+  });
+
+  it("валидирует интервал и показывает честный queued scan lifecycle", async () => {
+    const user = userEvent.setup();
+    render(wrap(<ObserverTab />));
+
+    await user.click(screen.getByRole("button", { name: /поставить scan в очередь/i }));
+    expect(mockScanNow).toHaveBeenCalledTimes(1);
+
+    await user.clear(screen.getByLabelText("Интервал сканирования в секундах"));
+    await user.type(screen.getByLabelText("Интервал сканирования в секундах"), "20");
+    await user.click(screen.getByRole("button", { name: "Сохранить интервал" }));
+    expect(screen.getByText(/от 30 до 600 секунд/i)).toBeInTheDocument();
+    expect(mockUpdateObserverInterval).not.toHaveBeenCalled();
   });
 
   // owner tag и «Сканировать сейчас» вынесены: owner tag → страница «Кампании»,
@@ -264,5 +316,12 @@ describe("TelegramTab", () => {
   it("поле Bot Token присутствует", () => {
     render(wrap(<TelegramTab />));
     expect(screen.getByLabelText("Bot Token")).toBeInTheDocument();
+  });
+
+  it("показывает Mini App и управление получателями без desktop-only разрыва", () => {
+    render(wrap(<TelegramTab />));
+    expect(screen.getByLabelText("HTTPS URL")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Пригласить получателя" })).toBeInTheDocument();
+    expect(screen.queryByText(/только в web/i)).not.toBeInTheDocument();
   });
 });

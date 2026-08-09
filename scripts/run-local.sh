@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Локальный DEV-профиль FB Stop Bot — изолирован от боевого сервера.
+# Локальный DEV-профиль FB Agent — изолирован от боевого сервера.
 #
 # Поднимает ТОЛЬКО безопасный набор: postgres + api + Telegram outbox workers
 # и опциональный Redis для несafety-функций
 # (под ТЕСТОВЫМ ботом). Webhook требует отдельный HTTPS tunnel/configurator.
 # НЕ запускает observer (сканирование), meta_api (мутации),
-# cabinet_scheduler (автостарт), Vision/browser-agent — никаких действий с боевой
+# Vision/browser-agent — никаких действий с боевой
 # рекламой физически невозможно.
 #
 # Перед запуском: cp .env.local.example .env → заполни одноразовый migrator input
@@ -67,7 +67,7 @@ echo "✅ Локальный dev-стек поднят."
 echo "   API:            http://localhost:8100  (/healthz, /readyz)"
 echo "   Запущено:       postgres, api, Telegram delivery/update workers"
 echo "   Опционально:    redis (его недоступность не блокирует control/notification planes)"
-echo "   НЕ запущено:    observer/сканирование, meta_api/мутации, cabinet_scheduler,"
+echo "   НЕ запущено:    observer/сканирование, meta_api/мутации,"
 echo "                   Vision/browser-agent — боевые действия с рекламой невозможны."
 echo "   Сканирование:   выключено (is_scanning_enabled=false по умолчанию)."
 echo ""

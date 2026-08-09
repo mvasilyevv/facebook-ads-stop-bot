@@ -78,7 +78,6 @@ def test_default_policy_keys() -> None:
         "task_queue_failed",
         "adset_duplicate_previews_expired",
         "browser_operation_capabilities_expired",
-        "enable_recommendations",
         "telegram_invites_expired",
         "operator_revision_events",
         "incidents_terminal",

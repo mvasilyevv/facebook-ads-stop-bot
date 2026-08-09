@@ -6,6 +6,7 @@
  */
 
 import { type FC } from "react";
+import { nextCampaignKey, validateCampaignStructure } from "@fb/features/campaigns";
 import { Trash2, Plus, Minus, Layers } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -17,11 +18,6 @@ interface WizardStep4StructureProps {
   errors?: string;
 }
 
-/** Генерирует уникальный key для новой кампании. */
-function genKey(campaigns: CampaignStructure[]): string {
-  return `camp${campaigns.length + 1}`;
-}
-
 export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
   campaigns,
   onChange,
@@ -30,8 +26,8 @@ export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
   const totalAdsets = campaigns.reduce((sum, c) => sum + c.adset_count, 0);
 
   const addCampaign = () => {
-    const key = genKey(campaigns);
-    onChange([...campaigns, { key, adset_count: 3, concept_refs: [] }]);
+    const key = nextCampaignKey(campaigns);
+    onChange([...campaigns, { key, adset_count: 3 }]);
   };
 
   const removeCampaign = (idx: number) => {
@@ -208,7 +204,5 @@ const CampaignRow: FC<CampaignRowProps> = ({ campaign, index, onUpdate, onRemove
 // ─── Валидация ────────────────────────────────────────────────────────────────
 
 export function validateStructure(campaigns: CampaignStructure[]): string | null {
-  if (campaigns.length === 0) return "Добавьте хотя бы одну кампанию";
-  if (campaigns.some((c) => c.adset_count < 1)) return "Число adset'ов должно быть ≥ 1";
-  return null;
+  return validateCampaignStructure(campaigns);
 }

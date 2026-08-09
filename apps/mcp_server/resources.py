@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MCP Resources — JSON-снимки текущего состояния FB Stop Bot.
+"""MCP Resources — JSON-снимки текущего состояния FB Agent.
 
 В отличие от tools (которые делают что-то), resources — read-only снимки,
 которые LLM может прочитать перед формулировкой ответа. Claude Desktop
@@ -22,6 +22,7 @@ from mcp import types
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from sqlalchemy import text
 
+from core.ad_account_catalog import ad_account_catalog
 from core.ai_assistant.tools import GLOBAL_REGISTRY
 from core.ai_assistant.tools.base import RiskLevel
 
@@ -86,26 +87,34 @@ async def _read_offers(ctx_mgr: "MCPContextManager") -> str:
         return json.dumps({"error": "engine_unavailable"}, ensure_ascii=False)
     async with ctx_mgr.engine.connect() as conn:
         rows = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT code, name, vertical, is_active, ad_account_ids
+            (
+                await conn.execute(
+                    text(
+                        """
+                    SELECT id, code, name, vertical, is_active
                     FROM offers
                     ORDER BY code
                     """
+                    )
                 )
             )
-        ).all()
+            .mappings()
+            .all()
+        )
+        account_ids_by_offer = await ad_account_catalog.list_by_offer(
+            conn,
+            offer_ids=(row["id"] for row in rows),
+        )
 
     items = [
         {
-            "code": row[0],
-            "name": row[1],
-            "vertical": row[2],
-            "is_active": bool(row[3]),
+            "code": row["code"],
+            "name": row["name"],
+            "vertical": row["vertical"],
+            "is_active": bool(row["is_active"]),
             # Мульти-кабинет: в каких кабинетах живёт оффер. Пустой список у
             # активного оффера = оффер НЕ сканируется (стоит сказать пользователю).
-            "ad_account_ids": list(row[4] or []),
+            "ad_account_ids": account_ids_by_offer.get(row["id"], []),
         }
         for row in rows
     ]
@@ -184,7 +193,7 @@ def _render_schema_overview() -> str:
     tools строится динамически из GLOBAL_REGISTRY — не устаревает.
     """
     lines: list[str] = [
-        "# FB Stop Bot — MCP tools",
+        "# FB Agent — MCP tools",
         "",
         "MCP-сервер бота мониторинга Facebook Ads. Бот сканирует объявления "
         "(через anti-detect браузер), оценивает стоп-правила (CPA/CPM/CTR/frequency/"
@@ -197,7 +206,7 @@ def _render_schema_overview() -> str:
         "- **Оффер** — рекламируемый продукт; матчится с кампаниями по вхождению "
         "кода (напр. `DRC_CR2`) в название кампании/объявления. Гео обычно "
         "закодировано в коде оффера.",
-        "- **Мульти-кабинет**: у каждого оффера список `ad_account_ids` — кабинеты, "
+        "- **Мульти-кабинет**: ресурс проецирует связи оффера как `ad_account_ids` — кабинеты, "
         "которые сканируются. Активный оффер с ПУСТЫМ списком не сканируется вовсе "
         "— это стоит подсветить пользователю как проблему.",
         "- **FSM объявления**: normal → warning_sent (80% порога) → stop_sent → "

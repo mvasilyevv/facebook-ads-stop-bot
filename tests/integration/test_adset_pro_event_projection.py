@@ -39,8 +39,8 @@ async def clean_event_projection(pg_engine):
             )
             await conn.execute(
                 text(
-                    "DELETE FROM task_queue WHERE idempotency_key LIKE 'auto-open-%' "
-                    "OR idempotency_key LIKE 'auto-started-%' "
+                    "DELETE FROM task_queue WHERE idempotency_key LIKE 'autopause-open-%' "
+                    "OR idempotency_key LIKE 'autopause-started-%' "
                     "OR idempotency_key LIKE 'auto-shadow-%' "
                     "OR idempotency_key LIKE 'manual-open-%'"
                 )
@@ -399,8 +399,8 @@ async def test_positive_event_cancels_only_unstarted_automatic_pause(
             {"ad_id": fb_ad_fixture.ad_id, "cycle_ts": now},
         )
         for key, requested_by, status_value, external_started in (
-            ("auto-open", "bot_auto_stop", "pending", None),
-            ("auto-started", "bot_auto_stop", "running", now),
+            ("autopause-open", "bot_auto_stop", "pending", None),
+            ("autopause-started", "bot_auto_stop", "running", now),
             ("manual-open", "tg:buyer", "pending", None),
         ):
             task_id = await create_task(
@@ -434,8 +434,8 @@ async def test_positive_event_cancels_only_unstarted_automatic_pause(
                 text(
                     """
                     SELECT idempotency_key, status FROM task_queue
-                    WHERE idempotency_key LIKE 'auto-open-%'
-                       OR idempotency_key LIKE 'auto-started-%'
+                    WHERE idempotency_key LIKE 'autopause-open-%'
+                       OR idempotency_key LIKE 'autopause-started-%'
                        OR idempotency_key LIKE 'manual-open-%'
                     """
                 )
@@ -444,8 +444,8 @@ async def test_positive_event_cancels_only_unstarted_automatic_pause(
     statuses = {
         str(row[0]).split("-", 2)[0] + "-" + str(row[0]).split("-", 2)[1]: row[1] for row in rows
     }
-    assert statuses["auto-open"] == "cancelled"
-    assert statuses["auto-started"] == "running"
+    assert statuses["autopause-open"] == "cancelled"
+    assert statuses["autopause-started"] == "running"
     assert statuses["manual-open"] == "pending"
 
 
@@ -466,7 +466,7 @@ async def test_positive_event_cancels_proven_pre_send_retry_before_next_claim(
     task_id = await create_task(
         pg_engine,
         task_type="meta_api_mutation",
-        idempotency_key=f"auto-open-{uuid.uuid4().hex}",
+        idempotency_key=f"autopause-open-{uuid.uuid4().hex}",
         payload=payload,
         requested_by="bot_auto_stop",
         lane="money",

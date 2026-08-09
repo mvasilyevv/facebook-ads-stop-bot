@@ -97,12 +97,20 @@ def _task_item(row: Any) -> dict[str, Any]:
     kind = task_action_kind(str(row.task_type), payload)
     state = task_action_state(str(row.status), result)
     target = row.target_label or payload.get("target_id") or payload.get("ad_id")
+    payload_target_id = payload.get("target_id")
     return {
         "id": str(row.id),
         "public_id": f"#{row.id}",
         "kind": kind,
         "state": state,
         "title": _task_title(kind),
+        "target_id": (
+            str(payload_target_id)
+            if isinstance(payload_target_id, (str, int))
+            and not isinstance(payload_target_id, bool)
+            and str(payload_target_id).strip()
+            else None
+        ),
         "target_label": str(target) if target else None,
         "requested_at": row.created_at,
         "updated_at": row.updated_at,
@@ -348,6 +356,85 @@ async def fetch_operator_incidents(
             )
         ).all()
     return [dict(row._mapping) for row in rows]
+
+
+async def fetch_operator_incident_page(
+    engine: AsyncEngine,
+    *,
+    account_id: str | None,
+    severities: tuple[str, ...] = (),
+    statuses: tuple[str, ...] = (),
+    page: int = 1,
+    page_size: int = 30,
+) -> tuple[list[dict[str, Any]], int]:
+    """Fetch a bounded incident journal with deterministic secondary ordering."""
+
+    safe_page = max(1, int(page))
+    safe_page_size = max(1, min(int(page_size), 100))
+    clauses = ["TRUE"]
+    params: dict[str, Any] = {
+        "limit": safe_page_size,
+        "offset": (safe_page - 1) * safe_page_size,
+    }
+    if account_id:
+        clauses.append("i.ad_account_id = :account_id")
+        params["account_id"] = account_id.removeprefix("act_")
+
+    allowed_severities = tuple(
+        sorted({value for value in severities if value in {"ok", "warning", "critical", "unknown"}})
+    )
+    if allowed_severities:
+        clauses.append("i.severity IN :severities")
+        params["severities"] = allowed_severities
+
+    allowed_statuses = tuple(
+        sorted(
+            {
+                value
+                for value in statuses
+                if value in {"open", "acknowledged", "executing", "resolved", "failed"}
+            }
+        )
+    )
+    if allowed_statuses:
+        clauses.append("i.status IN :statuses")
+        params["statuses"] = allowed_statuses
+
+    where_sql = " AND ".join(clauses)
+    page_stmt = text(
+        f"""
+        SELECT i.id, i.severity, i.status, i.title, i.summary,
+               i.resource_type, i.resource_id, i.opened_at,
+               i.correlation_id, i.facts, i.ad_account_id,
+               CASE WHEN i.resource_type IN ('ad','fb_ad')
+                    THEN a.ad_name ELSE NULL END AS resource_label
+        FROM incidents i
+        LEFT JOIN fb_ads a
+          ON i.resource_type IN ('ad','fb_ad')
+         AND a.fb_ad_id = i.resource_id
+        WHERE {where_sql}
+        ORDER BY
+          CASE i.severity
+            WHEN 'critical' THEN 0
+            WHEN 'warning' THEN 1
+            WHEN 'unknown' THEN 2
+            ELSE 3
+          END,
+          i.opened_at DESC,
+          i.id ASC
+        LIMIT :limit OFFSET :offset
+        """
+    )
+    count_stmt = text(f"SELECT COUNT(*) FROM incidents i WHERE {where_sql}")
+    for key in ("severities", "statuses"):
+        if key in params:
+            page_stmt = page_stmt.bindparams(bindparam(key, expanding=True))
+            count_stmt = count_stmt.bindparams(bindparam(key, expanding=True))
+
+    async with engine.connect() as conn:
+        rows = (await conn.execute(page_stmt, params)).all()
+        total = int((await conn.execute(count_stmt, params)).scalar_one())
+    return [dict(row._mapping) for row in rows], total
 
 
 async def fetch_operator_incident(
@@ -792,6 +879,7 @@ __all__ = [
     "fetch_operator_ads",
     "fetch_operator_events",
     "fetch_operator_incident",
+    "fetch_operator_incident_page",
     "fetch_operator_incidents",
     "fetch_operator_revision",
     "fetch_operator_scan_state",

@@ -194,17 +194,8 @@ async def test_stale_autostop_defers_without_external_call(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("reason", "source_key"),
-    [
-        ("autostart_reconciliation", "supersedes_autostart_task_id"),
-        ("activation_without_grace", "supersedes_activation_task_id"),
-    ],
-)
 async def test_safety_compensation_bypasses_snapshot_freshness_gate(
     monkeypatch,
-    reason: str,
-    source_key: str,
 ) -> None:
     monkeypatch.setattr(meta, "load_owner_tag", AsyncMock(return_value=None))
     monkeypatch.setattr(meta, "load_scanning_enabled", AsyncMock(return_value=True))
@@ -229,8 +220,8 @@ async def test_safety_compensation_bypasses_snapshot_freshness_gate(
                 "target_id": "123",
                 "ad_account_id": "456",
                 "params": {
-                    "safety_compensation": reason,
-                    source_key: 41,
+                    "safety_compensation": "activation_without_grace",
+                    "supersedes_activation_task_id": 41,
                 },
             }
         ),
@@ -269,8 +260,8 @@ async def test_malformed_safety_compensation_cannot_bypass_freshness_gate(
                 "target_id": "123",
                 "ad_account_id": "456",
                 "params": {
-                    "safety_compensation": "autostart_reconciliation",
-                    "supersedes_autostart_task_id": "41",
+                    "safety_compensation": "forged_compensation",
+                    "supersedes_activation_task_id": 41,
                 },
             }
         ),

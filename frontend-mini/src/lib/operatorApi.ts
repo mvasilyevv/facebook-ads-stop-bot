@@ -3,6 +3,7 @@ import type {
   OperatorActionsQuery,
   OperatorAdRow,
   OperatorAdsQuery,
+  OperatorIncidentsQuery,
   OperatorSnapshotQuery,
 } from "@fb/shared/operator/contracts";
 import { actionProjectionFromResponse } from "@fb/shared/operator/viewModel";
@@ -11,6 +12,7 @@ import {
   isApiProblem,
   reconcileOperatorReadModels,
   reconcileOperatorSnapshots,
+  safeApiProblemMessage,
 } from "@fb/operator-api";
 
 import { refreshTmaSession, tmaApi, tmaAuthenticatedFetch } from "./auth";
@@ -54,6 +56,15 @@ export function useOperatorIncident(incidentId: string) {
     "/api/operator/incidents/{incident_id}",
     { params: { path: { incident_id: incidentId } } },
     { enabled: Boolean(incidentId), staleTime: 5_000 },
+  );
+}
+
+export function useOperatorIncidents(query: OperatorIncidentsQuery = {}) {
+  return operatorApi.useQuery(
+    "get",
+    "/api/operator/incidents",
+    { params: { query } },
+    { staleTime: 5_000 },
   );
 }
 
@@ -231,7 +242,7 @@ export function useResolveTmaNavigation() {
   return operatorApi.useMutation("post", "/api/tma/navigation/resolve");
 }
 
-/** Mobile/TMA campaign surface is progress-only; creation stays desktop-first. */
+/** Campaign history remains available beside the full TMA creation flow. */
 export function useCampaignRuns() {
   return operatorApi.useQuery("get", "/api/tools/campaigns/runs", {
     params: { query: { limit: 50, offset: 0 } },
@@ -263,6 +274,10 @@ export function useResumeCampaignRun() {
 
 export function operatorProblemMessage(error: unknown): string {
   return formatApiProblem(error, "Операторский снимок недоступен");
+}
+
+export function operatorIncidentProblemMessage(error: unknown): string {
+  return safeApiProblemMessage(error, "Журнал инцидентов временно недоступен");
 }
 
 function isTerminalOperatorProblem(error: unknown): boolean {

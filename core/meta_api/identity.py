@@ -19,8 +19,11 @@ def require_ad_account_id(value: Any, *, field_name: str = "ad_account_id") -> s
     """
     if isinstance(value, bool) or not isinstance(value, (str, int)):
         raise ValueError(f"{field_name} must be an explicit numeric account id")
-    normalized = str(value).strip().removeprefix("act_").strip()
-    if not normalized or not normalized.isdigit():
+    normalized = str(value).strip()
+    if normalized[:4].lower() == "act_":
+        normalized = normalized[4:]
+    normalized = normalized.strip()
+    if not (1 <= len(normalized) <= 32) or not normalized.isdigit():
         raise ValueError(f"{field_name} must be an explicit numeric account id")
     return normalized
 

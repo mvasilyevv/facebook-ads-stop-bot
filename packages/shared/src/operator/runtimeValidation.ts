@@ -12,8 +12,7 @@ import {
 } from "../runtime/rfc3339";
 import { safeOperatorAttentionHref } from "./attentionNavigation";
 
-type GeneratedIncidentDetail =
-  components["schemas"]["OperatorIncidentDetailResponse"];
+type GeneratedIncidentItem = components["schemas"]["OperatorIncidentItem"];
 type GeneratedIncidentAck =
   components["schemas"]["OperatorIncidentAckResponse"];
 
@@ -56,8 +55,9 @@ const FUNNEL_KEYS = new Set([
   "confirmed_deposits",
 ]);
 const CONTEXT_STATES = new Set(["single", "mixed", "unknown"]);
-const INCIDENT_STATUSES: ReadonlySet<GeneratedIncidentDetail["status"]> =
-  new Set(["open", "acknowledged", "executing", "resolved", "failed"]);
+const INCIDENT_STATUSES: ReadonlySet<GeneratedIncidentItem["status"]> = new Set(
+  ["open", "acknowledged", "executing", "resolved", "failed"],
+);
 const ACKNOWLEDGED_STATUS: GeneratedIncidentAck["status"] = "acknowledged";
 
 export class OperatorPayloadValidationError extends Error {
@@ -913,6 +913,98 @@ function commandResponse(value: unknown, endpoint: string): void {
   string(root.correlation_id, endpoint, "$.correlation_id");
 }
 
+function incidentItem(
+  value: unknown,
+  endpoint: string,
+  field: string,
+): Record<string, unknown> {
+  const item = record(value, endpoint, field);
+  string(item.id, endpoint, `${field}.id`);
+  enumValue(item.severity, SEVERITIES, endpoint, `${field}.severity`);
+  enumValue(item.status, INCIDENT_STATUSES, endpoint, `${field}.status`);
+  string(item.title, endpoint, `${field}.title`);
+  nullableString(item.summary, endpoint, `${field}.summary`);
+  nullableString(item.reason, endpoint, `${field}.reason`);
+  isoDate(item.occurred_at, endpoint, `${field}.occurred_at`);
+  nullableString(item.account_id, endpoint, `${field}.account_id`);
+  const target = record(item.target, endpoint, `${field}.target`);
+  enumValue(target.kind, TARGET_KINDS, endpoint, `${field}.target.kind`);
+  nullableString(target.id, endpoint, `${field}.target.id`);
+  nullableString(target.label, endpoint, `${field}.target.label`);
+  navigationAction(item.action, endpoint, `${field}.action`);
+  bool(item.requires_usd_evidence, endpoint, `${field}.requires_usd_evidence`);
+  return item;
+}
+
+function validateIncidentMoneyEvidence(
+  state: unknown,
+  scope: Record<string, unknown>,
+  incidents: Record<string, unknown>[],
+  endpoint: string,
+): void {
+  const usdConfirmed =
+    scope.currency_state === "single" && scope.currency === "USD";
+  const guarded = incidents.filter(
+    (incident) => incident.requires_usd_evidence === true,
+  );
+  if (usdConfirmed || guarded.length === 0) return;
+  if (state === "ready") fail(endpoint, "$.state_currency_evidence");
+  for (const incident of guarded) {
+    if (
+      incident.title !== "Денежный сигнал требует проверки" ||
+      incident.summary !==
+        "Валюта кабинета не подтверждена. Денежные детали скрыты." ||
+      incident.reason !== null
+    ) {
+      fail(endpoint, "$.incident_money_copy");
+    }
+  }
+}
+
+function incidentsResponse(value: unknown, endpoint: string): void {
+  const root = record(value, endpoint, "$");
+  enumValue(root.state, DATA_STATES, endpoint, "$.state");
+  isoDate(root.as_of, endpoint, "$.as_of");
+  integer(root.freshness_seconds, endpoint, "$.freshness_seconds");
+  stringArray(root.sources, endpoint, "$.sources");
+  const issues = array(root.issues, endpoint, "$.issues");
+  issues.forEach((item, index) => issue(item, endpoint, `$.issues[${index}]`));
+  const scope = contextEvidence(root.scope, endpoint, "$.scope");
+  const items = array(root.items, endpoint, "$.items").map((item, index) =>
+    incidentItem(item, endpoint, `$.items[${index}]`),
+  );
+  integer(root.page, endpoint, "$.page", 1);
+  integer(root.page_size, endpoint, "$.page_size", 1);
+  integer(root.total, endpoint, "$.total");
+  integer(root.pages, endpoint, "$.pages");
+  if (Number(root.page) > 10_000) fail(endpoint, "$.page");
+  if (
+    Number(root.page_size) < 10 ||
+    Number(root.page_size) > 100 ||
+    items.length > Number(root.page_size)
+  ) {
+    fail(endpoint, "$.page_size");
+  }
+  const expectedPages =
+    Number(root.total) === 0
+      ? 0
+      : Math.ceil(Number(root.total) / Number(root.page_size));
+  if (Number(root.pages) !== expectedPages) fail(endpoint, "$.pages");
+  if (
+    root.state === "empty" &&
+    (Number(root.total) !== 0 || items.length > 0)
+  ) {
+    fail(endpoint, "$.empty_items");
+  }
+  if (Number(root.total) === 0 && root.state !== "empty") {
+    fail(endpoint, "$.state_total");
+  }
+  if (root.state === "ready" && issues.length > 0) {
+    fail(endpoint, "$.ready_evidence");
+  }
+  validateIncidentMoneyEvidence(root.state, scope, items, endpoint);
+}
+
 function incidentDetailResponse(value: unknown, endpoint: string): void {
   const root = record(value, endpoint, "$");
   enumValue(root.state, DATA_STATES, endpoint, "$.state");
@@ -923,8 +1015,8 @@ function incidentDetailResponse(value: unknown, endpoint: string): void {
   issues.forEach((item, index) => issue(item, endpoint, `$.issues[${index}]`));
   ianaTimezone(root.timezone, endpoint, "$.timezone");
   bool(root.timezone_known, endpoint, "$.timezone_known");
-  enumValue(root.status, INCIDENT_STATUSES, endpoint, "$.status");
-  attentionItem(root.incident, endpoint, "$.incident");
+  const scope = contextEvidence(root.scope, endpoint, "$.scope");
+  const incident = incidentItem(root.incident, endpoint, "$.incident");
   if (root.state === "empty") fail(endpoint, "$.state_incident");
   if (
     root.state === "ready" &&
@@ -932,6 +1024,7 @@ function incidentDetailResponse(value: unknown, endpoint: string): void {
   ) {
     fail(endpoint, "$.ready_evidence");
   }
+  validateIncidentMoneyEvidence(root.state, scope, [incident], endpoint);
 }
 
 function incidentAckResponse(value: unknown, endpoint: string): void {
@@ -982,6 +1075,8 @@ export function validateOperatorPayload(
   } else if (endpoint === "/api/operator/actions")
     actionsResponse(value, endpoint);
   else if (endpoint === "/api/operator/ads") adsResponse(value, endpoint);
+  else if (endpoint === "/api/operator/incidents")
+    incidentsResponse(value, endpoint);
   else if (endpoint === "/api/operator/events") eventsResponse(value, endpoint);
   else if (/^\/api\/operator\/ads\/[^/]+\/(?:pause|activate)$/.test(endpoint)) {
     commandResponse(value, endpoint);

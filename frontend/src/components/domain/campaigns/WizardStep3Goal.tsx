@@ -11,6 +11,7 @@
  */
 
 import { type FC } from "react";
+import { validateCampaignGoal } from "@fb/features/campaigns";
 import { CALL_TO_ACTIONS } from "@fb/shared";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
@@ -46,6 +47,10 @@ const ATTRIBUTION_DAYS_OPTIONS = [
   { value: "7", label: "7 дней" },
   { value: "28", label: "28 дней" },
 ];
+
+function asAttributionDays(value: string): 1 | 7 | 28 {
+  return value === "7" ? 7 : value === "28" ? 28 : 1;
+}
 
 export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
   values,
@@ -185,13 +190,13 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
             label="Click-through (дни)"
             options={ATTRIBUTION_DAYS_OPTIONS}
             value={String(values.click_through_days)}
-            onChange={(e) => onChange({ click_through_days: Number(e.target.value) })}
+            onChange={(e) => onChange({ click_through_days: asAttributionDays(e.target.value) })}
           />
           <Select
             label="View-through (дни)"
             options={ATTRIBUTION_DAYS_OPTIONS}
             value={String(values.view_through_days)}
-            onChange={(e) => onChange({ view_through_days: Number(e.target.value) })}
+            onChange={(e) => onChange({ view_through_days: asAttributionDays(e.target.value) })}
           />
         </div>
       </section>
@@ -305,64 +310,9 @@ function SectionLabel({ children }: { children: string }) {
 
 // ─── Валидация ────────────────────────────────────────────────────────────────
 
-const MAJOR_AMOUNT_PATTERN = /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/;
-
-function validateMajorAmount(
-  value: string,
-  options: {
-    exponent: number | null;
-    label: string;
-    maxWhole?: bigint;
-  },
-): string | null {
-  const { exponent, label, maxWhole } = options;
-  if (!value) return `Укажите ${label}`;
-  if (!MAJOR_AMOUNT_PATTERN.test(value)) {
-    return "Используйте положительное число с точкой";
-  }
-  if (!/[1-9]/.test(value)) return `${label} должен быть больше нуля`;
-  if (exponent == null) return "Сначала подтвердите валютный контекст кабинета";
-
-  const [wholePart, fraction = ""] = value.split(".");
-  const whole = wholePart ?? "0";
-  if (fraction.slice(exponent).replaceAll("0", "") !== "") {
-    return exponent === 0
-      ? "Для этой валюты разрешены только целые единицы"
-      : `Для этой валюты допустимо не более ${exponent} знаков после точки`;
-  }
-  if (maxWhole != null) {
-    const wholeUnits = BigInt(whole);
-    const aboveCap =
-      wholeUnits > maxWhole ||
-      (wholeUnits === maxWhole && fraction.slice(0, exponent).replaceAll("0", "") !== "");
-    if (aboveCap) return `Максимум ${maxWhole.toLocaleString("ru-RU")} в день`;
-  }
-  return null;
-}
-
 export function validateGoal(
   values: WizardGoal,
   currencyExponent: number | null,
 ): Partial<Record<keyof WizardGoal, string>> {
-  // url_tags убран из WizardGoal — бэк вычисляет по SOP
-  const errors: Partial<Record<keyof WizardGoal, string>> = {};
-
-  if (!values.destination_link.trim()) errors.destination_link = "Укажите трекинг-ссылку";
-  const dailyBudgetError = validateMajorAmount(values.daily_budget, {
-    exponent: currencyExponent,
-    label: "дневной бюджет",
-    maxWhole: 100_000n,
-  });
-  if (dailyBudgetError) errors.daily_budget = dailyBudgetError;
-  const bidAmountError = validateMajorAmount(values.bid_amount, {
-    exponent: currencyExponent,
-    label: "целевой CPA",
-  });
-  if (bidAmountError) errors.bid_amount = bidAmountError;
-  if (values.countries.length === 0) errors.countries = "Укажите хотя бы одну страну";
-  if (values.start_date && !/^\d{4}-\d{2}-\d{2}$/.test(values.start_date)) {
-    errors.start_date = "Некорректная дата";
-  }
-
-  return errors;
+  return validateCampaignGoal(values, currencyExponent);
 }

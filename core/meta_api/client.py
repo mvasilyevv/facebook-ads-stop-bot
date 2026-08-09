@@ -77,8 +77,19 @@ _CALLER_TASK_BINDINGS = {
     "campaign_creator": ("campaign_create", frozenset({"bulk"})),
 }
 _CALLER_MUTATION_KINDS = {
-    "autopause": frozenset({"pause_ad", "activate_ad", "bulk_status_change"}),
-    "meta_api": frozenset({"duplicate_adset_structure"}),
+    # The money worker is intentionally incapable of signing any command
+    # except the deterministic single-ad PAUSE claimed from the money lane.
+    "autopause": frozenset({"pause_ad"}),
+    # Owner-confirmed status actions and duplicate execution are isolated on
+    # the interactive/bulk/background worker lanes.
+    "meta_api": frozenset(
+        {
+            "pause_ad",
+            "activate_ad",
+            "bulk_status_change",
+            "duplicate_adset_structure",
+        }
+    ),
 }
 _UUID_TEXT_RE = (
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
@@ -801,6 +812,7 @@ _LIVE_OPERATION_AUTHORITY_SQL = text(
     SELECT
         tq.task_type,
         tq.lane,
+        tq.requested_by,
         tq.payload,
         tq.result,
         FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint AS db_now_epoch,
@@ -2367,6 +2379,11 @@ class MetaApiClient:
         mutation_kind = str(payload.get("mutation_kind") or "")
         if allowed_mutations is not None and mutation_kind not in allowed_mutations:
             raise PermanentError("browser operation caller/mutation binding is not authorized")
+        requested_by = str(row.get("requested_by") or "")
+        if authority.caller == "autopause" and requested_by != "bot_auto_stop":
+            raise PermanentError("browser operation caller/requester binding is not authorized")
+        if authority.caller == "meta_api" and requested_by == "bot_auto_stop":
+            raise PermanentError("browser operation caller/requester binding is not authorized")
 
         try:
             bound_account = require_ad_account_id(str(row.get("bound_ad_account_id") or ""))
@@ -2419,7 +2436,9 @@ class MetaApiClient:
             or _SAFE_MONEY_GRAPH_ENDPOINT_RE.fullmatch(endpoint) is None
         ):
             raise PermanentError("browser Graph operation target is invalid")
-        if authority.caller == "autopause":
+        if mutation_kind in {"pause_ad", "activate_ad", "bulk_status_change"}:
+            if authority.caller not in {"autopause", "meta_api"}:
+                raise PermanentError("browser status mutation caller is not authorized")
             if mutation_kind in {"pause_ad", "activate_ad"}:
                 target = str(payload.get("target_id") or "")
                 desired_status = "PAUSED" if mutation_kind == "pause_ad" else "ACTIVE"
@@ -2448,9 +2467,7 @@ class MetaApiClient:
             params = payload.get("params")
             if not isinstance(params, Mapping):
                 raise PermanentError("browser bulk operation payload is invalid")
-            raw_ids = task_result.get("bulk_execution_ad_ids")
-            if not isinstance(raw_ids, list):
-                raw_ids = params.get("ad_ids")
+            raw_ids = params.get("ad_ids")
             if not isinstance(raw_ids, list):
                 raise PermanentError("browser bulk operation targets are invalid")
             ordered_ids: list[str] = []

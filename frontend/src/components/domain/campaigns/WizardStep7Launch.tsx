@@ -38,8 +38,11 @@ import { CampaignRunManualReview } from "./CampaignRunManualReview";
 interface WizardStep7LaunchProps {
   config: CampaignConfig;
   presetId?: string | null;
+  draftRevision: number | null;
+  draftSyncState: "loading" | "idle" | "saving" | "saved" | "error" | "conflict";
   runId: string | null;
   onRunId: (id: string) => void;
+  onDraftCleared: () => void;
   /** Завершить визард (сброс к шагу 1). Кнопка «Готово» на успешном заливе. */
   onFinish: () => void;
 }
@@ -61,20 +64,28 @@ const STATUS_STEP_INDEX: Partial<Record<RunStatus, number>> = {
 export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
   config,
   presetId,
+  draftRevision,
+  draftSyncState,
   runId,
   onRunId,
+  onDraftCleared,
   onFinish,
 }) => {
   const launchMut = useLaunchCampaign();
 
   const handleLaunch = () => {
     launchMut.mutate(
-      { config, preset_id: presetId ?? null },
+      { config, preset_id: presetId ?? null, draft_revision: draftRevision },
       {
-        onSuccess: (out) => onRunId(out.run_id),
+        onSuccess: (out) => {
+          if (out.draft_cleared) onDraftCleared();
+          onRunId(out.run_id);
+        },
       },
     );
   };
+
+  const immutableDraftReady = draftRevision !== null && draftSyncState === "saved";
 
   return (
     <div className="space-y-6">
@@ -98,7 +109,9 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
             <Rocket size={24} className="text-accent" />
           </div>
           <div>
-            <div className="font-display text-[15px] font-medium text-bg-11">Готово к заливу?</div>
+            <div className="font-display text-[15px] font-medium text-bg-11">
+              Поставить подтверждённый план в очередь?
+            </div>
             <div className="text-[12px] text-bg-8 mt-1">
               Оффер: <b>{config.offer_code}</b> · Дата:{" "}
               <b>{config.start_date || "следующий день кабинета"}</b> · Кампаний:{" "}
@@ -113,14 +126,20 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
               Не удалось поставить запуск в очередь. Проверьте соединение и повторите попытку.
             </div>
           )}
+          {!immutableDraftReady ? (
+            <div role="status" className="text-[12px] text-warning">
+              Ждём сохранения точной версии серверного черновика.
+            </div>
+          ) : null}
           <Button
             variant="primary"
             size="lg"
             leftIcon={<Rocket size={16} />}
             onClick={handleLaunch}
             loading={launchMut.isPending}
+            disabled={!immutableDraftReady}
           >
-            Залить кампанию
+            Поставить в очередь
           </Button>
         </div>
       )}

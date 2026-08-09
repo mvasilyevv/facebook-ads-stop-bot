@@ -3,7 +3,9 @@
  * токен, статус авторизации, deep-link, web-app-url.
  */
 
-import { useState, type FC } from "react";
+import { useEffect, useState, type FC } from "react";
+import { isSafeTelegramWebAppUrl } from "@fb/features/settings";
+import { safeApiProblemMessage } from "@fb/operator-api";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -17,17 +19,27 @@ import {
   useTelegramSettings,
   useUpdateTelegramToken,
   useDeleteTelegramToken,
+  useUpdateTelegramWebAppUrl,
 } from "@/lib/api/settings";
+import { TelegramRecipients } from "./TelegramRecipients";
 import { CheckCircle2, Copy, ExternalLink, KeyRound, XCircle } from "lucide-react";
 
 export const TelegramTab: FC = () => {
-  const { data, isLoading, error } = useTelegramSettings();
+  const { data, isLoading, error, refetch } = useTelegramSettings();
   const diagnosticsQuery = useTelegramNotificationDiagnostics();
   const inviteMut = useCreateTelegramOwnerInvite();
   const tokenMut = useUpdateTelegramToken();
   const deleteMut = useDeleteTelegramToken();
+  const webAppUrlMut = useUpdateTelegramWebAppUrl();
 
   const [newToken, setNewToken] = useState("");
+  const [webAppUrl, setWebAppUrl] = useState("");
+  const [webAppUrlError, setWebAppUrlError] = useState<string | null>(null);
+  const [deleteArmed, setDeleteArmed] = useState(false);
+
+  useEffect(() => {
+    setWebAppUrl(data?.web_app_url ?? "");
+  }, [data?.web_app_url]);
 
   if (isLoading) {
     return (
@@ -40,7 +52,12 @@ export const TelegramTab: FC = () => {
   }
 
   if (error) {
-    return <ErrorState error={error} onRetry={() => void 0} />;
+    return (
+      <ErrorState
+        error={safeApiProblemMessage(error, "Настройки Telegram временно недоступны")}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   const handleSaveToken = async () => {
@@ -50,16 +67,25 @@ export const TelegramTab: FC = () => {
       setNewToken("");
       toast.success("Токен сохранён");
     } catch (e) {
-      toast.error("Ошибка сохранения токена", e instanceof Error ? e.message : String(e));
+      toast.error(
+        "Ошибка сохранения токена",
+        safeApiProblemMessage(e, "Проверьте токен и повторите попытку"),
+      );
     }
   };
 
   const handleDeleteToken = async () => {
+    if (!deleteArmed) {
+      setDeleteArmed(true);
+      toast.warning("Удаление остановит доставку", "Нажмите подтверждение ещё раз");
+      return;
+    }
     try {
       await deleteMut.mutateAsync();
+      setDeleteArmed(false);
       toast.success("Токен удалён");
     } catch (e) {
-      toast.error("Ошибка удаления токена", e instanceof Error ? e.message : String(e));
+      toast.error("Ошибка удаления токена", safeApiProblemMessage(e, "Повторите попытку"));
     }
   };
 
@@ -68,7 +94,7 @@ export const TelegramTab: FC = () => {
       await inviteMut.mutateAsync();
       toast.success("Ссылка подключения создана");
     } catch (e) {
-      toast.error("Не удалось создать ссылку", e instanceof Error ? e.message : String(e));
+      toast.error("Не удалось создать ссылку", safeApiProblemMessage(e, "Повторите попытку"));
     }
   };
 
@@ -77,8 +103,25 @@ export const TelegramTab: FC = () => {
     try {
       await navigator.clipboard.writeText(data.activation_command);
       toast.success("Команда скопирована");
+    } catch {
+      toast.error("Не удалось скопировать", "Выделите команду вручную");
+    }
+  };
+
+  const handleSaveWebAppUrl = async () => {
+    if (!isSafeTelegramWebAppUrl(webAppUrl)) {
+      setWebAppUrlError("Mini App URL должен быть корректным HTTPS-адресом");
+      return;
+    }
+    setWebAppUrlError(null);
+    try {
+      await webAppUrlMut.mutateAsync(webAppUrl.trim() || null);
+      toast.success(webAppUrl.trim() ? "Mini App URL сохранён" : "Mini App URL очищен");
     } catch (e) {
-      toast.error("Не удалось скопировать", e instanceof Error ? e.message : String(e));
+      toast.error(
+        "Не удалось сохранить Mini App URL",
+        safeApiProblemMessage(e, "Повторите попытку"),
+      );
     }
   };
 
@@ -281,6 +324,8 @@ export const TelegramTab: FC = () => {
           value={newToken}
           onChange={(e) => setNewToken(e.target.value)}
           helpText="Telegram Bot API токен от @BotFather. Хранится зашифрованным."
+          autoComplete="new-password"
+          spellCheck={false}
         />
         <div className="mt-4 flex gap-3">
           <Button
@@ -297,11 +342,40 @@ export const TelegramTab: FC = () => {
               onClick={() => void handleDeleteToken()}
               loading={deleteMut.isPending}
             >
-              Удалить токен
+              {deleteArmed ? "Подтвердить удаление" : "Удалить токен"}
             </Button>
           )}
         </div>
       </Card>
+
+      <Card eyebrow="Mini App" padded>
+        <Input
+          id="tg-web-app-url"
+          label="HTTPS URL"
+          placeholder="https://agent.example/app"
+          value={webAppUrl}
+          errorMessage={webAppUrlError ?? undefined}
+          onChange={(event) => {
+            setWebAppUrl(event.target.value);
+            if (webAppUrlError) setWebAppUrlError(null);
+          }}
+          helpText="Публичный адрес Telegram Mini App. Секреты и action tokens в URL не передаются."
+          inputMode="url"
+          autoComplete="url"
+          spellCheck={false}
+        />
+        <div className="mt-4">
+          <Button
+            variant="secondary"
+            onClick={() => void handleSaveWebAppUrl()}
+            loading={webAppUrlMut.isPending}
+          >
+            Сохранить Mini App URL
+          </Button>
+        </div>
+      </Card>
+
+      <TelegramRecipients />
     </div>
   );
 };

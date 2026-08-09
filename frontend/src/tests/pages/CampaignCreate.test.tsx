@@ -37,6 +37,26 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 // Мок API campaigns
 vi.mock("@/lib/api/campaigns", () => ({
+  useCampaignDraft: () => ({
+    data: { draft: null },
+    isSuccess: true,
+    isPending: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn().mockResolvedValue({ data: { draft: null } }),
+  }),
+  useSaveCampaignDraft: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({
+      revision: 1,
+      state: {},
+      updated_at: "2026-08-09T12:00:00Z",
+    }),
+    isPending: false,
+  }),
+  useDeleteCampaignDraft: () => ({
+    mutateAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+  }),
   usePresets: () => ({
     data: [
       {
@@ -539,13 +559,13 @@ describe("validateStructure", () => {
 
   // adset_count < 1 → ошибка
   it("adset_count=0 → ошибка", () => {
-    const err = validateStructure([{ key: "image1", adset_count: 0, concept_refs: [] }]);
+    const err = validateStructure([{ key: "image1", adset_count: 0 }]);
     expect(err).toBeTruthy();
   });
 
   // Корректная структура → null
   it("корректная структура → null", () => {
-    expect(validateStructure([{ key: "image1", adset_count: 3, concept_refs: [] }])).toBeNull();
+    expect(validateStructure([{ key: "image1", adset_count: 3 }])).toBeNull();
   });
 });
 
@@ -570,7 +590,7 @@ describe("WizardStep4Structure", () => {
   // Кнопка удалить уменьшает список
   it("кнопка «удалить» убирает кампанию", async () => {
     const user = userEvent.setup();
-    const campaigns = [{ key: "image1", adset_count: 3, concept_refs: [] }];
+    const campaigns = [{ key: "image1", adset_count: 3 }];
     const onChange = vi.fn();
     render(wrap(<WizardStep4Structure campaigns={campaigns} onChange={onChange} />));
     await user.click(screen.getByRole("button", { name: /Удалить кампанию/ }));
@@ -580,8 +600,8 @@ describe("WizardStep4Structure", () => {
   // Итого adset'ов отображается
   it("итого adset'ов суммируется корректно", () => {
     const campaigns = [
-      { key: "image1", adset_count: 3, concept_refs: [] },
-      { key: "video1", adset_count: 5, concept_refs: [] },
+      { key: "image1", adset_count: 3 },
+      { key: "video1", adset_count: 5 },
     ];
     render(wrap(<WizardStep4Structure campaigns={campaigns} onChange={vi.fn()} />));
     expect(screen.getByText(/8/)).toBeInTheDocument(); // 3 + 5
@@ -730,7 +750,7 @@ describe("WizardStep5Creatives", () => {
       wrap(
         <WizardStep5Creatives
           values={existing}
-          campaigns={[{ key: "c1", adset_count: 1, concept_refs: [] }]}
+          campaigns={[{ key: "c1", adset_count: 1 }]}
           onChange={onChange}
         />,
       ),
@@ -775,8 +795,8 @@ describe("WizardStep5Creatives", () => {
 
   // ── Колонки-кампании + распределение (новый формат) ──
   const twoCampaigns = [
-    { key: "c1", adset_count: 2, concept_refs: [] },
-    { key: "c2", adset_count: 2, concept_refs: [] },
+    { key: "c1", adset_count: 2 },
+    { key: "c2", adset_count: 2 },
   ];
   function oneConcept(keys: string[]): WizardCreatives {
     return {
@@ -1021,7 +1041,7 @@ describe("CampaignRunsHistory", () => {
 });
 
 describe("CampaignCreatePage responsive policy", () => {
-  it("renders action-first run history instead of the creation wizard on mobile", () => {
+  it("keeps the full creation wizard available on mobile", () => {
     const originalMatchMedia = window.matchMedia;
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
@@ -1040,11 +1060,10 @@ describe("CampaignCreatePage responsive policy", () => {
     try {
       render(wrap(<CampaignCreatePage />));
 
-      expect(screen.getByRole("heading", { name: "Запуски кампаний" })).toBeInTheDocument();
-      expect(screen.getByText("Создание доступно на desktop")).toBeVisible();
-      expect(screen.getByText("GH_PENDING")).toBeInTheDocument();
-      expect(screen.queryByText("Черновик сохраняется автоматически")).toBeNull();
-      expect(screen.queryByRole("button", { name: "Создать" })).toBeNull();
+      expect(screen.getByRole("heading", { name: "Создание кампаний" })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Создать" })).toBeVisible();
+      expect(screen.getByRole("heading", { name: "Как начать?" })).toBeVisible();
+      expect(screen.queryByText(/доступно на desktop/i)).toBeNull();
     } finally {
       Object.defineProperty(window, "matchMedia", {
         configurable: true,
@@ -1084,7 +1103,7 @@ describe("useWizardStore", () => {
     const store = useWizardStore.getState();
     store.setIdentity(DEFAULT_IDENTITY);
     store.setGoal(DEFAULT_GOAL);
-    store.setStructure({ campaigns: [{ key: "c1", adset_count: 1, concept_refs: [] }] });
+    store.setStructure({ campaigns: [{ key: "c1", adset_count: 1 }] });
     store.setCreatives({
       upload_id: "abc123",
       concepts: [
@@ -1136,17 +1155,11 @@ describe("useWizardStore", () => {
     expect(useWizardStore.getState().identity.offer_code).toBe("DRC_CR");
   });
 
-  it("автосохраняет черновик и время изменения", () => {
+  it("помечает локальное представление черновика изменённым без localStorage authority", () => {
     act(() => useWizardStore.getState().setIdentity({ offer_code: "DRC_CR" }));
 
-    expect(useWizardStore.getState().updatedAt).not.toBeNull();
-    const persisted = JSON.parse(
-      window.localStorage.getItem("fb-agent-campaign-draft") ?? "{}",
-    ) as {
-      state?: { identity?: { offer_code?: string }; updatedAt?: string | null };
-    };
-    expect(persisted.state?.identity?.offer_code).toBe("DRC_CR");
-    expect(persisted.state?.updatedAt).toBeTruthy();
+    expect(useWizardStore.getState().draftVersion).toBe(1);
+    expect(window.localStorage.getItem("fb-agent-campaign-draft")).toBeNull();
   });
 
   // applyPreset заполняет identity из пресета
@@ -1161,12 +1174,14 @@ describe("useWizardStore", () => {
       useWizardStore.getState().setIdentity({
         account_context_state: "ready",
         timezone_name: "Europe/Paris",
-        currency: "EUR",
+        currency: "USD",
         currency_exponent: 2,
         account_context_observed_at: "2026-07-29T08:30:00Z",
       }),
     );
-    expect(useWizardStore.getState().buildConfig().url_tags).toBe("sub2={{ad.id}}");
+    expect(useWizardStore.getState().buildConfig(PRESET_WITH_URL_TAGS).url_tags).toBe(
+      "sub2={{ad.id}}",
+    );
   });
 
   it("не переносит url_tags пресета после переключения в новый режим", () => {
@@ -1176,12 +1191,14 @@ describe("useWizardStore", () => {
       useWizardStore.getState().setIdentity({
         account_context_state: "ready",
         timezone_name: "Europe/Paris",
-        currency: "EUR",
+        currency: "USD",
         currency_exponent: 2,
         account_context_observed_at: "2026-07-29T08:30:00Z",
       }),
     );
-    expect(useWizardStore.getState().buildConfig().url_tags).toBe("sub2={{ad.id}}");
+    expect(useWizardStore.getState().buildConfig(PRESET_WITH_URL_TAGS).url_tags).toBe(
+      "sub2={{ad.id}}",
+    );
 
     act(() =>
       useWizardStore.getState().setStart({
@@ -1190,8 +1207,7 @@ describe("useWizardStore", () => {
       }),
     );
 
-    expect(useWizardStore.getState().loadedPreset).toBeNull();
-    expect(useWizardStore.getState().buildConfig().url_tags).toBeUndefined();
+    expect(useWizardStore.getState().buildConfig(null).url_tags).toBeUndefined();
   });
 
   // reset сбрасывает store в initial state
@@ -1213,7 +1229,7 @@ describe("useWizardStore", () => {
       store.setIdentity(DEFAULT_IDENTITY);
       store.setGoal(DEFAULT_GOAL);
       store.setStructure({
-        campaigns: [{ key: "image1", adset_count: 3, concept_refs: [] }],
+        campaigns: [{ key: "image1", adset_count: 3 }],
       });
       store.setCreatives({
         upload_id: "up123",
@@ -1257,7 +1273,7 @@ describe("useWizardStore", () => {
     act(() => {
       const store = useWizardStore.getState();
       store.setIdentity(DEFAULT_IDENTITY);
-      store.setStructure({ campaigns: [{ key: "c1", adset_count: 1, concept_refs: [] }] });
+      store.setStructure({ campaigns: [{ key: "c1", adset_count: 1 }] });
       store.setCreatives({
         upload_id: "abc123",
         concepts: [],

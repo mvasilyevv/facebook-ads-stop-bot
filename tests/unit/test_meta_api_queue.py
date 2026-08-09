@@ -13,19 +13,28 @@ from core.tasks.queue import infer_task_lane
 
 
 @pytest.mark.parametrize(
-    ("mutation_kind", "expected_lane"),
+    ("mutation_kind", "requested_by", "expected_lane"),
     [
-        ("pause_ad", "money"),
-        ("activate_ad", "money"),
-        ("bulk_status_change", "money"),
-        ("duplicate_adset_structure", "bulk"),
+        ("pause_ad", "bot_auto_stop", "money"),
+        ("pause_ad", "operator:web", "interactive"),
+        ("activate_ad", "operator:web", "interactive"),
+        ("bulk_status_change", "owner:test", "bulk"),
+        ("duplicate_adset_structure", "owner:test", "bulk"),
     ],
 )
-def test_mutation_lane_registry_covers_all_money_and_bulk_actions(
+def test_mutation_lane_registry_isolates_automatic_pause_from_owner_actions(
     mutation_kind: str,
+    requested_by: str,
     expected_lane: str,
 ) -> None:
-    assert infer_task_lane("meta_api_mutation", {"mutation_kind": mutation_kind}) == expected_lane
+    assert (
+        infer_task_lane(
+            "meta_api_mutation",
+            {"mutation_kind": mutation_kind},
+            requested_by=requested_by,
+        )
+        == expected_lane
+    )
 
 
 # Одинаковые payload + requested_by + (нет salt) → одинаковый ключ (для дедупа).

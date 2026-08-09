@@ -3,11 +3,9 @@
 
 Endpoints под /api (благодаря auto-discovery с prefix="/api"):
 - GET  /settings/observer          — читает ObserverConfig singleton
-- PUT  /settings/observer          — обновляет все поля (гейт скана как в PATCH /scanning)
+- PATCH /settings/observer/interval     — точечно меняет интервал
 - PATCH /settings/observer/scanning     — переключает is_scanning_enabled
 - PATCH /settings/observer/owner-tag    — точечно меняет owner_campaign_tag (анти лост-апдейт)
-- PATCH /settings/observer/auto-enable  — переключает auto_enable_recommendations
-- GET/POST/DELETE /settings/observer/auto-enable-exclusions — исключения по объявлениям
 - POST /settings/observer/scan-now — ставит durable observer_scan в PostgreSQL
 """
 
@@ -19,26 +17,20 @@ import re
 import uuid
 from datetime import UTC, date, datetime
 
-from fastapi import APIRouter, HTTPException, Query, Response
-from sqlalchemy import delete, select, text
-from sqlalchemy.exc import IntegrityError
+from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import DepEngine, DepSettings
 from apps.api.routers.v1.schemas.settings_observer import (
-    AutoEnableExclusionCreate,
-    AutoEnableExclusionResponse,
-    AutoEnableToggleRequest,
     CampaignAllowlistRequest,
     CampaignOption,
-    ObserverSettingsPutRequest,
+    ObserverIntervalPatchRequest,
     ObserverSettingsResponse,
     OwnerTagPatchRequest,
     ScanningToggleRequest,
     ScanNowResponse,
 )
-from core.models.catalog.fb_ad import FbAd
-from core.models.observer.ad_auto_enable_disabled import AdAutoEnableDisabled
 from core.models.settings.observer_config import ObserverConfig
 from core.observer.queries import campaign_matches_owner
 from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
@@ -124,7 +116,7 @@ async def _get_singleton(session: AsyncSession) -> ObserverConfig:
     if row is None:
         # Создаём запись с server-defaults (INSERT ... ON CONFLICT тоже работал бы,
         # но для singleton достаточно простого INSERT — race condition при первом запуске
-        # маловероятен, а повторный CREATE бросит IntegrityError, которая rollback'нется
+        # маловероятен; при гонке повторный запрос увидит уже созданную строку
         # и в следующем запросе row будет найдена).
         row = ObserverConfig()
         session.add(row)
@@ -138,7 +130,6 @@ def _to_response(cfg: ObserverConfig) -> ObserverSettingsResponse:
     return ObserverSettingsResponse(
         is_scanning_enabled=cfg.is_scanning_enabled,
         default_interval_seconds=cfg.interval_seconds,
-        auto_enable_recommendations=cfg.auto_enable_recommendations,
         owner_campaign_tag=cfg.owner_campaign_tag,
         campaign_ids=list(cfg.campaign_ids or []),
     )
@@ -152,41 +143,15 @@ async def get_observer_settings(engine: DepEngine) -> ObserverSettingsResponse:
         return _to_response(cfg)
 
 
-@router.put("", response_model=ObserverSettingsResponse)
-async def put_observer_settings(
-    body: ObserverSettingsPutRequest,
+@router.patch("/interval", response_model=ObserverSettingsResponse)
+async def patch_observer_interval(
+    body: ObserverIntervalPatchRequest,
     engine: DepEngine,
 ) -> ObserverSettingsResponse:
-    """Обновляет все поля ObserverConfig singleton.
-
-    Валидация: default_interval_seconds от 30 до 600 (через Pydantic Field).
-    Гейт «нечего сканировать» (аудит 2026-07-12, C-1): PUT с is_scanning_enabled=true
-    проходит ту же проверку, что PATCH /scanning — иначе full-PUT включал скан
-    в обход гейта при пустом allowlist («всё зелёное, авто-стоп не работает»).
-    """
+    """Меняет только интервал, не перезаписывая scanning/tag/allowlist."""
     async with AsyncSession(engine) as session:
         cfg = await _get_singleton(session)
-        if body.is_scanning_enabled:
-            from core.observer.accounts import scan_nothing_monitored_reason
-
-            # Гейт проверяет allowlist ИЗ ЭТОГО ЖЕ тела (если прислан), иначе текущий.
-            effective_allowlist = (
-                list(body.campaign_ids)
-                if body.campaign_ids is not None
-                else list(cfg.campaign_ids or [])
-            )
-            reason = await scan_nothing_monitored_reason(engine, effective_allowlist)
-            if reason:
-                raise HTTPException(status_code=409, detail=reason)
-        cfg.is_scanning_enabled = body.is_scanning_enabled
         cfg.interval_seconds = body.default_interval_seconds
-        cfg.auto_enable_recommendations = body.auto_enable_recommendations
-        cfg.owner_campaign_tag = body.owner_campaign_tag
-        # campaign_ids: None = не менять, [] = очистить.
-        if body.campaign_ids is not None:
-            cfg.campaign_ids = list(body.campaign_ids)
-        # Считываем значения ДО commit — после commit SQLAlchemy помечает
-        # атрибуты expired, и их чтение триггерит lazy-load вне greenlet.
         result = _to_response(cfg)
         await session.commit()
         return result
@@ -235,138 +200,6 @@ async def patch_observer_owner_tag(
         result = _to_response(cfg)
         await session.commit()
         return result
-
-
-@router.patch("/auto-enable", response_model=ObserverSettingsResponse)
-async def patch_observer_auto_enable(
-    body: AutoEnableToggleRequest,
-    engine: DepEngine,
-) -> ObserverSettingsResponse:
-    """Переключает только auto_enable_recommendations."""
-    async with AsyncSession(engine) as session:
-        cfg = await _get_singleton(session)
-        cfg.auto_enable_recommendations = body.enabled
-        result = _to_response(cfg)
-        await session.commit()
-        return result
-
-
-@router.get(
-    "/auto-enable-exclusions",
-    response_model=list[AutoEnableExclusionResponse],
-)
-async def list_auto_enable_exclusions(
-    engine: DepEngine,
-) -> list[AutoEnableExclusionResponse]:
-    """List ads which the operator excluded from automatic re-enable."""
-    stmt = (
-        select(
-            AdAutoEnableDisabled.ad_id,
-            AdAutoEnableDisabled.created_at,
-            AdAutoEnableDisabled.reason,
-            FbAd.fb_ad_id,
-            FbAd.ad_name,
-        )
-        .join(FbAd, AdAutoEnableDisabled.ad_id == FbAd.id, isouter=True)
-        .order_by(AdAutoEnableDisabled.created_at.desc())
-    )
-    async with engine.connect() as conn:
-        rows = (await conn.execute(stmt)).fetchall()
-    return [
-        AutoEnableExclusionResponse(
-            fb_ad_id=row.fb_ad_id or "",
-            internal_id=row.ad_id,
-            ad_name=row.ad_name,
-            disabled_at=row.created_at,
-            reason=row.reason,
-        )
-        for row in rows
-    ]
-
-
-@router.post(
-    "/auto-enable-exclusions/{fb_ad_id}",
-    response_model=AutoEnableExclusionResponse,
-    status_code=201,
-)
-async def create_auto_enable_exclusion(
-    fb_ad_id: str,
-    engine: DepEngine,
-    body: AutoEnableExclusionCreate | None = None,
-) -> AutoEnableExclusionResponse:
-    """Exclude one existing ad from automatic re-enable."""
-    reason = body.reason if body else None
-    async with engine.begin() as conn:
-        ad_row = (
-            await conn.execute(select(FbAd.id, FbAd.ad_name).where(FbAd.fb_ad_id == fb_ad_id))
-        ).one_or_none()
-        if ad_row is None:
-            raise HTTPException(status_code=404, detail=f"Объявление {fb_ad_id!r} не найдено")
-        if (
-            await conn.execute(
-                select(AdAutoEnableDisabled.id).where(AdAutoEnableDisabled.ad_id == ad_row.id)
-            )
-        ).one_or_none():
-            raise HTTPException(
-                status_code=409,
-                detail=f"Авто-включение уже отключено для объявления {fb_ad_id!r}",
-            )
-
-        now = datetime.now(UTC)
-        try:
-            result = (
-                await conn.execute(
-                    AdAutoEnableDisabled.__table__.insert()
-                    .values(
-                        ad_id=ad_row.id,
-                        cabinet_day_started_at=now,
-                        reason=reason,
-                        created_at=now,
-                    )
-                    .returning(
-                        AdAutoEnableDisabled.ad_id,
-                        AdAutoEnableDisabled.created_at,
-                        AdAutoEnableDisabled.reason,
-                    )
-                )
-            ).one()
-        except IntegrityError as exc:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Авто-включение уже отключено для объявления {fb_ad_id!r}",
-            ) from exc
-
-    return AutoEnableExclusionResponse(
-        fb_ad_id=fb_ad_id,
-        internal_id=result.ad_id,
-        ad_name=ad_row.ad_name,
-        disabled_at=result.created_at,
-        reason=result.reason,
-    )
-
-
-@router.delete("/auto-enable-exclusions/{fb_ad_id}", status_code=204)
-async def remove_auto_enable_exclusion(fb_ad_id: str, engine: DepEngine) -> Response:
-    """Remove one automatic re-enable exclusion."""
-    async with engine.begin() as conn:
-        ad_row = (
-            await conn.execute(select(FbAd.id).where(FbAd.fb_ad_id == fb_ad_id))
-        ).one_or_none()
-        if ad_row is None:
-            raise HTTPException(status_code=404, detail=f"Объявление {fb_ad_id!r} не найдено")
-        deleted = (
-            await conn.execute(
-                delete(AdAutoEnableDisabled)
-                .where(AdAutoEnableDisabled.ad_id == ad_row.id)
-                .returning(AdAutoEnableDisabled.id)
-            )
-        ).one_or_none()
-    if deleted is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Флаг авто-включения не установлен для объявления {fb_ad_id!r}",
-        )
-    return Response(status_code=204)
 
 
 @router.patch("/campaigns", response_model=ObserverSettingsResponse)
@@ -494,7 +327,7 @@ async def _refresh_observer_campaigns_unfenced(
     (в названии есть дата → свежие выше).
 
     Кабинеты: если задан явный ad_account_id — только он; иначе ВСЕ кабинеты активных
-    офферов (offers.ad_account_ids, resolve_scan_account_ids). Без настроенного кабинета
+    офферов (offer_ad_accounts, resolve_scan_account_ids). Без настроенного кабинета
     запрос отклоняется: текущая browser-вкладка не является identity.
     """
     import grpc

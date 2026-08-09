@@ -47,7 +47,9 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 # Read-endpoint'ы с административными или чувствительными данными.
 _PROTECTED_READ_PREFIXES = (
+    "/api/operator/preferences/",
     "/api/tools/adset-duplicates/",
+    "/api/tools/campaigns/draft",
     # Telegram settings expose recipient identities, delivery diagnostics and
     # owner-invite capabilities.  They are administration data, not a shared
     # TMA read surface.
@@ -215,6 +217,10 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
                     message="Эта операция TMA доступна только владельцу",
                 )
             request.state.operator_principal = f"tma:{authorization_context.telegram_user_id}"
+            if authorization_context.role == "owner":
+                request.state.operator_owner_telegram_user_id = (
+                    authorization_context.telegram_user_id
+                )
             return await call_next(request)
 
         if method not in _WRITE_METHODS and not is_protected_read:
@@ -245,7 +251,10 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
         # A browser-supplied X-Operator-Principal is ignored.
         verified_panel = request.headers.get("x-verified-operator-principal") or ""
         panel_match = _VERIFIED_PANEL_PRINCIPAL.fullmatch(verified_panel)
-        request.state.operator_principal = (
-            f"operator:web:{panel_match.group(1)}" if panel_match is not None else "operator:web"
-        )
+        if panel_match is not None:
+            owner_telegram_user_id = int(panel_match.group(1))
+            request.state.operator_principal = f"operator:web:{owner_telegram_user_id}"
+            request.state.operator_owner_telegram_user_id = owner_telegram_user_id
+        else:
+            request.state.operator_principal = "operator:web"
         return await call_next(request)

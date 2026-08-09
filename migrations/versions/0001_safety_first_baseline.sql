@@ -168,6 +168,18 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
+-- Name: ad_accounts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ad_accounts (
+    account_id character varying(32) NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_ad_accounts_account_id CHECK (((account_id)::text ~ '^[0-9]{1,32}$'::text))
+);
+
+
+--
 -- Name: ad_alert_state; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -214,19 +226,6 @@ CREATE TABLE public.ad_alert_state (
     ),
     CONSTRAINT ck_ad_alert_state_enable_grace_currency CHECK (((enable_grace_currency IS NULL) OR ((enable_grace_currency)::text ~ '^[A-Z]{3}$'::text))),
     CONSTRAINT ck_ad_alert_state_enable_grace_currency_exponent CHECK (((enable_grace_currency_exponent IS NULL) OR (enable_grace_currency_exponent = ANY (ARRAY[0, 2, 3]))))
-);
-
-
---
--- Name: ad_auto_enable_disabled; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.ad_auto_enable_disabled (
-    ad_id uuid NOT NULL,
-    cabinet_day_started_at timestamp with time zone NOT NULL,
-    reason character varying(64),
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
@@ -546,6 +545,23 @@ CREATE TABLE public.campaign_creative (
 
 
 --
+-- Name: campaign_draft; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.campaign_draft (
+    singleton_key character varying(16) DEFAULT 'owner'::character varying NOT NULL,
+    state jsonb DEFAULT '{}'::jsonb NOT NULL,
+    revision bigint DEFAULT 1 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_campaign_draft_revision_positive CHECK ((revision > 0)),
+    CONSTRAINT ck_campaign_draft_singleton_owner CHECK (((singleton_key)::text = 'owner'::text)),
+    CONSTRAINT ck_campaign_draft_state_bounded CHECK ((octet_length((state)::text) <= 262144)),
+    CONSTRAINT ck_campaign_draft_state_object CHECK ((jsonb_typeof(state) = 'object'::text))
+);
+
+
+--
 -- Name: campaign_preset; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -605,22 +621,6 @@ CREATE TABLE public.command_idempotency_receipts (
     target_id character varying(64) NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_command_idem_receipt_action CHECK (((action_kind)::text = ANY (ARRAY[('pause_ad'::character varying)::text, ('activate_ad'::character varying)::text, ('abort_campaign_run'::character varying)::text, ('resume_campaign_run'::character varying)::text])))
-);
-
-
---
--- Name: enable_recommendations; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.enable_recommendations (
-    ad_id uuid NOT NULL,
-    snapshot_metrics jsonb NOT NULL,
-    recommendation_level character varying(16) NOT NULL,
-    live_batch_started_at timestamp with time zone NOT NULL,
-    promoted_to_task_id bigint,
-    idempotency_key character varying(128) NOT NULL,
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
@@ -894,7 +894,6 @@ CREATE TABLE public.observer_config (
     singleton_key character varying(16) DEFAULT 'default'::character varying NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    auto_enable_recommendations boolean DEFAULT false NOT NULL,
     owner_campaign_tag character varying(255),
     campaign_ids text[] DEFAULT '{}'::text[] NOT NULL
 );
@@ -928,6 +927,16 @@ CREATE TABLE public.offer_rules (
 
 
 --
+-- Name: offer_ad_accounts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.offer_ad_accounts (
+    offer_id uuid NOT NULL,
+    account_id character varying(32) NOT NULL
+);
+
+
+--
 -- Name: offers; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -939,9 +948,20 @@ CREATE TABLE public.offers (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    ad_account_ids character varying[] DEFAULT '{}'::character varying[] NOT NULL,
     pixel_id character varying(64),
     countries character varying[] DEFAULT '{}'::character varying[] NOT NULL
+);
+
+
+--
+-- Name: operator_display_preferences; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.operator_display_preferences (
+    owner_recipient_id uuid NOT NULL,
+    timezone_name character varying(64) NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
@@ -1649,19 +1669,19 @@ ALTER TABLE ONLY public.meta_api_audit_log_default
 
 
 --
+-- Name: ad_accounts pk_ad_accounts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ad_accounts
+    ADD CONSTRAINT pk_ad_accounts PRIMARY KEY (account_id);
+
+
+--
 -- Name: ad_alert_state pk_ad_alert_state; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ad_alert_state
     ADD CONSTRAINT pk_ad_alert_state PRIMARY KEY (id);
-
-
---
--- Name: ad_auto_enable_disabled pk_ad_auto_enable_disabled; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.ad_auto_enable_disabled
-    ADD CONSTRAINT pk_ad_auto_enable_disabled PRIMARY KEY (id);
 
 
 --
@@ -1761,6 +1781,14 @@ ALTER TABLE ONLY public.campaign_creative
 
 
 --
+-- Name: campaign_draft pk_campaign_draft; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.campaign_draft
+    ADD CONSTRAINT pk_campaign_draft PRIMARY KEY (singleton_key);
+
+
+--
 -- Name: campaign_preset pk_campaign_preset; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1782,14 +1810,6 @@ ALTER TABLE ONLY public.campaign_run
 
 ALTER TABLE ONLY public.command_idempotency_receipts
     ADD CONSTRAINT pk_command_idempotency_receipts PRIMARY KEY (idempotency_key);
-
-
---
--- Name: enable_recommendations pk_enable_recommendations; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.enable_recommendations
-    ADD CONSTRAINT pk_enable_recommendations PRIMARY KEY (id);
 
 
 --
@@ -1873,6 +1893,14 @@ ALTER TABLE ONLY public.offer_creative_seq
 
 
 --
+-- Name: offer_ad_accounts pk_offer_ad_accounts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.offer_ad_accounts
+    ADD CONSTRAINT pk_offer_ad_accounts PRIMARY KEY (offer_id, account_id);
+
+
+--
 -- Name: offer_rules pk_offer_rules; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1886,6 +1914,14 @@ ALTER TABLE ONLY public.offer_rules
 
 ALTER TABLE ONLY public.offers
     ADD CONSTRAINT pk_offers PRIMARY KEY (id);
+
+
+--
+-- Name: operator_display_preferences pk_operator_display_preferences; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.operator_display_preferences
+    ADD CONSTRAINT pk_operator_display_preferences PRIMARY KEY (owner_recipient_id);
 
 
 --
@@ -2065,14 +2101,6 @@ ALTER TABLE ONLY public.ad_alert_state
 
 
 --
--- Name: ad_auto_enable_disabled uq_ad_auto_enable_disabled_ad; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.ad_auto_enable_disabled
-    ADD CONSTRAINT uq_ad_auto_enable_disabled_ad UNIQUE (ad_id);
-
-
---
 -- Name: adsetpro_credentials uq_adsetpro_credentials_singleton_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2102,14 +2130,6 @@ ALTER TABLE ONLY public.campaign_preset
 
 ALTER TABLE ONLY public.campaign_run
     ADD CONSTRAINT uq_campaign_run_idempotency_key UNIQUE (idempotency_key);
-
-
---
--- Name: enable_recommendations uq_enable_recommendations_idempotency; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.enable_recommendations
-    ADD CONSTRAINT uq_enable_recommendations_idempotency UNIQUE (idempotency_key);
 
 
 --
@@ -2543,13 +2563,6 @@ CREATE INDEX ix_ad_alert_state_state ON public.ad_alert_state USING btree (alert
 
 
 --
--- Name: ix_ad_auto_disable_day; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_ad_auto_disable_day ON public.ad_auto_enable_disabled USING btree (cabinet_day_started_at);
-
-
---
 -- Name: ix_browser_operation_leases_active; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2631,41 +2644,6 @@ CREATE INDEX ix_campaign_run_status ON public.campaign_run USING btree (status);
 --
 
 CREATE INDEX ix_command_idempotency_receipts_task_id ON public.command_idempotency_receipts USING btree (task_id);
-
-
---
--- Name: ix_enable_recs_ad; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_enable_recs_ad ON public.enable_recommendations USING btree (ad_id);
-
-
---
--- Name: ix_enable_recs_batch; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_enable_recs_batch ON public.enable_recommendations USING btree (live_batch_started_at);
-
-
---
--- Name: ix_enable_recs_created; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_enable_recs_created ON public.enable_recommendations USING btree (created_at);
-
-
---
--- Name: ix_enable_recs_level; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_enable_recs_level ON public.enable_recommendations USING btree (recommendation_level);
-
-
---
--- Name: ix_enable_recs_promoted; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_enable_recs_promoted ON public.enable_recommendations USING btree (promoted_to_task_id) WHERE (promoted_to_task_id IS NOT NULL);
 
 
 --
@@ -2872,6 +2850,13 @@ CREATE INDEX ix_notification_events_retention ON public.notification_events USIN
 
 
 --
+-- Name: ix_offer_ad_accounts_account_offer; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_offer_ad_accounts_account_offer ON public.offer_ad_accounts USING btree (account_id, offer_id);
+
+
+--
 -- Name: ix_offers_active; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2911,6 +2896,13 @@ CREATE INDEX ix_panel_sessions_expires_at ON public.panel_sessions USING btree (
 --
 
 CREATE INDEX ix_recipients_active ON public.telegram_recipients USING btree (chat_id) WHERE (revoked_at IS NULL);
+
+
+--
+-- Name: uq_telegram_recipients_single_active_owner; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_telegram_recipients_single_active_owner ON public.telegram_recipients USING btree (role) WHERE (((role)::text = 'owner'::text) AND (revoked_at IS NULL));
 
 
 --
@@ -3456,14 +3448,6 @@ ALTER TABLE ONLY public.ad_alert_state
 
 
 --
--- Name: ad_auto_enable_disabled fk_ad_auto_enable_disabled_ad_id_fb_ads; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.ad_auto_enable_disabled
-    ADD CONSTRAINT fk_ad_auto_enable_disabled_ad_id_fb_ads FOREIGN KEY (ad_id) REFERENCES public.fb_ads(id) ON DELETE CASCADE;
-
-
---
 -- Name: ad_metrics fk_ad_metrics_ad_id_fb_ads; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3509,22 +3493,6 @@ ALTER TABLE ONLY public.campaign_run
 
 ALTER TABLE ONLY public.command_idempotency_receipts
     ADD CONSTRAINT fk_command_idempotency_receipts_task_id_task_queue FOREIGN KEY (task_id) REFERENCES public.task_queue(id) ON DELETE CASCADE;
-
-
---
--- Name: enable_recommendations fk_enable_recommendations_ad_id_fb_ads; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.enable_recommendations
-    ADD CONSTRAINT fk_enable_recommendations_ad_id_fb_ads FOREIGN KEY (ad_id) REFERENCES public.fb_ads(id) ON DELETE CASCADE;
-
-
---
--- Name: enable_recommendations fk_enable_recommendations_promoted_to_task_id_task_queue; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.enable_recommendations
-    ADD CONSTRAINT fk_enable_recommendations_promoted_to_task_id_task_queue FOREIGN KEY (promoted_to_task_id) REFERENCES public.task_queue(id) ON DELETE SET NULL;
 
 
 --
@@ -3576,11 +3544,35 @@ ALTER TABLE ONLY public.notification_events
 
 
 --
+-- Name: offer_ad_accounts fk_offer_ad_accounts_account_id_ad_accounts; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.offer_ad_accounts
+    ADD CONSTRAINT fk_offer_ad_accounts_account_id_ad_accounts FOREIGN KEY (account_id) REFERENCES public.ad_accounts(account_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: offer_ad_accounts fk_offer_ad_accounts_offer_id_offers; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.offer_ad_accounts
+    ADD CONSTRAINT fk_offer_ad_accounts_offer_id_offers FOREIGN KEY (offer_id) REFERENCES public.offers(id) ON DELETE CASCADE;
+
+
+--
 -- Name: offer_rules fk_offer_rules_offer_id_offers; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.offer_rules
     ADD CONSTRAINT fk_offer_rules_offer_id_offers FOREIGN KEY (offer_id) REFERENCES public.offers(id) ON DELETE CASCADE;
+
+
+--
+-- Name: operator_display_preferences fk_operator_display_preferences_owner_recipient_id_telegram_recipients; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.operator_display_preferences
+    ADD CONSTRAINT fk_operator_display_preferences_owner_recipient_id_telegram_recipients FOREIGN KEY (owner_recipient_id) REFERENCES public.telegram_recipients(id) ON DELETE CASCADE;
 
 
 --

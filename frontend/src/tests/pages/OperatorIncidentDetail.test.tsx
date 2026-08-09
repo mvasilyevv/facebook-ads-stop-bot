@@ -2,9 +2,15 @@ import type { ComponentType, ReactNode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { makeOperatorScopeEvidence } from "@fb/shared/operator/testFixture";
+
 const useOperatorIncident = vi.fn();
 const acknowledge = vi.fn();
 const navigate = vi.fn();
+
+vi.mock("@fb/operator-api", () => ({
+  useOperatorRealtimeStatus: () => "connected",
+}));
 
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => ({
@@ -21,6 +27,7 @@ vi.mock("@/lib/api/operator", () => ({
     mutateAsync: acknowledge,
     isPending: false,
   }),
+  operatorIncidentProblemMessage: () => "Не удалось подтвердить получение",
   operatorProblemMessage: () => "Инцидент недоступен",
 }));
 
@@ -41,17 +48,19 @@ describe("typed operator incident detail", () => {
         issues: [],
         timezone: "UTC",
         timezone_known: true,
-        status: "resolved",
+        scope: makeOperatorScopeEvidence(),
         incident: {
           id: "incident:incident-51",
-          kind: "incident",
           severity: "critical",
+          status: "resolved",
           title: "Инцидент за пределами top-50",
           summary: "Детальная проекция загружена напрямую.",
           reason: "threshold",
           occurred_at: "2026-07-27T09:00:00Z",
           target: { kind: "system", id: null, label: "Система" },
-          action: null,
+          account_id: null,
+          action: { label: "Открыть", href: "/incidents/incident-51" },
+          requires_usd_evidence: false,
         },
       },
       isPending: false,
@@ -98,29 +107,57 @@ describe("typed operator incident detail", () => {
 
     expect(screen.getByText("Источник запаздывает")).toBeInTheDocument();
     expect(screen.getByText("Данные на")).toBeInTheDocument();
-    expect(screen.getByText("incidents")).toBeInTheDocument();
+    expect(screen.getByText("инциденты")).toBeInTheDocument();
+    expect(screen.getByText(/часовой пояс кабинета не подтверждён/i)).toBeInTheDocument();
+  });
+
+  it("suppresses monetary copy when detail USD evidence is missing", () => {
+    const current = useOperatorIncident();
+    useOperatorIncident.mockReturnValue({
+      ...current,
+      data: {
+        ...current.data,
+        state: "partial",
+        scope: {
+          ...current.data.scope,
+          currency: null,
+          currency_state: "unknown",
+          currency_observed_at: null,
+          missing_currency_account_ids: ["123"],
+        },
+        incident: {
+          ...current.data.incident,
+          title: "CPL $9.56 > $3.00",
+          summary: "Spend $18.40",
+          requires_usd_evidence: true,
+        },
+      },
+    });
+
+    render(<IncidentDetail />);
+
     expect(
-      screen.getByText(/часовой пояс кабинета не подтверждён/i),
+      screen.getByRole("heading", { name: "Денежный сигнал требует проверки" }),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/\$18\.40/)).not.toBeInTheDocument();
   });
 
   it("keeps a failed acknowledgement visible and stays on the incident", async () => {
     const current = useOperatorIncident();
     useOperatorIncident.mockReturnValue({
       ...current,
-      data: { ...current.data, status: "open" },
+      data: {
+        ...current.data,
+        incident: { ...current.data.incident, status: "open" },
+      },
     });
     acknowledge.mockRejectedValue(new Error("network"));
 
     render(<IncidentDetail />);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Подтвердить получение" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Подтвердить получение" }));
 
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Инцидент недоступен",
-      );
+      expect(screen.getByRole("alert")).toHaveTextContent("Не удалось подтвердить получение");
     });
     expect(navigate).not.toHaveBeenCalled();
   });

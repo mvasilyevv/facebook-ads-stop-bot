@@ -390,6 +390,9 @@ class LaunchIn(BaseModel):
 
     config: CampaignConfigIn
     preset_id: str | None = None
+    # Exact server draft used for this preview.  The launch transaction clears
+    # only this revision after the immutable run and task are durable.
+    draft_revision: int | None = Field(default=None, ge=1, strict=True)
 
     def domain_config(
         self,
@@ -415,6 +418,7 @@ class LaunchOut(BaseModel):
     task_id: int | None
     status: str
     idempotency_key: str
+    draft_cleared: bool = False
 
 
 # ────────────────────────────── runs ──────────────────────────────

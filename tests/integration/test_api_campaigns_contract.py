@@ -26,6 +26,7 @@ from sqlalchemy import text
 
 from apps.api.deps import get_engine, get_redis
 from apps.api.main import create_app
+from core.ad_account_catalog import ad_account_catalog
 
 
 def _make_app(*, engine=None, redis=None):
@@ -60,12 +61,12 @@ async def clean_campaigns(pg_engine, tmp_path, monkeypatch):
                     """
                     DELETE FROM offer_rules
                     WHERE offer_id IN (
-                        SELECT id FROM offers WHERE code = 'CTX_MISMATCH'
+                        SELECT id FROM offers WHERE code LIKE 'CTX_%'
                     )
                     """
                 )
             )
-            await conn.execute(text("DELETE FROM offers WHERE code = 'CTX_MISMATCH'"))
+            await conn.execute(text("DELETE FROM offers WHERE code LIKE 'CTX_%'"))
             await conn.execute(text("DELETE FROM meta_account_snapshot WHERE account_id = '123'"))
             if seed_account_context:
                 await conn.execute(
@@ -288,6 +289,34 @@ async def test_client_cannot_forge_account_timezone_or_currency(
 
 
 @pytest.mark.asyncio
+async def test_active_offer_without_account_link_fails_closed_before_campaign_write(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+) -> None:
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO offers(code, name, is_active) "
+                "VALUES ('CTX_EMPTY', 'No account membership', TRUE)"
+            )
+        )
+
+    config = _flat_config()
+    config["offer_code"] = "CTX_EMPTY"
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": config},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Выбранный кабинет не привязан к офферу"
+    assert await _campaign_write_counts(pg_engine) == (0, 0, 0, 0)
+
+
+@pytest.mark.asyncio
 async def test_offer_currency_mismatch_rejected_before_any_campaign_write(
     pg_engine,
     fake_redis_client,
@@ -298,13 +327,18 @@ async def test_offer_currency_mismatch_rejected_before_any_campaign_write(
             await conn.execute(
                 text(
                     """
-                    INSERT INTO offers(code, name, ad_account_ids)
-                    VALUES ('CTX_MISMATCH', 'Context mismatch test', ARRAY['123'])
+                    INSERT INTO offers(code, name)
+                    VALUES ('CTX_MISMATCH', 'Context mismatch test')
                     RETURNING id
                     """
                 )
             )
         ).scalar_one()
+        await ad_account_catalog.replace_offer_accounts(
+            conn,
+            offer_id=offer_id,
+            account_ids=["123"],
+        )
         await conn.execute(
             text(
                 """
@@ -331,13 +365,13 @@ async def test_offer_currency_mismatch_rejected_before_any_campaign_write(
 # ─────────────────────────── launch (плоская форма) ───────────────────────────
 
 
-# CRIT-2: launch принимает плоскую форму → 201; в БД config-снимок корректен.
+# CRIT-2: launch принимает плоскую форму → 202 queued; в БД config-снимок корректен.
 @pytest.mark.asyncio
 async def test_launch_accepts_flat_and_converts(pg_engine, fake_redis_client, clean_campaigns):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/tools/campaigns/launch", json={"config": _flat_config()})
-    assert resp.status_code == 201, resp.text
+    assert resp.status_code == 202, resp.text
     out = resp.json()
     run_id = out["run_id"]
     assert out["status"] == "queued"
@@ -372,9 +406,9 @@ async def test_launch_idempotent_same_key_one_run(pg_engine, fake_redis_client, 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         first = await ac.post("/api/tools/campaigns/launch", json={"config": _flat_config()})
         second = await ac.post("/api/tools/campaigns/launch", json={"config": _flat_config()})
-    assert first.status_code == 201, first.text
-    # Повтор не падает 500 — возвращает существующий run (201-shape).
-    assert second.status_code == 201, second.text
+    assert first.status_code == 202, first.text
+    # Повтор не падает 500 — возвращает существующий queued run (202-shape).
+    assert second.status_code == 202, second.text
     a, b = first.json(), second.json()
     assert a["run_id"] == b["run_id"]
     assert a["idempotency_key"] == b["idempotency_key"]

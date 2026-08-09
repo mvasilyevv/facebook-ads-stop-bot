@@ -225,9 +225,7 @@ def test_scheduled_workers_use_postgres_singleton_ownership() -> None:
         "run_cleanup_worker.py",
         "run_reconciler_worker.py",
         "run_health_watchdog.py",
-        "run_enable_recommendation_worker.py",
         "run_digest_scheduler.py",
-        "run_cabinet_scheduler.py",
     )
     for launcher in launchers:
         source = (ROOT / launcher).read_text(encoding="utf-8")
@@ -530,8 +528,6 @@ def test_release_manifest_preserves_registry_ports(tmp_path: Path) -> None:
             str(output),
             "--desktop-webtop-image",
             f"registry.example:5000/webtop@{digest}",
-            "--desktop-kasmvnc-image",
-            f"registry.example:5000/kasmvnc@{digest}",
         ],
         check=False,
         capture_output=True,
@@ -542,3 +538,4 @@ def test_release_manifest_preserves_registry_ports(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     manifest = output.read_text(encoding="utf-8")
     assert "API_IMAGE=registry.example:5000/fb-agent-api@sha256:" in manifest
+    assert f"DESKTOP_WEBTOP_IMAGE=registry.example:5000/webtop@{digest}" in manifest

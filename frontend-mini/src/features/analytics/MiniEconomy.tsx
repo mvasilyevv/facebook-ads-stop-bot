@@ -4,9 +4,10 @@ import { AccessibleChartFrame } from "@fb/operator-ui";
 import { formatSpend } from "@fb/shared/format/number";
 import { formatZonedTime } from "@fb/shared/format/time";
 import {
-  currentMarkerLabelPosition,
-  serverSeriesMarker,
-} from "@fb/shared/operator/chartModel";
+  buildSpendChartModel,
+  type SpendChartPoint,
+} from "@fb/shared/analytics/chartModel";
+import { currentMarkerLabelPosition } from "@fb/shared/operator/chartModel";
 import type {
   DataState,
   OperatorEconomyData,
@@ -115,16 +116,14 @@ function MiniSpendPlot({
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const width = 360;
   const height = 140;
-  const values = rows
-    .flatMap((row) => [row.actual, row.base, row.stop].map(decimalToNumber))
-    .filter((value): value is number => value !== null);
-  if (!rows.length || !values.length)
+  const model = buildSpendChartModel(rows, currentAt);
+  const points = model.points;
+  if (!points.length || !model.hasKnownValue)
     return <MiniEmpty text="Точки графика не подтверждены." />;
-  const max = Math.max(...values, 1);
   const paths = (key: "actual" | "base" | "stop") =>
-    makeSvgPaths(rows, key, width, height, max);
-  const timestamps = rows.map((row) => row.at);
-  const currentMarker = serverSeriesMarker(timestamps, currentAt);
+    makeSvgPaths(points, key, width, height, model.maximum);
+  const timestamps = points.map((row) => row.at);
+  const currentMarker = model.currentMarker;
   const currentMarkerIndex =
     currentMarker === null ? -1 : timestamps.indexOf(currentMarker);
   const currentMarkerLeft =
@@ -245,18 +244,16 @@ function MiniSpendPlot({
             />
           ))}
         </svg>
-        {rows.map((row, index) => {
-          const rowValues = [row.actual, row.base, row.stop].map(
-            decimalToNumber,
-          );
-          const actual = rowValues[0];
+        {points.map((row, index) => {
+          const rowValues = [row.actual, row.base, row.stop];
+          const actual = row.actual;
           const anchor = rowValues.find(
             (value): value is number => value !== null,
           );
           if (anchor === undefined) return null;
           const x =
             rows.length === 1 ? width / 2 : (index / (rows.length - 1)) * width;
-          const y = height - 8 - (anchor / max) * (height - 16);
+          const y = height - 8 - (anchor / model.maximum) * (height - 16);
           const label = `${formatTime(row.at, timezone)}. Факт ${money(row.actual, currency)}, база ${money(row.base, currency)}, stop ${money(row.stop, currency)}.`;
           return (
             <button
@@ -329,7 +326,7 @@ function spendSummary(
 }
 
 function makeSvgPaths(
-  rows: OperatorSpendPoint[],
+  rows: SpendChartPoint[],
   key: "actual" | "base" | "stop",
   width: number,
   height: number,
@@ -338,7 +335,7 @@ function makeSvgPaths(
   const paths: string[] = [];
   let current: string[] = [];
   rows.forEach((row, index) => {
-    const value = decimalToNumber(row[key]);
+    const value = row[key];
     if (value === null) {
       if (current.length > 1) paths.push(current.join(" "));
       current = [];
@@ -413,7 +410,7 @@ function MiniMoney({
   );
 }
 
-function money(value: string | null, currency: string | null): string {
+function money(value: string | number | null, currency: string | null): string {
   return formatSpend(value, currency);
 }
 

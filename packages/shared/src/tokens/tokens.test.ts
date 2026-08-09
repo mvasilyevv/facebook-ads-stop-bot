@@ -29,9 +29,14 @@ const __dir = dirname(__filename);
 const cssPath = join(__dir, "tokens.css");
 const cssContent = readFileSync(cssPath, "utf-8");
 
-function parseCssVariables(css: string, selector: ":root" | "@theme"): Map<string, string> {
+function parseCssVariables(
+  css: string,
+  selector: ":root" | "@theme",
+): Map<string, string> {
   const selectorMatch =
-    selector === ":root" ? /^\s*:root\s*\{/m.exec(css) : /^\s*@theme\s*\{/m.exec(css);
+    selector === ":root"
+      ? /^\s*:root\s*\{/m.exec(css)
+      : /^\s*@theme\s*\{/m.exec(css);
   const selectorStart = selectorMatch?.index ?? -1;
   const blockStart = selectorStart < 0 ? -1 : css.indexOf("{", selectorStart);
   const blockEnd = css.indexOf("}", blockStart);
@@ -127,8 +132,16 @@ const ROOT_TOKEN_MAPPING = [
     `${layout.sidebarWidthCollapsed}px`,
   ],
   ["layout.topbarHeight", "--topbar-height", `${layout.topbarHeight}px`],
-  ["layout.contentPaddingX", "--content-padding-x", `${layout.contentPaddingX}px`],
-  ["layout.contentPaddingY", "--content-padding-y", `${layout.contentPaddingY}px`],
+  [
+    "layout.contentPaddingX",
+    "--content-padding-x",
+    `${layout.contentPaddingX}px`,
+  ],
+  [
+    "layout.contentPaddingY",
+    "--content-padding-y",
+    `${layout.contentPaddingY}px`,
+  ],
   ["zIndex.base", "--z-base", String(zIndex.base)],
   ["zIndex.sticky", "--z-sticky", String(zIndex.sticky)],
   ["zIndex.drawer", "--z-drawer", String(zIndex.drawer)],
@@ -184,7 +197,9 @@ describe("Token invariant: full public TS namespace ↔ :root", () => {
 
 describe("Tailwind @theme stays aligned with canonical :root tokens", () => {
   it.each(THEME_ROOT_VARIABLES)("%s matches :root", (cssVar) => {
-    expect(themeVars.get(cssVar), `@theme is missing ${cssVar}`).toBe(cssVars.get(cssVar));
+    expect(themeVars.get(cssVar), `@theme is missing ${cssVar}`).toBe(
+      cssVars.get(cssVar),
+    );
   });
 
   it.each([
@@ -249,5 +264,11 @@ describe("muted production text contrast", () => {
     for (const surface of [colors.bg0, colors.bg1, colors.bg2, colors.bg3]) {
       expect(contrastRatio(colors.bg8, surface)).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  it("keeps danger text above WCAG AA on its semantic surface", () => {
+    expect(
+      contrastRatio(colors.danger, colors.dangerBg),
+    ).toBeGreaterThanOrEqual(4.5);
   });
 });

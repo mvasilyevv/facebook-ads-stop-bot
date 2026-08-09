@@ -685,9 +685,7 @@ export function RunsHistory() {
   return (
     <div className="flex flex-col gap-4 p-4 pb-8">
       <div className="rounded-[var(--radius-3)] border border-accent/25 bg-accent/5 p-4">
-        <p className="text-[14px] font-semibold text-bg-11">
-          Создание доступно на desktop
-        </p>
+        <p className="text-[14px] font-semibold text-bg-11">Ход выполнения</p>
         <p className="mt-1 text-[13px] leading-5 text-bg-9">
           Здесь — ход выполнения, подтверждённый результат и серверные команды
           безопасной остановки или повтора.
@@ -731,7 +729,7 @@ export function RunsHistory() {
       {!query.isLoading && !query.isError && runs.length === 0 ? (
         <EmptyState
           title="Запусков пока нет"
-          description="Создайте кампанию в web-интерфейсе — её прогресс появится здесь."
+          description="Создайте кампанию здесь — её ход появится в журнале."
         />
       ) : null}
 

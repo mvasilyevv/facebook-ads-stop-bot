@@ -11,7 +11,7 @@ there is no compatibility runtime or alternate traffic target.
 | `fb_agent_infra` | PostgreSQL, Redis, WAL spool and durable volumes | Never switched with an app release |
 | `fb_agent_blue` | API, web, TMA and workers | Alternates with green |
 | `fb_agent_green` | API, web, TMA and workers | Alternates with blue |
-| `fb_agent_vision` | Vision desktop and KasmVNC sidecar | Released independently |
+| `fb_agent_vision` | Unified Vision + KasmVNC desktop runtime | Released independently |
 | `fb_agent_desktop` | browser-agent beside the independent Vision/Kasm stack | Released independently |
 | `fb_agent_monitoring` | Prometheus, Loki, Tempo, Alertmanager, Grafana, blackbox | Preferably off-host |
 

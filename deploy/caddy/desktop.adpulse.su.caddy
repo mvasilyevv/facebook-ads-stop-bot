@@ -37,6 +37,17 @@ desktop.adpulse.su {
 			respond 404
 		}
 
+		# The first-party Kasm client reads only the server-bound layout profile.
+		handle /desktop-auth/profile {
+			log_skip
+			reverse_proxy 127.0.0.1:18100 {
+				header_up -Remote-User
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+			}
+		}
+
 		handle /desktop/logout {
 			log_skip
 			reverse_proxy 127.0.0.1:18100 {

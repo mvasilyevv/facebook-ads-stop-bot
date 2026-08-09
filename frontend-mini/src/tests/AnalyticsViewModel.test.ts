@@ -11,6 +11,11 @@ describe("analytics mobile view-model", () => {
     expect(performanceWindow("today")).toEqual({ period: "today" });
     expect(performanceWindow("7d")).toEqual({ period: "7d" });
     expect(performanceWindow("30d")).toEqual({ period: "30d" });
+    expect(performanceWindow("custom", "2026-08-01", "2026-08-08")).toEqual({
+      period: "custom",
+      from_date: "2026-08-01",
+      to_date: "2026-08-08",
+    });
   });
 
   it("materializes sparse daypart data as 24 explicit hours", () => {

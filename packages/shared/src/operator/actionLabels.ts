@@ -43,3 +43,24 @@ export function operatorActionStateReason(state: unknown): string {
   }
   return "Состояние команды требует сверки. Не повторяйте действие вслепую.";
 }
+
+export interface OperatorActionRecovery {
+  label: string;
+  destination: "target" | "sources";
+}
+
+/**
+ * Failed and ambiguous commands always expose a concrete, safe next step.
+ * Route construction stays in the platform shell; this helper only chooses
+ * whether exact target evidence is available.
+ */
+export function operatorActionRecovery(
+  state: unknown,
+  targetId: unknown,
+): OperatorActionRecovery | null {
+  if (state !== "failed" && state !== "unknown") return null;
+  if (typeof targetId === "string" && targetId.trim()) {
+    return { label: "Проверить объявление", destination: "target" };
+  }
+  return { label: "Проверить источники", destination: "sources" };
+}

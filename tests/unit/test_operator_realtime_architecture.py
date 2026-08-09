@@ -93,10 +93,7 @@ def test_runtime_routes_expose_only_canonical_operator_and_settings_contracts() 
     assert not any(path.startswith("/api/ads/") and path.endswith("/timeline") for path in paths)
 
     assert set(paths["/api/operator/events"]) >= {"get"}
-    exclusions = "/api/settings/observer/auto-enable-exclusions"
-    exclusion = f"{exclusions}/{{fb_ad_id}}"
-    assert set(paths[exclusions]) >= {"get"}
-    assert set(paths[exclusion]) >= {"post", "delete"}
+    assert not any("auto-enable" in path for path in paths)
 
     assert not any(path.startswith("/api/stats") for path in paths)
     assert "/api/operator/snapshot" in paths
@@ -104,4 +101,4 @@ def test_runtime_routes_expose_only_canonical_operator_and_settings_contracts() 
     assert "/api/tma/me" in paths
     assert "/api/tma/navigation/resolve" in paths
     assert "/api/tma/cabinet-autostart" not in paths
-    assert "/api/settings/cabinet-autostart" in paths
+    assert "/api/settings/cabinet-autostart" not in paths

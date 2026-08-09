@@ -376,9 +376,25 @@ async def test_verified_safety_compensation_requires_direct_active_status() -> N
         await CommandService(engine).enqueue_verified_pause_compensation(
             fb_ad_id="230011223344",
             idempotency_key="internal:unverified-status",
-            reason="autostart_reconciliation",
+            reason="activation_without_grace",
             source_task_id=91,
             observed_delivery_status="PAUSED",
+        )
+
+    engine.begin.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_verified_safety_compensation_rejects_unknown_recovery_reason() -> None:
+    engine = SimpleNamespace(begin=MagicMock(side_effect=AssertionError("must not open")))
+
+    with pytest.raises(ValueError, match="unsupported safety compensation reason"):
+        await CommandService(engine).enqueue_verified_pause_compensation(
+            fb_ad_id="230011223344",
+            idempotency_key="internal:unknown-recovery",
+            reason="unknown_recovery",  # type: ignore[arg-type]
+            source_task_id=91,
+            observed_delivery_status="ACTIVE",
         )
 
     engine.begin.assert_not_called()

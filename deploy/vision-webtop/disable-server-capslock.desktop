@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Version=1.0
-Name=macOS Caps Lock compatibility
-Comment=Leave Caps Lock language switching to the macOS client
-Exec=/config/.local/bin/disable-server-capslock
-OnlyShowIn=XFCE;
-X-GNOME-Autostart-enabled=true
-Terminal=false

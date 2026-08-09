@@ -120,12 +120,7 @@ def _root(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 
 def _release_env() -> str:
-    return (
-        "RELEASE_ID=release-1\n"
-        f"BROWSER_AGENT_IMAGE={IMAGE}\n"
-        f"DESKTOP_WEBTOP_IMAGE={IMAGE}\n"
-        f"DESKTOP_KASMVNC_IMAGE={IMAGE}\n"
-    )
+    return f"RELEASE_ID=release-1\nBROWSER_AGENT_IMAGE={IMAGE}\nDESKTOP_WEBTOP_IMAGE={IMAGE}\n"
 
 
 def _commit_app_state(

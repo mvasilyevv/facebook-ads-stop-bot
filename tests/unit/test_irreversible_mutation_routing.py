@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 import apps.meta_api_worker.main as meta
-from core.meta_api.bulk import AutostartActivationGuards
 from core.meta_api.errors import AmbiguousResultError, TemporaryError
 from core.meta_api.mutations.duplicate_adset_structure import (
     DuplicateAdsetStructurePartialError,
@@ -30,7 +29,6 @@ from core.tasks.queue import Task
 @asynccontextmanager
 async def _unlocked_targets(_engine, *, ad_ids):
     yield SimpleNamespace(
-        connection=object(),
         requested_ad_ids=tuple(ad_ids),
         busy_ad_id=None,
     )
@@ -57,7 +55,7 @@ class _LockConnection:
 
 def _task(kind: str, tid: int = 1) -> Task:
     now = datetime.now(UTC)
-    lane = "money" if kind in {"pause_ad", "activate_ad", "bulk_status_change"} else "interactive"
+    lane = "bulk" if kind in {"bulk_status_change", "duplicate_adset_structure"} else "interactive"
     return Task(
         id=tid,
         task_type="meta_api_mutation",
@@ -74,7 +72,7 @@ def _task(kind: str, tid: int = 1) -> Task:
         lane=lane,
         priority=0,
         available_at=now,
-        deadline_at=now + timedelta(seconds=30 if lane == "money" else 120),
+        deadline_at=now + timedelta(seconds=1800 if lane == "bulk" else 120),
         lease_owner=uuid.UUID("00000000-0000-0000-0000-000000000111"),
         lease_token=7,
         lease_expires_at=now + timedelta(minutes=2),
@@ -379,11 +377,7 @@ async def test_irreversible_value_error_after_boundary_is_unknown_manual_review(
 async def test_bulk_reconciliation_is_per_ad_and_never_resends_status(monkeypatch) -> None:
     task = _fenced_task("bulk_status_change", tid=50)
     task.payload["params"] = {"action": "activate", "ad_ids": ["101", "102"]}
-    task.result = {
-        "outcome": "UNKNOWN",
-        "reconcile_required": True,
-        "bulk_execution_ad_ids": ["101", "102"],
-    }
+    task.result = {"outcome": "UNKNOWN", "reconcile_required": True}
     payload = meta.MetaMutationPayload.from_dict(task.payload)
     client = AsyncMock()
     client.execute_graph_call = AsyncMock(
@@ -404,7 +398,7 @@ async def test_bulk_reconciliation_is_per_ad_and_never_resends_status(monkeypatc
     monkeypatch.setattr(meta, "mark_task_failed", failed)
     monkeypatch.setattr(meta, "requeue_unknown_for_reconciliation", requeue)
     monkeypatch.setattr(meta, "sync_fsm_after_mutation", fsm)
-    monkeypatch.setattr(meta, "locked_autostart_targets", _unlocked_targets)
+    monkeypatch.setattr(meta, "locked_status_targets", _unlocked_targets)
 
     terminal = await meta._reconcile_unknown_status_action(
         object(),
@@ -445,7 +439,7 @@ async def test_bulk_reconciliation_read_failure_is_terminal_unknown_without_retr
     monkeypatch.setattr(meta, "mark_task_failed", failed)
     monkeypatch.setattr(meta, "requeue_unknown_for_reconciliation", requeue)
     monkeypatch.setattr(meta, "sync_fsm_after_mutation", AsyncMock())
-    monkeypatch.setattr(meta, "locked_autostart_targets", _unlocked_targets)
+    monkeypatch.setattr(meta, "locked_status_targets", _unlocked_targets)
 
     terminal = await meta._reconcile_unknown_status_action(
         object(),
@@ -466,17 +460,12 @@ async def test_bulk_reconciliation_read_failure_is_terminal_unknown_without_retr
 async def test_bulk_reconciliation_busy_target_stays_non_terminal(monkeypatch) -> None:
     task = _fenced_task("bulk_status_change", tid=55)
     task.payload["params"] = {"action": "activate", "ad_ids": ["301", "302"]}
-    task.result = {
-        "outcome": "UNKNOWN",
-        "reconcile_required": True,
-        "bulk_execution_ad_ids": ["301", "302"],
-    }
+    task.result = {"outcome": "UNKNOWN", "reconcile_required": True}
     payload = meta.MetaMutationPayload.from_dict(task.payload)
 
     @asynccontextmanager
     async def busy_targets(_engine, *, ad_ids):
         yield SimpleNamespace(
-            connection=object(),
             requested_ad_ids=tuple(ad_ids),
             busy_ad_id="302",
         )
@@ -484,7 +473,7 @@ async def test_bulk_reconciliation_busy_target_stays_non_terminal(monkeypatch) -
     defer = AsyncMock(return_value=True)
     fail = AsyncMock(return_value=True)
     client = AsyncMock()
-    monkeypatch.setattr(meta, "locked_autostart_targets", busy_targets)
+    monkeypatch.setattr(meta, "locked_status_targets", busy_targets)
     monkeypatch.setattr(meta, "defer_unknown_reconciliation", defer)
     monkeypatch.setattr(meta, "mark_task_failed", fail)
 
@@ -499,87 +488,6 @@ async def test_bulk_reconciliation_busy_target_stays_non_terminal(monkeypatch) -
     assert "302" in defer.await_args.kwargs["error"]
     fail.assert_not_awaited()
     client.execute_graph_call.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_ambiguous_autostart_never_normalizes_newer_disabled_generation(
-    monkeypatch,
-) -> None:
-    task = _fenced_task("bulk_status_change", tid=53)
-    task.payload["params"] = {
-        "action": "activate",
-        "ad_ids": ["101"],
-        "autostart_day": "2026-07-27",
-        "activation_guards": {
-            "101": {
-                "version": 1,
-                "generation": "old-generation",
-            }
-        },
-    }
-    task.result = {
-        "outcome": "UNKNOWN",
-        "reconcile_required": True,
-        "bulk_execution_ad_ids": ["101"],
-        "bulk_external_deadline_at": "2020-01-01T00:00:00+00:00",
-    }
-    payload = meta.MetaMutationPayload.from_dict(task.payload)
-    client = AsyncMock()
-    client.execute_graph_call = AsyncMock(
-        return_value=[
-            {
-                "code": 200,
-                "body": '{"status":"ACTIVE","effective_status":"ACTIVE"}',
-            }
-        ]
-    )
-    conn = _LockConnection()
-
-    @asynccontextmanager
-    async def locked(_engine, *, ad_ids):
-        yield SimpleNamespace(
-            connection=conn,
-            requested_ad_ids=tuple(ad_ids),
-            busy_ad_id=None,
-        )
-
-    class _CommandService:
-        def __init__(self, _engine) -> None:
-            self.enqueue_verified_pause_compensation = AsyncMock(
-                return_value=SimpleNamespace(created=True, task_id=900)
-            )
-
-    failed = AsyncMock(return_value=True)
-    monkeypatch.setattr(meta, "locked_autostart_targets", locked)
-    monkeypatch.setattr(
-        meta,
-        "revalidate_autostart_activation_guards",
-        AsyncMock(
-            return_value=AutostartActivationGuards(
-                guards_by_ad_id={},
-                rejected_by_ad_id={"101": "fsm_state:disabled"},
-            )
-        ),
-    )
-    monkeypatch.setattr(meta, "CommandService", _CommandService)
-    monkeypatch.setattr(meta, "mark_task_failed", failed)
-    monkeypatch.setattr(meta, "sync_fsm_after_mutation", AsyncMock())
-
-    assert await meta._reconcile_unknown_status_action(
-        object(),
-        task,
-        payload,
-        client=client,
-    )
-
-    result = failed.await_args.kwargs["result"]
-    assert result["outcome"] == "UNKNOWN"
-    assert result["modified_ids"] == []
-    assert result["confirmed_ids"] == []
-    assert result["unknown_ids"] == ["101"]
-    assert result["safety_compensation_ids"] == ["101"]
-    assert result["generation_rejected"] == {"101": "fsm_state:disabled"}
-    assert any("dependency_task_ids" in sql for sql, _params in conn.calls)
 
 
 @pytest.mark.asyncio
@@ -760,6 +668,7 @@ async def test_confirmed_active_without_grace_atomically_queues_pause_compensati
 async def test_autostop_reconciliation_confirmed_paused_uses_atomic_finalizer(monkeypatch) -> None:
     task = _fenced_task("pause_ad", tid=47)
     task.requested_by = "bot_auto_stop"
+    task.lane = "money"
     task.result = {"outcome": "UNKNOWN", "reconcile_required": True}
     payload = meta.MetaMutationPayload.from_dict(task.payload)
     client = AsyncMock()
@@ -790,6 +699,7 @@ async def test_autostop_reconciliation_confirmed_paused_uses_atomic_finalizer(mo
 async def test_autostop_reconciliation_unknown_never_resolves_incidents(monkeypatch) -> None:
     task = _fenced_task("pause_ad", tid=48)
     task.requested_by = "bot_auto_stop"
+    task.lane = "money"
     task.result = {"outcome": "UNKNOWN", "reconcile_required": True}
     payload = meta.MetaMutationPayload.from_dict(task.payload)
     client = AsyncMock()

@@ -76,7 +76,6 @@ _DEFAULT_RETENTION: dict[str, str] = {
     "task_queue_failed": "90 days",
     "adset_duplicate_previews_expired": "immediate",
     "browser_operation_capabilities_expired": "immediate",
-    "enable_recommendations": "30 days",
     "telegram_invites_expired": "30 days",
     "operator_revision_events": "7 days",
     # Durable notification/idempotency boundaries.  Only terminal rows are

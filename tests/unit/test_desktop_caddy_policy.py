@@ -28,12 +28,15 @@ def test_public_desktop_is_cookie_authenticated_kasm_only() -> None:
     assert "127.0.0.1:8090" not in app + desktop
 
 
-def test_only_redeem_logout_and_internal_verify_are_public_on_desktop_host() -> None:
+def test_only_session_endpoints_and_authenticated_kasm_are_public_on_desktop_host() -> None:
     config = DESKTOP_SITE.read_text(encoding="utf-8")
     redeem = config.split("handle /desktop-auth/redeem", maxsplit=1)[1].split(
         "handle /desktop-auth/verify", maxsplit=1
     )[0]
     verify = config.split("handle /desktop-auth/verify", maxsplit=1)[1].split(
+        "handle /desktop-auth/profile", maxsplit=1
+    )[0]
+    profile = config.split("handle /desktop-auth/profile", maxsplit=1)[1].split(
         "handle /desktop/logout", maxsplit=1
     )[0]
 
@@ -41,6 +44,9 @@ def test_only_redeem_logout_and_internal_verify_are_public_on_desktop_host() -> 
     assert "reverse_proxy 127.0.0.1:18100" in redeem
     assert "header_up -Authorization" in redeem
     assert "respond 404" in verify
+    assert "reverse_proxy 127.0.0.1:18100" in profile
+    assert "header_up -Authorization" in profile
+    assert "header_up -X-API-Key" in profile
     assert "handle /desktop/logout" in config
     for removed in (
         "/desktop-auth/connect",

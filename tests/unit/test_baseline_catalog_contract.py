@@ -105,7 +105,7 @@ def test_frozen_sql_and_orm_checks_are_all_in_the_catalog_manifest() -> None:
         if isinstance(constraint, CheckConstraint) and constraint.name is not None
     }
 
-    assert len(frozen) == 92
+    assert len(frozen) == 97
     assert orm <= frozen
     assert {
         key

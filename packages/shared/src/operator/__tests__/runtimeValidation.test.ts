@@ -54,6 +54,7 @@ function adsResponse() {
 }
 
 function incidentResponse() {
+  const attention = makeOperatorSnapshot().attention.data!.items[0]!;
   return {
     state: "ready",
     as_of: "2026-07-18T10:14:45Z",
@@ -62,8 +63,23 @@ function incidentResponse() {
     issues: [],
     timezone: "Europe/Kaliningrad",
     timezone_known: true,
-    status: "open",
-    incident: makeOperatorSnapshot().attention.data!.items[0]!,
+    scope: makeOperatorScopeEvidence(),
+    incident: {
+      id: attention.id,
+      severity: attention.severity,
+      status: "open",
+      title: attention.title,
+      summary: attention.summary,
+      reason: attention.reason,
+      occurred_at: attention.occurred_at,
+      account_id: "123",
+      target: attention.target,
+      action: {
+        label: "Открыть",
+        href: `/incidents/${attention.id}`,
+      },
+      requires_usd_evidence: true,
+    },
   };
 }
 
@@ -285,6 +301,73 @@ describe("operator semantic runtime validation", () => {
         state: "empty",
       }),
     ).toThrow(OperatorPayloadValidationError);
+  });
+
+  it("validates bounded incident pages and rejects monetary copy without USD proof", () => {
+    const detail = incidentResponse();
+    const page = {
+      state: "ready",
+      as_of: detail.as_of,
+      freshness_seconds: 0,
+      sources: detail.sources,
+      issues: [],
+      scope: detail.scope,
+      items: [detail.incident],
+      page: 1,
+      page_size: 30,
+      total: 1,
+      pages: 1,
+    };
+
+    expect(validateOperatorPayload("/api/operator/incidents", page)).toBe(page);
+    expect(() =>
+      validateOperatorPayload("/api/operator/incidents", {
+        ...page,
+        pages: 2,
+      }),
+    ).toThrow(OperatorPayloadValidationError);
+    expect(() =>
+      validateOperatorPayload("/api/operator/incidents", {
+        ...page,
+        page: 10_001,
+      }),
+    ).toThrow(OperatorPayloadValidationError);
+    expect(() =>
+      validateOperatorPayload("/api/operator/incidents", {
+        ...page,
+        page_size: 9,
+      }),
+    ).toThrow(OperatorPayloadValidationError);
+
+    const unknownScope = {
+      ...detail.scope,
+      currency: null,
+      currency_state: "unknown",
+      currency_observed_at: null,
+      missing_currency_account_ids: ["123"],
+    };
+    expect(() =>
+      validateOperatorPayload("/api/operator/incidents", {
+        ...page,
+        state: "partial",
+        scope: unknownScope,
+      }),
+    ).toThrow(OperatorPayloadValidationError);
+    expect(
+      validateOperatorPayload("/api/operator/incidents", {
+        ...page,
+        state: "partial",
+        scope: unknownScope,
+        items: [
+          {
+            ...detail.incident,
+            title: "Денежный сигнал требует проверки",
+            summary: "Валюта кабинета не подтверждена. Денежные детали скрыты.",
+            reason: null,
+          },
+        ],
+      }),
+    ).toBeTruthy();
   });
 
   it("rejects invalid or falsely confirmed incident timezones", () => {

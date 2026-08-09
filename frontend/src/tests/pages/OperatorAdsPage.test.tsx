@@ -9,7 +9,7 @@ import type {
   OperatorAdsQuery,
   OperatorAdsResponse,
 } from "@fb/shared/operator/contracts";
-import { makeOperatorScopeEvidence } from "@fb/shared/operator/testFixture";
+import { makeOperatorScopeEvidence, makeOperatorSnapshot } from "@fb/shared/operator/testFixture";
 import { OperatorRealtimeStatusProvider, type OperatorRealtimeStatus } from "@fb/operator-api";
 
 const navigate = vi.fn();
@@ -25,6 +25,7 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 const useOperatorAds = vi.fn();
+const useOperatorSnapshot = vi.fn();
 const fetchOperatorAdForCommand = vi.fn();
 const pauseMutate = vi.fn();
 const activateMutate = vi.fn();
@@ -33,6 +34,7 @@ let activatePending = false;
 
 vi.mock("@/lib/api/operator", () => ({
   useOperatorAds: (...args: unknown[]) => useOperatorAds(...args),
+  useOperatorSnapshot: (...args: unknown[]) => useOperatorSnapshot(...args),
   fetchOperatorAdForCommand: (...args: unknown[]) => fetchOperatorAdForCommand(...args),
   usePauseOperatorAd: () => ({ mutateAsync: pauseMutate, isPending: pausePending }),
   useActivateOperatorAd: () => ({ mutateAsync: activateMutate, isPending: activatePending }),
@@ -140,11 +142,16 @@ describe("typed operator ads page", () => {
       return row;
     });
     setQuery(response());
+    useOperatorSnapshot.mockReturnValue({
+      data: makeOperatorSnapshot(),
+      isError: false,
+    });
   });
 
   it("passes server search, severity, sort and page without client-side overfetch", () => {
     routeSearch = {
       q: "CR2",
+      account_id: "123",
       severity: "critical",
       sort: "spend",
       direction: "asc",
@@ -155,6 +162,7 @@ describe("typed operator ads page", () => {
 
     expect(useOperatorAds).toHaveBeenCalledWith({
       search: "CR2",
+      account_id: "123",
       severity: "critical",
       sort: "spend",
       direction: "asc",

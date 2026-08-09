@@ -12,16 +12,19 @@ const refetch = vi.fn();
 const useAnalyticsPerformance = vi.fn();
 const useOperatorRealtimeStatus = vi.fn(() => "connected");
 const useOperatorEvents = vi.fn();
+const useOperatorDisplayPreference = vi.fn();
 const routeSearch = {
   tab: "uploads" as "uploads" | "events",
   period: "today" as const,
-  sort: "spend",
+  preset: "economy" as const,
+  sort: "spend" as const,
   direction: "desc" as const,
   page: 1,
 };
 
 vi.mock("@fb/operator-api", () => ({
   useOperatorRealtimeStatus: () => useOperatorRealtimeStatus(),
+  safeApiProblemMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -43,9 +46,8 @@ vi.mock("@/lib/api/operator", () => ({
   useOperatorEvents: (...args: unknown[]) => useOperatorEvents(...args),
 }));
 
-vi.mock("@/stores/ui", () => ({
-  useUiStore: (selector: (state: { displayTimeZone: "auto" }) => unknown) =>
-    selector({ displayTimeZone: "auto" }),
+vi.mock("@/lib/api/settings", () => ({
+  useOperatorDisplayPreference: () => useOperatorDisplayPreference(),
 }));
 
 import { Route } from "@/routes/analytics/index";
@@ -61,6 +63,16 @@ describe("analytics route fail-closed state", () => {
       data: [],
       isLoading: false,
       isFetching: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    useOperatorDisplayPreference.mockReturnValue({
+      data: {
+        timezone_name: "Europe/Kaliningrad",
+        updated_at: "2026-08-09T10:00:00Z",
+      },
+      isPending: false,
       isError: false,
       error: null,
       refetch: vi.fn(),
@@ -96,6 +108,35 @@ describe("analytics route fail-closed state", () => {
     expect(screen.getByText(/снимок устарел · Europe\/Kaliningrad/)).toBeInTheDocument();
     expect(document.querySelectorAll('[data-source-status="good"]')).toHaveLength(0);
     expect(document.querySelectorAll('[data-source-status="unknown"]')).toHaveLength(5);
+  });
+
+  it("fails closed when the server display timezone is unavailable", () => {
+    useOperatorDisplayPreference.mockReturnValue({
+      data: undefined,
+      isPending: false,
+      isError: true,
+      error: new Error("traceback postgres://secret 00000000-0000-0000-0000-000000000099"),
+      refetch: vi.fn(),
+    });
+
+    render(<AnalyticsPage />);
+
+    expect(screen.getByText(/Данные не показаны в другом timezone/i)).toBeInTheDocument();
+    expect(
+      screen.getByText("Откройте настройки отображения или повторите запрос"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/traceback|postgres|00000000-/i)).not.toBeInTheDocument();
+  });
+
+  it("does not send the presentation timezone into server analytics boundaries", () => {
+    render(<AnalyticsPage />);
+
+    expect(useAnalyticsPerformance).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        timezone: expect.anything(),
+        timezone_name: expect.anything(),
+      }),
+    );
   });
 
   it("exposes the selected analytics view and period without relying on color", async () => {

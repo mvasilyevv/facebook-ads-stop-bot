@@ -1,16 +1,34 @@
 import type { ComponentType } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TelegramSettings } from "@fb/shared";
 
+const routeState = vi.hoisted(() => ({
+  section: undefined as
+    | "display"
+    | "observer"
+    | "telegram"
+    | "vision"
+    | undefined,
+  role: "owner",
+}));
+const mockNavigate = vi.hoisted(() => vi.fn());
+
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => (options: { component: ComponentType }) => options,
-  useNavigate: () => vi.fn(),
+  createFileRoute: () => (options: { component: ComponentType }) => ({
+    ...options,
+    useSearch: () => ({ section: routeState.section }),
+  }),
+  useNavigate: () => mockNavigate,
 }));
 
 vi.mock("@/lib/tg", () => ({
-  haptic: { selection: vi.fn() },
+  haptic: { selection: vi.fn(), notify: vi.fn(), impact: vi.fn() },
+}));
+
+vi.mock("@/lib/auth", () => ({
+  getStoredRole: () => routeState.role,
 }));
 
 vi.mock("@/components/layout/MiniHeader", () => ({
@@ -26,15 +44,31 @@ const telegram: TelegramSettings = {
   web_app_url: "https://t.me/fb_stop_bot/app",
 };
 
+const mockUseObserverSettings = vi.fn();
 const mockUseTelegramSettings = vi.fn();
 const mockUseTelegramNotificationDiagnostics = vi.fn();
 const mockUseVisionSettings = vi.fn();
+const mockUseOperatorDisplayPreference = vi.fn();
 
 vi.mock("@/lib/api", () => ({
+  useOperatorDisplayPreference: (enabled?: boolean) =>
+    mockUseOperatorDisplayPreference(enabled),
+  useObserverSettings: () => mockUseObserverSettings(),
   useTelegramSettings: () => mockUseTelegramSettings(),
   useTelegramNotificationDiagnostics: () =>
     mockUseTelegramNotificationDiagnostics(),
   useVisionSettings: () => mockUseVisionSettings(),
+}));
+
+vi.mock("@/lib/settingsApi", () => ({
+  useOperatorDisplayPreference: (enabled?: boolean) =>
+    mockUseOperatorDisplayPreference(enabled),
+  useUpdateOperatorDisplayPreference: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
 }));
 
 import { Route } from "@/routes/settings/index";
@@ -45,12 +79,25 @@ const SettingsPage = (Route as unknown as { component: ComponentType })
 describe("TMA settings route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    routeState.section = undefined;
+    routeState.role = "owner";
+    globalThis.localStorage.clear();
+    mockUseObserverSettings.mockReturnValue({
+      data: {
+        is_scanning_enabled: true,
+        default_interval_seconds: 60,
+        owner_campaign_tag: "MV",
+        campaign_ids: [],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
     mockUseTelegramSettings.mockReturnValue({
       data: telegram,
       isLoading: false,
       isError: false,
       error: null,
-      refetch: vi.fn(),
     });
     mockUseTelegramNotificationDiagnostics.mockReturnValue({
       data: {
@@ -58,11 +105,9 @@ describe("TMA settings route", () => {
         webhook_state: "configured",
         gateway_state: "configured",
         outbox_state: "idle",
-        last_webhook_update_at: null,
         inbox_counts: {},
         delivery_counts: {},
         command_reply_counts: {},
-        oldest_pending_at: null,
         active_recipients: 1,
         enabled_recipients: 1,
         auth_incident_active: false,
@@ -78,47 +123,76 @@ describe("TMA settings route", () => {
         profile_id: "profile-123",
         channel_status: "READY",
         channel_message: null,
+        browser_contract_compatible: true,
       },
       isLoading: false,
       isError: false,
       error: null,
-      refetch: vi.fn(),
+    });
+    mockUseOperatorDisplayPreference.mockReturnValue({
+      data: {
+        timezone_name: "Europe/Kaliningrad",
+        updated_at: "2026-08-09T10:00:00Z",
+      },
+      isPending: false,
+      isError: false,
+      error: null,
     });
   });
 
-  it("renders the real action-first route and read-only diagnostics", () => {
+  it("exposes complete platform-native settings without web-only copy", () => {
     render(<SettingsPage />);
 
     expect(screen.getByText("Ещё")).toBeInTheDocument();
-    expect(screen.getByText("@fb_stop_bot")).toBeInTheDocument();
-    expect(screen.getByText("Webhook")).toBeInTheDocument();
-    expect(screen.getByText("Gateway")).toBeInTheDocument();
-    expect(screen.getByText("Outbox")).toBeInTheDocument();
-    expect(screen.getByText("profile-123")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Отображение/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Observer/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Telegram/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Vision и desktop/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/web-панел/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/редкие настройки/i)).not.toBeInTheDocument();
   });
 
-  it("keeps rare configuration desktop-first", () => {
+  it("keeps section state in the typed settings URL", () => {
     render(<SettingsPage />);
-
-    expect(screen.getByText(/редкие настройки/i)).toBeInTheDocument();
-    expect(screen.queryByText("Owner Campaign Tag")).not.toBeInTheDocument();
-    expect(screen.queryByText("Автостарт кабинета")).not.toBeInTheDocument();
-    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Observer/i }));
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: "/settings",
+      search: { section: "observer" },
+    });
   });
 
-  it("links only to supported secondary screens", () => {
+  it("renders a fail-closed owner gate for notification-only recipients", () => {
+    routeState.role = "recipient";
     render(<SettingsPage />);
+    expect(screen.getByText(/доступен только для чтения/i)).toBeInTheDocument();
+    expect(screen.getByText("Только owner")).toBeInTheDocument();
+    expect(mockUseOperatorDisplayPreference).toHaveBeenCalledWith(false);
+  });
 
+  it("keeps primary navigation and settings controls at least 44px", () => {
+    render(<SettingsPage />);
     for (const label of [
+      "Отображение",
+      "Observer",
+      "Telegram",
+      "Vision и desktop",
       "Рабочий стол",
       "Аналитика",
       "Источники и воркеры",
       "Запуски кампаний",
       "Офферы",
     ]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: new RegExp(label, "i") }).className,
+      ).toMatch(/min-h-(?:11|\[64px\])/);
     }
-    expect(screen.queryByText("Скрипты кампаний")).not.toBeInTheDocument();
   });
-
 });

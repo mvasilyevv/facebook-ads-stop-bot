@@ -28,12 +28,7 @@ const BASE_VALUES: WizardGoal = {
 
 function renderGoal(values: WizardGoal = BASE_VALUES) {
   return render(
-    <WizardStep3Goal
-      values={values}
-      onChange={() => {}}
-      currency="GHS"
-      currencyExponent={2}
-    />,
+    <WizardStep3Goal values={values} onChange={() => {}} currency="USD" currencyExponent={2} />,
   );
 }
 
@@ -48,8 +43,7 @@ describe("WizardStep3Goal — currency-aware major units", () => {
     renderGoal();
 
     expect(screen.getByPlaceholderText("Введите сумму")).toHaveValue("200.00");
-    expect(screen.getByLabelText(/Целевой CPA \(GHS\)/i)).toHaveValue("5.00");
-    expect(document.body.textContent).not.toContain("$");
+    expect(screen.getByLabelText(/Целевой CPA \(USD\)/i)).toHaveValue("5.00");
   });
 });
 
@@ -82,34 +76,24 @@ describe("validateGoal — exact exponent contract", () => {
   it("unknown exponent блокирует денежные поля", () => {
     const errors = validateGoal(BASE_VALUES, null);
 
-    expect(errors.daily_budget).toMatch(/валютный контекст/i);
-    expect(errors.bid_amount).toMatch(/валютный контекст/i);
+    expect(errors.daily_budget).toMatch(/USD-контекст/i);
+    expect(errors.bid_amount).toMatch(/USD-контекст/i);
   });
 
-  it("JPY отклоняет ненулевую дробную часть", () => {
-    const errors = validateGoal(
-      { ...BASE_VALUES, daily_budget: "200.5", bid_amount: "5.1" },
-      0,
+  it("блокирует денежные поля при любой неподтверждённой USD-точности", () => {
+    const errors = validateGoal({ ...BASE_VALUES, daily_budget: "200.5", bid_amount: "5.1" }, 0);
+
+    expect(errors.daily_budget).toMatch(/USD-контекст/i);
+    expect(errors.bid_amount).toMatch(/USD-контекст/i);
+  });
+
+  it("USD принимает максимум две значимые дробные цифры", () => {
+    expect(validateGoal({ ...BASE_VALUES, daily_budget: "200.00", bid_amount: "1.23" }, 2)).toEqual(
+      {},
     );
-
-    expect(errors.daily_budget).toMatch(/целые/i);
-    expect(errors.bid_amount).toMatch(/целые/i);
-  });
-
-  it("JPY принимает trailing zero без потери точности", () => {
     expect(
-      validateGoal({ ...BASE_VALUES, daily_budget: "200.0", bid_amount: "5.000" }, 0),
-    ).toEqual({});
-  });
-
-  it("трёхзнаковая валюта принимает 1.234 и отклоняет 1.2341", () => {
-    expect(
-      validateGoal({ ...BASE_VALUES, daily_budget: "200.000", bid_amount: "1.234" }, 3),
-    ).toEqual({});
-    expect(
-      validateGoal({ ...BASE_VALUES, daily_budget: "200.000", bid_amount: "1.2341" }, 3)
-        .bid_amount,
-    ).toMatch(/не более 3/i);
+      validateGoal({ ...BASE_VALUES, daily_budget: "200.00", bid_amount: "1.234" }, 2).bid_amount,
+    ).toMatch(/не более 2/i);
   });
 
   it("отклоняет значения выше hard cap без float conversion", () => {
@@ -119,10 +103,7 @@ describe("validateGoal — exact exponent contract", () => {
   });
 
   it("пустой destination и countries остаются явными ошибками", () => {
-    const errors = validateGoal(
-      { ...BASE_VALUES, destination_link: "", countries: [] },
-      2,
-    );
+    const errors = validateGoal({ ...BASE_VALUES, destination_link: "", countries: [] }, 2);
 
     expect(errors.destination_link).toBeTruthy();
     expect(errors.countries).toBeTruthy();

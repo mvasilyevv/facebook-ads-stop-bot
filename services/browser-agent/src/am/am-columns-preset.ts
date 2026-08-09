@@ -10,16 +10,37 @@
 // колонок/пресет без пересборки образа.
 
 const DEFAULT_COLUMNS_QS =
-  'columns=name%2Cdelivery%2Cbudget%2Cresults%2Creach%2Cimpressions%2Ccost_per_result' +
-  '%2Cspend%2Cclicks%2Ccpc%2Cactions%3Alead%2Ccost_per_action_type%3Alead' +
-  '%2Cactions%3Aomni_complete_registration%2Ccost_per_action_type%3Aomni_complete_registration' +
-  '%2Cctr%2Ccampaign_group_name%2Ccampaign_name%2Coutbound_clicks%3Aoutbound_click' +
-  '%2Coutbound_clicks_ctr%3Aoutbound_click%2Cactions%3Aomni_landing_page_view' +
-  '%2Ccost_per_action_type%3Alanding_page_view%2Ccpm%2Cfrequency' +
-  '&attribution_windows=default&column_preset=1030561339462971';
+  "columns=name%2Cdelivery%2Cbudget%2Cresults%2Creach%2Cimpressions%2Ccost_per_result" +
+  "%2Cspend%2Cclicks%2Ccpc%2Cactions%3Alead%2Ccost_per_action_type%3Alead" +
+  "%2Cactions%3Aomni_complete_registration%2Ccost_per_action_type%3Aomni_complete_registration" +
+  "%2Cctr%2Ccampaign_group_name%2Ccampaign_name%2Coutbound_clicks%3Aoutbound_click" +
+  "%2Coutbound_clicks_ctr%3Aoutbound_click%2Cactions%3Aomni_landing_page_view" +
+  "%2Ccost_per_action_type%3Alanding_page_view%2Ccpm%2Cfrequency" +
+  "&attribution_windows=default&column_preset=1030561339462971";
+
+const ALLOWED_COLUMNS_QUERY_KEYS = [
+  "columns",
+  "attribution_windows",
+  "column_preset",
+] as const;
+
+function sanitizeColumnsQuery(raw: string): string {
+  if (raw.length > 16_384) return DEFAULT_COLUMNS_QS;
+  const parsed = new URLSearchParams(raw);
+  const safe = new URLSearchParams();
+  for (const key of ALLOWED_COLUMNS_QUERY_KEYS) {
+    const values = parsed.getAll(key);
+    if (values.length === 1 && values[0] && values[0].length <= 8_192) {
+      safe.set(key, values[0]);
+    }
+  }
+  return safe.size > 0 ? safe.toString() : DEFAULT_COLUMNS_QS;
+}
 
 /** Query-строка колонок Ads Manager (без ведущего '?'). Env переопределяет дефолт. */
 export function adsManagerColumnsQs(): string {
   const env = process.env.BROWSER_AGENT_AM_COLUMNS_QS;
-  return env && env.trim() ? env.trim() : DEFAULT_COLUMNS_QS;
+  return sanitizeColumnsQuery(
+    env && env.trim() ? env.trim() : DEFAULT_COLUMNS_QS,
+  );
 }

@@ -131,6 +131,38 @@ def test_task_item_derives_safe_reason_from_public_lifecycle(
         assert str(raw_result_reason) not in item["reason"]
 
 
+def test_task_item_exposes_target_id_only_from_command_payload() -> None:
+    base_row = {
+        "id": 42,
+        "task_type": "meta_api_mutation",
+        "status": "failed",
+        "target_label": "Ad",
+        "created_at": datetime(2026, 8, 8, 10, tzinfo=UTC),
+        "updated_at": datetime(2026, 8, 8, 10, 1, tzinfo=UTC),
+        "requested_by": "operator:web",
+        "last_error": "target_id=error-secret",
+        "correlation_id": "00000000-0000-0000-0000-000000000042",
+    }
+
+    with_payload_target = _task_item(
+        SimpleNamespace(
+            **base_row,
+            payload={"mutation_kind": "pause_ad", "target_id": "ad-safe"},
+            result={"outcome": "REJECTED", "target_id": "result-secret"},
+        )
+    )
+    without_payload_target = _task_item(
+        SimpleNamespace(
+            **base_row,
+            payload={"mutation_kind": "pause_ad"},
+            result={"outcome": "REJECTED", "target_id": "result-secret"},
+        )
+    )
+
+    assert with_payload_target["target_id"] == "ad-safe"
+    assert without_payload_target["target_id"] is None
+
+
 def test_operator_section_fields_are_required_even_when_nullable() -> None:
     schema = OperatorSection[OperatorAttentionData].model_json_schema()
     assert set(schema["required"]) == {
@@ -426,6 +458,236 @@ def test_operator_openapi_declares_typed_problem_responses() -> None:
     assert cabinet_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/OperatorSnapshot"
     }
+
+    actions_operation = openapi["paths"]["/api/operator/actions"]["get"]
+    account_parameter = next(
+        parameter
+        for parameter in actions_operation["parameters"]
+        if parameter["name"] == "account_id"
+    )
+    assert account_parameter["in"] == "query"
+    assert account_parameter["required"] is False
+    action_schema = openapi["components"]["schemas"]["OperatorActionItem"]
+    assert "target_id" in action_schema["properties"]
+    assert "target_id" not in action_schema["required"]
+
+    incidents_operation = openapi["paths"]["/api/operator/incidents"]["get"]
+    assert {parameter["name"] for parameter in incidents_operation["parameters"]} >= {
+        "account_id",
+        "severity",
+        "status",
+        "page",
+        "page_size",
+    }
+    assert incidents_operation["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/OperatorIncidentsResponse"
+    }
+
+
+@pytest.mark.asyncio
+async def test_operator_actions_scopes_rows_and_evidence_to_requested_cabinet(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 8, 8, 12, tzinfo=UTC)
+    cabinet_days = operator_router.CabinetDayResolution(
+        account_ids=("111",),
+        timezone_names={"111": "Europe/Kaliningrad"},
+        query_boundaries={"111": now.replace(hour=0)},
+        missing_account_ids=(),
+    )
+    currencies = operator_router.AccountCurrencyResolution(
+        account_ids=("111",),
+        currencies={"111": "USD"},
+        observed_at_by_account={"111": now},
+        missing_account_ids=(),
+    )
+    actions_mock = AsyncMock(return_value=([], None, now))
+    cabinet_days_mock = AsyncMock(return_value=cabinet_days)
+    currencies_mock = AsyncMock(return_value=currencies)
+    monkeypatch.setattr(operator_router, "fetch_operator_actions", actions_mock)
+    monkeypatch.setattr(operator_router, "resolve_cabinet_days", cabinet_days_mock)
+    monkeypatch.setattr(operator_router, "resolve_account_currencies", currencies_mock)
+
+    response = await operator_router.get_operator_actions(
+        engine=object(),
+        settings=SimpleNamespace(app_timezone="Europe/Kaliningrad"),
+        account_id="act_111",
+        limit=30,
+        before_id=None,
+        state=[],
+    )
+
+    assert not isinstance(response, operator_router.JSONResponse)
+    assert response.scope.account_ids == ["111"]
+    assert response.scope.currency == "USD"
+    assert response.scope.cabinet_timezone == "Europe/Kaliningrad"
+    assert actions_mock.await_args.kwargs["account_id"] == "111"
+    assert cabinet_days_mock.await_args.kwargs["account_ids"] == ["111"]
+    assert currencies_mock.await_args.kwargs["account_ids"] == ["111"]
+
+
+@pytest.mark.asyncio
+async def test_operator_actions_rejects_empty_canonical_scope_without_unscoped_reads(
+    monkeypatch,
+) -> None:
+    actions_mock = AsyncMock()
+    cabinet_days_mock = AsyncMock()
+    currencies_mock = AsyncMock()
+    monkeypatch.setattr(operator_router, "fetch_operator_actions", actions_mock)
+    monkeypatch.setattr(operator_router, "resolve_cabinet_days", cabinet_days_mock)
+    monkeypatch.setattr(operator_router, "resolve_account_currencies", currencies_mock)
+
+    response = await operator_router.get_operator_actions(
+        engine=object(),
+        settings=SimpleNamespace(app_timezone="Europe/Kaliningrad"),
+        account_id=" act_ ",
+        limit=30,
+        before_id=None,
+        state=[],
+    )
+
+    assert isinstance(response, operator_router.JSONResponse)
+    assert response.status_code == 422
+    actions_mock.assert_not_awaited()
+    cabinet_days_mock.assert_not_awaited()
+    currencies_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_operator_incident_list_hides_money_copy_without_confirmed_usd(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 8, 8, 12, tzinfo=UTC)
+    incident_id = "00000000-0000-0000-0000-000000000051"
+    cabinet_days = operator_router.CabinetDayResolution(
+        account_ids=("111",),
+        timezone_names={"111": "Europe/Kaliningrad"},
+        query_boundaries={"111": now.replace(hour=0)},
+        missing_account_ids=(),
+    )
+    currencies = operator_router.AccountCurrencyResolution(
+        account_ids=("111",),
+        currencies={},
+        observed_at_by_account={},
+        missing_account_ids=("111",),
+    )
+    incident_row = {
+        "id": incident_id,
+        "severity": "critical",
+        "status": "open",
+        "title": "CPL $9.56 > $3.00",
+        "summary": "Spend $18.40 · 0 FTD",
+        "resource_type": "ad",
+        "resource_id": "120001",
+        "resource_label": "GH_CR2",
+        "ad_account_id": "111",
+        "opened_at": now,
+        "correlation_id": "00000000-0000-0000-0000-000000000099",
+        "facts": {"currency": "USD", "metrics": {"spend": "18.40"}},
+    }
+    page_mock = AsyncMock(return_value=([incident_row], 1))
+    monkeypatch.setattr(operator_router, "fetch_operator_incident_page", page_mock)
+    monkeypatch.setattr(
+        operator_router,
+        "resolve_cabinet_days",
+        AsyncMock(return_value=cabinet_days),
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "resolve_account_currencies",
+        AsyncMock(return_value=currencies),
+    )
+
+    response = await operator_router.get_operator_incidents(
+        engine=object(),
+        settings=SimpleNamespace(app_timezone="Europe/Kaliningrad"),
+        account_id="act_111",
+        severity=["critical"],
+        incident_status=["open"],
+        page=1,
+        page_size=30,
+    )
+
+    assert not isinstance(response, operator_router.JSONResponse)
+    assert response.state == DataState.PARTIAL
+    assert response.scope.currency_state == "unknown"
+    assert response.items[0].title == "Денежный сигнал требует проверки"
+    assert response.items[0].summary is not None
+    assert "$" not in response.items[0].summary
+    assert response.items[0].requires_usd_evidence is True
+    assert response.items[0].status == "open"
+    assert "00000000-0000-0000-0000-000000000099" not in response.model_dump_json()
+    assert page_mock.await_args.kwargs == {
+        "account_id": "111",
+        "severities": ("critical",),
+        "statuses": ("open",),
+        "page": 1,
+        "page_size": 30,
+    }
+
+
+@pytest.mark.asyncio
+async def test_operator_incident_detail_hides_business_copy_without_usd_evidence(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 8, 8, 12, tzinfo=UTC)
+    incident_id = "00000000-0000-0000-0000-000000000052"
+    cabinet_days = operator_router.CabinetDayResolution(
+        account_ids=("222",),
+        timezone_names={"222": "Europe/Kaliningrad"},
+        query_boundaries={"222": now.replace(hour=0)},
+        missing_account_ids=(),
+    )
+    currencies = operator_router.AccountCurrencyResolution(
+        account_ids=("222",),
+        currencies={"222": "EUR"},
+        observed_at_by_account={"222": now},
+        missing_account_ids=(),
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "fetch_operator_incident",
+        AsyncMock(
+            return_value={
+                "id": incident_id,
+                "severity": "warning",
+                "status": "open",
+                "title": "Spend $44.00 выше stop",
+                "summary": "CPL $8.80",
+                "resource_type": "ad",
+                "resource_id": "120002",
+                "resource_label": "PL_VIP",
+                "ad_account_id": "222",
+                "opened_at": now,
+                "facts": {"metrics": {"spend": "44.00"}},
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "resolve_cabinet_days",
+        AsyncMock(return_value=cabinet_days),
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "resolve_account_currencies",
+        AsyncMock(return_value=currencies),
+    )
+
+    response = await operator_router.get_operator_incident(
+        incident_id=operator_router.uuid.UUID(incident_id),
+        engine=object(),
+        settings=SimpleNamespace(app_timezone="Europe/Kaliningrad"),
+    )
+
+    assert not isinstance(response, operator_router.JSONResponse)
+    assert response.state == DataState.PARTIAL
+    assert response.scope.currency == "EUR"
+    assert response.incident.title == "Денежный сигнал требует проверки"
+    assert response.incident.summary is not None
+    assert "$" not in response.incident.summary
+    assert response.incident.status == "open"
+    assert any(issue.code == "currency_not_usd" for issue in response.issues)
 
 
 @pytest.mark.asyncio

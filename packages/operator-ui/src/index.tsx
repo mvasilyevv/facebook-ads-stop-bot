@@ -7,9 +7,11 @@ import {
 import { formatZonedDateTime } from "@fb/shared/format/time";
 import type {
   DataState,
+  OperatorIncidentStatus,
   OperatorIssue,
   OperatorSection,
 } from "@fb/shared/operator/contracts";
+import { OPERATOR_INCIDENT_STATUS_LABEL } from "@fb/shared/operator/incidentViewModel";
 
 export interface DataStateBadgeProps {
   state: DataState;
@@ -28,6 +30,19 @@ export function DataStateBadge({
     >
       <span className="operator-state-dot" aria-hidden="true" />
       {compact ? shortStateLabel(state) : DATA_STATE_LABEL[state]}
+    </span>
+  );
+}
+
+export function OperatorIncidentStatusBadge({
+  status,
+}: {
+  status: OperatorIncidentStatus;
+}) {
+  return (
+    <span className="operator-incident-status" data-status={status}>
+      <span className="operator-incident-status-mark" aria-hidden="true" />
+      {OPERATOR_INCIDENT_STATUS_LABEL[status]}
     </span>
   );
 }

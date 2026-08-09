@@ -20,8 +20,8 @@ function seedStore(concepts: UploadedConcept[], campaigns: { key: string }[]) {
     page_id: "page_456",
     pixel_id: "pixel_789",
     account_context_state: "ready",
-    timezone_name: "Africa/Accra",
-    currency: "GHS",
+    timezone_name: "America/New_York",
+    currency: "USD",
     currency_exponent: 2,
     account_context_observed_at: "2026-07-29T08:30:00Z",
     account_context_issue: null,
@@ -50,7 +50,7 @@ function seedStore(concepts: UploadedConcept[], campaigns: { key: string }[]) {
     ad_text_primary: "",
   });
   store.setStructure({
-    campaigns: campaigns.map((c) => ({ ...c, adset_count: 3, concept_refs: [] })),
+    campaigns: campaigns.map((c) => ({ ...c, adset_count: 3 })),
   });
   store.setCreatives({ upload_id: "upload-abc", concepts, copies_per_concept: null });
   store.setPreview({ plan: null });
@@ -247,7 +247,7 @@ describe("buildConfig — account context остаётся server-owned", () => 
     useWizardStore.getState().setIdentity({ account_context_state: "stale" });
 
     expect(() => useWizardStore.getState().buildConfig()).toThrow(
-      "Контекст кабинета не подтверждён",
+      "USD-контекст кабинета не подтверждён",
     );
   });
 });

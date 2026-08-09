@@ -72,8 +72,11 @@ describe("WizardStep7Launch — успешный залив", () => {
     const { container } = render(
       <WizardStep7Launch
         config={CONFIG}
+        draftRevision={4}
+        draftSyncState="saved"
         runId="1a6bb9a5-d83b-4652-b791-428a588a1be0"
         onRunId={vi.fn()}
+        onDraftCleared={vi.fn()}
         onFinish={onFinish}
       />,
     );
@@ -129,8 +132,11 @@ describe("WizardStep7Launch — успешный залив", () => {
     render(
       <WizardStep7Launch
         config={CONFIG}
+        draftRevision={4}
+        draftSyncState="saved"
         runId="1a6bb9a5-d83b-4652-b791-428a588a1be0"
         onRunId={vi.fn()}
+        onDraftCleared={vi.fn()}
         onFinish={vi.fn()}
       />,
     );

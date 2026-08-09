@@ -28,9 +28,7 @@ APPLICATION_SERVICES = frozenset(
         "cleanup",
         "reconciler",
         "health_watchdog",
-        "enable_recommendation",
         "digest_scheduler",
-        "cabinet_scheduler",
         "tracker_reconciliation_worker",
         "campaign_creator",
     }

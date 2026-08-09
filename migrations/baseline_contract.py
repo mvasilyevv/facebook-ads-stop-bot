@@ -50,13 +50,17 @@ ORDER BY namespace.nspname, extension.extname
 """
 
 BASELINE_RELATION_SENTINELS = (
+    "public.ad_accounts",
     "public.adset_duplicate_previews",
     "public.browser_channel_readiness",
     "public.browser_operation_capability_uses",
     "public.browser_operation_leases",
     "public.cabinet_runtime",
+    "public.campaign_draft",
     "public.incidents",
     "public.notification_events",
+    "public.offer_ad_accounts",
+    "public.operator_display_preferences",
     "public.operator_revision_state",
     "public.system_config",
     "public.task_queue",
@@ -717,6 +721,7 @@ def validate_public_partition_layout(
 # does not compare them.  The relation name is part of the identity so inherited
 # partition constraints remain independently verifiable.
 BASELINE_CHECK_CONSTRAINT_HASHES: dict[str, str] = {
+    "check_constraint:public.ad_accounts.ck_ad_accounts_account_id": "69d1069554b08aa53a118e9ec00eb9f4ee31604ba1f86af7d6cc0d815ff21574",
     "check_constraint:public.ad_alert_state.ck_ad_alert_state_enable_grace_coherent": "0722b7f2f428a6df0ef1298cd4f3bfcf604e5df20228b4e21c7eeb351d482b85",
     "check_constraint:public.ad_alert_state.ck_ad_alert_state_enable_grace_currency": "f7cab1aeca2efc180ebbf44a94b09e12d6d3b1d1c94f23fbdb83aae57fbb8de8",
     "check_constraint:public.ad_alert_state.ck_ad_alert_state_enable_grace_currency_exponent": "75b3bedb30bb5d33c20b37588f1d0ff272963b991cc4137c267276be5121949d",
@@ -742,6 +747,10 @@ BASELINE_CHECK_CONSTRAINT_HASHES: dict[str, str] = {
     "check_constraint:public.browser_operation_capability_uses.ck_browser_operation_capability_contract_version": "93f24241c45f7c88ede5c4ce620119bad86480848d9e712f42ef3d6a0eec7bff",
     "check_constraint:public.browser_operation_capability_uses.ck_browser_operation_capability_rpc": "05e767f0e1caecce09ea19d9c51afcfad09661b9c1a33960072bfe4d08121b18",
     "check_constraint:public.campaign_run.ck_campaign_run_status": "f701a2a09eddcb4d0885273586dfb132a2404b7cbaa1cb4508c84c616a6cd71d",
+    "check_constraint:public.campaign_draft.ck_campaign_draft_revision_positive": "861fc51810889d42326b2832188e401c004649b0d6210dfb2d567ff7546518dc",
+    "check_constraint:public.campaign_draft.ck_campaign_draft_singleton_owner": "823a91c5584065881432371b4e7a613b909469334bbd9e1c4d1516654d78406b",
+    "check_constraint:public.campaign_draft.ck_campaign_draft_state_bounded": "1df4b8898a1bafe6f29eaae0ac036ed16ce01d84132877c9bcd9d473f97ec2b1",
+    "check_constraint:public.campaign_draft.ck_campaign_draft_state_object": "e89109d024760953f1e09c24663d6a4c32bee1818aea6005d2279c85d7f55330",
     "check_constraint:public.command_idempotency_receipts.ck_command_idem_receipt_action": "f8981069ac4c65bd3cd20e00415900c6f669505d7d707f658740b168ab6317b7",
     "check_constraint:public.fb_campaigns.ck_fb_campaigns_ad_account_identity": "d1ca82c3b03c3520075c03bb846d0617ca94176870a9daddcb8de2e16f0161ed",
     "check_constraint:public.incidents.ck_incidents_incident_generation_positive": "bc2700100fdddf45069df04e5f65317795bccb373545d2b39b28538a3d25c600",

@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useRef, useState, type FC } from "react";
+import { validateCampaignIdentity } from "@fb/features/campaigns";
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
@@ -73,8 +74,8 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
         onChange({
           account_context_state: data.state,
           timezone_name: data.timezone_name ?? "",
-          currency: data.currency ?? "",
-          currency_exponent: data.currency_exponent,
+          currency: data.currency === "USD" ? "USD" : "",
+          currency_exponent: data.currency_exponent === 2 ? 2 : null,
           account_context_observed_at: data.observed_at,
           account_context_issue: data.issue,
         });
@@ -421,21 +422,5 @@ function formatObservedAt(value: string | null): string {
 export function validateIdentity(
   values: WizardIdentity,
 ): Partial<Record<keyof WizardIdentity, string>> {
-  const errors: Partial<Record<keyof WizardIdentity, string>> = {};
-
-  if (!values.act_id.trim()) errors.act_id = "Обязательное поле";
-  if (!values.page_id.trim()) errors.page_id = "Обязательное поле";
-  if (!values.pixel_id.trim()) errors.pixel_id = "Обязательное поле";
-  if (!values.offer_code.trim()) errors.offer_code = "Обязательное поле";
-  if (
-    values.account_context_state !== "ready" ||
-    !values.timezone_name ||
-    !values.currency ||
-    values.currency_exponent == null ||
-    !values.account_context_observed_at
-  ) {
-    errors.account_context_state = "Нужен свежий подтверждённый снимок кабинета";
-  }
-
-  return errors;
+  return validateCampaignIdentity(values);
 }

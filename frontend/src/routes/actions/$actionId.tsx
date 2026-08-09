@@ -1,9 +1,18 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft, CheckCircle2, CircleHelp, Clock3, Loader2, XCircle } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  CircleHelp,
+  Clock3,
+  Loader2,
+  XCircle,
+} from "lucide-react";
 
 import { ACTION_STATE_LABEL, actionForRealtimeState } from "@fb/shared/operator/viewModel";
 import {
   operatorActionKindLabel,
+  operatorActionRecovery,
   operatorActionStateReason,
 } from "@fb/shared/operator/actionLabels";
 import { formatZonedDateTime, timezoneEvidenceLabel } from "@fb/shared/format/time";
@@ -52,6 +61,7 @@ function ActionDetailPage() {
       />
     );
   }
+  const recovery = operatorActionRecovery(action.state, action.target_id);
 
   return (
     <article className="mx-auto max-w-3xl">
@@ -127,6 +137,24 @@ function ActionDetailPage() {
           <p className="m-0 mt-2 break-words text-[14px] leading-6 text-bg-10">
             {operatorActionStateReason(action.state)}
           </p>
+          {recovery?.destination === "target" && action.target_id ? (
+            <Link
+              to="/ads/$fbAdId"
+              params={{ fbAdId: action.target_id }}
+              className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] px-3 text-[14px] font-semibold text-bg-11 hover:bg-bg-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              {recovery.label}
+              <ArrowRight size={16} aria-hidden="true" />
+            </Link>
+          ) : recovery?.destination === "sources" ? (
+            <Link
+              to="/system/sources"
+              className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] px-3 text-[14px] font-semibold text-bg-11 hover:bg-bg-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              {recovery.label}
+              <ArrowRight size={16} aria-hidden="true" />
+            </Link>
+          ) : null}
         </div>
       </section>
     </article>

@@ -77,8 +77,32 @@ def test_asset_is_exact_current_orm_schema_plus_default_partitions() -> None:
     tables = set(re.findall(r"^CREATE TABLE public\.([a-z0-9_]+) \(", _asset(), re.MULTILINE))
 
     assert tables == set(Base.metadata.tables) | DEFAULT_PARTITIONS
-    assert len(Base.metadata.tables) == 47
-    assert len(tables) == 52
+    assert len(Base.metadata.tables) == 49
+    assert len(tables) == 54
+
+
+def test_fresh_baseline_normalizes_offer_account_membership() -> None:
+    asset = _asset()
+    offers_table = re.search(
+        r"CREATE TABLE public\.offers \((.*?)\n\);",
+        asset,
+        re.DOTALL,
+    )
+
+    assert offers_table is not None
+    assert "ad_account_ids" not in offers_table.group(1)
+    assert "CREATE TABLE public.ad_accounts (" in asset
+    assert "CREATE TABLE public.offer_ad_accounts (" in asset
+    assert "ck_ad_accounts_account_id" in asset
+    assert "pk_offer_ad_accounts PRIMARY KEY (offer_id, account_id)" in asset
+    assert (
+        "fk_offer_ad_accounts_offer_id_offers FOREIGN KEY (offer_id) "
+        "REFERENCES public.offers(id) ON DELETE CASCADE"
+    ) in asset
+    assert (
+        "fk_offer_ad_accounts_account_id_ad_accounts FOREIGN KEY (account_id) "
+        "REFERENCES public.ad_accounts(account_id) ON DELETE RESTRICT"
+    ) in asset
 
 
 def test_asset_has_required_postgresql_objects_and_only_default_partitions() -> None:
@@ -137,6 +161,9 @@ def test_asset_contains_only_active_task_types_and_no_contract_fallbacks() -> No
         "ad_library",
         "CREATE TABLE public.tracker_aggregate ",
         "ix_tracker_agg_",
+        "ad_auto_enable_disabled",
+        "auto_enable_recommendations",
+        "cabinet_autostart",
     ):
         assert forbidden not in asset
 
@@ -242,7 +269,7 @@ def test_baseline_retention_seed_equals_current_policy() -> None:
     migration = importlib.import_module(REVISION_MODULE)
 
     assert migration.BASELINE_RETENTION_POLICY == get_default_policy()
-    assert len(migration.BASELINE_RETENTION_POLICY) == 19
+    assert len(migration.BASELINE_RETENTION_POLICY) == 18
 
 
 def test_sql_splitter_preserves_functions_literals_and_nested_comments() -> None:

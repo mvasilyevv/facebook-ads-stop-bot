@@ -20,15 +20,18 @@ from core.models.base import (
 )
 from core.models.campaigns import (
     CampaignCreative,
+    CampaignDraft,
     CampaignPreset,
     CampaignRun,
     OfferCreativeSeq,
 )
 from core.models.catalog import (
+    AdAccount,
     FbAd,
     FbAdset,
     FbCampaign,
     Offer,
+    OfferAdAccount,
     OfferRule,
 )
 from core.models.meta_api import (
@@ -39,12 +42,11 @@ from core.models.meta_api import (
 )
 from core.models.observer import (
     AdAlertState,
-    AdAutoEnableDisabled,
     AdMetrics,
     AlertEvent,
     ScanRun,
 )
-from core.models.operator import OperatorRevisionEvent
+from core.models.operator import OperatorDisplayPreference, OperatorRevisionEvent
 from core.models.settings import (
     AdsetProCredentials,
     ObserverConfig,
@@ -56,7 +58,6 @@ from core.models.tasks import (
     AdsetDuplicatePreview,
     BrowserOperationLease,
     CommandIdempotencyReceipt,
-    EnableRecommendation,
     TaskQueue,
 )
 from core.models.telegram import (
@@ -91,6 +92,7 @@ __all__ = [
     "PanelSessionRecord",
     # campaigns
     "CampaignCreative",
+    "CampaignDraft",
     "CampaignPreset",
     "CampaignRun",
     "OfferCreativeSeq",
@@ -101,24 +103,25 @@ __all__ = [
     "TelegramConfig",
     "VisionConfig",
     # catalog
+    "AdAccount",
     "FbAd",
     "FbAdset",
     "FbCampaign",
     "Offer",
+    "OfferAdAccount",
     "OfferRule",
     # observer
     "AdAlertState",
-    "AdAutoEnableDisabled",
     "AdMetrics",
     "AlertEvent",
     "ScanRun",
     # operator
+    "OperatorDisplayPreference",
     "OperatorRevisionEvent",
     # tasks
     "AdsetDuplicatePreview",
     "BrowserOperationLease",
     "CommandIdempotencyReceipt",
-    "EnableRecommendation",
     "TaskQueue",
     # telegram
     "Incident",

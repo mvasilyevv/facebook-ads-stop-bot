@@ -966,57 +966,6 @@ async def test_delete_last_owner_is_rejected(pg_engine) -> None:
 
 
 @pytest.mark.asyncio
-async def test_concurrent_owner_revocations_preserve_one_owner(pg_engine) -> None:
-    owner_ids = (uuid.uuid4(), uuid.uuid4())
-    async with pg_engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                INSERT INTO telegram_recipients
-                    (id, chat_id, telegram_user_id, role)
-                VALUES
-                    (:first_id, 103, 203, 'owner'),
-                    (:second_id, 104, 204, 'owner')
-                """
-            ),
-            {"first_id": owner_ids[0], "second_id": owner_ids[1]},
-        )
-
-    app = create_app()
-    app.dependency_overrides[get_engine] = lambda: pg_engine
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            responses = await asyncio.gather(
-                *(
-                    client.delete(f"/api/settings/telegram/recipients/{owner_id}")
-                    for owner_id in owner_ids
-                )
-            )
-
-        assert sorted(response.status_code for response in responses) == [200, 409]
-        async with pg_engine.connect() as conn:
-            active_owners = await conn.scalar(
-                text(
-                    """
-                    SELECT COUNT(*)
-                    FROM telegram_recipients
-                    WHERE id = ANY(:ids)
-                      AND role = 'owner'
-                      AND revoked_at IS NULL
-                    """
-                ),
-                {"ids": list(owner_ids)},
-            )
-        assert active_owners == 1
-    finally:
-        async with pg_engine.begin() as conn:
-            await conn.execute(
-                text("DELETE FROM telegram_recipients WHERE id = ANY(:ids)"),
-                {"ids": list(owner_ids)},
-            )
-
-
-@pytest.mark.asyncio
 async def test_delete_recipient_atomically_retires_pending_work_and_capabilities(
     pg_engine,
 ) -> None:
@@ -1286,3 +1235,30 @@ async def test_owner_invite_is_idempotent_and_visible_in_settings(app_client, pg
             )
         )
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_owner_invite_is_rejected_after_owner_activation(app_client, pg_engine) -> None:
+    owner_id = uuid.uuid4()
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO telegram_recipients
+                    (id, chat_id, telegram_user_id, role)
+                VALUES (:id, 99102, 99202, 'owner')
+                """
+            ),
+            {"id": owner_id},
+        )
+    try:
+        response = await app_client.post("/api/settings/telegram/owner-invite")
+
+        assert response.status_code == 409
+        assert "уже подключ" in response.json()["message"].lower()
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM telegram_recipients WHERE id = :id"),
+                {"id": owner_id},
+            )

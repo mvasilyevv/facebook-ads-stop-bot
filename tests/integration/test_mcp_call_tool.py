@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from apps.mcp_server.context import MCPContextManager
 from apps.mcp_server.main import build_server
+from core.ad_account_catalog import ad_account_catalog
 
 
 async def _invoke_call_tool(app: Server, name: str, arguments: dict) -> list[types.TextContent]:
@@ -50,6 +51,11 @@ async def seeded_offer(pg_engine: AsyncEngine):
         await conn.execute(
             text("INSERT INTO offers (id, code, name, is_active) VALUES (:i, :c, :n, true)"),
             {"i": offer_id, "c": code, "n": f"Test MCP {suffix}"},
+        )
+        await ad_account_catalog.replace_offer_accounts(
+            conn,
+            offer_id=offer_id,
+            account_ids=["98765002"],
         )
     yield code
     async with pg_engine.begin() as conn:
@@ -86,6 +92,7 @@ async def test_call_tool_read_only_returns_offers(
     block = contents[0]
     assert block.type == "text"
     assert seeded_offer in block.text
+    assert "98765002" in block.text
 
 
 # Неизвестный tool возвращает TextContent с пояснением, не падает.

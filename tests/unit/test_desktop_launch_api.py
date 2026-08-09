@@ -88,9 +88,12 @@ async def test_web_and_tma_launch_use_explicit_verified_identities(monkeypatch):
         web = await client.post(
             "/api/desktop/launch",
             headers={"Origin": "https://app.adpulse.su", "X-API-Key": "api-key"},
+            json={"presentation": "desktop"},
         )
         tma = await client.post(
-            "/api/desktop/launch", headers={"Authorization": f"Bearer {bearer}"}
+            "/api/desktop/launch",
+            headers={"Authorization": f"Bearer {bearer}"},
+            json={"presentation": "mobile"},
         )
         transports = await client.get("/api/desktop/transports", headers={"X-API-Key": "api-key"})
 
@@ -104,6 +107,8 @@ async def test_web_and_tma_launch_use_explicit_verified_identities(monkeypatch):
     tma_grant = await consume_desktop_ticket(redis, tma.json()["url"].split("ticket=", 1)[1])
     assert (web_grant.telegram_user_id, web_grant.source) == (1001, "web_panel")
     assert (tma_grant.telegram_user_id, tma_grant.source) == (2002, "telegram_mini_app")
+    assert web_grant.presentation == "desktop"
+    assert tma_grant.presentation == "mobile"
     await redis.aclose()
 
 
@@ -138,13 +143,17 @@ async def test_launch_rejects_bad_web_transport_and_non_owner_tma(monkeypatch):
         wrong_origin = await client.post(
             "/api/desktop/launch",
             headers={"Origin": "https://evil.example", "X-API-Key": "api-key"},
+            json={"presentation": "desktop"},
         )
         wrong_key = await client.post(
             "/api/desktop/launch",
             headers={"Origin": "https://app.adpulse.su", "X-API-Key": "wrong"},
+            json={"presentation": "desktop"},
         )
         recipient_response = await client.post(
-            "/api/desktop/launch", headers={"Authorization": f"Bearer {bearer}"}
+            "/api/desktop/launch",
+            headers={"Authorization": f"Bearer {bearer}"},
+            json={"presentation": "mobile"},
         )
     assert wrong_origin.status_code == 403
     assert wrong_key.status_code == 401
@@ -163,17 +172,23 @@ async def test_launch_fails_closed_for_non_production_public_origin():
         response = await client.post(
             "/api/desktop/launch",
             headers={"Origin": "https://app.adpulse.su", "X-API-Key": "api-key"},
+            json={"presentation": "desktop"},
         )
 
     assert response.status_code == 503
     await redis.aclose()
 
 
-def test_openapi_exposes_only_bodyless_public_desktop_launch():
+def test_openapi_requires_the_public_desktop_presentation_body():
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     schema = _app(redis, _settings()).openapi()
     operation = schema["paths"]["/api/desktop/launch"]["post"]
-    assert "requestBody" not in operation
+    assert operation["requestBody"] == {
+        "required": True,
+        "content": {
+            "application/json": {"schema": {"$ref": "#/components/schemas/DesktopLaunchRequest"}}
+        },
+    }
     assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/DesktopLaunchResponse"
     }

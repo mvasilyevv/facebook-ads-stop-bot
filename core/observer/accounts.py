@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Резолв явного scan set кабинетов для observer.
 
-Scan set = объединение offers.ad_account_ids всех АКТИВНЫХ офферов:
+Scan set = объединение offer_ad_accounts всех АКТИВНЫХ офферов:
 кабинет сканируется, если привязан хотя бы к одному активному офферу.
 Пустой scan set всегда останавливает цикл fail-closed: текущая вкладка браузера
 никогда не используется как неявная account identity.
@@ -9,14 +9,11 @@ Scan set = объединение offers.ad_account_ids всех АКТИВНЫ�
 
 from __future__ import annotations
 
-import re
-
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-# Числовой ID кабинета без префикса act_ (валидация на входе из БД — защита от мусора,
-# попавшего мимо API-валидации, например ручным UPDATE).
-_ACCOUNT_ID_RE = re.compile(r"^\d+$")
+from core.ad_account_catalog import ad_account_catalog
+from core.meta_api.identity import require_ad_account_id
 
 
 def allowlist_blocks_scan(single_cabinet: bool, campaign_ids: list[str]) -> bool:
@@ -38,34 +35,17 @@ def normalize_account_id(raw: str | None) -> str | None:
 
     Возвращает числовую строку или None, если значение невалидно.
     """
-    if not raw:
+    try:
+        return require_ad_account_id(raw)
+    except ValueError:
         return None
-    s = str(raw).strip()
-    if s.lower().startswith("act_"):
-        s = s[4:]
-    return s if _ACCOUNT_ID_RE.match(s) else None
 
 
 async def resolve_scan_account_ids(engine: AsyncEngine) -> list[str]:
-    """DISTINCT union ad_account_ids активных офферов, отсортированный для стабильного
-    порядка обхода (одинаковый порядок между циклами — предсказуемые латентности).
+    """Sorted DISTINCT union of accounts linked to active offers."""
 
-    Невалидные значения молча отбрасываются (нормализация через normalize_account_id).
-    """
     async with engine.connect() as conn:
-        rows = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT DISTINCT unnest(ad_account_ids) AS acc
-                    FROM offers
-                    WHERE is_active = TRUE
-                    """
-                )
-            )
-        ).fetchall()
-    normalized = {normalize_account_id(r[0]) for r in rows}
-    return sorted(acc for acc in normalized if acc)
+        return await ad_account_catalog.resolve_scan_set(conn)
 
 
 async def scan_nothing_monitored_reason(engine: AsyncEngine, campaign_ids: list[str]) -> str | None:
@@ -111,20 +91,7 @@ async def load_ad_account_id_for_fb_ad(engine: AsyncEngine, fb_ad_id: str) -> st
 
 
 async def list_offers_without_accounts(engine: AsyncEngine) -> list[str]:
-    """Коды активных офферов с пустым ad_account_ids — для warning'а в TG ops-топик:
-    такие офферы выпадают из мульти-кабинетного скана, пока кабинеты не заполнены.
-    """
+    """Active offers without membership rows, for the operator warning."""
+
     async with engine.connect() as conn:
-        rows = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT code FROM offers
-                    WHERE is_active = TRUE
-                      AND (ad_account_ids IS NULL OR cardinality(ad_account_ids) = 0)
-                    ORDER BY code
-                    """
-                )
-            )
-        ).fetchall()
-    return [r[0] for r in rows]
+        return await ad_account_catalog.list_active_offers_without_accounts(conn)

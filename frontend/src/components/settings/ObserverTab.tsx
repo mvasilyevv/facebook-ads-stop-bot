@@ -1,194 +1,374 @@
-/**
- * ObserverTab — настройки наблюдателя.
- *
- * Тоглы (сканирование / auto-enable reco) — авто-сейв через точечный PATCH.
- * Owner Campaign Tag и отслеживаемые кампании находятся в разделе «Реклама».
- * Состояние источников и воркеров — в «Система → Источники и воркеры»,
- * а ручной запуск сканирования — на странице «Сейчас».
- */
+import { useEffect, useState, type FC, type ReactNode } from "react";
+import {
+  normalizeOwnerCampaignTags,
+  OBSERVER_INTERVAL_MAX_SECONDS,
+  OBSERVER_INTERVAL_MIN_SECONDS,
+  validateObserverInterval,
+} from "@fb/features/settings";
+import { safeApiProblemMessage } from "@fb/operator-api";
+import { RefreshCw, ScanSearch } from "lucide-react";
 
-import { useState, useEffect, type FC } from "react";
-import { Switch } from "@/components/ui/Switch";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { ErrorState } from "@/components/ui/ErrorState";
+import { Switch } from "@/components/ui/Switch";
 import { toast } from "@/components/ui/Toast";
 import {
+  useObserverCampaigns,
   useObserverSettings,
-  useUpdateObserverSettings,
+  useRefreshObserverCampaigns,
+  useScanObserverNow,
+  useSetCampaignAllowlist,
   useToggleScanning,
-  useToggleAutoEnable,
-  useAutoEnableExclusions,
-  useRemoveAutoEnableExclusion,
+  useUpdateObserverInterval,
+  useUpdateOwnerTag,
 } from "@/lib/api/settings";
-import type { ObserverConfig } from "@fb/shared";
 
-// ─── Field — строка формы (label 180px + control) ────────────────────────────
-
-interface FieldProps {
+interface SettingRowProps {
   label: string;
-  hint?: string;
-  children: React.ReactNode;
+  hint: string;
+  children: ReactNode;
 }
 
-function Field({ label, hint, children }: FieldProps) {
+function SettingRow({ label, hint, children }: SettingRowProps) {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "180px 1fr",
-        gap: 16,
-        alignItems: "center",
-        padding: "12px 0",
-        borderBottom: "1px solid var(--color-hairline)",
-      }}
-    >
+    <div className="grid gap-3 border-b border-[var(--color-hairline)] py-4 last:border-b-0 sm:grid-cols-[minmax(0,220px)_minmax(0,1fr)] sm:items-center">
       <div>
-        <div className="text-[13px]" style={{ color: "var(--color-bg-10)" }}>
-          {label}
-        </div>
-        {hint && (
-          <div className="text-[12px] mt-0.5" style={{ color: "var(--color-bg-8)" }}>
-            {hint}
-          </div>
-        )}
+        <div className="text-[14px] font-medium text-bg-11">{label}</div>
+        <div className="mt-1 max-w-[54ch] text-[13px] leading-5 text-bg-8">{hint}</div>
       </div>
-      <div>{children}</div>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }
 
-// ─── Основной компонент ───────────────────────────────────────────────────────
-
 export const ObserverTab: FC = () => {
-  const { data, isLoading, error } = useObserverSettings();
-  const updateMut = useUpdateObserverSettings();
-  const toggleScanningMut = useToggleScanning();
-  const toggleAutoEnableMut = useToggleAutoEnable();
-  const exclusionsQ = useAutoEnableExclusions();
-  const removeExclusion = useRemoveAutoEnableExclusion();
+  const settingsQuery = useObserverSettings();
+  const [includeStale, setIncludeStale] = useState(false);
+  const campaignsQuery = useObserverCampaigns(includeStale);
+  const updateInterval = useUpdateObserverInterval();
+  const toggleScanning = useToggleScanning();
+  const updateOwnerTag = useUpdateOwnerTag();
+  const setAllowlist = useSetCampaignAllowlist();
+  const refreshCampaigns = useRefreshObserverCampaigns();
+  const scanNow = useScanObserverNow();
 
-  const [form, setForm] = useState<Partial<ObserverConfig>>({});
+  const [interval, setInterval] = useState("60");
+  const [ownerTags, setOwnerTags] = useState("");
+  const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
+  const [intervalError, setIntervalError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (data) {
-      setForm({
-        is_scanning_enabled: data.is_scanning_enabled,
-        auto_enable_recommendations: data.auto_enable_recommendations,
-      });
-    }
-  }, [data]);
+    if (!settingsQuery.data) return;
+    setInterval(String(settingsQuery.data.default_interval_seconds));
+    setOwnerTags(settingsQuery.data.owner_campaign_tag ?? "");
+    setSelectedCampaigns(settingsQuery.data.campaign_ids ?? []);
+  }, [settingsQuery.data]);
 
-  if (isLoading) {
+  if (settingsQuery.isLoading) {
     return (
-      <div className="space-y-3" style={{ maxWidth: 800 }}>
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-10 w-full" />
+      <div className="max-w-4xl space-y-3" aria-label="Загрузка настроек Observer">
+        {Array.from({ length: 4 }, (_, index) => (
+          <Skeleton key={index} className="h-14 w-full" />
         ))}
       </div>
     );
   }
 
-  if (error) {
-    return <ErrorState error={error} onRetry={() => void 0} />;
+  if (settingsQuery.error || !settingsQuery.data) {
+    return (
+      <div role="alert" className="max-w-3xl border-y border-[var(--color-hairline)] py-5">
+        <p className="m-0 text-[14px] text-danger">
+          {safeApiProblemMessage(settingsQuery.error, "Настройки Observer временно недоступны")}
+        </p>
+        <Button className="mt-4" variant="secondary" onClick={() => void settingsQuery.refetch()}>
+          Повторить
+        </Button>
+      </div>
+    );
   }
 
-  // Тоглы — точечный PATCH (scanning/auto-enable), не partial PUT (иначе 422).
-  const handleToggle = async (
-    field: "is_scanning_enabled" | "auto_enable_recommendations",
-    value: boolean,
-  ) => {
-    setForm((f) => ({ ...f, [field]: value }));
-    try {
-      if (field === "is_scanning_enabled") {
-        await toggleScanningMut.mutateAsync(value);
-      } else {
-        await toggleAutoEnableMut.mutateAsync(value);
-      }
-      toast.success("Настройки сохранены");
-    } catch (e) {
-      setForm((f) => ({ ...f, [field]: !value }));
-      toast.error("Ошибка сохранения", e instanceof Error ? e.message : String(e));
-    }
-  };
+  const settings = settingsQuery.data;
+  const campaigns = campaignsQuery.data ?? [];
 
-  // updateMut оставлен на будущее (PUT с полным body); сейчас тоглы идут через PATCH.
-  void updateMut;
+  async function saveInterval() {
+    const validationError = validateObserverInterval(interval);
+    setIntervalError(validationError);
+    if (validationError) return;
+    try {
+      await updateInterval.mutateAsync(Number(interval));
+      toast.success("Интервал Observer сохранён");
+    } catch (error) {
+      toast.error(
+        "Не удалось сохранить интервал",
+        safeApiProblemMessage(error, "Повторите попытку"),
+      );
+    }
+  }
+
+  async function saveOwnerTags() {
+    try {
+      await updateOwnerTag.mutateAsync(normalizeOwnerCampaignTags(ownerTags));
+      toast.success("Теги владельца сохранены");
+    } catch (error) {
+      toast.error("Не удалось сохранить теги", safeApiProblemMessage(error, "Повторите попытку"));
+    }
+  }
+
+  async function saveAllowlist() {
+    try {
+      await setAllowlist.mutateAsync(selectedCampaigns);
+      toast.success(
+        selectedCampaigns.length
+          ? "Список отслеживаемых кампаний сохранён"
+          : "Фильтр кампаний очищен",
+      );
+    } catch (error) {
+      toast.error(
+        "Не удалось сохранить кампании",
+        safeApiProblemMessage(error, "Повторите попытку"),
+      );
+    }
+  }
+
+  async function handleToggleScanning() {
+    const next = !settings.is_scanning_enabled;
+    try {
+      await toggleScanning.mutateAsync(next);
+      toast.success(next ? "Сканирование включено" : "Сканирование остановлено");
+    } catch (error) {
+      toast.error(
+        "Состояние сканирования не изменено",
+        safeApiProblemMessage(error, "Проверьте готовность Observer"),
+      );
+    }
+  }
+
+  async function handleScanNow() {
+    try {
+      await scanNow.mutateAsync();
+      toast.success("Сканирование поставлено в очередь");
+    } catch (error) {
+      toast.error(
+        "Сканирование не поставлено в очередь",
+        safeApiProblemMessage(error, "Проверьте готовность Observer"),
+      );
+    }
+  }
+
+  async function handleRefreshCampaigns() {
+    try {
+      await refreshCampaigns.mutateAsync(includeStale);
+      toast.success("Список кампаний обновлён");
+    } catch (error) {
+      toast.error(
+        "Не удалось обновить кампании",
+        safeApiProblemMessage(error, "Повторите попытку"),
+      );
+    }
+  }
 
   return (
-    <div className="grid gap-8">
-      {/* ── Левая колонка: параметры ── */}
-      <div>
-        <div
-          className="font-display text-[12px] tracking-[0.12em] uppercase text-bg-8"
-          style={{ marginBottom: 8, display: "inline-block" }}
-        >
-          МОНИТОРИНГ · ПАРАМЕТРЫ
+    <div className="max-w-4xl space-y-8">
+      <section aria-labelledby="observer-runtime-heading">
+        <div className="mb-2 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 id="observer-runtime-heading" className="m-0 text-[16px] font-medium text-bg-11">
+              Ритм наблюдения
+            </h2>
+            <p className="m-0 mt-1 text-[13px] leading-5 text-bg-8">
+              Автопауза остаётся разрешена только при свежем полном snapshot и активном
+              детерминированном правиле.
+            </p>
+          </div>
+          <span className="text-[13px] text-bg-9" role="status">
+            {settings.is_scanning_enabled ? "Сканирование включено" : "Сканирование остановлено"}
+          </span>
         </div>
 
-        <Field label="Включить сканирование" hint="Наблюдатель периодически сканирует объявления">
-          <Switch
-            checked={form.is_scanning_enabled ?? false}
-            onChange={() => handleToggle("is_scanning_enabled", !form.is_scanning_enabled)}
-            label="Включить сканирование"
-          />
-        </Field>
+        <div className="border-y border-[var(--color-hairline)]">
+          <SettingRow
+            label="Периодическое сканирование"
+            hint="Остановка прекращает новые циклы Observer. Она не активирует объявления и не отменяет уже подтверждённые команды."
+          >
+            <Switch
+              checked={settings.is_scanning_enabled}
+              onChange={() => void handleToggleScanning()}
+              disabled={toggleScanning.isPending}
+              label={
+                settings.is_scanning_enabled
+                  ? "Остановить периодическое сканирование"
+                  : "Включить периодическое сканирование"
+              }
+              visualLabel={settings.is_scanning_enabled ? "Включено" : "Остановлено"}
+            />
+          </SettingRow>
 
-        <Field
-          label="Auto-enable рекомендаций OK"
-          hint="OK включаются автоматически; WARNING и curator всегда требуют ручного решения"
-        >
-          <Switch
-            checked={form.auto_enable_recommendations ?? false}
-            onChange={() =>
-              handleToggle("auto_enable_recommendations", !form.auto_enable_recommendations)
-            }
-            label="Автоматически исполнять безопасные рекомендации OK"
-          />
-        </Field>
-      </div>
-
-      <section className="border-t border-[var(--color-hairline)] pt-6">
-        <div className="font-display text-[12px] uppercase tracking-[0.1em] text-bg-8">
-          Исключения auto-enable
-        </div>
-        <p className="mt-1 text-[12px] text-bg-8">
-          Рекомендации для этих объявлений остаются видимыми, но автоматически не исполняются.
-        </p>
-        <div className="mt-4 overflow-hidden rounded-[var(--radius-2)] border border-[var(--color-hairline)]">
-          {exclusionsQ.isLoading ? (
-            <div className="p-3">
-              <Skeleton height={34} className="w-full" />
-            </div>
-          ) : exclusionsQ.data?.length ? (
-            exclusionsQ.data.map((item) => (
-              <div
-                key={item.fb_ad_id}
-                className="flex items-center justify-between gap-4 border-b border-[var(--color-hairline)] px-4 py-3 last:border-0"
+          <SettingRow
+            label="Интервал"
+            hint={`Допустимый диапазон: ${OBSERVER_INTERVAL_MIN_SECONDS}–${OBSERVER_INTERVAL_MAX_SECONDS} секунд.`}
+          >
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start">
+              <Input
+                id="observer-interval"
+                aria-label="Интервал сканирования в секундах"
+                type="number"
+                min={OBSERVER_INTERVAL_MIN_SECONDS}
+                max={OBSERVER_INTERVAL_MAX_SECONDS}
+                inputMode="numeric"
+                value={interval}
+                errorMessage={intervalError ?? undefined}
+                onChange={(event) => {
+                  setInterval(event.target.value);
+                  if (intervalError) setIntervalError(null);
+                }}
+                className="sm:max-w-40"
+              />
+              <Button
+                variant="secondary"
+                onClick={() => void saveInterval()}
+                loading={updateInterval.isPending}
               >
-                <div className="min-w-0">
-                  <div className="truncate text-[12px] text-bg-11">
-                    {item.ad_name || item.fb_ad_id}
-                  </div>
-                  <div className="mt-0.5 font-display text-[12px] text-bg-8">
-                    {item.fb_ad_id}
-                    {item.reason ? ` · ${item.reason}` : ""}
-                  </div>
-                </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  loading={removeExclusion.isPending && removeExclusion.variables === item.fb_ad_id}
-                  onClick={() => removeExclusion.mutate(item.fb_ad_id)}
-                >
-                  Разрешить auto-enable
-                </Button>
-              </div>
-            ))
-          ) : (
-            <div className="px-4 py-6 text-center text-[12px] text-bg-8">Исключений нет</div>
-          )}
+                Сохранить интервал
+              </Button>
+            </div>
+          </SettingRow>
+
+          <SettingRow
+            label="Сканировать сейчас"
+            hint="Создаёт отдельную задачу. Ответ означает только постановку в очередь, не завершённый scan."
+          >
+            <Button
+              variant="secondary"
+              leftIcon={<ScanSearch size={15} aria-hidden="true" />}
+              onClick={() => void handleScanNow()}
+              loading={scanNow.isPending}
+            >
+              Поставить scan в очередь
+            </Button>
+          </SettingRow>
         </div>
+      </section>
+
+      <section aria-labelledby="observer-scope-heading">
+        <h2 id="observer-scope-heading" className="m-0 text-[16px] font-medium text-bg-11">
+          Область сканирования
+        </h2>
+        <p className="m-0 mt-1 max-w-[70ch] text-[13px] leading-5 text-bg-8">
+          Теги ограничивают владельца кампаний, allowlist — конкретные кампании. Пустое значение
+          снимает соответствующий фильтр.
+        </p>
+
+        <div className="mt-3 border-y border-[var(--color-hairline)]">
+          <SettingRow
+            label="Теги владельца"
+            hint="Один или несколько тегов через запятую. Например: MV,ABC."
+          >
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start">
+              <Input
+                id="observer-owner-tags"
+                aria-label="Теги владельца кампаний"
+                value={ownerTags}
+                placeholder="MV,ABC"
+                onChange={(event) => setOwnerTags(event.target.value)}
+              />
+              <Button
+                variant="secondary"
+                onClick={() => void saveOwnerTags()}
+                loading={updateOwnerTag.isPending}
+              >
+                Сохранить теги
+              </Button>
+            </div>
+          </SettingRow>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+          <Switch
+            checked={includeStale}
+            onChange={() => setIncludeStale((value) => !value)}
+            label="Показывать старые кампании"
+            visualLabel="Показывать кампании старше 14 дней"
+          />
+          <Button
+            variant="ghost"
+            leftIcon={<RefreshCw size={14} aria-hidden="true" />}
+            onClick={() => void handleRefreshCampaigns()}
+            loading={refreshCampaigns.isPending}
+          >
+            Обновить список
+          </Button>
+        </div>
+
+        {campaignsQuery.isError ? (
+          <div role="alert" className="mt-4 border-y border-[var(--color-hairline)] py-4">
+            <p className="m-0 text-[14px] text-danger">
+              {safeApiProblemMessage(campaignsQuery.error, "Список кампаний временно недоступен")}
+            </p>
+            <Button
+              className="mt-3"
+              variant="secondary"
+              onClick={() => void campaignsQuery.refetch()}
+            >
+              Повторить
+            </Button>
+          </div>
+        ) : campaignsQuery.isLoading ? (
+          <div className="mt-4 space-y-2">
+            {Array.from({ length: 3 }, (_, index) => (
+              <Skeleton key={index} className="h-12 w-full" />
+            ))}
+          </div>
+        ) : campaigns.length ? (
+          <fieldset className="mt-4">
+            <legend className="sr-only">Кампании для сканирования</legend>
+            <div className="max-h-[360px] overflow-y-auto border-y border-[var(--color-hairline)]">
+              {campaigns.map((campaign) => {
+                const checked = selectedCampaigns.includes(campaign.id);
+                return (
+                  <label
+                    key={campaign.id}
+                    className="flex min-h-11 cursor-pointer items-center gap-3 border-b border-[var(--color-hairline)] py-2.5 last:border-b-0"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() =>
+                        setSelectedCampaigns((current) =>
+                          checked
+                            ? current.filter((id) => id !== campaign.id)
+                            : [...current, campaign.id],
+                        )
+                      }
+                      className="size-4 shrink-0 accent-[var(--color-accent)]"
+                    />
+                    <span className="min-w-0 break-words text-[14px] text-bg-10">
+                      {campaign.name}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <p className="m-0 text-[13px] text-bg-8">
+                {selectedCampaigns.length
+                  ? `Выбрано: ${selectedCampaigns.length}`
+                  : "Allowlist пуст: фильтр по кампаниям отключён"}
+              </p>
+              <Button
+                variant="primary"
+                onClick={() => void saveAllowlist()}
+                loading={setAllowlist.isPending}
+              >
+                Сохранить allowlist
+              </Button>
+            </div>
+          </fieldset>
+        ) : (
+          <div className="mt-4 border-y border-[var(--color-hairline)] py-5 text-[14px] text-bg-9">
+            Кампании не найдены. Обновите список после проверки кабинетов и активных офферов.
+          </div>
+        )}
       </section>
     </div>
   );

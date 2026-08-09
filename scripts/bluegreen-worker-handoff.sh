@@ -20,14 +20,13 @@ DEADLINE_EPOCH=""
 
 readonly -a NON_MONEY_WORKERS=(
   observer meta_api telegram_delivery_worker telegram_update_worker cleanup reconciler
-  health_watchdog enable_recommendation digest_scheduler tracker_reconciliation_worker
+  health_watchdog digest_scheduler tracker_reconciliation_worker
   campaign_creator
 )
-readonly -a MONEY_WORKERS=(autopause_worker cabinet_scheduler)
+readonly -a MONEY_WORKERS=(autopause_worker)
 readonly -a ALL_WORKERS=("${NON_MONEY_WORKERS[@]}" "${MONEY_WORKERS[@]}")
 readonly -a SINGLETON_WORKERS=(
-  cleanup reconciler health_watchdog enable_recommendation digest_scheduler
-  cabinet_scheduler
+  cleanup reconciler health_watchdog digest_scheduler
 )
 readonly SINGLETON_READY_PREFIX="/tmp/fb-agent-postgres-singleton-"
 
@@ -161,19 +160,16 @@ container_release_signature() {
 }
 
 wait_target_money_ready() {
-  local previous_autopause="" previous_scheduler=""
-  local current_autopause="" current_scheduler=""
+  local previous_autopause=""
+  local current_autopause=""
   while remaining_seconds >/dev/null; do
     current_autopause="$(container_release_signature autopause_worker)" || current_autopause=""
-    current_scheduler="$(container_release_signature cabinet_scheduler)" || current_scheduler=""
-    if [[ -n "$current_autopause" && -n "$current_scheduler" \
-      && "$current_autopause" == "$previous_autopause" \
-      && "$current_scheduler" == "$previous_scheduler" ]]; then
+    if [[ -n "$current_autopause" \
+      && "$current_autopause" == "$previous_autopause" ]]; then
       printf 'Target money workers are release-specific and stable: %s\n' "$target_release_id"
       return 0
     fi
     previous_autopause="$current_autopause"
-    previous_scheduler="$current_scheduler"
     remaining="$(remaining_seconds)" || break
     sleep_seconds=2
     ((remaining < sleep_seconds)) && sleep_seconds="$remaining"

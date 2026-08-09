@@ -262,6 +262,7 @@ async def redeem_desktop_ticket(
             telegram_user_id=grant.telegram_user_id,
             source=grant.source,
             expected_hostname=grant.expected_hostname,
+            presentation=grant.presentation,
             ttl=settings.desktop_access_session_ttl_seconds,
         )
     except DesktopAccessError as exc:
@@ -287,11 +288,37 @@ async def verify_desktop_session(
                 **_NO_STORE,
                 "Remote-User": DESKTOP_PRINCIPAL,
                 "X-Desktop-Transport": "kasm",
+                "X-Desktop-Presentation": session.presentation,
             },
         )
     response = RedirectResponse(_PANEL_DESKTOP_PAGE, status_code=303, headers=_NO_STORE)
     _clear_desktop_cookie(response)
     return response
+
+
+@router.get("/desktop-auth/profile", include_in_schema=False)
+async def desktop_session_profile(
+    request: Request,
+    engine: DepEngine,
+    redis: DepRedis,
+    settings: DepSettings,
+) -> Response:
+    """Expose only the authenticated presentation profile to the first-party client."""
+    resolved = await _resolve_desktop_session(request, engine, redis, settings)
+    if resolved is None:
+        response = JSONResponse(
+            {"detail": "desktop_session_required"},
+            status_code=401,
+            headers=_NO_STORE,
+        )
+        _clear_desktop_cookie(response)
+        return response
+    _, session = resolved
+    return JSONResponse(
+        {"presentation": session.presentation},
+        status_code=200,
+        headers={**_NO_STORE, "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.post("/desktop/logout", include_in_schema=False)

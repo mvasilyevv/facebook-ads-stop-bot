@@ -44,6 +44,7 @@ def _task_snapshot(
     requested_by: str = "test",
     result: dict | None = None,
     lease_token: int = _LEASE_TOKEN,
+    lane: str = "money",
 ) -> Task:
     now = datetime.now(UTC)
     return Task(
@@ -60,7 +61,7 @@ def _task_snapshot(
         created_at=now,
         external_started_at=None,
         result=result,
-        lane="money",
+        lane=lane,
         priority=0,
         available_at=now,
         deadline_at=now + timedelta(seconds=30),
@@ -310,8 +311,9 @@ async def test_last_mutation_attempt_still_schedules_read_reconciliation() -> No
         },
         attempt_count=0,
         max_attempts=1,
-        requested_by="cabinet_autostart",
+        requested_by="owner:test-bulk-activate",
         result=None,
+        lane="bulk",
     )
     task.idempotency_key = "last-ambiguous-attempt"
 
@@ -341,8 +343,9 @@ async def test_busy_reconciliation_lock_does_not_consume_attempt_budget() -> Non
         },
         attempt_count=5,
         max_attempts=5,
-        requested_by="cabinet_autostart",
+        requested_by="owner:test-bulk-activate",
         result={"outcome": "UNKNOWN", "reconcile_required": True},
+        lane="bulk",
     )
     task.idempotency_key = "busy-reconciliation"
 
@@ -355,7 +358,7 @@ async def test_busy_reconciliation_lock_does_not_consume_attempt_budget() -> Non
     update_sql, params = engine.calls[0]
     assert "status = 'retrying'" in update_sql
     assert "attempt_count" not in update_sql
-    assert params["deadline_delay_seconds"] == 31
+    assert params["deadline_delay_seconds"] == 1801
 
 
 # _execute_with_touch: во время долгой mutation фоновый touch освежает updated_at,

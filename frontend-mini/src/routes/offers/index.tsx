@@ -4,8 +4,9 @@
  * Код оффера: mono 15px weight 600 text-bg-11 (канон OfferCard).
  */
 import { useEffect, useId, useRef, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Plus, ChevronRight } from "lucide-react";
+import { safeApiProblemMessage } from "@fb/operator-api";
 import {
   DEFAULT_OFFER_RULES_VALUES,
   isOfferCpaValid,
@@ -43,9 +44,20 @@ import {
 } from "@/lib/api";
 import { haptic } from "@/lib/tg";
 import { cn } from "@/lib/cn";
+import { getStoredRole } from "@/lib/auth";
 import type { Offer } from "@fb/shared";
 
+type OfferFilter = "all" | "active" | "inactive";
+
 export const Route = createFileRoute("/offers/")({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { filter: OfferFilter } => ({
+    filter:
+      search.filter === "active" || search.filter === "inactive"
+        ? search.filter
+        : "all",
+  }),
   component: OffersPage,
 });
 
@@ -150,7 +162,12 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
       onClose();
     } catch (err) {
       haptic.notify("error");
-      setError((err as Error).message);
+      setError(
+        safeApiProblemMessage(
+          err,
+          "Оффер не сохранён. Проверьте поля и повторите.",
+        ),
+      );
     }
   }
 
@@ -292,14 +309,22 @@ function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
   async function handleSave() {
     haptic.impact("medium");
     setSaveError(null);
+    let payload;
     try {
-      const payload = rulesValuesToPayload(values, frequency);
+      payload = rulesValuesToPayload(values, frequency);
+    } catch {
+      setSaveError("Проверьте CPA, валюту и проценты правила");
+      return;
+    }
+    try {
       await updateRules.mutateAsync({ offerId, payload });
       haptic.notify("success");
       onClose();
     } catch (err) {
       haptic.notify("error");
-      setSaveError((err as Error).message);
+      setSaveError(
+        safeApiProblemMessage(err, "Пороги не сохранены. Повторите попытку."),
+      );
     }
   }
 
@@ -571,6 +596,8 @@ interface OfferDetailProps {
   onThresholds: () => void;
   onToggleActive: () => void;
   isToggling: boolean;
+  canEdit: boolean;
+  toggleArmed: boolean;
 }
 
 function OfferDetail({
@@ -579,6 +606,8 @@ function OfferDetail({
   onThresholds,
   onToggleActive,
   isToggling,
+  canEdit,
+  toggleArmed,
 }: OfferDetailProps) {
   return (
     <div className="flex flex-col gap-5 pb-6">
@@ -611,21 +640,44 @@ function OfferDetail({
       </div>
 
       {/* Кнопки действий */}
+      {!canEdit ? (
+        <p
+          role="status"
+          className="m-0 border-y border-[var(--color-hairline)] py-3 text-[14px] text-warning"
+        >
+          Изменять офферы может только владелец.
+        </p>
+      ) : null}
       <div className="grid grid-cols-2 gap-2">
-        <Button variant="secondary" onClick={onEdit} fullWidth>
+        <Button
+          variant="secondary"
+          onClick={onEdit}
+          disabled={!canEdit}
+          fullWidth
+        >
           Редактировать
         </Button>
-        <Button variant="secondary" onClick={onThresholds} fullWidth>
+        <Button
+          variant="secondary"
+          onClick={onThresholds}
+          disabled={!canEdit}
+          fullWidth
+        >
           Пороги
         </Button>
         <Button
           variant="secondary"
           onClick={onToggleActive}
           loading={isToggling}
+          disabled={!canEdit}
           fullWidth
           className="col-span-2"
         >
-          {offer.is_active ? "Выключить" : "Включить"}
+          {toggleArmed
+            ? `Подтвердить ${offer.is_active ? "выключение" : "включение"}`
+            : offer.is_active
+              ? "Выключить"
+              : "Включить"}
         </Button>
       </div>
     </div>
@@ -637,15 +689,20 @@ function OfferDetail({
 type SheetMode = "detail" | "edit" | "create" | "thresholds" | null;
 
 function OffersPage() {
+  const navigate = useNavigate();
+  const { filter } = Route.useSearch();
+  const canEdit = getStoredRole() === "owner";
   const { data: offers, isLoading, isError, error, refetch } = useOffers();
   const updateOffer = useUpdateOffer();
 
   const [selected, setSelected] = useState<Offer | null>(null);
   const [sheetMode, setSheetMode] = useState<SheetMode>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [toggleArmed, setToggleArmed] = useState(false);
 
   function openDetail(offer: Offer) {
     setActionError(null);
+    setToggleArmed(false);
     setSelected(offer);
     setSheetMode("detail");
     haptic.selection();
@@ -653,11 +710,16 @@ function OffersPage() {
 
   function closeSheet() {
     setSheetMode(null);
+    setToggleArmed(false);
     // selected не сбрасываем — нужен при detail→edit переходе
   }
 
   async function handleToggleActive() {
-    if (!selected) return;
+    if (!selected || !canEdit) return;
+    if (!toggleArmed) {
+      setToggleArmed(true);
+      return;
+    }
     setActionError(null);
     haptic.impact("medium");
     try {
@@ -669,7 +731,12 @@ function OffersPage() {
       closeSheet();
     } catch (err) {
       haptic.notify("error");
-      setActionError((err as Error).message);
+      setActionError(
+        safeApiProblemMessage(
+          err,
+          "Статус оффера не изменён. Повторите попытку.",
+        ),
+      );
     }
   }
 
@@ -689,6 +756,11 @@ function OffersPage() {
 
   // Счётчик для eyebrow правой кнопки
   const activeCount = (offers ?? []).filter((o) => o.is_active).length;
+  const filteredOffers = (offers ?? []).filter((offer) => {
+    if (filter === "active") return offer.is_active;
+    if (filter === "inactive") return !offer.is_active;
+    return true;
+  });
 
   return (
     <div className="flex flex-col min-h-full pb-20">
@@ -701,6 +773,7 @@ function OffersPage() {
           <Button
             size="sm"
             variant="secondary"
+            disabled={!canEdit}
             onClick={() => {
               setSelected(null);
               setSheetMode("create");
@@ -713,6 +786,15 @@ function OffersPage() {
         }
       />
 
+      {!canEdit ? (
+        <p
+          role="status"
+          className="mx-4 mt-3 border-y border-[var(--color-hairline)] py-3 text-[14px] text-warning"
+        >
+          Каталог доступен только для чтения. Изменения разрешены владельцу.
+        </p>
+      ) : null}
+
       {actionError ? (
         <p
           role="alert"
@@ -720,6 +802,37 @@ function OffersPage() {
         >
           {actionError}
         </p>
+      ) : null}
+
+      {!isLoading && !isError ? (
+        <div
+          className="flex gap-2 overflow-x-auto px-4 pb-1 pt-3"
+          aria-label="Фильтр офферов"
+        >
+          {(
+            [
+              ["all", "Все"],
+              ["active", "Активные"],
+              ["inactive", "Выключенные"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={filter === value}
+              onClick={() =>
+                void navigate({ to: "/offers", search: { filter: value } })
+              }
+              className={`min-h-11 shrink-0 rounded-full px-4 text-[13px] ${
+                filter === value
+                  ? "bg-accent text-bg-0"
+                  : "border border-[var(--color-hairline)] text-bg-10"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       ) : null}
 
       {/* Подзаголовок-счётчик */}
@@ -747,32 +860,37 @@ function OffersPage() {
         {isError && !isLoading && (
           <EmptyState
             title="Не удалось загрузить"
-            description={
-              error instanceof Error ? error.message : "Проверьте соединение"
-            }
+            description={safeApiProblemMessage(
+              error,
+              "Проверьте соединение и повторите",
+            )}
             action={{ label: "Повторить", onClick: () => void refetch() }}
           />
         )}
 
         {/* Пусто */}
-        {!isLoading && !isError && (offers ?? []).length === 0 && (
+        {!isLoading && !isError && filteredOffers.length === 0 && (
           <EmptyState
             title="Офферов нет"
             description="Создайте первый оффер для настройки стоп-правил"
-            action={{
-              label: "Создать оффер",
-              onClick: () => {
-                setSelected(null);
-                setSheetMode("create");
-              },
-            }}
+            action={
+              canEdit
+                ? {
+                    label: "Создать оффер",
+                    onClick: () => {
+                      setSelected(null);
+                      setSheetMode("create");
+                    },
+                  }
+                : undefined
+            }
           />
         )}
 
         {/* Карточки офферов */}
         {!isLoading &&
           !isError &&
-          (offers ?? []).map((offer) => (
+          filteredOffers.map((offer) => (
             <OfferCard
               key={offer.id}
               offer={offer}
@@ -799,6 +917,8 @@ function OffersPage() {
             }}
             onToggleActive={() => void handleToggleActive()}
             isToggling={updateOffer.isPending}
+            canEdit={canEdit}
+            toggleArmed={toggleArmed}
           />
         ) : null}
 

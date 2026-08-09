@@ -48,14 +48,24 @@ describe("web route architecture", () => {
     }
   });
 
+  it("gives /campaigns the creation journal meaning shared with TMA", () => {
+    const campaignsRoute = readFileSync(join(srcDir, "routes/campaigns/index.tsx"), "utf8");
+
+    expect(campaignsRoute).toContain("CampaignRunsHistory");
+    expect(campaignsRoute).toContain('to="/campaigns/create"');
+    expect(campaignsRoute).not.toContain("useObserverCampaigns");
+    expect(campaignsRoute).not.toContain("CabinetAutostart");
+  });
+
   it("uses canonical operator events and observer exclusions only", () => {
     const operatorClient = readFileSync(join(srcDir, "lib/api/operator.ts"), "utf8");
     const settingsClient = readFileSync(join(srcDir, "lib/api/settings.ts"), "utf8");
 
     expect(operatorClient).toContain('"/api/operator/events"');
     expect(operatorClient).not.toContain('"/history/');
-    expect(settingsClient).toContain('"/api/settings/observer/auto-enable-exclusions"');
-    expect(settingsClient).not.toContain("/dashboard/auto-enable-disabled");
+    expect(settingsClient).not.toContain("/auto-enable");
+    expect(settingsClient).not.toContain("cabinet-autostart");
+    expect(settingsClient).not.toContain("auto_enable_recommendations");
     expect(existsSync(join(srcDir, "lib/api/history.ts"))).toBe(false);
   });
 

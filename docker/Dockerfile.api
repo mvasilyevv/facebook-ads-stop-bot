@@ -1,4 +1,4 @@
-# FastAPI сервер FB Stop Bot
+# FastAPI сервер FB Agent
 ARG BASE_IMAGE=fb-stop-bot/python-base:latest
 FROM ${BASE_IMAGE} AS runtime
 

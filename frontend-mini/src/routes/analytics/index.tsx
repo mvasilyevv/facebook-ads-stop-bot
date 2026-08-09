@@ -1,7 +1,16 @@
-import { useMemo, useState } from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useOperatorRealtimeStatus } from "@fb/operator-api";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import {
+  safeApiProblemMessage,
+  useOperatorRealtimeStatus,
+} from "@fb/operator-api";
 import type { AnalyticsPerformance } from "@fb/shared";
+import { ANALYTICS_PRESETS } from "@fb/shared/analytics/presentation";
+import {
+  parseAnalyticsRouteSearch,
+  type AnalyticsPreset,
+  type AnalyticsRouteSearch,
+  type AnalyticsSort,
+} from "@fb/shared/analytics/routeState";
 import type { components } from "@fb/shared/api/generated";
 import { formatInt, formatSpend } from "@fb/shared/format/number";
 import {
@@ -35,6 +44,7 @@ import {
   useTmaAnalyticsLiveBudget,
   useTmaAnalyticsPerformance,
 } from "@/features/analytics/api";
+import { useOperatorDisplayPreference } from "@/lib/settingsApi";
 import {
   FunnelSummary,
   LiveBudgetChart,
@@ -54,39 +64,44 @@ import {
 
 export const Route = createFileRoute("/analytics/")({
   component: AnalyticsPage,
+  validateSearch: parseAnalyticsRouteSearch,
 });
 
-interface AnalyticsFilters {
-  accountId: string;
-  offerId: string;
-  campaignId: string;
-  search: string;
-}
-
-const EMPTY_FILTERS: AnalyticsFilters = {
-  accountId: "",
-  offerId: "",
-  campaignId: "",
-  search: "",
-};
+const ANALYTICS_SORT_OPTIONS: Array<{
+  value: AnalyticsSort;
+  label: string;
+}> = [
+  { value: "spend", label: "Расход" },
+  { value: "clicks", label: "Клики" },
+  { value: "registrations", label: "Регистрации" },
+  { value: "ftds", label: "FTD" },
+  { value: "confirmed_deposits", label: "Депозиты" },
+  { value: "revenue", label: "Выручка" },
+  { value: "base_delta", label: "Δ базы" },
+  { value: "name", label: "Название" },
+];
 
 function AnalyticsPage() {
-  const [period, setPeriod] = useState<AnalyticsPeriod>("today");
-  const [filters, setFilters] = useState<AnalyticsFilters>(EMPTY_FILTERS);
-  const [page, setPage] = useState(1);
+  const search = Route.useSearch();
+  const navigate = useNavigate({ from: "/analytics/" });
   const realtimeStatus = useOperatorRealtimeStatus();
-  const window = useMemo(() => performanceWindow(period), [period]);
+  const displayPreferenceQ = useOperatorDisplayPreference();
+  const window = performanceWindow(
+    search.period,
+    search.from_date,
+    search.to_date,
+  );
 
   const performanceParams = {
     ...window,
     level: "campaign" as const,
-    account_id: filters.accountId || undefined,
-    offer_id: filters.offerId || undefined,
-    campaign_id: filters.campaignId || undefined,
-    search: filters.search.trim() || undefined,
-    sort: "spend" as const,
-    direction: "desc" as const,
-    page,
+    account_id: search.account_id,
+    offer_id: search.offer_id,
+    campaign_id: search.campaign_id,
+    search: search.search,
+    sort: search.sort,
+    direction: search.direction,
+    page: search.page,
     page_size: 20,
   };
   const performanceQ = useTmaAnalyticsPerformance(performanceParams);
@@ -103,11 +118,13 @@ function AnalyticsPage() {
     : "unavailable";
   const liveBudgetQ = useTmaAnalyticsLiveBudget(
     {
-      account_id: filters.accountId || undefined,
-      offer_id: filters.offerId || undefined,
-      campaign_id: filters.campaignId || undefined,
+      account_id: search.account_id,
+      offer_id: search.offer_id,
+      campaign_id: search.campaign_id,
     },
-    period === "today" && Boolean(performanceData) && !performanceQ.isError,
+    search.period === "today" &&
+      Boolean(performanceData) &&
+      !performanceQ.isError,
   );
   const liveBudgetData = liveBudgetQ.isError ? undefined : liveBudgetQ.data;
   const liveBudgetState = liveBudgetData
@@ -121,9 +138,13 @@ function AnalyticsPage() {
       )
     : "unavailable";
   const eventsQ = useTmaAnalyticsEvents({
-    period,
-    campaign_id: filters.campaignId || undefined,
-    search: filters.search.trim() || undefined,
+    period: search.period,
+    from_date: search.from_date,
+    to_date: search.to_date,
+    campaign_id: search.campaign_id,
+    stage: search.event_level,
+    task_status: search.task_result,
+    search: search.search,
     limit: 50,
   });
   const eventsState: DataState = eventsQ.isError
@@ -142,9 +163,9 @@ function AnalyticsPage() {
     {
       from_iso: performanceData?.window.from_iso,
       to_iso: performanceData?.window.to_iso,
-      account_id: filters.accountId || undefined,
-      offer_id: filters.offerId || undefined,
-      campaign_id: filters.campaignId || undefined,
+      account_id: search.account_id,
+      offer_id: search.offer_id,
+      campaign_id: search.campaign_id,
     },
     daypartEnabled,
   );
@@ -161,22 +182,76 @@ function AnalyticsPage() {
       )
     : "unavailable";
 
-  const patchFilters = (patch: Partial<AnalyticsFilters>) => {
-    setFilters((previous) => ({ ...previous, ...patch }));
-    setPage(1);
+  const patchSearch = (patch: Partial<AnalyticsRouteSearch>) => {
+    void navigate({
+      search: (previous) => ({ ...previous, ...patch }),
+      replace: true,
+    });
   };
 
   const selectPeriod = (next: AnalyticsPeriod) => {
     haptic.selection();
-    setPeriod(next);
-    setPage(1);
+    const dates =
+      next === "custom"
+        ? defaultCalendarDates(search.from_date, search.to_date)
+        : { from_date: undefined, to_date: undefined };
+    patchSearch({
+      period: next,
+      from_date: dates.from_date,
+      to_date: dates.to_date,
+      page: 1,
+    });
   };
 
   const focusCampaign = (campaignId: string) => {
     haptic.selection();
-    patchFilters({ campaignId });
+    patchSearch({ campaign_id: campaignId, page: 1 });
     globalThis.scrollTo?.({ top: 0, behavior: "smooth" });
   };
+
+  if (displayPreferenceQ.isPending) {
+    return (
+      <div className="flex min-h-full flex-col pb-20">
+        <MiniHeader
+          eyebrowNum="10"
+          eyebrow="META × TRACKER"
+          title="Аналитика"
+        />
+        <section className="grid gap-4 p-4" aria-label="Аналитика">
+          <Card>
+            <p role="status" className="m-0 text-[14px] text-bg-8">
+              Подготавливаем подписи времени…
+            </p>
+          </Card>
+        </section>
+      </div>
+    );
+  }
+
+  if (displayPreferenceQ.isError || !displayPreferenceQ.data) {
+    return (
+      <div className="flex min-h-full flex-col pb-20">
+        <MiniHeader
+          eyebrowNum="10"
+          eyebrow="META × TRACKER"
+          title="Аналитика"
+        />
+        <section className="grid gap-4 p-4" aria-label="Аналитика">
+          <Card data-state="unavailable">
+            <ErrorState
+              message={safeApiProblemMessage(
+                displayPreferenceQ.error,
+                "Timezone отображения не подтверждён сервером. Откройте настройки или повторите запрос.",
+              )}
+              onRetry={() => void displayPreferenceQ.refetch()}
+            />
+          </Card>
+        </section>
+      </div>
+    );
+  }
+
+  const displayTimeZone = displayPreferenceQ.data.timezone_name;
 
   return (
     <div className="flex min-h-full flex-col pb-20">
@@ -193,15 +268,21 @@ function AnalyticsPage() {
 
       <section className="grid gap-4 p-4" aria-label="Аналитика">
         <AnalyticsFiltersPanel
-          period={period}
-          filters={filters}
+          search={search}
           options={performanceData?.filter_options}
           onPeriod={selectPeriod}
-          onChange={patchFilters}
+          onChange={(patch) => patchSearch({ ...patch, page: 1 })}
           onReset={() => {
             haptic.selection();
-            setFilters(EMPTY_FILTERS);
-            setPage(1);
+            patchSearch({
+              account_id: undefined,
+              offer_id: undefined,
+              campaign_id: undefined,
+              search: undefined,
+              sort: "spend",
+              direction: "desc",
+              page: 1,
+            });
           }}
         />
 
@@ -225,7 +306,7 @@ function AnalyticsPage() {
             <SourceEvidence
               data={performanceData}
               state={overallState}
-              timezone={performanceData.scope.display_timezone}
+              timezone={displayTimeZone}
               timezoneKnown={windowSafety.timezoneKnown}
               refreshing={performanceQ.isFetching}
               onRefresh={() => {
@@ -233,7 +314,7 @@ function AnalyticsPage() {
                 void Promise.all([
                   performanceQ.refetch(),
                   eventsQ.refetch(),
-                  ...(period === "today" ? [liveBudgetQ.refetch()] : []),
+                  ...(search.period === "today" ? [liveBudgetQ.refetch()] : []),
                   ...(daypartEnabled ? [daypartQ.refetch()] : []),
                 ]);
               }}
@@ -255,10 +336,10 @@ function AnalyticsPage() {
             <TotalsSummary
               data={performanceData}
               state={overallState}
-              period={period}
+              period={search.period}
             />
 
-            {period === "today" ? (
+            {search.period === "today" ? (
               <section aria-labelledby="live-budget-title">
                 <h2
                   id="live-budget-title"
@@ -273,7 +354,7 @@ function AnalyticsPage() {
                     performance={performanceData}
                     series={liveBudgetData}
                     completeness={liveBudgetState}
-                    timezone={liveBudgetData.scope.display_timezone}
+                    timezone={displayTimeZone}
                     currency={commonCurrency(
                       performanceData.scope,
                       liveBudgetData.scope,
@@ -301,41 +382,41 @@ function AnalyticsPage() {
               <FunnelSummary
                 performance={performanceData}
                 completeness={overallState}
-                timezone={performanceData.scope.display_timezone}
+                timezone={displayTimeZone}
                 currency={confirmedCurrency(performanceData.scope)}
               />
             </section>
 
             <section aria-labelledby="campaign-performance-title">
               <div className="mb-3 flex items-end justify-between gap-3">
-                <div>
-                  <p className="m-0 font-display text-[12px] uppercase tracking-[0.08em] text-bg-8">
-                    По расходу · сверху
-                  </p>
-                  <h2
-                    id="campaign-performance-title"
-                    className="m-0 mt-1 font-display text-[18px] font-semibold text-bg-11"
-                  >
-                    Кампании
-                  </h2>
-                </div>
+                <h2
+                  id="campaign-performance-title"
+                  className="m-0 font-display text-[18px] font-semibold text-bg-11"
+                >
+                  Кампании
+                </h2>
                 <span className="text-[12px] text-bg-8">
                   {overallState === "ready" || overallState === "empty"
                     ? `${performanceData.pagination.total} строк`
                     : "Количество не подтверждено"}
                 </span>
               </div>
+              <AnalyticsPresetControl
+                value={search.preset}
+                onChange={(preset) => patchSearch({ preset, page: 1 })}
+              />
               <PerformanceCards
                 rows={performanceData.rows}
                 parentState={overallState}
-                period={period}
+                period={search.period}
+                preset={search.preset}
                 currency={confirmedCurrency(performanceData.scope)}
                 onFocusCampaign={focusCampaign}
               />
               <Pagination
                 page={performanceData.pagination.page}
                 pages={performanceData.pagination.pages}
-                onPage={setPage}
+                onPage={(page) => patchSearch({ page })}
               />
             </section>
 
@@ -393,7 +474,7 @@ function AnalyticsPage() {
             <AnalyticsEvents
               items={eventsQ.data}
               state={eventsState}
-              timezone={performanceData.scope.display_timezone}
+              timezone={displayTimeZone}
               error={eventsQ.error}
               onRetry={() => void eventsQ.refetch()}
             />
@@ -405,30 +486,32 @@ function AnalyticsPage() {
 }
 
 function AnalyticsFiltersPanel({
-  period,
-  filters,
+  search,
   options,
   onPeriod,
   onChange,
   onReset,
 }: {
-  period: AnalyticsPeriod;
-  filters: AnalyticsFilters;
+  search: AnalyticsRouteSearch;
   options?: AnalyticsPerformance["filter_options"];
   onPeriod: (period: AnalyticsPeriod) => void;
-  onChange: (patch: Partial<AnalyticsFilters>) => void;
+  onChange: (patch: Partial<AnalyticsRouteSearch>) => void;
   onReset: () => void;
 }) {
   const structuredFilterCount = [
-    filters.accountId,
-    filters.offerId,
-    filters.campaignId,
+    search.account_id,
+    search.offer_id,
+    search.campaign_id,
   ].filter(Boolean).length;
-  const activeFilterCount = structuredFilterCount + (filters.search ? 1 : 0);
+  const activeFilterCount =
+    structuredFilterCount +
+    Number(Boolean(search.search)) +
+    Number(search.sort !== "spend") +
+    Number(search.direction !== "desc");
   return (
     <Card padding="sm" aria-label="Фильтры аналитики" className="grid gap-3">
       <div
-        className="grid grid-cols-3 gap-2"
+        className="grid grid-cols-2 gap-2"
         role="group"
         aria-label="Период аналитики"
       >
@@ -436,11 +519,11 @@ function AnalyticsFiltersPanel({
           <button
             key={item.id}
             type="button"
-            aria-pressed={item.id === period}
+            aria-pressed={item.id === search.period}
             onClick={() => onPeriod(item.id)}
             className={cn(
               "min-h-11 rounded-[var(--radius-2)] border px-2 text-[13px] font-semibold",
-              item.id === period
+              item.id === search.period
                 ? "border-accent bg-accent text-bg-0"
                 : "border-[var(--color-hairline-strong)] bg-bg-2 text-bg-9",
             )}
@@ -450,63 +533,115 @@ function AnalyticsFiltersPanel({
         ))}
       </div>
 
+      {search.period === "custom" ? (
+        <div className="grid grid-cols-2 gap-2">
+          <Input
+            type="date"
+            label="С даты"
+            aria-label="Начало периода"
+            value={search.from_date ?? ""}
+            onChange={(event) =>
+              onChange({ from_date: event.target.value || undefined })
+            }
+          />
+          <Input
+            type="date"
+            label="По дату"
+            aria-label="Конец периода"
+            value={search.to_date ?? ""}
+            onChange={(event) =>
+              onChange({ to_date: event.target.value || undefined })
+            }
+          />
+        </div>
+      ) : null}
+
       <Input
         type="search"
         label="Быстрый поиск"
         aria-label="Поиск в аналитике"
         placeholder="Кампания, adset или ad ID"
-        value={filters.search}
-        onChange={(event) => onChange({ search: event.target.value })}
+        value={search.search ?? ""}
+        onChange={(event) =>
+          onChange({ search: event.target.value || undefined })
+        }
       />
 
       <details className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-1">
         <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 px-3 text-[13px] font-semibold text-bg-11">
-          <span>Кабинет, оффер, кампания</span>
+          <span>Фильтры и сортировка</span>
           <span className="font-display text-[12px] text-bg-8">
-            {structuredFilterCount ? `выбрано ${structuredFilterCount}` : "все"}
+            {activeFilterCount
+              ? `изменено ${activeFilterCount}`
+              : "по умолчанию"}
           </span>
         </summary>
         <div className="grid gap-3 border-t border-[var(--color-hairline)] p-3">
           <Select
             label="Кабинет"
             aria-label="Кабинет"
-            value={filters.accountId}
+            value={search.account_id ?? ""}
             options={[
               { value: "", label: "Все кабинеты" },
               ...(options?.accounts ?? []),
             ]}
             onChange={(event) =>
               onChange({
-                accountId: event.target.value,
-                offerId: "",
-                campaignId: "",
+                account_id: event.target.value || undefined,
+                offer_id: undefined,
+                campaign_id: undefined,
               })
             }
           />
           <Select
             label="Оффер"
             aria-label="Оффер"
-            value={filters.offerId}
+            value={search.offer_id ?? ""}
             options={[
               { value: "", label: "Все офферы" },
               ...(options?.offers ?? []),
             ]}
             onChange={(event) =>
               onChange({
-                offerId: event.target.value,
-                campaignId: "",
+                offer_id: event.target.value || undefined,
+                campaign_id: undefined,
               })
             }
           />
           <Select
             label="Кампания"
             aria-label="Кампания"
-            value={filters.campaignId}
+            value={search.campaign_id ?? ""}
             options={[
               { value: "", label: "Все кампании" },
               ...(options?.campaigns ?? []),
             ]}
-            onChange={(event) => onChange({ campaignId: event.target.value })}
+            onChange={(event) =>
+              onChange({ campaign_id: event.target.value || undefined })
+            }
+          />
+          <Select
+            label="Сортировка"
+            aria-label="Сортировка"
+            value={search.sort}
+            options={ANALYTICS_SORT_OPTIONS}
+            onChange={(event) =>
+              onChange({ sort: event.target.value as AnalyticsSort })
+            }
+          />
+          <Select
+            label="Порядок"
+            aria-label="Порядок сортировки"
+            value={search.direction}
+            options={[
+              { value: "desc", label: "По убыванию" },
+              { value: "asc", label: "По возрастанию" },
+            ]}
+            onChange={(event) =>
+              onChange({
+                direction: event.target.value === "asc" ? "asc" : "desc",
+              })
+            }
           />
           <Button
             type="button"
@@ -520,6 +655,42 @@ function AnalyticsFiltersPanel({
         </div>
       </details>
     </Card>
+  );
+}
+
+function AnalyticsPresetControl({
+  value,
+  onChange,
+}: {
+  value: AnalyticsPreset;
+  onChange: (preset: AnalyticsPreset) => void;
+}) {
+  return (
+    <div
+      className="mb-3 grid grid-cols-3 gap-2"
+      role="group"
+      aria-label="Набор показателей аналитики"
+    >
+      {ANALYTICS_PRESETS.map((preset) => (
+        <button
+          key={preset.value}
+          type="button"
+          aria-pressed={value === preset.value}
+          onClick={() => {
+            haptic.selection();
+            onChange(preset.value);
+          }}
+          className={cn(
+            "min-h-11 rounded-[var(--radius-2)] border px-2 text-[13px] font-semibold",
+            value === preset.value
+              ? "border-accent bg-accent text-bg-0"
+              : "border-[var(--color-hairline-strong)] bg-bg-2 text-bg-9",
+          )}
+        >
+          {preset.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -962,4 +1133,36 @@ function commonCurrency(...scopes: CurrencyScope[]): string | null {
   return first !== null && currencies.every((currency) => currency === first)
     ? first
     : null;
+}
+
+function defaultCalendarDates(
+  fromDate?: string,
+  toDate?: string,
+): { from_date: string; to_date: string } {
+  if (validCalendarDate(fromDate) && validCalendarDate(toDate)) {
+    return { from_date: fromDate!, to_date: toDate! };
+  }
+  const today = new Date();
+  const from = new Date(today);
+  from.setDate(from.getDate() - 6);
+  return {
+    from_date: localCalendarDate(from),
+    to_date: localCalendarDate(today),
+  };
+}
+
+function validCalendarDate(value?: string): boolean {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  return (
+    new Date(Date.UTC(year!, month! - 1, day!)).toISOString().slice(0, 10) ===
+    value
+  );
+}
+
+function localCalendarDate(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }

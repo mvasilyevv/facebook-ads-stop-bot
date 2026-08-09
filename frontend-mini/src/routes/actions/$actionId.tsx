@@ -1,4 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { ArrowRight } from "lucide-react";
 
 import {
   ACTION_STATE_LABEL,
@@ -6,6 +7,7 @@ import {
 } from "@fb/shared/operator/viewModel";
 import {
   operatorActionKindLabel,
+  operatorActionRecovery,
   operatorActionStateReason,
 } from "@fb/shared/operator/actionLabels";
 import {
@@ -52,6 +54,7 @@ export function MiniActionDetail({ actionId }: { actionId: string }) {
         Действие #{actionId} не найдено.
       </div>
     );
+  const recovery = operatorActionRecovery(action.state, action.target_id);
 
   return (
     <article className="px-4 pb-6 pt-4">
@@ -121,6 +124,24 @@ export function MiniActionDetail({ actionId }: { actionId: string }) {
           value={operatorActionStateReason(action.state)}
         />
       </dl>
+      {recovery?.destination === "target" && action.target_id ? (
+        <Link
+          to="/ads/$fbAdId"
+          params={{ fbAdId: action.target_id }}
+          className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 px-4 text-[14px] font-semibold text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          {recovery.label}
+          <ArrowRight size={16} aria-hidden="true" />
+        </Link>
+      ) : recovery?.destination === "sources" ? (
+        <Link
+          to="/system/sources"
+          className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 px-4 text-[14px] font-semibold text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          {recovery.label}
+          <ArrowRight size={16} aria-hidden="true" />
+        </Link>
+      ) : null}
     </article>
   );
 }

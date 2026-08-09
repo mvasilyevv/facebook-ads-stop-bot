@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   operatorActionKindLabel,
+  operatorActionRecovery,
   operatorActionStateReason,
 } from "../actionLabels";
 
@@ -44,5 +45,24 @@ describe("operator action labels", () => {
     expect(operatorActionStateReason("internal_retry_exhausted")).toBe(
       "Состояние команды требует сверки. Не повторяйте действие вслепую.",
     );
+  });
+
+  it("offers an exact target check for failed or ambiguous ad commands", () => {
+    expect(operatorActionRecovery("failed", "ad-42")).toEqual({
+      label: "Проверить объявление",
+      destination: "target",
+    });
+    expect(operatorActionRecovery("unknown", "ad-42")).toEqual({
+      label: "Проверить объявление",
+      destination: "target",
+    });
+  });
+
+  it("falls back to source diagnostics without inventing a target", () => {
+    expect(operatorActionRecovery("failed", null)).toEqual({
+      label: "Проверить источники",
+      destination: "sources",
+    });
+    expect(operatorActionRecovery("confirmed", "ad-42")).toBeNull();
   });
 });

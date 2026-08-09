@@ -20,7 +20,7 @@ const ROUTE_CRUMB: Record<string, string> = {
   "/actions": "Действия",
   "/ads": "Объявления",
   "/campaigns": "Кампании",
-  "/incidents": "Инцидент",
+  "/incidents": "Инциденты",
   "/offers": "Офферы",
   "/analytics": "Аналитика",
   "/system/sources": "Источники и воркеры",

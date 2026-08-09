@@ -134,6 +134,7 @@ def _live_row(
         return {
             "task_type": "campaign_create",
             "lane": "bulk",
+            "requested_by": "operator:web",
             "payload": {"run_id": "864f701e-f008-4de7-b677-18a879f1f260"},
             "db_now_epoch": 1_800_000_000,
             "lease_expires_epoch": lease_expires_epoch,
@@ -143,6 +144,7 @@ def _live_row(
     row: dict[str, object] = {
         "task_type": "meta_api_mutation",
         "lane": "money" if caller == "autopause" else "bulk",
+        "requested_by": "bot_auto_stop" if caller == "autopause" else "operator:web",
         "payload": {
             "mutation_kind": ("pause_ad" if caller == "autopause" else "duplicate_adset_structure"),
             "target_id": "987654321",
@@ -2531,25 +2533,225 @@ async def test_python_client_rejects_signed_status_semantic_substitution(
             )
 
 
+@pytest.mark.parametrize(
+    ("mutation_kind", "desired_status"),
+    (
+        ("pause_ad", "PAUSED"),
+        ("activate_ad", "ACTIVE"),
+    ),
+)
 @pytest.mark.asyncio
-async def test_python_client_binds_bulk_task_to_exact_targets_and_action(
+async def test_owner_worker_authorizes_exact_single_ad_status_action(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation_kind: str,
+    desired_status: str,
+) -> None:
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    row = _live_row(caller="meta_api")
+    row["lane"] = "interactive"
+    row["payload"] = {
+        "mutation_kind": mutation_kind,
+        "target_id": "987654321",
+        "ad_account_id": "123",
+    }
+    operation = graph_operation_binding(
+        method="POST",
+        endpoint="/987654321",
+        query_params={"status": desired_status},
+        body_json="",
+    )
+    client = MetaApiClient(
+        session_id="session-exact",
+        operation_engine=_operation_engine(row),
+    )
+    client._stub = SimpleNamespace(
+        CheckMetaApiHealth=AsyncMock(
+            return_value=SimpleNamespace(
+                healthy=True,
+                browser_contract_version=BROWSER_CONTRACT_VERSION,
+                session_id="session-exact",
+                vision_profile_id="profile-exact",
+            )
+        )
+    )
+
+    with client.operation_authority(
+        caller="meta_api",
+        task_id=1842,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        authorization = await client.prepare_operation_authorization(
+            rpc="execute_graph_call",
+            operation=operation,
+            ad_account_id="123",
+            graph_method="POST",
+            graph_endpoint="/987654321",
+            graph_query_params={"status": desired_status},
+            graph_body_json="",
+        )
+
+    assert authorization["task_id"] == 1842
+
+    automatic_row = {**row, "requested_by": "bot_auto_stop"}
+    automatic_engine = _operation_engine(automatic_row)
+    automatic_client = MetaApiClient(
+        session_id="session-exact",
+        operation_engine=automatic_engine,
+    )
+    automatic_client._stub = client._stub
+    with automatic_client.operation_authority(
+        caller="meta_api",
+        task_id=1842,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        with pytest.raises(PermanentError, match="caller/requester binding"):
+            await automatic_client.prepare_operation_authorization(
+                rpc="execute_graph_call",
+                operation=operation,
+                ad_account_id="123",
+                graph_method="POST",
+                graph_endpoint="/987654321",
+                graph_query_params={"status": desired_status},
+                graph_body_json="",
+            )
+
+    assert automatic_engine._test_connection.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_autopause_caller_rejects_manual_requester_even_for_pause(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
     row = _live_row()
+    row["requested_by"] = "operator:web"
+    engine = _operation_engine(row)
+    client = MetaApiClient(session_id="session-exact", operation_engine=engine)
+    client._stub = SimpleNamespace(
+        CheckMetaApiHealth=AsyncMock(
+            return_value=SimpleNamespace(
+                healthy=True,
+                browser_contract_version=BROWSER_CONTRACT_VERSION,
+                session_id="session-exact",
+                vision_profile_id="profile-exact",
+            )
+        )
+    )
+
+    with client.operation_authority(
+        caller="autopause",
+        task_id=1842,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        with pytest.raises(PermanentError, match="caller/requester binding"):
+            await client.prepare_operation_authorization(
+                rpc="execute_graph_call",
+                operation=_STATUS_OPERATION,
+                ad_account_id="123",
+                **_STATUS_GRAPH_SEMANTICS,
+            )
+
+    assert engine._test_connection.execute.await_count == 2
+
+
+@pytest.mark.parametrize("mutation_kind", ("activate_ad", "bulk_status_change"))
+@pytest.mark.asyncio
+async def test_autopause_caller_cannot_authorize_non_pause_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    mutation_kind: str,
+) -> None:
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    row = _live_row()
+    if mutation_kind == "activate_ad":
+        row["payload"] = {
+            "mutation_kind": mutation_kind,
+            "target_id": "987654321",
+            "ad_account_id": "123",
+        }
+        endpoint = "/987654321"
+        query_params = {"status": "ACTIVE"}
+    else:
+        row["payload"] = {
+            "mutation_kind": mutation_kind,
+            "target_id": "bulk:1",
+            "ad_account_id": "123",
+            "params": {"action": "activate", "ad_ids": ["987654321"]},
+        }
+        endpoint = "/"
+        query_params = {
+            "batch": json.dumps([{"method": "POST", "relative_url": "987654321?status=ACTIVE"}])
+        }
+    operation = graph_operation_binding(
+        method="POST",
+        endpoint=endpoint,
+        query_params=query_params,
+        body_json="",
+    )
+    engine = _operation_engine(row)
+    client = MetaApiClient(session_id="session-exact", operation_engine=engine)
+    client._stub = SimpleNamespace(
+        CheckMetaApiHealth=AsyncMock(
+            return_value=SimpleNamespace(
+                healthy=True,
+                browser_contract_version=BROWSER_CONTRACT_VERSION,
+                session_id="session-exact",
+                vision_profile_id="profile-exact",
+            )
+        )
+    )
+
+    with client.operation_authority(
+        caller="autopause",
+        task_id=1842,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        with pytest.raises(PermanentError, match="caller/mutation binding"):
+            await client.prepare_operation_authorization(
+                rpc="execute_graph_call",
+                operation=operation,
+                ad_account_id="123",
+                graph_method="POST",
+                graph_endpoint=endpoint,
+                graph_query_params=query_params,
+                graph_body_json="",
+            )
+
+    assert engine._test_connection.execute.await_count == 2
+
+
+@pytest.mark.parametrize(
+    ("action", "desired_status"),
+    (("pause", "PAUSED"), ("activate", "ACTIVE")),
+)
+@pytest.mark.asyncio
+async def test_owner_worker_binds_bulk_task_to_exact_targets_and_action(
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+    desired_status: str,
+) -> None:
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    row = _live_row(caller="meta_api")
     row["payload"] = {
         "mutation_kind": "bulk_status_change",
         "target_id": "bulk:2",
         "ad_account_id": "123",
         "params": {
             "ad_ids": ["111", "222"],
-            "action": "pause",
+            "action": action,
         },
     }
     exact_batch = json.dumps(
         [
-            {"method": "POST", "relative_url": "111?status=PAUSED"},
-            {"method": "POST", "relative_url": "222?status=PAUSED"},
+            {"method": "POST", "relative_url": f"111?status={desired_status}"},
+            {"method": "POST", "relative_url": f"222?status={desired_status}"},
         ]
     )
     exact_operation = graph_operation_binding(
@@ -2573,7 +2775,7 @@ async def test_python_client_binds_bulk_task_to_exact_targets_and_action(
         )
     )
     with client.operation_authority(
-        caller="autopause",
+        caller="meta_api",
         task_id=1842,
         lease_owner=uuid.uuid4(),
         lease_token=7,
@@ -2592,8 +2794,13 @@ async def test_python_client_binds_bulk_task_to_exact_targets_and_action(
 
     tampered_batch = json.dumps(
         [
-            {"method": "POST", "relative_url": "111?status=PAUSED"},
-            {"method": "POST", "relative_url": "999?status=ACTIVE"},
+            {"method": "POST", "relative_url": f"111?status={desired_status}"},
+            {
+                "method": "POST",
+                "relative_url": (
+                    "999?status=ACTIVE" if desired_status == "PAUSED" else "999?status=PAUSED"
+                ),
+            },
         ]
     )
     tampered_client = MetaApiClient(
@@ -2602,7 +2809,7 @@ async def test_python_client_binds_bulk_task_to_exact_targets_and_action(
     )
     tampered_client._stub = client._stub
     with tampered_client.operation_authority(
-        caller="autopause",
+        caller="meta_api",
         task_id=1842,
         lease_owner=uuid.uuid4(),
         lease_token=7,

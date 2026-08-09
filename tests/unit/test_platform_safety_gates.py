@@ -156,7 +156,6 @@ def test_mismatched_existing_release_fails_before_rsync(tmp_path: Path) -> None:
             (
                 "RELEASE_ID=repeat-release",
                 f"DESKTOP_WEBTOP_IMAGE=example/webtop@sha256:{'1' * 64}",
-                f"DESKTOP_KASMVNC_IMAGE=example/kasm@sha256:{'2' * 64}",
                 "",
             )
         ),
@@ -275,7 +274,7 @@ def test_supported_release_owns_backup_timer_adoption_and_alloy_readiness() -> N
     assert "--previous-release-dir" in release[app_cutover:alloy_promote]
 
 
-def test_desktop_cutover_requires_explicit_seed_cdp_and_authenticated_kasm() -> None:
+def test_desktop_cutover_requires_explicit_seed_cdp_and_authenticated_desktop() -> None:
     release = _source("scripts/server-platform-release.sh")
     desktop = _source("scripts/platform-desktop-release.sh")
     healer = _source("scripts/platform-desktop-heal.sh")
@@ -420,9 +419,8 @@ def test_desktop_cutover_requires_explicit_seed_cdp_and_authenticated_kasm() -> 
     assert "X-FB-Agent-Browser-Maintenance-Owner" in healer
     assert "--force-recreate" in desktop_runtime
     assert ".HostConfig.NetworkMode" in desktop_runtime
-    assert ".HostConfig.NetworkMode" in vision
-    assert ".HostConfig.IpcMode" in vision
-    assert "container:${webtop_id}|container:${webtop_id}" in vision
+    assert ".HostConfig.IpcMode" not in vision
+    assert "vision_identity_is_exact" in vision
     runtime_start = desktop_runtime.index("start_browser()")
     exact_runtime = desktop_runtime.index("if browser_identity_is_exact", runtime_start)
     registry_pull = desktop_runtime.index('"${compose[@]}" pull browser-agent', runtime_start)
@@ -560,7 +558,6 @@ def test_coordinated_release_uses_one_deadline_and_fail_closed_desktop_rollback(
     runtime_mutation = desktop.index("\nacquire_browser_maintenance\n", preflight)
     for rollback_capability in (
         "desktop_webtop_pull",
-        "desktop_kasmvnc_pull",
         "previous_rollback_contract_is_compatible",
         "previous_runtime_matches_active_app",
     ):

@@ -35,6 +35,7 @@ REMOVED_KEYS = (
             "DESKTOP_KASM_PUBLIC_ORIGIN",
             "DESKTOP_ACTIVE_TRANSPORT",
             "DESKTOP_KASM_ENABLED",
+            "DESKTOP_KASMVNC_IMAGE",
             "VISION_X_TOKEN",
             "VISION_PROFILE_ID",
         }
@@ -104,7 +105,6 @@ def validate(values: dict[str, str]) -> list[str]:
         "TMA_SESSION_SECRET",
         "ADSETPRO_POSTBACK_SECRET",
         "DESKTOP_WEBTOP_IMAGE",
-        "DESKTOP_KASMVNC_IMAGE",
         "DESKTOP_OWNER_TELEGRAM_USER_ID",
         "DESKTOP_PUBLIC_ORIGIN",
         "DESKTOP_KASM_SERVICE_USER",
@@ -153,9 +153,6 @@ def validate(values: dict[str, str]) -> list[str]:
     ):
         errors.append("DESKTOP_WEBTOP_IMAGE must be an immutable image@sha256 reference")
 
-    kasm_image = values.get("DESKTOP_KASMVNC_IMAGE", "")
-    if kasm_image and not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", kasm_image):
-        errors.append("DESKTOP_KASMVNC_IMAGE must be an immutable image@sha256 reference")
     kasm_user = values.get("DESKTOP_KASM_SERVICE_USER", "")
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", kasm_user):
         errors.append("DESKTOP_KASM_SERVICE_USER contains unsupported characters")
@@ -211,7 +208,6 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--public-url", default="https://app.adpulse.su")
     parser.add_argument("--desktop-webtop-image")
-    parser.add_argument("--desktop-kasmvnc-image")
     parser.add_argument("--bootstrap-secrets", type=Path)
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
@@ -270,8 +266,6 @@ def main() -> int:
         "ADSETPRO_POSTBACK_SECRET": durable_generated["ADSETPRO_POSTBACK_SECRET"],
         "DESKTOP_WEBTOP_IMAGE": args.desktop_webtop_image
         or current.get("DESKTOP_WEBTOP_IMAGE", ""),
-        "DESKTOP_KASMVNC_IMAGE": args.desktop_kasmvnc_image
-        or current.get("DESKTOP_KASMVNC_IMAGE", ""),
     }
     rendered = render(lines, overrides)
     _, final_values = parse_lines(rendered)

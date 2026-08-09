@@ -32,6 +32,53 @@
   background: var(--color-bg-8);
 }
 
+.operator-incident-status {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: var(--radius-1);
+  padding: 4px 9px;
+  color: var(--color-bg-10);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.operator-incident-status-mark {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: 1px;
+}
+
+.operator-incident-status[data-status="open"],
+.operator-incident-status[data-status="acknowledged"],
+.operator-incident-status[data-status="executing"] {
+  color: var(--color-warning);
+}
+
+.operator-incident-status[data-status="acknowledged"]
+  .operator-incident-status-mark,
+.operator-incident-status[data-status="executing"]
+  .operator-incident-status-mark,
+.operator-incident-status[data-status="resolved"]
+  .operator-incident-status-mark,
+.operator-incident-status[data-status="failed"] .operator-incident-status-mark {
+  background: currentColor;
+}
+
+.operator-incident-status[data-status="resolved"] {
+  color: var(--color-success);
+}
+
+.operator-incident-status[data-status="failed"] {
+  color: var(--color-danger);
+}
+
 .operator-state-notice {
   display: flex;
   align-items: flex-start;
@@ -40,8 +87,7 @@
   border-top: 1px solid var(--color-hairline-strong);
   border-right: 0;
   border-bottom: 1px solid var(--color-hairline-strong);
-  border-left: 2px solid var(--color-bg-8);
-  border-left-width: 3px;
+  border-left: 0;
   border-radius: 0;
   background: var(--color-bg-1);
   padding: 12px 14px;
@@ -49,15 +95,12 @@
   font-size: 14px;
 }
 
-.operator-state-notice[data-tone="degraded"] {
-  border-left-color: var(--color-warning);
-}
-.operator-state-notice[data-tone="neutral"] {
-  border-left-color: var(--color-bg-8);
-}
 .operator-state-notice-mark {
   color: var(--color-bg-11);
   font-family: var(--font-display);
+}
+.operator-state-notice[data-tone="degraded"] .operator-state-notice-mark {
+  color: var(--color-warning);
 }
 .operator-state-notice strong {
   color: var(--color-bg-11);

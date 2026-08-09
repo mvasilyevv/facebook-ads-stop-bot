@@ -28,7 +28,7 @@ ROUTER_MODULES: tuple[str, ...] = (
     "desktop",
     "offers",
     "operator",
-    "settings_cabinet_autostart",
+    "operator_preferences",
     "settings_observer",
     "settings_telegram",
     "settings_vision",

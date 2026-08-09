@@ -20,8 +20,8 @@ export interface BrowserSession {
   primaryPage: import('playwright').Page | null;
   /**
    * Dedicated pages used by the operator control plane. A cabinet key is the
-   * numeric Meta account id (without ``act_``), or ``__default__`` only while
-   * the first account is being resolved from the current Ads Manager URL.
+   * exact numeric Meta account id (without ``act_``). A role page is never
+   * assigned until the current Ads Manager URL confirms that account id.
    *
    * Scan and control pages MUST never contain the same Page instance. A scan
    * reload is therefore unable to destroy the execution context of a money

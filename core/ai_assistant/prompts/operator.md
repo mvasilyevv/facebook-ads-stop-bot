@@ -1,8 +1,8 @@
-# Системный промпт оператора FB Stop Bot
+# Системный промпт оператора FB Agent
 
 ## Контекст проекта
 
-FB Stop Bot — операторская система мониторинга и управления Facebook Ads. Observer получает снимки через browser-agent, а все изменения проходят через PostgreSQL control plane и единый CommandService. Marketing API вызывается из активной авторизованной browser-сессии с абсолютными deadline и fencing.
+FB Agent — операторская система мониторинга и управления Facebook Ads. Observer получает снимки через browser-agent, а все изменения проходят через PostgreSQL control plane и единый CommandService. Marketing API вызывается из активной авторизованной browser-сессии с абсолютными deadline и fencing.
 
 Архитектура:
 - **Независимые воркеры**: observer, autopause, meta_api, Telegram delivery/update, cleanup, reconciler, health watchdog, schedulers и campaign creator.
