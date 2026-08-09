@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pickle
 
 import pytest
 from pydantic import ValidationError
@@ -124,5 +125,10 @@ def test_campaign_draft_conflict_supports_exception_traceback_protocol() -> None
     # propagating an exception. Domain exceptions must permit that protocol.
     conflict.__traceback__ = None
 
+    assert isinstance(conflict, RuntimeError)
     assert conflict.expected_revision == 3
     assert conflict.actual_revision == 4
+
+    restored = pickle.loads(pickle.dumps(conflict))
+    assert restored.expected_revision == 3
+    assert restored.actual_revision == 4

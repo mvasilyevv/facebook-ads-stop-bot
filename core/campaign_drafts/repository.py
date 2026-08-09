@@ -18,9 +18,14 @@ class CampaignDraftConflictError(RuntimeError):
     def __init__(self, expected_revision: int, actual_revision: int | None) -> None:
         self.expected_revision = expected_revision
         self.actual_revision = actual_revision
-        super().__init__(
+        # BaseException.args must preserve the constructor signature so the
+        # exception remains serializable by workers and diagnostics tooling.
+        super().__init__(expected_revision, actual_revision)
+
+    def __str__(self) -> str:
+        return (
             "campaign draft revision conflict: "
-            f"expected={expected_revision}, actual={actual_revision}"
+            f"expected={self.expected_revision}, actual={self.actual_revision}"
         )
 
 

@@ -46,6 +46,17 @@ async def _seed_ad(engine, *, fb_ad_id: str) -> uuid.UUID:
         )
         await conn.execute(
             text(
+                """
+                INSERT INTO meta_account_snapshot(
+                    account_id, timezone_name, currency, currency_observed_at
+                )
+                VALUES (:account_id, 'UTC', 'USD', clock_timestamp())
+                """
+            ),
+            {"account_id": account_id},
+        )
+        await conn.execute(
+            text(
                 "INSERT INTO fb_adsets (id, campaign_id, fb_adset_id, adset_name) "
                 "VALUES (:id, :campaign_id, :fb_adset_id, :name)"
             ),
@@ -112,6 +123,19 @@ async def _cleanup(engine, *, fb_ad_id: str, offer_id: uuid.UUID) -> None:
                 """
             ),
             {"fb_ad_id": fb_ad_id},
+        )
+        await conn.execute(
+            text(
+                """
+                DELETE FROM meta_account_snapshot
+                WHERE account_id IN (
+                    SELECT ad_account_id
+                    FROM fb_campaigns
+                    WHERE offer_id = :id
+                )
+                """
+            ),
+            {"id": offer_id},
         )
         await conn.execute(
             text("DELETE FROM fb_campaigns WHERE offer_id = :id"),
