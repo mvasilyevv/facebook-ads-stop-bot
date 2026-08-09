@@ -28,6 +28,7 @@ async def test_auto_pause_requires_current_complete_scan_and_rule_generation(pg_
     config_existed = previous_scanning_enabled is not None
 
     scan_id: int | None = None
+    newer_scan_id: int | None = None
     try:
         async with pg_engine.begin() as conn:
             scan_id = int(await conn.scalar(text("SELECT nextval('scan_runs_id_seq')")))
@@ -137,6 +138,36 @@ async def test_auto_pause_requires_current_complete_scan_and_rule_generation(pg_
         assert evidence.decision_confirmed is True
 
         async with pg_engine.begin() as conn:
+            newer_scan_id = int(await conn.scalar(text("SELECT nextval('scan_runs_id_seq')")))
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO scan_runs
+                        (id, scan_id, started_at, finished_at, outcome,
+                         rows_total, ad_account_id)
+                    VALUES
+                        (:scan_id, :scan_id, :started_at, :finished_at, 'partial',
+                         0, :account_id)
+                    """
+                ),
+                {
+                    "scan_id": newer_scan_id,
+                    "started_at": checked_at - timedelta(seconds=10),
+                    "finished_at": checked_at - timedelta(seconds=5),
+                    "account_id": account_id,
+                },
+            )
+        assert not (
+            await load_meta_snapshot_freshness(pg_engine, fb_ad_id=fb_ad_id, now=checked_at)
+        ).fresh
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM scan_runs WHERE scan_id = :scan_id"),
+                {"scan_id": newer_scan_id},
+            )
+        newer_scan_id = None
+
+        async with pg_engine.begin() as conn:
             await conn.execute(
                 text("UPDATE scan_runs SET outcome = 'partial' WHERE scan_id = :scan_id"),
                 {"scan_id": scan_id},
@@ -211,5 +242,10 @@ async def test_auto_pause_requires_current_complete_scan_and_rule_generation(pg_
                 await conn.execute(
                     text("DELETE FROM scan_runs WHERE scan_id = :scan_id"),
                     {"scan_id": scan_id},
+                )
+            if newer_scan_id is not None:
+                await conn.execute(
+                    text("DELETE FROM scan_runs WHERE scan_id = :scan_id"),
+                    {"scan_id": newer_scan_id},
                 )
             await conn.execute(text("DELETE FROM offers WHERE id = :id"), {"id": offer_id})

@@ -71,6 +71,7 @@ async def load_meta_snapshot_freshness(
                         metric.scan_id,
                         COALESCE(
                             metric.currency = 'USD'
+                            AND scan.scan_id = metric.scan_id
                             AND scan.outcome = 'success'
                             AND scan.finished_at IS NOT NULL
                             AND scan.finished_at <= :checked_at
@@ -85,11 +86,10 @@ async def load_meta_snapshot_freshness(
                         ) AS decision_confirmed
                     FROM latest_metric metric
                     LEFT JOIN LATERAL (
-                        SELECT outcome, finished_at
+                        SELECT scan_id, outcome, finished_at
                         FROM scan_runs candidate
-                        WHERE candidate.scan_id = metric.scan_id
-                          AND candidate.ad_account_id = metric.ad_account_id
-                        ORDER BY candidate.started_at DESC
+                        WHERE candidate.ad_account_id = metric.ad_account_id
+                        ORDER BY candidate.started_at DESC, candidate.scan_id DESC
                         LIMIT 1
                     ) scan ON TRUE
                     LEFT JOIN ad_alert_state state ON state.ad_id = metric.ad_id
