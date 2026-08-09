@@ -51,6 +51,8 @@ async def fetch_daily_series(
         cte_alias="per_ad_day",
         columns=_METRIC_COLUMNS,
     )
+    canonical_account_id = account_id.removeprefix("act_") if account_id else None
+    account_filter = "TRUE" if canonical_account_id is None else "ad_account_id = :account_id"
     sql = f"""
         WITH {cte}
         SELECT
@@ -58,20 +60,18 @@ async def fetch_daily_series(
             {_SUM_SELECT},
             COUNT(DISTINCT ad_id)::int AS active_ads
         FROM per_ad_day
-        WHERE (:account_id IS NULL OR ad_account_id = :account_id)
+        WHERE {account_filter}
         GROUP BY day_bucket
         ORDER BY day_bucket ASC
     """
-    canonical_account_id = account_id.removeprefix("act_") if account_id else None
+    params: dict[str, Any] = {"from_dt": from_dt, "to_dt": to_dt}
+    if canonical_account_id is not None:
+        params["account_id"] = canonical_account_id
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
                 text(sql),
-                {
-                    "from_dt": from_dt,
-                    "to_dt": to_dt,
-                    "account_id": canonical_account_id,
-                },
+                params,
             )
         ).fetchall()
     return [dict(row._mapping) for row in rows]

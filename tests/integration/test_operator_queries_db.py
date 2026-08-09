@@ -12,8 +12,9 @@ from sqlalchemy import text
 import apps.api.routers.ws as ws_router
 import core.config
 import core.db
-from apps.api.routers.v1.operator import _analytics_sections
+from apps.api.routers.v1.operator import _account_meta, _analytics_sections
 from apps.api.routers.v1.schemas.operator import DataState
+from core.dashboard.stats_queries import fetch_daily_series
 from core.operator.queries import (
     fetch_operator_actions,
     fetch_operator_ads,
@@ -51,6 +52,24 @@ async def _ensure_operator_revision_row(pg_engine) -> None:
                 """
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_global_operator_queries_accept_unscoped_account(pg_engine) -> None:
+    """A fresh portfolio has no account filter value for PostgreSQL to infer."""
+
+    now = datetime.now(UTC)
+
+    account = await _account_meta(pg_engine, None)
+    daily = await fetch_daily_series(
+        pg_engine,
+        from_dt=now - timedelta(days=7),
+        to_dt=now,
+        account_id=None,
+    )
+
+    assert set(account) == {"id", "name"}
+    assert isinstance(daily, list)
 
 
 @pytest.mark.asyncio

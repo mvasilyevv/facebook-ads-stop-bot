@@ -23,7 +23,7 @@
 - [x] Реализовать adoption-bundle export/validate/dry-run/import.
 - [x] Подготовить runbook и checklist повторного ввода секретов.
 - [x] Проверить fail-closed validation и атомарный rollback импорта.
-- [ ] Прогнать adoption integration на отдельной чистой PostgreSQL.
+- [x] Прогнать adoption integration на отдельной чистой PostgreSQL.
 
 ## PR-04 — safety/control plane
 
@@ -31,14 +31,14 @@
 - [x] Разделить scan/control/interactive browser pages.
 - [x] Находить кабинет во всех вкладках или безопасно открывать его автоматически.
 - [x] Записывать реальный `cabinet_runtime.next_scan_at`.
-- [ ] Прогнать crash/concurrency/DB-restart acceptance.
+- [x] Прогнать crash/concurrency/DB-restart и lost-NOTIFY acceptance.
 
 ## PR-05 — incidents и Telegram
 
 - [x] Durable inbox/outbox, webhook и callback tokens.
 - [x] Editable incident cards и suppression rules.
 - [x] Удалить direct send, Rich, polling и Redis alert queue.
-- [ ] Прогнать полный Telegram failure/burst suite.
+- [x] Прогнать полный Telegram failure/burst suite.
 
 ## PR-06 — Operator API и frontend foundation
 
@@ -104,21 +104,23 @@
 - [x] Подготовить off-host monitoring, traces и blackbox-конфигурацию.
 - [x] Настроить pgBackRest continuous WAL, full/differential backup и drill machinery.
 - [x] Добавить обязательные Storybook/a11y и Playwright CI jobs.
-- [ ] Получить живые CI, restore/PITR, load/chaos и Web Vitals artifacts.
+- [x] Получить живые source CI, a11y и локальные load/chaos artifacts.
+- [ ] Получить release-image CI, restore/PITR и field Web Vitals artifacts.
 
 ## PR-15 — legacy eradication и release packet
 
 - [x] Запустить архитектурные legacy guards по всему репозиторию.
 - [x] Провести независимые backend/Telegram/UI/platform reviews.
 - [x] Исправить все P0/P1 и решить подтверждённые P2.
-- [ ] Подготовить manifests, adoption bundle, rollback и cutover runbook.
+- [x] Подготовить rollback и двухчасовой cutover runbook.
+- [ ] Сформировать финальные production manifests и adoption bundle.
 
 ## Текущие integration gates
 
 - [x] Вернуть TMA initial JS в бюджет ≤160 KB (`149 665 B gzip`, запас `10 335 B`).
 - [x] Завершить server-backed display timezone preference и подключить analytics.
 - [x] Прогнать локальные unit/type/lint/build gates: backend `2463 passed`, web `418`, TMA `151`, browser-agent `224`.
-- [ ] Прогнать DB integration tests на изолированной PostgreSQL.
+- [x] Прогнать DB integration tests на изолированной PostgreSQL (`779 passed`).
 - [ ] Выполнить browser/device QA для settings, campaigns и desktop.
 
 ## До локально рабочего release candidate
@@ -132,7 +134,7 @@
 ## Production gate
 
 - [ ] Все CI, restore, load, chaos, accessibility и device gates зелёные.
-- [ ] Подготовлен двухчасовой cutover packet.
+- [x] Подготовлен двухчасовой cutover packet; запуск всё ещё заблокирован gates ниже.
 - [ ] Получена отдельная команда owner: `запускай`.
 - [ ] Production-switch выполнен.
 - [ ] Старые production data удалены только после отдельного подтверждения.

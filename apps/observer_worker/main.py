@@ -88,7 +88,7 @@ from core.worker_metrics import SNAPSHOT_AGE, mark_worker_heartbeat, start_worke
 logger = logging.getLogger(__name__)
 
 _OBSERVER_INSTANCE_ID = uuid.uuid4()
-_CABINET_SCAN_CONCURRENCY = max(1, int(os.environ.get("OBSERVER_CABINET_CONCURRENCY", "1")))
+_CABINET_SCAN_CONCURRENCY = max(1, int(os.environ.get("OBSERVER_CABINET_CONCURRENCY", "2")))
 _CABINET_SCAN_DEADLINE_SECONDS = max(
     30,
     int(os.environ.get("OBSERVER_SCAN_DEADLINE_SECONDS", "120")),
@@ -811,9 +811,9 @@ async def run_one_cycle(
             cabinet_lease=lease,
         )
 
-    # Each cabinet is an isolated actor.  The TaskGroup cancels and drains all
-    # children on shutdown; the semaphore keeps the canary at one browser
-    # operation until OBSERVER_CABINET_CONCURRENCY is explicitly raised to two.
+    # Each cabinet is an isolated actor. The TaskGroup cancels and drains all
+    # children on shutdown; the semaphore enforces the approved production
+    # browser-operation concurrency.
     per_account = await supervisor.run_cycle(accounts, _run_cabinet)
 
     return _aggregate_cycle_summary(per_account)

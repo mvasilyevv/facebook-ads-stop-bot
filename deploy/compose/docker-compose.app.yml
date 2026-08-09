@@ -152,7 +152,7 @@ services:
     environment:
       <<: *runtime-environment
       WORKER_TYPE: observer
-      OBSERVER_CABINET_CONCURRENCY: ${OBSERVER_CABINET_CONCURRENCY:-1}
+      OBSERVER_CABINET_CONCURRENCY: ${OBSERVER_CABINET_CONCURRENCY:-2}
       OBSERVER_SCAN_DEADLINE_SECONDS: ${OBSERVER_SCAN_DEADLINE_SECONDS:-120}
     labels:
       <<: *runtime-labels

@@ -93,6 +93,12 @@ def test_money_workers_exist_only_in_production_compose() -> None:
         production_services["meta_api"]["environment"]["META_API_WORKER_LANES"]
         == "interactive,bulk,background"
     )
+    assert (
+        production_services["observer"]["environment"]["OBSERVER_CABINET_CONCURRENCY"]
+        == "${OBSERVER_CABINET_CONCURRENCY:-2}"
+    )
+    observer_source = (ROOT / "apps/observer_worker/main.py").read_text(encoding="utf-8")
+    assert 'os.environ.get("OBSERVER_CABINET_CONCURRENCY", "2")' in observer_source
 
 
 def test_forbidden_auto_activate_runtime_is_physically_absent() -> None:

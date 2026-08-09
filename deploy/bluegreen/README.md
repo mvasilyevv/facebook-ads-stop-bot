@@ -6,14 +6,14 @@ there is no compatibility runtime or alternate traffic target.
 
 ## Runtime topology
 
-| Project | Owns | Lifecycle |
-| --- | --- | --- |
-| `fb_agent_infra` | PostgreSQL, Redis, WAL spool and durable volumes | Never switched with an app release |
-| `fb_agent_blue` | API, web, TMA and workers | Alternates with green |
-| `fb_agent_green` | API, web, TMA and workers | Alternates with blue |
-| `fb_agent_vision` | Unified Vision + KasmVNC desktop runtime | Released independently |
-| `fb_agent_desktop` | browser-agent beside the independent Vision/Kasm stack | Released independently |
-| `fb_agent_monitoring` | Prometheus, Loki, Tempo, Alertmanager, Grafana, blackbox | Preferably off-host |
+| Project               | Owns                                                     | Lifecycle                          |
+| --------------------- | -------------------------------------------------------- | ---------------------------------- |
+| `fb_agent_infra`      | PostgreSQL, Redis, WAL spool and durable volumes         | Never switched with an app release |
+| `fb_agent_blue`       | API, web, TMA and workers                                | Alternates with green              |
+| `fb_agent_green`      | API, web, TMA and workers                                | Alternates with blue               |
+| `fb_agent_vision`     | Unified Vision + KasmVNC desktop runtime                 | Released independently             |
+| `fb_agent_desktop`    | browser-agent beside the independent Vision/Kasm stack   | Released independently             |
+| `fb_agent_monitoring` | Prometheus, Loki, Tempo, Alertmanager, Grafana, blackbox | Preferably off-host                |
 
 There are no fixed application container names. Caddy continues to own public
 TLS and switches between loopback port sets:
@@ -97,9 +97,10 @@ historical target.
 
 6. Prove the target contains no user relations and no historical
    `alembic_version`. The next step runs the advisory-locked migrator; after it
-   succeeds, verify that its sole revision is `0001_safety_first_baseline`. If
-   business data is outside this deployment path and requires a separately
-   reviewed migration project.
+   succeeds, verify that its sole revision is `0001_safety_first_baseline`.
+   Transfer only reviewed configuration through `adoption-bundle/v1` by
+   following `docs/adoption-bundle-runbook.md`; this release path never imports
+   history or runtime state.
 
 7. Prepare the first color without traffic or workers:
 
@@ -129,10 +130,10 @@ Choose the inactive color and run the same command with `--activate`. A release
 to the already-active color is rejected, so no deployment can silently become
 an in-place restart.
 
-The first canary keeps `OBSERVER_CABINET_CONCURRENCY=1`. Raise it to `2` in the
-application environment only after the 24-hour quota/CPU/SLO gate. Money tasks
-are exclusively claimed by `autopause_worker`; ordinary `meta_api` explicitly
-claims `interactive,bulk,background`.
+The approved first production runtime uses
+`OBSERVER_CABINET_CONCURRENCY=2`; there is no reduced-concurrency production
+canary. Money tasks are exclusively claimed by `autopause_worker`; ordinary
+`meta_api` explicitly claims `interactive,bulk,background`.
 
 All Vision/browser stop, restart and release paths share a renewable PostgreSQL
 maintenance lease. Browser task claims serialize their snapshot boundary with

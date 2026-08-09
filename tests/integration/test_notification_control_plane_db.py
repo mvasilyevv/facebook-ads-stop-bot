@@ -305,6 +305,114 @@ async def _enqueue_incident_warning(
     return result
 
 
+@pytest.mark.asyncio
+async def test_incident_burst_creates_one_delivery_per_event_and_recipient(
+    pg_engine,
+    notification_resources,
+) -> None:
+    """A 100-incident burst must neither lose nor duplicate durable deliveries."""
+    owner_id, first_incident_id, first_correlation_id = await _seed_recipient_and_incident(
+        pg_engine, notification_resources
+    )
+    recipient_ids = [owner_id]
+    async with pg_engine.begin() as conn:
+        for offset in range(2):
+            recipient_id = uuid.uuid4()
+            suffix = uuid.uuid4().int % 1_000_000_000
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO telegram_recipients
+                        (id, chat_id, telegram_user_id, role)
+                    VALUES (:id, :chat_id, :user_id, 'recipient')
+                    """
+                ),
+                {
+                    "id": recipient_id,
+                    "chat_id": 10_000_000_000 + suffix + offset,
+                    "user_id": 11_000_000_000 + suffix + offset,
+                },
+            )
+            recipient_ids.append(recipient_id)
+            notification_resources.recipient_ids.append(recipient_id)
+
+        incidents = [(first_incident_id, first_correlation_id)]
+        for index in range(1, 100):
+            incident_id = uuid.uuid4()
+            correlation_id = uuid.uuid4()
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO incidents
+                        (id, incident_key, generation, resource_type, resource_id,
+                         severity, status, title, correlation_id)
+                    VALUES
+                        (:id, :key, 1, 'ad', :resource_id,
+                         'critical', 'open', 'Burst incident', :correlation_id)
+                    """
+                ),
+                {
+                    "id": incident_id,
+                    "key": f"test:burst:{incident_id}",
+                    "resource_id": f"burst-ad-{index}",
+                    "correlation_id": correlation_id,
+                },
+            )
+            incidents.append((incident_id, correlation_id))
+            notification_resources.incident_ids.append(incident_id)
+
+        for incident_id, correlation_id in incidents:
+            result = await enqueue_notification_in_transaction(
+                conn,
+                NotificationEventSpec(
+                    event_type="incident_warning",
+                    severity="critical",
+                    audience="all",
+                    facts=NotificationCardFacts(title="Burst threshold", status="OPEN"),
+                    dedupe_key=f"test:burst:{incident_id}",
+                    incident_id=incident_id,
+                    correlation_id=correlation_id,
+                ),
+            )
+            notification_resources.event_ids.append(result.event_id)
+            assert result.delivery_count == len(recipient_ids)
+
+    async with pg_engine.connect() as conn:
+        event_count = await conn.scalar(
+            text(
+                "SELECT COUNT(*) FROM notification_events "
+                "WHERE id = ANY(CAST(:event_ids AS uuid[]))"
+            ),
+            {"event_ids": notification_resources.event_ids},
+        )
+        delivery_count = await conn.scalar(
+            text(
+                "SELECT COUNT(*) FROM notification_deliveries "
+                "WHERE event_id = ANY(CAST(:event_ids AS uuid[]))"
+            ),
+            {"event_ids": notification_resources.event_ids},
+        )
+        duplicate_count = await conn.scalar(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM (
+                    SELECT event_id, recipient_id
+                    FROM notification_deliveries
+                    WHERE event_id = ANY(CAST(:event_ids AS uuid[]))
+                    GROUP BY event_id, recipient_id
+                    HAVING COUNT(*) > 1
+                ) duplicates
+                """
+            ),
+            {"event_ids": notification_resources.event_ids},
+        )
+
+    assert event_count == 100
+    assert delivery_count == 300
+    assert duplicate_count == 0
+
+
 def _rotation_target():
     return resolve_webhook_target(
         frontend_origin="https://operator.example.test",

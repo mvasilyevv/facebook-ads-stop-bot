@@ -518,25 +518,31 @@ async def _window(
 
 
 async def _account_meta(engine: Any, account_id: str | None) -> dict[str, str | None]:
+    canonical_account_id = account_id.removeprefix("act_") if account_id else None
+    account_filter = (
+        "ad_account_id IS NOT NULL"
+        if canonical_account_id is None
+        else "ad_account_id = :account_id"
+    )
+    params = {} if canonical_account_id is None else {"account_id": canonical_account_id}
     async with engine.connect() as conn:
         row = (
             await conn.execute(
                 text(
-                    """
+                    f"""
                     SELECT ad_account_id, COUNT(*) AS campaign_count
                     FROM fb_campaigns
-                    WHERE (:account_id IS NULL OR ad_account_id = :account_id)
-                      AND ad_account_id IS NOT NULL
+                    WHERE {account_filter}
                     GROUP BY ad_account_id
                     ORDER BY campaign_count DESC, ad_account_id
                     LIMIT 1
                     """
                 ),
-                {"account_id": account_id.removeprefix("act_") if account_id else None},
+                params,
             )
         ).first()
     if row is None:
-        return {"id": account_id.removeprefix("act_") if account_id else None, "name": None}
+        return {"id": canonical_account_id, "name": None}
     resolved = str(row.ad_account_id)
     return {"id": resolved, "name": f"act_{resolved}"}
 
