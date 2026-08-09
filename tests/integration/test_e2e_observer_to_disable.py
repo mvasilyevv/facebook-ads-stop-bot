@@ -32,6 +32,7 @@ from apps.meta_api_worker.main import process_one_task
 from core.meta_api.queue import claim_browser_ready_mutation_task
 from core.observer.pipeline import process_scan_rows
 from core.scanner.models import ScannedAdRow
+from tests.integration.scan_evidence import begin_complete_test_scan, finish_complete_test_scan
 
 pytestmark = pytest.mark.usefixtures(
     "known_test_cabinet_timezones",
@@ -128,7 +129,9 @@ async def test_full_cycle_observer_to_disable_success(
     row = _stop_row(code=offer_e2e["code"], fb_ad_id=fb_ad_id)
 
     # Шаг 1: observer pipeline отрабатывает scan-цикл
-    result = await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=999)
+    scan_id = await begin_complete_test_scan(pg_engine, account_id="123")
+    result = await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=scan_id)
+    await finish_complete_test_scan(pg_engine, scan_id=scan_id, rows_total=1)
     assert result.rows_with_offer == 1
     # FSM должен сразу попасть в stop_sent (fast-stop по spend без deposits)
     assert result.alerts_stop >= 1
@@ -258,7 +261,9 @@ async def test_after_disable_succeeds_no_new_task_on_same_incident(
     row = _stop_row(code=offer_e2e["code"], fb_ad_id=fb_ad_id)
 
     # Полный цикл: scan → outbox → meta_api_worker succeeded
-    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=10)
+    scan_id = await begin_complete_test_scan(pg_engine, account_id="123")
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=scan_id)
+    await finish_complete_test_scan(pg_engine, scan_id=scan_id, rows_total=1)
 
     async def _fake_dispatch(client, payload):
         return {

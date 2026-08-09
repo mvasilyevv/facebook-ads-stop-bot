@@ -12,24 +12,28 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
 
+MAX_AUTO_PAUSE_SNAPSHOT_AGE_SECONDS = 60
+
 
 @dataclass(slots=True, frozen=True)
 class MetaSnapshotFreshness:
     fresh: bool
     latest_cycle_at: datetime | None
-    interval_seconds: int
+    scan_id: int | None
+    decision_confirmed: bool
 
 
 def snapshot_is_fresh(
     *,
     latest_cycle_at: datetime | None,
-    interval_seconds: int,
+    decision_confirmed: bool,
     now: datetime,
 ) -> bool:
-    """A money decision may use at most two observer intervals of staleness."""
+    """Accept only a confirmed complete decision no more than 60 seconds old."""
     return bool(
-        latest_cycle_at is not None
-        and latest_cycle_at >= now - timedelta(seconds=max(interval_seconds, 1) * 2)
+        decision_confirmed
+        and latest_cycle_at is not None
+        and now - timedelta(seconds=MAX_AUTO_PAUSE_SNAPSHOT_AGE_SECONDS) <= latest_cycle_at <= now
     )
 
 
@@ -39,36 +43,76 @@ async def load_meta_snapshot_freshness(
     fb_ad_id: str,
     now: datetime | None = None,
 ) -> MetaSnapshotFreshness:
-    """Load latest Meta metric timestamp and evaluate the two-interval gate."""
+    """Load the latest complete cabinet decision and enforce the 60-second gate."""
     checked_at = now or datetime.now(UTC)
     async with engine.connect() as conn:
         row = (
             await conn.execute(
                 text(
                     """
+                    WITH latest_metric AS (
+                        SELECT
+                            m.cycle_ts,
+                            m.scan_id,
+                            m.currency,
+                            a.id AS ad_id,
+                            campaign.ad_account_id,
+                            campaign.offer_id
+                        FROM ad_metrics m
+                        JOIN fb_ads a ON a.id = m.ad_id
+                        JOIN fb_adsets adset ON adset.id = a.adset_id
+                        JOIN fb_campaigns campaign ON campaign.id = adset.campaign_id
+                        WHERE a.fb_ad_id = :fb_ad_id
+                        ORDER BY m.cycle_ts DESC
+                        LIMIT 1
+                    )
                     SELECT
-                        (SELECT MAX(m.cycle_ts)
-                         FROM ad_metrics m
-                         JOIN fb_ads a ON a.id = m.ad_id
-                         WHERE a.fb_ad_id = :fb_ad_id) AS latest_cycle,
-                        COALESCE((SELECT interval_seconds FROM observer_config
-                                  WHERE singleton_key = 'default' LIMIT 1), 90)
-                            AS interval_seconds
+                        metric.cycle_ts,
+                        metric.scan_id,
+                        COALESCE(
+                            metric.currency = 'USD'
+                            AND scan.outcome = 'success'
+                            AND scan.finished_at IS NOT NULL
+                            AND scan.finished_at <= :checked_at
+                            AND state.alert_state = 'stop_sent'
+                            AND state.current_stage = 'stop'
+                            AND state.last_scan_id = metric.scan_id
+                            AND jsonb_array_length(state.stop_rule_codes) > 0
+                            AND offer.is_active
+                            AND rule.updated_at <= metric.cycle_ts
+                            AND config.is_scanning_enabled,
+                            FALSE
+                        ) AS decision_confirmed
+                    FROM latest_metric metric
+                    LEFT JOIN LATERAL (
+                        SELECT outcome, finished_at
+                        FROM scan_runs candidate
+                        WHERE candidate.scan_id = metric.scan_id
+                          AND candidate.ad_account_id = metric.ad_account_id
+                        ORDER BY candidate.started_at DESC
+                        LIMIT 1
+                    ) scan ON TRUE
+                    LEFT JOIN ad_alert_state state ON state.ad_id = metric.ad_id
+                    LEFT JOIN offers offer ON offer.id = metric.offer_id
+                    LEFT JOIN offer_rules rule ON rule.offer_id = metric.offer_id
+                    LEFT JOIN observer_config config ON config.singleton_key = 'default'
                     """
                 ),
-                {"fb_ad_id": fb_ad_id},
+                {"fb_ad_id": fb_ad_id, "checked_at": checked_at},
             )
-        ).one()
-    latest_cycle = row[0]
-    interval_seconds = int(row[1] or 90)
+        ).one_or_none()
+    latest_cycle = row[0] if row is not None else None
+    scan_id = int(row[1]) if row is not None and row[1] is not None else None
+    decision_confirmed = bool(row[2]) if row is not None else False
     return MetaSnapshotFreshness(
         fresh=snapshot_is_fresh(
             latest_cycle_at=latest_cycle,
-            interval_seconds=interval_seconds,
+            decision_confirmed=decision_confirmed,
             now=checked_at,
         ),
         latest_cycle_at=latest_cycle,
-        interval_seconds=interval_seconds,
+        scan_id=scan_id,
+        decision_confirmed=decision_confirmed,
     )
 
 
@@ -125,6 +169,7 @@ async def defer_auto_stop_for_fresh_snapshot(
 
 
 __all__ = [
+    "MAX_AUTO_PAUSE_SNAPSHOT_AGE_SECONDS",
     "MetaSnapshotFreshness",
     "defer_auto_stop_for_fresh_snapshot",
     "load_meta_snapshot_freshness",

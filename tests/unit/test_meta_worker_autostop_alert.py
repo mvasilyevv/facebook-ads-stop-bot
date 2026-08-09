@@ -168,7 +168,8 @@ async def test_stale_autostop_defers_without_external_call(monkeypatch) -> None:
             return_value=SimpleNamespace(
                 fresh=False,
                 latest_cycle_at=None,
-                interval_seconds=90,
+                scan_id=None,
+                decision_confirmed=False,
             )
         ),
     )
@@ -203,7 +204,8 @@ async def test_safety_compensation_bypasses_snapshot_freshness_gate(
         return_value=SimpleNamespace(
             fresh=False,
             latest_cycle_at=None,
-            interval_seconds=90,
+            scan_id=None,
+            decision_confirmed=False,
         )
     )
     monkeypatch.setattr(meta, "load_meta_snapshot_freshness", freshness)
@@ -243,7 +245,8 @@ async def test_malformed_safety_compensation_cannot_bypass_freshness_gate(
         return_value=SimpleNamespace(
             fresh=False,
             latest_cycle_at=None,
-            interval_seconds=90,
+            scan_id=None,
+            decision_confirmed=False,
         )
     )
     monkeypatch.setattr(meta, "load_meta_snapshot_freshness", freshness)

@@ -7,7 +7,7 @@ production.
 
 - clean PostgreSQL target migrated to the sole
   `0001_safety_first_baseline` revision;
-- full PostgreSQL integration suite: `779 passed, 2 skipped, 3 deselected`;
+- full PostgreSQL integration suite: `781 passed, 2 skipped, 3 deselected`;
 - adoption, safety and Telegram acceptance subset: `78 passed`;
 - Telegram burst: 100 incidents × 3 recipients produced exactly 300 durable
   deliveries and zero duplicate `(event_id, recipient_id)` pairs;

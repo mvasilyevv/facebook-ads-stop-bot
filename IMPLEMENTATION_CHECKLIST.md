@@ -120,7 +120,7 @@
 - [x] Вернуть TMA initial JS в бюджет ≤160 KB (`149 665 B gzip`, запас `10 335 B`).
 - [x] Завершить server-backed display timezone preference и подключить analytics.
 - [x] Прогнать локальные unit/type/lint/build gates: backend `2463 passed`, web `418`, TMA `151`, browser-agent `224`.
-- [x] Прогнать DB integration tests на изолированной PostgreSQL (`779 passed`).
+- [x] Прогнать DB integration tests на изолированной PostgreSQL (`781 passed`).
 - [ ] Выполнить browser/device QA для settings, campaigns и desktop.
 
 ## До локально рабочего release candidate

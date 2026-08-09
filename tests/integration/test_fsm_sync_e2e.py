@@ -23,6 +23,7 @@ from core.meta_api.queue import (
     create_mutation_task,
 )
 from core.meta_api.schemas import MetaMutationPayload
+from tests.integration.scan_evidence import begin_complete_test_scan, finish_complete_test_scan
 
 pytestmark = pytest.mark.usefixtures(
     "fresh_browser_readiness",
@@ -57,6 +58,13 @@ async def ad_with_state(pg_engine: AsyncEngine):
         )
         await conn.execute(
             text(
+                "INSERT INTO offer_rules (offer_id, cpa_threshold, currency) "
+                "VALUES (:offer_id, 10, 'USD')"
+            ),
+            {"offer_id": offer_id},
+        )
+        await conn.execute(
+            text(
                 "INSERT INTO fb_campaigns (id, campaign_name, offer_id, ad_account_id) VALUES (:i, :n, :o, '123')"
             ),
             {"i": campaign_id, "n": f"CMP_{suffix}", "o": offer_id},
@@ -71,6 +79,7 @@ async def ad_with_state(pg_engine: AsyncEngine):
         )
 
     async def _seed(initial_state: str) -> str:
+        scan_id = await begin_complete_test_scan(pg_engine, account_id="123")
         stage = (
             "warning"
             if initial_state == "warning_sent"
@@ -81,21 +90,23 @@ async def ad_with_state(pg_engine: AsyncEngine):
             await conn.execute(
                 text(
                     """
-                    INSERT INTO ad_metrics (id, ad_id, cycle_ts, currency, spend)
-                    VALUES (gen_random_uuid(), :ad_id, now(), 'USD', 10)
+                    INSERT INTO ad_metrics (id, ad_id, cycle_ts, scan_id, currency, spend)
+                    VALUES (gen_random_uuid(), :ad_id, now(), :scan_id, 'USD', 10)
                     ON CONFLICT (ad_id, cycle_ts) DO NOTHING
                     """
                 ),
-                {"ad_id": ad_id},
+                {"ad_id": ad_id, "scan_id": scan_id},
             )
             await conn.execute(
                 text(
                     """
                     INSERT INTO ad_alert_state
                         (id, ad_id, alert_state, current_stage, open_state_token,
-                         warning_rule_codes, stop_rule_codes, last_transition_at)
+                         warning_rule_codes, stop_rule_codes, last_scan_id,
+                         last_transition_at)
                     VALUES (:id, :a, :st, :stg, :tok,
-                            '["w1"]'::jsonb, '["s1"]'::jsonb, NOW() - INTERVAL '1 hour')
+                            '["w1"]'::jsonb, '["s1"]'::jsonb, :scan_id,
+                            NOW() - INTERVAL '1 hour')
                     """
                 ),
                 {
@@ -104,8 +115,10 @@ async def ad_with_state(pg_engine: AsyncEngine):
                     "st": initial_state,
                     "stg": stage,
                     "tok": uuid.uuid4(),
+                    "scan_id": scan_id,
                 },
             )
+        await finish_complete_test_scan(pg_engine, scan_id=scan_id, rows_total=1)
         return fb_ad_id
 
     yield fb_ad_id, _seed

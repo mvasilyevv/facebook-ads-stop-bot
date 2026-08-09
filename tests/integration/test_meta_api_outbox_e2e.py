@@ -133,7 +133,8 @@ def _allow_fresh_auto_stop(monkeypatch, *, observed_at: datetime | None = None) 
             return_value=MetaSnapshotFreshness(
                 fresh=True,
                 latest_cycle_at=observed_at or datetime.now(UTC),
-                interval_seconds=30,
+                scan_id=1,
+                decision_confirmed=True,
             )
         ),
     )

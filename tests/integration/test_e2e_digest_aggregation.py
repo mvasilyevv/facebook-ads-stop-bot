@@ -30,6 +30,7 @@ from core.meta_api.queue import claim_browser_ready_mutation_task
 from core.observer.pipeline import process_scan_rows
 from core.scanner.models import ScannedAdRow
 from core.telegram.digest_builder import build_digest
+from tests.integration.scan_evidence import begin_complete_test_scan, finish_complete_test_scan
 
 pytestmark = pytest.mark.usefixtures(
     "known_test_cabinet_timezones",
@@ -124,9 +125,11 @@ async def test_digest_aggregates_observer_pipeline_output(
 
     # Шаг 1: один scan-цикл → один stop_event + два snapshot'а метрик +
     # одна pause_ad mutation задача (pending) в outbox.
+    scan_id = await begin_complete_test_scan(pg_engine, account_id="123")
     result = await process_scan_rows(
-        pg_engine, ad_account_id="123", rows=[stop_row, ok_row], scan_id=100
+        pg_engine, ad_account_id="123", rows=[stop_row, ok_row], scan_id=scan_id
     )
+    await finish_complete_test_scan(pg_engine, scan_id=scan_id, rows_total=2)
     assert result.alerts_stop == 1
     assert result.disable_tasks_created == 1
 

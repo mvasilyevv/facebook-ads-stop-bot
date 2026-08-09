@@ -1639,10 +1639,11 @@ async def process_one_task(
             if deferred:
                 logger.info(
                     "meta_api: auto-stop task id=%s deferred for fresh Meta snapshot "
-                    "latest=%s interval=%ss",
+                    "latest=%s scan_id=%s decision_confirmed=%s",
                     task.id,
                     freshness.latest_cycle_at,
-                    freshness.interval_seconds,
+                    freshness.scan_id,
+                    freshness.decision_confirmed,
                 )
             return
 
