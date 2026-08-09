@@ -113,6 +113,17 @@ def test_pull_requests_run_verification_without_publishing() -> None:
     assert "github.ref == 'refs/heads/main'" in deploy
 
 
+def test_workspace_makes_build_script_policy_explicit() -> None:
+    workspace = (ROOT / "pnpm-workspace.yaml").read_text(encoding="utf-8")
+
+    assert "allowBuilds:" in workspace
+    assert '  "@tailwindcss/oxide": true' in workspace
+    assert "  esbuild: true" in workspace
+    assert "  msw: false" in workspace
+    assert "onlyBuiltDependencies:" not in workspace
+    assert "ignoredBuiltDependencies:" not in workspace
+
+
 def test_external_docker_bases_are_digest_pinned() -> None:
     direct_base_files = (
         "docker/Dockerfile.python-base",
