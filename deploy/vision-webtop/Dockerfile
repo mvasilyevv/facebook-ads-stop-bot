@@ -53,8 +53,12 @@ RUN apt-get update \
     && echo "${VISION_DEB_SHA256}  /tmp/vision.deb" | sha256sum --check --strict \
     && apt-get install -y --no-install-recommends /tmp/vision.deb \
     && test "$(dpkg-query -W -f='${Version}' vision)" = "${VISION_VERSION}" \
-    && groupadd --gid 1000 vision \
-    && useradd --uid 1000 --gid 1000 --home-dir /config --shell /bin/bash vision \
+    && test "$(getent passwd 1000 | cut -d: -f1)" = "ubuntu" \
+    && test "$(getent group 1000 | cut -d: -f1)" = "ubuntu" \
+    && usermod --login vision --home /config --shell /bin/bash ubuntu \
+    && groupmod --new-name vision ubuntu \
+    && test "$(id -u vision)" = "1000" \
+    && test "$(id -g vision)" = "1000" \
     && locale-gen en_US.UTF-8 ru_RU.UTF-8 \
     && rm -f /tmp/kasmvncserver.deb /tmp/vision.deb \
     && rm -rf /var/lib/apt/lists/*
