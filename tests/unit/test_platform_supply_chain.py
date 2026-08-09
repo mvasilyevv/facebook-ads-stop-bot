@@ -66,6 +66,15 @@ def test_ci_full_pytest_uses_complete_test_only_secret_contract() -> None:
     )
 
 
+def test_backend_ci_uses_the_production_frozen_dependency_graph() -> None:
+    test_job = _job_block(WORKFLOW.read_text(encoding="utf-8"), "test")
+
+    assert 'python -m pip install "uv==0.9.18"' in test_job
+    assert "uv sync --frozen --extra dev" in test_job
+    assert 'echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"' in test_job
+    assert 'pip install -e ".[dev]"' not in test_job
+
+
 def test_every_published_image_has_provenance_and_sbom() -> None:
     text = WORKFLOW.read_text()
     build_steps = text.count("uses: docker/build-push-action@")

@@ -71,19 +71,13 @@ jobs:
           cache: pip
 
       # ── Регенерация pb2-стабов ────────────────────────────────────────────
-      # КРИТИЧНО: committed pb2 может дрейфовать от proto (известная грабля).
-      # Регенерируем ДО установки зависимостей, чтобы тесты всегда видели
-      # актуальные стабы. Зеркалим `make proto-compile`.
-      - name: Установка grpcio-tools для регенерации pb2
+      # CI и production image используют один frozen dependency graph.
+      # Плавающий `pip install -e .[dev]` здесь запрещён.
+      - name: Установка frozen Python-зависимостей
         run: |
-          # grpcio-tools И protobuf берём ТОЙ ЖЕ версии, что залочена в uv.lock для
-          # рантайма. Иначе плавающий pip ставит свежее → регенерённый pb2 требует
-          # grpcio/protobuf новее установленного в образе (uv sync --frozen) → краш
-          # всех gRPC-воркеров (grpc version guard / ValidateProtobufRuntimeVersion).
-          GRPCIO_VER=$(python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('uv.lock').read_text()); print(next(p['version'] for p in d['package'] if p['name']=='grpcio'))")
-          PROTOBUF_VER=$(python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('uv.lock').read_text()); print(next(p['version'] for p in d['package'] if p['name']=='protobuf'))")
-          echo "uv.lock: grpcio=${GRPCIO_VER} protobuf=${PROTOBUF_VER}; ставлю их же для регенерации pb2"
-          pip install "grpcio-tools==${GRPCIO_VER}" "protobuf==${PROTOBUF_VER}"
+          python -m pip install "uv==0.9.18"
+          uv sync --frozen --extra dev
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Регенерация gRPC Python-стабов из proto/v1/*.proto
         run: |
@@ -106,8 +100,6 @@ jobs:
           "
 
       # ── Установка зависимостей проекта ────────────────────────────────────
-      - name: Установка зависимостей (включая dev-extras для тестов)
-        run: pip install -e ".[dev]"
 
       # ── Линтинг ───────────────────────────────────────────────────────────
       - name: ruff check (линтер)

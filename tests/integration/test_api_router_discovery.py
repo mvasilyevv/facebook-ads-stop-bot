@@ -14,10 +14,8 @@ from apps.api.main import create_app
 from apps.api.routers import v1 as registry
 
 
-def _get_route_paths(app: FastAPI) -> set[str]:
-    http_paths = set(app.openapi().get("paths", {}).keys())
-    runtime_paths = {route.path for route in app.routes if hasattr(route, "path")}
-    return http_paths | runtime_paths
+def _get_http_route_paths(app: FastAPI) -> set[str]:
+    return set(app.openapi().get("paths", {}).keys())
 
 
 def test_registry_names_every_v1_router_file() -> None:
@@ -27,17 +25,18 @@ def test_registry_names_every_v1_router_file() -> None:
 
 
 def test_create_app_registers_required_unprefixed_and_operator_routes() -> None:
-    paths = _get_route_paths(create_app())
+    app = create_app()
+    paths = _get_http_route_paths(app)
     assert {
         "/healthz",
         "/readyz",
         "/system-readyz",
-        "/ws/operator",
         "/api/operator/snapshot",
         "/api/operator/actions",
         "/api/operator/ads",
         "/api/v1/integrations/telegram/webhook",
     } <= paths
+    assert str(app.url_path_for("ws_operator")) == "/ws/operator"
     assert any("postback" in path for path in paths)
 
 
