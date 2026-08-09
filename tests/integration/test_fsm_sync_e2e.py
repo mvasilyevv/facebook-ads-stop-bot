@@ -24,7 +24,10 @@ from core.meta_api.queue import (
 )
 from core.meta_api.schemas import MetaMutationPayload
 
-pytestmark = pytest.mark.usefixtures("fresh_browser_readiness")
+pytestmark = pytest.mark.usefixtures(
+    "fresh_browser_readiness",
+    "known_test_cabinet_timezones",
+)
 
 
 @pytest_asyncio.fixture
@@ -78,8 +81,8 @@ async def ad_with_state(pg_engine: AsyncEngine):
             await conn.execute(
                 text(
                     """
-                    INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend)
-                    VALUES (gen_random_uuid(), :ad_id, now(), 10)
+                    INSERT INTO ad_metrics (id, ad_id, cycle_ts, currency, spend)
+                    VALUES (gen_random_uuid(), :ad_id, now(), 'USD', 10)
                     ON CONFLICT (ad_id, cycle_ts) DO NOTHING
                     """
                 ),
@@ -131,16 +134,24 @@ async def _read_alert_state(pg_engine: AsyncEngine, fb_ad_id: str) -> str:
     return row[0] if row else "<none>"
 
 
-async def _run_one(pg_engine, payload: MetaMutationPayload, *, idem: str, monkeypatch) -> None:
+async def _run_one(
+    pg_engine,
+    payload: MetaMutationPayload,
+    *,
+    idem: str,
+    requested_by: str,
+    lane: str,
+    monkeypatch,
+) -> None:
     """create pending → claim → process_one_task с мок-success dispatch."""
     await create_mutation_task(
         pg_engine,
         payload=payload,
-        requested_by="bot_auto_stop",
+        requested_by=requested_by,
         status="pending",
         idempotency_key=idem,
     )
-    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=("money",))
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=(lane,))
     assert claim.task is not None
 
     async def _fake_dispatch(client, p):
@@ -185,7 +196,14 @@ async def test_pause_ad_success_sets_disabled(pg_engine, ad_with_state, monkeypa
     payload = MetaMutationPayload(
         mutation_kind="pause_ad", target_id=fb_ad_id, params={}, ad_account_id="123"
     )
-    await _run_one(pg_engine, payload, idem=f"auto:pause_ad:{fb_ad_id}:t1", monkeypatch=monkeypatch)
+    await _run_one(
+        pg_engine,
+        payload,
+        idem=f"auto:pause_ad:{fb_ad_id}:t1",
+        requested_by="bot_auto_stop",
+        lane="money",
+        monkeypatch=monkeypatch,
+    )
 
     assert await _read_alert_state(pg_engine, fb_ad_id) == "disabled"
 
@@ -203,6 +221,8 @@ async def test_activate_ad_success_sets_normal(pg_engine, ad_with_state, monkeyp
         pg_engine,
         payload,
         idem=f"owner-confirmed:activate_ad:{fb_ad_id}:t1",
+        requested_by="operator:web:owner",
+        lane="interactive",
         monkeypatch=monkeypatch,
     )
 
@@ -227,6 +247,8 @@ async def test_owner_confirmed_bulk_activate_sets_normal(
         pg_engine,
         payload,
         idem=f"owner-confirmed:bulk:{fb_ad_id}",
+        requested_by="operator:web:owner",
+        lane="bulk",
         monkeypatch=monkeypatch,
     )
 

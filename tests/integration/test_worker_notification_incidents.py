@@ -283,7 +283,7 @@ async def test_identical_active_snapshot_catches_up_new_recipient_without_new_ev
     key = f"test:catch-up:{uuid.uuid4()}"
     kwargs = {
         "incident_key": key,
-        "audience": "owners",
+        "audience": "all",
         "event_type": "observer_degraded",
         "severity": "critical",
         "title": "Observer degraded",
@@ -296,7 +296,7 @@ async def test_identical_active_snapshot_catches_up_new_recipient_without_new_ev
                 """
                 INSERT INTO telegram_recipients
                     (chat_id, telegram_user_id, role)
-                VALUES (880021, 880022, 'owner')
+                VALUES (880021, 880022, 'recipient')
                 """
             )
         )

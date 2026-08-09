@@ -443,6 +443,31 @@ def _is_money_stop_payload(payload: dict[str, Any] | None) -> bool:
     return requested_status in {"PAUSE", "PAUSED"}
 
 
+def is_money_changing_task(
+    *,
+    task_type: str,
+    payload: dict[str, Any] | None,
+) -> bool:
+    """Classify monetary effects independently from scheduler routing.
+
+    ``lane`` answers which worker may claim a task; it is not business
+    authority and cannot suppress failure notifications.  Only explicit Meta
+    status mutations belong here.  Scans, reads and irreversible duplicate
+    flows keep their dedicated incident projections.
+    """
+    if task_type != "meta_api_mutation":
+        return False
+    values = payload or {}
+    mutation_kind = str(values.get("mutation_kind") or "")
+    if mutation_kind in {"pause_ad", "activate_ad"}:
+        return True
+    if mutation_kind != "bulk_status_change":
+        return False
+    params = values.get("params") if isinstance(values.get("params"), dict) else {}
+    requested_status = str(params.get("action") or "").upper()
+    return requested_status in {"PAUSE", "PAUSED", "ACTIVATE", "ACTIVE"}
+
+
 def _is_partial_money_result(
     payload: dict[str, Any] | None,
     result: dict[str, Any] | None,
@@ -471,7 +496,7 @@ async def _enqueue_standalone_money_failure(
     dedupe_suffix: str | None = None,
 ) -> None:
     """Persist an uncorrelated critical money-action card in the task transaction."""
-    if lane != "money":
+    if not is_money_changing_task(task_type=task_type, payload=payload):
         return
 
     from core.telegram.notifications import enqueue_notification_in_transaction

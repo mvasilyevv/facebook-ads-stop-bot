@@ -128,7 +128,8 @@ async def test_operator_actions_filter_two_cabinets_in_the_database(pg_engine) -
                         VALUES (
                             'meta_api_mutation', 'running', :idempotency_key,
                             CAST(:payload AS JSONB), '{}'::JSONB,
-                            'operator:test', 'money', 100, NOW(), NOW() + INTERVAL '30 seconds'
+                            'operator:test', 'interactive', 100,
+                            NOW(), NOW() + INTERVAL '120 seconds'
                         )
                         RETURNING id
                         """
@@ -137,7 +138,7 @@ async def test_operator_actions_filter_two_cabinets_in_the_database(pg_engine) -
                         "idempotency_key": f"operator-cabinet-scope-{suffix}-{account_id}",
                         "payload": (
                             '{"mutation_kind":"pause_ad","target_id":"scope-'
-                            f'{account_id}","ad_account_id":"act_{account_id}"}}'
+                            f'{account_id}","ad_account_id":"{account_id}"}}'
                         ),
                     },
                 )
@@ -153,9 +154,8 @@ async def test_operator_actions_filter_two_cabinets_in_the_database(pg_engine) -
         visible_ids = {item["id"] for item in visible}
         assert str(task_ids[0]) in visible_ids
         assert str(task_ids[1]) not in visible_ids
-        assert {item["account_id"] for item in visible if item["id"] in visible_ids} >= {
-            f"act_{account_a}"
-        }
+        scoped_item = next(item for item in visible if item["id"] == str(task_ids[0]))
+        assert scoped_item["account_id"] == account_a
     finally:
         if task_ids:
             async with pg_engine.begin() as conn:

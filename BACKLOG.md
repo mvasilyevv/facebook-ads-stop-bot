@@ -16,6 +16,7 @@
 
 ## Продуктовые улучшения после стабилизации
 
+- [ ] Переименовать internal money-status classifier и удалить неиспользуемый `lane`-аргумент из terminal projection API.
 - [ ] Добавить read-only enable-рекомендации как projection текущих данных с owner-preview; без worker, таблицы событий и auto-activate.
 - [ ] Собрать полевые метрики UX и скорректировать ranked attention по фактической работе owner.
 - [ ] Провести отдельный usability-pass Telegram-карточек на реальном потоке уведомлений.

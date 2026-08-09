@@ -79,7 +79,11 @@ async def _configure_bot(conn, *, generation: int) -> None:
 
 
 @pytest_asyncio.fixture
-async def telegram_action_context(pg_engine, fb_ad_fixture):
+async def telegram_action_context(
+    pg_engine,
+    fb_ad_fixture,
+    known_test_cabinet_timezones,
+):
     recipient_id = uuid.uuid4()
     incident_id = uuid.uuid4()
     suffix = uuid.uuid4().int % 1_000_000_000
@@ -449,18 +453,18 @@ async def test_incident_ack_waiting_on_incident_never_deadlocks_recipient_revoke
 ) -> None:
     """ACK takes incident then recipient advisory; revoke can finish meanwhile."""
     ctx = telegram_action_context
-    second_owner_id = uuid.uuid4()
+    notification_recipient_id = uuid.uuid4()
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
                 """
                 INSERT INTO telegram_recipients
                     (id, chat_id, telegram_user_id, role)
-                VALUES (:id, :chat_id, :user_id, 'owner')
+                VALUES (:id, :chat_id, :user_id, 'recipient')
                 """
             ),
             {
-                "id": second_owner_id,
+                "id": notification_recipient_id,
                 "chat_id": ctx["chat_id"] + 10_000_000_000,
                 "user_id": ctx["user_id"] + 10_000_000_000,
             },
@@ -506,7 +510,7 @@ async def test_incident_ack_waiting_on_incident_never_deadlocks_recipient_revoke
             query_fragment="SELECT t.recipient_id",
         )
         revoke_task = asyncio.create_task(
-            delete_telegram_recipient(str(ctx["recipient_id"]), pg_engine)
+            delete_telegram_recipient(str(notification_recipient_id), pg_engine)
         )
         # With the old recipient-row-first ACK order this side waited in a
         # row/advisory cycle until PostgreSQL's deadlock detector aborted one.
@@ -527,7 +531,7 @@ async def test_incident_ack_waiting_on_incident_never_deadlocks_recipient_revoke
         async with pg_engine.begin() as conn:
             await conn.execute(
                 text("DELETE FROM telegram_recipients WHERE id = :id"),
-                {"id": second_owner_id},
+                {"id": notification_recipient_id},
             )
 
     async with pg_engine.connect() as conn:
@@ -558,34 +562,21 @@ async def test_incident_ack_waiting_on_incident_never_deadlocks_recipient_revoke
             ),
             {"incident_id": ctx["incident_id"]},
         )
-    assert incident_status == "open"
+    assert incident_status == "acknowledged"
     assert token_state.claimed_at is not None
-    assert token_state.consumed_at is None
-    assert ack_events == 0
-    assert "больше недоступно" in client.answer_callback_query.await_args.kwargs["text"]
+    assert token_state.consumed_at is not None
+    assert ack_events == 1
+    assert "принят" in client.answer_callback_query.await_args.kwargs["text"].lower()
 
 
 @pytest.mark.asyncio
-async def test_two_owner_ack_broadcasts_lock_all_recipients_in_one_order(
+async def test_single_owner_can_ack_two_incidents_concurrently(
     pg_engine,
     telegram_action_context,
 ) -> None:
     ctx = telegram_action_context
-    second_owner_id = uuid.uuid4()
     second_incident_id = uuid.uuid4()
-    second_chat_id = ctx["chat_id"] + 20_000_000_000
-    second_user_id = ctx["user_id"] + 20_000_000_000
     async with pg_engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                INSERT INTO telegram_recipients
-                    (id, chat_id, telegram_user_id, role)
-                VALUES (:id, :chat_id, :user_id, 'owner')
-                """
-            ),
-            {"id": second_owner_id, "chat_id": second_chat_id, "user_id": second_user_id},
-        )
         await conn.execute(
             text(
                 """
@@ -609,7 +600,12 @@ async def test_two_owner_ack_broadcasts_lock_all_recipients_in_one_order(
                 ctx["chat_id"],
                 ctx["user_id"],
             ),
-            (second_owner_id, second_incident_id, second_chat_id, second_user_id),
+            (
+                ctx["recipient_id"],
+                second_incident_id,
+                ctx["chat_id"],
+                ctx["user_id"],
+            ),
         ]
         tokens = []
         for index, (recipient_id, incident_id, _chat_id, _user_id) in enumerate(owner_specs):
@@ -668,10 +664,6 @@ async def test_two_owner_ack_broadcasts_lock_all_recipients_in_one_order(
         await asyncio.gather(*tasks, return_exceptions=True)
         async with pg_engine.begin() as conn:
             await conn.execute(
-                text("DELETE FROM telegram_action_tokens WHERE recipient_id = :id"),
-                {"id": second_owner_id},
-            )
-            await conn.execute(
                 text(
                     """
                     DELETE FROM notification_deliveries d
@@ -690,20 +682,16 @@ async def test_two_owner_ack_broadcasts_lock_all_recipients_in_one_order(
                 text("DELETE FROM incidents WHERE id = :id"),
                 {"id": second_incident_id},
             )
-            await conn.execute(
-                text("DELETE FROM telegram_recipients WHERE id = :id"),
-                {"id": second_owner_id},
-            )
 
 
 @pytest.mark.asyncio
-async def test_ack_roster_snapshot_linearizes_concurrent_owner_add(
+async def test_ack_roster_snapshot_linearizes_concurrent_recipient_add(
     pg_engine,
     telegram_action_context,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = telegram_action_context
-    added_owner_id = uuid.uuid4()
+    added_recipient_id = uuid.uuid4()
     async with pg_engine.begin() as conn:
         token = await mint_action_token(
             conn,
@@ -747,7 +735,7 @@ async def test_ack_roster_snapshot_linearizes_concurrent_owner_add(
         )
     )
 
-    async def add_owner() -> None:
+    async def add_recipient() -> None:
         async with pg_engine.begin() as conn:
             await lock_owner_roster(conn)
             await conn.execute(
@@ -755,11 +743,11 @@ async def test_ack_roster_snapshot_linearizes_concurrent_owner_add(
                     """
                     INSERT INTO telegram_recipients
                         (id, chat_id, telegram_user_id, role)
-                    VALUES (:id, :chat_id, :user_id, 'owner')
+                    VALUES (:id, :chat_id, :user_id, 'recipient')
                     """
                 ),
                 {
-                    "id": added_owner_id,
+                    "id": added_recipient_id,
                     "chat_id": ctx["chat_id"] + 30_000_000_000,
                     "user_id": ctx["user_id"] + 30_000_000_000,
                 },
@@ -768,7 +756,7 @@ async def test_ack_roster_snapshot_linearizes_concurrent_owner_add(
     add_task = None
     try:
         await asyncio.wait_for(entered.wait(), timeout=3.0)
-        add_task = asyncio.create_task(add_owner())
+        add_task = asyncio.create_task(add_recipient())
         await _wait_for_blocked_backend(
             pg_engine,
             query_fragment="pg_advisory_xact_lock(hashtext",
@@ -788,7 +776,7 @@ async def test_ack_roster_snapshot_linearizes_concurrent_owner_add(
                       AND d.recipient_id=:recipient_id
                     """
                 ),
-                {"incident_id": ctx["incident_id"], "recipient_id": added_owner_id},
+                {"incident_id": ctx["incident_id"], "recipient_id": added_recipient_id},
             )
         assert added_delivery_count == 0
     finally:
@@ -803,7 +791,7 @@ async def test_ack_roster_snapshot_linearizes_concurrent_owner_add(
         async with pg_engine.begin() as conn:
             await conn.execute(
                 text("DELETE FROM telegram_recipients WHERE id=:id"),
-                {"id": added_owner_id},
+                {"id": added_recipient_id},
             )
 
 
@@ -814,7 +802,7 @@ async def test_money_status_divergence_linearizes_concurrent_recipient_revoke(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = telegram_action_context
-    second_owner_id = uuid.uuid4()
+    notification_recipient_id = uuid.uuid4()
     original = await CommandService(pg_engine).enqueue_ad_action(
         action_kind="pause_ad",
         fb_ad_id=ctx["fb_ad_id"],
@@ -827,11 +815,11 @@ async def test_money_status_divergence_linearizes_concurrent_recipient_revoke(
                 """
                 INSERT INTO telegram_recipients
                     (id, chat_id, telegram_user_id, role)
-                VALUES (:id, :chat_id, :user_id, 'owner')
+                VALUES (:id, :chat_id, :user_id, 'recipient')
                 """
             ),
             {
-                "id": second_owner_id,
+                "id": notification_recipient_id,
                 "chat_id": ctx["chat_id"] + 40_000_000_000,
                 "user_id": ctx["user_id"] + 40_000_000_000,
             },
@@ -906,7 +894,7 @@ async def test_money_status_divergence_linearizes_concurrent_recipient_revoke(
     try:
         await asyncio.wait_for(entered.wait(), timeout=3.0)
         revoke_task = asyncio.create_task(
-            delete_telegram_recipient(str(ctx["recipient_id"]), pg_engine)
+            delete_telegram_recipient(str(notification_recipient_id), pg_engine)
         )
         await _wait_for_blocked_backend(
             pg_engine,
@@ -973,7 +961,7 @@ async def test_money_status_divergence_linearizes_concurrent_recipient_revoke(
             )
             await conn.execute(
                 text("DELETE FROM telegram_recipients WHERE id=:id"),
-                {"id": second_owner_id},
+                {"id": notification_recipient_id},
             )
 
 

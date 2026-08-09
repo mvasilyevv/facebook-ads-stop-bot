@@ -170,15 +170,15 @@ async def test_missing_catalog_account_rejects_without_enqueue(monkeypatch) -> N
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("action_kind", "delivery_status", "currency", "currency_observed_at"),
+    ("action_kind", "delivery_status", "currency", "currency_evidence"),
     [
-        ("pause_ad", "ACTIVE", "EUR", datetime.now(UTC)),
-        ("activate_ad", "PAUSED", "EUR", datetime.now(UTC)),
-        ("pause_ad", "ACTIVE", None, None),
-        ("activate_ad", "PAUSED", None, None),
-        ("pause_ad", "ACTIVE", "USD", datetime.now(UTC) - timedelta(hours=25)),
-        ("activate_ad", "PAUSED", "USD", datetime.now(UTC) + timedelta(minutes=6)),
-        ("pause_ad", "ACTIVE", "USD", datetime.now()),
+        ("pause_ad", "ACTIVE", "EUR", "fresh"),
+        ("activate_ad", "PAUSED", "EUR", "fresh"),
+        ("pause_ad", "ACTIVE", None, "missing"),
+        ("activate_ad", "PAUSED", None, "missing"),
+        ("pause_ad", "ACTIVE", "USD", "stale"),
+        ("activate_ad", "PAUSED", "USD", "future"),
+        ("pause_ad", "ACTIVE", "USD", "naive"),
     ],
 )
 async def test_operator_command_requires_confirmed_usd_before_enqueue(
@@ -186,8 +186,16 @@ async def test_operator_command_requires_confirmed_usd_before_enqueue(
     action_kind,
     delivery_status,
     currency,
-    currency_observed_at,
+    currency_evidence,
 ) -> None:
+    evidence_now = datetime.now(UTC)
+    currency_observed_at = {
+        "fresh": evidence_now,
+        "missing": None,
+        "stale": evidence_now - timedelta(hours=25),
+        "future": evidence_now + timedelta(minutes=6),
+        "naive": evidence_now.replace(tzinfo=None),
+    }[currency_evidence]
     connection = SimpleNamespace(
         scalar=AsyncMock(return_value=False),
         execute=AsyncMock(

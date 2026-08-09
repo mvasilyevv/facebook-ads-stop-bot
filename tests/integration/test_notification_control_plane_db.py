@@ -6,6 +6,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from unittest.mock import AsyncMock
 
 import pytest
@@ -284,6 +285,7 @@ async def _enqueue_incident_warning(
     incident_id: uuid.UUID,
     correlation_id: uuid.UUID,
     expected_delivery_count: int = 1,
+    audience: Literal["owners", "all"] = "owners",
 ):
     async with pg_engine.begin() as conn:
         result = await enqueue_notification_in_transaction(
@@ -291,7 +293,7 @@ async def _enqueue_incident_warning(
             NotificationEventSpec(
                 event_type="incident_warning",
                 severity="critical",
-                audience="owners",
+                audience=audience,
                 facts=NotificationCardFacts(title="Threshold breached", status="OPEN"),
                 dedupe_key=f"test:warning:{incident_id}:{uuid.uuid4()}",
                 incident_id=incident_id,
@@ -2828,7 +2830,7 @@ async def test_incident_ack_is_transactional_generation_bound_and_idempotent(
 
 
 @pytest.mark.asyncio
-async def test_ack_replaces_other_owner_pre_boundary_snapshot(
+async def test_ack_replaces_notification_recipient_pre_boundary_snapshot(
     pg_engine,
     notification_resources,
 ) -> None:
@@ -2844,7 +2846,7 @@ async def test_ack_replaces_other_owner_pre_boundary_snapshot(
                 """
                 INSERT INTO telegram_recipients
                     (id, chat_id, telegram_user_id, role)
-                VALUES (:id, :chat_id, :user_id, 'owner')
+                VALUES (:id, :chat_id, :user_id, 'recipient')
                 """
             ),
             {
@@ -2859,6 +2861,7 @@ async def test_ack_replaces_other_owner_pre_boundary_snapshot(
         incident_id=incident_id,
         correlation_id=correlation_id,
         expected_delivery_count=2,
+        audience="all",
     )
     async with pg_engine.connect() as conn:
         assert (

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -24,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from apps.meta_api_worker.main import process_one_task
 from core.meta_api.audit import record_audit_log
 from core.meta_api.errors import RateLimitedError, TokenInvalidError
+from core.meta_api.freshness import MetaSnapshotFreshness
 from core.meta_api.queue import (
     cancel_task,
     claim_browser_ready_mutation_task,
@@ -105,6 +107,38 @@ def _unique_numeric_payload(kind: str = "pause_ad") -> MetaMutationPayload:
     )
 
 
+def _fresh_auto_stop_payload() -> MetaMutationPayload:
+    """Direct queue fixture with the same confirmed context as CommandService."""
+    observed_at = datetime.now(UTC)
+    return MetaMutationPayload(
+        mutation_kind="pause_ad",
+        target_id=uuid.uuid4().hex,
+        params={"reason": "integration test"},
+        ad_account_id="act_42",
+        currency="USD",
+        cabinet_timezone="UTC",
+        account_context_observed_at=observed_at.isoformat(),
+        account_context_issues=(),
+    )
+
+
+def _allow_fresh_auto_stop(monkeypatch, *, observed_at: datetime | None = None) -> None:
+    """Keep error-routing tests beyond the independent freshness gate."""
+    import apps.meta_api_worker.main as worker_main
+
+    monkeypatch.setattr(
+        worker_main,
+        "load_meta_snapshot_freshness",
+        AsyncMock(
+            return_value=MetaSnapshotFreshness(
+                fresh=True,
+                latest_cycle_at=observed_at or datetime.now(UTC),
+                interval_seconds=30,
+            )
+        ),
+    )
+
+
 # ====================== Lifecycle ======================
 
 
@@ -164,7 +198,7 @@ async def test_rate_limited_error_requeues_task(
     clean_meta_tables,
     monkeypatch,
 ):
-    payload = _unique_payload("pause_ad")
+    payload = _fresh_auto_stop_payload()
     task_id = await create_mutation_task(
         pg_engine,
         payload=payload,
@@ -181,6 +215,7 @@ async def test_rate_limited_error_requeues_task(
 
     import apps.meta_api_worker.main as worker_main
 
+    _allow_fresh_auto_stop(monkeypatch)
     monkeypatch.setattr(worker_main, "dispatch_mutation", _raise_rate_limited)
 
     fake_client = AsyncMock()
@@ -208,7 +243,7 @@ async def test_token_invalid_marks_failed_without_retry(
 ):
     # Use a deactivating mutation so this test reaches dispatch regardless of
     # the global scanning pause; the assertion is about permanent auth errors.
-    payload = _unique_payload("pause_ad")
+    payload = _fresh_auto_stop_payload()
     task_id = await create_mutation_task(
         pg_engine,
         payload=payload,
@@ -225,6 +260,7 @@ async def test_token_invalid_marks_failed_without_retry(
 
     import apps.meta_api_worker.main as worker_main
 
+    _allow_fresh_auto_stop(monkeypatch)
     monkeypatch.setattr(worker_main, "dispatch_mutation", _raise_token_invalid)
 
     fake_client = AsyncMock()
@@ -269,7 +305,7 @@ async def test_token_invalid_rolls_back_terminal_task_when_card_projection_fails
     import apps.meta_api_worker.main as worker_main
     import core.telegram.worker_notify as worker_notify
 
-    payload = _unique_payload("pause_ad")
+    payload = _fresh_auto_stop_payload()
     task_id = await create_mutation_task(
         pg_engine,
         payload=payload,
@@ -285,6 +321,7 @@ async def test_token_invalid_rolls_back_terminal_task_when_card_projection_fails
     async def fail_projection(*_args, **_kwargs):
         raise RuntimeError("notification projection failed")
 
+    _allow_fresh_auto_stop(monkeypatch)
     monkeypatch.setattr(worker_main, "dispatch_mutation", raise_token_invalid)
     monkeypatch.setattr(
         worker_notify,

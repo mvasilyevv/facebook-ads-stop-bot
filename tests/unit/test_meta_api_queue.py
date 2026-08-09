@@ -9,7 +9,7 @@ import pytest
 
 from core.meta_api.queue import create_mutation_task, default_idempotency_key
 from core.meta_api.schemas import MetaMutationPayload
-from core.tasks.queue import infer_task_lane
+from core.tasks.queue import infer_task_lane, is_money_changing_task
 
 
 @pytest.mark.parametrize(
@@ -35,6 +35,39 @@ def test_mutation_lane_registry_isolates_automatic_pause_from_owner_actions(
         )
         == expected_lane
     )
+
+
+@pytest.mark.parametrize(
+    ("task_type", "payload", "expected"),
+    [
+        ("meta_api_mutation", {"mutation_kind": "pause_ad"}, True),
+        ("meta_api_mutation", {"mutation_kind": "activate_ad"}, True),
+        (
+            "meta_api_mutation",
+            {"mutation_kind": "bulk_status_change", "params": {"action": "pause"}},
+            True,
+        ),
+        (
+            "meta_api_mutation",
+            {"mutation_kind": "bulk_status_change", "params": {"action": "activate"}},
+            True,
+        ),
+        (
+            "meta_api_mutation",
+            {"mutation_kind": "bulk_status_change", "params": {}},
+            False,
+        ),
+        ("meta_api_mutation", {"mutation_kind": "duplicate_adset_structure"}, False),
+        ("observer_scan", {"mutation_kind": "pause_ad"}, False),
+        ("tracker_event_process", {"action": "read"}, False),
+    ],
+)
+def test_money_notification_classification_is_semantic_not_lane(
+    task_type: str,
+    payload: dict[str, object],
+    expected: bool,
+) -> None:
+    assert is_money_changing_task(task_type=task_type, payload=payload) is expected
 
 
 # Одинаковые payload + requested_by + (нет salt) → одинаковый ключ (для дедупа).

@@ -981,12 +981,14 @@ async def test_snooze_boundary_equality_does_not_suppress(pg_engine, offer_kr2) 
     """snoozed_until == cycle_ts: строгое > в pipeline не suppress'ит emit при равенстве."""
     # Создаём ad в состоянии warning_sent через первый скан
     row = _make_row(spend=Decimal("20.0"), deposits=0, leads=0, registrations=0)
-    ts1 = datetime(2026, 5, 28, 10, 0, 0, tzinfo=UTC)
+    # Keep the synthetic cycle clock inside the 60-second confirmed-currency
+    # window.  The test owns snooze boundary semantics, not stale-data policy.
+    ts1 = datetime.now(UTC) - timedelta(seconds=5)
     await _set_account_currency_observed_at(pg_engine, ts1)
     await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1, cycle_ts=ts1)
 
     # Ставим snoozed_until = ts2 (ровно момент следующего скана)
-    ts2 = datetime(2026, 5, 28, 10, 30, 0, tzinfo=UTC)
+    ts2 = ts1 + timedelta(seconds=1)
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
@@ -1025,12 +1027,13 @@ async def test_snooze_expired_between_scans_emits_on_third(pg_engine, offer_kr2)
     row = _make_row(spend=Decimal("20.0"), deposits=0, leads=0, registrations=0)
 
     # Scan #1: ставим ad в warning_sent/stop_sent
-    ts1 = datetime(2026, 5, 28, 10, 0, 0, tzinfo=UTC)
+    # Exercise snooze transitions while the confirmed USD evidence remains fresh.
+    ts1 = datetime.now(UTC) - timedelta(seconds=5)
     await _set_account_currency_observed_at(pg_engine, ts1)
     await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1, cycle_ts=ts1)
 
-    # Ставим snoozed_until = ts1 + 2 минуты (истечёт после ts2 но до ts3)
-    snooze_exp = ts1 + timedelta(minutes=2)
+    # Snooze expires after scan #2 but before scan #3.
+    snooze_exp = ts1 + timedelta(seconds=2)
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
@@ -1044,8 +1047,8 @@ async def test_snooze_expired_between_scans_emits_on_third(pg_engine, offer_kr2)
     async with pg_engine.begin() as conn:
         await conn.execute(text("DELETE FROM alert_events"))
 
-    # Scan #2: cycle_ts = ts1 + 1 мин < snoozed_until → snooze активен, emit suppress'ируется
-    ts2 = ts1 + timedelta(minutes=1)
+    # Scan #2: cycle_ts < snoozed_until → snooze активен, emit suppress'ируется
+    ts2 = ts1 + timedelta(seconds=1)
     await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=2, cycle_ts=ts2)
 
     async with pg_engine.connect() as conn:
@@ -1057,8 +1060,8 @@ async def test_snooze_expired_between_scans_emits_on_third(pg_engine, offer_kr2)
         f"Scan #2 должен быть suppressed, но alert_events.scan_id=2: {n_events_after_scan2}"
     )
 
-    # Scan #3: cycle_ts = ts1 + 3 мин > snoozed_until → snooze истёк, emit разрешён
-    ts3 = ts1 + timedelta(minutes=3)
+    # Scan #3: cycle_ts > snoozed_until → snooze истёк, emit разрешён
+    ts3 = ts1 + timedelta(seconds=3)
     await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=3, cycle_ts=ts3)
 
     # Scan #3: FSM stop_sent → stop_sent (no new emit for same state) — но мы проверяем
@@ -1075,7 +1078,7 @@ async def test_snooze_expired_between_scans_emits_on_third(pg_engine, offer_kr2)
         await conn.execute(text("DELETE FROM alert_events"))
 
     # Повторный scan #4 после сброса: snooze истёк, должен выдать emit
-    ts4 = ts1 + timedelta(minutes=4)
+    ts4 = ts1 + timedelta(seconds=4)
     await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=4, cycle_ts=ts4)
 
     async with pg_engine.connect() as conn:
@@ -1099,12 +1102,13 @@ async def test_snooze_stop_recovery_creates_pause_task(pg_engine, offer_kr2) -> 
     row = _make_row(spend=Decimal("20.0"), deposits=0, leads=0, registrations=0)
 
     # Scan #1 → ад уходит в stop_sent (трата без событий).
-    ts1 = datetime(2026, 5, 28, 12, 0, 0, tzinfo=UTC)
+    # Keep the scan sequence inside the independent 60-second USD freshness gate.
+    ts1 = datetime.now(UTC) - timedelta(seconds=5)
     await _set_account_currency_observed_at(pg_engine, ts1)
     await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1, cycle_ts=ts1)
 
-    # Снуз активен до ts1+2мин + эмулируем «pause-задача не создавалась» (краш-сценарий):
-    snooze_exp = ts1 + timedelta(minutes=2)
+    # Снуз активен до ts1+2s + эмулируем «pause-задача не создавалась» (краш-сценарий):
+    snooze_exp = ts1 + timedelta(seconds=2)
     async with pg_engine.begin() as conn:
         await conn.execute(
             text("UPDATE ad_alert_state SET snoozed_until = :su WHERE alert_state = 'stop_sent'"),
@@ -1114,7 +1118,7 @@ async def test_snooze_stop_recovery_creates_pause_task(pg_engine, offer_kr2) -> 
 
     # Scan #2 под активным снузом: pause-задача СОЗДАЁТСЯ (MID-2 — снуз не выключает
     # авто-стоп; подавляется только TG-алерт).
-    ts2 = ts1 + timedelta(minutes=1)
+    ts2 = ts1 + timedelta(seconds=1)
     await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=2, cycle_ts=ts2)
     async with pg_engine.connect() as conn:
         n_under_snooze = (
@@ -1126,7 +1130,7 @@ async def test_snooze_stop_recovery_creates_pause_task(pg_engine, offer_kr2) -> 
 
     # Scan #3 после истечения снуза: recovery НЕ плодит дубль — по-прежнему ровно одна
     # pause_ad на инцидент (idempotency_key по open_token).
-    ts3 = ts1 + timedelta(minutes=3)
+    ts3 = ts1 + timedelta(seconds=3)
     await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=3, cycle_ts=ts3)
     async with pg_engine.connect() as conn:
         recovered = (

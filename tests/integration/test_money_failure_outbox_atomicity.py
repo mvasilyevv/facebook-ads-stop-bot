@@ -130,7 +130,7 @@ async def test_uncorrelated_money_failure_commits_one_durable_delivery(
         claim = await claim_browser_ready_task(
             pg_engine,
             task_type=task_type,
-            lanes=("money",),
+            lanes=("bulk" if mutation_kind == "bulk_status_change" else "interactive",),
         )
         assert claim.task is not None and claim.task.id == task_id
         fence = {
@@ -201,7 +201,7 @@ async def test_notification_enqueue_failure_rolls_back_terminal_task_transition(
         claim = await claim_browser_ready_task(
             pg_engine,
             task_type="meta_api_mutation",
-            lanes=("money",),
+            lanes=("interactive",),
         )
         assert claim.task is not None and claim.task.id == task_id
 
@@ -274,7 +274,7 @@ async def test_partial_bulk_alert_is_committed_with_success_status(pg_engine) ->
         claim = await claim_browser_ready_task(
             pg_engine,
             task_type="meta_api_mutation",
-            lanes=("money",),
+            lanes=("bulk",),
         )
         assert claim.task is not None and claim.task.id == task_id
         assert await mark_succeeded(

@@ -102,7 +102,7 @@ async def test_replace_is_atomic_when_an_account_id_is_invalid(
 ) -> None:
     await _insert_offer(pg_engine, code=f"{PFX}_C", accounts=["777"])
 
-    async with pytest.raises(ValueError, match="explicit numeric account id"):
+    with pytest.raises(ValueError, match="explicit numeric account id"):
         async with pg_engine.begin() as conn:
             offer_id = await conn.scalar(
                 text("SELECT id FROM offers WHERE code = :code"),

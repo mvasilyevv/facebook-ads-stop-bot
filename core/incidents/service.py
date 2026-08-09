@@ -146,7 +146,10 @@ async def acknowledge_incident(
             NotificationEventSpec(
                 event_type="incident_acknowledged",
                 severity="warning",
-                audience="owners",
+                # Every recipient owns an editable incident card.  The owner is
+                # the only role allowed to acknowledge it, but read-only
+                # recipients must see the same lifecycle transition.
+                audience="all",
                 facts=NotificationCardFacts(
                     title=str(row.title),
                     summary=str(row.summary) if row.summary else None,
