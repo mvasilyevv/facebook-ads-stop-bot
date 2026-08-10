@@ -78,7 +78,7 @@ export APP_ENV_FILE="$APP_ENV"
 export BACKUP_ENV_FILE="$BACKUP_ENV"
 export PGBACKREST_CONFIG_FILE="$CONFIG_FILE"
 compose=(docker compose -p "${INFRA_PROJECT_NAME:-fb_agent_infra}" \
-  --env-file "$RELEASE_ENV" -f "$COMPOSE_FILE")
+  --env-file "$APP_ENV" --env-file "$RELEASE_ENV" -f "$COMPOSE_FILE")
 
 case "$COMMAND" in
   stanza-create) args=(stanza-create) ;;

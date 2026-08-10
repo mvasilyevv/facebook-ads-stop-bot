@@ -162,7 +162,7 @@ export APP_API_PORT=18100
 export APP_WEB_PORT=18080
 export APP_TMA_PORT=18081
 
-infra=(docker compose -p validation_infra --env-file "$RELEASE_ENV" \
+infra=(docker compose -p validation_infra --env-file "$APP_ENV" --env-file "$RELEASE_ENV" \
   -f "$PROJECT_DIR/deploy/compose/docker-compose.infra.yml")
 app=(docker compose -p validation_blue --env-file "$RELEASE_ENV" \
   -f "$PROJECT_DIR/deploy/compose/docker-compose.app.yml")

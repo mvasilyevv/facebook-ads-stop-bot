@@ -23,6 +23,11 @@ services:
     env_file:
       - ${APP_ENV_FILE:?set APP_ENV_FILE}
       - ${BACKUP_ENV_FILE:?set BACKUP_ENV_FILE}
+    environment:
+      # pgBackRest must connect with the actual database owner.  The container
+      # OS account remains `postgres`; hard-coding that name as the database
+      # role breaks clusters initialized with a custom POSTGRES_USER.
+      PGBACKREST_PG1_USER: ${POSTGRES_USER:?set POSTGRES_USER}
     command:
       - postgres
       - -c

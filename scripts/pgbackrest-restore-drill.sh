@@ -85,7 +85,7 @@ PRODUCTION_VOLUME="${PRODUCTION_VOLUME:-fb_agent_safety_first_pgdata}"
 export APP_ENV_FILE="$APP_ENV" BACKUP_ENV_FILE="$BACKUP_ENV"
 export PGBACKREST_CONFIG_FILE="$CONFIG_FILE"
 infra=(docker compose -p "${INFRA_PROJECT_NAME:-fb_agent_infra}" \
-  --env-file "$RELEASE_ENV" -f "$COMPOSE_FILE")
+  --env-file "$APP_ENV" --env-file "$RELEASE_ENV" -f "$COMPOSE_FILE")
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 suffix="${timestamp//[^0-9A-Za-z]/}"
