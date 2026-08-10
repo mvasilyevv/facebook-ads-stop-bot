@@ -20,6 +20,7 @@ from core.adoption.bundle import (
 from core.adoption.profiles import LegacySourceProfile
 from core.adoption.repository import (
     AdoptionSemanticMismatchError,
+    AdoptionTargetPreflightError,
     LegacyArraySourceRepository,
     NormalizedTargetRepository,
 )
@@ -54,6 +55,14 @@ class AdoptionImportConfirmationError(ValueError):
 @dataclass(frozen=True)
 class AdoptionImportResult:
     dry_run: bool
+    source_fingerprint: str
+    entity_counts: dict[str, int]
+    section_sha256: dict[str, str]
+
+
+@dataclass(frozen=True)
+class AdoptionFirstReleaseResult:
+    imported: bool
     source_fingerprint: str
     entity_counts: dict[str, int]
     section_sha256: dict[str, str]
@@ -225,11 +234,78 @@ async def apply_adoption_bundle(
             raise
 
 
+async def verify_adoption_bundle(
+    engine: AsyncEngine,
+    *,
+    bundle: AdoptionBundleV1,
+    repository_factory: Callable[
+        [AsyncConnection], NormalizedTargetRepository
+    ] = NormalizedTargetRepository,
+) -> AdoptionImportResult:
+    """Verify an already imported first-release target without mutating it."""
+
+    async with engine.connect() as conn:
+        transaction = await conn.begin()
+        try:
+            await conn.execute(_EXPORT_TRANSACTION_SQL)
+            await _assert_transaction_state(
+                conn,
+                isolation="repeatable read",
+                read_only=True,
+            )
+            repository = repository_factory(conn)
+            await repository.preflight_adopted()
+            projection = await repository.project()
+            _assert_semantic_projection(bundle, projection)
+            result = AdoptionImportResult(
+                dry_run=False,
+                source_fingerprint=bundle.source_fingerprint,
+                entity_counts=dict(bundle.entity_counts),
+                section_sha256=dict(bundle.section_sha256),
+            )
+            await transaction.commit()
+            return result
+        except BaseException:
+            if transaction.is_active:
+                await transaction.rollback()
+            raise
+
+
+async def adopt_first_release_bundle(
+    engine: AsyncEngine,
+    *,
+    bundle: AdoptionBundleV1,
+) -> AdoptionFirstReleaseResult:
+    """Import once, or reconcile a crash after the committed import."""
+
+    try:
+        result = await verify_adoption_bundle(engine, bundle=bundle)
+        imported = False
+    except (AdoptionSemanticMismatchError, AdoptionTargetPreflightError):
+        await apply_adoption_bundle(engine, bundle=bundle, dry_run=True)
+        result = await apply_adoption_bundle(
+            engine,
+            bundle=bundle,
+            dry_run=False,
+            confirmed_source_fingerprint=bundle.source_fingerprint,
+        )
+        imported = True
+    return AdoptionFirstReleaseResult(
+        imported=imported,
+        source_fingerprint=result.source_fingerprint,
+        entity_counts=result.entity_counts,
+        section_sha256=result.section_sha256,
+    )
+
+
 __all__ = [
     "AdoptionImportConfirmationError",
+    "AdoptionFirstReleaseResult",
     "AdoptionImportResult",
     "AdoptionTransactionError",
+    "adopt_first_release_bundle",
     "apply_adoption_bundle",
     "export_legacy_bundle",
     "source_fingerprint",
+    "verify_adoption_bundle",
 ]

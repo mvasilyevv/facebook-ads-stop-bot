@@ -8,7 +8,7 @@ there is no compatibility runtime or alternate traffic target.
 
 | Project               | Owns                                                     | Lifecycle                          |
 | --------------------- | -------------------------------------------------------- | ---------------------------------- |
-| `fb_agent_infra`      | PostgreSQL, Redis, WAL spool and durable volumes         | Never switched with an app release |
+| `fb_agent_infra`      | PostgreSQL, Redis, local backup repository and durable volumes | Never switched with an app release |
 | `fb_agent_blue`       | API, web, TMA and workers                                | Alternates with green              |
 | `fb_agent_green`      | API, web, TMA and workers                                | Alternates with blue               |
 | `fb_agent_vision`     | Unified Vision + KasmVNC desktop runtime                 | Released independently             |
@@ -61,9 +61,8 @@ historical target.
 1. Download `release-images.env` from the CI artifact to
    `/opt/fb-agent/shared/release-images.env`.
 2. Create `/opt/fb-agent/shared/pgbackrest.env` from
-   `deploy/backup/pgbackrest.env.example`, mode `0600`. The S3-compatible bucket
-   must be encrypted, versioned, off-host and protected with Object Lock where
-   available.
+   `deploy/backup/pgbackrest.env.example`, mode `0600`. It intentionally holds
+   no credentials: the repository is a dedicated local Docker volume.
 3. Provision `/opt/fb-agent/shared/alloy-agent.env` (mode `0600`) with private
    HTTPS ingest endpoints and a root-only
    `/opt/fb-agent/shared/desktop-profile-seed` (mode `0700`). The seed must be
@@ -149,7 +148,7 @@ durably committed.
 
 ## Backups and drills
 
-The supported first-release path creates a full encrypted off-host backup,
+The supported first-release path creates a full local backup,
 forces and archives a post-backup WAL marker, restores that exact set in an
 isolated temporary volume and validates the evidence before candidate start.
 Only then does `server-platform-release.sh` enable and verify weekly full, daily

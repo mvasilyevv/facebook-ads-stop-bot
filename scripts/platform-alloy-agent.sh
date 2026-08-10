@@ -155,12 +155,24 @@ candidate_compose() {
 
 remote_backends_ready() {
   local key=""
+  local transport=""
   local status=""
   local url=""
   local expected_suffix=""
+  transport="$(sed -n 's/^MONITORING_TRANSPORT=//p' "$AGENT_ENV" | tail -n 1)"
+  [[ "$transport" == "private_https" || "$transport" == "same_host" ]] || return 1
   for key in PROMETHEUS_READY_URL LOKI_READY_URL TEMPO_READY_URL; do
     url="$(sed -n "s/^${key}=//p" "$AGENT_ENV" | tail -n 1)"
-    [[ "$url" == https://* ]] || return 1
+    if [[ "$transport" == "private_https" ]]; then
+      [[ "$url" == https://* ]] || return 1
+    else
+      case "$key:$url" in
+        PROMETHEUS_READY_URL:http://172.17.0.1:9090/-/ready|\
+        LOKI_READY_URL:http://172.17.0.1:3100/ready|\
+        TEMPO_READY_URL:http://172.17.0.1:3200/ready) ;;
+        *) return 1 ;;
+      esac
+    fi
     [[ "$url" != *"@"* && "$url" != *"?"* && "$url" != *"#"* ]] || return 1
     case "$key" in
       PROMETHEUS_READY_URL) expected_suffix="/-/ready" ;;

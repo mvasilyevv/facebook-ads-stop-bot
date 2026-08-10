@@ -60,6 +60,7 @@ def _runtime_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
                 f"ALLOY_IMAGE=example/alloy@sha256:{digest}",
                 f"NODE_EXPORTER_IMAGE=example/node-exporter@sha256:{digest}",
                 f"CADVISOR_IMAGE=example/cadvisor@sha256:{digest}",
+                "MONITORING_TRANSPORT=private_https",
                 "PROMETHEUS_REMOTE_WRITE_URL=https://monitoring.test/prometheus/api/v1/write",
                 "LOKI_WRITE_URL=https://monitoring.test/loki/api/v1/push",
                 "TEMPO_OTLP_HTTP_URL=https://monitoring.test/otlp",

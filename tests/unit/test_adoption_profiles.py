@@ -203,3 +203,12 @@ async def test_legacy_export_profile_rejects_normalized_catalog() -> None:
 def test_unknown_source_profile_is_rejected() -> None:
     with pytest.raises(AdoptionSourceProfileError, match="unknown explicit"):
         get_source_profile("auto-detect")
+
+
+def test_legacy_0036_profile_matches_migrated_campaign_id_storage() -> None:
+    profile = get_source_profile(LEGACY_0036_PROFILE)
+
+    assert profile.exported_column_types[("observer_config", "campaign_ids")] == (
+        "ARRAY",
+        "_varchar",
+    )

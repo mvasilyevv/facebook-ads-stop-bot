@@ -72,22 +72,26 @@ validate_digest REDIS_IMAGE
 readonly DEFAULT_POSTGRES_VOLUME="fb_agent_safety_first_pgdata"
 readonly DEFAULT_REDIS_VOLUME="fb_agent_safety_first_redisdata"
 readonly DEFAULT_PGBACKREST_SPOOL_VOLUME="fb_agent_safety_first_pgbackrest_spool"
+readonly DEFAULT_PGBACKREST_REPO_VOLUME="fb_agent_safety_first_pgbackrest_repo"
 readonly DEFAULT_CAMPAIGN_UPLOAD_VOLUME="fb_agent_safety_first_campaign_uploads"
 readonly DEFAULT_PLATFORM_NETWORK="fb_agent_safety_first_platform"
 release_postgres_volume="$(dotenv_value "$RELEASE_ENV" POSTGRES_VOLUME)"
 release_redis_volume="$(dotenv_value "$RELEASE_ENV" REDIS_VOLUME)"
 release_spool_volume="$(dotenv_value "$RELEASE_ENV" PGBACKREST_SPOOL_VOLUME)"
+release_repo_volume="$(dotenv_value "$RELEASE_ENV" PGBACKREST_REPO_VOLUME)"
 release_upload_volume="$(dotenv_value "$RELEASE_ENV" CAMPAIGN_UPLOAD_VOLUME)"
 release_platform_network="$(dotenv_value "$RELEASE_ENV" PLATFORM_NETWORK)"
 POSTGRES_VOLUME="${POSTGRES_VOLUME:-${release_postgres_volume:-$DEFAULT_POSTGRES_VOLUME}}"
 REDIS_VOLUME="${REDIS_VOLUME:-${release_redis_volume:-$DEFAULT_REDIS_VOLUME}}"
 PGBACKREST_SPOOL_VOLUME="${PGBACKREST_SPOOL_VOLUME:-${release_spool_volume:-$DEFAULT_PGBACKREST_SPOOL_VOLUME}}"
+PGBACKREST_REPO_VOLUME="${PGBACKREST_REPO_VOLUME:-${release_repo_volume:-$DEFAULT_PGBACKREST_REPO_VOLUME}}"
 CAMPAIGN_UPLOAD_VOLUME="${CAMPAIGN_UPLOAD_VOLUME:-${release_upload_volume:-$DEFAULT_CAMPAIGN_UPLOAD_VOLUME}}"
 PLATFORM_NETWORK="${PLATFORM_NETWORK:-${release_platform_network:-$DEFAULT_PLATFORM_NETWORK}}"
 for resource in \
   "$POSTGRES_VOLUME" \
   "$REDIS_VOLUME" \
   "$PGBACKREST_SPOOL_VOLUME" \
+  "$PGBACKREST_REPO_VOLUME" \
   "$CAMPAIGN_UPLOAD_VOLUME" \
   "$PLATFORM_NETWORK"; do
   [[ "$resource" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]+$ ]] \
@@ -99,6 +103,7 @@ for resource_contract in \
   "$POSTGRES_VOLUME:$DEFAULT_POSTGRES_VOLUME" \
   "$REDIS_VOLUME:$DEFAULT_REDIS_VOLUME" \
   "$PGBACKREST_SPOOL_VOLUME:$DEFAULT_PGBACKREST_SPOOL_VOLUME" \
+  "$PGBACKREST_REPO_VOLUME:$DEFAULT_PGBACKREST_REPO_VOLUME" \
   "$CAMPAIGN_UPLOAD_VOLUME:$DEFAULT_CAMPAIGN_UPLOAD_VOLUME" \
   "$PLATFORM_NETWORK:$DEFAULT_PLATFORM_NETWORK"; do
   actual_resource="${resource_contract%%:*}"
@@ -106,7 +111,7 @@ for resource_contract in \
   [[ "$actual_resource" == "$expected_resource" ]] \
     || die "fresh bootstrap requires canonical safety-first resource $expected_resource"
 done
-export POSTGRES_VOLUME REDIS_VOLUME PGBACKREST_SPOOL_VOLUME
+export POSTGRES_VOLUME REDIS_VOLUME PGBACKREST_SPOOL_VOLUME PGBACKREST_REPO_VOLUME
 export CAMPAIGN_UPLOAD_VOLUME PLATFORM_NETWORK
 
 BOOTSTRAP_CLUSTER_ID="$(dotenv_value "$BOOTSTRAP_SECRETS" FB_AGENT_BOOTSTRAP_CLUSTER_ID)"
@@ -177,6 +182,7 @@ ensure_platform_network
 ensure_owned_volume "$POSTGRES_VOLUME" postgres
 ensure_owned_volume "$REDIS_VOLUME" redis
 ensure_owned_volume "$PGBACKREST_SPOOL_VOLUME" pgbackrest-spool
+ensure_owned_volume "$PGBACKREST_REPO_VOLUME" pgbackrest-repo
 ensure_owned_volume "$CAMPAIGN_UPLOAD_VOLUME" campaign-uploads
 
 "${compose[@]}" config --quiet

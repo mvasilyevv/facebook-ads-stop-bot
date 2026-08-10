@@ -22,11 +22,13 @@ production.
   and the first post-recovery probe returned 200;
 - production Compose, Prometheus rules, Alertmanager, Loki, blackbox and Caddy
   validators passed with container-backed validators.
+- immutable release-image workflow succeeded for commit `c5cdb0a7`; the
+  manifest contains eight digest-only image references.
 
 ## Still external
 
-- immutable release-image workflow and digest artifact for the final commit;
-- off-host backup plus isolated restore/PITR evidence;
+- local pgBackRest backup plus isolated restore/PITR evidence; remote backup
+  was removed from the production contract by owner decision;
 - unified desktop disposable runtime and physical-device matrix;
 - production-like k6/Toxiproxy suite against the candidate host;
 - real-user Web Vitals and the final adoption bundle made from the reviewed

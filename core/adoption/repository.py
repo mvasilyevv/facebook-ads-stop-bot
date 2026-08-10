@@ -328,7 +328,11 @@ class LegacyArraySourceRepository:
 
 
 def _fresh_data_sql() -> Any:
-    table_names = sorted(name for name in Base.metadata.tables if name != "system_config")
+    table_names = sorted(
+        name
+        for name in Base.metadata.tables
+        if name not in {"adsetpro_credentials", "system_config", "telegram_config"}
+    )
     statements = [
         f"SELECT '{name}' AS table_name WHERE EXISTS (SELECT 1 FROM public.\"{name}\" LIMIT 1)"
         for name in table_names
@@ -339,15 +343,46 @@ def _fresh_data_sql() -> Any:
 _TARGET_FRESH_DATA_SQL = _fresh_data_sql()
 
 
+_ADOPTED_CONFIGURATION_TABLES = frozenset(
+    {
+        "ad_accounts",
+        "adsetpro_credentials",
+        "offer_ad_accounts",
+        "offer_rules",
+        "offers",
+        "observer_config",
+        "operator_revision_events",
+        "operator_display_preferences",
+        "system_config",
+        "telegram_recipient_preferences",
+        "telegram_recipients",
+        "telegram_config",
+    }
+)
+
+
+def _unexpected_adopted_data_sql() -> Any:
+    table_names = sorted(
+        name for name in Base.metadata.tables if name not in _ADOPTED_CONFIGURATION_TABLES
+    )
+    statements = [
+        f"SELECT '{name}' AS table_name WHERE EXISTS (SELECT 1 FROM public.\"{name}\" LIMIT 1)"
+        for name in table_names
+    ]
+    return text("/* adoption:target-unexpected-data */\n" + "\nUNION ALL\n".join(statements))
+
+
+_TARGET_UNEXPECTED_ADOPTED_DATA_SQL = _unexpected_adopted_data_sql()
+
+
 class NormalizedTargetRepository:
     """Importer and semantic projector for the exact normalized baseline."""
 
     def __init__(self, conn: AsyncConnection) -> None:
         self._conn = conn
 
-    async def preflight_fresh(self) -> None:
-        """Require exact baseline schema and no adopted/runtime data."""
-
+    async def preflight_baseline(self) -> None:
+        """Require the exact normalized baseline schema."""
         try:
             revisions = list((await self._conn.scalars(_TARGET_REVISION_SQL)).all())
             if revisions != [BASELINE_REVISION]:
@@ -387,9 +422,21 @@ class NormalizedTargetRepository:
             if await self._conn.run_sync(schema_diffs):
                 raise AdoptionTargetPreflightError("target ORM schema drift detected")
 
+        except AdoptionTargetPreflightError:
+            raise
+        except Exception as exc:
+            raise AdoptionTargetPreflightError("target preflight failed") from exc
+
+    async def preflight_fresh(self) -> None:
+        """Require exact baseline schema and no adopted/runtime data."""
+
+        await self.preflight_baseline()
+        try:
             dirty_tables = list((await self._conn.scalars(_TARGET_FRESH_DATA_SQL)).all())
             if dirty_tables:
-                raise AdoptionTargetPreflightError("target contains application data")
+                raise AdoptionTargetPreflightError(
+                    "target contains application data: " + ", ".join(dirty_tables)
+                )
             system_rows = (
                 (
                     await self._conn.execute(
@@ -406,14 +453,74 @@ class NormalizedTargetRepository:
                 .mappings()
                 .all()
             )
-            if len(system_rows) != 1:
+            if not 1 <= len(system_rows) <= 2:
                 raise AdoptionTargetPreflightError("target system configuration is not fresh")
-            row = system_rows[0]
+            rows_by_key = {str(row["key"]): row["value"] for row in system_rows}
             if (
-                row["key"] != "retention_policy"
-                or _json_value(row["value"]) != get_default_policy()
+                set(rows_by_key) not in ({"retention_policy"}, {"retention_policy", "web_app_url"})
+                or _json_value(rows_by_key["retention_policy"]) != get_default_policy()
             ):
                 raise AdoptionTargetPreflightError("target baseline seed is not pristine")
+        except AdoptionTargetPreflightError:
+            raise
+        except Exception as exc:
+            raise AdoptionTargetPreflightError("target preflight failed") from exc
+
+    async def preflight_adopted(self) -> None:
+        """Require a target that contains configuration only, never runtime state."""
+
+        await self.preflight_baseline()
+        try:
+            dirty_tables = list(
+                (await self._conn.scalars(_TARGET_UNEXPECTED_ADOPTED_DATA_SQL)).all()
+            )
+            if dirty_tables:
+                raise AdoptionTargetPreflightError(
+                    "target contains runtime data: " + ", ".join(dirty_tables)
+                )
+            system_keys = list(
+                (
+                    await self._conn.scalars(
+                        text(
+                            """
+                            /* adoption:target-system-keys */
+                            SELECT key
+                            FROM public.system_config
+                            ORDER BY key
+                            """
+                        )
+                    )
+                ).all()
+            )
+            if not system_keys or not set(system_keys).issubset(
+                {"retention_policy", "web_app_url"}
+            ):
+                raise AdoptionTargetPreflightError(
+                    "target contains unreviewed system configuration"
+                )
+            revision_rows = (
+                (
+                    await self._conn.execute(
+                        text(
+                            """
+                            /* adoption:target-revision-events */
+                            SELECT scope, event_id
+                            FROM public.operator_revision_events
+                            ORDER BY revision
+                            """
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            if len(revision_rows) > 1 or any(
+                row["scope"] != "observer_config" or row["event_id"] is not None
+                for row in revision_rows
+            ):
+                raise AdoptionTargetPreflightError(
+                    "target contains unreviewed operator revision events"
+                )
         except AdoptionTargetPreflightError:
             raise
         except Exception as exc:

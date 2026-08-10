@@ -115,6 +115,8 @@ def test_same_release_retry_after_desired_rotation_fails_without_mutation(
                 for key in (
                     "FB_AGENT_BOOTSTRAP_CLUSTER_ID",
                     "POSTGRES_PASSWORD",
+                    "TELEGRAM_WEBHOOK_SECRET",
+                    "ALERTMANAGER_WEBHOOK_SECRET",
                     "TMA_SESSION_SECRET",
                     "ADSETPRO_POSTBACK_SECRET",
                     "DESKTOP_KASM_SERVICE_PASSWORD",

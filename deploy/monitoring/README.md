@@ -62,11 +62,17 @@ On a separate monitoring node, set `MONITORING_INGEST_BIND_ADDRESS` to its
 private address and restrict these ports at the firewall. Terminate private TLS
 in front of the three ingest paths before pointing an app agent at them.
 
+For a single-host installation, bind ingest only to the Docker bridge
+(`172.17.0.1`) and set `MONITORING_TRANSPORT=same_host` in the application-host
+agent environment. The agent then uses the fixed `host.docker.internal`
+gateway endpoints; telemetry never leaves the host and ingest is not exposed on
+a public interface.
+
 ## Application-host agent
 
 ```bash
 install -m 600 .env.agent.example /opt/fb-agent/shared/alloy-agent.env
-# Set private HTTPS Prometheus, Loki and Tempo ingest and readiness URLs before release.
+# Set MONITORING_TRANSPORT and the matching fixed private endpoints before release.
 ```
 
 `server-platform-release.sh` owns installation and activation. It starts the

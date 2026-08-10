@@ -27,6 +27,13 @@ def test_backup_and_pitr_gate_orders_fresh_and_existing_migrations_safely() -> N
     assert fresh_branch.index("--profile migration run --rm migrator") < fresh_branch.index(
         "release-backup-gate.sh"
     )
+    assert (
+        fresh_branch.index("--profile migration run --rm migrator")
+        < fresh_branch.index("adoption_importer")
+        < fresh_branch.index("release-backup-gate.sh")
+    )
+    assert 'ADOPTION_BUNDLE_FILE="$STATE_DIR/adoption-bundle-v1.json"' in deploy
+    assert "first release requires the reviewed adoption bundle" in deploy
     assert existing_branch.index("release-backup-gate.sh") < existing_branch.index(
         "--profile migration run --rm migrator"
     )
@@ -266,6 +273,10 @@ def test_supported_release_owns_backup_timer_adoption_and_alloy_readiness() -> N
     assert '[[ "$status" =~ ^2[0-9][0-9]$ ]]' in alloy_runtime
     assert "fb_agent_telemetry_candidate" in alloy_runtime
     assert "candidate_cleanup" in alloy_runtime
+    assert "MONITORING_TRANSPORT" in alloy_install
+    assert "same_host" in alloy_install
+    assert "host.docker.internal:9090" in alloy_install
+    assert "http://172.17.0.1:9090/-/ready" in alloy_runtime
     alloy_gate = release.index('"$SCRIPT_DIR/platform-alloy-agent.sh" candidate-up')
     app_cutover = release.index('"$SCRIPT_DIR/bluegreen-deploy.sh"')
     assert alloy_gate < app_cutover

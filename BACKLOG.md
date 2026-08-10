@@ -7,10 +7,10 @@
 - [x] Прогнать PostgreSQL integration suite на чистой изолированной БД.
 - [x] Прогнать crash/concurrency/DB-restart и lost-NOTIFY acceptance.
 - [x] Прогнать полный Telegram failure/burst suite.
-- [ ] Собрать immutable images в CI и проверить digest-only deploy.
+- [x] Собрать immutable images в CI и проверить digest-only manifest.
 - [ ] Проверить unified desktop runtime в disposable container.
 - [ ] Пройти browser/device matrix для web, TMA и remote desktop.
-- [ ] Провести restore/PITR drill и подтвердить RPO/RTO.
+- [ ] Провести локальный restore/PITR drill; удалённые backups исключены решением owner.
 - [ ] Получить release CI для load/chaos/a11y и реальные field Web Vitals; локальные load/chaos/a11y зелёные.
 - [x] Подготовить rollback и двухчасовой cutover packet.
 

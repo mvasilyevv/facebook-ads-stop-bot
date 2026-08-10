@@ -112,6 +112,7 @@ fi
 export APP_COLOR="$COLOR"
 export APP_ENV_FILE="$APP_ENV"
 export BACKUP_ENV_FILE="$BACKUP_ENV"
+export ADOPTION_BUNDLE_FILE="$STATE_DIR/adoption-bundle-v1.json"
 export DESKTOP_READINESS_DIR="${DESKTOP_READINESS_DIR:-$STATE_DIR/desktop-readiness}"
 export PGBACKREST_CONFIG_FILE="$STATE_DIR/pgbackrest.conf"
 [[ -f "$PGBACKREST_CONFIG_FILE" && ! -L "$PGBACKREST_CONFIG_FILE" ]] \
@@ -135,7 +136,8 @@ compose=(docker compose -p "fb_agent_${COLOR}" --env-file "$RELEASE_ENV" -f "$AP
 "${compose[@]}" config --quiet
 while IFS= read -r image; do
   [[ "$image" =~ @sha256:[0-9a-f]{64}$ ]] || die "non-immutable image: $image"
-done < <("${compose[@]}" --profile migration --profile release --profile workers config --images)
+done < <("${compose[@]}" --profile adoption --profile migration --profile release \
+  --profile workers config --images)
 
 if [[ "$DRY_RUN" == true ]]; then
   log "configuration validated; candidate $COLOR was not changed"
@@ -208,9 +210,14 @@ if [[ -e "$STATE_DIR/active-state" || -L "$STATE_DIR/active-state" ]]; then
   [[ "$PREVIOUS_COLOR" != "$COLOR" ]] || die "candidate color is already active"
 else
   [[ "$COLOR" == blue ]] || die "the first clean installation must start on blue"
+  [[ -f "$ADOPTION_BUNDLE_FILE" && ! -L "$ADOPTION_BUNDLE_FILE" ]] \
+    || die "first release requires the reviewed adoption bundle"
+  [[ "$(stat -Lc '%a' "$ADOPTION_BUNDLE_FILE")" == "600" ]] \
+    || die "adoption bundle must have mode 600"
 fi
 
-"${compose[@]}" --profile migration --profile release --profile workers pull
+"${compose[@]}" --profile adoption --profile migration --profile release \
+  --profile workers pull
 backup_gate_args=(
   --release-env "$RELEASE_ENV"
   --app-env "$APP_ENV"
@@ -220,9 +227,10 @@ backup_gate_args=(
 if [[ -z "$PREVIOUS_COLOR" ]]; then
   # There is no historical application data to protect on an explicitly
   # empty first-install target. Install the reviewed baseline first, then
-  # prove a full off-host backup, post-backup WAL replay and isolated restore
+  # prove a full local backup, post-backup WAL replay and isolated restore
   # before the candidate can start or receive public traffic.
   "${compose[@]}" --profile migration run --rm migrator
+  "${compose[@]}" --profile adoption run --rm adoption_importer
   "$SCRIPT_DIR/release-backup-gate.sh" \
     "${backup_gate_args[@]}" \
     --evidence-root "$STATE_DIR/backup-evidence" \

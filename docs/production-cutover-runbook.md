@@ -9,8 +9,8 @@ command `запускай` and all evidence cells below are green.
 - immutable release manifest from CI; every runtime image is an `@sha256`;
 - clean `0001_safety_first_baseline` target and accepted adoption bundle;
 - newly provisioned secrets and successful connectivity checks;
-- off-host monitoring/Alertmanager/blackbox readiness;
-- accepted full backup plus post-backup WAL and isolated PITR restore evidence;
+- monitoring/Alertmanager/blackbox readiness;
+- accepted local full backup plus post-backup WAL and isolated PITR restore evidence;
 - load, chaos, accessibility, browser and physical-device results;
 - named release operator and rollback owner with access to the host, registry,
   DNS/Caddy, backup repository and Meta verification UI.
@@ -23,7 +23,7 @@ Any missing, expired or ambiguous item is a stop, not a waiver.
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | T-30…T-15 | Freeze config changes and money commands. Record current Meta state, active color, release pointer and N-1 manifest.                                                               | Signed preflight record; N-1 images pull by digest.                                   |
 | T-15…T-5  | Export, validate and dry-run `adoption-bundle/v1` using `docs/adoption-bundle-runbook.md`. Provision new secrets.                                                                  | Counts and semantic hashes match; connectivity is green; scanning remains disabled.   |
-| T-5…T0    | Verify monitoring ingest, Alertmanager, blackbox, backup/WAL and restore artifacts. Announce maintenance.                                                                          | All required evidence current; rollback owner ready.                                  |
+| T-5…T0    | Verify monitoring ingest, Alertmanager, blackbox, local backup/WAL and restore artifacts.                                                                                       | All required evidence current.                                                        |
 | T0…T20    | Merge the reviewed release commit to `main`. CI builds once, publishes immutable images and creates `release-images-<git-sha>`.                                                    | All source and artifact jobs green; manifest contains no tag-only references.         |
 | T20…T40   | Let the deployment workflow stage the immutable release and run the advisory-locked migrator against the clean target. Import the approved bundle once.                            | Only baseline revision exists; import transaction and semantic re-projection succeed. |
 | T40…T55   | Candidate starts without public traffic. Run health, readiness, OpenAPI, Alloy and desktop preflight checks.                                                                       | Candidate identity and every digest match the manifest.                               |

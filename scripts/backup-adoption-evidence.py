@@ -232,8 +232,8 @@ def _validate_full(document: Any) -> dict[str, Any]:
         _die("full-backup evidence has no full backup label")
     repository = document.get("repository")
     expected = {
-        "type": "s3",
-        "cipher": "aes-256-cbc",
+        "type": "posix",
+        "cipher": None,
         "retention_full_type": "time",
         "retention_full": 35,
     }
@@ -241,7 +241,7 @@ def _validate_full(document: Any) -> dict[str, Any]:
         not isinstance(repository, dict)
         or {key: repository.get(key) for key in expected} != expected
     ):
-        _die("full-backup repository policy is not the accepted off-host policy")
+        _die("full-backup repository policy is not the accepted local policy")
     if not re.fullmatch(r"[0-9a-f]{64}", str(repository.get("config_sha256", ""))):
         _die("full-backup evidence has no effective config digest")
     backup_timestamps = backup.get("timestamp")

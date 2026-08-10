@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from sqlalchemy.engine import make_url
 
+import core.adoption.service as adoption_service
 from apps.cleanup_worker.retention import get_default_policy
 from core.adoption.bundle import (
     AdoptionAccountV1,
@@ -20,8 +21,11 @@ from core.adoption.bundle import (
 from core.adoption.profiles import get_source_profile
 from core.adoption.service import (
     AdoptionImportConfirmationError,
+    AdoptionImportResult,
+    adopt_first_release_bundle,
     apply_adoption_bundle,
     export_legacy_bundle,
+    verify_adoption_bundle,
 )
 
 
@@ -168,6 +172,9 @@ class _TargetRepository:
 
     async def preflight_fresh(self) -> None:
         self.events.append("preflight")
+
+    async def preflight_adopted(self) -> None:
+        self.events.append("preflight_adopted")
 
     async def import_sections(self, sections: AdoptionSectionsV1) -> None:
         self.events.append("import")
@@ -325,3 +332,72 @@ async def test_semantic_verification_mismatch_rolls_back() -> None:
         )
 
     assert engine.conn.transaction.rolled_back is True
+
+
+@pytest.mark.asyncio
+async def test_already_imported_target_is_verified_read_only() -> None:
+    engine = _Engine(export=True)
+    _TargetRepository.events = []
+    _TargetRepository.projection = _sections()
+
+    result = await verify_adoption_bundle(
+        engine,  # type: ignore[arg-type]
+        bundle=_bundle(),
+        repository_factory=_TargetRepository,  # type: ignore[arg-type]
+    )
+
+    assert result.dry_run is False
+    assert _TargetRepository.events == ["preflight_adopted", "project"]
+    assert engine.conn.transaction.committed is True
+    assert "REPEATABLE READ, READ ONLY" in engine.conn.statements[0]
+
+
+@pytest.mark.asyncio
+async def test_first_release_dry_runs_before_import_and_retries_as_verify(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    expected = AdoptionImportResult(
+        dry_run=False,
+        source_fingerprint="a" * 64,
+        entity_counts=dict(_bundle().entity_counts),
+        section_sha256=dict(_bundle().section_sha256),
+    )
+
+    async def fake_verify(*_args, **_kwargs):
+        calls.append("verify")
+        if calls.count("verify") == 1:
+            raise adoption_service.AdoptionSemanticMismatchError("fresh baseline")
+        return expected
+
+    async def fake_apply(*_args, dry_run: bool, **_kwargs):
+        calls.append("dry-run" if dry_run else "import")
+        return expected
+
+    monkeypatch.setattr(adoption_service, "verify_adoption_bundle", fake_verify)
+    monkeypatch.setattr(adoption_service, "apply_adoption_bundle", fake_apply)
+
+    imported = await adopt_first_release_bundle(  # type: ignore[arg-type]
+        object(),
+        bundle=_bundle(),
+    )
+    assert imported.imported is True
+    assert calls == ["verify", "dry-run", "import"]
+
+    calls.clear()
+
+    async def fake_verify_success(*_args, **_kwargs):
+        calls.append("verify")
+        return expected
+
+    monkeypatch.setattr(
+        adoption_service,
+        "verify_adoption_bundle",
+        fake_verify_success,
+    )
+    verified = await adopt_first_release_bundle(  # type: ignore[arg-type]
+        object(),
+        bundle=_bundle(),
+    )
+    assert verified.imported is False
+    assert calls == ["verify"]

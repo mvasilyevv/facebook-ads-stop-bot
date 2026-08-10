@@ -29,15 +29,37 @@ done
 [[ "$(stat -Lc '%a' "$AGENT_ENV")" == "600" ]] \
   || die "$AGENT_ENV must have mode 600"
 
+transport="$(sed -n 's/^MONITORING_TRANSPORT=//p' "$AGENT_ENV" | tail -n 1)"
+[[ "$transport" == "private_https" || "$transport" == "same_host" ]] \
+  || die "MONITORING_TRANSPORT must be private_https or same_host"
+
 for key in PROMETHEUS_REMOTE_WRITE_URL LOKI_WRITE_URL TEMPO_OTLP_HTTP_URL; do
   value="$(sed -n "s/^${key}=//p" "$AGENT_ENV" | tail -n 1)"
-  [[ "$value" == https://* ]] || die "$key must use private HTTPS transport"
+  if [[ "$transport" == "private_https" ]]; then
+    [[ "$value" == https://* ]] || die "$key must use private HTTPS transport"
+  else
+    case "$key:$value" in
+      PROMETHEUS_REMOTE_WRITE_URL:http://host.docker.internal:9090/api/v1/write|\
+      LOKI_WRITE_URL:http://host.docker.internal:3100/loki/api/v1/push|\
+      TEMPO_OTLP_HTTP_URL:http://host.docker.internal:4318) ;;
+      *) die "$key must use the fixed same-host monitoring endpoint" ;;
+    esac
+  fi
   [[ "$value" != *"@"* && "$value" != *"?"* && "$value" != *"#"* ]] \
     || die "$key must not carry credentials or query tokens in its URL"
 done
 for key in PROMETHEUS_READY_URL LOKI_READY_URL TEMPO_READY_URL; do
   value="$(sed -n "s/^${key}=//p" "$AGENT_ENV" | tail -n 1)"
-  [[ "$value" == https://* ]] || die "$key must use private HTTPS transport"
+  if [[ "$transport" == "private_https" ]]; then
+    [[ "$value" == https://* ]] || die "$key must use private HTTPS transport"
+  else
+    case "$key:$value" in
+      PROMETHEUS_READY_URL:http://172.17.0.1:9090/-/ready|\
+      LOKI_READY_URL:http://172.17.0.1:3100/ready|\
+      TEMPO_READY_URL:http://172.17.0.1:3200/ready) ;;
+      *) die "$key must use the fixed same-host readiness endpoint" ;;
+    esac
+  fi
   [[ "$value" != *"@"* && "$value" != *"?"* && "$value" != *"#"* ]] \
     || die "$key must not carry credentials or query tokens in its URL"
   case "$key" in

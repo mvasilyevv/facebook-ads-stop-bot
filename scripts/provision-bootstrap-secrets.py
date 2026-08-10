@@ -17,6 +17,8 @@ CLUSTER_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 KEY_RE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 INSECURE_POSTGRES_PASSWORDS = frozenset({"", "fb_stop_bot"})
 DURABLE_GENERATED_SECRETS = {
+    "TELEGRAM_WEBHOOK_SECRET": 32,
+    "ALERTMANAGER_WEBHOOK_SECRET": 32,
     "TMA_SESSION_SECRET": 32,
     "ADSETPRO_POSTBACK_SECRET": 32,
     "DESKTOP_KASM_SERVICE_PASSWORD": 32,

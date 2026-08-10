@@ -71,8 +71,8 @@ fi
   || die "--expected-release-id is required for initial timer adoption"
 
 # This is the sole adoption gate: both evidence files and their immutable
-# checksums must prove a new encrypted off-host full backup and an isolated
-# restore of that exact backup set before any recurring timer is enabled.
+# checksums must prove a new local full backup and an isolated restore of that
+# exact backup set before any recurring timer is enabled.
 python3 "$SCRIPT_DIR/backup-adoption-evidence.py" validate-pair \
   --full "$FULL_EVIDENCE" \
   --restore "$RESTORE_EVIDENCE" \

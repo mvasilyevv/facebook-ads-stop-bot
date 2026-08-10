@@ -42,6 +42,7 @@ MONITORING_ENV="$TEMP_DIR/monitoring.env"
 ALERTMANAGER_TOKEN="$TEMP_DIR/alertmanager-webhook-token"
 AGENT_ENV="$TEMP_DIR/agent.env"
 CADDY_ENV="$TEMP_DIR/caddy.env"
+ADOPTION_BUNDLE="$TEMP_DIR/adoption-bundle-v1.json"
 RELEASE_ENV="$PROJECT_DIR/deploy/bluegreen/release-images.env.example"
 printf '%s\n' \
   'POSTGRES_DB=fb_stop_bot' \
@@ -74,12 +75,8 @@ printf '%s\n' \
   'BROWSER_AUTHORITY_CONSUMER_TOKEN=validation-only-browser-authority-token-0123456789abcdef' \
   >"$BROWSER_AUTHORITY_ENV"
 printf '%s\n' \
-  'PGBACKREST_REPO1_S3_BUCKET=validation' \
-  'PGBACKREST_REPO1_S3_ENDPOINT=s3.example.invalid' \
-  'PGBACKREST_REPO1_S3_REGION=eu-central-1' \
-  'PGBACKREST_REPO1_S3_KEY=validation' \
-  'PGBACKREST_REPO1_S3_KEY_SECRET=validation' \
-  'PGBACKREST_REPO1_CIPHER_PASS=validation-only-cipher-pass' >"$BACKUP_ENV"
+  '# local pgBackRest repository needs no credentials' >"$BACKUP_ENV"
+printf '%s\n' '{}' >"$ADOPTION_BUNDLE"
 printf '%s\n' \
   'GF_SECURITY_ADMIN_PASSWORD=validation-only' \
   'GF_SERVER_ROOT_URL=http://localhost:3000' \
@@ -100,6 +97,7 @@ printf '%s\n' \
   'ALLOY_IMAGE=grafana/alloy@sha256:41c41849989b7e054ccbadc17938ee1e5592fe26bfbc56ef3ffc109c0b0b2739' \
   'NODE_EXPORTER_IMAGE=prom/node-exporter@sha256:4032c6d5bfd752342c3e631c2f1de93ba6b86c41db6b167b9a35372c139e7706' \
   'CADVISOR_IMAGE=gcr.io/cadvisor/cadvisor@sha256:3cde6faf0791ebf7b41d6f8ae7145466fed712ea6f252c935294d2608b1af388' \
+  'MONITORING_TRANSPORT=private_https' \
   'PROMETHEUS_REMOTE_WRITE_URL=https://monitoring.example.invalid/api/v1/write' \
   'LOKI_WRITE_URL=https://monitoring.example.invalid/loki/api/v1/push' \
   'TEMPO_OTLP_HTTP_URL=https://monitoring.example.invalid/otlp' \
@@ -122,6 +120,7 @@ chmod 0600 \
   "$BROWSER_CAMPAIGN_CREATOR_ENV" \
   "$BROWSER_AUTHORITY_ENV" \
   "$BACKUP_ENV" \
+  "$ADOPTION_BUNDLE" \
   "$MONITORING_ENV" \
   "$AGENT_ENV" \
   "$CADDY_ENV"
@@ -142,6 +141,7 @@ browser_authority_env_require "$BROWSER_AUTHORITY_ENV" \
   || die "browser authority validation fixture failed the private-file contract"
 
 export APP_ENV_FILE="$APP_ENV"
+export ADOPTION_BUNDLE_FILE="$ADOPTION_BUNDLE"
 export BROWSER_CONTROL_ENV_FILE="$BROWSER_CONTROL_ENV"
 export BROWSER_MAINTENANCE_ENV_FILE="$BROWSER_MAINTENANCE_ENV"
 export BROWSER_AUTOPAUSE_ENV_FILE="$BROWSER_AUTOPAUSE_ENV"
@@ -177,7 +177,8 @@ agent=(docker compose --env-file "$AGENT_ENV" \
   -f "$PROJECT_DIR/deploy/monitoring/docker-compose.agent.yml")
 
 "${infra[@]}" config --quiet
-"${app[@]}" --profile migration --profile release --profile workers config --quiet
+"${app[@]}" --profile adoption --profile migration --profile release \
+  --profile workers config --quiet
 "${desktop[@]}" config --quiet
 "${monitoring[@]}" config --quiet
 "${monitoring_local[@]}" config --quiet
@@ -347,7 +348,7 @@ agent=(docker compose --env-file "$AGENT_ENV" \
 for compose_name in infra app desktop; do
   case "$compose_name" in
     infra) command=("${infra[@]}") ;;
-    app) command=("${app[@]}" --profile migration --profile release --profile workers) ;;
+    app) command=("${app[@]}" --profile adoption --profile migration --profile release --profile workers) ;;
     desktop) command=("${desktop[@]}") ;;
   esac
   while IFS= read -r image; do

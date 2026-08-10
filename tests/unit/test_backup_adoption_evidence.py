@@ -56,13 +56,9 @@ def _evidence_pair(tmp_path: Path) -> tuple[Path, Path]:
     restore = tmp_path / "adoption-restore.json"
     config = tmp_path / "pgbackrest.conf"
     backup_env = tmp_path / "pgbackrest.env"
-    backup_env.write_text("PGBACKREST_REPO1_S3_BUCKET=unit-test\n", encoding="utf-8")
+    backup_env.write_text("# local repository needs no credentials\n", encoding="utf-8")
     config.write_text(
-        "[global]\n"
-        "repo1-type=s3\n"
-        "repo1-cipher-type=aes-256-cbc\n"
-        "repo1-retention-full-type=time\n"
-        "repo1-retention-full=35\n",
+        "[global]\nrepo1-type=posix\nrepo1-retention-full-type=time\nrepo1-retention-full=35\n",
         encoding="utf-8",
     )
     _run(
@@ -184,7 +180,7 @@ def test_evidence_records_effective_repository_config_not_a_constant(tmp_path: P
     full, _ = _evidence_pair(tmp_path)
     document = json.loads(full.read_text(encoding="utf-8"))
 
-    assert document["repository"]["type"] == "s3"
+    assert document["repository"]["type"] == "posix"
     assert document["repository"]["retention_full"] == 35
     assert len(document["repository"]["config_sha256"]) == 64
 
@@ -195,7 +191,7 @@ def test_repository_policy_env_override_is_observed_and_rejected(tmp_path: Path)
     info = tmp_path / "info.json"
     config = tmp_path / "pgbackrest.conf"
     backup_env = tmp_path / "unsafe.env"
-    backup_env.write_text("PGBACKREST_REPO1_TYPE=posix\n", encoding="utf-8")
+    backup_env.write_text("PGBACKREST_REPO1_TYPE=s3\n", encoding="utf-8")
     output = tmp_path / "unsafe-full.json"
 
     result = _run(
@@ -219,7 +215,7 @@ def test_repository_policy_env_override_is_observed_and_rejected(tmp_path: Path)
 
     assert full.exists()
     assert result.returncode != 0
-    assert "not the accepted off-host policy" in result.stderr
+    assert "not the accepted local policy" in result.stderr
 
 
 def test_latest_recoverable_selects_diff_and_emits_wal_pitr_time(tmp_path: Path) -> None:

@@ -855,12 +855,14 @@ bootstrap_postgres_password="$(dotenv_value "$BOOTSTRAP_SECRETS" POSTGRES_PASSWO
 readonly POSTGRES_VOLUME="fb_agent_safety_first_pgdata"
 readonly REDIS_VOLUME="fb_agent_safety_first_redisdata"
 readonly PGBACKREST_SPOOL_VOLUME="fb_agent_safety_first_pgbackrest_spool"
+readonly PGBACKREST_REPO_VOLUME="fb_agent_safety_first_pgbackrest_repo"
 readonly CAMPAIGN_UPLOAD_VOLUME="fb_agent_safety_first_campaign_uploads"
 readonly PLATFORM_NETWORK="fb_agent_safety_first_platform"
 for resource_contract in \
   "POSTGRES_VOLUME:$POSTGRES_VOLUME" \
   "REDIS_VOLUME:$REDIS_VOLUME" \
   "PGBACKREST_SPOOL_VOLUME:$PGBACKREST_SPOOL_VOLUME" \
+  "PGBACKREST_REPO_VOLUME:$PGBACKREST_REPO_VOLUME" \
   "CAMPAIGN_UPLOAD_VOLUME:$CAMPAIGN_UPLOAD_VOLUME" \
   "PLATFORM_NETWORK:$PLATFORM_NETWORK"; do
   resource_key="${resource_contract%%:*}"
@@ -870,7 +872,7 @@ for resource_contract in \
     || die "$resource_key must use the canonical safety-first resource"
 done
 export FB_AGENT_BOOTSTRAP_CLUSTER_ID="$bootstrap_cluster_id"
-export POSTGRES_VOLUME REDIS_VOLUME PGBACKREST_SPOOL_VOLUME
+export POSTGRES_VOLUME REDIS_VOLUME PGBACKREST_SPOOL_VOLUME PGBACKREST_REPO_VOLUME
 export CAMPAIGN_UPLOAD_VOLUME PLATFORM_NETWORK
 
 release_id="$(dotenv_value "$RELEASE_ENV" RELEASE_ID)"

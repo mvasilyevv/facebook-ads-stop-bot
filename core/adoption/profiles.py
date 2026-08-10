@@ -153,7 +153,7 @@ _COMMON_EXPORTED_TYPES = {
     ("offer_rules", "warning_percent_of_stop"): ("numeric", "numeric"),
     ("observer_config", "interval_seconds"): ("integer", "int4"),
     ("observer_config", "owner_campaign_tag"): ("character varying", "varchar"),
-    ("observer_config", "campaign_ids"): ("ARRAY", "_text"),
+    ("observer_config", "campaign_ids"): ("ARRAY", "_varchar"),
     ("telegram_recipients", "id"): ("uuid", "uuid"),
     ("telegram_recipients", "chat_id"): ("bigint", "int8"),
     ("telegram_recipients", "telegram_user_id"): ("bigint", "int8"),

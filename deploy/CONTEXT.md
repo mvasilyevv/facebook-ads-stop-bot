@@ -20,7 +20,8 @@
 - Production images собираются один раз в CI и деплоятся по digest.
 - Candidate поднимается без money workers; handoff выполняется после traffic gate.
 - Rollback не понижает схему БД.
-- Реплика не считается backup; monitoring и backup находятся off-host.
+- Реплика не считается backup; monitoring может находиться off-host, а первый
+  production release использует локальный pgBackRest repository по решению owner.
 - Release не считается безопасным без health, contract, desktop readiness и
   rollback evidence.
 - Автоматический DB failover включается только после SLO, restore drills,

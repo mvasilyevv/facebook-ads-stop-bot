@@ -43,6 +43,8 @@ REMOVED_KEYS = (
     | PRIVATE_BROWSER_KEYS
 )
 DURABLE_GENERATED_SECRETS = {
+    "TELEGRAM_WEBHOOK_SECRET": 32,
+    "ALERTMANAGER_WEBHOOK_SECRET": 32,
     "TMA_SESSION_SECRET": 32,
     "ADSETPRO_POSTBACK_SECRET": 32,
     "DESKTOP_KASM_SERVICE_PASSWORD": 32,
@@ -260,6 +262,8 @@ def main() -> int:
         "DEV_TOOLS_ENABLED": "false",
         "LOG_FORMAT": "json",
         "DEPLOYMENT_ENVIRONMENT": "production",
+        "TELEGRAM_WEBHOOK_SECRET": durable_generated["TELEGRAM_WEBHOOK_SECRET"],
+        "ALERTMANAGER_WEBHOOK_SECRET": durable_generated["ALERTMANAGER_WEBHOOK_SECRET"],
         "TMA_SESSION_SECRET": durable_generated["TMA_SESSION_SECRET"],
         # AdSet.pro умеет только GET pixel без custom header, поэтому этот секрет
         # используется query-token'ом. Генерируем один раз и сохраняем между release.

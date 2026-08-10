@@ -354,6 +354,21 @@ class _DirtyFreshTargetConnection:
         return []
 
 
+class _AdoptedTargetConnection(_DirtyFreshTargetConnection):
+    def __init__(self, *, unexpected_tables: list[str]) -> None:
+        self._unexpected_tables = unexpected_tables
+
+    async def scalars(self, statement) -> _FreshGuardScalars:
+        sql = str(statement)
+        if "adoption:target-revision" in sql:
+            return _FreshGuardScalars([BASELINE_REVISION])
+        if "adoption:target-unexpected-data" in sql:
+            return _FreshGuardScalars(self._unexpected_tables)
+        if "adoption:target-system-keys" in sql:
+            return _FreshGuardScalars(["retention_policy", "web_app_url"])
+        raise AssertionError(f"unexpected scalar query: {statement}")
+
+
 @pytest.mark.asyncio
 async def test_target_preflight_rejects_any_existing_application_data(
     monkeypatch: pytest.MonkeyPatch,
@@ -379,3 +394,30 @@ async def test_target_preflight_rejects_any_existing_application_data(
         await NormalizedTargetRepository(  # type: ignore[arg-type]
             _DirtyFreshTargetConnection()
         ).preflight_fresh()
+
+
+@pytest.mark.asyncio
+async def test_adopted_preflight_rejects_runtime_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(adoption_repository, "assert_catalog_artifacts", lambda _rows: None)
+    monkeypatch.setattr(
+        adoption_repository,
+        "validate_database_extension_layout",
+        lambda _rows, *, baseline_installed: None,
+    )
+    monkeypatch.setattr(
+        adoption_repository,
+        "describe_standalone_public_catalog_objects",
+        lambda _rows, *, allow_manifested_routines: [],
+    )
+    monkeypatch.setattr(
+        adoption_repository,
+        "validate_public_partition_layout",
+        lambda _rows, *, require_baseline_defaults: [],
+    )
+
+    with pytest.raises(AdoptionTargetPreflightError, match="runtime data"):
+        await NormalizedTargetRepository(  # type: ignore[arg-type]
+            _AdoptedTargetConnection(unexpected_tables=["task_queue"])
+        ).preflight_adopted()

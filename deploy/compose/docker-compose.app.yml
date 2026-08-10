@@ -62,6 +62,21 @@ services:
     profiles: [migration]
     labels: *runtime-labels
 
+  adoption_importer:
+    image: ${WORKERS_IMAGE:?set WORKERS_IMAGE to image@sha256}
+    restart: "no"
+    init: true
+    logging: *logging
+    env_file: ${APP_ENV_FILE:?set APP_ENV_FILE}
+    environment:
+      <<: *runtime-environment
+    entrypoint: ["python", "/app/scripts/adopt-first-release.py"]
+    volumes:
+      - ${ADOPTION_BUNDLE_FILE:?set ADOPTION_BUNDLE_FILE}:/run/fb-agent/adoption-bundle-v1.json:ro
+    networks: [platform]
+    profiles: [adoption]
+    labels: *runtime-labels
+
   telegram_webhook_configurator:
     image: ${WORKERS_IMAGE:?set WORKERS_IMAGE to image@sha256}
     restart: "no"

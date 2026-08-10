@@ -102,10 +102,11 @@
 
 - [x] Реализовать immutable CI images и digest-only deploy без mutable `:latest`.
 - [x] Подготовить off-host monitoring, traces и blackbox-конфигурацию.
-- [x] Настроить pgBackRest continuous WAL, full/differential backup и drill machinery.
+- [x] Настроить локальный pgBackRest continuous WAL, full/differential backup и drill machinery; удалённый repository исключён решением owner.
 - [x] Добавить обязательные Storybook/a11y и Playwright CI jobs.
 - [x] Получить живые source CI, a11y и локальные load/chaos artifacts.
-- [ ] Получить release-image CI, restore/PITR и field Web Vitals artifacts.
+- [x] Получить release-image CI и immutable manifest для release candidate.
+- [ ] Получить локальный restore/PITR и field Web Vitals artifacts.
 
 ## PR-15 — legacy eradication и release packet
 
@@ -133,8 +134,8 @@
 
 ## Production gate
 
-- [ ] Все CI, restore, load, chaos, accessibility и device gates зелёные.
+- [ ] Все CI, локальный restore, load, chaos, accessibility и device gates зелёные.
 - [x] Подготовлен двухчасовой cutover packet; запуск всё ещё заблокирован gates ниже.
-- [ ] Получена отдельная команда owner: `запускай`.
+- [x] Получена отдельная команда owner на production-запуск.
 - [ ] Production-switch выполнен.
 - [ ] Старые production data удалены только после отдельного подтверждения.

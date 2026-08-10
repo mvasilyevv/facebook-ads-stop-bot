@@ -40,6 +40,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - pgbackrest_spool:/var/spool/pgbackrest
+      - pgbackrest_repo:/var/lib/pgbackrest/repo
       # This bind source lives in durable shared state, never in a release
       # directory that retention may prune while PostgreSQL is still running.
       - ${PGBACKREST_CONFIG_FILE:?set PGBACKREST_CONFIG_FILE}:/etc/pgbackrest/pgbackrest.conf:ro
@@ -90,4 +91,7 @@ volumes:
     external: true
   pgbackrest_spool:
     name: fb_agent_safety_first_pgbackrest_spool
+    external: true
+  pgbackrest_repo:
+    name: fb_agent_safety_first_pgbackrest_repo
     external: true

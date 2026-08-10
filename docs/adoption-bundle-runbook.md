@@ -92,6 +92,12 @@ lock, runs one serializable transaction, writes in foreign-key order, reprojects
 the target inside that transaction, and compares every semantic count and hash.
 Any error or mismatch rolls back the whole import. Dry-run always rolls back.
 
+For the first production release, install the validated bundle as
+`/opt/fb-agent/shared/adoption-bundle-v1.json` with mode `0600`. The immutable
+release path performs the dry-run and import before any API or worker starts.
+After a crash following commit, a retry verifies the same semantic hashes and
+the absence of runtime data instead of attempting a second import.
+
 ## Operator checklist
 
 - [ ] Source backup and rollback owner are confirmed.
