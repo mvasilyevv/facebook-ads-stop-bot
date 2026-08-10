@@ -648,6 +648,14 @@ def test_pgbackrest_config_uses_durable_shared_path() -> None:
     assert 'export PGBACKREST_CONFIG_FILE="$PGBACKREST_CONFIG"' in runtime
 
 
+def test_pgbackrest_uses_configured_database_owner() -> None:
+    compose = (ROOT / "deploy/compose/docker-compose.infra.yml").read_text()
+    config = (ROOT / "deploy/backup/pgbackrest.conf").read_text()
+
+    assert "PGBACKREST_PG1_USER: ${POSTGRES_USER:?set POSTGRES_USER}" in compose
+    assert "pg1-user=postgres" not in config
+
+
 def test_deploy_and_every_reconciler_share_one_flock() -> None:
     parent = _source("scripts/server-platform-release.sh")
     deploy = _source("scripts/bluegreen-deploy.sh")

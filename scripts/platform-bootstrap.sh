@@ -135,7 +135,8 @@ fi
 export APP_ENV_FILE="$APP_ENV"
 export BACKUP_ENV_FILE="$BACKUP_ENV"
 readonly PROJECT_NAME="${INFRA_PROJECT_NAME:-fb_agent_infra}"
-compose=(docker compose -p "$PROJECT_NAME" --env-file "$RELEASE_ENV" -f "$COMPOSE_FILE")
+compose=(docker compose -p "$PROJECT_NAME" --env-file "$APP_ENV" \
+  --env-file "$RELEASE_ENV" -f "$COMPOSE_FILE")
 
 if [[ "$DRY_RUN" == true ]]; then
   "${compose[@]}" config --quiet

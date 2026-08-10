@@ -1089,7 +1089,8 @@ if [[ "$FIRST_RELEASE" == true ]]; then
     --require-empty
 else
   export APP_ENV_FILE="$candidate_app_env" BACKUP_ENV_FILE="$BACKUP_ENV"
-  running_services="$(docker compose -p fb_agent_infra --env-file "$candidate_release_env" \
+  running_services="$(docker compose -p fb_agent_infra --env-file "$candidate_app_env" \
+    --env-file "$candidate_release_env" \
     -f "$RELEASE_DIR/deploy/compose/docker-compose.infra.yml" \
     ps --status running --services)"
   grep -qx postgres <<<"$running_services" || die "durable PostgreSQL is not running"

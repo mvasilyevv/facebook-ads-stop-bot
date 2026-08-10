@@ -102,7 +102,7 @@ export BROWSER_AUTHORITY_ENV_FILE="$BROWSER_AUTHORITY_ENV"
 export PGBACKREST_CONFIG_FILE="$PGBACKREST_CONFIG"
 export DESKTOP_READINESS_DIR="${DESKTOP_READINESS_DIR:-$STATE_DIR/desktop-readiness}"
 infra=(docker compose -p "${INFRA_PROJECT_NAME:-fb_agent_infra}" \
-  --env-file "$RELEASE_ENV" -f "$INFRA_COMPOSE")
+  --env-file "$APP_ENV" --env-file "$RELEASE_ENV" -f "$INFRA_COMPOSE")
 app=(docker compose -p "fb_agent_${COLOR}" --env-file "$RELEASE_ENV" -f "$APP_COMPOSE")
 
 acquire_runtime_mutation_lock() {
