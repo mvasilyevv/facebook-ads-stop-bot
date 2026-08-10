@@ -3,26 +3,16 @@ from __future__ import annotations
 import base64
 import json
 
-import fakeredis.aioredis
 import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from core.auth import panel_access
 from core.auth.panel_access import (
     PANEL_SESSION_COOKIE,
     PanelAuthError,
     TelegramSigningKeyNotFound,
-    consume_oidc_attempt,
-    consume_panel_ticket,
     create_oidc_authorization,
-    create_panel_session,
-    create_panel_ticket,
-    delete_panel_session,
-    load_panel_session,
-    mark_owner_checked,
     safe_return_to,
-    save_oidc_attempt,
     verify_telegram_id_token,
 )
 
@@ -78,9 +68,7 @@ def test_cookie_and_open_redirect_contract() -> None:
         assert safe_return_to(unsafe) == "/"
 
 
-@pytest.mark.asyncio
-async def test_oidc_state_is_getdel_single_use_and_pkce_s256() -> None:
-    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+def test_oidc_authorization_uses_pkce_s256() -> None:
     state, url, attempt = create_oidc_authorization(
         client_id="12345",
         redirect_uri="https://app.adpulse.su/auth/telegram/callback",
@@ -88,52 +76,8 @@ async def test_oidc_state_is_getdel_single_use_and_pkce_s256() -> None:
     )
     assert "code_challenge_method=S256" in url
     assert f"state={state}" in url
-    await save_oidc_attempt(redis, state, attempt, 600)
-    assert await consume_oidc_attempt(redis, state) == attempt
-    with pytest.raises(PanelAuthError, match="уже был использован"):
-        await consume_oidc_attempt(redis, state)
-    await redis.aclose()
-
-
-@pytest.mark.asyncio
-async def test_ticket_is_hashed_short_lived_and_single_use() -> None:
-    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    ticket, grant = await create_panel_ticket(
-        redis,
-        telegram_user_id=123456,
-        source="telegram_oidc",
-        return_to="/campaigns",
-        ttl=60,
-        now=1_700_000_000,
-    )
-    keys = await redis.keys("panel_auth:v1:ticket:*")
-    assert len(keys) == 1 and ticket not in keys[0]
-    assert await redis.ttl(keys[0]) <= 60
-    assert await consume_panel_ticket(redis, ticket, now=1_700_000_010) == grant
-    with pytest.raises(PanelAuthError, match="уже был использован"):
-        await consume_panel_ticket(redis, ticket, now=1_700_000_011)
-    await redis.aclose()
-
-
-@pytest.mark.asyncio
-async def test_session_is_hashed_and_logout_wins_role_refresh_race(monkeypatch) -> None:
-    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    monkeypatch.setattr(panel_access.secrets, "token_urlsafe", lambda _size: "fixed-token")
-    token, session = await create_panel_session(
-        redis,
-        telegram_user_id=123456,
-        role="owner",
-        source="telegram_oidc",
-        ttl=43_200,
-        now=1_700_000_000,
-    )
-    keys = await redis.keys("panel_auth:v1:session:*")
-    assert len(keys) == 1 and token not in keys[0]
-    assert await load_panel_session(redis, token, now=1_700_000_100) == session
-    await delete_panel_session(redis, token)
-    assert await mark_owner_checked(redis, token, session, 1_700_000_101) is None
-    assert not await redis.keys("panel_auth:v1:session:*")
-    await redis.aclose()
+    assert attempt.return_to == "/settings"
+    assert attempt.nonce and attempt.code_verifier
 
 
 def test_rs256_claim_validation_and_unknown_kid() -> None:

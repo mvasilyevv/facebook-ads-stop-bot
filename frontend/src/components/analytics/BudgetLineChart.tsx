@@ -4,107 +4,265 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
+
 import type { AnalyticsLiveBudgetSeries } from "@fb/shared";
+import { formatSpend } from "@fb/shared/format/number";
+import { buildSpendChartModel } from "@fb/shared/analytics/chartModel";
+import { currentMarkerLabelPosition } from "@fb/shared/operator/chartModel";
+import type { DataState } from "@fb/shared/operator/contracts";
+import { inheritAnalyticsState } from "@fb/shared/analytics/state";
+import { AccessibleChartFrame } from "@fb/operator-ui";
 
 import { Skeleton } from "@/components/ui/Skeleton";
-import { formatDisplayTime, resolveDisplayTimeZone } from "@/lib/timezone";
+import { formatDisplayTime } from "@/lib/timezone";
 
 interface BudgetLineChartProps {
   data?: AnalyticsLiveBudgetSeries;
   loading?: boolean;
   height?: number;
+  timezone: string;
+  parentState: DataState;
 }
 
-export function BudgetLineChart({ data, loading = false, height = 260 }: BudgetLineChartProps) {
-  const timeZone = resolveDisplayTimeZone();
-  const points = useMemo(
+export function BudgetLineChart({
+  data,
+  loading = false,
+  height = 260,
+  timezone,
+  parentState,
+}: BudgetLineChartProps) {
+  const chartModel = useMemo(
     () =>
-      (data?.points ?? []).map((point) => ({
-        ts: new Date(point.ts).getTime(),
-        actual: Number(point.actual),
-        base: Number(point.base),
-        stop: Number(point.stop),
-      })),
+      buildSpendChartModel(
+        (data?.points ?? []).map((point) => ({
+          at: point.ts,
+          actual: point.actual,
+          base: point.base,
+          stop: point.stop,
+        })),
+        data?.as_of ?? null,
+      ),
     [data],
   );
+  const points = chartModel.points;
+  const usdConfirmed = data?.scope.currency_state === "single" && data.scope.currency === "USD";
+  const currency = usdConfirmed ? "USD" : null;
 
-  if (loading) return <Skeleton height={height} className="w-full" />;
-  if (!points.length) {
-    return (
-      <div className="flex items-center justify-center text-[12px] text-bg-8" style={{ height }}>
-        Линии появятся после первого скана текущих суток
+  if (loading) return <Skeleton height={height + 150} className="w-full" />;
+
+  const hasKnownValue = chartModel.hasKnownValue;
+  const partial = (data?.points ?? []).some(
+    (point) => point.available_ads === 0 || point.unavailable_ads > 0,
+  );
+  const serverState: DataState = data?.state ?? (!points.length ? "empty" : "unavailable");
+  const localState: DataState = serverState === "ready" && partial ? "partial" : serverState;
+  const completeness = inheritAnalyticsState(localState, parentState);
+  const valuesAvailable = completeness !== "unavailable" && usdConfirmed;
+  const stopColor =
+    completeness === "ready"
+      ? "var(--color-danger)"
+      : completeness === "partial"
+        ? "var(--color-warning)"
+        : "var(--color-bg-8)";
+  const latest = [...points].reverse().find((point) => point.actual !== null);
+  const currentMarker = serverTimeMarker(
+    points.map((point) => point.timestamp),
+    data?.as_of ?? null,
+  );
+  const currentMarkerLabel =
+    currentMarker === null
+      ? "insideTopLeft"
+      : currentMarkerLabelPosition(
+          points.map((point) => point.at),
+          new Date(currentMarker).toISOString(),
+        );
+  const evidenceSummary = !usdConfirmed
+    ? "Денежные ряды скрыты: рабочая валюта не подтверждена как USD."
+    : completeness === "unavailable"
+      ? "Точки расхода, базы и stop-границы не подтверждены и скрыты."
+      : !points.length
+        ? "Линии появятся после первого подтверждённого скана текущих суток."
+        : !hasKnownValue
+          ? "Источники не подтвердили ни одной точки расхода, базы или stop-границы."
+          : completeness === "ready"
+            ? `Последний подтверждённый расход ${money(latest?.actual, currency)}. Все точки получены без пропусков источников.`
+            : completeness === "partial"
+              ? `Последний доступный расход из неполного снимка ${money(latest?.actual, currency)}. Отсутствующие источники показаны разрывами.`
+              : `Последний доступный расход из устаревшего снимка ${money(latest?.actual, currency)}. Значения не считаются текущими.`;
+  const summary =
+    completeness === "ready" || !data?.issues[0]
+      ? evidenceSummary
+      : `${evidenceSummary} Причина: ${data.issues[0]}.`;
+
+  const chart =
+    valuesAvailable && points.length && hasKnownValue ? (
+      <div className="w-full min-w-0 overflow-hidden" style={{ height }}>
+        <ResponsiveContainer
+          width="100%"
+          height="100%"
+          minWidth={0}
+          minHeight={240}
+          initialDimension={{ width: 640, height: 320 }}
+        >
+          <LineChart
+            accessibilityLayer
+            data={points}
+            margin={{ top: 8, right: 18, bottom: 4, left: 2 }}
+          >
+            <CartesianGrid vertical={false} stroke="var(--color-hairline)" />
+            <XAxis
+              dataKey="timestamp"
+              type="number"
+              scale="time"
+              domain={["dataMin", "dataMax"]}
+              padding={{ left: 12, right: 12 }}
+              interval="preserveStartEnd"
+              minTickGap={34}
+              tickFormatter={(value) => formatDisplayTime(new Date(value), {}, timezone)}
+              tick={{ fill: "var(--color-bg-8)", fontSize: 12 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              width={48}
+              tickFormatter={(value) => money(Number(value), currency)}
+              tick={{ fill: "var(--color-bg-8)", fontSize: 12 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <Tooltip
+              labelFormatter={(value) => formatDisplayTime(new Date(Number(value)), {}, timezone)}
+              formatter={(value, name) => [
+                money(typeof value === "number" ? value : null, currency),
+                String(name),
+              ]}
+              contentStyle={{
+                background: "var(--color-bg-1)",
+                border: "1px solid var(--color-hairline-strong)",
+                borderRadius: "var(--radius-2)",
+                fontSize: 14,
+              }}
+            />
+            <Legend iconType="plainline" wrapperStyle={{ fontSize: 12 }} />
+            {currentMarker !== null ? (
+              <ReferenceLine
+                x={currentMarker}
+                stroke="var(--color-bg-7)"
+                strokeDasharray="2 4"
+                label={{
+                  value: "Сейчас",
+                  position: currentMarkerLabel,
+                  fill: "var(--color-bg-8)",
+                  fontSize: 12,
+                }}
+              />
+            ) : null}
+            <Line
+              name="Факт"
+              dataKey="actual"
+              connectNulls={false}
+              stroke="var(--color-accent)"
+              strokeWidth={2.2}
+              dot={{ r: 2.5, fill: "var(--color-accent)", strokeWidth: 0 }}
+              activeDot={{ r: 4, fill: "var(--color-accent)", strokeWidth: 0 }}
+              isAnimationActive={false}
+            />
+            <Line
+              name="База"
+              dataKey="base"
+              connectNulls={false}
+              stroke="var(--color-info)"
+              strokeWidth={1.6}
+              strokeDasharray="5 4"
+              dot={false}
+              isAnimationActive={false}
+            />
+            <Line
+              name="Stop"
+              dataKey="stop"
+              connectNulls={false}
+              stroke={stopColor}
+              strokeWidth={1.6}
+              strokeDasharray="5 4"
+              dot={false}
+              isAnimationActive={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    ) : (
+      <div className="flex items-center justify-center text-[14px] text-bg-8" style={{ height }}>
+        Нет подтверждённых точек
       </div>
     );
-  }
+
+  const table = (
+    <table className="w-full border-collapse text-left text-[14px]">
+      <caption className="sr-only">Почасовой расход, база, stop и доступность источников</caption>
+      <thead>
+        <tr>
+          <th scope="col">Время</th>
+          <th scope="col">Факт</th>
+          <th scope="col">База</th>
+          <th scope="col">Stop</th>
+          <th scope="col">Источники</th>
+        </tr>
+      </thead>
+      <tbody>
+        {points.map((point, index) => (
+          <tr key={point.at}>
+            <th scope="row">{formatDisplayTime(new Date(point.timestamp), {}, timezone)}</th>
+            <td>{valuesAvailable ? money(point.actual, currency) : "—"}</td>
+            <td>{valuesAvailable ? money(point.base, currency) : "—"}</td>
+            <td>{valuesAvailable ? money(point.stop, currency) : "—"}</td>
+            <td>
+              {valuesAvailable
+                ? `${data?.points[index]?.available_ads ?? 0} доступно · ${data?.points[index]?.unavailable_ads ?? 0} недоступно`
+                : "не подтверждено"}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 
   return (
-    <div className="w-full min-w-0 overflow-hidden" style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={points} margin={{ top: 8, right: 18, bottom: 4, left: 2 }}>
-          <CartesianGrid vertical={false} stroke="var(--hairline)" />
-          <XAxis
-            dataKey="ts"
-            type="number"
-            scale="time"
-            domain={["dataMin", "dataMax"]}
-            padding={{ left: 12, right: 12 }}
-            interval="preserveStartEnd"
-            minTickGap={34}
-            tickFormatter={(value) => formatDisplayTime(new Date(value), {}, timeZone)}
-            tick={{ fill: "var(--color-bg-8)", fontSize: 10 }}
-            axisLine={false}
-            tickLine={false}
-          />
-          <YAxis
-            width={44}
-            tickFormatter={(value) => `$${Number(value).toFixed(0)}`}
-            tick={{ fill: "var(--color-bg-8)", fontSize: 10 }}
-            axisLine={false}
-            tickLine={false}
-          />
-          <Tooltip
-            labelFormatter={(value) => formatDisplayTime(new Date(Number(value)), {}, timeZone)}
-            formatter={(value, name) => [`$${Number(value).toFixed(2)}`, String(name)]}
-            contentStyle={{
-              background: "var(--color-bg-1)",
-              border: "1px solid var(--hairline-strong)",
-              borderRadius: "var(--radius-2)",
-              fontSize: 12,
-            }}
-          />
-          <Legend iconType="plainline" wrapperStyle={{ fontSize: 11 }} />
-          <Line
-            name="Факт"
-            dataKey="actual"
-            stroke="var(--accent)"
-            strokeWidth={2.2}
-            dot={false}
-            isAnimationActive={false}
-          />
-          <Line
-            name="База"
-            dataKey="base"
-            stroke="var(--info)"
-            strokeWidth={1.6}
-            strokeDasharray="5 4"
-            dot={false}
-            isAnimationActive={false}
-          />
-          <Line
-            name="Stop"
-            dataKey="stop"
-            stroke="var(--danger)"
-            strokeWidth={1.6}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
+    <AccessibleChartFrame
+      title="Расход, база и stop-граница"
+      summary={summary}
+      timezone={timezone}
+      asOf={data?.as_of ?? null}
+      sources={sourceLabels(data, completeness)}
+      completeness={completeness}
+      chart={chart}
+      table={table}
+    />
   );
+}
+
+export function serverTimeMarker(points: number[], asOf: string | null): number | null {
+  const serverTimestamp = asOf ? Date.parse(asOf) : Number.NaN;
+  const valid = points.filter(Number.isFinite).sort((left, right) => left - right);
+  if (!valid.length || !Number.isFinite(serverTimestamp)) return null;
+  const earliest = valid[0]!;
+  const latest = valid[valid.length - 1]!;
+  return Math.max(earliest, Math.min(latest, serverTimestamp));
+}
+
+function sourceLabels(data: AnalyticsLiveBudgetSeries | undefined, state: DataState): string[] {
+  if (!data) return [];
+  if (state === "stale") return ["Meta (снимок устарел)", "AdSet.pro (снимок устарел)"];
+  if (state === "unavailable") return ["Meta (не подтверждено)", "AdSet.pro (не подтверждено)"];
+  if (state === "partial") return ["Meta (частично)", "AdSet.pro (частично)"];
+  return [`Meta (${data.sources.meta.status})`, `AdSet.pro (${data.sources.tracker.status})`];
+}
+
+function money(value: number | null | undefined, currency: string | null): string {
+  return formatSpend(value, currency);
 }

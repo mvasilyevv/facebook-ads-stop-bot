@@ -17,10 +17,14 @@ Handler знает один mutation_kind и валидирует свой на�
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from core.meta_api.client import MetaApiClient
-from core.meta_api.errors import MutationValidationError  # noqa: F401 — экспортируем для handlers
+from core.meta_api.errors import (
+    AmbiguousResultError,
+    MutationValidationError,  # noqa: F401 — экспортируем для handlers
+    PermanentError,
+)
 from core.meta_api.schemas import MetaMutationPayload
 
 
@@ -46,6 +50,25 @@ class MutationHandler(Protocol):
 
 
 # ====================== общие helpers ======================
+
+MutationEvidence = Literal["confirmed", "rejected", "unknown"]
+
+
+def classify_meta_mutation_evidence(response: Any) -> MutationEvidence:
+    """Classify the only acknowledgement that proves a Meta mutation.
+
+    This pure classifier is shared by single-call and Graph Batch mutations so
+    an HTTP/gRPC success can never be promoted to a confirmed business outcome
+    without the literal JSON boolean ``{"success": true}``.
+    """
+    if not isinstance(response, dict):
+        return "unknown"
+    acknowledged = response.get("success")
+    if acknowledged is True:
+        return "confirmed"
+    if acknowledged is False:
+        return "rejected"
+    return "unknown"
 
 
 def require_numeric_id(value: str, field_name: str) -> str:
@@ -74,6 +97,42 @@ def require_status(value: Any, *, field_name: str = "status") -> str:
             f"{field_name}: допустимо PAUSED или ACTIVE, получено {value!r}"
         )
     return normalized
+
+
+def require_meta_success_ack(
+    graph_response: Any,
+    *,
+    endpoint: str,
+) -> dict[str, Any]:
+    """Require Meta's exact boolean acknowledgement for a Graph mutation.
+
+    A transport-level HTTP 2xx is not proof that a money command was applied.
+    Meta acknowledges these accepted writes with the literal JSON
+    boolean ``{"success": true}``; additional response fields remain valid.
+
+    ``success=false`` is an explicit rejection and is therefore terminal. A
+    missing, non-boolean or structurally invalid acknowledgement is ambiguous:
+    the write may have committed even though the response cannot prove it. The
+    worker routes ``AmbiguousResultError`` through kind-specific reconciliation
+    or terminal ``UNKNOWN`` instead of blindly sending the money action again.
+    """
+    evidence = classify_meta_mutation_evidence(graph_response)
+    if evidence == "confirmed":
+        return graph_response
+    if evidence == "rejected":
+        raise PermanentError(
+            "Meta explicitly rejected mutation (success=false)",
+            endpoint=endpoint,
+        )
+    if not isinstance(graph_response, dict):
+        raise AmbiguousResultError(
+            "Meta mutation returned a non-object acknowledgement",
+            endpoint=endpoint,
+        )
+    raise AmbiguousResultError(
+        "Meta mutation returned no exact success=true acknowledgement",
+        endpoint=endpoint,
+    )
 
 
 def success_result(

@@ -1,9 +1,8 @@
 /**
- * Eyebrow (canon) — мелкий uppercase mono-лейбл, опционально нумерованный.
+ * Eyebrow — мелкий uppercase mono-лейбл, опционально нумерованный.
  *
- * Канон design_handoff: 10px, weight 600, letter-spacing 0.08–0.12em, uppercase.
- * Номер группы — в accent-muted, затем «/», затем сам лейбл (как в прототипе
- * components.jsx). Без внешнего margin — раскладку задаёт родитель.
+ * Номер группы отображается приглушённым акцентом перед лейблом.
+ * Внешние отступы задаёт родитель.
  *
  * Отдельно от layout/Eyebrow (тот завязан на PageHeader других страниц).
  */
@@ -24,7 +23,7 @@ export function Eyebrow({ num, children, className, style }: EyebrowProps) {
     <span
       className={cn(
         "inline-flex items-center gap-1.5",
-        "font-display text-[10px] font-semibold uppercase tracking-[0.12em] text-bg-9",
+        "font-display text-[12px] font-semibold uppercase tracking-[0.12em] text-bg-9",
         className,
       )}
       style={style}

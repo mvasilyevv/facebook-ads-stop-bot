@@ -2,7 +2,7 @@
  * Коды стоп-правил и их человекочитаемые лейблы.
  *
  * Источник правды — core/rules/labels.py (RULE_LABELS + RULE_LABELS_SHORT).
- * API отдаёт сырые коды в matched_rule_codes (AlertEventOut, AdSnapshotOut).
+ * Operator API отдаёт сырые коды правил в ленте событий и attention feed.
  * Человекочитаемый лейбл — на фронте, через ruleCodeLabel().
  */
 

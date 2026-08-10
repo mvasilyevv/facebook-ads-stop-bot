@@ -6,18 +6,21 @@ generic ``execute_graph_call`` convention:
 
 * ``POST /act_<id>/campaigns`` with a JSON PAUSED campaign body;
 * ``POST /<source_adset>/copies`` with ``deep_copy=false`` and target campaign;
-* ``POST /act_<id>/ads`` with the existing ``creative_id`` only.
+* ``POST /act_<id>/ads`` with the existing ``creative_id`` only;
+* every created campaign/ad set/ad remains PAUSED for manual review.
 """
 
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
-import core.meta_api.mutations.duplicate_adset_structure as duplicate_module
+from core.adset_duplicates.plan_integrity import duplicate_execution_plan_digest
+from core.adset_duplicates.service import _ready_task_payload
 from core.meta_api.errors import MutationValidationError, TemporaryError
 from core.meta_api.mutations.duplicate_adset_structure import (
     DuplicateAdsetStructureHandler,
@@ -34,7 +37,9 @@ def _params(**overrides: Any) -> dict[str, Any]:
         "campaign_count": 3,
         "adsets_per_campaign": 2,
         "budget_level": "ABO",
-        "daily_budget_cents": 5000,
+        "daily_budget": "50.00",
+        "currency": "USD",
+        "currency_exponent": 2,
         "start_time": "2099-07-16T08:00:00Z",
         "campaign_names": ["CR copy 1", "CR copy 2", "CR copy 3"],
         "adset_names": [
@@ -48,11 +53,51 @@ def _params(**overrides: Any) -> dict[str, Any]:
 
 
 def _payload(**overrides: Any) -> MetaMutationPayload:
+    params = _params(**overrides)
+    plan_digest = duplicate_execution_plan_digest(
+        mutation_kind="duplicate_adset_structure",
+        target_id="201",
+        params=params,
+        ad_account_id="999",
+    )
+    params["plan_digest"] = plan_digest.hex()
     return MetaMutationPayload(
         mutation_kind="duplicate_adset_structure",
         target_id="201",
-        params=_params(**overrides),
+        params=params,
         ad_account_id="act_999",
+    )
+
+
+def _tamper_payload(payload: MetaMutationPayload, case: str) -> MetaMutationPayload:
+    params = deepcopy(payload.params)
+    target_id = payload.target_id
+    ad_account_id = payload.ad_account_id
+    if case == "money":
+        params["daily_budget"] = "75.00"
+    elif case == "start":
+        params["start_time"] = "2099-07-17T08:00:00Z"
+    elif case == "account":
+        ad_account_id = "998"
+    elif case == "name":
+        params["campaign_names"][0] = "tampered campaign"
+    elif case == "selection":
+        params["selected_ad_ids"] = ["302"]
+    elif case == "target":
+        target_id = "202"
+    elif case == "digest_missing":
+        params.pop("plan_digest")
+    elif case == "digest_malformed":
+        params["plan_digest"] = "not-a-sha256"
+    elif case == "digest_mismatch":
+        params["plan_digest"] = "0" * 64
+    else:  # pragma: no cover - test helper contract
+        raise AssertionError(f"unknown tamper case: {case}")
+    return MetaMutationPayload(
+        mutation_kind=payload.mutation_kind,
+        target_id=target_id,
+        params=params,
+        ad_account_id=ad_account_id,
     )
 
 
@@ -68,9 +113,14 @@ class FakeGraphClient:
         self.adset_budget: dict[str, int | None] = {}
         self.ads_by_adset: dict[str, list[tuple[str, str]]] = {}
         self.campaign_budget: dict[str, int | None] = {}
+        self.campaign_name: dict[str, str] = {}
+        self.campaign_objective: dict[str, str] = {}
         self.campaign_status: dict[str, str] = {}
         self.adset_status: dict[str, str] = {}
         self.ad_status: dict[str, str] = {}
+        self.ad_parent: dict[str, str] = {}
+        self.ad_name: dict[str, str] = {}
+        self.ad_creative: dict[str, str] = {}
 
     async def execute_graph_call(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
@@ -109,6 +159,8 @@ class FakeGraphClient:
             self.campaign_seq += 1
             object_id = str(1000 + self.campaign_seq)
             self.campaign_budget[object_id] = body.get("daily_budget")
+            self.campaign_name[object_id] = str(body["name"])
+            self.campaign_objective[object_id] = str(body["objective"])
             self.campaign_status[object_id] = "PAUSED"
             return {"id": object_id}
         if method == "POST" and endpoint == "/201/copies":
@@ -124,6 +176,9 @@ class FakeGraphClient:
                 raise TemporaryError("mid-flight ad create failure")
             object_id = str(3000 + self.ad_seq)
             self.ad_status[object_id] = "PAUSED"
+            self.ad_parent[object_id] = str(body["adset_id"])
+            self.ad_name[object_id] = str(body["name"])
+            self.ad_creative[object_id] = str(body["creative"]["creative_id"])
             self.ads_by_adset[str(body["adset_id"])].append(
                 (object_id, str(body["creative"]["creative_id"]))
             )
@@ -134,7 +189,7 @@ class FakeGraphClient:
             self.adset_start[object_id] = str(body["start_time"])
             self.adset_budget[object_id] = body.get("daily_budget")
             return {"success": True}
-        if method == "POST" and body.get("status") in {"PAUSED", "ACTIVE"}:
+        if method == "POST" and body.get("status") == "PAUSED":
             if object_id in self.campaign_status:
                 self.campaign_status[object_id] = body["status"]
             elif object_id in self.adset_status:
@@ -148,6 +203,9 @@ class FakeGraphClient:
         if method == "GET" and object_id in self.campaign_budget:
             row: dict[str, Any] = {
                 "id": object_id,
+                "account_id": "999",
+                "name": self.campaign_name[object_id],
+                "objective": self.campaign_objective[object_id],
                 "status": self.campaign_status[object_id],
             }
             if self.campaign_budget[object_id] is not None:
@@ -156,6 +214,7 @@ class FakeGraphClient:
         if method == "GET" and object_id in self.adset_campaign:
             row = {
                 "id": object_id,
+                "account_id": "999",
                 "campaign_id": self.adset_campaign[object_id],
                 "status": self.adset_status[object_id],
             }
@@ -165,7 +224,16 @@ class FakeGraphClient:
                 row["daily_budget"] = str(self.adset_budget[object_id])
             return row
         if method == "GET" and object_id in self.ad_status:
-            return {"id": object_id, "status": self.ad_status[object_id]}
+            adset_id = self.ad_parent[object_id]
+            return {
+                "id": object_id,
+                "account_id": "999",
+                "campaign_id": self.adset_campaign[adset_id],
+                "adset_id": adset_id,
+                "name": self.ad_name[object_id],
+                "status": self.ad_status[object_id],
+                "creative": {"id": self.ad_creative[object_id]},
+            }
         if method == "GET" and endpoint.endswith("/ads"):
             adset_id = endpoint.split("/")[1]
             return {
@@ -201,10 +269,11 @@ class FaultInjectingGraphClient(FakeGraphClient):
             "copy_adset": method == "POST" and endpoint == "/201/copies",
             "configure_adset": method == "POST" and endpoint == "/2001" and "name" in body,
             "create_ad": method == "POST" and endpoint == "/act_999/ads",
-            "verify": method == "GET" and endpoint == "/1001",
-            "activate_campaign": body.get("status") == "ACTIVE" and endpoint == "/1001",
-            "activate_ad": body.get("status") == "ACTIVE" and endpoint == "/3001",
-            "activate_adset": body.get("status") == "ACTIVE" and endpoint == "/2001",
+            "verify": (
+                method == "GET"
+                and endpoint == "/1001"
+                and kwargs.get("query_params", {}).get("fields") == "id,status,daily_budget"
+            ),
         }[stage]
 
     async def execute_graph_call(self, **kwargs: Any) -> dict[str, Any]:
@@ -225,7 +294,7 @@ class FaultInjectingGraphClient(FakeGraphClient):
 
 
 @pytest.mark.asyncio
-async def test_321_selective_duplicate_and_activation_order() -> None:
+async def test_321_selective_duplicate_remains_all_paused() -> None:
     client = FakeGraphClient()
 
     result = await DuplicateAdsetStructureHandler().execute(client, _payload())
@@ -234,6 +303,7 @@ async def test_321_selective_duplicate_and_activation_order() -> None:
     assert result["campaign_count"] == 3
     assert result["adset_count"] == 6
     assert result["ad_count"] == 6
+    assert result["creation_policy"] == "all_paused"
 
     campaign_calls = [c for c in client.calls if c["endpoint"] == "/act_999/campaigns"]
     assert len(campaign_calls) == 3
@@ -262,10 +332,10 @@ async def test_321_selective_duplicate_and_activation_order() -> None:
         for c in client.calls
         if c["method"] == "POST" and (c.get("body_json") or {}).get("status") == "ACTIVE"
     ]
-    active_ids = [c["endpoint"][1:] for c in active_calls]
-    assert active_ids[:3] == ["1001", "1002", "1003"]
-    assert active_ids[3:9] == [f"{3000 + index}" for index in range(1, 7)]
-    assert active_ids[9:] == [f"{2000 + index}" for index in range(1, 7)]
+    assert active_calls == []
+    assert set(client.campaign_status.values()) == {"PAUSED"}
+    assert set(client.adset_status.values()) == {"PAUSED"}
+    assert set(client.ad_status.values()) == {"PAUSED"}
 
 
 @pytest.mark.asyncio
@@ -292,11 +362,129 @@ async def test_cbo_budget_is_only_on_campaign() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cbo_refuses_activation_if_copy_retains_adset_budget() -> None:
+async def test_nested_copy_response_cannot_be_used_to_configure_the_source_adset() -> None:
+    class NestedSourceIdClient(FakeGraphClient):
+        async def execute_graph_call(self, **kwargs: Any) -> dict[str, Any]:
+            response = await super().execute_graph_call(**kwargs)
+            if kwargs["method"] == "POST" and kwargs["endpoint"] == "/201/copies":
+                return {"data": [{"id": "201"}]}
+            return response
+
+    client = NestedSourceIdClient()
+    payload = _payload(
+        campaign_count=1,
+        adsets_per_campaign=1,
+        campaign_names=["safe campaign"],
+        adset_names=["safe adset"],
+    )
+
+    with pytest.raises(DuplicateAdsetStructurePartialError, match="schema is not exact") as exc:
+        await DuplicateAdsetStructureHandler().execute(client, payload)
+
+    assert exc.value.created_ids == {
+        "campaigns": ["1001"],
+        "adsets": [],
+        "ads": [],
+    }
+    assert not any(call["method"] == "POST" and call["endpoint"] == "/201" for call in client.calls)
+    assert not any(call["endpoint"] == "/act_999/ads" for call in client.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "colliding_id",
+    ["101", "201", "301", "401", "1001"],
+    ids=[
+        "source-campaign",
+        "source-adset",
+        "source-ad",
+        "source-creative",
+        "created-campaign",
+    ],
+)
+async def test_copy_response_rejects_source_and_cross_type_id_collisions(
+    colliding_id: str,
+) -> None:
+    class CollidingCopyClient(FakeGraphClient):
+        async def execute_graph_call(self, **kwargs: Any) -> dict[str, Any]:
+            response = await super().execute_graph_call(**kwargs)
+            if kwargs["method"] == "POST" and kwargs["endpoint"] == "/201/copies":
+                return {"copied_adset_id": colliding_id}
+            return response
+
+    client = CollidingCopyClient()
+    payload = _payload(
+        campaign_count=1,
+        adsets_per_campaign=1,
+        campaign_names=["safe campaign"],
+        adset_names=["safe adset"],
+    )
+
+    with pytest.raises(DuplicateAdsetStructurePartialError, match="collides") as exc:
+        await DuplicateAdsetStructureHandler().execute(client, payload)
+
+    assert exc.value.created_ids == {
+        "campaigns": ["1001"],
+        "adsets": [],
+        "ads": [],
+    }
+    assert not any(
+        call["method"] == "POST"
+        and call["endpoint"] == f"/{colliding_id}"
+        and "name" in (call.get("body_json") or {})
+        for call in client.calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_wrong_parent_copy_proof_stops_before_configuration() -> None:
+    class WrongParentProofClient(FakeGraphClient):
+        async def execute_graph_call(self, **kwargs: Any) -> dict[str, Any]:
+            response = await super().execute_graph_call(**kwargs)
+            if (
+                kwargs["method"] == "GET"
+                and kwargs["endpoint"] == "/2001"
+                and kwargs.get("query_params", {}).get("fields")
+                == "id,account_id,campaign_id,status"
+            ):
+                return {**response, "campaign_id": "101"}
+            return response
+
+    client = WrongParentProofClient()
+    payload = _payload(
+        campaign_count=1,
+        adsets_per_campaign=1,
+        campaign_names=["safe campaign"],
+        adset_names=["safe adset"],
+    )
+
+    with pytest.raises(DuplicateAdsetStructurePartialError, match="parent mismatch") as exc:
+        await DuplicateAdsetStructureHandler().execute(client, payload)
+
+    assert exc.value.created_ids == {
+        "campaigns": ["1001"],
+        "adsets": [],
+        "ads": [],
+    }
+    assert not any(
+        call["method"] == "POST"
+        and call["endpoint"] == "/2001"
+        and "name" in (call.get("body_json") or {})
+        for call in client.calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_cbo_refuses_completion_if_copy_retains_adset_budget() -> None:
     class RetainedBudgetClient(FakeGraphClient):
         async def execute_graph_call(self, **kwargs: Any) -> dict[str, Any]:
             response = await super().execute_graph_call(**kwargs)
-            if kwargs["method"] == "GET" and kwargs["endpoint"] == "/2001":
+            if (
+                kwargs["method"] == "GET"
+                and kwargs["endpoint"] == "/2001"
+                and kwargs.get("query_params", {}).get("fields")
+                == "id,campaign_id,status,daily_budget,lifetime_budget,start_time"
+            ):
                 response["daily_budget"] = "777"
             return response
 
@@ -381,21 +569,6 @@ async def test_failure_pauses_every_known_created_object_and_raises_partial() ->
             "verify_paused_structure",
             {"campaigns": ["1001"], "adsets": ["2001"], "ads": ["3001"]},
         ),
-        (
-            "activate_campaign",
-            "activate_campaign",
-            {"campaigns": ["1001"], "adsets": ["2001"], "ads": ["3001"]},
-        ),
-        (
-            "activate_ad",
-            "activate_ad",
-            {"campaigns": ["1001"], "adsets": ["2001"], "ads": ["3001"]},
-        ),
-        (
-            "activate_adset",
-            "activate_adset",
-            {"campaigns": ["1001"], "adsets": ["2001"], "ads": ["3001"]},
-        ),
     ],
     ids=[
         "create-campaign-lost-response",
@@ -403,12 +576,9 @@ async def test_failure_pauses_every_known_created_object_and_raises_partial() ->
         "configure-adset",
         "create-ad",
         "verify",
-        "activate-campaign",
-        "activate-ad",
-        "activate-adset",
     ],
 )
-async def test_fault_matrix_pauses_all_known_ids_and_stops_activation(
+async def test_fault_matrix_pauses_all_known_ids_and_stops_creation(
     stage: str,
     step_prefix: str,
     expected_created: dict[str, list[str]],
@@ -432,11 +602,6 @@ async def test_fault_matrix_pauses_all_known_ids_and_stops_activation(
     assert exc.cleanup_failures == []
 
     calls_after_fault = client.calls[client.fault_call_index + 1 :]
-    assert not any(
-        call["method"] == "POST" and (call.get("body_json") or {}).get("status") == "ACTIVE"
-        for call in calls_after_fault
-    ), "executor continued activation after the injected failure"
-
     known_ids = {object_id for object_ids in expected_created.values() for object_id in object_ids}
     cleanup_pause_ids = {
         call["endpoint"][1:]
@@ -447,7 +612,7 @@ async def test_fault_matrix_pauses_all_known_ids_and_stops_activation(
 
 
 @pytest.mark.asyncio
-async def test_progress_checkpoint_after_every_create_and_activation_boundary() -> None:
+async def test_progress_checkpoint_ends_at_verified_paused() -> None:
     client = FakeGraphClient()
     checkpoints: list[dict[str, Any]] = []
     payload = _payload(
@@ -472,39 +637,38 @@ async def test_progress_checkpoint_after_every_create_and_activation_boundary() 
         "adset_created[0,0]",
         "ad_created[0,0,301]",
     ]
-    first_active_call = next(
-        index
-        for index, checkpoint in enumerate(checkpoints)
-        if checkpoint["step"] == "activation_started"
-    )
-    assert checkpoints[first_active_call]["created_ids"] == {
+    assert steps[-2:] == [
+        "verify_paused_structure",
+        "verify_paused_structure_complete",
+    ]
+    assert checkpoints[-1]["created_ids"] == {
         "campaigns": ["1001"],
         "adsets": ["2001"],
         "ads": ["3001"],
     }
-    assert steps[first_active_call + 1 : first_active_call + 4] == [
-        "activate_campaign[1001]",
-        "activate_ad[3001]",
-        "activate_adset[2001]",
-    ]
-    assert checkpoints[-1]["phase"] == "activated"
-    assert checkpoints[-1]["activated_ids"] == checkpoints[-1]["created_ids"]
+    assert checkpoints[-1]["phase"] == "verified_paused"
+    assert checkpoints[-1]["checkpoint_version"] == 2
+    assert "activated_ids" not in checkpoints[-1]
 
 
 @pytest.mark.asyncio
-async def test_cancelled_activation_runs_shielded_pause_and_persists_cleanup() -> None:
-    class CancelAtSpendGateClient(FakeGraphClient):
+async def test_cancelled_verification_runs_shielded_pause_and_persists_cleanup() -> None:
+    class CancelAtVerificationClient(FakeGraphClient):
+        cancelled_once = False
+
         async def execute_graph_call(self, **kwargs: Any) -> dict[str, Any]:
             if (
-                kwargs["method"] == "POST"
-                and kwargs["endpoint"] == "/2001"
-                and (kwargs.get("body_json") or {}).get("status") == "ACTIVE"
+                not self.cancelled_once
+                and kwargs["method"] == "GET"
+                and kwargs["endpoint"] == "/1001"
+                and kwargs.get("query_params", {}).get("fields") == "id,status,daily_budget"
             ):
+                self.cancelled_once = True
                 self.calls.append(kwargs)
                 raise asyncio.CancelledError
             return await super().execute_graph_call(**kwargs)
 
-    client = CancelAtSpendGateClient()
+    client = CancelAtVerificationClient()
     checkpoints: list[dict[str, Any]] = []
     payload = _payload(
         campaign_count=1,
@@ -533,63 +697,87 @@ async def test_cancelled_activation_runs_shielded_pause_and_persists_cleanup() -
     assert checkpoints[-1]["cleanup_failures"] == []
 
 
-def test_start_guard_exceeds_recovery_stale_interval() -> None:
-    assert (
-        duplicate_module._START_TIME_GUARD.total_seconds()
-        >= duplicate_module._RECOVERY_STALE_SECONDS
-        + duplicate_module._RECONCILER_POLL_SECONDS
-        + duplicate_module._RECOVERY_SAFETY_MARGIN_SECONDS
-    )
-    assert (
-        duplicate_module._START_TIME_GUARD.total_seconds()
-        > duplicate_module._RECOVERY_STALE_SECONDS
-    )
-
-
-def test_start_time_inside_recovery_window_is_rejected(monkeypatch) -> None:
+def test_start_time_must_be_in_the_future(monkeypatch) -> None:
     now = datetime(2099, 7, 16, 7, 0, tzinfo=UTC)
     monkeypatch.setattr(
         DuplicateAdsetStructureHandler,
         "_utcnow",
         staticmethod(lambda: now),
     )
-    too_soon = now + duplicate_module._START_TIME_GUARD - timedelta(seconds=1)
 
-    with pytest.raises(MutationValidationError, match="crash recovery"):
+    with pytest.raises(MutationValidationError, match="future"):
         DuplicateAdsetStructureHandler._validate_plan(
-            _payload(start_time=too_soon.isoformat().replace("+00:00", "Z"))
+            _payload(start_time=now.isoformat().replace("+00:00", "Z"))
         )
 
 
-@pytest.mark.asyncio
-async def test_activation_rechecks_recovery_window_after_creation(monkeypatch) -> None:
-    initial_now = datetime(2099, 7, 16, 7, 0, tzinfo=UTC)
-    start_at = initial_now + duplicate_module._START_TIME_GUARD + timedelta(minutes=10)
-    activation_now = start_at - duplicate_module._START_TIME_GUARD + timedelta(seconds=1)
-    clock = iter((initial_now, activation_now))
+def test_near_future_start_is_valid_for_paused_creation(monkeypatch) -> None:
+    now = datetime(2099, 7, 16, 7, 0, tzinfo=UTC)
     monkeypatch.setattr(
         DuplicateAdsetStructureHandler,
         "_utcnow",
-        staticmethod(lambda: next(clock)),
+        staticmethod(lambda: now),
     )
-    client = FakeGraphClient()
+    start_at = now + timedelta(seconds=1)
+
+    plan = DuplicateAdsetStructureHandler._validate_plan(
+        _payload(start_time=start_at.isoformat().replace("+00:00", "Z"))
+    )
+    assert plan.start_at == start_at
+
+
+def test_service_producer_digest_is_accepted_by_executor() -> None:
+    task_params = _params(
+        campaign_count=1,
+        adsets_per_campaign=1,
+        campaign_names=["signed campaign"],
+        adset_names=["signed adset"],
+    )
+    task_payload, plan_digest = _ready_task_payload(
+        preview={"source": {"account": {"id": "act_999"}}},
+        task_params=task_params,
+    )
+
+    plan = DuplicateAdsetStructureHandler._validate_plan(
+        MetaMutationPayload.from_dict(task_payload)
+    )
+
+    assert task_payload["params"]["plan_digest"] == plan_digest.hex()
+    assert plan.account_id == "act_999"
+    assert plan.source_adset_id == "201"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "money",
+        "start",
+        "account",
+        "name",
+        "selection",
+        "target",
+        "digest_missing",
+        "digest_malformed",
+        "digest_mismatch",
+    ],
+)
+async def test_plan_tamper_is_rejected_before_any_graph_call(case: str) -> None:
     payload = _payload(
         campaign_count=1,
         adsets_per_campaign=1,
-        campaign_names=["late campaign"],
-        adset_names=["late adset"],
-        start_time=start_at.isoformat().replace("+00:00", "Z"),
+        campaign_names=["signed campaign"],
+        adset_names=["signed adset"],
     )
+    client = FakeGraphClient()
 
-    with pytest.raises(DuplicateAdsetStructurePartialError) as exc_info:
-        await DuplicateAdsetStructureHandler().execute(client, payload)
+    with pytest.raises(MutationValidationError, match="plan_digest"):
+        await DuplicateAdsetStructureHandler().execute(
+            client,
+            _tamper_payload(payload, case),
+        )
 
-    assert exc_info.value.failed_steps[0]["step"] == "activation_headroom"
-    assert not any(
-        call["method"] == "POST" and (call.get("body_json") or {}).get("status") == "ACTIVE"
-        for call in client.calls
-    )
-    assert exc_info.value.cleanup_failures == []
+    assert client.calls == []
 
 
 @pytest.mark.asyncio
@@ -615,6 +803,10 @@ async def test_live_hierarchy_mismatch_stops_before_writes() -> None:
         ({"campaign_count": 6}, "campaign_count"),
         ({"adsets_per_campaign": 11}, "adsets_per_campaign"),
         ({"budget_level": "AUTO"}, "budget_level"),
+        ({"daily_budget": "1.50", "currency": "JPY", "currency_exponent": 0}, "daily_budget"),
+        ({"daily_budget": "1.500", "currency": "KWD", "currency_exponent": 2}, "daily_budget"),
+        ({"daily_budget": "1.00", "currency": "XAU", "currency_exponent": 2}, "daily_budget"),
+        ({"daily_budget": None}, "daily_budget"),
         ({"start_time": "2026-07-16T08:00:00+03:00"}, "UTC"),
         ({"selected_ad_ids": []}, "selected_ad_ids"),
         (

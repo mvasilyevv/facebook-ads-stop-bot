@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entrypoint для meta_api_worker (run.sh / supervisord)."""
+"""Container entrypoint для meta_api_worker."""
 
 from __future__ import annotations
 

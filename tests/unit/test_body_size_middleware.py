@@ -137,6 +137,6 @@ async def test_chunked_large_body_413_through_real_app() -> None:
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as ac:
         resp = await ac.post("/api/v1/postback/adsetpro", content=_chunks())
-    # Внутри FastAPI-стека 413 отдаёт штатный exception-handler (detail без max_bytes).
-    assert resp.status_code == 413
-    assert "too large" in resp.text
+    # Canonical AdSet.pro transport is GET-only, so a body-bearing POST is rejected
+    # by routing before any endpoint can consume the streamed body.
+    assert resp.status_code == 405

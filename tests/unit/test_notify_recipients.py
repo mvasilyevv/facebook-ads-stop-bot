@@ -1,79 +1,107 @@
-# -*- coding: utf-8 -*-
-"""Unit-тесты notify_recipients: рассылка ВСЕМ активным recipients, dedup-after-send."""
-
 from __future__ import annotations
 
-from types import SimpleNamespace
+import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
 
-import core.telegram.worker_notify as wn
-from core.telegram.service import Recipient
+import core.telegram.worker_notify as worker_notify
+from core.telegram.notifications import EnqueuedNotification
+
+_SCHEDULED_AT = datetime(2026, 7, 22, tzinfo=UTC)
 
 
-def _r(chat_id, role="recipient"):
-    return Recipient(chat_id=chat_id, telegram_user_id=chat_id, username="u", role=role)
-
-
-def _cfg():
-    return SimpleNamespace(bot_token="T", chat_id=None)
-
-
-@pytest.fixture(autouse=True)
-def _clear():
-    wn._reset_client_cache()
-    yield
-    wn._reset_client_cache()
-
-
-# Рассылка двум recipients → 2 send, True, dedup ставится после
 @pytest.mark.asyncio
-async def test_broadcasts_to_all(monkeypatch):
-    monkeypatch.setattr(wn, "load_telegram_config", AsyncMock(return_value=_cfg()))
+async def test_recipients_notification_is_committed_to_outbox(monkeypatch) -> None:
+    enqueue = AsyncMock(
+        return_value=EnqueuedNotification(event_id=uuid.uuid4(), delivery_count=2, was_created=True)
+    )
+    monkeypatch.setattr(worker_notify, "enqueue_notification_in_rolling_window", enqueue)
+    accepted = await worker_notify.notify_recipients(
+        object(),
+        event_type="watchdog_channel",
+        severity="warning",
+        title="Канал degraded",
+        summary="Источник недоступен",
+        dedupe_key="watchdog:channel",
+        dedupe_ttl_seconds=300,
+        scheduled_at=_SCHEDULED_AT,
+    )
+
+    assert accepted is True
+    spec = enqueue.await_args.args[1]
+    assert enqueue.await_args.kwargs["window_seconds"] == 300
+    assert spec.audience == "all"
+    assert spec.event_type == "worker_watchdog_channel"
+    assert spec.severity == "warning"
+    assert spec.facts.title == "Канал degraded"
+    assert spec.facts.summary == "Источник недоступен"
+    assert spec.scheduled_at == _SCHEDULED_AT
+
+
+def test_windowed_dedupe_key_is_stable_without_epoch_bucket() -> None:
+    facts = worker_notify.NotificationCardFacts(title="Same incident")
+
+    first = worker_notify._dedupe_key(
+        event_type="worker_watchdog_channel",
+        facts=facts,
+        dedupe_key="watchdog:channel",
+        dedupe_ttl_seconds=300,
+    )
+    second = worker_notify._dedupe_key(
+        event_type="worker_watchdog_channel",
+        facts=facts,
+        dedupe_key="watchdog:channel",
+        dedupe_ttl_seconds=300,
+    )
+
+    assert first == second
+    assert len(first.rsplit(":", 1)[-1]) == 24
+
+
+@pytest.mark.asyncio
+async def test_durable_duplicate_is_treated_as_already_accepted(monkeypatch) -> None:
     monkeypatch.setattr(
-        wn, "load_active_recipients", AsyncMock(return_value=[_r(111, "owner"), _r(222)])
+        worker_notify,
+        "enqueue_notification",
+        AsyncMock(
+            return_value=EnqueuedNotification(
+                event_id=uuid.uuid4(), delivery_count=0, was_created=False
+            )
+        ),
     )
-    client = AsyncMock()
-    monkeypatch.setattr(wn, "_client_for_token", lambda t: client)
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
-    sent = await wn.notify_recipients(
-        object(), redis, category="x", text="t", dedup_key="k", dedup_ttl_seconds=60
+
+    accepted = await worker_notify.notify_recipients(
+        object(),
+        event_type="watchdog_channel",
+        severity="warning",
+        title="Same",
+        dedupe_key="stable",
+        scheduled_at=_SCHEDULED_AT,
     )
-    assert sent is True
-    assert client.send_message.await_count == 2
-    chats = {c.kwargs["chat_id"] for c in client.send_message.await_args_list}
-    assert chats == {"111", "222"}
-    redis.set.assert_awaited_once()
+
+    assert accepted is True
 
 
-# Нет recipients → False, без отправки и dedup
 @pytest.mark.asyncio
-async def test_no_recipients_false(monkeypatch):
-    monkeypatch.setattr(wn, "load_telegram_config", AsyncMock(return_value=_cfg()))
-    monkeypatch.setattr(wn, "load_active_recipients", AsyncMock(return_value=[]))
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
-    sent = await wn.notify_recipients(
-        object(), redis, category="x", text="t", dedup_key="k", dedup_ttl_seconds=60
+async def test_new_event_without_recipient_delivery_returns_false(monkeypatch) -> None:
+    monkeypatch.setattr(
+        worker_notify,
+        "enqueue_notification",
+        AsyncMock(
+            return_value=EnqueuedNotification(
+                event_id=uuid.uuid4(), delivery_count=0, was_created=True
+            )
+        ),
     )
-    assert sent is False
-    redis.set.assert_not_awaited()
 
-
-# Частичный сбой (один send падает) → True (доставлено ≥1), dedup ставится
-@pytest.mark.asyncio
-async def test_partial_failure_still_true(monkeypatch):
-    monkeypatch.setattr(wn, "load_telegram_config", AsyncMock(return_value=_cfg()))
-    monkeypatch.setattr(wn, "load_active_recipients", AsyncMock(return_value=[_r(111), _r(222)]))
-    client = AsyncMock()
-    client.send_message = AsyncMock(side_effect=[RuntimeError("x"), {"ok": True}])
-    monkeypatch.setattr(wn, "_client_for_token", lambda t: client)
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
-    sent = await wn.notify_recipients(
-        object(), redis, category="x", text="t", dedup_key="k", dedup_ttl_seconds=60
+    accepted = await worker_notify.notify_recipients(
+        object(),
+        event_type="watchdog_channel",
+        severity="warning",
+        title="No recipients",
+        scheduled_at=_SCHEDULED_AT,
     )
-    assert sent is True
-    redis.set.assert_awaited_once()
+
+    assert accepted is False

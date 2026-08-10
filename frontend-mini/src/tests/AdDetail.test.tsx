@@ -1,324 +1,622 @@
-/**
- * Тесты AdDetail: рендер РЕАЛЬНОГО компонента AdDetailPage (routes/ads/$fbAdId.tsx)
- * поверх мокнутого @tanstack/react-router и @/lib/api — паттерн StatsPage
- * (именованный экспорт компонента, без дублирования логики в test.helper.tsx).
- *
- * Покрывает: рендер STOP_SENT, Eyebrow/бейдж/offer-pill, MetricsGrid, AlertTimeline,
- * кнопки действий (Disable confirm-flow, Claim), кнопка Ads Manager, loading/error.
- *
- * MID-23 аудита 02.07: добавлены сценарии — отклонённая disable-мутация показывает
- * ошибку и возвращает кнопку в активное состояние (а не тихий catch), и явный
- * regression-тест на анти-даблклик (кнопка disabled во время isPending).
- */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ComponentType, ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
-import type { ComponentType } from "react";
 import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// ─── Моки роутера ────────────────────────────────────────────────────────────
-// Route.useParams() читается напрямую в компоненте — мок createFileRoute должен
-// вернуть объект с методом useParams (не просто { component }).
+import type {
+  OperatorAdRow,
+  OperatorAdsResponse,
+} from "@fb/shared/operator/contracts";
+import { makeOperatorScopeEvidence } from "@fb/shared/operator/testFixture";
+import {
+  OperatorRealtimeStatusProvider,
+  type OperatorRealtimeStatus,
+} from "@fb/operator-api";
 
 let mockFbAdId = "ad_stop_001";
+const navigate = vi.fn();
 
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => (opts: { component: unknown }) => ({
-    ...opts,
+  createFileRoute: () => (options: { component: ComponentType }) => ({
+    ...options,
     useParams: () => ({ fbAdId: mockFbAdId }),
   }),
-  useNavigate: () => vi.fn(),
-  useRouter: () => ({ navigate: vi.fn(), history: { back: vi.fn() } }),
-  useLocation: () => ({ pathname: "/ads/ad_stop_001" }),
+  useNavigate: () => navigate,
+  Link: ({ children }: { children: ReactNode }) => <span>{children}</span>,
 }));
 
-// ─── Моки TG ────────────────────────────────────────────────────────────────
-
-const mockTgConfirm = vi.fn();
-const mockTgAlert = vi.fn();
+const tgConfirm = vi.fn();
+const tgAlert = vi.fn();
 
 vi.mock("@/lib/tg", () => ({
   haptic: { impact: vi.fn(), notify: vi.fn(), selection: vi.fn() },
-  tgConfirm: () => mockTgConfirm(),
-  tgAlert: (...args: unknown[]) => mockTgAlert(...args),
-  openLink: vi.fn(),
-  registerBackButton: () => () => {},
-  hideBackButton: vi.fn(),
-  initTheme: vi.fn(),
-  getInitData: () => "",
+  tgConfirm: (...args: unknown[]) => tgConfirm(...args),
+  tgAlert: (...args: unknown[]) => tgAlert(...args),
 }));
 
-// ─── Типы фикстур ────────────────────────────────────────────────────────────
+const pauseMutate = vi.fn();
+const activateMutate = vi.fn();
+const fetchOperatorAdForCommand = vi.fn();
+let pausePending = false;
+let activatePending = false;
+let adsData: ReturnType<typeof operatorAdsResponse> | undefined;
+let adsLoading = false;
+let adsError: Error | null = null;
 
-interface MockMetrics {
-  spend: string | null;
-  leads: number | null;
-  deposits: number | null;
-  cpc: string | null;
-  ctr: string | null;
-  registrations: number | null;
-  cost_per_lead: string | null;
-}
-
-interface MockAlert {
-  stage: string;
-  created_at: string | null;
-  reason_title: string | null;
-}
-
-interface MockAdData {
-  fb_ad_id: string;
-  ad_name: string | null;
-  campaign_name: string | null;
-  adset_name: string | null;
-  offer_code: string | null;
-  state: string;
-  account_id: string | null;
-  can_open_in_ads_manager: boolean;
-  creative_thumb_url?: string | null;
-  creative_image_url?: string | null;
-  metrics: MockMetrics;
-  recent_alerts: MockAlert[];
-}
-
-// ─── Фикстуры ────────────────────────────────────────────────────────────────
-
-const STOP_AD: MockAdData = {
-  fb_ad_id: "ad_stop_001",
-  ad_name: "CR2 | GH | Stop Test",
-  campaign_name: "CR2 | GH | MV | 07.06",
-  adset_name: "CR2-adset-1",
-  offer_code: "CR2",
-  state: "STOP_SENT",
-  account_id: "act_123456",
-  can_open_in_ads_manager: true,
-  metrics: {
-    spend: "150.50",
-    leads: 5,
-    deposits: 0,
-    cpc: "1.20",
-    ctr: "2.50",
-    registrations: 8,
-    cost_per_lead: "30.10",
-  },
-  recent_alerts: [
-    { stage: "stop", created_at: new Date(Date.now() - 3600_000).toISOString(), reason_title: "Дорогой лид" },
-    { stage: "warning", created_at: new Date(Date.now() - 7200_000).toISOString(), reason_title: "Расход без депа" },
-  ],
-};
-
-const NORMAL_AD: MockAdData = {
-  ...STOP_AD,
-  fb_ad_id: "ad_normal_002",
-  ad_name: "GH_AVI Normal Ad",
-  state: "NORMAL",
-  recent_alerts: [],
-};
-
-// ─── Моки API ────────────────────────────────────────────────────────────────
-
-const disableMutate = vi.fn();
-const claimMutate = vi.fn();
-
-let mockAdData: MockAdData | null = STOP_AD;
-let mockIsLoading = false;
-let mockIsError = false;
-let mockDisablePending = false;
-let mockClaimPending = false;
-
-vi.mock("@/lib/api", () => ({
-  useTmaAd: () => ({
-    data: mockAdData,
-    isLoading: mockIsLoading,
-    isError: mockIsError,
-    error: mockIsError ? new Error("Ошибка сети") : null,
+vi.mock("@/lib/operatorApi", () => ({
+  useOperatorAds: () => ({
+    data: adsData,
+    isPending: adsLoading,
+    isError: adsError !== null,
+    error: adsError,
     refetch: vi.fn(),
   }),
-  useTmaDisable: () => ({
-    mutateAsync: disableMutate,
-    isPending: mockDisablePending,
+  usePauseOperatorAd: () => ({
+    mutateAsync: pauseMutate,
+    isPending: pausePending,
   }),
-  useTmaClaim: () => ({
-    mutateAsync: claimMutate,
-    isPending: mockClaimPending,
+  useActivateOperatorAd: () => ({
+    mutateAsync: activateMutate,
+    isPending: activatePending,
   }),
+  fetchOperatorAdForCommand: (...args: unknown[]) =>
+    fetchOperatorAdForCommand(...args),
+  operatorProblemMessage: (error: unknown) =>
+    error instanceof Error ? error.message : "Неизвестная ошибка",
 }));
 
-// ─── Компонент под тестом (реальный) ──────────────────────────────────────────
-
 import { Route } from "@/routes/ads/$fbAdId";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MiniOperatorAdCard } from "@/features/operator/OperatorAds";
 
-const AdDetailPage = (Route as unknown as { component: ComponentType }).component;
+const AdDetail = (Route as unknown as { component: ComponentType }).component;
 
-const makeQC = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function makeAd(overrides: Partial<OperatorAdRow> = {}): OperatorAdRow {
+  return {
+    id: "row-1",
+    fb_ad_id: "ad_stop_001",
+    name: "CR2 | GH | Stop Test",
+    campaign_id: "campaign-1",
+    campaign_name: "CR2 | GH | MV | 07.06",
+    adset_id: "adset-1",
+    adset_name: "CR2-adset-1",
+    account_id: "act_123456",
+    delivery_status: "ACTIVE",
+    data_state: "ready",
+    severity: "warning",
+    as_of: "2026-07-19T10:00:00Z",
+    metrics: {
+      spend: "150.50",
+      impressions: 1_000,
+      clicks: 12,
+      registrations: 0,
+      ftd: null,
+      confirmed_deposits: 0,
+      cpc: "1.20",
+      cost_per_registration: null,
+    },
+    active_action: null,
+    ...overrides,
+  };
+}
 
-function Wrapper() {
-  return (
-    <QueryClientProvider client={makeQC()}>
-      <AdDetailPage />
-    </QueryClientProvider>
+function operatorAdsResponse(
+  row: OperatorAdRow = makeAd(),
+): OperatorAdsResponse {
+  return {
+    state: "ready" as const,
+    as_of: row.as_of,
+    freshness_seconds: 5,
+    sources: ["meta"],
+    issues: [],
+    scope: makeOperatorScopeEvidence(),
+    rows: [row],
+    page: 1,
+    page_size: 10,
+    total: 1,
+    pages: 1,
+  };
+}
+
+function actionAccountContext() {
+  return {
+    account_id: "act_123456",
+    currency: "USD",
+    cabinet_timezone: "Europe/Kaliningrad",
+    account_context_observed_at: "2026-07-19T09:59:00Z",
+    account_context_issues: [],
+  };
+}
+
+function renderDetail(status: OperatorRealtimeStatus = "connected") {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <OperatorRealtimeStatusProvider status={status}>
+        <AdDetail />
+      </OperatorRealtimeStatusProvider>
+    </QueryClientProvider>,
   );
 }
 
-// ─── Тесты ───────────────────────────────────────────────────────────────────
+function renderMobileCard(status: OperatorRealtimeStatus = "connected") {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <OperatorRealtimeStatusProvider status={status}>
+        <MiniOperatorAdCard ad={makeAd()} currency="USD" />
+      </OperatorRealtimeStatusProvider>
+    </QueryClientProvider>,
+  );
+}
 
-describe("AdDetail", () => {
+describe("TMA typed operator ad detail", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    globalThis.localStorage.clear();
     mockFbAdId = "ad_stop_001";
-    mockAdData = STOP_AD;
-    mockIsLoading = false;
-    mockIsError = false;
-    mockDisablePending = false;
-    mockClaimPending = false;
-    mockTgConfirm.mockReset().mockResolvedValue(true);
-    mockTgAlert.mockReset().mockResolvedValue(undefined);
-    disableMutate.mockReset().mockResolvedValue({ ok: true });
-    claimMutate.mockReset().mockResolvedValue({ ok: true });
+    adsData = operatorAdsResponse();
+    adsLoading = false;
+    adsError = null;
+    pausePending = false;
+    activatePending = false;
+    tgConfirm.mockResolvedValue(true);
+    tgAlert.mockResolvedValue(undefined);
+    pauseMutate.mockResolvedValue({
+      task_id: 1842,
+      public_id: "#1842",
+      created: true,
+    });
+    activateMutate.mockResolvedValue({
+      task_id: 1843,
+      public_id: "#1843",
+      created: true,
+    });
+    fetchOperatorAdForCommand.mockImplementation(
+      async (_client: unknown, id: string) => {
+        const row = adsData?.rows.find(
+          (candidate) => candidate.fb_ad_id === id,
+        );
+        if (!row || !row.as_of || !row.delivery_status) {
+          throw new Error("row unavailable");
+        }
+        return row;
+      },
+    );
   });
 
-  // Базовый рендер: имя объявления видно
-  it("рендерит имя объявления", () => {
-    render(<Wrapper />);
-    expect(screen.getByText("CR2 | GH | Stop Test")).toBeInTheDocument();
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  // Бейдж STOP_SENT показывает «Стоп»
-  it("показывает бейдж Стоп для STOP_SENT", () => {
-    render(<Wrapper />);
-    expect(screen.getByText("Стоп")).toBeInTheDocument();
+  it("renders the typed row, cabinet context and exact zero/unknown semantics", () => {
+    renderDetail();
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "CR2 | GH | Stop Test",
+    );
+    expect(screen.getByText("Внимание")).toBeInTheDocument();
+    expect(screen.getByText("Регистрации").parentElement).toHaveTextContent(
+      "0",
+    );
+    expect(screen.getByText("FTD").parentElement).toHaveTextContent("—");
+    expect(screen.getByText("Часовой пояс").parentElement).toHaveTextContent(
+      "Europe/Kaliningrad",
+    );
   });
 
-  // Pill оффера виден
-  it("показывает pill с кодом оффера CR2", () => {
-    render(<Wrapper />);
-    const pills = screen.getAllByText("CR2");
-    expect(pills.length).toBeGreaterThan(0);
+  it("keeps timezone evidence but hides money for a non-USD scope", () => {
+    const data = operatorAdsResponse(
+      makeAd({
+        metrics: {
+          ...makeAd().metrics,
+          spend: "1.234",
+          cpc: "0.001",
+        },
+      }),
+    );
+    data.scope = {
+      ...data.scope,
+      currency: "KWD",
+      currency_state: "single",
+      cabinet_timezone: "Asia/Tokyo",
+      cabinet_timezone_state: "single",
+      display_timezone: "Europe/Moscow",
+    };
+    adsData = data;
+
+    renderDetail();
+
+    expect(screen.getByText("Расход").parentElement).toHaveTextContent("—");
+    expect(screen.getByText("CPC").parentElement).toHaveTextContent("—");
+    expect(document.body).not.toHaveTextContent(/KWD|1\.234|0\.001/);
+    expect(screen.getByText("Часовой пояс").parentElement).toHaveTextContent(
+      "Asia/Tokyo",
+    );
+    expect(screen.getByText("Данные на").parentElement).toHaveTextContent(
+      "19.07.2026, 19:00",
+    );
   });
 
-  // MetricsGrid рендерится и содержит ячейки
-  it("рендерит MetricsGrid с метриками", () => {
-    render(<Wrapper />);
-    expect(screen.getByText("$150.50")).toBeInTheDocument();
+  it("renders mixed scope explicitly and never invents UTC or a currency", () => {
+    const row = makeAd({
+      data_state: "partial",
+      metrics: {
+        ...makeAd().metrics,
+        spend: null,
+        cpc: null,
+        cost_per_registration: null,
+      },
+    });
+    adsData = {
+      ...operatorAdsResponse(row),
+      state: "partial",
+      scope: {
+        ...makeOperatorScopeEvidence(),
+        cabinet_timezone: null,
+        cabinet_timezone_state: "mixed",
+        currency: null,
+        currency_state: "mixed",
+        display_timezone: "Europe/Moscow",
+      },
+    };
+
+    renderDetail();
+
+    expect(screen.getByText("Часовой пояс").parentElement).toHaveTextContent(
+      "Несколько часовых поясов · границы по каждому кабинету",
+    );
+    expect(screen.getByText("Часовой пояс").parentElement).toHaveTextContent(
+      "отображение Europe/Moscow",
+    );
+    expect(screen.getByText("Расход").parentElement).toHaveTextContent("—");
+    expect(screen.queryByText("UTC")).not.toBeInTheDocument();
   });
 
-  // Метрика Leads
-  it("показывает количество leads", () => {
-    render(<Wrapper />);
-    expect(screen.getAllByText("5").length).toBeGreaterThan(0);
-  });
-
-  // AlertTimeline рендерится
-  it("показывает ленту алертов", () => {
-    render(<Wrapper />);
-    expect(screen.getByText("Дорогой лид")).toBeInTheDocument();
-    expect(screen.getByText("Расход без депа")).toBeInTheDocument();
-  });
-
-  // Claim виден для stop_sent
-  it("показывает Claim для stop_sent", () => {
-    render(<Wrapper />);
-    expect(screen.getByRole("button", { name: "Снять алерт" })).toBeInTheDocument();
-  });
-
-  // Claim скрыт для normal
-  it("скрывает Claim для normal состояния", () => {
-    mockAdData = NORMAL_AD;
-    mockFbAdId = "ad_normal_002";
-    render(<Wrapper />);
-    expect(screen.queryByRole("button", { name: "Снять алерт" })).not.toBeInTheDocument();
-  });
-
-  // Disable confirm-flow: OK → mutateAsync вызван
-  it("Disable: confirm → mutateAsync вызван", async () => {
-    render(<Wrapper />);
+  it("queues pause with a dedicated idempotency header and opens its lifecycle", async () => {
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Отключить объявление" }));
-    expect(mockTgConfirm).toHaveBeenCalled();
-    await waitFor(() => {
-      expect(disableMutate).toHaveBeenCalledWith({ fbAdId: "ad_stop_001" });
+    renderDetail();
+
+    await user.click(screen.getByRole("button", { name: "Отключить" }));
+
+    expect(tgConfirm).toHaveBeenCalledWith(
+      expect.stringContaining("Результат будет подтверждён"),
+    );
+    await waitFor(() => expect(pauseMutate).toHaveBeenCalledOnce());
+    const request = pauseMutate.mock.calls[0]?.[0] as {
+      params: { path: { ad_id: string }; header: Record<string, string> };
+    };
+    expect(request.params.path.ad_id).toBe("ad_stop_001");
+    expect(request.params.header["Idempotency-Key"]).toMatch(
+      /^[0-9a-f-]{36}$/i,
+    );
+    expect(request.params.header["X-Operator-Principal"]).toBe("operator:tma");
+    expect(request).toMatchObject({
+      body: {
+        expected_delivery_status: "ACTIVE",
+        expected_as_of: "2026-07-19T10:00:00Z",
+      },
     });
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith({
+        to: "/actions/$actionId",
+        params: { actionId: "1842" },
+      }),
+    );
   });
 
-  // Disable confirm-flow: отмена → mutateAsync НЕ вызван
-  it("Disable: отмена confirm → mutateAsync не вызван", async () => {
-    mockTgConfirm.mockResolvedValue(false);
-    render(<Wrapper />);
+  it("reuses the same intent key after an ambiguous network failure", async () => {
+    mockFbAdId = "ambiguous-tma-ad";
+    adsData = operatorAdsResponse(makeAd({ fb_ad_id: mockFbAdId }));
+    pauseMutate
+      .mockRejectedValueOnce(new TypeError("network response lost"))
+      .mockResolvedValueOnce({
+        task_id: 1842,
+        public_id: "#1842",
+        created: false,
+      });
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Отключить объявление" }));
-    await waitFor(() => {
-      expect(disableMutate).not.toHaveBeenCalled();
-    });
+    renderDetail();
+
+    await user.click(screen.getByRole("button", { name: "Отключить" }));
+    await waitFor(() => expect(pauseMutate).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "Отключить" }));
+    await waitFor(() => expect(pauseMutate).toHaveBeenCalledTimes(2));
+
+    const first = pauseMutate.mock.calls[0]?.[0] as {
+      params: { header: Record<string, string> };
+    };
+    const retry = pauseMutate.mock.calls[1]?.[0] as {
+      params: { header: Record<string, string> };
+    };
+    expect(retry.params.header["Idempotency-Key"]).toBe(
+      first.params.header["Idempotency-Key"],
+    );
   });
 
-  // MID-23: отклонённая disable-мутация (ошибка сети/сервера) → UI показывает
-  // ошибку через tgAlert, кнопка возвращается в активное (не залипшее) состояние.
-  it("Disable: отклонённая мутация → показывает ошибку, кнопка снова активна", async () => {
-    disableMutate.mockReset().mockRejectedValue(new Error("Сервер недоступен"));
-    render(<Wrapper />);
+  it("fails closed and shows durable-storage recovery before sending a money command", async () => {
+    vi.spyOn(globalThis.localStorage, "getItem").mockImplementation(() => {
+      throw new Error("storage blocked");
+    });
     const user = userEvent.setup();
-    const btn = screen.getByRole("button", { name: "Отключить объявление" });
-    await user.click(btn);
+    renderDetail();
 
-    await waitFor(() => {
-      expect(disableMutate).toHaveBeenCalledWith({ fbAdId: "ad_stop_001" });
-    });
-    await waitFor(() => {
-      expect(mockTgAlert).toHaveBeenCalledWith("Сервер недоступен");
-    });
-    // isPending снова false после отклонённого промиса — кнопка не задизейблена busy-состоянием.
-    expect(screen.getByRole("button", { name: "Отключить объявление" })).not.toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Отключить" }));
+
+    await waitFor(() =>
+      expect(fetchOperatorAdForCommand).toHaveBeenCalledOnce(),
+    );
+    expect(pauseMutate).not.toHaveBeenCalled();
+    expect(tgAlert).toHaveBeenCalledWith(
+      expect.stringContaining("Безопасное действие заблокировано"),
+    );
+    expect(tgAlert).toHaveBeenCalledWith(
+      expect.stringContaining("Перезагрузите приложение"),
+    );
   });
 
-  // MID-23: анти-даблклик — во время isPending (disable ИЛИ claim) обе money-кнопки
-  // задизейблены, защита от дубля задачи в outbox при повторном тапе.
-  it("Disable и Claim задизейблены во время isPending (анти-даблклик)", () => {
-    mockDisablePending = true;
-    render(<Wrapper />);
-    expect(screen.getByRole("button", { name: "Отключить объявление" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Снять алерт" })).toBeDisabled();
+  it("opens the committed lifecycle and warns against retry when intent cleanup fails", async () => {
+    vi.spyOn(globalThis.localStorage, "removeItem").mockImplementation(
+      () => undefined,
+    );
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole("button", { name: "Отключить" }));
+
+    await waitFor(() => expect(pauseMutate).toHaveBeenCalledOnce());
+    expect(tgAlert).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "#1842: задача уже создана — не повторяйте команду",
+      ),
+    );
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith({
+        to: "/actions/$actionId",
+        params: { actionId: "1842" },
+      }),
+    );
   });
 
-  it("Claim.isPending тоже блокирует кнопку Disable (общий busy)", () => {
-    mockClaimPending = true;
-    render(<Wrapper />);
-    expect(screen.getByRole("button", { name: "Отключить объявление" })).toBeDisabled();
+  it("does not queue a money action after confirmation is cancelled", async () => {
+    tgConfirm.mockResolvedValue(false);
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole("button", { name: "Отключить" }));
+    expect(pauseMutate).not.toHaveBeenCalled();
   });
 
-  // Кнопка Ads Manager видна при can_open_in_ads_manager=true
-  it("кнопка Ads Manager видна при can_open_in_ads_manager=true", () => {
-    render(<Wrapper />);
-    expect(screen.getByRole("button", { name: /Открыть в Ads Manager/ })).toBeInTheDocument();
+  it("does not queue after the confirmed row changes before submit", async () => {
+    fetchOperatorAdForCommand.mockResolvedValue(
+      makeAd({ delivery_status: "PAUSED", as_of: "2026-07-19T10:00:01Z" }),
+    );
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole("button", { name: "Отключить" }));
+
+    await waitFor(() =>
+      expect(fetchOperatorAdForCommand).toHaveBeenCalledOnce(),
+    );
+    expect(pauseMutate).not.toHaveBeenCalled();
+    expect(tgAlert).toHaveBeenCalledWith(
+      expect.stringContaining("Состояние объявления изменилось"),
+    );
   });
 
-  // Кнопка Ads Manager скрыта при can_open_in_ads_manager=false
-  it("кнопка Ads Manager скрыта при can_open_in_ads_manager=false", () => {
-    mockAdData = { ...STOP_AD, can_open_in_ads_manager: false };
-    render(<Wrapper />);
-    expect(screen.queryByRole("button", { name: /Открыть в Ads Manager/ })).not.toBeInTheDocument();
+  it("shows activate for a confirmed inactive delivery state", async () => {
+    adsData = operatorAdsResponse(makeAd({ delivery_status: "PAUSED" }));
+    const user = userEvent.setup();
+    renderDetail();
+
+    await user.click(screen.getByRole("button", { name: "Включить" }));
+    await waitFor(() => expect(activateMutate).toHaveBeenCalledOnce());
   });
 
-  // Состояние загрузки
-  it("рендерит загрузку при isLoading", () => {
-    mockIsLoading = true;
-    mockAdData = null;
-    render(<Wrapper />);
-    // Skeleton-заглушки рендерятся вместо контента объявления
-    expect(screen.queryByText("CR2 | GH | Stop Test")).not.toBeInTheDocument();
+  it("fails closed when delivery state is unknown", () => {
+    adsData = operatorAdsResponse(makeAd({ delivery_status: null }));
+    renderDetail();
+
+    expect(screen.getByText("Статус доставки неизвестен")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Отключить|Включить/ }),
+    ).not.toBeInTheDocument();
   });
 
-  // Состояние ошибки
-  it("рендерит ошибку при isError", () => {
-    mockIsError = true;
-    mockAdData = null;
-    render(<Wrapper />);
+  it("neutralizes stale health and blocks money commands until refresh", () => {
+    adsData = operatorAdsResponse(
+      makeAd({ data_state: "stale", severity: "ok" }),
+    );
+    renderDetail();
+
+    expect(screen.getByText("Неизвестно")).toBeInTheDocument();
+    expect(
+      screen.getByText("Обновите данные перед действием"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Отключить|Включить/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides cached metrics and delivery when the row is unavailable", () => {
+    adsData = {
+      ...operatorAdsResponse(
+        makeAd({
+          data_state: "unavailable",
+          delivery_status: "ACTIVE",
+          metrics: {
+            spend: "0",
+            impressions: 0,
+            clicks: 0,
+            registrations: 0,
+            ftd: 0,
+            confirmed_deposits: 0,
+            cpc: "0",
+            cost_per_registration: "0",
+          },
+        }),
+      ),
+      state: "unavailable",
+      as_of: null,
+      freshness_seconds: null,
+    };
+
+    renderDetail();
+
+    for (const label of [
+      "Расход",
+      "Показы",
+      "Клики",
+      "Регистрации",
+      "FTD",
+      "Депозиты",
+      "CPC",
+      "Цена рег.",
+    ]) {
+      expect(screen.getByText(label).parentElement).toHaveTextContent("—");
+    }
+    expect(screen.getByText("Доставка").parentElement).toHaveTextContent(
+      "Не подтверждено",
+    );
+  });
+
+  it("blocks money commands while realtime snapshot reconciliation is pending", () => {
+    renderDetail("reconnecting");
+
+    expect(
+      screen.getByText("Действие недоступно до сверки live-снимка"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Отключить|Включить/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the full reconciliation message readable in the mobile ad card", () => {
+    const { container } = renderMobileCard("reconnecting");
+
+    const message = screen.getByText(
+      "Действие недоступно до сверки live-снимка",
+    );
+    expect(container).toHaveTextContent(
+      "Действие недоступно до сверки live-снимка",
+    );
+    expect(message).toHaveClass(
+      "w-full",
+      "min-w-0",
+      "whitespace-normal",
+      "break-words",
+    );
+    expect(message.parentElement).toHaveClass(
+      "min-w-0",
+      "flex-col",
+      "items-start",
+    );
+  });
+
+  it("links an in-flight command to the exact lifecycle", () => {
+    adsData = operatorAdsResponse(
+      makeAd({
+        active_action: {
+          id: "1842",
+          public_id: "#1842",
+          kind: "pause",
+          state: "running",
+          title: "Отключение объявления",
+          target_label: "CR2 | GH | Stop Test",
+          requested_at: "2026-07-19T10:00:00Z",
+          updated_at: "2026-07-19T10:00:01Z",
+          requested_by: "operator:tma",
+          reason: null,
+          correlation_id: "corr-1842",
+          ...actionAccountContext(),
+        },
+      }),
+    );
+    renderDetail();
+
+    expect(screen.getByText("#1842 · выполняется")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Отключить|Включить/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps a confirmed command blocked while fresh delivery data is pending", () => {
+    adsData = operatorAdsResponse(
+      makeAd({
+        active_action: {
+          id: "1842",
+          public_id: "#1842",
+          kind: "pause",
+          state: "confirmed",
+          title: "Отключение объявления",
+          target_label: "CR2 | GH | Stop Test",
+          requested_at: "2026-07-19T10:00:00Z",
+          updated_at: "2026-07-19T10:00:01Z",
+          requested_by: "operator:tma",
+          reason: null,
+          correlation_id: "corr-1842",
+          ...actionAccountContext(),
+        },
+      }),
+    );
+    renderDetail();
+
+    expect(
+      screen.getByText("#1842 · Подтверждено · сверяем данные"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Отключить|Включить/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows an ambiguous command result as unconfirmed", () => {
+    adsData = operatorAdsResponse(
+      makeAd({
+        active_action: {
+          id: "1842",
+          public_id: "#1842",
+          kind: "pause",
+          state: "unknown",
+          title: "Отключение объявления",
+          target_label: "CR2 | GH | Stop Test",
+          requested_at: "2026-07-19T10:00:00Z",
+          updated_at: "2026-07-19T10:00:01Z",
+          requested_by: "operator:tma",
+          reason: "Требуется сверка",
+          correlation_id: "corr-1842",
+          ...actionAccountContext(),
+        },
+      }),
+    );
+    renderDetail();
+
+    expect(
+      screen.getByText("#1842 · результат не подтверждён"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("#1842 · в очереди")).not.toBeInTheDocument();
+  });
+
+  it("renders loading and explicit error states", () => {
+    adsData = undefined;
+    adsLoading = true;
+    const { rerender } = renderDetail();
+    expect(
+      screen.getByRole("status", { name: "Загрузка объявления" }),
+    ).toBeInTheDocument();
+
+    adsLoading = false;
+    adsError = new Error("Ошибка сети");
+    const client = new QueryClient();
+    rerender(
+      <QueryClientProvider client={client}>
+        <AdDetail />
+      </QueryClientProvider>,
+    );
     expect(screen.getByText("Ошибка сети")).toBeInTheDocument();
-  });
-
-  // Алерты не рендерятся для normal без алертов
-  it("показывает пустой стейт для normal без алертов", () => {
-    mockAdData = NORMAL_AD;
-    mockFbAdId = "ad_normal_002";
-    render(<Wrapper />);
-    expect(screen.getByText("Нет активных алертов")).toBeInTheDocument();
   });
 });

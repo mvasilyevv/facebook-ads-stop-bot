@@ -19,20 +19,23 @@ export function AuthGuard({ children }: AuthGuardProps) {
 
   useEffect(() => {
     // Инициализируем Telegram тему/ready/expand при первом монтировании.
-    initTheme();
+    const cleanupTheme = initTheme();
+    let active = true;
 
-    const result = ensureAuthenticated();
-    if (result === "idle") {
-      setStatus("ok");
-      return;
-    }
-    result
-      .then(() => setStatus("ok"))
+    ensureAuthenticated()
+      .then(() => {
+        if (active) setStatus("ok");
+      })
       .catch((err: Error) => {
+        if (!active) return;
         console.error("TMA auth error:", err);
         setError(err.message);
         setStatus("error");
       });
+    return () => {
+      active = false;
+      cleanupTheme();
+    };
   }, []);
 
   if (status === "loading") {
@@ -61,7 +64,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
         <p className="text-[13px] text-[var(--color-bg-9)] font-body">
           {error ?? "Откройте приложение через Telegram-бота."}
         </p>
-        <p className="text-[11px] text-[var(--color-bg-8)] font-mono mt-2">
+        <p className="text-[12px] text-[var(--color-bg-8)] font-mono mt-2">
           Получите invite у владельца бота.
         </p>
       </div>

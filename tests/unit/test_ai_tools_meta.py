@@ -15,9 +15,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.ai_assistant.tools.base import ToolContext, ToolError
+from core.ai_assistant.tools.meta._currency import (
+    currency_evidence,
+    format_minor_money,
+)
 from core.ai_assistant.tools.meta.find_ads import FindAdsTool
 from core.ai_assistant.tools.meta.get_account_health import GetAccountHealthTool
-from core.ai_assistant.tools.meta.get_competitor_patterns import GetCompetitorPatternsTool
 from core.ai_assistant.tools.meta.get_insights import GetInsightsTool
 from core.ai_assistant.tools.meta.get_offer_performance import GetOfferPerformanceTool
 from core.meta_api.schemas import MetaInsightsRow
@@ -48,6 +51,13 @@ def _ctx_with_client(client: Any, *, engine: Any = None) -> ToolContext:
     return ToolContext(client_key="user", engine=engine, meta_api_client=client)
 
 
+def test_meta_minor_money_distinguishes_confirmed_zero_from_unknown() -> None:
+    usd = currency_evidence("USD")
+
+    assert format_minor_money(0, usd) == "0.00 USD"
+    assert format_minor_money(None, usd) == "—"
+
+
 # ====================== get_insights ======================
 
 
@@ -63,13 +73,16 @@ async def test_get_insights_default_level_ad(monkeypatch) -> None:
         lambda client: fetcher_instance,
     )
 
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(return_value={"currency": "KWD"})
     tool = GetInsightsTool()
-    ctx = _ctx_with_client(MagicMock())
+    ctx = _ctx_with_client(client)
     out = await tool.run(ctx, {"ad_account_id": "act_42"})
 
     fetcher_instance.fetch_for_request.assert_awaited()
     assert "rows=2" in out
     assert "id=100" in out
+    assert "total_spend=15.500 KWD" in out
 
 
 # ad_ids: вызывается fetch_for_ads. campaign_ids одновременно с ad_ids → ToolError.
@@ -82,8 +95,10 @@ async def test_get_insights_ad_ids_and_collision(monkeypatch) -> None:
         lambda client: fetcher_instance,
     )
 
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(return_value={"currency": "USD"})
     tool = GetInsightsTool()
-    ctx = _ctx_with_client(MagicMock())
+    ctx = _ctx_with_client(client)
     out = await tool.run(ctx, {"ad_account_id": "act_42", "ad_ids": ["200"]})
     assert "id=200" in out
 
@@ -177,6 +192,8 @@ async def test_get_offer_performance_aggregates(monkeypatch) -> None:
 
     engine = MagicMock()
     engine.connect = MagicMock(return_value=_Conn())
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(return_value={"currency": "USD"})
 
     fetcher_instance = MagicMock()
     fetcher_instance.fetch_for_request = AsyncMock(
@@ -197,14 +214,14 @@ async def test_get_offer_performance_aggregates(monkeypatch) -> None:
     )
 
     tool = GetOfferPerformanceTool()
-    ctx = _ctx_with_client(MagicMock(), engine=engine)
+    ctx = _ctx_with_client(client, engine=engine)
 
     out = await tool.run(
         ctx,
         {"ad_account_id": "act_1", "offer_code": "DRC_CR2", "date_preset": "last_7d"},
     )
     assert "Оффер DRC_CR2" in out
-    assert "Spend: $50.00" in out
+    assert "Spend: 50.00 USD" in out
     assert "Leads: 10" in out
 
 
@@ -297,7 +314,34 @@ async def test_account_health_detailed(monkeypatch) -> None:
     out = await tool.run(ctx, {"ad_account_id": "act_777"})
     assert "act_777" in out
     assert "ACTIVE" in out
-    assert "Today: spend=$33.21" in out
+    assert "Spent (lifetime): 123.45 USD" in out
+    assert "Today: spend=33.21 USD" in out
+
+
+@pytest.mark.asyncio
+async def test_get_insights_hides_money_when_currency_is_unconfirmed(
+    monkeypatch,
+) -> None:
+    fetcher_instance = MagicMock(name="InsightsFetcher")
+    fetcher_instance.fetch_for_request = AsyncMock(
+        return_value=[_meta_row("100", spend=Decimal("10.50"))]
+    )
+    monkeypatch.setattr(
+        "core.ai_assistant.tools.meta.get_insights.InsightsFetcher",
+        lambda client: fetcher_instance,
+    )
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(return_value={"currency": "ZZZ"})
+
+    out = await GetInsightsTool().run(
+        _ctx_with_client(client),
+        {"ad_account_id": "act_42"},
+    )
+
+    assert "currency=unknown" in out
+    assert "total_spend=—" in out
+    assert "spend=—" in out
+    assert "$" not in out
 
 
 # Bad account format → ToolError.
@@ -307,16 +351,3 @@ async def test_account_health_bad_account() -> None:
     ctx = _ctx_with_client(MagicMock())
     with pytest.raises(ToolError, match="act_"):
         await tool.run(ctx, {"ad_account_id": "777"})
-
-
-# ====================== get_competitor_patterns ======================
-
-
-# Заглушка возвращает строку с упоминанием Этапа 4 и /spy.
-@pytest.mark.asyncio
-async def test_competitor_patterns_stub_response() -> None:
-    tool = GetCompetitorPatternsTool()
-    ctx = _ctx_with_client(MagicMock())
-    out = await tool.run(ctx, {"slot": "chicken road 2", "country": "ke"})
-    assert "Этап 4" in out or "Этапе 4" in out
-    assert "/spy" in out

@@ -71,7 +71,8 @@ async def test_ai_analyze_no_providers_503(fake_redis_client, monkeypatch) -> No
         resp = await ac.post("/api/ai/analyze", json=_valid_body())
 
     assert resp.status_code == 503
-    assert "не настроены" in resp.json()["detail"].lower()
+    assert resp.json()["code"] == "ai_unavailable"
+    assert "не настроены" in resp.json()["message"].lower()
 
 
 # ─────────────────────── Happy path (mock ChatSession) ────────────────────────

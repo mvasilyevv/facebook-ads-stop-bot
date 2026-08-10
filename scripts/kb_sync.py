@@ -56,8 +56,6 @@ METHODOLOGY_FILES = [
     "docs/creatives/README.md",
     "docs/creatives/hooks.yaml",
     "docs/stop_rules.md",
-    "docs/research_risk_framework.md",
-    "docs/roadmap/creative-analytics.md",
 ]
 
 

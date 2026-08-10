@@ -1,29 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Утилиты шифрования для хранения токенов в БД.
+"""Fernet encryption for credentials stored in PostgreSQL.
 
-Использует Fernet (AES-128-CBC) из библиотеки cryptography.
-Ключ берётся из ENCRYPTION_KEY в .env. Ключ НЕ генерируется в рантайме воркера:
-это делал каждый из 13+ параллельно стартующих процессов, дописывая свой ключ в
-.env без блокировки → несколько строк ENCRYPTION_KEY, побеждала последняя →
-токены, зашифрованные другими ключами, становились нерасшифровываемы (канал
-авто-стопа молча слепнул). Теперь при пустом ключе _get_fernet бросает явную
-ошибку (fail-fast), а генерация вынесена в единый bootstrap-шаг ensure_encryption_key()
-под file-lock с double-check (его зовёт run.sh / scripts/ensure_encryption_key.py
-ДО старта воркеров).
-
-Дополнительно:
-- ensure_encryption_key()   — единый bootstrap: генерирует ключ под flock, если его нет
-- backup_encryption_key()   — сохраняет ключ в .encryption_key.backup (0600)
-- verify_encryption_key()   — проверяет ключ по ENCRYPTION_KEY_VERIFY из .env
-- rotate_encryption_key()   — перешифровывает все токены в БД при смене ключа
+Both ``ENCRYPTION_KEY`` and its independently persisted
+``ENCRYPTION_KEY_VERIFY`` token are mandatory. Runtime code never creates,
+repairs, backs up, or writes secret material.
 """
 
 from __future__ import annotations
 
-import fcntl
 import logging
-import os
-import stat
 
 try:
     from cryptography.fernet import Fernet, InvalidToken  # type: ignore[import-not-found]
@@ -40,18 +25,17 @@ _VERIFY_PLAINTEXT = "encryption_key_verify_v1"
 
 
 class EncryptionKeyMissingError(RuntimeError):
-    """ENCRYPTION_KEY не задан в окружении.
-
-    Бросается вместо тихой рантайм-генерации ключа воркером. Сгенерировать ключ
-    нужно единым bootstrap-шагом (run.sh / scripts/ensure_encryption_key.py).
-    """
+    """Required encryption material is absent from the environment."""
 
 
 # Текст ошибки при пустом ключе — единый источник для _get_fernet и тестов.
 _MISSING_KEY_MESSAGE = (
-    "ENCRYPTION_KEY не задан — сгенерируйте его через scripts/ensure_encryption_key.py "
-    "(его вызывает run.sh ДО старта воркеров). Рантайм-генерация ключа отключена: "
-    "параллельные воркеры затирали .env разными ключами и портили зашифрованные токены."
+    "ENCRYPTION_KEY не задан. Provision ENCRYPTION_KEY and ENCRYPTION_KEY_VERIFY "
+    "together before starting the application; runtime secret generation is forbidden."
+)
+_MISSING_VERIFY_MESSAGE = (
+    "ENCRYPTION_KEY_VERIFY не задан. Provision the verification token together "
+    "with ENCRYPTION_KEY; starting without key-integrity verification is forbidden."
 )
 
 
@@ -67,162 +51,10 @@ def _reveal(value: object) -> str:
     return value if isinstance(value, str) else str(value)
 
 
-def _project_root() -> str:
-    """Возвращает абсолютный путь к корню проекта."""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _env_path() -> str:
-    """Путь к файлу .env в корне проекта."""
-    return os.path.join(_project_root(), ".env")
-
-
-def _lock_path() -> str:
-    """Путь к lock-файлу для эксклюзивной генерации ключа."""
-    return os.path.join(_project_root(), ".env.lock")
-
-
-def _read_env_key(var: str = "ENCRYPTION_KEY") -> str:
-    """Читает значение ENCRYPTION_KEY: сперва os.environ, затем .env-файл.
-
-    M-13 (аудит 2026-07-12): раньше смотрели ТОЛЬКО файл .env, игнорируя реальную
-    env-переменную. get_settings()/Fernet читают через pydantic-settings, где env
-    имеет приоритет над .env-файлом. При env-only деплое (k8s/helm Secret → env, без
-    материализации в файл) bootstrap не видел ключ → генерировал ВТОРОЙ → verify-fail
-    краш / риск порчи зашифрованных токенов БД. Теперь os.environ — источник №1.
-
-    Отдельно от get_settings(): та кэширует Settings на процесс, а нам нужен
-    актуальный диск после double-check внутри flock. Побеждает последняя строка —
-    паттерн `set -a; . ./.env` в run.sh: повторное присваивание перекрывает.
-
-    Args:
-        var: имя переменной окружения в .env.
-
-    Returns:
-        Значение переменной (без кавычек/пробелов) или "" если не найдено.
-    """
-    env_value = os.environ.get(var, "").strip()
-    if env_value:
-        return env_value
-
-    env = _env_path()
-    value = ""
-    try:
-        with open(env, encoding="utf-8") as fp:
-            for raw in fp:
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                name, _, val = line.partition("=")
-                if name.strip() != var:
-                    continue
-                val = val.strip()
-                # Снимаем окружающие кавычки, если есть.
-                if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
-                    val = val[1:-1]
-                value = val
-    except OSError:
-        return ""
-    return value
-
-
-def ensure_encryption_key() -> str:
-    """Единый bootstrap-шаг: гарантирует наличие ENCRYPTION_KEY в .env.
-
-    Money/security-критично. Вызывается ОДИН раз до старта воркеров (run.sh →
-    scripts/ensure_encryption_key.py). Идемпотентно: если ключ уже есть — ничего
-    не меняет и возвращает его. Генерация — только под эксклюзивным flock на
-    .env.lock, с double-check внутри критической секции (ключ мог появиться, пока
-    ждали захвата), поэтому конкурентные вызовы дают ровно один ключ в .env.
-
-    Returns:
-        Актуальный ENCRYPTION_KEY (существующий или только что сгенерированный).
-
-    Raises:
-        RuntimeError: если библиотека cryptography не установлена.
-    """
-    if Fernet is None:
-        raise RuntimeError("Библиотека cryptography не установлена")
-
-    # Быстрый путь без блокировки: ключ уже есть.
-    existing = _read_env_key()
-    if existing:
-        return existing
-
-    lock_path = _lock_path()
-    lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        # Эксклюзивная блокировка на межпроцессном уровне (flock переживает fork,
-        # снимается при close/exit процесса-владельца).
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-
-        # Double-check: пока ждали lock, другой процесс мог записать ключ.
-        existing = _read_env_key()
-        if existing:
-            logger.info("ENCRYPTION_KEY уже присутствует в .env (записан параллельным процессом)")
-            return existing
-
-        key = Fernet.generate_key().decode()
-        env = _env_path()
-        with open(env, "a", encoding="utf-8") as f:
-            f.write(f"\nENCRYPTION_KEY={key}\n")
-        logger.info("Сгенерирован ENCRYPTION_KEY и записан в .env")
-
-        # Бэкап и верификационный токен — только при первой генерации.
-        backup_encryption_key(key)
-        _write_verify_token(key)
-        return key
-    finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        os.close(lock_fd)
-
-
-def backup_encryption_key(key: str) -> None:
-    """Сохраняет ключ шифрования в резервный файл .encryption_key.backup.
-
-    Файл создаётся с правами 0600 (только владелец).
-    Вызывается автоматически при первой генерации ключа.
-
-    Args:
-        key: строка с Fernet-ключом (base64).
-    """
-    backup_path = os.path.join(_project_root(), ".encryption_key.backup")
-    try:
-        # Создаём файл с правами 0600 сразу при открытии
-        fd = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(key + "\n")
-        # Явно выставляем права на случай umask
-        os.chmod(backup_path, stat.S_IRUSR | stat.S_IWUSR)
-        logger.info("Резервная копия ENCRYPTION_KEY сохранена в %s", backup_path)
-    except OSError as exc:
-        logger.warning("Не удалось создать резервную копию ключа: %s", exc)
-
-
-def _write_verify_token(key: str) -> None:
-    """Шифрует эталонную строку текущим ключом и дописывает в .env.
-
-    Args:
-        key: строка с Fernet-ключом (base64).
-    """
-    if Fernet is None:
-        return
-    try:
-        f = Fernet(key.encode() if isinstance(key, str) else key)
-        verify_token = f.encrypt(_VERIFY_PLAINTEXT.encode()).decode()
-        env = _env_path()
-        with open(env, "a") as fp:
-            fp.write(f"\nENCRYPTION_KEY_VERIFY={verify_token}\n")
-        logger.info("ENCRYPTION_KEY_VERIFY записан в .env")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Не удалось записать ENCRYPTION_KEY_VERIFY в .env: %s", exc)
-
-
 def verify_encryption_key(key: str, verify_token: str) -> None:
     """Проверяет, что ключ соответствует сохранённому verify-токену.
 
-    Если расшифровка не совпадает с эталоном — логирует CRITICAL и бросает RuntimeError.
-    При отсутствии verify_token (старые инсталляции) — пропускает проверку с предупреждением.
+    Missing or mismatched verification material fails closed.
 
     Args:
         key: строка с Fernet-ключом (base64).
@@ -232,14 +64,11 @@ def verify_encryption_key(key: str, verify_token: str) -> None:
         RuntimeError: если ключ не может расшифровать verify_token.
     """
     if Fernet is None:
-        return
+        raise RuntimeError("Библиотека cryptography не установлена")
 
     if not verify_token:
-        logger.warning(
-            "ENCRYPTION_KEY_VERIFY не задан — проверка целостности ключа пропущена. "
-            "Рекомендуется пересоздать ключ для получения верификационного токена."
-        )
-        return
+        logger.critical(_MISSING_VERIFY_MESSAGE)
+        raise EncryptionKeyMissingError(_MISSING_VERIFY_MESSAGE)
 
     try:
         f = Fernet(key.encode() if isinstance(key, str) else key)
@@ -252,7 +81,7 @@ def verify_encryption_key(key: str, verify_token: str) -> None:
     except Exception as exc:  # noqa: BLE001
         logger.critical(
             "КРИТИЧЕСКАЯ ОШИБКА: ENCRYPTION_KEY не совпадает с ENCRYPTION_KEY_VERIFY. "
-            "Все зашифрованные токены в БД недоступны. Проверьте .encryption_key.backup. "
+            "Все зашифрованные токены в БД недоступны. "
             "Причина: %s",
             exc,
         )
@@ -292,7 +121,6 @@ class EncryptionKeyRotationError(RuntimeError):
 async def rotate_encryption_key(old_key: str, new_key: str) -> int:
     """Перешифровывает все зашифрованные поля в БД при смене ключа.
 
-    Сохраняет старый ключ в .encryption_key.old перед ротацией.
     Затронутые поля: telegram_config.bot_token_encrypted, vision_config.x_token_encrypted,
     adsetpro_credentials.api_key_encrypted/postback_secret_encrypted (BYTEA — N4).
     Использует raw SQL через AsyncEngine — без ORM-моделей, чтобы не зависеть от
@@ -319,21 +147,10 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
         RuntimeError: если библиотека cryptography не установлена.
         EncryptionKeyRotationError: если старым ключом не расшифровалось хотя бы
             одно поле — БД не изменена, вызывающий код НЕ должен переключать
-            ENCRYPTION_KEY в .env на new_key.
+            ENCRYPTION_KEY/ENCRYPTION_KEY_VERIFY на новую пару.
     """
     if Fernet is None:
         raise RuntimeError("Библиотека cryptography не установлена")
-
-    # Сохраняем старый ключ для возможного отката
-    old_backup = os.path.join(_project_root(), ".encryption_key.old")
-    try:
-        fd = os.open(old_backup, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(old_key + "\n")
-        os.chmod(old_backup, stat.S_IRUSR | stat.S_IWUSR)
-        logger.info("Старый ключ сохранён в %s для возможного отката", old_backup)
-    except OSError as exc:
-        logger.warning("Не удалось сохранить старый ключ в %s: %s", old_backup, exc)
 
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -472,11 +289,8 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
 def _get_fernet() -> Fernet:
     """Ленивая инициализация Fernet с ключом из env.
 
-    При пустом ключе — бросает EncryptionKeyMissingError (fail-fast). Рантайм-
-    генерация отключена намеренно: 13+ параллельных воркеров дописывали в .env
-    каждый свой ключ без блокировки → тихая порча зашифрованных токенов. Ключ
-    генерируется единым bootstrap-шагом (ensure_encryption_key через run.sh).
-    При каждом запуске с ключом — верифицирует его по ENCRYPTION_KEY_VERIFY.
+    При пустом ключе или verify-токене бросает EncryptionKeyMissingError.
+    Рантайм-генерация и запись секретов на диск отсутствуют.
 
     Raises:
         EncryptionKeyMissingError: если ENCRYPTION_KEY не задан.
@@ -506,6 +320,11 @@ def _get_fernet() -> Fernet:
 
     _fernet = Fernet(key.encode() if isinstance(key, str) else key)
     return _fernet
+
+
+def validate_encryption_material() -> None:
+    """Fail unless the configured key and verification token form a valid pair."""
+    _get_fernet()
 
 
 def encrypt(plaintext: str) -> str:

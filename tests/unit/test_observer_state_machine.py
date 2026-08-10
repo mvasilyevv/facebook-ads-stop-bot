@@ -10,8 +10,6 @@ import pytest
 from core.observer.state_machine import (
     FsmInput,
     decide,
-    reset_after_disable_succeeded,
-    reset_after_enable_succeeded,
     should_reopen_disabled,
     should_sync_disabled,
 )
@@ -51,7 +49,7 @@ def test_warning_sent_does_not_re_emit() -> None:
 
 
 # Сценарий: эскалация warning_sent → stop_sent сохраняет тот же open_token
-# (incident единый — старые WARNING-кнопки `dis:<fb>:<token>` остаются валидны)
+# (incident единый — notification plane обновляет ту же карточку)
 def test_warning_escalates_to_stop() -> None:
     tok = uuid.uuid4()
     t = decide(
@@ -179,18 +177,6 @@ def test_stop_deescalates_to_warning_no_emit() -> None:
     assert t.new_state == "warning_sent"
     assert t.emit_alert is False  # не дублируем, инцидент тот же
     assert t.new_open_token == tok
-
-
-# Сценарий: helpers для disable/enable workers
-def test_disable_resets_to_disabled() -> None:
-    assert reset_after_disable_succeeded("stop_sent") == "disabled"
-    assert reset_after_disable_succeeded("claimed") == "disabled"
-    assert reset_after_disable_succeeded("normal") == "disabled"
-
-
-def test_enable_resets_to_normal() -> None:
-    assert reset_after_enable_succeeded("disabled") == "normal"
-    assert reset_after_enable_succeeded("stop_sent") == "normal"
 
 
 # Сценарий: pure-функция — одинаковый вход → одинаковый выход (кроме UUID)

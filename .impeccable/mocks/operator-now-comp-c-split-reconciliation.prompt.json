@@ -1,0 +1,9 @@
+{
+  "id": "split-reconciliation",
+  "direction": "Точный журнал",
+  "prompt": "Портфельная сверка и журнал команд делят первый ряд; причины внимания раскрываются ниже на общей ширине. На мобильном lifecycle действий идет первым, затем attention и кабинетная шкала.",
+  "renderer": "local-html-css",
+  "source": "operator-now-compositions.html?variant=c",
+  "viewports": ["1440x900", "390x844"],
+  "approved": false
+}

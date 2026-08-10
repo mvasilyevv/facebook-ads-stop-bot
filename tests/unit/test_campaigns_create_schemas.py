@@ -8,11 +8,15 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from pydantic import ValidationError
 
 from apps.api.routers.v1.schemas.campaigns_create import (
+    AdsetPlanOut,
     CampaignConfigIn,
+    CampaignPlanOut,
     LaunchIn,
     PresetIn,
     UploadConceptsOut,
@@ -26,19 +30,18 @@ def _flat_config_dict() -> dict:
     """Плоский конфиг — РОВНО та форма, что шлёт фронт (web buildConfig / mini).
 
     Источник истины — frontend/src/stores/campaignWizard.ts::buildConfig:
-    act_id/daily_budget_cents/countries на верхнем уровне, campaigns[] с adset_count.
+    act_id/daily_budget/countries на верхнем уровне, campaigns[] с adset_count.
     """
     return {
         "act_id": "123",
         "page_id": "100",
         "pixel_id": "200",
-        "tz_offset": -7,
         "offer_code": "GH_CR",
         "byer_tag": "MV",
         "destination_link": "https://example.com",
         "start_date": "2026-07-01",
         "budget_level": "campaign",
-        "daily_budget_cents": 20000,
+        "daily_budget": "200.00",
         "bid_strategy": "LOWEST_COST_WITHOUT_CAP",
         "countries": ["DE"],
         "age_min": 18,
@@ -50,7 +53,6 @@ def _flat_config_dict() -> dict:
         "campaigns": [{"key": "static", "adset_count": 2, "concept_refs": ["a.jpg", "b.jpg"]}],
         "copies_per_concept": None,
         "creo_root": "abc123",
-        "launch_state": "campaign_paused",
         "url_tags": "sub2=MV",
     }
 
@@ -58,11 +60,18 @@ def _flat_config_dict() -> dict:
 def _valid_config_dict() -> dict:
     """Минимально-валидный CampaignConfig для теста схем."""
     return {
-        "account": {"act_id": "123", "page_id": "100", "pixel_id": "200"},
+        "account": {
+            "act_id": "123",
+            "page_id": "100",
+            "pixel_id": "200",
+            "timezone_name": "America/Los_Angeles",
+            "currency": "USD",
+            "account_context_observed_at": "2026-06-30T12:00:00+00:00",
+        },
         "offer_code": "GH_CR",
         "destination_link": "https://example.com",
-        # Дефолт COST_CAP требует bid_amount_cents — задаём явный таргет CPA.
-        "budget": {"daily_cents": 300, "bid_amount_cents": 500},
+        "start_date": "2026-07-01",
+        "budget": {"currency": "USD", "daily_amount": "3.00", "bid_amount": "5.00"},
         "targeting": {"countries": ["DE"]},
         "campaigns": [
             {
@@ -76,6 +85,26 @@ def _valid_config_dict() -> dict:
             }
         ],
     }
+
+
+_NOW = datetime(2026, 6, 30, 12, tzinfo=UTC)
+_OBSERVED_AT = datetime(2026, 6, 30, 11, tzinfo=UTC)
+
+
+def _to_domain(
+    body: CampaignConfigIn | ValidateIn | LaunchIn,
+    *,
+    timezone_name: str = "America/Los_Angeles",
+    currency: str = "USD",
+    now: datetime = _NOW,
+):
+    converter = body.to_domain if isinstance(body, CampaignConfigIn) else body.domain_config
+    return converter(
+        timezone_name=timezone_name,
+        currency=currency,
+        account_context_observed_at=_OBSERVED_AT,
+        now=now,
+    )
 
 
 # PresetIn принимает SOP-дефолты и не требует опциональных полей.
@@ -95,35 +124,34 @@ def test_preset_in_rejects_empty_name() -> None:
         PresetIn(name="", act_id="act_1", page_id="100", pixel_id="200")
 
 
-# ValidateIn оборачивает валидный CampaignConfig.
+# ValidateIn принимает только канонический плоский контракт.
 def test_validate_in_wraps_config() -> None:
-    body = ValidateIn(config=_valid_config_dict())
+    body = ValidateIn(config=_flat_config_dict())
     assert body.config.offer_code == "GH_CR"
-    assert body.config.targeting.geo_countries() == ["DE", "AQ"]
+    assert _to_domain(body).targeting.geo_countries() == ["DE", "AQ"]
 
 
-# LaunchIn пробрасывает невалидный бюджет вглубь CampaignConfig → ValidationError.
+# LaunchIn пробрасывает невалидный бюджет в доменную money-валидацию.
 def test_launch_in_propagates_budget_hard_cap() -> None:
-    cfg = _valid_config_dict()
-    cfg["budget"] = {"daily_cents": 100_000_00 + 1}  # выше hard-cap
-    with pytest.raises(ValidationError):
-        LaunchIn(config=cfg)
+    cfg = _flat_config_dict()
+    cfg["daily_budget"] = "100000.01"
+    with pytest.raises(ValueError):
+        _to_domain(LaunchIn(config=cfg))
 
 
 # Слишком короткий бюджет (опечатка) тоже отклоняется на схеме.
-def test_launch_in_rejects_tiny_budget() -> None:
-    cfg = _valid_config_dict()
-    cfg["budget"] = {"daily_cents": 1}  # ниже MIN
-    with pytest.raises(ValidationError):
-        LaunchIn(config=cfg)
+def test_launch_in_rejects_zero_budget() -> None:
+    cfg = _flat_config_dict()
+    cfg["daily_budget"] = "0"
+    with pytest.raises(ValueError):
+        _to_domain(LaunchIn(config=cfg))
 
 
-# idempotency_key опционален и ограничен по длине.
-def test_launch_in_idempotency_key_optional() -> None:
-    body = LaunchIn(config=_valid_config_dict())
-    assert body.idempotency_key is None
+# Идемпотентность вычисляет сервер из канонического конфига; клиент не может
+# подменить ключ и случайно склеить разные money-запуски.
+def test_launch_in_rejects_client_idempotency_key() -> None:
     with pytest.raises(ValidationError):
-        LaunchIn(config=_valid_config_dict(), idempotency_key="x" * 129)
+        LaunchIn(config=_flat_config_dict(), idempotency_key="client-key")
 
 
 # UploadConceptsOut агрегирует список концептов с размерами.
@@ -146,15 +174,39 @@ def test_upload_concepts_out_shape() -> None:
 def test_validate_plan_out_counts() -> None:
     plan = ValidatePlanOut(
         offer_code="GH_CR",
-        launch_state="campaign_paused",
+        creation_policy="all_paused",
         copies_per_concept=2,
         campaign_count=1,
         adset_count=2,
         ad_count=4,
         campaigns=[],
+        start_date="2026-07-01",
+        start_time="2026-07-01T00:00:00-07:00",
+        timezone_name="America/Los_Angeles",
+        currency="USD",
+        account_context_observed_at=_OBSERVED_AT,
     )
     assert plan.ad_count == 4
-    assert plan.launch_state == "campaign_paused"
+    assert plan.creation_policy == "all_paused"
+
+
+@pytest.mark.parametrize("model", [AdsetPlanOut, CampaignPlanOut])
+def test_validate_plan_rejects_non_paused_status(model: type) -> None:
+    payload = {"name": "target", "status": "ACTIVE"}
+    if model is AdsetPlanOut:
+        payload["ad_count"] = 1
+    else:
+        payload.update({"key": "campaign", "adsets": []})
+
+    with pytest.raises(ValidationError):
+        model.model_validate(payload)
+
+
+def test_campaign_config_rejects_legacy_launch_state() -> None:
+    cfg = _flat_config_dict()
+    cfg["launch_state"] = "campaign_paused"
+    with pytest.raises(ValidationError):
+        CampaignConfigIn.model_validate(cfg)
 
 
 # ────────────── CRIT-2: контракт фронт↔бэк (плоская форма) ──────────────
@@ -163,13 +215,14 @@ def test_validate_plan_out_counts() -> None:
 # CampaignConfigIn.to_domain маппит плоский конфиг фронта в доменный вложенный.
 def test_flat_config_to_domain_mapping() -> None:
     cfg_in = CampaignConfigIn.model_validate(_flat_config_dict())
-    dom = cfg_in.to_domain()
-    # account: tz_offset int(-7) → ISO '-07:00', act_id с префиксом.
+    dom = _to_domain(cfg_in)
+    # Account timezone/currency come only from the server-owned context.
     assert dom.account.act == "act_123"
-    assert dom.account.tz_offset == "-07:00"
+    assert dom.account.timezone_name == "America/Los_Angeles"
+    assert dom.account.currency == "USD"
     assert dom.account.pixel_id == "200"
-    # budget: daily_budget_cents → budget.daily_cents.
-    assert dom.budget.daily_cents == 20000
+    assert dom.budget.daily_amount == "200.00"
+    assert dom.budget.daily_minor_units == 20000
     assert dom.budget.level == "campaign"
     # targeting: countries + авто-AQ по SOP.
     assert dom.targeting.geo_countries() == ["DE", "AQ"]
@@ -193,77 +246,76 @@ def test_flat_config_to_domain_mapping() -> None:
     assert dom.url_tags_template == "sub2=MV"
 
 
-# concept_counts извлекается из длины concept_refs каждого блока.
-def test_flat_config_concept_counts() -> None:
-    cfg_in = CampaignConfigIn.model_validate(_flat_config_dict())
-    assert cfg_in.concept_counts() == {"static": 2}
-
-
-# ValidateIn принимает плоскую форму фронта и нормализует config + concept_counts.
+# ValidateIn принимает плоскую форму фронта; concept_refs остаются единственным
+# источником раскладки.
 def test_validate_in_accepts_flat_config() -> None:
     body = ValidateIn(config=_flat_config_dict())
-    dom = body.domain_config()
+    dom = _to_domain(body)
     assert dom.offer_code == "GH_CR"
-    assert dom.budget.daily_cents == 20000
+    assert dom.budget.daily_minor_units == 20000
     assert dom.targeting.geo_countries() == ["DE", "AQ"]
-    # concept_counts извлечён из плоского входа для build_campaign_spec.
-    assert body.concept_counts_map() == {"static": 2}
+    assert dom.campaigns[0].concept_refs == ["a.jpg", "b.jpg"]
 
 
 # LaunchIn принимает плоскую форму фронта (тот же config-маппинг).
 def test_launch_in_accepts_flat_config() -> None:
     body = LaunchIn(config=_flat_config_dict())
-    dom = body.domain_config()
+    dom = _to_domain(body)
     assert dom.offer_code == "GH_CR"
-    assert dom.budget.daily_cents == 20000
+    assert dom.budget.daily_minor_units == 20000
     assert dom.account.act == "act_123"
 
 
-# launch тоже знает раскладку K: concept_counts из длины concept_refs (симметрия с validate).
-def test_launch_in_concept_counts_map_from_flat() -> None:
-    body = LaunchIn(config=_flat_config_dict())
-    assert body.concept_counts_map() == {"static": 2}
+# Второй источник количества концептов запрещён контрактом.
+def test_launch_in_rejects_concept_counts_override() -> None:
+    with pytest.raises(ValidationError):
+        LaunchIn(config=_flat_config_dict(), concept_counts={"static": 5})
 
 
-# Явный concept_counts в теле launch перекрывает выведенный из concept_refs.
-def test_launch_in_concept_counts_explicit_override() -> None:
-    body = LaunchIn(config=_flat_config_dict(), concept_counts={"static": 5})
-    assert body.concept_counts_map() == {"static": 5}
+@pytest.mark.parametrize("field", ["creo_root", "concept_refs"])
+def test_campaign_contract_requires_uploaded_concepts(field: str) -> None:
+    config = _flat_config_dict()
+    if field == "creo_root":
+        config.pop("creo_root")
+    else:
+        config["campaigns"][0]["concept_refs"] = []
+    with pytest.raises(ValidationError):
+        LaunchIn(config=config)
 
 
 # Money-инвариант: плоский конфиг с бюджетом выше hard-cap отклоняется при конвертации.
 # (pydantic ValidationError — подкласс ValueError, эндпоинт ловит → 422.)
 def test_flat_config_budget_hard_cap_rejected() -> None:
     cfg = _flat_config_dict()
-    cfg["daily_budget_cents"] = 100_000_00 + 1
+    cfg["daily_budget"] = "100000.01"
     body = LaunchIn(config=cfg)
     with pytest.raises(ValueError):
-        body.domain_config()
+        _to_domain(body)
 
 
-# ────────────── bid_amount_cents (Целевой CPA) + SOP-дефолты ──────────────
+# ────────────── exact currency-aware bid amount + SOP defaults ──────────────
 
 
-# bid_amount_cents из плоского конфига доходит до доменного Budget.
+# Major-unit bid_amount доходит до точных Meta minor units.
 def test_flat_config_bid_amount_reaches_budget() -> None:
     cfg = _flat_config_dict()
     cfg["bid_strategy"] = "COST_CAP"
-    cfg["bid_amount_cents"] = 750  # $7.50 целевой CPA
-    dom = CampaignConfigIn.model_validate(cfg).to_domain()
+    cfg["bid_amount"] = "7.50"
+    dom = _to_domain(CampaignConfigIn.model_validate(cfg))
     assert dom.budget.bid_strategy == "COST_CAP"
-    assert dom.budget.bid_amount_cents == 750
+    assert dom.budget.bid_minor_units == 750
 
 
-# COST_CAP без bid_amount_cents отклоняется при конвертации (домен досверяет → 422).
+# COST_CAP без bid_amount отклоняется при конвертации.
 def test_flat_config_cost_cap_without_bid_rejected() -> None:
     cfg = _flat_config_dict()
     cfg["bid_strategy"] = "COST_CAP"
-    cfg["bid_amount_cents"] = None
+    cfg["bid_amount"] = None
     with pytest.raises(ValueError):
-        CampaignConfigIn.model_validate(cfg).to_domain()
+        _to_domain(CampaignConfigIn.model_validate(cfg))
 
 
-# SOP-дефолты плоской схемы: bid_strategy COST_CAP, age_min 21, bid_amount_cents отсутствует.
+# SOP-дефолты плоской схемы: bid_strategy COST_CAP, age_min 21, bid_amount отсутствует.
 def test_flat_config_sop_defaults() -> None:
     cfg = _flat_config_dict()
     del cfg["bid_strategy"]  # дефолт схемы
@@ -271,35 +323,116 @@ def test_flat_config_sop_defaults() -> None:
     cfg_in = CampaignConfigIn.model_validate(cfg)
     assert cfg_in.bid_strategy == "COST_CAP"
     assert cfg_in.age_min == 21
-    assert cfg_in.bid_amount_cents is None
+    assert cfg_in.bid_amount is None
 
 
 # Доменные SOP-дефолты Budget/Targeting: COST_CAP и age_min 21.
 def test_domain_sop_defaults() -> None:
     from core.campaign_builder.config import Budget, Targeting
 
-    assert Budget(daily_cents=300, bid_amount_cents=500).bid_strategy == "COST_CAP"
+    assert Budget(currency="EUR", daily_amount="3.00", bid_amount="5.00").bid_strategy == "COST_CAP"
     assert Targeting(countries=["DE"]).age_min == 21
     # Дефолтный COST_CAP без ставки → ValueError (money-инвариант).
     with pytest.raises(ValueError):
-        Budget(daily_cents=300)
+        Budget(currency="EUR", daily_amount="3.00")
 
 
-# Вложенная (legacy) форма по-прежнему принимается обоими телами (обратная совместимость).
-def test_nested_config_still_accepted() -> None:
+# Внутренняя вложенная модель не является вторым публичным API-контрактом.
+def test_nested_config_is_rejected() -> None:
     nested = _valid_config_dict()
-    assert ValidateIn(config=nested).domain_config().offer_code == "GH_CR"
-    assert LaunchIn(config=nested).domain_config().offer_code == "GH_CR"
-    # У вложенной формы concept_counts недоступен из тела → None (фолбэк раскладки).
-    assert ValidateIn(config=nested).concept_counts_map() is None
-    assert LaunchIn(config=nested).concept_counts_map() is None
+    with pytest.raises(ValidationError):
+        ValidateIn(config=nested)
+    with pytest.raises(ValidationError):
+        LaunchIn(config=nested)
+
+
+def test_campaign_contract_rejects_unknown_fields() -> None:
+    config = _flat_config_dict()
+    config["account"] = {"act_id": "shadow-account"}
+    with pytest.raises(ValidationError):
+        LaunchIn(config=config)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tz_offset", -7),
+        ("timezone_name", "America/Los_Angeles"),
+        ("currency", "USD"),
+        ("currency_exponent", 2),
+    ],
+)
+def test_client_cannot_forge_account_context(field: str, value: object) -> None:
+    config = _flat_config_dict()
+    config[field] = value
+    with pytest.raises(ValidationError):
+        LaunchIn(config=config)
+
+
+@pytest.mark.parametrize("field", ["daily_budget", "bid_amount"])
+def test_money_inputs_must_be_decimal_strings(field: str) -> None:
+    config = _flat_config_dict()
+    config["bid_strategy"] = "COST_CAP"
+    config["bid_amount"] = "5.00"
+    config[field] = 5
+    with pytest.raises(ValidationError):
+        CampaignConfigIn.model_validate(config)
+
+
+def test_default_start_date_uses_next_cabinet_local_day_not_utc_day() -> None:
+    config = _flat_config_dict()
+    config["start_date"] = None
+    # UTC is still July 1 while Pacific/Kiritimati is already July 2.
+    now = datetime(2026, 7, 1, 12, 30, tzinfo=UTC)
+    domain = _to_domain(
+        CampaignConfigIn.model_validate(config),
+        timezone_name="Pacific/Kiritimati",
+        now=now,
+    )
+    assert domain.start_date == "2026-07-03"
+    assert domain.start_time == "2026-07-03T00:00:00+14:00"
+
+
+@pytest.mark.parametrize(
+    ("currency", "daily", "bid", "daily_minor", "bid_minor"),
+    [
+        ("JPY", "1200", "75", 1200, 75),
+        ("KWD", "12.345", "0.125", 12345, 125),
+    ],
+)
+def test_currency_exponent_contract_is_exact(
+    currency: str,
+    daily: str,
+    bid: str,
+    daily_minor: int,
+    bid_minor: int,
+) -> None:
+    config = _flat_config_dict()
+    config.update(
+        {
+            "daily_budget": daily,
+            "bid_strategy": "COST_CAP",
+            "bid_amount": bid,
+        }
+    )
+    domain = _to_domain(CampaignConfigIn.model_validate(config), currency=currency)
+    assert domain.budget.daily_minor_units == daily_minor
+    assert domain.budget.bid_minor_units == bid_minor
+    assert domain.account.currency == currency
+
+
+def test_currency_precision_loss_is_rejected() -> None:
+    config = _flat_config_dict()
+    config["daily_budget"] = "1.01"
+    with pytest.raises(ValueError, match="decimal places"):
+        _to_domain(CampaignConfigIn.model_validate(config), currency="JPY")
 
 
 # Метка кампании добавляется в конец имени кампании и каждого adset'а.
 def test_flat_config_label_appended() -> None:
     cfg = _flat_config_dict()
     cfg["campaigns"][0]["label"] = "TEST-A"
-    dom = CampaignConfigIn.model_validate(cfg).to_domain()
+    dom = _to_domain(CampaignConfigIn.model_validate(cfg))
     block = dom.campaigns[0]
     assert block.name.endswith("| TEST-A")
     assert all(a.name.endswith("| TEST-A") for a in block.adsets)
@@ -307,7 +440,7 @@ def test_flat_config_label_appended() -> None:
 
 # Без метки — имя без сегмента типа и без хвоста.
 def test_flat_config_no_label_no_type_segment() -> None:
-    dom = CampaignConfigIn.model_validate(_flat_config_dict()).to_domain()
+    dom = _to_domain(CampaignConfigIn.model_validate(_flat_config_dict()))
     block = dom.campaigns[0]
     assert "adset.pro" in block.name
     assert "static" not in block.name and "video" not in block.name

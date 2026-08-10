@@ -5,7 +5,7 @@
 - автоуникализацию: число копий = N (число adset'ов), детерминированный seed,
   распределение variant[i] → adset[i], adset i = K ads (1 на концепт);
 - реальный execute поверх builder.plan_execution_steps: порядок
-  campaign → adsets → upload → creatives → ads, статусы по launch_state,
+  campaign → adsets → upload → creatives → ads, canonical all-paused status,
   прогресс-колбэк после каждого шага, сбор created_meta_ids;
 - классификацию ошибок воркера (permanent / transient / partial-create);
 - статус-переходы run (queued → uniquifying → uploading → creating → succeeded|failed).
@@ -25,7 +25,6 @@ from core.campaign_builder import (
     Budget,
     CampaignBlock,
     CampaignConfig,
-    LaunchState,
     Targeting,
     build_campaign_spec,
 )
@@ -53,10 +52,17 @@ from core.meta_api.errors import (
 
 
 def _account() -> Account:
-    return Account(act_id="123456789", page_id="111", pixel_id="222")
+    return Account(
+        act_id="123456789",
+        page_id="111",
+        pixel_id="222",
+        timezone_name="America/New_York",
+        currency="USD",
+        account_context_observed_at="2026-06-17T12:00:00+00:00",
+    )
 
 
-def _image_block(n_adsets: int = 3) -> CampaignBlock:
+def _image_block(n_adsets: int = 3, concept_count: int = 2) -> CampaignBlock:
     """Image-кампания с n_adsets adset'ами."""
     adsets = [
         AdsetConfig(name="{byer} | {offer} | static | s%d | {date}" % i, dir=f"a{i}", glob="*.jpg")
@@ -66,6 +72,7 @@ def _image_block(n_adsets: int = 3) -> CampaignBlock:
         key="static",
         name="{byer} | {offer} | static | adset.pro | {date}",
         adsets=adsets,
+        concept_refs=[f"c{i}.jpg" for i in range(concept_count)],
     )
 
 
@@ -75,8 +82,7 @@ def _config(block: CampaignBlock | None = None, **overrides) -> CampaignConfig:
         offer_code="GH_CR",
         destination_link="https://example.shop/x",
         start_date="2026-06-18",
-        # Дефолт COST_CAP требует bid_amount_cents — ставим явный таргет CPA.
-        budget=Budget(daily_cents=300, bid_amount_cents=500),
+        budget=Budget(currency="USD", daily_amount="3.00", bid_amount="5.00"),
         targeting=Targeting(countries=["GH"]),
         campaigns=[block or _image_block()],
     )
@@ -314,11 +320,10 @@ def test_execute_full_success(monkeypatch):
     assert {"uploading", "creating"} <= stages
 
 
-# launch_state=campaign_paused: кампания PAUSED, adset'ы и ads ACTIVE.
-def test_execute_launch_state_campaign_paused(monkeypatch):
+def test_execute_creation_is_all_paused(monkeypatch):
     _patch_uniquify(monkeypatch)
-    block = _image_block(n_adsets=1)
-    cfg = _config(block, launch_state=LaunchState.CAMPAIGN_PAUSED)
+    block = _image_block(n_adsets=1, concept_count=1)
+    cfg = _config(block)
     spec = build_campaign_spec(cfg)
     concepts = _concepts("image", count=1)
     client = _FakeClient()
@@ -338,40 +343,36 @@ def test_execute_launch_state_campaign_paused(monkeypatch):
     adset_calls = [c for c in client.calls if "adsets" in c["endpoint"]]
     ad_calls = [c for c in client.calls if c["endpoint"].endswith("/ads")]
     assert camp_calls[0]["body"]["status"] == "PAUSED"
-    assert adset_calls[0]["body"]["status"] == "ACTIVE"
-    assert ad_calls[0]["body"]["status"] == "ACTIVE"
+    assert adset_calls[0]["body"]["status"] == "PAUSED"
+    assert ad_calls[0]["body"]["status"] == "PAUSED"
 
 
-# launch_state=all_paused: всё PAUSED.
-def test_execute_launch_state_all_paused(monkeypatch):
+def test_execute_rejects_non_paused_spec_before_graph_io(monkeypatch):
     _patch_uniquify(monkeypatch)
-    block = _image_block(n_adsets=1)
-    cfg = _config(block, launch_state=LaunchState.ALL_PAUSED)
+    block = _image_block(n_adsets=1, concept_count=1)
+    cfg = _config(block)
     spec = build_campaign_spec(cfg)
-    concepts = _concepts("image", count=1)
+    spec.campaigns[0].adsets[0].body["status"] = "ACTIVE"
     client = _FakeClient()
-    uploader = _FakeUploader()
 
     async def run():
         return await execute_campaign_spec(
             cfg,
             spec,
-            concepts_by_campaign={block.key: concepts},
+            concepts_by_campaign={block.key: _concepts("image", count=1)},
             client=client,
-            uploader=uploader,
+            uploader=_FakeUploader(),
         )
 
-    asyncio.run(run())
-    adset_calls = [c for c in client.calls if "adsets" in c["endpoint"]]
-    ad_calls = [c for c in client.calls if c["endpoint"].endswith("/ads")]
-    assert adset_calls[0]["body"]["status"] == "PAUSED"
-    assert ad_calls[0]["body"]["status"] == "PAUSED"
+    with pytest.raises(CampaignExecutionError, match="must be PAUSED"):
+        asyncio.run(run())
+    assert client.calls == []
 
 
 # Все вызовы адресуют явно заданный кабинет (act_id из config).
 def test_execute_addresses_explicit_account(monkeypatch):
     _patch_uniquify(monkeypatch)
-    block = _image_block(n_adsets=1)
+    block = _image_block(n_adsets=1, concept_count=1)
     cfg = _config(block)
     spec = build_campaign_spec(cfg)
     concepts = _concepts("image", count=1)
@@ -394,7 +395,7 @@ def test_execute_addresses_explicit_account(monkeypatch):
 # Падение на середине (после создания кампании) → PartialCreateError с уже созданными id.
 def test_execute_partial_create_raises_with_created_ids(monkeypatch):
     _patch_uniquify(monkeypatch)
-    block = _image_block(n_adsets=1)
+    block = _image_block(n_adsets=1, concept_count=1)
     cfg = _config(block)
     spec = build_campaign_spec(cfg)
     concepts = _concepts("image", count=1)
@@ -421,7 +422,7 @@ def test_execute_partial_create_raises_with_created_ids(monkeypatch):
 # Повтор такого залива = дубль кампании, поэтому НЕ transient/requeue.
 def test_execute_fail_on_campaign_post_is_partial_not_transient(monkeypatch):
     _patch_uniquify(monkeypatch)
-    block = _image_block(n_adsets=1)
+    block = _image_block(n_adsets=1, concept_count=1)
     cfg = _config(block)
     spec = build_campaign_spec(cfg)
     concepts = _concepts("image", count=1)

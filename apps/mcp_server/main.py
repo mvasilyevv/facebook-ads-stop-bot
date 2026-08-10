@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Точка входа MCP-сервера FB Stop Bot (stdio transport).
+"""Точка входа MCP-сервера FB Agent (stdio transport).
 
 Регистрирует:
 - list_tools / call_tool — поверх core.ai_assistant.tools.GLOBAL_REGISTRY
@@ -37,7 +37,6 @@ from core.ai_assistant.tools import (
     execute_tool,
 )
 from core.ai_assistant.tools._ratelimit import _DEFAULT_MAX_PER_HOUR, _check_memory_fallback
-from core.ai_assistant.tools.base import RiskLevel
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +50,16 @@ _RATE_LIMIT_PER_HOUR = _DEFAULT_MAX_PER_HOUR
 # Краткая версия schema-overview: контекст + money-правила. Полная инструкция —
 # ресурс fb-stop-bot://schema-overview.
 _SERVER_INSTRUCTIONS = (
-    "FB Stop Bot — мониторинг и авто-стоп убыточной рекламы Facebook Ads. "
+    "FB Agent — мониторинг и авто-стоп убыточной рекламы Facebook Ads. "
     "Здесь реальные деньги: не выдумывай данные, при сомнении читай ресурсы "
-    "(fb-stop-bot://offers, recent-alerts, workers-health, schema-overview — "
+    "(fb-stop-bot://offers, recent-alerts, schema-overview — "
     "в последнем полная инструкция).\n\n"
     "Правила:\n"
     "1. MCP только read-only: write-мутации (пауза/бюджет/клон/создание кампании) "
     "отключены. Давай анализ и рекомендации, изменения рекламы пользователь делает сам.\n"
     "2. «Что отключить?» = read-only анализ (get_recent_alerts, get_offer_performance, "
-    "get_tracker_stats) + рекомендация, БЕЗ создания draft.\n"
-    "3. Мульти-кабинет: офферы привязаны к ad_account_ids; активный оффер без "
+    "get_tracker_stats) + рекомендация, без постановки mutation-задач.\n"
+    "3. Мульти-кабинет: API показывает привязки как ad_account_ids; активный оффер без "
     "кабинетов не сканируется — подсвечивай это как проблему.\n"
     "4. Расхождение метрик Meta (spend) и трекера AdSet.pro (депозиты/ROI) — "
     "нормальный attribution gap, упоминай его в сравнениях."
@@ -78,29 +77,14 @@ def build_server(ctx_mgr: MCPContextManager) -> Server:
     async def list_tools() -> list[types.Tool]:
         # Снимаем актуальное состояние GLOBAL_REGISTRY на каждом list_tools —
         # tools регистрируются на импорте, но тесты могут добавлять/убирать.
-        # DRAFT_REQUIRED (write-мутации) НЕ экспонируются: подтверждение AI-черновиков
-        # убрано, MCP остаётся read-only.
         handlers = [GLOBAL_REGISTRY.get(name) for name in GLOBAL_REGISTRY.list_names()]
-        return [
-            adapt_to_mcp_tool(h)
-            for h in handlers
-            if h is not None and h.risk_level != RiskLevel.DRAFT_REQUIRED
-        ]
+        return [adapt_to_mcp_tool(h) for h in handlers if h is not None]
 
     @app.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
         handler = GLOBAL_REGISTRY.get(name)
         if handler is None:
             return [types.TextContent(type="text", text=f"Неизвестный tool: '{name}'")]
-        # Draft-инструменты отключены в MCP (write-мутации недоступны без TG-подтверждения).
-        if handler.risk_level == RiskLevel.DRAFT_REQUIRED:
-            return [
-                types.TextContent(
-                    type="text",
-                    text=f"Draft-инструмент '{name}' отключён: write-мутации через MCP недоступны.",
-                )
-            ]
-
         tool_ctx = ctx_mgr.build_tool_context()
 
         # Rate-limit per client_key. НЕ fail-open (H-7, см. HIGH #13 раунда 6):

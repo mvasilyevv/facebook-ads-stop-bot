@@ -7,6 +7,10 @@ from datetime import date
 from typing import Any, ClassVar
 
 from core.ai_assistant.tools.base import RiskLevel, ToolContext, ToolError
+from core.ai_assistant.tools.meta._currency import (
+    fetch_account_currency,
+    format_major_money,
+)
 from core.meta_api.errors import MetaApiError
 from core.meta_api.insights.fetcher import InsightsFetcher, sum_spend
 from core.meta_api.schemas import MetaInsightsRequest
@@ -121,13 +125,19 @@ class GetInsightsTool:
         if not rows:
             return "Insights пуст — фильтры не дали результата."
 
-        lines = [f"Insights (level={level}, rows={len(rows)}, total_spend=${sum_spend(rows):.2f}):"]
+        currency = await fetch_account_currency(client, ad_account_id)
+        lines = [
+            f"Insights (level={level}, rows={len(rows)}, "
+            f"currency={currency.code if currency else 'unknown'}, "
+            f"total_spend={format_major_money(sum_spend(rows), currency)}):"
+        ]
         for row in rows[:limit]:
             ctr_str = f"{row.ctr:.2%}" if row.ctr is not None else "—"
-            cpc_str = f"${row.cpc:.2f}" if row.cpc is not None else "—"
+            cpc_str = format_major_money(row.cpc, currency)
             entity_id = row.ad_id or row.campaign_id or "?"
             lines.append(
-                f"- id={entity_id} spend=${row.spend:.2f} impr={row.impressions} "
+                f"- id={entity_id} spend={format_major_money(row.spend, currency)} "
+                f"impr={row.impressions} "
                 f"clicks={row.clicks} cpc={cpc_str} ctr={ctr_str}"
             )
         return "\n".join(lines)

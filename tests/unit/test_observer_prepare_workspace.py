@@ -1,11 +1,9 @@
 """Тесты фазы «подготовка рабочего места» observer.
 
 Перед сканом observer открывает вкладки Ads Manager кабинетов активных офферов
-(manage/campaigns + колонки), пишет статус preparing и шлёт TG. Идемпотентно по
+(manage/campaigns + колонки). Идемпотентно по
 набору кабинетов: повтор того же набора — пропуск, смена набора — переподготовка.
 """
-
-import json
 
 import pytest
 
@@ -22,81 +20,63 @@ class _FakeGate:
     async def run_one_scan(self, **kwargs):  # в этих тестах не используется
         from apps.observer_worker.main import ScanCycleOutput
 
-        return ScanCycleOutput(rows=[])
+        return ScanCycleOutput(rows=[], metrics_contract_revision=0)
 
     async def open_cabinet_tabs(self, ad_account_ids):
         self.calls.append(list(ad_account_ids))
         if self._results_factory:
             return self._results_factory(ad_account_ids)
         return [
-            {"ad_account_id": a, "opened": True, "url": f"url:{a}", "error": ""}
+            {
+                "ad_account_id": a,
+                "opened": True,
+                "url": (f"https://adsmanager.facebook.com/adsmanager/manage/campaigns?act={a}"),
+                "error": "",
+            }
             for a in ad_account_ids
         ]
 
 
-class _FakeRedis:
-    """Fake redis: хранит последний observer:runtime payload."""
+@pytest.fixture(autouse=True)
+def _reset_prepared(monkeypatch):
+    # Module-level флаг подготовки — сбрасываем до и после каждого теста (изоляция).
+    calls = {"opened": [], "resolved": []}
 
-    def __init__(self):
-        self.store: dict[str, str] = {}
-
-    async def set(self, key, value, ex=None, nx=False):
-        if nx and key in self.store:
-            return None  # SET NX: ключ уже есть → не перезаписываем
-        self.store[key] = value
+    async def _opened(_engine, **kwargs):
+        calls["opened"].append(kwargs)
         return True
 
-    async def get(self, key):
-        return self.store.get(key)
+    async def _resolved(_engine, **kwargs):
+        calls["resolved"].append(kwargs)
+        return True
 
-
-@pytest.fixture(autouse=True)
-def _reset_prepared():
-    # Module-level флаг подготовки — сбрасываем до и после каждого теста (изоляция).
+    monkeypatch.setattr(observer_main, "notify_recurring_incident", _opened)
+    monkeypatch.setattr(observer_main, "resolve_recurring_incident", _resolved)
     observer_main._reset_prepared_accounts()
-    yield
+    yield calls
     observer_main._reset_prepared_accounts()
 
 
-# Подготовка открывает все кабинеты и пишет статус preparing в observer:runtime.
-async def test_prepare_opens_cabinets_and_sets_status():
+# Подготовка открывает все кабинеты.
+async def test_prepare_opens_cabinets():
     gate = _FakeGate()
-    redis = _FakeRedis()
-    await observer_main._prepare_workspace(
-        None, gate=gate, accounts=["111", "222"], redis_client=redis, tg_client=None
-    )
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111", "222"])
     assert gate.calls == [["111", "222"]]
-    payload = json.loads(redis.store["observer:runtime"])
-    assert payload["active_phase"] == "preparing"
-    assert payload["status"] == "running"  # preparing нормализуется в running
-    assert payload["worker_status"] == "preparing"
-    assert "Подготавливаю" in payload["status_message"]
-    assert payload["accounts_total"] == 2
 
 
 # Повторная подготовка того же набора (даже в другом порядке) — пропуск, gate не дёргается.
 async def test_prepare_idempotent_same_set():
     gate = _FakeGate()
-    redis = _FakeRedis()
-    await observer_main._prepare_workspace(
-        None, gate=gate, accounts=["111", "222"], redis_client=redis, tg_client=None
-    )
-    await observer_main._prepare_workspace(
-        None, gate=gate, accounts=["222", "111"], redis_client=redis, tg_client=None
-    )
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111", "222"])
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["222", "111"])
     assert gate.calls == [["111", "222"]]  # ровно один раз
 
 
 # Смена набора кабинетов (активирован новый оффер) → переподготовка.
 async def test_prepare_reprepares_on_set_change():
     gate = _FakeGate()
-    redis = _FakeRedis()
-    await observer_main._prepare_workspace(
-        None, gate=gate, accounts=["111"], redis_client=redis, tg_client=None
-    )
-    await observer_main._prepare_workspace(
-        None, gate=gate, accounts=["111", "333"], redis_client=redis, tg_client=None
-    )
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111"])
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111", "333"])
     assert gate.calls == [["111"], ["111", "333"]]
 
 
@@ -106,14 +86,71 @@ async def test_prepare_not_marked_when_none_opened():
         return [{"ad_account_id": a, "opened": False, "url": "", "error": "boom"} for a in ids]
 
     gate = _FakeGate(results_factory=all_failed)
-    redis = _FakeRedis()
-    await observer_main._prepare_workspace(
-        None, gate=gate, accounts=["111"], redis_client=redis, tg_client=None
-    )
-    await observer_main._prepare_workspace(
-        None, gate=gate, accounts=["111"], redis_client=redis, tg_client=None
-    )
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111"])
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111"])
     assert gate.calls == [["111"], ["111"]]  # повторил, т.к. ничего не открылось
+
+
+async def test_prepare_retries_partial_set_and_opens_incident(_reset_prepared):
+    def one_failed(ids):
+        return [
+            {
+                "ad_account_id": account_id,
+                "opened": account_id == "111",
+                "url": (
+                    f"https://adsmanager.facebook.com/adsmanager/manage/campaigns?act={account_id}"
+                    if account_id == "111"
+                    else ""
+                ),
+                "error": "cabinet_tab_not_confirmed" if account_id != "111" else "",
+            }
+            for account_id in ids
+        ]
+
+    gate = _FakeGate(results_factory=one_failed)
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111", "222"])
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111", "222"])
+
+    assert gate.calls == [["111", "222"], ["111", "222"]]
+    assert {call["resource_id"] for call in _reset_prepared["opened"]} == {"222"}
+    assert any("111" in call["incident_key"] for call in _reset_prepared["resolved"])
+
+
+async def test_prepare_rejects_opened_result_with_wrong_final_cabinet(_reset_prepared):
+    gate = _FakeGate(
+        results_factory=lambda _ids: [
+            {
+                "ad_account_id": "111",
+                "opened": True,
+                "url": ("https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=999"),
+                "error": "",
+            }
+        ]
+    )
+
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111"])
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111"])
+
+    assert gate.calls == [["111"], ["111"]]
+    assert all(call["resource_id"] == "111" for call in _reset_prepared["opened"])
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.facebook.com/login.php?next=adsmanager&act=111",
+        "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=999",
+        "http://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111",
+        "https://user@adsmanager.facebook.com/adsmanager/manage/campaigns?act=111",
+        "https://www.facebook.com/business/adsmanager/manage?act=111",
+        "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111&act=999",
+    ],
+)
+def test_cabinet_tab_confirmation_rejects_untrusted_final_url(url):
+    assert not observer_main._cabinet_tab_is_confirmed(
+        {"ad_account_id": "111", "opened": True, "url": url},
+        account_id="111",
+    )
 
 
 # Сбой open_cabinet_tabs не валит подготовку и не помечает prepared (скан откроет вкладки сам).
@@ -124,23 +161,6 @@ async def test_prepare_survives_gate_exception():
             raise RuntimeError("grpc down")
 
     gate = _BoomGate()
-    redis = _FakeRedis()
-    await observer_main._prepare_workspace(
-        None, gate=gate, accounts=["111"], redis_client=redis, tg_client=None
-    )
-    await observer_main._prepare_workspace(
-        None, gate=gate, accounts=["111"], redis_client=redis, tg_client=None
-    )
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111"])
+    await observer_main._prepare_workspace(None, gate=gate, accounts=["111"])
     assert gate.calls == [["111"], ["111"]]  # не помечен prepared → повтор
-
-
-# Дедуп TG-уведомлений подготовки по набору: первый раз — да, повтор того же набора — нет.
-async def test_prepare_tg_allowed_dedup():
-    redis = _FakeRedis()
-    accounts = frozenset({"111", "222"})
-    assert await observer_main._prepare_tg_allowed(redis, accounts) is True  # первый раз
-    assert await observer_main._prepare_tg_allowed(redis, accounts) is False  # дедуп окна
-    # Другой набор кабинетов → уведомление разрешено.
-    assert await observer_main._prepare_tg_allowed(redis, frozenset({"333"})) is True
-    # Redis недоступен → не теряем уведомление (лучше уведомить).
-    assert await observer_main._prepare_tg_allowed(None, accounts) is True

@@ -1,0 +1,27 @@
+{
+  "name": "@fb/operator-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fb/shared": "workspace:*",
+    "openapi-fetch": "^0.17.0",
+    "openapi-react-query": "^0.5.4"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "^5.96.2",
+    "react": "^19.2.4"
+  },
+  "devDependencies": {
+    "@tanstack/react-query": "^5.96.2",
+    "@types/react": "^19.0.0",
+    "react": "^19.2.4",
+    "typescript": "^5.7.3"
+  }
+}

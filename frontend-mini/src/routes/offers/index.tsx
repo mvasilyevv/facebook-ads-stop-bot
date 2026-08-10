@@ -3,9 +3,21 @@
  * Шапка → список карточек → bottom-sheet деталей/формы/порогов.
  * Код оффера: mono 15px weight 600 text-bg-11 (канон OfferCard).
  */
-import { useEffect, useState, useId } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useId, useRef, useState } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Plus, ChevronRight } from "lucide-react";
+import { safeApiProblemMessage } from "@fb/operator-api";
+import {
+  DEFAULT_OFFER_RULES_VALUES,
+  isOfferCpaValid,
+  isOfferCurrencyValid,
+  parseOfferAccountIds,
+  parseOfferCountries,
+  rulesValuesFromOut,
+  rulesValuesToPayload,
+  type OfferRulesValues,
+} from "@fb/features/offers";
+import { formatSpend } from "@fb/shared/format/number";
 import { MiniHeader } from "@/components/layout/MiniHeader";
 import { Eyebrow } from "@/components/data/Eyebrow";
 import {
@@ -24,19 +36,28 @@ import {
   useOffers,
   useCreateOffer,
   useUpdateOffer,
-  useDeleteOffer,
   useOfferRules,
   useUpdateOfferRules,
   useRulesPreview,
   type OfferCreatePayload,
   type OfferUpdatePayload,
-  type OfferExt,
 } from "@/lib/api";
-import { haptic, tgConfirm } from "@/lib/tg";
+import { haptic } from "@/lib/tg";
 import { cn } from "@/lib/cn";
-import type { Offer, OfferRules } from "@fb/shared";
+import { getStoredRole } from "@/lib/auth";
+import type { Offer } from "@fb/shared";
+
+type OfferFilter = "all" | "active" | "inactive";
 
 export const Route = createFileRoute("/offers/")({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { filter: OfferFilter } => ({
+    filter:
+      search.filter === "active" || search.filter === "inactive"
+        ? search.filter
+        : "all",
+  }),
   component: OffersPage,
 });
 
@@ -52,45 +73,6 @@ const VERTICAL_OPTIONS = [
   { value: "other", label: "Другая" },
 ];
 
-// ─── Конфиг порогов ───────────────────────────────────────────────────────────
-//
-// Модель CPA + 2 ползунка чувствительности (stop_percent_of_rule/warning_percent_of_stop)
-// портирована из frontend/src/components/offers/OfferRulesFields.tsx (MID-21 аудита
-// 02.07 — паритет mini/web). Formulas и enabled-условие preview — РОВНО как в web,
-// не переизобретаем. frequency_threshold — отдельный независимый порог (не завязан
-// на CPA-расчёт), остаётся простым числовым полем как раньше.
-//
-// spend_no_event/cpm/ctr/funnel_ratio по-прежнему не показываем: движок их не
-// использует (см. комментарий предыдущей версии формы).
-
-/** Значения money-блока правил (CPA + чувствительность) — зеркало OfferRulesValues (web). */
-interface OfferRulesValues {
-  /** CPA как строка (для number-input). Пусто → правила неактивны (нет авторасчёта). */
-  cpa: string;
-  /** Стоп = N% от базового правила (1–100, дефолт 80). */
-  stop_percent_of_rule: number;
-  /** Warning = M% от стопа (1–100, дефолт 80). */
-  warning_percent_of_stop: number;
-}
-
-const DEFAULT_OFFER_RULES_VALUES: OfferRulesValues = {
-  cpa: "",
-  stop_percent_of_rule: 80,
-  warning_percent_of_stop: 80,
-};
-
-/** OfferRuleOut (с бэка) → OfferRulesValues для формы. NULL/пусто → дефолт 80/80. */
-function rulesValuesFromOut(rules: OfferRules | null | undefined): OfferRulesValues {
-  if (!rules) return DEFAULT_OFFER_RULES_VALUES;
-  return {
-    cpa: rules.cpa_threshold ?? "",
-    stop_percent_of_rule: rules.stop_percent_of_rule ? Number(rules.stop_percent_of_rule) : 80,
-    warning_percent_of_stop: rules.warning_percent_of_stop
-      ? Number(rules.warning_percent_of_stop)
-      : 80,
-  };
-}
-
 // ─── Форма создания/редактирования оффера ─────────────────────────────────────
 
 interface OfferFormProps {
@@ -98,52 +80,13 @@ interface OfferFormProps {
   onClose: () => void;
 }
 
-/** Разбор ввода кабинетов: запятые/пробелы, срез act_, дедуп. null — есть мусор. */
-function parseAccountIds(raw: string): string[] | null {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  for (const part of raw.split(/[\s,;]+/)) {
-    const token = part.trim();
-    if (!token) continue;
-    const normalized = token.replace(/^act_/i, "");
-    if (!/^\d+$/.test(normalized)) return null;
-    if (!seen.has(normalized)) {
-      seen.add(normalized);
-      ids.push(normalized);
-    }
-  }
-  return ids;
-}
-
-/**
- * Разбор гео-ввода: запятые/пробелы, ISO-2 upper, дедуп. null — есть невалидный
- * токен (не 2 буквы). Пустой ввод → [] (валидно, гео не задано).
- */
-function parseCountries(raw: string): string[] | null {
-  const codes: string[] = [];
-  const seen = new Set<string>();
-  for (const part of raw.split(/[\s,;]+/)) {
-    const token = part.trim().toUpperCase();
-    if (!token) continue;
-    if (!/^[A-Z]{2}$/.test(token)) return null;
-    if (!seen.has(token)) {
-      seen.add(token);
-      codes.push(token);
-    }
-  }
-  return codes;
-}
-
 function OfferForm({ offer, onClose }: OfferFormProps) {
   const isEdit = !!offer;
-  // countries появляются в generated-типах после pnpm gen:api —
-  // до этого читаем мягко через OfferExt (бэк OfferOut уже отдаёт их).
-  const offerExt = offer as OfferExt | null;
-  const offerAccounts = offerExt?.ad_account_ids ?? [];
-  const offerCountries = offerExt?.countries ?? [];
+  const offerAccounts = offer?.ad_account_ids ?? [];
+  const offerCountries = offer?.countries ?? [];
   const [code, setCode] = useState(offer?.code ?? "");
-  const [name, setName] = useState(offer?.name ?? "");
   const [vertical, setVertical] = useState(offer?.vertical ?? "");
+  const [pixelId, setPixelId] = useState(offer?.pixel_id ?? "");
   const [accountsRaw, setAccountsRaw] = useState(offerAccounts.join(", "));
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [countriesRaw, setCountriesRaw] = useState(offerCountries.join(", "));
@@ -151,6 +94,9 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
   const [isActive, setIsActive] = useState(offer?.is_active ?? true);
   const [error, setError] = useState<string | null>(null);
   const switchId = useId();
+  const codeRef = useRef<HTMLInputElement>(null);
+  const accountsRef = useRef<HTMLInputElement>(null);
+  const countriesRef = useRef<HTMLInputElement>(null);
 
   const create = useCreateOffer();
   const update = useUpdateOffer();
@@ -165,32 +111,36 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
 
     if (!code.trim()) {
       setError("Код оффера обязателен");
+      codeRef.current?.focus();
       return;
     }
 
     // Мульти-кабинет: минимум один числовой ID — без него оффер не сканируется.
-    const accountIds = parseAccountIds(accountsRaw);
+    const accountIds = parseOfferAccountIds(accountsRaw);
     if (accountIds === null) {
       setAccountsError("Только числовые ID кабинетов (через запятую)");
+      accountsRef.current?.focus();
       return;
     }
     if (accountIds.length === 0) {
       setAccountsError("Укажи минимум один ID кабинета");
+      accountsRef.current?.focus();
       return;
     }
 
     // Гео — опц.: пусто → [] (валидно). Невалидный токен (не ISO-2) → ошибка.
-    const countries = parseCountries(countriesRaw);
+    const countries = parseOfferCountries(countriesRaw);
     if (countries === null) {
       setCountriesError("Только ISO-2 коды стран (US, GB, DE…)");
+      countriesRef.current?.focus();
       return;
     }
 
     try {
       if (isEdit && offer) {
         const payload: OfferUpdatePayload = {
-          name: name.trim() || null,
           vertical: vertical || null,
+          pixel_id: pixelId,
           is_active: isActive,
           ad_account_ids: accountIds,
           countries,
@@ -200,8 +150,9 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
         const trimmedCode = code.trim().toUpperCase();
         const payload: OfferCreatePayload = {
           code: trimmedCode,
-          name: name.trim() || trimmedCode,
           vertical: vertical || null,
+          pixel_id: pixelId || null,
+          is_active: isActive,
           ad_account_ids: accountIds,
           countries,
         };
@@ -211,14 +162,23 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
       onClose();
     } catch (err) {
       haptic.notify("error");
-      setError((err as Error).message);
+      setError(
+        safeApiProblemMessage(
+          err,
+          "Оффер не сохранён. Проверьте поля и повторите.",
+        ),
+      );
     }
   }
 
   return (
-    <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-col gap-4 pb-6">
+    <form
+      onSubmit={(e) => void handleSubmit(e)}
+      className="flex flex-col gap-4 pb-6"
+    >
       {/* Код оффера — immutable при редактировании */}
       <Input
+        inputRef={codeRef}
         label="Код оффера"
         placeholder="CR2_GH"
         value={code}
@@ -227,16 +187,9 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
         errorMessage={error ?? undefined}
       />
 
-      {/* Имя */}
-      <Input
-        label="Название"
-        placeholder={code || "GH Aviator"}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-
       {/* Кабинеты (мульти-кабинет): числовые ID через запятую, минимум 1 */}
       <Input
+        inputRef={accountsRef}
         label="Рекламные кабинеты"
         placeholder="1234567890, 9876543210"
         value={accountsRaw}
@@ -248,8 +201,19 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
         inputMode="numeric"
       />
 
+      <Input
+        label="FB Pixel ID"
+        placeholder="1234567890123456"
+        value={pixelId}
+        onChange={(event) => setPixelId(event.target.value)}
+        inputMode="numeric"
+        autoComplete="off"
+        autoCorrect="off"
+      />
+
       {/* Гео оффера (ISO-2 upper, опц.) — визард префиллит ими countries */}
       <Input
+        inputRef={countriesRef}
         label="Гео (страны, ISO-2)"
         placeholder="US, GB, DE"
         value={countriesRaw}
@@ -270,17 +234,14 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
         options={VERTICAL_OPTIONS}
       />
 
-      {/* Активность (только при редактировании) */}
-      {isEdit && (
-        <div className="border-t border-[var(--hairline)] pt-3">
-          <Switch
-            id={switchId}
-            label="Активен"
-            checked={isActive}
-            onChange={(e) => setIsActive(e.target.checked)}
-          />
-        </div>
-      )}
+      <div className="border-t border-[var(--color-hairline)] pt-3">
+        <Switch
+          id={switchId}
+          label="Активен"
+          checked={isActive}
+          onChange={(e) => setIsActive(e.target.checked)}
+        />
+      </div>
 
       <Button type="submit" loading={saving} fullWidth>
         {isEdit ? "Сохранить" : "Создать оффер"}
@@ -311,9 +272,12 @@ function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
   const { data: rules, isLoading } = useOfferRules(offerId);
   const updateRules = useUpdateOfferRules();
 
-  const [values, setValues] = useState<OfferRulesValues>(DEFAULT_OFFER_RULES_VALUES);
+  const [values, setValues] = useState<OfferRulesValues>({
+    ...DEFAULT_OFFER_RULES_VALUES,
+  });
   const [frequency, setFrequency] = useState("");
   const [initialized, setInitialized] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Инициализируем значения при загрузке данных
   if (rules && !initialized) {
@@ -322,13 +286,14 @@ function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
     setInitialized(true);
   }
 
-  const cpaNum = parseFloat(values.cpa);
-  const cpaValid = Number.isFinite(cpaNum) && cpaNum > 0;
+  const cpaValid = isOfferCpaValid(values.cpa);
+  const currencyValid = isOfferCurrencyValid(values.currency);
 
   // Дебаунсим связку cpa/stop/warning → меньше запросов при движении ползунка.
   const debounced = useDebounced(
     {
-      cpa: cpaValid ? cpaNum : null,
+      cpa: cpaValid ? values.cpa.trim() : null,
+      currency: values.currency.trim().toUpperCase(),
       stop: values.stop_percent_of_rule,
       warning: values.warning_percent_of_stop,
     },
@@ -336,63 +301,83 @@ function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
   );
   const preview = useRulesPreview({
     cpa: debounced.cpa,
+    currency: debounced.currency,
     stop_percent_of_rule: debounced.stop,
     warning_percent_of_stop: debounced.warning,
   });
 
   async function handleSave() {
     haptic.impact("medium");
-    const cpa = values.cpa.trim();
-    const freq = frequency.trim();
-    const payload: Partial<OfferRules> = {
-      cpa_threshold: cpa ? cpa : null,
-      stop_percent_of_rule: String(values.stop_percent_of_rule),
-      warning_percent_of_stop: String(values.warning_percent_of_stop),
-      frequency_threshold: freq ? freq : null,
-    };
+    setSaveError(null);
+    let payload;
+    try {
+      payload = rulesValuesToPayload(values, frequency);
+    } catch {
+      setSaveError("Проверьте CPA, валюту и проценты правила");
+      return;
+    }
     try {
       await updateRules.mutateAsync({ offerId, payload });
       haptic.notify("success");
       onClose();
     } catch (err) {
       haptic.notify("error");
-      void alert((err as Error).message);
+      setSaveError(
+        safeApiProblemMessage(err, "Пороги не сохранены. Повторите попытку."),
+      );
     }
   }
 
   if (isLoading) {
     return (
       <div className="flex flex-col gap-3 pb-6">
-        {Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-14" />)}
+        {Array.from({ length: 6 }, (_, i) => (
+          <Skeleton key={i} className="h-14" />
+        ))}
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-5 pb-6">
+      <div
+        className="border-y border-[var(--color-hairline)] px-1 py-3"
+        role="status"
+      >
+        <div className="text-[12px] text-bg-8">Валюта бюджета</div>
+        <div className="mt-1 font-numeric text-[16px] text-bg-11">
+          {currencyValid ? "$ · доллар США" : "Нужна конфигурация USD"}
+        </div>
+      </div>
       <Input
-        label="CPA ставка ($)"
+        label={`CPA ставка${currencyValid ? " ($)" : ""}`}
         placeholder="10"
-        type="number"
-        step="any"
-        min="0"
+        type="text"
+        inputMode="decimal"
         value={values.cpa}
-        onChange={(e) => setValues((prev) => ({ ...prev, cpa: e.target.value }))}
+        onChange={(e) =>
+          setValues((prev) => ({ ...prev, cpa: e.target.value }))
+        }
       />
-      <p className="text-[11px] text-bg-8 -mt-3">
-        Целевая цена действия (FTD/депозит). От неё автоматически считаются стоп-пороги.
+      <p className="text-[12px] text-bg-8 -mt-3">
+        Целевая цена действия (FTD/депозит). От неё автоматически считаются
+        стоп-пороги.
       </p>
 
       <Slider
         label="Стоп — % от правила"
         value={values.stop_percent_of_rule}
-        onChange={(v) => setValues((prev) => ({ ...prev, stop_percent_of_rule: v }))}
+        onChange={(v) =>
+          setValues((prev) => ({ ...prev, stop_percent_of_rule: v }))
+        }
         hint="100% = базовое правило. Меньше — стоп срабатывает раньше (жёстче)."
       />
       <Slider
         label="Warning — % от стопа"
         value={values.warning_percent_of_stop}
-        onChange={(v) => setValues((prev) => ({ ...prev, warning_percent_of_stop: v }))}
+        onChange={(v) =>
+          setValues((prev) => ({ ...prev, warning_percent_of_stop: v }))
+        }
         hint="Ранний сигнал: warning = этот % от стоп-порога."
       />
 
@@ -400,26 +385,43 @@ function ThresholdsForm({ offerId, onClose }: ThresholdsFormProps) {
         loading={preview.isLoading || preview.isFetching}
         data={preview.data}
         cpaValid={cpaValid}
+        currencyValid={currencyValid}
       />
 
-      <div className="border-t border-[var(--hairline)] pt-4">
+      <div className="border-t border-[var(--color-hairline)] pt-4">
         <Input
           label="Frequency порог"
           placeholder="—"
           type="number"
-          min="0"
+          min="0.01"
           step="any"
           value={frequency}
           onChange={(e) => setFrequency(e.target.value)}
         />
-        <p className="text-[11px] text-bg-8 mt-1">
-          Максимальная частота показа — независимый порог (не связан с CPA-расчётом).
+        <p className="text-[12px] text-bg-8 mt-1">
+          Максимальная частота показа — независимый порог (не связан с
+          CPA-расчётом).
         </p>
       </div>
 
-      <Button onClick={() => void handleSave()} loading={updateRules.isPending} fullWidth>
-        Сохранить пороги
-      </Button>
+      {saveError ? (
+        <p
+          role="alert"
+          className="m-0 rounded-[var(--radius-2)] bg-danger-bg p-3 text-[14px] text-danger"
+        >
+          {saveError}
+        </p>
+      ) : null}
+
+      <div className="sticky bottom-0 z-10 -mx-1 bg-bg-1/95 px-1 pb-[max(4px,var(--tg-content-safe-bottom,0px))] pt-2 backdrop-blur">
+        <Button
+          onClick={() => void handleSave()}
+          loading={updateRules.isPending}
+          fullWidth
+        >
+          Сохранить пороги
+        </Button>
+      </div>
     </div>
   );
 }
@@ -432,15 +434,19 @@ function RulesPreview({
   loading,
   data,
   cpaValid,
+  currencyValid,
 }: {
   loading: boolean;
   data: PreviewData | undefined;
   cpaValid: boolean;
+  currencyValid: boolean;
 }) {
-  if (!cpaValid) {
+  if (!cpaValid || !currencyValid) {
     return (
-      <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] text-[12px] text-bg-9 p-3">
-        Укажите CPA — покажу, при какой цене сработают стоп и warning по каждой метрике.
+      <div className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] p-3 text-[14px] leading-5 text-bg-9">
+        {!currencyValid
+          ? "Настройка оффера не в USD. Исправьте adoption bundle до запуска."
+          : "Укажите CPA — покажу, при какой цене сработают стоп и warning по каждой метрике."}
       </div>
     );
   }
@@ -450,15 +456,15 @@ function RulesPreview({
   if (!data) return null;
 
   return (
-    <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] p-3">
-      <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-3">
+    <div className="border border-[var(--color-hairline)] rounded-[var(--radius-2)] p-3">
+      <div className="font-display text-[12px] tracking-[0.12em] uppercase text-bg-8 mb-3">
         ПРИ КАКОЙ ЦЕНЕ СРАБОТАЕТ
       </div>
 
       {/* Денежные правила: CPC / CPL / CPR */}
-      <table className="w-full text-[12.5px]">
+      <table className="w-full text-[14px]">
         <thead>
-          <tr className="text-bg-8 font-display text-[10px] tracking-wider uppercase">
+          <tr className="text-bg-8 font-display text-[12px] tracking-wider uppercase">
             <th className="text-left font-normal pb-1.5">Метрика</th>
             <th className="text-right font-normal pb-1.5">Warning</th>
             <th className="text-right font-normal pb-1.5">Стоп</th>
@@ -466,13 +472,16 @@ function RulesPreview({
         </thead>
         <tbody>
           {data.cost_rules.map((r) => (
-            <tr key={r.rule} className="border-t border-[var(--hairline)]">
+            <tr
+              key={r.rule}
+              className="border-t border-[var(--color-hairline)]"
+            >
               <td className="py-1.5 text-bg-10">{r.label}</td>
               <td className="py-1.5 text-right font-display tabular-nums text-warning">
-                ${r.warning}
+                {formatSpend(r.warning, data.currency)}
               </td>
               <td className="py-1.5 text-right font-display tabular-nums text-danger">
-                ${r.stop}
+                {formatSpend(r.stop, data.currency)}
               </td>
             </tr>
           ))}
@@ -481,21 +490,25 @@ function RulesPreview({
 
       {/* Диапазоны расхода без/с депозитом */}
       {data.spend_ranges.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-[var(--hairline)] flex flex-col gap-1.5">
+        <div className="mt-3 pt-3 border-t border-[var(--color-hairline)] flex flex-col gap-1.5">
           {data.spend_ranges.map((s) => (
-            <div key={s.rule} className="flex items-center justify-between text-[12px]">
+            <div
+              key={s.rule}
+              className="flex items-center justify-between gap-3 text-[14px]"
+            >
               <span className="text-bg-10">{s.label}</span>
               <span className="font-display tabular-nums text-bg-11">
-                ${s.stop_from}–${s.stop_to}
+                {formatSpend(s.stop_from, data.currency)}–
+                {formatSpend(s.stop_to, data.currency)}
               </span>
             </div>
           ))}
         </div>
       )}
 
-      <div className="mt-3 text-[11px] text-bg-8">
-        {data.regs_no_dep_stop_count} регистраций без депозитов → стоп. Базовые проценты правил
-        (CPC 2% / CPL 10% / CPR 20% от CPA) фиксированы.
+      <div className="mt-3 text-[12px] text-bg-8">
+        {data.regs_no_dep_stop_count} регистраций без депозитов → стоп. Базовые
+        проценты правил (CPC 2% / CPL 10% / CPR 20% от CPA) фиксированы.
       </div>
     </div>
   );
@@ -511,8 +524,7 @@ interface OfferCardProps {
 function OfferCard({ offer, onClick }: OfferCardProps) {
   const isActive = offer.is_active;
   const vertical = offer.vertical;
-  // Мульти-кабинет: до pnpm gen:api поле читаем мягким кастом.
-  const accounts = (offer as Offer & { ad_account_ids?: string[] }).ad_account_ids ?? [];
+  const accounts = offer.ad_account_ids ?? [];
 
   return (
     <button
@@ -522,7 +534,9 @@ function OfferCard({ offer, onClick }: OfferCardProps) {
         "w-full text-left border bg-bg-1 min-h-[44px] rounded-[var(--radius-2)]",
         "flex items-center gap-3 px-4 py-3.5",
         "active:bg-bg-2 transition-colors duration-[var(--dur-base)]",
-        isActive ? "border-[var(--hairline)]" : "border-[var(--hairline)] opacity-70",
+        isActive
+          ? "border-[var(--color-hairline)]"
+          : "border-[var(--color-hairline)] opacity-70",
       )}
       aria-label={`Оффер ${offer.code}`}
     >
@@ -547,27 +561,28 @@ function OfferCard({ offer, onClick }: OfferCardProps) {
         ) : null}
         {/* Мульти-кабинет: кабинеты оффера; пусто = warning (оффер вне скана) */}
         {isActive && accounts.length === 0 ? (
-          <p className="text-[11px] text-warning mt-0.5">кабинеты не заданы — не сканируется</p>
+          <p className="text-[12px] text-warning mt-0.5">
+            кабинеты не заданы — не сканируется
+          </p>
         ) : accounts.length > 0 ? (
           <p
-            className="font-display tabular-nums text-[11px] text-bg-8 mt-0.5 truncate"
+            className="font-display tabular-nums text-[12px] text-bg-8 mt-0.5 truncate"
             title={accounts.join(", ")}
           >
-            каб: {accounts.map((a) => (a.length > 8 ? `…${a.slice(-6)}` : a)).join(" · ")}
+            каб:{" "}
+            {accounts
+              .map((a) => (a.length > 8 ? `…${a.slice(-6)}` : a))
+              .join(" · ")}
           </p>
         ) : null}
       </div>
 
       {/* Правая часть: Badge активности + chevron */}
       <div className="flex items-center gap-2 shrink-0">
-        <Badge
-          variant={isActive ? "done" : "disabled"}
-          size="sm"
-          withDot
-        >
-          {isActive ? "active" : "inactive"}
+        <Badge variant={isActive ? "done" : "disabled"} size="sm" withDot>
+          {isActive ? "Активен" : "Выключен"}
         </Badge>
-        <ChevronRight size={14} strokeWidth={1.5} className="text-bg-7" />
+        <ChevronRight size={14} strokeWidth={1.5} className="text-bg-8" />
       </div>
     </button>
   );
@@ -579,18 +594,20 @@ interface OfferDetailProps {
   offer: Offer;
   onEdit: () => void;
   onThresholds: () => void;
-  onDelete: () => void;
   onToggleActive: () => void;
   isToggling: boolean;
+  canEdit: boolean;
+  toggleArmed: boolean;
 }
 
 function OfferDetail({
   offer,
   onEdit,
   onThresholds,
-  onDelete,
   onToggleActive,
   isToggling,
+  canEdit,
+  toggleArmed,
 }: OfferDetailProps) {
   return (
     <div className="flex flex-col gap-5 pb-6">
@@ -608,7 +625,7 @@ function OfferDetail({
             size="sm"
             withDot
           >
-            {offer.is_active ? "active" : "inactive"}
+            {offer.is_active ? "Активен" : "Выключен"}
           </Badge>
         </div>
         {offer.vertical ? (
@@ -623,23 +640,44 @@ function OfferDetail({
       </div>
 
       {/* Кнопки действий */}
+      {!canEdit ? (
+        <p
+          role="status"
+          className="m-0 border-y border-[var(--color-hairline)] py-3 text-[14px] text-warning"
+        >
+          Изменять офферы может только владелец.
+        </p>
+      ) : null}
       <div className="grid grid-cols-2 gap-2">
-        <Button variant="secondary" onClick={onEdit} fullWidth>
+        <Button
+          variant="secondary"
+          onClick={onEdit}
+          disabled={!canEdit}
+          fullWidth
+        >
           Редактировать
         </Button>
-        <Button variant="secondary" onClick={onThresholds} fullWidth>
+        <Button
+          variant="secondary"
+          onClick={onThresholds}
+          disabled={!canEdit}
+          fullWidth
+        >
           Пороги
         </Button>
         <Button
           variant="secondary"
           onClick={onToggleActive}
           loading={isToggling}
+          disabled={!canEdit}
           fullWidth
+          className="col-span-2"
         >
-          {offer.is_active ? "Выключить" : "Включить"}
-        </Button>
-        <Button variant="danger" onClick={onDelete} fullWidth>
-          Удалить
+          {toggleArmed
+            ? `Подтвердить ${offer.is_active ? "выключение" : "включение"}`
+            : offer.is_active
+              ? "Выключить"
+              : "Включить"}
         </Button>
       </div>
     </div>
@@ -651,14 +689,20 @@ function OfferDetail({
 type SheetMode = "detail" | "edit" | "create" | "thresholds" | null;
 
 function OffersPage() {
-  const { data: offers, isLoading, isError, refetch } = useOffers();
+  const navigate = useNavigate();
+  const { filter } = Route.useSearch();
+  const canEdit = getStoredRole() === "owner";
+  const { data: offers, isLoading, isError, error, refetch } = useOffers();
   const updateOffer = useUpdateOffer();
-  const deleteOffer = useDeleteOffer();
 
   const [selected, setSelected] = useState<Offer | null>(null);
   const [sheetMode, setSheetMode] = useState<SheetMode>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [toggleArmed, setToggleArmed] = useState(false);
 
   function openDetail(offer: Offer) {
+    setActionError(null);
+    setToggleArmed(false);
     setSelected(offer);
     setSheetMode("detail");
     haptic.selection();
@@ -666,26 +710,17 @@ function OffersPage() {
 
   function closeSheet() {
     setSheetMode(null);
+    setToggleArmed(false);
     // selected не сбрасываем — нужен при detail→edit переходе
   }
 
-  async function handleDelete() {
-    if (!selected) return;
-    const ok = await tgConfirm(`Удалить оффер ${selected.code}? Это действие необратимо.`);
-    if (!ok) return;
-    haptic.impact("heavy");
-    try {
-      await deleteOffer.mutateAsync({ id: selected.id });
-      haptic.notify("success");
-      closeSheet();
-    } catch (err) {
-      haptic.notify("error");
-      void alert((err as Error).message);
-    }
-  }
-
   async function handleToggleActive() {
-    if (!selected) return;
+    if (!selected || !canEdit) return;
+    if (!toggleArmed) {
+      setToggleArmed(true);
+      return;
+    }
+    setActionError(null);
     haptic.impact("medium");
     try {
       await updateOffer.mutateAsync({
@@ -696,16 +731,21 @@ function OffersPage() {
       closeSheet();
     } catch (err) {
       haptic.notify("error");
-      void alert((err as Error).message);
+      setActionError(
+        safeApiProblemMessage(
+          err,
+          "Статус оффера не изменён. Повторите попытку.",
+        ),
+      );
     }
   }
 
   // Заголовки для sheet по режиму
   const sheetEyebrow: Record<NonNullable<SheetMode>, string> = {
-    detail: "CATALOG · ДЕТАЛИ",
-    edit: "CATALOG · РЕДАКТИРОВАНИЕ",
-    create: "CATALOG · СОЗДАНИЕ",
-    thresholds: "CATALOG · СТОП-ПРАВИЛА",
+    detail: "КАТАЛОГ · ДЕТАЛИ",
+    edit: "КАТАЛОГ · РЕДАКТИРОВАНИЕ",
+    create: "КАТАЛОГ · СОЗДАНИЕ",
+    thresholds: "КАТАЛОГ · СТОП-ПРАВИЛА",
   };
   const sheetTitle: Record<NonNullable<SheetMode>, string> = {
     detail: selected?.code ?? "Оффер",
@@ -716,18 +756,24 @@ function OffersPage() {
 
   // Счётчик для eyebrow правой кнопки
   const activeCount = (offers ?? []).filter((o) => o.is_active).length;
+  const filteredOffers = (offers ?? []).filter((offer) => {
+    if (filter === "active") return offer.is_active;
+    if (filter === "inactive") return !offer.is_active;
+    return true;
+  });
 
   return (
     <div className="flex flex-col min-h-full pb-20">
       {/* Шапка */}
       <MiniHeader
         eyebrowNum="02"
-        eyebrow="CATALOG · ОФФЕРЫ"
+        eyebrow="КАТАЛОГ · ОФФЕРЫ"
         title="Офферы"
         right={
           <Button
             size="sm"
             variant="secondary"
+            disabled={!canEdit}
             onClick={() => {
               setSelected(null);
               setSheetMode("create");
@@ -740,11 +786,61 @@ function OffersPage() {
         }
       />
 
+      {!canEdit ? (
+        <p
+          role="status"
+          className="mx-4 mt-3 border-y border-[var(--color-hairline)] py-3 text-[14px] text-warning"
+        >
+          Каталог доступен только для чтения. Изменения разрешены владельцу.
+        </p>
+      ) : null}
+
+      {actionError ? (
+        <p
+          role="alert"
+          className="mx-4 mt-3 rounded-[var(--radius-2)] border border-danger/40 bg-danger-bg p-3 text-[14px] text-danger"
+        >
+          {actionError}
+        </p>
+      ) : null}
+
+      {!isLoading && !isError ? (
+        <div
+          className="flex gap-2 overflow-x-auto px-4 pb-1 pt-3"
+          aria-label="Фильтр офферов"
+        >
+          {(
+            [
+              ["all", "Все"],
+              ["active", "Активные"],
+              ["inactive", "Выключенные"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={filter === value}
+              onClick={() =>
+                void navigate({ to: "/offers", search: { filter: value } })
+              }
+              className={`min-h-11 shrink-0 rounded-full px-4 text-[13px] ${
+                filter === value
+                  ? "bg-accent text-bg-0"
+                  : "border border-[var(--color-hairline)] text-bg-10"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       {/* Подзаголовок-счётчик */}
       {!isLoading && !isError && (offers ?? []).length > 0 ? (
         <div className="px-4 pt-2 pb-1">
           <Eyebrow>
-            {activeCount} active · {(offers ?? []).length - activeCount} inactive
+            Активных: {activeCount} · выключено:{" "}
+            {(offers ?? []).length - activeCount}
           </Eyebrow>
         </div>
       ) : null}
@@ -754,37 +850,47 @@ function OffersPage() {
         {/* Загрузка */}
         {isLoading &&
           Array.from({ length: 4 }, (_, i) => (
-            <Skeleton key={i} className="h-[60px] w-full rounded-[var(--radius-2)]" />
+            <Skeleton
+              key={i}
+              className="h-[60px] w-full rounded-[var(--radius-2)]"
+            />
           ))}
 
         {/* Ошибка */}
         {isError && !isLoading && (
           <EmptyState
             title="Не удалось загрузить"
-            description="Проверьте соединение"
+            description={safeApiProblemMessage(
+              error,
+              "Проверьте соединение и повторите",
+            )}
             action={{ label: "Повторить", onClick: () => void refetch() }}
           />
         )}
 
         {/* Пусто */}
-        {!isLoading && !isError && (offers ?? []).length === 0 && (
+        {!isLoading && !isError && filteredOffers.length === 0 && (
           <EmptyState
             title="Офферов нет"
             description="Создайте первый оффер для настройки стоп-правил"
-            action={{
-              label: "Создать оффер",
-              onClick: () => {
-                setSelected(null);
-                setSheetMode("create");
-              },
-            }}
+            action={
+              canEdit
+                ? {
+                    label: "Создать оффер",
+                    onClick: () => {
+                      setSelected(null);
+                      setSheetMode("create");
+                    },
+                  }
+                : undefined
+            }
           />
         )}
 
         {/* Карточки офферов */}
         {!isLoading &&
           !isError &&
-          (offers ?? []).map((offer) => (
+          filteredOffers.map((offer) => (
             <OfferCard
               key={offer.id}
               offer={offer}
@@ -803,15 +909,20 @@ function OffersPage() {
         {sheetMode === "detail" && selected ? (
           <OfferDetail
             offer={selected}
-            onEdit={() => { setSheetMode("edit"); }}
-            onThresholds={() => { setSheetMode("thresholds"); }}
-            onDelete={() => void handleDelete()}
+            onEdit={() => {
+              setSheetMode("edit");
+            }}
+            onThresholds={() => {
+              setSheetMode("thresholds");
+            }}
             onToggleActive={() => void handleToggleActive()}
             isToggling={updateOffer.isPending}
+            canEdit={canEdit}
+            toggleArmed={toggleArmed}
           />
         ) : null}
 
-        {(sheetMode === "edit" || sheetMode === "create") ? (
+        {sheetMode === "edit" || sheetMode === "create" ? (
           <OfferForm
             offer={sheetMode === "edit" ? selected : null}
             onClose={closeSheet}

@@ -1,14 +1,32 @@
 # -*- coding: utf-8 -*-
-"""Telegram-домен: invite-коды, получатели, ссылки на сообщения."""
+"""Telegram-домен: получатели, durable notifications и webhook inbox."""
 
 from __future__ import annotations
 
 from core.models.telegram.invite import TelegramInvite
-from core.models.telegram.message_ref import TelegramMessageRef
+from core.models.telegram.notification import (
+    Incident,
+    NotificationDelivery,
+    NotificationEvent,
+    TelegramActionToken,
+    TelegramCommandReply,
+    TelegramMessageSlot,
+    TelegramNavigationToken,
+    TelegramRecipientPreference,
+    TelegramUpdateInbox,
+)
 from core.models.telegram.recipient import TelegramRecipient
 
 __all__ = [
+    "Incident",
+    "NotificationDelivery",
+    "NotificationEvent",
+    "TelegramActionToken",
+    "TelegramCommandReply",
     "TelegramInvite",
-    "TelegramMessageRef",
+    "TelegramMessageSlot",
+    "TelegramNavigationToken",
     "TelegramRecipient",
+    "TelegramRecipientPreference",
+    "TelegramUpdateInbox",
 ]

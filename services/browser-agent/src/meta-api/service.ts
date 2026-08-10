@@ -1,47 +1,277 @@
 // gRPC-обработчики MetaApiService.
 // Мост между gRPC-запросом и executeGraphCall/checkMetaApiHealth в client.ts.
 import * as grpc from '@grpc/grpc-js';
+import { createHash, randomUUID } from 'crypto';
 import type { Page } from 'playwright';
-import { SessionManager, findPreferredPrimaryPage } from '../session-manager.js';
+import { SessionManager, extractAdAccountId } from '../session-manager.js';
 import type { BrowserSession } from '../types.js';
 import { executeGraphCall, checkMetaApiHealth, type GraphApiCallParams } from './client.js';
 import { uploadImage, uploadVideoSingle } from './upload.js';
-import { withPageLock } from '../page-lock.js';
+import { withPageRoleLock } from '../page-lock.js';
 import { recordFetchOutcome, shouldHealNow } from '../session-health.js';
+import {
+  assertCanonicalGraphMethodSemantics,
+  BROWSER_OPERATION_CONTRACT_VERSION,
+  graphOperationBinding,
+  mediaOperationBinding,
+  verifyOperationCapability,
+  type OperationCapabilityBinding,
+} from './operation-capability.js';
+import { consumeOperationCapability } from './operation-authority-client.js';
+import { assertGraphOperationOwnership } from './ownership.js';
+
+// v5 removes URL-backed image upload and requires capability-bound bytes.
+// It retains exact task/query/body semantics for every controlled operation.
+export const BROWSER_CONTRACT_VERSION = BROWSER_OPERATION_CONTRACT_VERSION;
 
 function grpcCodeForError(err: any): number {
   const message = String(err?.message || '').toLowerCase();
+  if (message.includes('capability consume was denied')) {
+    // A durable row may already have been consumed by a process that died
+    // after crossing the boundary. Upstream must reconcile UNKNOWN, never
+    // convert this replay into a proven rejection.
+    return grpc.status.ABORTED;
+  }
+  if (
+    message.includes('operation capability')
+    || message.includes('caller is not authorized')
+    || message.includes('ownership preflight rejected')
+    || message.includes('graph method override')
+    || message.includes('graph request method semantics')
+    || message.includes('graph get body semantics')
+    || message.includes('graph endpoint query/fragment semantics')
+  ) {
+    return grpc.status.PERMISSION_DENIED;
+  }
+  if (message.includes('ownership preflight')) {
+    return grpc.status.FAILED_PRECONDITION;
+  }
+  if (message.includes('authority is unavailable')) {
+    return grpc.status.UNAVAILABLE;
+  }
+  if (message.includes('exact session/profile identity')) {
+    return grpc.status.FAILED_PRECONDITION;
+  }
   return message.includes('not found') || message.includes('не найден')
     ? grpc.status.NOT_FOUND
     : grpc.status.INTERNAL;
 }
 
-function getPage(session: BrowserSession): Page {
-  const preferredPage = findPreferredPrimaryPage(session.browser);
-  if (preferredPage && preferredPage !== session.primaryPage) {
-    session.primaryPage = preferredPage;
-  }
-  const page = session.primaryPage;
-  const closed = typeof page?.isClosed === 'function' && page.isClosed();
-  if (!page || closed) {
-    throw new Error('Основная страница браузера недоступна');
-  }
-  return page;
+function normalizeActId(value: unknown): string {
+  const normalized = String(value || '').replace(/^act_/, '').trim();
+  return /^\d+$/.test(normalized) ? normalized : '';
 }
 
-// Инъекция зависимостей — только для тестов сборки чанков uploadVideo (без реального
-// аплоада/браузера). В проде используются дефолты (модульные импорты) — поведение неизменно.
+function actIdFromEndpoint(endpoint: string): string {
+  return endpoint.match(/(?:^|\/)act_(\d+)(?:\/|$)/)?.[1] ?? '';
+}
+
+function bindGrpcAbort(call: any): {
+  controller: AbortController;
+  bindCapabilityExpiry: (expiresAtSeconds: number) => void;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const onCancelled = () => controller.abort('grpc_cancelled');
+  const onClose = () => controller.abort('grpc_closed');
+  call.on('cancelled', onCancelled);
+  call.on('close', onClose);
+  const remainingMs = remainingDeadlineMs(call);
+  const deadlineTimer = remainingMs === undefined
+    ? undefined
+    : setTimeout(() => controller.abort('grpc_deadline_exceeded'), remainingMs);
+  let capabilityTimer: ReturnType<typeof setTimeout> | undefined;
+  return {
+    controller,
+    bindCapabilityExpiry: (expiresAtSeconds: number) => {
+      if (capabilityTimer !== undefined) clearTimeout(capabilityTimer);
+      if (!Number.isSafeInteger(expiresAtSeconds) || expiresAtSeconds <= 0) {
+        controller.abort('capability_invalid');
+        return;
+      }
+      capabilityTimer = setTimeout(
+        () => controller.abort('capability_expired'),
+        Math.max(0, expiresAtSeconds * 1_000 - Date.now()),
+      );
+    },
+    dispose: () => {
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      if (capabilityTimer !== undefined) clearTimeout(capabilityTimer);
+      call.removeListener?.('cancelled', onCancelled);
+      call.removeListener?.('close', onClose);
+    },
+  };
+}
+
+function grpcAbortError(signal: AbortSignal): {
+  code: number;
+  message: string;
+} {
+  const reason = String(signal.reason || 'grpc_cancelled');
+  if (reason === 'capability_invalid') {
+    return {
+      code: grpc.status.PERMISSION_DENIED,
+      message: 'Browser operation capability is invalid',
+    };
+  }
+  if (reason === 'capability_expired') {
+    return {
+      code: grpc.status.DEADLINE_EXCEEDED,
+      message: 'Browser operation capability expired',
+    };
+  }
+  if (reason === 'grpc_deadline_exceeded') {
+    return {
+      code: grpc.status.DEADLINE_EXCEEDED,
+      message: 'Browser operation gRPC deadline exceeded',
+    };
+  }
+  return {
+    code: grpc.status.CANCELLED,
+    message: 'Browser operation was cancelled',
+  };
+}
+
+function createUnaryOperationResponder(
+  callback: any,
+  signal: AbortSignal,
+): {
+  respond: (error: any, response?: any) => void;
+  dispose: () => void;
+} {
+  let responded = false;
+  const respond = (error: any, response?: any): void => {
+    if (responded) return;
+    responded = true;
+    callback(error, response);
+  };
+  const onAbort = (): void => respond(grpcAbortError(signal));
+  signal.addEventListener('abort', onAbort, { once: true });
+  return {
+    respond,
+    dispose: () => signal.removeEventListener('abort', onAbort),
+  };
+}
+
+function remainingDeadlineMs(call: any): number | undefined {
+  const raw = call.getDeadline?.();
+  const deadlineMs = raw instanceof Date ? raw.getTime() : Number(raw);
+  if (!Number.isFinite(deadlineMs)) return undefined;
+  return Math.max(0, deadlineMs - Date.now());
+}
+
+function isMoneyControlGraphCall(
+  method: string,
+  endpoint: string,
+  queryParams: Record<string, string>,
+): boolean {
+  const normalizedMethod = method.toUpperCase();
+  if (normalizedMethod !== 'GET') return true;
+  const normalizedEndpoint = endpoint.trim();
+  if (/^\/?\d+\/thumbnails$/.test(normalizedEndpoint)) return true;
+  if (!/^\/?\d+$/.test(normalizedEndpoint)) return false;
+  const fields = new Set(
+    String(queryParams.fields || '')
+      .split(',')
+      .map((field) => field.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return fields.has('status') || fields.has('effective_status');
+}
+
+// Dependency injection is test-only (no real browser/Meta calls). Production
+// always uses the concrete SessionManager and upload implementations.
 export interface MetaApiServiceDeps {
+  uploadImage?: typeof uploadImage;
   uploadVideoSingle?: typeof uploadVideoSingle;
-  getPage?: (session: BrowserSession) => Page;
+  checkMetaApiHealth?: typeof checkMetaApiHealth;
+  getControlPage?: (
+    session: BrowserSession,
+    actId: string,
+    signal?: AbortSignal,
+  ) => Page | Promise<Page>;
+  getInteractivePage?: (
+    session: BrowserSession,
+    actId: string,
+    signal?: AbortSignal,
+  ) => Page | Promise<Page>;
+  verifyOperationCapability?: (
+    request: Record<string, unknown>,
+    binding: OperationCapabilityBinding,
+  ) => void;
+  consumeOperationCapability?: (
+    request: Record<string, unknown>,
+    binding: OperationCapabilityBinding,
+    signal?: AbortSignal,
+  ) => Promise<void> | void;
+  assertGraphOperationOwnership?: (
+    page: Page,
+    params: GraphApiCallParams,
+    expectedAccountId: string,
+    options?: { signal?: AbortSignal; operationId?: string },
+  ) => Promise<void>;
+  poisonRolePage?: (
+    session: BrowserSession,
+    role: 'control' | 'interactive',
+    actId: string,
+    page: Page,
+  ) => void;
+  /**
+   * Compatibility injection for focused tests. Production never supplies it:
+   * local signature verification and durable consume remain separate stages.
+   */
+  authorizeOperationCapability?: (
+    request: Record<string, unknown>,
+    binding: OperationCapabilityBinding,
+    signal?: AbortSignal,
+  ) => Promise<void> | void;
 }
 
 export function createMetaApiServiceHandlers(
   sessionManager: SessionManager,
   deps: MetaApiServiceDeps = {},
 ) {
+  const _uploadImage = deps.uploadImage ?? uploadImage;
   const _uploadVideoSingle = deps.uploadVideoSingle ?? uploadVideoSingle;
-  const _getPage = deps.getPage ?? getPage;
+  const _checkMetaApiHealth = deps.checkMetaApiHealth ?? checkMetaApiHealth;
+  const _verifyOperationCapability = deps.verifyOperationCapability
+    ?? (deps.authorizeOperationCapability
+      ? (() => undefined)
+      : verifyOperationCapability);
+  const _consumeOperationCapability = deps.consumeOperationCapability
+    ?? deps.authorizeOperationCapability
+    ?? (async (
+      request: Record<string, unknown>,
+      binding: OperationCapabilityBinding,
+      signal?: AbortSignal,
+    ) => {
+      await consumeOperationCapability(request, binding, { signal });
+    });
+  const _assertGraphOperationOwnership = deps.assertGraphOperationOwnership
+    ?? (deps.authorizeOperationCapability
+      ? (async () => undefined)
+      : assertGraphOperationOwnership);
+  const _poisonRolePage = deps.poisonRolePage
+    ?? ((
+      session: BrowserSession,
+      role: 'control' | 'interactive',
+      actId: string,
+      page: Page,
+    ) => (sessionManager as SessionManager & {
+      poisonRolePage?: typeof sessionManager.poisonRolePage;
+    }).poisonRolePage?.(session, role, actId, page));
+  const _getControlPage = deps.getControlPage
+    ?? ((session: BrowserSession, actId: string, signal?: AbortSignal) =>
+      sessionManager.ensureControlPage(session, {
+        actId: actId || undefined,
+        signal,
+      }));
+  const _getInteractivePage = deps.getInteractivePage
+    ?? ((session: BrowserSession, actId: string, signal?: AbortSignal) =>
+      sessionManager.ensureInteractivePage(session, {
+        actId: actId || undefined,
+        signal,
+      }));
 
   function resolveSession(sessionId: string): BrowserSession {
     const normalizedSessionId = String(sessionId || '').trim();
@@ -50,13 +280,62 @@ export function createMetaApiServiceHandlers(
       : sessionManager.getPreferredSession();
   }
 
-  async function executeGraphCallHandler(call: any, callback: any): Promise<void> {
+  function resolveExactOperationSession(request: Record<string, unknown>): BrowserSession {
+    const sessionId = String(request.session_id || '').trim();
+    const profileId = String(request.vision_profile_id || '').trim();
+    if (!sessionId || !profileId) {
+      throw new Error('Browser operation requires exact session/profile identity');
+    }
+    let session: BrowserSession;
+    try {
+      session = sessionManager.getSession(sessionId);
+    } catch {
+      throw new Error('Browser operation requires exact session/profile identity');
+    }
+    if (session.visionProfileId !== profileId) {
+      throw new Error('Browser operation requires exact session/profile identity');
+    }
+    return session;
+  }
+
+  function resolveHealthSession(
+    sessionId: string,
+    expectedVisionProfileId: string,
+  ): BrowserSession {
+    const normalizedSessionId = String(sessionId || '').trim();
+    const normalizedProfileId = String(expectedVisionProfileId || '').trim();
+    if (normalizedSessionId) {
+      const session = sessionManager.getSession(normalizedSessionId);
+      if (normalizedProfileId && session.visionProfileId !== normalizedProfileId) {
+        throw new Error(
+          `Session ${normalizedSessionId} does not own Vision profile ${normalizedProfileId}`,
+        );
+      }
+      return session;
+    }
+    return normalizedProfileId
+      ? sessionManager.getSessionForVisionProfile(normalizedProfileId)
+      : sessionManager.getPreferredSession();
+  }
+
+  async function executeGraphCallV5Handler(call: any, callback: any): Promise<void> {
+    const grpcAbort = bindGrpcAbort(call);
+    const responder = createUnaryOperationResponder(
+      callback,
+      grpcAbort.controller.signal,
+    );
     try {
       const req = call.request;
-      const session = resolveSession(req.session_id);
-      // Мульти-кабинет: с ad_account_id fetch уходит из вкладки СВОЕГО кабинета
-      // («человеческий» паттерн). Пусто → legacy primary-вкладка (токен общий).
-      const actId: string = String(req.ad_account_id || '').replace(/^act_/, '').trim();
+      const endpoint = String(req.endpoint || '/me');
+      const requestedAccount = String(req.ad_account_id || '').trim();
+      const actId = normalizeActId(req.ad_account_id) || actIdFromEndpoint(endpoint);
+      if (requestedAccount && !normalizeActId(requestedAccount)) {
+        responder.respond({
+          code: grpc.status.INVALID_ARGUMENT,
+          message: 'ad_account_id must be an explicit numeric account id',
+        });
+        return;
+      }
 
       // Конвертация proto map<string, string> в plain object для page.evaluate.
       const queryParams: Record<string, string> = {};
@@ -65,41 +344,140 @@ export function createMetaApiServiceHandlers(
           queryParams[String(key)] = String(value);
         }
       }
-
-      const params: GraphApiCallParams = {
-        method: (req.method || 'GET').toUpperCase() as 'GET' | 'POST' | 'DELETE',
-        endpoint: req.endpoint || '/me',
+      const requestMethod = String(req.method || 'GET').trim().toUpperCase();
+      const requestBody = String(req.body_json || '');
+      assertCanonicalGraphMethodSemantics(
+        requestMethod,
+        endpoint,
         queryParams,
-        bodyJson: req.body_json && req.body_json.length > 0 ? req.body_json : undefined,
-        timeoutMs: req.timeout_ms && req.timeout_ms > 0 ? req.timeout_ms : undefined,
+        requestBody,
+      );
+
+      const requestedTimeoutMs = req.timeout_ms && req.timeout_ms > 0 ? req.timeout_ms : 30_000;
+      const remainingMs = remainingDeadlineMs(call);
+      if (remainingMs !== undefined && remainingMs <= 0) {
+        responder.respond({
+          code: grpc.status.DEADLINE_EXCEEDED,
+          message: 'Graph deadline exhausted',
+        });
+        return;
+      }
+      const timeoutMs = remainingMs === undefined
+        ? requestedTimeoutMs
+        : Math.max(1, Math.min(requestedTimeoutMs, Math.floor(remainingMs)));
+      const params: GraphApiCallParams = {
+        method: requestMethod as 'GET' | 'POST' | 'DELETE',
+        endpoint,
+        queryParams,
+        bodyJson: requestBody.length > 0 ? requestBody : undefined,
+        timeoutMs,
       };
 
-      // H-7 (BA-4): per-session лок — mutation page.evaluate(fetch) не должен
-      // пересекаться со scan page.reload (acquireGraphContext) на общей странице,
-      // иначе reload рвёт in-flight fetch → «Execution context was destroyed».
-      // Резолв вкладки кабинета (может открыть новую) — тоже под локом.
-      const result = await withPageLock(session.id, async () => {
-        let page: Page;
-        if (actId) {
-          page = await sessionManager.ensureAdsManagerPage(session, { actId });
-        } else {
-          try {
-            page = _getPage(session);
-          } catch (err) {
-            // Read-only helper'ы визарда не передают ad_account_id, чтобы не менять
-            // вкладку кабинета. Если primary-вкладку закрыли, но CDP ещё жив, используем
-            // тот же Layer 1 self-heal, что и scanner: переоткрываем last known Ads Manager
-            // URL и выполняем Graph GET без 503 оператору.
-            console.warn(
-              `[meta-api] primary-вкладка недоступна → пробую восстановить: ${String((err as Error)?.message ?? err)}`,
+      const moneyControl = (
+        isMoneyControlGraphCall(params.method, endpoint, queryParams)
+        || String(req.authorized_caller || '').trim() === 'campaign_creator'
+      );
+      if (moneyControl && !normalizeActId(req.ad_account_id)) {
+        responder.respond({
+          code: grpc.status.INVALID_ARGUMENT,
+          message: 'money Graph call requires explicit ad_account_id',
+        });
+        return;
+      }
+      const session = moneyControl
+        ? resolveExactOperationSession(req)
+        : resolveSession(req.session_id);
+      const capabilityBinding: OperationCapabilityBinding | undefined = moneyControl
+        ? {
+            browserContractVersion: BROWSER_CONTRACT_VERSION,
+            rpc: 'execute_graph_call',
+            operation: graphOperationBinding(
+              params.method,
+              endpoint,
+              queryParams,
+              requestBody,
+            ),
+            sessionId: session.id,
+            visionProfileId: session.visionProfileId,
+            adAccountId: actId,
+          }
+        : undefined;
+      if (moneyControl) {
+        _verifyOperationCapability(req, capabilityBinding!);
+        grpcAbort.bindCapabilityExpiry(Number(req.capability_expires_at));
+      }
+      const role = moneyControl ? 'control' : 'interactive';
+      const operationId = `${role}:${session.id}:${actId || 'default'}:${randomUUID()}`;
+      const result = await withPageRoleLock(session.id, role, actId, async () => {
+        let operationPage: Page | undefined;
+        try {
+          operationPage = moneyControl
+            ? await _getControlPage(session, actId, grpcAbort.controller.signal)
+            : await _getInteractivePage(session, actId, grpcAbort.controller.signal);
+          if (moneyControl) {
+            // Ownership is proven in the same page/lock that will send the
+            // mutation. Only after that read succeeds do we atomically consume
+            // the PostgreSQL grant and cross the external-send boundary.
+            await _assertGraphOperationOwnership(
+              operationPage,
+              params,
+              actId,
+              {
+                signal: grpcAbort.controller.signal,
+                operationId,
+              },
             );
-            page = await sessionManager.ensureAdsManagerPage(session);
+            await _consumeOperationCapability(
+              req,
+              capabilityBinding!,
+              grpcAbort.controller.signal,
+            );
+          }
+          const graphResult = await executeGraphCall(operationPage, params, {
+            signal: grpcAbort.controller.signal,
+            operationId,
+          });
+
+          // Keep failed fetch recovery inside the same role lock. Cancellation
+          // instead poisons the page below so recovery cannot wait on bad CDP.
+          const netFail = graphResult.statusCode === 0;
+          recordFetchOutcome(session, !netFail);
+          if (
+            !grpcAbort.controller.signal.aborted
+            && netFail
+            && shouldHealNow(session, Date.now())
+          ) {
+            const healed = await sessionManager.reloadPageAfterNetworkFailureWithinRoleLock(
+              session.id,
+              {
+                role,
+                actId,
+                page: operationPage,
+                signal: grpcAbort.controller.signal,
+              },
+            );
+            console.warn(
+              `[meta-api] page reload after network failure: ${healed.action} (ok=${healed.ok})`,
+            );
+          }
+          return graphResult;
+        } finally {
+          if (operationPage && grpcAbort.controller.signal.aborted) {
+            _poisonRolePage(
+              session,
+              role,
+              actId,
+              operationPage,
+            );
           }
         }
-        return executeGraphCall(page, params);
       });
 
-      callback(null, {
+      // The transport is gone. Never turn an aborted/closed gRPC into a false
+      // confirmed response; upstream keeps the external outcome UNKNOWN.
+      if (grpcAbort.controller.signal.aborted) return;
+
+      responder.respond(null, {
         status_code: result.statusCode,
         response_json: result.responseJson,
         duration_ms: result.durationMs,
@@ -113,42 +491,42 @@ export function createMetaApiServiceHandlers(
             }
           : undefined,
       });
-
-      // Авто-исцеление: сетевой сбой мутации (statusCode 0 / NetworkError code -2) при живой
-      // странице — копим серию и эскалируем лечение, чтобы money-канал авто-стопа сам оживал
-      // (а не требовал ручного рестарта). После callback — не задерживаем ответ воркеру.
-      const netFail = result.statusCode === 0;
-      recordFetchOutcome(session, !netFail);
-      if (netFail && shouldHealNow(session, Date.now())) {
-        try {
-          const healed = await sessionManager.healSessionNetwork(session.id);
-          console.warn(`[meta-api] авто-исцеление после мутации: ${healed.action} (ok=${healed.ok})`);
-        } catch (e) {
-          console.error('[meta-api] авто-исцеление после мутации упало:', e);
-        }
-      }
     } catch (err: any) {
-      callback({
+      if (grpcAbort.controller.signal.aborted) return;
+      responder.respond({
         code: grpcCodeForError(err),
         message: String(err?.message ?? err),
       });
+    } finally {
+      responder.dispose();
+      grpcAbort.dispose();
     }
   }
 
   async function checkMetaApiHealthHandler(call: any, callback: any): Promise<void> {
+    const grpcAbort = bindGrpcAbort(call);
     try {
       const req = call.request;
-      const session = resolveSession(req.session_id);
-      const page = getPage(session);
+      const session = resolveHealthSession(
+        req.session_id,
+        req.expected_vision_profile_id,
+      );
+      const actId = extractAdAccountId(session.primaryPage?.url?.()) ?? '';
       const fullProbe = Boolean(req.full_probe);
 
-      // full_probe делает реальный page.evaluate(fetch) — под per-session лок (как
-      // executeGraphCall), чтобы probe не пересекался со scan reload и не рвал in-flight
-      // fetch. Token-only режим — без лока (дешёвое чтение DOM).
-      const result = fullProbe
-        ? await withPageLock(session.id, () => checkMetaApiHealth(page, { fullProbe: true }))
-        : await checkMetaApiHealth(page);
+      const result = await withPageRoleLock(session.id, 'interactive', actId, async () => {
+        const page = await _getInteractivePage(
+          session,
+          actId,
+          grpcAbort.controller.signal,
+        );
+        return _checkMetaApiHealth(page, {
+          fullProbe,
+          signal: grpcAbort.controller.signal,
+        });
+      });
 
+      if (grpcAbort.controller.signal.aborted) return;
       callback(null, {
         healthy: result.healthy,
         current_url: result.currentUrl,
@@ -160,8 +538,12 @@ export function createMetaApiServiceHandlers(
         probe_status_code: result.probeStatusCode,
         probe_duration_ms: result.probeDurationMs,
         probe_detail: result.probeDetail,
+        browser_contract_version: BROWSER_CONTRACT_VERSION,
+        session_id: session.id,
+        vision_profile_id: session.visionProfileId,
       });
     } catch (err: any) {
+      if (grpcAbort.controller.signal.aborted) return;
       // Если сессия не найдена — возвращаем healthy=false как штатный ответ
       // (а не gRPC ошибку), потому что вызывающий health_watchdog хочет видеть состояние.
       callback(null, {
@@ -175,47 +557,114 @@ export function createMetaApiServiceHandlers(
         probe_status_code: 0,
         probe_duration_ms: 0,
         probe_detail: 'not_performed',
+        browser_contract_version: BROWSER_CONTRACT_VERSION,
+        session_id: '',
+        vision_profile_id: '',
       });
+    } finally {
+      grpcAbort.dispose();
     }
   }
 
   async function uploadImageHandler(call: any, callback: any): Promise<void> {
+    const grpcAbort = bindGrpcAbort(call);
+    const responder = createUnaryOperationResponder(
+      callback,
+      grpcAbort.controller.signal,
+    );
     try {
       const req = call.request;
-      const session = resolveSession(req.session_id);
-      const page = getPage(session);
-
+      const actId = normalizeActId(req.ad_account_id);
+      if (!actId) {
+        responder.respond({
+          code: grpc.status.INVALID_ARGUMENT,
+          message: 'UploadImage requires explicit ad_account_id',
+        });
+        return;
+      }
       const fileBytes = req.file_bytes;
       // proto-loader отдаёт bytes как Buffer; нормализуем.
       const buf: Buffer = Buffer.isBuffer(fileBytes)
         ? fileBytes
         : Buffer.from(fileBytes || []);
 
-      const imageUrl = String(req.image_url || '');
-      const name = String(req.name || '');
-
-      // Если image_url пуст и file_bytes тоже — вернём ошибку без вызова uploadImage.
-      if (!imageUrl && buf.length === 0) {
-        callback(null, {
+      // Reject a deterministic no-op before consuming its one-shot grant.
+      if (buf.length === 0) {
+        responder.respond(null, {
           image_hash: '',
           ok: false,
-          error: 'INVALID_ARGUMENT: image_url и file_bytes оба пусты — нужен один из двух',
+          error: 'INVALID_ARGUMENT: file_bytes пусты',
           url: '',
           duration_ms: 0,
         });
         return;
       }
+      const session = resolveExactOperationSession(req);
+      const capabilityBinding: OperationCapabilityBinding = {
+        browserContractVersion: BROWSER_CONTRACT_VERSION,
+        rpc: 'upload_image',
+        operation: mediaOperationBinding('upload_image', {
+          filename: String(req.filename || ''),
+          content_type: String(req.content_type || ''),
+          content_sha256: createHash('sha256').update(buf).digest('hex'),
+        }),
+        sessionId: session.id,
+        visionProfileId: session.visionProfileId,
+        adAccountId: actId,
+      };
+      _verifyOperationCapability(req, capabilityBinding);
+      grpcAbort.bindCapabilityExpiry(Number(req.capability_expires_at));
 
-      const result = await uploadImage(page, {
-        adAccountId: String(req.ad_account_id || ''),
-        filename: String(req.filename || 'upload.jpg'),
-        contentType: String(req.content_type || 'image/jpeg'),
-        fileBytes: buf,
-        imageUrl: imageUrl || undefined,
-        name: name || undefined,
+      const remainingMs = remainingDeadlineMs(call);
+      if (grpcAbort.controller.signal.aborted || remainingMs === 0) return;
+      const timeoutMs = remainingMs === undefined ? 120_000 : Math.max(1, Math.min(120_000, remainingMs));
+      const operationId = `image:${session.id}:${actId}:${randomUUID()}`;
+      const result = await withPageRoleLock(session.id, 'interactive', actId, async () => {
+        if (grpcAbort.controller.signal.aborted) {
+          return { ok: false, imageHash: '', url: '', error: 'cancelled', durationMs: 0 };
+        }
+        let page: Page | undefined;
+        try {
+          page = await _getInteractivePage(
+            session,
+            actId,
+            grpcAbort.controller.signal,
+          );
+          if (grpcAbort.controller.signal.aborted) {
+            return { ok: false, imageHash: '', url: '', error: 'cancelled', durationMs: 0 };
+          }
+          await _consumeOperationCapability(
+            req,
+            capabilityBinding,
+            grpcAbort.controller.signal,
+          );
+          return _uploadImage(page, {
+            adAccountId: `act_${actId}`,
+            filename: String(req.filename || 'upload.jpg'),
+            contentType: String(req.content_type || 'image/jpeg'),
+            fileBytes: buf,
+            timeoutMs,
+          }, {
+            signal: grpcAbort.controller.signal,
+            operationId,
+          });
+        } finally {
+          if (page && grpcAbort.controller.signal.aborted) {
+            _poisonRolePage(session, 'interactive', actId, page);
+          }
+        }
       });
 
-      callback(null, {
+      if (grpcAbort.controller.signal.aborted) return;
+      if (!result.ok && result.error.includes('TOKEN_NOT_FOUND_IN_PAGE')) {
+        responder.respond({
+          code: grpc.status.FAILED_PRECONDITION,
+          message: 'Browser operation exact session/profile identity has no Meta token',
+        });
+        return;
+      }
+
+      responder.respond(null, {
         image_hash: result.imageHash,
         ok: result.ok,
         error: result.error,
@@ -223,10 +672,14 @@ export function createMetaApiServiceHandlers(
         duration_ms: result.durationMs,
       });
     } catch (err: any) {
-      callback({
+      if (grpcAbort.controller.signal.aborted) return;
+      responder.respond({
         code: grpcCodeForError(err),
         message: String(err?.message ?? err),
       });
+    } finally {
+      responder.dispose();
+      grpcAbort.dispose();
     }
   }
 
@@ -236,6 +689,7 @@ export function createMetaApiServiceHandlers(
   // Meta v22 отвергает chunked resumable (upload_phase=start/transfer/finish) как
   // 'Invalid parameter', а single-POST принимает (проверено живьём: 200 + video_id).
   function uploadVideoHandler(call: any, callback: any): void {
+    const grpcAbort = bindGrpcAbort(call);
     const t0 = Date.now();
     let chunksProcessed = 0;
     let isFinishing = false;
@@ -247,8 +701,10 @@ export function createMetaApiServiceHandlers(
     // накапливает байты по порядку. Раньше async 'data' наезжали → перемешивание/гонка.
     let metadataSeen = false;
     let adAccountId = '';
+    let numericActId = '';
     let filename = 'upload.mp4';
-    let resolvedPage: Page | null = null;
+    let resolvedSession: BrowserSession | null = null;
+    let firstRequest: Record<string, unknown> | null = null;
     const videoBuffers: Buffer[] = [];
 
     const pendingChunks: any[] = [];
@@ -256,9 +712,25 @@ export function createMetaApiServiceHandlers(
     let endReceived = false;
     let isLastChunkSeen = false;
 
-    function respondError(msg: string): void {
+    const cancelUpload = (): void => {
       if (respondedOnce) return;
       respondedOnce = true;
+      pendingChunks.length = 0;
+      videoBuffers.length = 0;
+      grpcAbort.dispose();
+      callback(grpcAbortError(grpcAbort.controller.signal));
+    };
+    grpcAbort.controller.signal.addEventListener('abort', cancelUpload, { once: true });
+
+    function respondError(msg: string): void {
+      if (respondedOnce) return;
+      if (grpcAbort.controller.signal.aborted) {
+        cancelUpload();
+        return;
+      }
+      respondedOnce = true;
+      grpcAbort.controller.signal.removeEventListener('abort', cancelUpload);
+      grpcAbort.dispose();
       callback(null, {
         video_id: videoId,
         ok: false,
@@ -268,9 +740,30 @@ export function createMetaApiServiceHandlers(
       });
     }
 
+    function respondGrpcError(err: unknown): void {
+      if (respondedOnce) return;
+      if (grpcAbort.controller.signal.aborted) {
+        cancelUpload();
+        return;
+      }
+      respondedOnce = true;
+      grpcAbort.controller.signal.removeEventListener('abort', cancelUpload);
+      grpcAbort.dispose();
+      callback({
+        code: grpcCodeForError(err),
+        message: String((err as { message?: unknown })?.message ?? err),
+      });
+    }
+
     function respondSuccess(vid: string): void {
       if (respondedOnce) return;
+      if (grpcAbort.controller.signal.aborted) {
+        cancelUpload();
+        return;
+      }
       respondedOnce = true;
+      grpcAbort.controller.signal.removeEventListener('abort', cancelUpload);
+      grpcAbort.dispose();
       videoId = vid;
       callback(null, {
         video_id: vid,
@@ -292,19 +785,29 @@ export function createMetaApiServiceHandlers(
       processing = true;
       try {
         while (pendingChunks.length > 0) {
+          if (grpcAbort.controller.signal.aborted) return;
           const chunk = pendingChunks.shift();
           if (!metadataSeen) {
-            const sessionId = String(chunk.session_id || '');
             adAccountId = String(chunk.ad_account_id || '');
+            numericActId = normalizeActId(adAccountId);
             filename = String(chunk.filename || 'upload.mp4');
-            if (!adAccountId) {
+            if (!numericActId) {
               respondError('Первый chunk должен содержать ad_account_id');
               return;
             }
-            const resolvedSession = sessionId
-              ? sessionManager.getSession(sessionId)
-              : sessionManager.getPreferredSession();
-            resolvedPage = _getPage(resolvedSession);
+            adAccountId = `act_${numericActId}`;
+            firstRequest = chunk as Record<string, unknown>;
+            resolvedSession = resolveExactOperationSession(firstRequest);
+            // The full content digest is not available until the stream ends.
+            // Bound this unauthenticated phase to the strict RPC TTL; the exact
+            // signature is consumed immediately before any browser upload.
+            const claimedExpiry = Number(firstRequest.capability_expires_at);
+            const boundedExpiry = Number.isSafeInteger(claimedExpiry)
+              ? Math.min(claimedExpiry, Math.floor(Date.now() / 1_000) + 185)
+              : 0;
+            grpcAbort.bindCapabilityExpiry(
+              boundedExpiry,
+            );
             metadataSeen = true;
           }
           const bytes = bytesOf(chunk);
@@ -317,22 +820,83 @@ export function createMetaApiServiceHandlers(
           }
         }
         // Очередь пуста: всё видео собрано → грузим ОДНИМ POST.
-        if (metadataSeen && resolvedPage && !isFinishing && (isLastChunkSeen || endReceived)) {
+        if (
+          metadataSeen
+          && resolvedSession
+          && firstRequest
+          && !isFinishing
+          && (isLastChunkSeen || endReceived)
+        ) {
+          if (grpcAbort.controller.signal.aborted) return;
           isFinishing = true;
           const full = Buffer.concat(videoBuffers);
           if (full.length === 0) {
             respondError('UploadVideo: пустое видео (0 байт)');
             return;
           }
-          const res = await _uploadVideoSingle(resolvedPage, { adAccountId, filename, fileBytes: full });
+          const activeSession = resolvedSession;
+          const capabilityBinding: OperationCapabilityBinding = {
+            browserContractVersion: BROWSER_CONTRACT_VERSION,
+            rpc: 'upload_video',
+            operation: mediaOperationBinding('upload_video', {
+              filename,
+              file_size: full.length,
+              content_sha256: createHash('sha256').update(full).digest('hex'),
+            }),
+            sessionId: activeSession.id,
+            visionProfileId: activeSession.visionProfileId,
+            adAccountId: numericActId,
+          };
+          _verifyOperationCapability(firstRequest, capabilityBinding);
+          const remainingMs = remainingDeadlineMs(call);
+          if (remainingMs === 0) return;
+          const timeoutMs = remainingMs === undefined ? 120_000 : Math.max(1, Math.min(120_000, remainingMs));
+          const operationId = `video:${activeSession.id}:${numericActId}:${randomUUID()}`;
+          const res = await withPageRoleLock(activeSession.id, 'interactive', numericActId, async () => {
+            if (grpcAbort.controller.signal.aborted) {
+              return { ok: false, videoId: '', error: 'cancelled', durationMs: 0 };
+            }
+            let page: Page | undefined;
+            try {
+              page = await _getInteractivePage(
+                activeSession,
+                numericActId,
+                grpcAbort.controller.signal,
+              );
+              if (grpcAbort.controller.signal.aborted) {
+                return { ok: false, videoId: '', error: 'cancelled', durationMs: 0 };
+              }
+              await _consumeOperationCapability(
+                firstRequest!,
+                capabilityBinding,
+                grpcAbort.controller.signal,
+              );
+              return _uploadVideoSingle(
+                page,
+                { adAccountId, filename, fileBytes: full, timeoutMs },
+                { signal: grpcAbort.controller.signal, operationId },
+              );
+            } finally {
+              if (page && grpcAbort.controller.signal.aborted) {
+                _poisonRolePage(activeSession, 'interactive', numericActId, page);
+              }
+            }
+          });
+          if (grpcAbort.controller.signal.aborted) return;
           if (res.ok && res.videoId) {
             respondSuccess(res.videoId);
+          } else if (res.error.includes('TOKEN_NOT_FOUND_IN_PAGE')) {
+            respondGrpcError(
+              new Error(
+                'Browser operation exact session/profile identity has no Meta token',
+              ),
+            );
           } else {
             respondError(`UploadVideo: ${res.error || 'no video_id'}`);
           }
         }
       } catch (err: any) {
-        respondError(`UploadVideo: ${String(err?.message ?? err)}`);
+        respondGrpcError(err);
       } finally {
         processing = false;
       }
@@ -343,6 +907,7 @@ export function createMetaApiServiceHandlers(
     }
 
     call.on('data', (chunk: any) => {
+      if (grpcAbort.controller.signal.aborted || respondedOnce) return;
       pendingChunks.push(chunk);
       void processChunks();
     });
@@ -361,12 +926,17 @@ export function createMetaApiServiceHandlers(
     });
 
     call.on('cancelled', () => {
-      respondError('UploadVideo: cancelled клиентом');
+      cancelUpload();
+    });
+
+    call.on('close', () => {
+      if (!grpcAbort.controller.signal.aborted) return;
+      cancelUpload();
     });
   }
 
   return {
-    executeGraphCall: executeGraphCallHandler,
+    executeGraphCallV5: executeGraphCallV5Handler,
     checkMetaApiHealth: checkMetaApiHealthHandler,
     uploadImage: uploadImageHandler,
     uploadVideo: uploadVideoHandler,

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -13,7 +12,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    Numeric,
     String,
     UniqueConstraint,
     text,
@@ -55,13 +53,7 @@ class TrackerClickState(UUIDPrimaryKey, Timestamp, Base):
     registration_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ftd_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confirmed_deposit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    ftd_revenue: Mapped[Decimal] = mapped_column(
-        Numeric(12, 4), nullable=False, server_default=text("0")
-    )
     redeposits: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    redeposit_revenue: Mapped[Decimal] = mapped_column(
-        Numeric(12, 4), nullable=False, server_default=text("0")
-    )
     last_event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
 

@@ -4,9752 +4,9046 @@
  */
 
 export interface paths {
-    "/healthz": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Healthz
-         * @description Liveness probe для k8s: всегда 200, не лезет в БД/Redis.
-         */
-        get: operations["healthz_healthz_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/readyz": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Readyz
-         * @description Readiness probe: Postgres + Redis. Кэш 5 секунд, чтобы не бомбить инфру.
-         */
-        get: operations["readyz_readyz_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/system-readyz": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * System Readyz
-         * @description Готовность бизнес-контура auto-stop.
-         *
-         *     В отличие от ``/readyz`` проверяет не только инфраструктуру API, но и все
-         *     ожидаемые heartbeat, живой runtime observer, Meta API probe и глобальный
-         *     флаг сканирования. Используется оператором и post-deploy проверками; k8s
-         *     liveness/readiness намеренно остаются независимыми от состояния воркеров.
-         */
-        get: operations["system_readyz_system_readyz_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/metrics": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Metrics
-         * @description Prometheus exposition format. Метрики собираются в middleware.
-         */
-        get: operations["metrics_metrics_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/postback/adsetpro": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Receive AdSet.pro GET postback
-         * @description AdSet.pro-compatible GET endpoint. The raw URL is never logged here.
-         */
-        get: operations["receive_adsetpro_get_api_v1_postback_adsetpro_get"];
-        put?: never;
-        /** Receive legacy POST AdSet.pro postback */
-        post: operations["receive_adsetpro_postback_api_v1_postback_adsetpro_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/ads/{fb_ad_id}/snooze": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Snooze Ad
-         * @description Снуз одного объявления: ad_alert_state.snoozed_until = now + minutes.
-         *
-         *     404 — объявления нет в fb_ads. 409 — у ad нет строки состояния (нечего снузить).
-         *     422 — ад в normal (нет активного инцидента): снуз задуман «не спамить алертами по
-         *     активному инциденту», а не «выключить авто-стоп». Снуз на normal-аде заглушил бы
-         *     будущий STOP до конца окна — money-дыра (MID-2). Зеркало tma_snooze_ad.
-         */
-        post: operations["snooze_ad_api_dashboard_ads__fb_ad_id__snooze_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/ads/bulk-snooze": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Bulk Snooze Ads
-         * @description Массовый снуз с partial-failure (HTTP 200).
-         *
-         *     Один общий snoozed_until для всего batch. snoozed — fb_ad_id успешно снузленных;
-         *     failed — ad не найден (no_ad) или нет строки состояния (no_alert_state).
-         *
-         *     Реализация одним UPDATE через unnest+CTE: множественный UPDATE атомарен в одной
-         *     транзакции, классификация неуспешных — отдельным LEFT JOIN-проходом по тому же
-         *     списку (без N round-trip'ов на ad).
-         *
-         *     422 — только на валидации входа (пустой список / превышение cap).
-         */
-        post: operations["bulk_snooze_ads_api_dashboard_ads_bulk_snooze_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/ads/bulk-delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Bulk Delete Ads
-         * @description Hard-delete объявлений из fb_ads по списку fb_ad_id (каскад на уровне БД).
-         *
-         *     Возвращает фактически удалённые fb_ad_id (которых не было — молча пропускаются).
-         */
-        post: operations["bulk_delete_ads_api_dashboard_ads_bulk_delete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/ads/{fb_ad_id}/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Ad Timeline
-         * @description Возвращает timeline объявления: метрики, алерты FSM и задачи из outbox.
-         *
-         *     Временное окно по умолчанию — последние 7 дней.
-         *     Партиционированные таблицы (ad_metrics, alert_events) фильтруются обязательно по времени.
-         */
-        get: operations["get_ad_timeline_api_ads__fb_ad_id__timeline_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/adset-duplicates/preview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Preview Adset Duplicate
-         * @description Read-only dry-run; сохраняет канонический план в Redis на 15 минут.
-         */
-        post: operations["preview_adset_duplicate_api_tools_adset_duplicates_preview_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/adset-duplicates/launch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Launch Adset Duplicate
-         * @description Creates an idempotent task and launches it after explicit web confirmation.
-         */
-        post: operations["launch_adset_duplicate_api_tools_adset_duplicates_launch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/adset-duplicates/{task_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Adset Duplicate Status
-         * @description Статус только duplicate_adset_structure; чужие task IDs возвращают 404.
-         */
-        get: operations["get_adset_duplicate_status_api_tools_adset_duplicates__task_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/ai/analyze": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Ai Analyze
-         * @description Возвращает AI-анализ блока данных с Redis-кэшем TTL 600s.
-         *
-         *     При force_refresh=True кэш игнорируется и перезаписывается.
-         *     Rate-limit: 20 запросов/час per remote IP. Превышение → 429.
-         *     Если AI-провайдеры не настроены → 503.
-         */
-        post: operations["ai_analyze_api_ai_analyze_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/ai/chat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Ai Chat
-         * @description Ответ ассистента на вопрос из веб-виджета (с tool-use, read-only канал).
-         *
-         *     429 — превышен лимит; 503 — AI-провайдеры не настроены.
-         */
-        post: operations["ai_chat_api_ai_chat_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/ai/pulse": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Ai Pulse
-         * @description Почасовой пульс кабинета для веб-виджета.
-         *
-         *     Виджет опрашивает раз в час (пока вкладка открыта). Двухступенчатый контракт
-         *     против шума и лишних токенов: детерминированный pre-check сигналов (стопы /
-         *     упавшие задачи / шквал warnings за прошедший час) — если пусто, AI НЕ
-         *     вызывается и возвращается important=false (виджет молчит). Результат
-         *     кэшируется на календарный час — повторные опросы и вторые вкладки бесплатны.
-         */
-        get: operations["ai_pulse_api_ai_pulse_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/analytics/performance": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Analytics Performance
-         * @description Return lossless performance metrics at one hierarchy level.
-         */
-        get: operations["get_analytics_performance_api_analytics_performance_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/analytics/live-budget": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Analytics Live Budget
-         * @description Return hourly actual/base/stop series for the current cabinet day.
-         */
-        get: operations["get_analytics_live_budget_api_analytics_live_budget_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/analytics/daypart": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Analytics Daypart
-         * @description Return weekday x hour cells in a validated IANA display timezone.
-         */
-        get: operations["get_analytics_daypart_api_analytics_daypart_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/auto-enable-disabled": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Auto Enable Disabled
-         * @description Возвращает список объявлений с отключённым авто-включением.
-         *
-         *     JOIN на fb_ads для получения fb_ad_id и ad_name.
-         */
-        get: operations["list_auto_enable_disabled_api_dashboard_auto_enable_disabled_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/auto-enable-disabled/{fb_ad_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Disable Auto Enable
-         * @description Устанавливает флаг «не включать автоматически» для объявления.
-         *
-         *     Фронт (disableAutoEnable) не передаёт тело — body опционален.
-         *     404 если объявление не найдено.
-         *     409 если флаг уже установлен.
-         */
-        post: operations["disable_auto_enable_api_dashboard_auto_enable_disabled__fb_ad_id__post"];
-        /**
-         * Enable Auto Enable
-         * @description Снимает флаг «не включать автоматически» (включает авто-включение).
-         *
-         *     404 если флаг не был установлен. 204 при успешном удалении.
-         */
-        delete: operations["enable_auto_enable_api_dashboard_auto_enable_disabled__fb_ad_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaigns/presets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Presets
-         * @description Список всех пресетов (новые сверху).
-         */
-        get: operations["list_presets_api_tools_campaigns_presets_get"];
-        put?: never;
-        /**
-         * Create Preset
-         * @description Создать пресет. 409 при дубле имени (UNIQUE name).
-         */
-        post: operations["create_preset_api_tools_campaigns_presets_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaigns/presets/{preset_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Update Preset
-         * @description Полное обновление пресета. 404 если нет, 409 при дубле имени.
-         */
-        put: operations["update_preset_api_tools_campaigns_presets__preset_id__put"];
-        post?: never;
-        /**
-         * Delete Preset
-         * @description Удалить пресет. FK run→preset с ON DELETE SET NULL (история запусков цела).
-         */
-        delete: operations["delete_preset_api_tools_campaigns_presets__preset_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaigns/upload": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Upload Concepts
-         * @description Загрузка концептов креативов в per-run временную папку на сервере.
-         *
-         *     Возвращает upload_id (входит в config.creo_root для воркера) + список refs
-         *     с размерами для превью. Тяжёлая уникализация — в воркере, не здесь.
-         */
-        post: operations["upload_concepts_api_tools_campaigns_upload_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaigns/validate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Validate Config
-         * @description Dry-run: собирает план (число объектов + нейминг) без создания в Meta.
-         *
-         *     concept_counts (число концептов на блок) передаётся в build_campaign_spec —
-         *     раскладка K концептов × copies (сквозная нумерация ads), как у исполнителя.
-         */
-        post: operations["validate_config_api_tools_campaigns_validate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaigns/launch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Launch Campaign
-         * @description Создать campaign_run(queued) + task_queue(campaign_create) в одной транзакции.
-         *
-         *     Money-safety: idempotency_key (по конфигу) общий для run и задачи. Повторный
-         *     launch того же конфига → находим существующий run, ничего не дублируем (200-shape).
-         *     Воркер по run_id грузит CampaignRun и исполняет залив.
-         */
-        post: operations["launch_campaign_api_tools_campaigns_launch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaigns/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Runs
-         * @description Список запусков (новые сверху). offer_code извлекается из снимка config.
-         */
-        get: operations["list_runs_api_tools_campaigns_runs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaigns/runs/{run_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Run
-         * @description Детали запуска: конфиг-снимок, прогресс, созданные Meta-ID, ошибка.
-         */
-        get: operations["get_run_api_tools_campaigns_runs__run_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaigns/runs/{run_id}/clone": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Clone Run
-         * @description Клон запуска в новый черновик-run (status=queued БЕЗ задачи).
-         *
-         *     Клон не заливает сразу: создаёт queued-run с новым idempotency_key
-         *     (config + другой start_date/повторный залив должны иметь свой ключ).
-         *     Пользователь правит и жмёт launch отдельно. Здесь — только заготовка config.
-         */
-        post: operations["clone_run_api_tools_campaigns_runs__run_id__clone_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaigns/runs/{run_id}/cancel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Cancel Run
-         * @description Отмена запуска в очереди (status=cancelled + отмена задачи).
-         *
-         *     Money-гард: отмена только ДО creating (необратимое создание Meta уже идёт).
-         *     409 если run уже creating/succeeded/failed/cancelled.
-         */
-        post: operations["cancel_run_api_tools_campaigns_runs__run_id__cancel_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaigns/runs/{run_id}/cleanup": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Cleanup Run
-         * @description Пометить созданные Meta-объекты на снос (partial-fail recovery).
-         *
-         *     Возвращает created_meta_ids run для ручного/задачного сноса. Реальный снос —
-         *     отдельной meta-мутацией (вне scope этого роутера). Money-safe: только читает
-         *     список id, ничего сам в Meta не трогает.
-         */
-        post: operations["cleanup_run_api_tools_campaigns_runs__run_id__cleanup_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/campaigns/ad-account-timezone": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Ad Account Timezone
-         * @description Автоподхват таймзоны кабинета для start_time кампании.
-         *
-         *     400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула
-         *     ошибку или кабинет не найден. read-only: один GET /act_{id} через Vision-сессию,
-         *     без открытия браузера.
-         */
-        get: operations["get_ad_account_timezone_api_campaigns_ad_account_timezone_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/campaigns/ad-account-pages": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Ad Account Pages
-         * @description Список FB-страниц кабинета (promote_pages) для дропдауна page_id.
-         *
-         *     400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула
-         *     ошибку или кабинет не найден. read-only: один GET /act_{id}/promote_pages через
-         *     Vision-сессию, без открытия браузера. Массив может быть пустым (нет страниц).
-         */
-        get: operations["get_ad_account_pages_api_campaigns_ad_account_pages_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/ads": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Ad Snapshots
-         * @description Список ad'ов с alert_state, последней метрикой и offer.
-         *
-         *     Два режима пагинации (обратно совместимы):
-         *     1. Offset-пагинация (без cursor): работает как раньше.
-         *        Лимит поднят с 500 до 2000 для совместимости с виртуальными таблицами.
-         *     2. Cursor/keyset-пагинация (cursor задан): стабильный обход без дублей.
-         *        cursor = X-Next-Cursor из предыдущего ответа (base64 ключа сортировки).
-         *        offset игнорируется. Нет дублей при добавлении новых строк во время листания.
-         *
-         *     Партиционный фильтр по ad_metrics.cycle_ts применяется внутри LATERAL'а
-         *     (последние 7 дней). Если за окно нет метрик — metrics=None.
-         *
-         *     Headers ответа:
-         *     - X-Total-Count — реальный COUNT с теми же фильтрами (для пагинатора).
-         *     - X-Next-Cursor — cursor следующей страницы (None/отсутствует если последняя).
-         */
-        get: operations["list_ad_snapshots_api_dashboard_ads_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/alerts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Alert Events
-         * @description Append-only лог FSM-событий с JOIN'ами по fb_ads/fb_campaigns/offers.
-         *
-         *     Партиционный фильтр по alert_events.created_at — обязательный.
-         *     Если from_iso/to_iso не переданы — дефолт last 24h.
-         *     Если from_iso > to_iso → 422.
-         *
-         *     CRITICAL: имена полей AlertEvent — `stage` / `matched_rule_codes`
-         *     (не `event_type` / `rule_codes`). triggered_by_rule_codes отдельного поля в
-         *     ORM не имеет — отдаём alias matched_rule_codes (см. alert_serializer).
-         */
-        get: operations["list_alert_events_api_dashboard_alerts_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/incidents": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Incidents
-         * @description Активные инциденты: ad_alert_state IN ('warning_sent','stop_sent')
-         *     AND (snoozed_until IS NULL OR snoozed_until < NOW()).
-         *
-         *     Дополнительно к /dashboard/ads:
-         *     - incident_open_since: last_transition_at (момент входа в текущее состояние).
-         *     - incident_duration_seconds: NOW - incident_open_since.
-         *     - transitions_count: COUNT(alert_events) от incident_open_since до NOW().
-         *
-         *     transitions_count считается batch'ем за один запрос — никаких N+1.
-         */
-        get: operations["list_incidents_api_dashboard_incidents_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/performance": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Dashboard Performance
-         * @description Тяжёлая агрегация: top кампаний, leaderboard офферов, rule violations.
-         *
-         *     Три параллельных SQL через asyncio.gather. Каждый запрос использует
-         *     partition pruning (cycle_ts/created_at) для ad_metrics и alert_events.
-         *
-         *     Fail-policy: если хотя бы один подзапрос падает — пробрасываем (fail-all),
-         *     потому что секция должна быть согласованной.
-         *
-         *     Производительность: партиционирование + INDEX на (ad_id, cycle_ts) для
-         *     ad_metrics; ix_alert_events_ad_created для alert_events; JOIN'ы через FK.
-         */
-        get: operations["get_dashboard_performance_api_dashboard_performance_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/stats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Dashboard Stats
-         * @description Overview-карточки для DashboardPage. Никаких параметров.
-         *
-         *     Параллельно (asyncio.gather) выполняет:
-         *     - COUNT'ы по fb_ads + ad_alert_state (один SQL).
-         *     - COUNT'ы по scan_runs (partitioned WHERE started_at).
-         *     - COUNT'ы по task_queue (status='failed' за 24h + pending).
-         *     - Чтение observer:runtime из Redis.
-         *
-         *     Если Redis недоступен — observer_status='unknown', endpoint не падает.
-         */
-        get: operations["get_dashboard_stats_api_dashboard_stats_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/batch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Dashboard Batch
-         * @description Композит stats + recent_incidents + recent_alerts + recent_disable_tasks
-         *     + recent_enable_tasks + enable_recommendations_pending.
-         *
-         *     Снижает количество fetch'ей на DashboardPage с 6 до 1.
-         *     Поведение при partial failure: если один из подзапросов падает —
-         *     возвращаем для него default (пустой массив или нулевой stats).
-         *     Остальные секции возвращаются. Это согласовано с UX: фронт не отображает
-         *     ошибку всему экрану, если упала одна секция.
-         *
-         *     recent_enable_tasks — задачи включения объявлений (activate_ad), аналог
-         *     recent_disable_tasks. Управляется отдельным параметром enable_limit.
-         */
-        get: operations["get_dashboard_batch_api_dashboard_batch_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/spend-history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Spend History
-         * @description Сырые точки ad_metrics за окно hours.
-         *
-         *     Партиционный фильтр по cycle_ts применяется в WHERE (partition pruning).
-         *     Если fb_ad_id не передан — limit 10000 (защита от мегабайтных ответов).
-         *     Если fb_ad_id передан — cap 50000 (история одного ad'а может быть длинной,
-         *     но не безграничной — LOW аудита 02.07).
-         *     ORDER BY cycle_ts ASC.
-         */
-        get: operations["get_spend_history_api_dashboard_spend_history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/chart-data": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Chart Data
-         * @description Бакетированный график для DashboardPage.
-         *
-         *     bucket=day: последний snapshot на (день × ad) = суточный итог (кумулятив
-         *     сбрасывается посуточно) → SUM по дню. bucket=hour (аудит 2026-07-12, H-5):
-         *     последний snapshot в часе — это кумулятив С НАЧАЛА СУТОК кабинета, не «за час»;
-         *     поэтому считаем per-ad дельты через hourly_deltas (тот же движок, что /stats/today),
-         *     иначе почасовой график рисовал нарастающий кумулятив.
-         *
-         *     ВАЖНО (ревью #4): bucket=hour осмыслен только с cabinet_day=true — предусловие
-         *     hourly_deltas «окно внутри одних суток кабинета» (prev=0 на 00:00). Оба фронта
-         *     зовут именно так. На скользящем окне (cabinet_day=false) первый час окна даст
-         *     спайк (полный кумулятив), а сброс на границе суток — клэмп в 0.
-         *
-         *     cabinet_day=true (Волна 2/E): окно от начала текущих суток кабинета (TZ аккаунта),
-         *     чтобы график спенда начинался с нуля в полночь кабинета, а не от скользящего 24ч.
-         *
-         *     Бакеты без метрик в окне не появляются (gap). Recharts сам обработает разрывы.
-         *     Partition pruning через WHERE cycle_ts >= floor (константа).
-         */
-        get: operations["get_chart_data_api_dashboard_chart_data_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/disable-tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Disable Tasks
-         * @description Список disable-задач с фильтрацией.
-         *
-         *     ?status=PENDING,FAILED — CSV uppercase frontend-статусов.
-         *     PENDING разворачивается в ['draft','pending'] для покрытия обоих db-статусов.
-         *     ?fb_ad_id=12345 — фильтр по payload->>'fb_ad_id'.
-         *     Заголовок X-Total-Count — полный COUNT без LIMIT.
-         */
-        get: operations["list_disable_tasks_api_dashboard_disable_tasks_get"];
-        put?: never;
-        /**
-         * Create Disable Task
-         * @description Создать disable-задачу вручную.
-         *
-         *     Резолвит fb_ad_id → fb_ads.id (404 если нет).
-         *     Idempotency key уникален per-request через UUID (ручные задачи дублировать можно).
-         */
-        post: operations["create_disable_task_api_dashboard_disable_tasks_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/disable-tasks/bulk": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Bulk Create Disable Tasks
-         * @description Массовое отключение объявлений (money-критично).
-         *
-         *     На каждый fb_ad_id — отдельный create_mutation_task pause_ad в собственной
-         *     транзакции (idempotent через per-ad ключ manual:pause_ad:{id}:{token}).
-         *     Частичный откат невозможен: падение на одном ad не теряет уже созданные задачи.
-         *
-         *     Ответ partial-failure (HTTP 200):
-         *       created — задачи, созданные этим запросом;
-         *       skipped — дубли (ключ уже был): повтор того же idempotency_token или race;
-         *       failed  — ad не найден в fb_ads / неожиданная ошибка.
-         *
-         *     422 — только на валидации входа (пустой/слишком большой batch). Логика в
-         *     core.tasks.bulk_disable.process_bulk_disable (тестируется изолированно).
-         */
-        post: operations["bulk_create_disable_tasks_api_dashboard_disable_tasks_bulk_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/disable-tasks/{task_id}/retry": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Retry Disable Task
-         * @description Повторить failed/cancelled disable-задачу.
-         *
-         *     Переводит статус в 'retrying' и сбрасывает next_retry_at=NOW().
-         *     Attempt_count НЕ инкрементируется — worker сам это делает при claim.
-         *     409 если задача в активном статусе (running/pending/succeeded).
-         */
-        post: operations["retry_disable_task_api_dashboard_disable_tasks__task_id__retry_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/disable-tasks/{task_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Cancel Disable Task
-         * @description Отменить disable-задачу (soft cancel).
-         *
-         *     Переводит status в 'cancelled'.
-         *     404 если задача не найдена или не disable.
-         *     409 если задача в терминальном статусе (succeeded/cancelled) или исполняется
-         *     прямо сейчас (running) — отмена running-задачи ломала FSM-sync (H-7).
-         */
-        delete: operations["cancel_disable_task_api_dashboard_disable_tasks__task_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/enable-recommendations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Enable Recommendations
-         * @description Список рекомендаций на включение.
-         *
-         *     ?status=PENDING  — только без promoted_to_task_id (ещё не подтверждены).
-         *     ?status=PROMOTED — только с promoted_to_task_id (уже создана enable-задача).
-         *     JOIN fb_ads для ad_name и fb_ad_id.
-         *     JOIN fb_adsets → fb_campaigns для campaign_name.
-         *     LEFT JOIN task_queue для promoted_task_status.
-         */
-        get: operations["list_enable_recommendations_api_dashboard_enable_recommendations_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/enable-recommendations/{rec_id}/enable": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Confirm Enable Recommendation
-         * @description Revalidate рекомендацию и атомарно создать activate_ad задачу.
-         */
-        post: operations["confirm_enable_recommendation_api_dashboard_enable_recommendations__rec_id__enable_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/enable-tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Enable Tasks
-         * @description Список enable-задач с фильтрацией.
-         *
-         *     ?status=PENDING,FAILED — CSV uppercase frontend-статусов.
-         *     PENDING разворачивается в ['draft','pending'].
-         *     ?fb_ad_id=12345 — фильтр по payload->>'fb_ad_id'.
-         *     Заголовок X-Total-Count — полный COUNT без LIMIT.
-         */
-        get: operations["list_enable_tasks_api_dashboard_enable_tasks_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fake-deposits": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Fake Deposits
-         * @description Возвращает все корректировки фейковых депозитов с именем объявления через LEFT JOIN.
-         */
-        get: operations["list_fake_deposits_api_fake_deposits_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/fake-deposits/{fb_ad_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Upsert Fake Deposit
-         * @description Upsert корректировки фейковых депозитов для объявления.
-         *
-         *     Ресолв fb_ad_id → FbAd.id. 404 если объявление не существует.
-         *     ON CONFLICT (ad_id) DO UPDATE — обновляет corrected_deposits и note.
-         *     Возвращает обновлённую запись (200).
-         */
-        put: operations["upsert_fake_deposit_api_fake_deposits__fb_ad_id__put"];
-        post?: never;
-        /**
-         * Delete Fake Deposit
-         * @description Удаляет корректировку фейковых депозитов для объявления.
-         *
-         *     404 если записи не было. 204 при успешном удалении.
-         */
-        delete: operations["delete_fake_deposit_api_fake_deposits__fb_ad_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/health/details": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Health Details
-         * @description Агрегирует статусы воркеров по Redis worker:heartbeat:* ключам.
-         *
-         *     Использует SCAN MATCH (не KEYS) для безопасного обхода Redis.
-         *     Статус воркера: ONLINE если heartbeat-ключ существует (TTL > 0),
-         *     OFFLINE если ключ протух или не найден.
-         *
-         *     overall:
-         *         HEALTHY  — все expected ONLINE
-         *         DEGRADED — >0 OFFLINE
-         *         CRITICAL — observer OFFLINE или активный money-critical watchdog
-         */
-        get: operations["get_health_details_api_health_details_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/history/summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get History Summary
-         * @description Сводная агрегация за период: spend/метрики + алерты + задачи.
-         *
-         *     Партиционированные таблицы фильтруются по partition-key. 5 запросов на одном
-         *     соединении (см. core.dashboard.history_queries).
-         */
-        get: operations["get_history_summary_api_history_summary_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/history/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get History Timeline
-         * @description Объединённая лента: AlertEvent + terminal TaskQueue (succeeded/failed/cancelled).
-         *
-         *     UNION ALL с JOIN FbAd→FbAdset→FbCampaign для имён. Сорт по ts DESC.
-         *     Только terminal задачи (succeeded/failed/cancelled) — pending/running не включаются.
-         */
-        get: operations["get_history_timeline_api_history_timeline_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/history/campaigns": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get History Campaigns
-         * @description GROUP BY кампании: spend/leads/deps + active_ads_count + alerts_count.
-         *
-         *     Партиционированная ad_metrics фильтруется по cycle_ts.
-         *     active_ads_count — через last_seen_at >= NOW() - 7d.
-         */
-        get: operations["get_history_campaigns_api_history_campaigns_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/history/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get History Events
-         * @description AlertEvent drill-down с JOIN ad/adset/campaign/offer.
-         *
-         *     Партиционированная alert_events фильтруется по created_at.
-         */
-        get: operations["get_history_events_api_history_events_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/history/offers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get History Offers
-         * @description GROUP BY Offer через JOIN fb_campaigns.offer_id.
-         *
-         *     Партиционированные таблицы фильтруются по partition-key.
-         */
-        get: operations["get_history_offers_api_history_offers_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/history/ads": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get History Ads
-         * @description GROUP BY объявлению: spend/leads/deps + last_alert + last_disable.
-         *
-         *     last_alert_at / last_alert_stage — через LATERAL subquery.
-         *     last_disable_at — через LATERAL subquery по task_queue.
-         *     Партиционированные таблицы фильтруются по partition-key.
-         */
-        get: operations["get_history_ads_api_history_ads_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/observer/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Observer Status
-         * @description Возвращает статус observer-воркера из Redis ключа observer:runtime.
-         *
-         *     Если ключ отсутствует — возвращает {status: unknown, last_scan_at: null, ...}.
-         *     Никогда не падает с 5xx.
-         *     Использует read_observer_runtime() — единственную точку чтения контракта.
-         *     Дополнительно из scan_runs считает scans_today и outcome последнего скана.
-         */
-        get: operations["get_observer_status_api_observer_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/observer/scan-runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Scan Runs
-         * @description Возвращает историю scan_runs с обязательным оконным фильтром по started_at.
-         *
-         *     Partition pruning требует явного WHERE по started_at.
-         *     Если from_iso/to_iso не переданы — дефолт last 7 days.
-         *     limit автоматически ограничен до 200.
-         */
-        get: operations["list_scan_runs_api_observer_scan_runs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/observer/start-new-cabinet-day": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start New Cabinet Day
-         * @description Архивирует агрегаты за вчера и публикует событие new_cabinet_day.
-         *
-         *     Логика:
-         *     1. Агрегируем метрики за прошлые сутки (SUM spend/deposits/leads) из scan_runs.
-         *     2. INSERT в cabinet_day_archives.
-         *     3. Публикуем {event: new_cabinet_day, ...} в Redis канал fb_agent:observer:cabinet_day.
-         *
-         *     observer_worker подписан на этот канал (main.py::_on_cabinet_day) и делает
-         *     форс-рескан нового дня. Архив (шаг 2) здесь — единственный источник истины:
-         *     observer его НЕ дублирует.
-         */
-        post: operations["start_new_cabinet_day_api_observer_start_new_cabinet_day_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/observer/restart": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Restart Observer
-         * @description Публикует сигнал рестарта observer-воркера в Redis.
-         *
-         *     observer_worker подписан на канал fb_agent:worker:restart:observer
-         *     (main.py::_on_restart) и выполняет graceful stop по этому событию.
-         *     Если Redis недоступен — 503.
-         */
-        post: operations["restart_observer_api_observer_restart_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/offers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Offers
-         * @description Возвращает список офферов.
-         *
-         *     По умолчанию только активные (is_active=true).
-         *     При include_inactive=true — все, включая soft-deleted.
-         */
-        get: operations["list_offers_api_offers_get"];
-        put?: never;
-        /**
-         * Create Offer
-         * @description Создаёт новый оффер.
-         *
-         *     При конфликте по UNIQUE code → 409 Conflict.
-         */
-        post: operations["create_offer_api_offers_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/offers/compare": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Compare Offers
-         * @description Агрегированные метрики per-offer за последние N дней.
-         *
-         *     Требует партиционного WHERE по ad_metrics.cycle_ts и alert_events.created_at.
-         *     Без этого фильтра запрос становится full-scan — не убирать.
-         */
-        get: operations["compare_offers_api_offers_compare_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/offers/{offer_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Update Offer
-         * @description Обновляет оффер.
-         *
-         *     code — immutable: передача code в теле игнорируется, изменение не применяется.
-         *     404 если оффер не найден.
-         */
-        put: operations["update_offer_api_offers__offer_id__put"];
-        post?: never;
-        /**
-         * Delete Offer
-         * @description Soft delete оффера: is_active=false.
-         *
-         *     404 если оффер не найден или уже неактивный (не идемпотентно).
-         *     Рационал: фронт ожидает ошибку при попытке удалить несуществующее.
-         */
-        delete: operations["delete_offer_api_offers__offer_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/offers/{offer_id}/rules": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Offer Rules
-         * @description Возвращает правила оффера.
-         *
-         *     Если OfferRule для оффера не существует — возвращает дефолтную структуру
-         *     с offer_id и всеми порогами null (правило не настроено).
-         *     404 если сам оффер не найден.
-         */
-        get: operations["get_offer_rules_api_offers__offer_id__rules_get"];
-        /**
-         * Upsert Offer Rules
-         * @description Upsert правил оффера.
-         *
-         *     Если OfferRule не существует — создаёт. Если существует — обновляет.
-         *     404 если оффер не найден.
-         *     Невалидные пороги (отрицательные) → 422.
-         */
-        put: operations["upsert_offer_rules_api_offers__offer_id__rules_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/offers/rules/preview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Preview Rule Thresholds
-         * @description При какой $-стоимости сработают правила и ворнинги для CPA + чувствительности.
-         *
-         *     Использует RuleContext — единый расчёт с автостопом: значения в превью ТОЧНО совпадают
-         *     с реальными порогами, по которым observer отключает объявления. Базовые проценты
-         *     (CPC 2% / CPL 10% / CPR 20% / spend 50-70%/70-90%) фиксированы.
-         */
-        get: operations["preview_rule_thresholds_api_offers_rules_preview_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/cabinet-autostart": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Cabinet Autostart
-         * @description Текущий конфиг автостарта (или дефолт, если ещё не задан).
-         */
-        get: operations["get_cabinet_autostart_api_settings_cabinet_autostart_get"];
-        /**
-         * Put Cabinet Autostart
-         * @description Полная замена конфига автостарта. Применяется со следующей минуты воркера.
-         */
-        put: operations["put_cabinet_autostart_api_settings_cabinet_autostart_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/observer": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Observer Settings
-         * @description Возвращает текущий ObserverConfig singleton.
-         *
-         *     Поля warning_percent_of_stop и WARNING-параметры возвращаются как null —
-         *     они перенесены в OfferRule (per-offer). Фронт получает стабильный shape.
-         */
-        get: operations["get_observer_settings_api_settings_observer_get"];
-        /**
-         * Put Observer Settings
-         * @description Обновляет все поля ObserverConfig singleton.
-         *
-         *     Валидация: default_interval_seconds от 30 до 600 (через Pydantic Field).
-         *     Гейт «нечего сканировать» (аудит 2026-07-12, C-1): PUT с is_scanning_enabled=true
-         *     проходит ту же проверку, что PATCH /scanning — иначе full-PUT включал скан
-         *     в обход гейта при пустом allowlist («всё зелёное, авто-стоп не работает»).
-         */
-        put: operations["put_observer_settings_api_settings_observer_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/observer/scanning": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Patch Observer Scanning
-         * @description Переключает только is_scanning_enabled, не трогая остальные поля.
-         *
-         *     Гейт включения: не даём включить скан, если мониторить нечего (пустой allowlist при
-         *     одном кабинете / нет активных офферов). Иначе скан крутился бы вхолостую раз в интервал,
-         *     ничего не отслеживая. Возвращаем 409 с понятной причиной — фронт показывает её на клике
-         *     «Включить», а заполнять кампании пользователь идёт на страницу «Кампании».
-         */
-        patch: operations["patch_observer_scanning_api_settings_observer_scanning_patch"];
-        trace?: never;
-    };
-    "/api/settings/observer/owner-tag": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Patch Observer Owner Tag
-         * @description Меняет только owner_campaign_tag, не трогая остальные поля.
-         *
-         *     Точечный PATCH против лост-апдейта (аудит 2026-07-12, C-1): фронты сохраняли тег
-         *     через full-PUT из закэшированного состояния и молча откатывали is_scanning_enabled.
-         */
-        patch: operations["patch_observer_owner_tag_api_settings_observer_owner_tag_patch"];
-        trace?: never;
-    };
-    "/api/settings/observer/auto-enable": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Patch Observer Auto Enable
-         * @description Переключает только auto_enable_recommendations (требует миграции 0003).
-         */
-        patch: operations["patch_observer_auto_enable_api_settings_observer_auto_enable_patch"];
-        trace?: never;
-    };
-    "/api/settings/observer/campaigns": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Observer Campaigns
-         * @description Список кампаний (накопленных observer'ом) для выбора allowlist (#3).
-         *
-         *     Фильтр по owner_campaign_tag (word-boundary, через campaign_matches_owner).
-         *     selected — входит ли кампания в текущий allowlist (cfg.campaign_ids).
-         *     Кампании без Meta fb_campaign_id пропускаются — их нельзя заскоупить по campaign.id.
-         *     Свежесть: по умолчанию кампании с датой в имени старше CAMPAIGN_LIST_HORIZON_DAYS
-         *     скрываются (если не выбраны) — see include_stale.
-         */
-        get: operations["list_observer_campaigns_api_settings_observer_campaigns_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Patch Observer Campaigns
-         * @description Задаёт allowlist кампаний для am-режима (#3).
-         *
-         *     Фильтрует am_tabular по campaign.id IN [...]: в общем кабинете не тянем чужие ад'ы.
-         *     Пустой список — без фильтра по кампаниям (owner_campaign_tag всё равно отсекает чужое).
-         */
-        patch: operations["patch_observer_campaigns_api_settings_observer_campaigns_patch"];
-        trace?: never;
-    };
-    "/api/settings/observer/campaigns/refresh": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Refresh Observer Campaigns
-         * @description Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).
-         *
-         *     Решает «замкнутый круг»: обычный скан с allowlist не подхватывает новые кампании,
-         *     поэтому их нельзя выбрать. Здесь резолвим кампании владельца по owner_tag живьём,
-         *     апсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.
-         *     503 при недоступности browser-agent. Результат отсортирован по имени убыванием
-         *     (в названии есть дата → свежие выше).
-         *
-         *     Кабинеты: если задан явный ad_account_id — только он; иначе ВСЕ кабинеты активных
-         *     офферов (offers.ad_account_ids, resolve_scan_account_ids) — обходим каждый и сливаем
-         *     кампании (dedup по fb_campaign_id). Нет активных офферов → legacy primary-вкладка.
-         */
-        post: operations["refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/observer/scan-now": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Post Scan Now
-         * @description Публикует Redis-событие fb_agent:observer:trigger для немедленного запуска scan.
-         *
-         *     observer_worker подписан на канал fb_agent:observer:trigger и немедленно
-         *     запускает scan-цикл по этому событию (main.py::_on_trigger).
-         *     Если Redis недоступен — возвращает 503.
-         */
-        post: operations["post_scan_now_api_settings_observer_scan_now_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/telegram": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Telegram Settings
-         * @description Возвращает публичные поля TelegramConfig с compute-полями.
-         *
-         *     НЕ возвращает bot_token_encrypted. web_app_url — из system_config или .env.
-         */
-        get: operations["get_telegram_settings_api_settings_telegram_get"];
-        put?: never;
-        post?: never;
-        /**
-         * Delete Telegram Settings
-         * @description Очищает bot_token_encrypted и chat_id в TelegramConfig.
-         *
-         *     Если строки нет — создаёт пустую singleton-строку как tombstone. Это сохраняет
-         *     явное отключение через UI: env-bootstrap не восстановит токен после DELETE.
-         */
-        delete: operations["delete_telegram_settings_api_settings_telegram_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/telegram/web-app-url": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Put Telegram Web App Url
-         * @description Сохраняет Web App URL Mini App в system_config (без рестарта).
-         *
-         *     Пустая строка/None — очистка (тогда GET вернёт фолбэк из .env).
-         *     Непустой URL обязан быть HTTPS (требование Telegram Mini Apps) → иначе 422.
-         */
-        put: operations["put_telegram_web_app_url_api_settings_telegram_web_app_url_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/telegram/token": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Put Telegram Token
-         * @description Шифрует bot_token и сохраняет в TelegramConfig singleton.
-         *
-         *     Если строки ещё нет — создаёт с server-defaults.
-         *     Инвалидирует кэш bot_username в Redis.
-         */
-        put: operations["put_telegram_token_api_settings_telegram_token_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/telegram/recipients": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Telegram Recipients
-         * @description Возвращает список активных (не отозванных) получателей Telegram.
-         */
-        get: operations["get_telegram_recipients_api_settings_telegram_recipients_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/telegram/recipients/{recipient_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Delete Telegram Recipient
-         * @description Soft-delete: выставляет revoked_at = NOW() для получателя с заданным id.
-         *
-         *     Возвращает 404, если получатель не найден или уже отозван.
-         */
-        delete: operations["delete_telegram_recipient_api_settings_telegram_recipients__recipient_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/telegram/recipients/invite": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Post Telegram Invite
-         * @description Генерирует invite-код (TTL 24h) и сохраняет в telegram_invites.
-         *
-         *     Возвращает { code, expires_at }.
-         */
-        post: operations["post_telegram_invite_api_settings_telegram_recipients_invite_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/telegram/owner-invite": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Post Telegram Owner Invite
-         * @description Вернуть действующую owner-ссылку или создать её атомарно.
-         *
-         *     Повторный клик и сетевой retry возвращают тот же код до его использования или
-         *     истечения. GET настроек никогда не создаёт секреты сам — он только показывает
-         *     уже существующую ссылку.
-         */
-        post: operations["post_telegram_owner_invite_api_settings_telegram_owner_invite_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/vision": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Vision Settings
-         * @description Возвращает VisionConfig и runtime-поля из Redis.
-         *
-         *     has_token = токен есть в БД ИЛИ в .env (token_source говорит, где именно).
-         *     Runtime-поля берутся из worker:heartbeat:browser-agent.
-         */
-        get: operations["get_vision_settings_api_settings_vision_get"];
-        /**
-         * Put Vision Settings
-         * @description Обновляет x_token / profile_id / флаг self-heal в VisionConfig singleton.
-         *
-         *     Если x_token передан — шифрует и сохраняет.
-         *     Если profile_id передан — обновляет.
-         *     Если auto_restart_on_missing_cdp передан — выставляет флаг (None = не трогать).
-         *     Если строки ещё нет — создаёт с server-defaults.
-         */
-        put: operations["put_vision_settings_api_settings_vision_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/vision/reconnect": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Post Vision Reconnect
-         * @description Триггерит gRPC ReconnectBrowser к browser-agent.
-         *
-         *     Читает x_token и profile_id из БД (или fallback в Settings).
-         *     Возвращает 503 при недоступности gRPC.
-         */
-        post: operations["post_vision_reconnect_api_vision_reconnect_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/vision/ensure-cdp": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Post Vision Ensure Cdp
-         * @description Bootstrap CDP при старте (run.sh): проверяет cdp_ready, при необходимости reconnect.
-         *
-         *     Никогда не падает 5xx — всегда {ok,status,action,message}. Если CDP уже готов —
-         *     action=none. Если нет — пытается reconnect; при недоступности browser-agent
-         *     возвращает ok=false (run.sh покажет мягкий warning, а не ошибку 404/503).
-         */
-        post: operations["post_vision_ensure_cdp_api_vision_ensure_cdp_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/stats/today": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Stats Today
-         * @description Воронка текущих суток кабинета: тоталы, производные, почасовые дельты, трекер.
-         */
-        get: operations["get_stats_today_api_stats_today_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/stats/period": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Stats Period
-         * @description Воронка за период (max 90д): тоталы, производные, подневные серии Meta и трекера.
-         */
-        get: operations["get_stats_period_api_stats_period_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tma/auth": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Tma Auth
-         * @description Валидирует initData и выдаёт сессионный токен + роль.
-         *
-         *     503 — Telegram/secret не настроены; 401 — initData невалиден/истёк;
-         *     403 — пользователь не в списке доступа (нет активного recipient'а).
-         */
-        post: operations["tma_auth_api_tma_auth_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tma/me": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Tma Me
-         * @description Проверка сессии: возвращает текущего пользователя (под Bearer-guard).
-         */
-        get: operations["tma_me_api_tma_me_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tma/ads/{fb_ad_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Tma Ad Detail
-         * @description Детальный снимок объявления (build_ad_snapshot + история алертов + account).
-         */
-        get: operations["tma_ad_detail_api_tma_ads__fb_ad_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tma/ads/{fb_ad_id}/disable": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Tma Disable Ad
-         * @description Создаёт задачу на отключение объявления (money-действие).
-         *
-         *     Канал — только Marketing API (meta_api pause_ad, точно по ad_id),
-         *     как ручная кнопка бота. requested_by = tma:<telegram_user_id>.
-         */
-        post: operations["tma_disable_ad_api_tma_ads__fb_ad_id__disable_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tma/ads/{fb_ad_id}/snooze": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Tma Snooze Ad
-         * @description Снуз: ad_alert_state.snoozed_until = now + minutes.
-         *
-         *     404 — объявления нет. 409 — у ad нет строки состояния (нечего снузить).
-         *     422 — ад в normal (нет активного инцидента): снуз на normal-аде заглушил бы
-         *     будущий STOP до конца окна — money-дыра (MID-2). Зеркало dashboard snooze_ad.
-         */
-        post: operations["tma_snooze_ad_api_tma_ads__fb_ad_id__snooze_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tma/ads/{fb_ad_id}/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Tma Claim Ad
-         * @description Claim: взять активный алерт под контроль вручную → alert_state='claimed'.
-         *
-         *     Переход warning_sent/stop_sent → claimed (observer перестаёт ре-алертить,
-         *     защита WHERE NOT IN ('claimed','disabled') в apply_fsm_transition). Идемпотентно:
-         *     повторный claim уже-claimed → ok. 404 — ad нет; 409 — нет активного алерта.
-         */
-        post: operations["tma_claim_ad_api_tma_ads__fb_ad_id__claim_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tma/cabinet-autostart": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Tma Get Cabinet Autostart
-         * @description Текущий конфиг автостарта кабинета (любой авторизованный recipient).
-         */
-        get: operations["tma_get_cabinet_autostart_api_tma_cabinet_autostart_get"];
-        /**
-         * Tma Put Cabinet Autostart
-         * @description Изменить конфиг автостарта. Money-критично → только role='owner'.
-         */
-        put: operations["tma_put_cabinet_autostart_api_tma_cabinet_autostart_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/creative-uniquify": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Creative Uniquify
-         * @description Уникализирует загруженные изображения и сохраняет в FB_Agent_Creo.
-         *
-         *     Принимает form-data с полями offer_name, copies и files (multipart).
-         *     Не удаляет выходную папку — клиент может открыть её через open-folder.
-         */
-        post: operations["creative_uniquify_api_tools_creative_uniquify_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/creative-uniquify/open-folder": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Open Creative Folder
-         * @description Открывает папку с результатом уникализации в Finder (macOS) или xdg-open (Linux).
-         *
-         *     ПРЕДУПРЕЖДЕНИЕ: dev-only endpoint. На удалённом/prod-сервере не имеет смысла,
-         *     так как открывает Finder на сервере, а не у пользователя.
-         *
-         *     Безопасность: разрешает открывать только папки внутри корня FB_Agent_Creo.
-         */
-        post: operations["open_creative_folder_api_tools_creative_uniquify_open_folder_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaign-create/folders": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Campaign Creative Folders
-         * @description Возвращает список папок с креативами из корня FB_Agent_Creo.
-         *
-         *     Prod-safe: читает структуру FS без открытия GUI или записи файлов.
-         *     Сканирует 1 уровень глубины. Возвращает пустой список если корня нет.
-         *     Используется Mini App Scripts-экраном.
-         */
-        get: operations["get_campaign_creative_folders_api_tools_campaign_create_folders_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tools/campaign-create/plan": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Build Campaign Plan
-         * @description Строит план создания кампании из папки с креативами и настроек UI.
-         *
-         *     Читает структуру папки, валидирует файлы, собирает имена кампании/групп/объявлений,
-         *     URL-параметры и ручной чек-лист.
-         */
-        post: operations["build_campaign_plan_api_tools_campaign_create_plan_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
+  "/healthz": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Healthz
+     * @description Liveness probe платформы: всегда 200, не лезет в БД/Redis.
+     */
+    get: operations["healthz_healthz_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/readyz": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Readyz
+     * @description Readiness probe: PostgreSQL is required; Redis is optional degraded state.
+     */
+    get: operations["readyz_readyz_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/system-readyz": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * System Readyz
+     * @description Готовность бизнес-контура auto-stop.
+     *
+     *     В отличие от ``/readyz`` проверяет persisted scan/actor/task lifecycle.
+     *     Redis и process-local heartbeats сюда намеренно не входят: process liveness
+     *     проверяют Prometheus/blackbox, а этот endpoint не должен расходиться с
+     *     PostgreSQL control plane после restart или blue/green handoff.
+     */
+    get: operations["system_readyz_system_readyz_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/metrics": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Metrics
+     * @description Prometheus exposition format. Метрики собираются в middleware.
+     */
+    get: operations["metrics_metrics_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/postback/adsetpro": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Receive AdSet.pro GET postback
+     * @description AdSet.pro-compatible GET endpoint. The raw URL is never logged here.
+     */
+    get: operations["receive_adsetpro_get_api_v1_postback_adsetpro_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/adset-duplicates/preview": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Preview Adset Duplicate
+     * @description Read-only dry-run; сохраняет канонический план в PostgreSQL на 15 минут.
+     */
+    post: operations["preview_adset_duplicate_api_tools_adset_duplicates_preview_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/adset-duplicates/launch": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Launch Adset Duplicate
+     * @description Queues one idempotent durable task after the explicit web launch request.
+     */
+    post: operations["launch_adset_duplicate_api_tools_adset_duplicates_launch_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/adset-duplicates/{task_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Adset Duplicate Status
+     * @description Статус только duplicate_adset_structure; чужие task IDs возвращают 404.
+     */
+    get: operations["get_adset_duplicate_status_api_tools_adset_duplicates__task_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/ai/analyze": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Ai Analyze
+     * @description Возвращает AI-анализ блока данных с Redis-кэшем TTL 600s.
+     *
+     *     При force_refresh=True кэш игнорируется и перезаписывается.
+     *     Rate-limit: 20 запросов/час per remote IP. Превышение → 429.
+     *     Если AI-провайдеры не настроены → 503.
+     */
+    post: operations["ai_analyze_api_ai_analyze_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/ai/chat": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Ai Chat
+     * @description Ответ ассистента на вопрос из веб-виджета (с tool-use, read-only канал).
+     *
+     *     429 — превышен лимит; 503 — AI-провайдеры не настроены.
+     */
+    post: operations["ai_chat_api_ai_chat_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/ai/pulse": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Ai Pulse
+     * @description Почасовой пульс кабинета для веб-виджета.
+     *
+     *     Виджет опрашивает раз в час (пока вкладка открыта). Двухступенчатый контракт
+     *     против шума и лишних токенов: детерминированный pre-check сигналов (стопы /
+     *     упавшие задачи / шквал warnings за прошедший час) — если пусто, AI НЕ
+     *     вызывается и возвращается important=false (виджет молчит). Результат
+     *     кэшируется на календарный час — повторные опросы и вторые вкладки бесплатны.
+     */
+    post: operations["ai_pulse_api_ai_pulse_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/integrations/alertmanager/webhook": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Receive Alertmanager Webhook
+     * @description Return 204 only after incident and notification intent commit together.
+     */
+    post: operations["receive_alertmanager_webhook_api_v1_integrations_alertmanager_webhook_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/analytics/performance": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Analytics Performance
+     * @description Return lossless performance metrics at one hierarchy level.
+     */
+    get: operations["get_analytics_performance_api_analytics_performance_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/analytics/live-budget": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Analytics Live Budget
+     * @description Return hourly actual/base/stop series for the current cabinet day.
+     */
+    get: operations["get_analytics_live_budget_api_analytics_live_budget_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/analytics/daypart": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Analytics Daypart
+     * @description Return weekday x hour cells in the server-owned display timezone.
+     */
+    get: operations["get_analytics_daypart_api_analytics_daypart_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/internal/browser-operations/consume": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Consume Browser Operation */
+    post: operations["consume_browser_operation_api_v1_internal_browser_operations_consume_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/internal/browser-maintenance/consume": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Consume Browser Maintenance */
+    post: operations["consume_browser_maintenance_api_v1_internal_browser_maintenance_consume_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaigns/draft": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Campaign Draft
+     * @description Return the one owner draft; absence is an explicit null document.
+     */
+    get: operations["get_campaign_draft_api_tools_campaigns_draft_get"];
+    /**
+     * Put Campaign Draft
+     * @description Create or update the owner draft with optimistic revision CAS.
+     */
+    put: operations["put_campaign_draft_api_tools_campaigns_draft_put"];
+    post?: never;
+    /**
+     * Delete Campaign Draft
+     * @description Delete only the exact owner draft revision.
+     */
+    delete: operations["delete_campaign_draft_api_tools_campaigns_draft_delete"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaigns/presets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Presets
+     * @description Список всех пресетов (новые сверху).
+     */
+    get: operations["list_presets_api_tools_campaigns_presets_get"];
+    put?: never;
+    /**
+     * Create Preset
+     * @description Создать пресет. 409 при дубле имени (UNIQUE name).
+     */
+    post: operations["create_preset_api_tools_campaigns_presets_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaigns/presets/{preset_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Update Preset
+     * @description Полное обновление пресета. 404 если нет, 409 при дубле имени.
+     */
+    put: operations["update_preset_api_tools_campaigns_presets__preset_id__put"];
+    post?: never;
+    /**
+     * Delete Preset
+     * @description Удалить пресет. FK run→preset с ON DELETE SET NULL (история запусков цела).
+     */
+    delete: operations["delete_preset_api_tools_campaigns_presets__preset_id__delete"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaigns/upload": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Upload Concepts
+     * @description Загрузка концептов креативов в per-run временную папку на сервере.
+     *
+     *     Возвращает upload_id (входит в config.creo_root для воркера) + список refs
+     *     с размерами для превью. Тяжёлая уникализация — в воркере, не здесь.
+     */
+    post: operations["upload_concepts_api_tools_campaigns_upload_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaigns/validate": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Validate Config
+     * @description Dry-run: собирает план (число объектов + нейминг) без создания в Meta.
+     *
+     *     Количество концептов берётся только из config.campaigns[*].concept_refs —
+     *     раскладка K концептов × copies совпадает с исполнителем.
+     */
+    post: operations["validate_config_api_tools_campaigns_validate_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaigns/launch": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Launch Campaign
+     * @description Создать campaign_run(queued) + task_queue(campaign_create) в одной транзакции.
+     *
+     *     Money-safety: idempotency_key (по конфигу) общий для run и задачи. Повторный
+     *     launch того же конфига → находим существующий run, ничего не дублируем (202-shape).
+     *     Воркер по run_id грузит CampaignRun и исполняет залив.
+     */
+    post: operations["launch_campaign_api_tools_campaigns_launch_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaigns/runs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Runs
+     * @description Список запусков (новые сверху). offer_code извлекается из снимка config.
+     */
+    get: operations["list_runs_api_tools_campaigns_runs_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaigns/runs/{run_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Run
+     * @description Return bounded progress, lifecycle evidence and safe control guidance.
+     */
+    get: operations["get_run_api_tools_campaigns_runs__run_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaigns/runs/{run_id}/abort": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Abort Run
+     * @description Request cooperative cancellation; acceptance is never completion.
+     */
+    post: operations["abort_run_api_tools_campaigns_runs__run_id__abort_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaigns/runs/{run_id}/resume": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Resume Run
+     * @description Resume only a verified REJECTED pre-external checkpoint.
+     */
+    post: operations["resume_run_api_tools_campaigns_runs__run_id__resume_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/campaigns/ad-account-context": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Ad Account Context
+     * @description Return durable context state without navigating or querying Meta live.
+     */
+    get: operations["get_ad_account_context_api_campaigns_ad_account_context_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/campaigns/ad-account-pages": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Ad Account Pages
+     * @description Список FB-страниц кабинета (promote_pages) для дропдауна page_id.
+     *
+     *     400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула
+     *     ошибку или кабинет не найден. read-only: один GET /act_{id}/promote_pages через
+     *     Vision-сессию, без открытия браузера. Массив может быть пустым (нет страниц).
+     */
+    get: operations["get_ad_account_pages_api_campaigns_ad_account_pages_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/desktop/transports": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Desktop Transports
+     * @description Return owner-visible transport choices without issuing a ticket.
+     */
+    get: operations["list_desktop_transports_api_desktop_transports_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/desktop/launch": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Launch Desktop
+     * @description Issue one single-use URL bound to a predefined presentation profile.
+     */
+    post: operations["launch_desktop_api_desktop_launch_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/offers": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Offers
+     * @description Возвращает список офферов.
+     *
+     *     По умолчанию только активные (is_active=true).
+     *     При include_inactive=true — все, включая soft-deleted.
+     */
+    get: operations["list_offers_api_offers_get"];
+    put?: never;
+    /**
+     * Create Offer
+     * @description Создаёт новый оффер.
+     *
+     *     При конфликте по UNIQUE code → 409 Conflict.
+     */
+    post: operations["create_offer_api_offers_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/offers/{offer_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Update Offer
+     * @description Обновляет оффер.
+     *
+     *     404 если оффер не найден.
+     */
+    put: operations["update_offer_api_offers__offer_id__put"];
+    post?: never;
+    /**
+     * Deactivate Offer
+     * @description Idempotently deactivate an offer while retaining its history.
+     */
+    delete: operations["deactivate_offer_api_offers__offer_id__delete"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/offers/{offer_id}/rules": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Offer Rules
+     * @description Возвращает правила оффера.
+     *
+     *     Если OfferRule для оффера не существует — возвращает дефолтную структуру
+     *     с offer_id и всеми порогами null (правило не настроено).
+     *     404 если сам оффер не найден.
+     */
+    get: operations["get_offer_rules_api_offers__offer_id__rules_get"];
+    /**
+     * Upsert Offer Rules
+     * @description Upsert правил оффера.
+     *
+     *     Если OfferRule не существует — создаёт. Если существует — обновляет.
+     *     404 если оффер не найден.
+     *     Невалидные пороги (отрицательные) → 422.
+     */
+    put: operations["upsert_offer_rules_api_offers__offer_id__rules_put"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/offers/rules/preview": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Preview Rule Thresholds
+     * @description При какой $-стоимости сработают правила и ворнинги для CPA + чувствительности.
+     *
+     *     Использует RuleContext — единый расчёт с автостопом: значения в превью ТОЧНО совпадают
+     *     с реальными порогами, по которым observer отключает объявления. Базовые проценты
+     *     (CPC 2% / CPL 10% / CPR 20% / spend 50-70%/70-90%) фиксированы.
+     */
+    get: operations["preview_rule_thresholds_api_offers_rules_preview_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/operator/events": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Operator Events
+     * @description Return the bounded alert and terminal-action feed used by Analytics.
+     */
+    get: operations["get_operator_events_api_operator_events_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/operator/snapshot": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Operator Snapshot */
+    get: operations["get_operator_snapshot_api_operator_snapshot_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/operator/cabinets/{cabinet_id}/snapshot": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Operator Cabinet Snapshot
+     * @description Return the canonical operator snapshot narrowed to one cabinet.
+     */
+    get: operations["get_operator_cabinet_snapshot_api_operator_cabinets__cabinet_id__snapshot_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/operator/actions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Operator Actions */
+    get: operations["get_operator_actions_api_operator_actions_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/operator/ads": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Operator Ads */
+    get: operations["get_operator_ads_api_operator_ads_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/operator/ads/{ad_id}/pause": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Pause Operator Ad */
+    post: operations["pause_operator_ad_api_operator_ads__ad_id__pause_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/operator/ads/{ad_id}/activate": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Activate Operator Ad */
+    post: operations["activate_operator_ad_api_operator_ads__ad_id__activate_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/operator/incidents": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Operator Incidents
+     * @description Return the complete incident journal with explicit cabinet evidence.
+     */
+    get: operations["get_operator_incidents_api_operator_incidents_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/operator/incidents/{incident_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Operator Incident */
+    get: operations["get_operator_incident_api_operator_incidents__incident_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/operator/incidents/{incident_id}/ack": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Acknowledge Operator Incident */
+    post: operations["acknowledge_operator_incident_api_operator_incidents__incident_id__ack_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/operator/preferences/display": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Display Preference */
+    get: operations["get_display_preference_api_operator_preferences_display_get"];
+    /** Put Display Preference */
+    put: operations["put_display_preference_api_operator_preferences_display_put"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/observer": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Observer Settings
+     * @description Возвращает текущий ObserverConfig singleton.
+     */
+    get: operations["get_observer_settings_api_settings_observer_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/observer/interval": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Patch Observer Interval
+     * @description Меняет только интервал, не перезаписывая scanning/tag/allowlist.
+     */
+    patch: operations["patch_observer_interval_api_settings_observer_interval_patch"];
+    trace?: never;
+  };
+  "/api/settings/observer/scanning": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Patch Observer Scanning
+     * @description Переключает только is_scanning_enabled, не трогая остальные поля.
+     *
+     *     Гейт включения: не даём включить скан, если мониторить нечего (пустой allowlist при
+     *     одном кабинете / нет активных офферов). Иначе скан крутился бы вхолостую раз в интервал,
+     *     ничего не отслеживая. Возвращаем 409 с понятной причиной — фронт показывает её на клике
+     *     «Включить», а заполнять кампании пользователь идёт на страницу «Кампании».
+     */
+    patch: operations["patch_observer_scanning_api_settings_observer_scanning_patch"];
+    trace?: never;
+  };
+  "/api/settings/observer/owner-tag": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Patch Observer Owner Tag
+     * @description Меняет только owner_campaign_tag, не трогая остальные поля.
+     *
+     *     Точечный PATCH против лост-апдейта (аудит 2026-07-12, C-1): фронты сохраняли тег
+     *     через full-PUT из закэшированного состояния и молча откатывали is_scanning_enabled.
+     */
+    patch: operations["patch_observer_owner_tag_api_settings_observer_owner_tag_patch"];
+    trace?: never;
+  };
+  "/api/settings/observer/campaigns": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Observer Campaigns
+     * @description Список кампаний (накопленных observer'ом) для выбора allowlist (#3).
+     *
+     *     Фильтр по owner_campaign_tag (word-boundary, через campaign_matches_owner).
+     *     selected — входит ли кампания в текущий allowlist (cfg.campaign_ids).
+     *     Кампании без Meta fb_campaign_id пропускаются — их нельзя заскоупить по campaign.id.
+     *     Свежесть: по умолчанию кампании с датой в имени старше CAMPAIGN_LIST_HORIZON_DAYS
+     *     скрываются (если не выбраны) — see include_stale.
+     */
+    get: operations["list_observer_campaigns_api_settings_observer_campaigns_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Patch Observer Campaigns
+     * @description Задаёт allowlist кампаний для am-режима (#3).
+     *
+     *     Фильтрует am_tabular по campaign.id IN [...]: в общем кабинете не тянем чужие ад'ы.
+     *     Пустой список — без фильтра по кампаниям (owner_campaign_tag всё равно отсекает чужое).
+     */
+    patch: operations["patch_observer_campaigns_api_settings_observer_campaigns_patch"];
+    trace?: never;
+  };
+  "/api/settings/observer/campaigns/refresh": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Refresh Observer Campaigns
+     * @description Run discovery under an exclusive fence because StartBrowser may restart.
+     */
+    post: operations["refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/observer/scan-now": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Post Scan Now
+     * @description Atomically enqueue a scan; ``202`` means queued, never completed.
+     */
+    post: operations["post_scan_now_api_settings_observer_scan_now_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/telegram": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Telegram Settings
+     * @description Возвращает публичные поля TelegramConfig с compute-полями.
+     *
+     *     НЕ возвращает bot_token_encrypted. web_app_url — только из system_config.
+     */
+    get: operations["get_telegram_settings_api_settings_telegram_get"];
+    put?: never;
+    post?: never;
+    /**
+     * Delete Telegram Settings
+     * @description Disable sends now and durably delete the remote webhook before token wipe.
+     */
+    delete: operations["delete_telegram_settings_api_settings_telegram_delete"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/telegram/web-app-url": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Put Telegram Web App Url
+     * @description Сохраняет Web App URL Mini App в system_config (без рестарта).
+     *
+     *     Пустая строка/None — явная очистка (DB tombstone; env не восстанавливает).
+     *     Непустой URL обязан быть HTTPS (требование Telegram Mini Apps) → иначе 422.
+     */
+    put: operations["put_telegram_web_app_url_api_settings_telegram_web_app_url_put"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/telegram/token": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Put Telegram Token
+     * @description Atomically persist a token and its durable desired webhook generation.
+     */
+    put: operations["put_telegram_token_api_settings_telegram_token_put"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/telegram/recipients": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Telegram Recipients
+     * @description Возвращает список активных (не отозванных) получателей Telegram.
+     */
+    get: operations["get_telegram_recipients_api_settings_telegram_recipients_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/telegram/recipients/{recipient_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Delete Telegram Recipient
+     * @description Soft-delete: выставляет revoked_at = NOW() для получателя с заданным id.
+     *
+     *     Возвращает 404, если получатель не найден или уже отозван.
+     */
+    delete: operations["delete_telegram_recipient_api_settings_telegram_recipients__recipient_id__delete"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/telegram/recipients/{recipient_id}/preferences": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Telegram Recipient Preferences */
+    get: operations["get_telegram_recipient_preferences_api_settings_telegram_recipients__recipient_id__preferences_get"];
+    /** Put Telegram Recipient Preferences */
+    put: operations["put_telegram_recipient_preferences_api_settings_telegram_recipients__recipient_id__preferences_put"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/telegram/diagnostics": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Telegram Notification Diagnostics */
+    get: operations["get_telegram_notification_diagnostics_api_settings_telegram_diagnostics_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/telegram/recipients/invite": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Post Telegram Invite
+     * @description Генерирует invite-код (TTL 24h) и сохраняет в telegram_invites.
+     *
+     *     Возвращает { code, expires_at }.
+     */
+    post: operations["post_telegram_invite_api_settings_telegram_recipients_invite_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/telegram/owner-invite": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Post Telegram Owner Invite
+     * @description Вернуть действующую owner-ссылку или создать её атомарно.
+     *
+     *     Повторный клик и сетевой retry возвращают тот же код до его использования или
+     *     истечения. GET настроек никогда не создаёт секреты сам — он только показывает
+     *     уже существующую ссылку.
+     */
+    post: operations["post_telegram_owner_invite_api_settings_telegram_owner_invite_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/settings/vision": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Vision Settings
+     * @description Возвращает canonical PostgreSQL VisionConfig и browser-agent status.
+     */
+    get: operations["get_vision_settings_api_settings_vision_get"];
+    /**
+     * Put Vision Settings
+     * @description Обновляет x_token / profile_id в VisionConfig singleton.
+     *
+     *     Если x_token передан — шифрует и сохраняет.
+     *     Если profile_id передан — обновляет.
+     *     Если строки ещё нет — создаёт с server-defaults.
+     */
+    put: operations["put_vision_settings_api_settings_vision_put"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/vision/reconnect": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Post Vision Reconnect
+     * @description Триггерит gRPC ReconnectBrowser к browser-agent.
+     *
+     *     Читает x_token и profile_id только из PostgreSQL.
+     *     Возвращает 503 при недоступности gRPC.
+     */
+    post: operations["post_vision_reconnect_api_vision_reconnect_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/vision/ensure-cdp": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Post Vision Ensure Cdp
+     * @description Bootstrap browser channel: direct probe, then exclusive recovery when needed.
+     *
+     *     Никогда не падает 5xx — всегда {ok,status,action,message}. Если CDP уже готов,
+     *     action=none. Иначе подтверждённый maintenance owner разрешает ровно один
+     *     принудительный restart canonical Vision-профиля с обязательным повторным probe.
+     */
+    post: operations["post_vision_ensure_cdp_api_vision_ensure_cdp_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/integrations/telegram/webhook": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Receive Telegram Webhook
+     * @description Return 204 only after the update is durable in PostgreSQL.
+     */
+    post: operations["receive_telegram_webhook_api_v1_integrations_telegram_webhook_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tma/auth": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Tma Auth
+     * @description Валидирует initData и выдаёт сессионный токен + роль.
+     *
+     *     503 — Telegram/secret не настроены; 401 — initData невалиден/истёк;
+     *     403 — пользователь не в списке доступа (нет активного recipient'а).
+     */
+    post: operations["tma_auth_api_tma_auth_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tma/me": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Tma Me
+     * @description Проверка сессии: возвращает текущего пользователя (под Bearer-guard).
+     */
+    get: operations["tma_me_api_tma_me_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tma/navigation/resolve": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Resolve Tma Navigation
+     * @description Consume a recipient-bound navigation capability exactly once.
+     */
+    post: operations["resolve_tma_navigation_api_tma_navigation_resolve_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/creative-uniquify": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Creative Uniquify
+     * @description Уникализирует загруженные изображения и сохраняет в FB_Agent_Creo.
+     *
+     *     Принимает form-data с полями offer_name, copies и files (multipart).
+     *     Не удаляет выходную папку — клиент может открыть её через open-folder.
+     */
+    post: operations["creative_uniquify_api_tools_creative_uniquify_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/creative-uniquify/open-folder": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Open Creative Folder
+     * @description Открывает папку с результатом уникализации в Finder (macOS) или xdg-open (Linux).
+     *
+     *     ПРЕДУПРЕЖДЕНИЕ: dev-only endpoint. На удалённом/prod-сервере не имеет смысла,
+     *     так как открывает Finder на сервере, а не у пользователя.
+     *
+     *     Безопасность: разрешает открывать только папки внутри корня FB_Agent_Creo.
+     */
+    post: operations["open_creative_folder_api_tools_creative_uniquify_open_folder_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaign-create/folders": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Campaign Creative Folders
+     * @description Возвращает список папок с креативами из корня FB_Agent_Creo.
+     *
+     *     Prod-safe: читает структуру FS без открытия GUI или записи файлов.
+     *     Сканирует 1 уровень глубины. Возвращает пустой список если корня нет.
+     *     Используется Mini App Scripts-экраном.
+     */
+    get: operations["get_campaign_creative_folders_api_tools_campaign_create_folders_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/tools/campaign-create/plan": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Build Campaign Plan
+     * @description Строит план создания кампании из папки с креативами и настроек UI.
+     *
+     *     Читает структуру папки, валидирует файлы, собирает имена кампании/групп/объявлений,
+     *     URL-параметры и ручной чек-лист.
+     */
+    post: operations["build_campaign_plan_api_tools_campaign_create_plan_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
-    schemas: {
-        /**
-         * AIAnalyzeRequest
-         * @description Тело запроса AI-анализа.
-         */
-        AIAnalyzeRequest: {
-            /**
-             * Block Type
-             * @enum {string}
-             */
-            block_type: "dashboard_overview" | "ad_detail" | "campaign_summary" | "history_summary";
-            /**
-             * Scope Key
-             * @description 'global' или конкретный ID
-             * @default global
-             */
-            scope_key: string;
-            /**
-             * Force Refresh
-             * @description Игнорировать Redis-кэш
-             * @default false
-             */
-            force_refresh: boolean;
-            /**
-             * Client Data
-             * @description Контекстные данные от клиента (опционально)
-             */
-            client_data?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /**
-         * AIAnalyzeResponse
-         * @description Ответ AI-анализа.
-         */
-        AIAnalyzeResponse: {
-            /** Block Type */
-            block_type: string;
-            /** Scope Key */
-            scope_key: string;
-            /** Analysis Text */
-            analysis_text: string;
-            /** From Cache */
-            from_cache: boolean;
-            /** Generated At */
-            generated_at: string;
-            /** Model */
-            model: string;
-        };
-        /**
-         * AIChatRequest
-         * @description Запрос чата: история (последнее сообщение — вопрос пользователя).
-         */
-        AIChatRequest: {
-            /** Messages */
-            messages: components["schemas"]["ChatMessageIn"][];
-        };
-        /**
-         * AIChatResponse
-         * @description Ответ ассистента.
-         */
-        AIChatResponse: {
-            /** Answer */
-            answer: string;
-            /** Tool Calls */
-            tool_calls?: components["schemas"]["ToolCallOut"][];
-            /** Generated At */
-            generated_at: string;
-            /** Model */
-            model: string;
-        };
-        /**
-         * AIPulseResponse
-         * @description Почасовой пульс для веб-виджета.
-         *
-         *     important=False → за окно ничего значимого, виджет молчит (text = null).
-         */
-        AIPulseResponse: {
-            /** Important */
-            important: boolean;
-            /** Text */
-            text?: string | null;
-            /** Generated At */
-            generated_at: string;
-        };
-        /**
-         * Account
-         * @description Идентичность кабинета (preset).
-         */
-        Account: {
-            /** Act Id */
-            act_id: string;
-            /** Page Id */
-            page_id: string;
-            /** Pixel Id */
-            pixel_id: string;
-            /**
-             * Tz Offset
-             * @default -07:00
-             */
-            tz_offset: string;
-        };
-        /**
-         * AdAccountPage
-         * @description FB-страница, доступная кабинету для промо (id + человекочитаемое имя).
-         */
-        AdAccountPage: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-        };
-        /**
-         * AdAccountPagesResponse
-         * @description Список страниц кабинета для дропдауна page_id в шаге «Идентичность».
-         */
-        AdAccountPagesResponse: {
-            /** Pages */
-            pages: components["schemas"]["AdAccountPage"][];
-        };
-        /**
-         * AdAccountTimezoneResponse
-         * @description Таймзона рекламного кабинета для start_time кампании.
-         */
-        AdAccountTimezoneResponse: {
-            /** Tz Offset Hours */
-            tz_offset_hours: number;
-            /** Tz Offset Str */
-            tz_offset_str: string;
-            /** Timezone Name */
-            timezone_name: string;
-        };
-        /**
-         * AdSnapshotOut
-         * @description Композитный snapshot одного ad'а для /dashboard/ads и /dashboard/incidents.
-         */
-        AdSnapshotOut: {
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /** Internal Id */
-            internal_id: string;
-            /** Ad Name */
-            ad_name: string;
-            /** Campaign Name */
-            campaign_name?: string | null;
-            /** Adset Name */
-            adset_name?: string | null;
-            /** Ad Account Id */
-            ad_account_id?: string | null;
-            /** Offer Code */
-            offer_code?: string | null;
-            /** Offer Id */
-            offer_id?: string | null;
-            /**
-             * Alert State
-             * @default normal
-             */
-            alert_state: string;
-            /** Snoozed Until */
-            snoozed_until?: string | null;
-            /** Open State Token */
-            open_state_token?: string | null;
-            /** Last Warning At */
-            last_warning_at?: string | null;
-            /** Last Stop At */
-            last_stop_at?: string | null;
-            /** Is Active */
-            is_active: boolean;
-            /** Last Seen At */
-            last_seen_at?: string | null;
-            /** Delivery Status */
-            delivery_status?: string | null;
-            /** Meta Ad Status */
-            meta_ad_status?: string | null;
-            /** Creative Thumb Url */
-            creative_thumb_url?: string | null;
-            /** Creative Image Url */
-            creative_image_url?: string | null;
-            /** Adset Pixel Id */
-            adset_pixel_id?: string | null;
-            /** Adset Daily Budget */
-            adset_daily_budget?: string | null;
-            /** Adset Lifetime Budget */
-            adset_lifetime_budget?: string | null;
-            /** Adset Budget Remaining */
-            adset_budget_remaining?: string | null;
-            /** Learning Stage */
-            learning_stage?: string | null;
-            /** Stop Rule Codes */
-            stop_rule_codes?: string[];
-            /** Warning Rule Codes */
-            warning_rule_codes?: string[];
-            metrics?: components["schemas"]["MetricsBlock"] | null;
-        };
-        /**
-         * AdText
-         * @description Текст объявления (run). mode=none — объявления без текста.
-         */
-        AdText: {
-            /**
-             * Mode
-             * @default none
-             */
-            mode: string;
-            /**
-             * Message
-             * @default
-             */
-            message: string;
-            /**
-             * Headline
-             * @default
-             */
-            headline: string;
-            /**
-             * Description
-             * @default
-             */
-            description: string;
-        };
-        /**
-         * AdTextIn
-         * @description Текст объявления в форме фронта (mode none|text, primary).
-         */
-        AdTextIn: {
-            /**
-             * Mode
-             * @default none
-             */
-            mode: string;
-            /**
-             * Primary
-             * @default
-             */
-            primary: string;
-        };
-        /**
-         * AdTimelineResponse
-         * @description Ответ GET /ads/{fb_ad_id}/timeline.
-         */
-        AdTimelineResponse: {
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /**
-             * Internal Id
-             * Format: uuid
-             */
-            internal_id: string;
-            /** Ad Name */
-            ad_name: string;
-            /** Campaign Name */
-            campaign_name?: string | null;
-            /** Adset Name */
-            adset_name?: string | null;
-            /** Offer Code */
-            offer_code?: string | null;
-            /**
-             * From Iso
-             * Format: date-time
-             */
-            from_iso: string;
-            /**
-             * To Iso
-             * Format: date-time
-             */
-            to_iso: string;
-            /** Metrics */
-            metrics: components["schemas"]["MetricRow"][];
-            /** Alerts */
-            alerts: components["schemas"]["AlertRow"][];
-            /** Tasks */
-            tasks: components["schemas"]["TaskRow"][];
-        };
-        /**
-         * AdsetConfig
-         * @description Один adset в структуре кампании.
-         */
-        AdsetConfig: {
-            /** Name */
-            name: string;
-            /** Dir */
-            dir: string;
-            /** Glob */
-            glob: string;
-        };
-        /** AdsetDuplicateBudget */
-        AdsetDuplicateBudget: {
-            /**
-             * Level
-             * @enum {string}
-             */
-            level: "ABO" | "CBO";
-            /** Unit Daily Budget Cents */
-            unit_daily_budget_cents: number;
-            /** Total Daily Budget Cents */
-            total_daily_budget_cents: number;
-            /** Currency */
-            currency: string;
-        };
-        /** AdsetDuplicateCounts */
-        AdsetDuplicateCounts: {
-            /** Campaigns */
-            campaigns: number;
-            /** Adsets */
-            adsets: number;
-            /** Ads */
-            ads: number;
-            /** Total Objects */
-            total_objects: number;
-        };
-        /** AdsetDuplicateGeneratedNames */
-        AdsetDuplicateGeneratedNames: {
-            /** Campaigns */
-            campaigns: string[];
-            /** Adsets */
-            adsets: string[];
-        };
-        /** AdsetDuplicateLaunchIn */
-        AdsetDuplicateLaunchIn: {
-            /** Preview Token */
-            preview_token: string;
-        };
-        /** AdsetDuplicateLaunchOut */
-        AdsetDuplicateLaunchOut: {
-            /** Task Id */
-            task_id: number;
-            /** Status */
-            status: string;
-            /**
-             * Expires At
-             * Format: date-time
-             */
-            expires_at: string;
-        };
-        /** AdsetDuplicatePreviewIn */
-        AdsetDuplicatePreviewIn: {
-            /** Source Ad Id */
-            source_ad_id: string;
-            /** Selected Ad Ids */
-            selected_ad_ids: string[];
-            /** Campaign Count */
-            campaign_count: number;
-            /** Adsets Per Campaign */
-            adsets_per_campaign: number;
-            /**
-             * Budget Level
-             * @enum {string}
-             */
-            budget_level: "ABO" | "CBO";
-            /** Daily Budget Cents */
-            daily_budget_cents: number;
-            /** Start Date */
-            start_date?: string | null;
-            /** Campaign Name Base */
-            campaign_name_base?: string | null;
-            /** Adset Name Base */
-            adset_name_base?: string | null;
-            /** Idempotency Token */
-            idempotency_token: string;
-        };
-        /** AdsetDuplicatePreviewOut */
-        AdsetDuplicatePreviewOut: {
-            /** Preview Token */
-            preview_token: string;
-            source: components["schemas"]["AdsetDuplicateSource"];
-            /** Format Code */
-            format_code: string;
-            counts: components["schemas"]["AdsetDuplicateCounts"];
-            budget: components["schemas"]["AdsetDuplicateBudget"];
-            schedule: components["schemas"]["AdsetDuplicateSchedule"];
-            generated_names: components["schemas"]["AdsetDuplicateGeneratedNames"];
-            /** Warnings */
-            warnings: string[];
-            /**
-             * Expires At
-             * Format: date-time
-             */
-            expires_at: string;
-        };
-        /** AdsetDuplicateProgress */
-        AdsetDuplicateProgress: {
-            /** Phase */
-            phase?: string | null;
-            /** Completed */
-            completed?: number | null;
-            /** Total */
-            total?: number | null;
-            /** Message */
-            message?: string | null;
-        } & {
-            [key: string]: unknown;
-        };
-        /** AdsetDuplicateSchedule */
-        AdsetDuplicateSchedule: {
-            /** Timezone Name */
-            timezone_name: string;
-            /** Offset */
-            offset: string;
-            /** Start Time Utc */
-            start_time_utc: string;
-            /** Start Time Local */
-            start_time_local: string;
-        };
-        /** AdsetDuplicateSource */
-        AdsetDuplicateSource: {
-            account: components["schemas"]["DuplicateSourceAccount"];
-            campaign: components["schemas"]["DuplicateSourceEntity"];
-            adset: components["schemas"]["DuplicateSourceEntity"];
-            /** Ads */
-            ads: components["schemas"]["DuplicateSourceAd"][];
-        };
-        /** AdsetDuplicateStatusOut */
-        AdsetDuplicateStatusOut: {
-            /** Task Id */
-            task_id: number;
-            /** Status */
-            status: string;
-            progress: components["schemas"]["AdsetDuplicateProgress"] | null;
-            /** Created Meta Ids */
-            created_meta_ids?: {
-                [key: string]: string | string[];
-            };
-            /** Error */
-            error: string | null;
-            /** Expires At */
-            expires_at?: string | null;
-        };
-        /**
-         * AdsetPlanOut
-         * @description Сводка по одному adset в плане.
-         */
-        AdsetPlanOut: {
-            /** Name */
-            name: string;
-            /** Status */
-            status: string;
-            /** Ad Count */
-            ad_count: number;
-        };
-        /**
-         * AlertEventOut
-         * @description Одна запись alert_events с JOIN'ом по fb_ads/offers.
-         */
-        AlertEventOut: {
-            /** Id */
-            id: string;
-            /** Fb Ad Id */
-            fb_ad_id?: string | null;
-            /** Ad Name */
-            ad_name?: string | null;
-            /** Campaign Name */
-            campaign_name?: string | null;
-            /** Ad Account Id */
-            ad_account_id?: string | null;
-            /** Offer Code */
-            offer_code?: string | null;
-            /** Stage */
-            stage: string;
-            /** Matched Rule Codes */
-            matched_rule_codes?: string[];
-            /** Triggered By Rule Codes */
-            triggered_by_rule_codes?: string[] | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Alert Payload */
-            alert_payload?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /**
-         * AlertRow
-         * @description Одна строка alert_events (partitioned by created_at).
-         */
-        AlertRow: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Stage */
-            stage: string;
-            /** Matched Rule Codes */
-            matched_rule_codes: string[];
-            /** Triggered By Rule Codes */
-            triggered_by_rule_codes: string[];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /** AnalyticsBudgetPointOut */
-        AnalyticsBudgetPointOut: {
-            /**
-             * Ts
-             * Format: date-time
-             */
-            ts: string;
-            /** Actual */
-            actual: string;
-            /** Base */
-            base: string;
-            /** Stop */
-            stop: string;
-            /**
-             * Available Ads
-             * @default 0
-             */
-            available_ads: number;
-            /**
-             * Unavailable Ads
-             * @default 0
-             */
-            unavailable_ads: number;
-        };
-        /** AnalyticsDaypartCellOut */
-        AnalyticsDaypartCellOut: {
-            /** Weekday */
-            weekday: number;
-            /** Hour */
-            hour: number;
-            /**
-             * Clicks
-             * @default 0
-             */
-            clicks: number;
-            /**
-             * Registrations
-             * @default 0
-             */
-            registrations: number;
-            /**
-             * Ftds
-             * @default 0
-             */
-            ftds: number;
-        };
-        /** AnalyticsDaypartOut */
-        AnalyticsDaypartOut: {
-            /** Timezone */
-            timezone: string;
-            /**
-             * From Iso
-             * Format: date-time
-             */
-            from_iso: string;
-            /**
-             * To Iso
-             * Format: date-time
-             */
-            to_iso: string;
-            /** Cells */
-            cells: components["schemas"]["AnalyticsDaypartCellOut"][];
-        };
-        /** AnalyticsFilterOptionOut */
-        AnalyticsFilterOptionOut: {
-            /** Value */
-            value: string;
-            /** Label */
-            label: string;
-        };
-        /** AnalyticsFilterOptionsOut */
-        AnalyticsFilterOptionsOut: {
-            /** Accounts */
-            accounts?: components["schemas"]["AnalyticsFilterOptionOut"][];
-            /** Offers */
-            offers?: components["schemas"]["AnalyticsFilterOptionOut"][];
-            /** Campaigns */
-            campaigns?: components["schemas"]["AnalyticsFilterOptionOut"][];
-        };
-        /** AnalyticsLiveBudgetOut */
-        AnalyticsLiveBudgetOut: {
-            /**
-             * Stage
-             * @enum {string}
-             */
-            stage: "click" | "lead" | "registration" | "deposit" | "mixed";
-            /** Base Unit */
-            base_unit?: string | null;
-            /** Stop Unit */
-            stop_unit?: string | null;
-            /** Quantity */
-            quantity?: number | null;
-            /** Base Budget */
-            base_budget: string;
-            /** Stop Budget */
-            stop_budget: string;
-            /** Base Delta */
-            base_delta: string;
-            /** Stop Delta */
-            stop_delta: string;
-        };
-        /** AnalyticsLiveBudgetSeriesOut */
-        AnalyticsLiveBudgetSeriesOut: {
-            window: components["schemas"]["AnalyticsWindowOut"];
-            /** Points */
-            points: components["schemas"]["AnalyticsBudgetPointOut"][];
-        };
-        /** AnalyticsMetricsOut */
-        AnalyticsMetricsOut: {
-            /**
-             * Spend
-             * @default 0.00
-             */
-            spend: string;
-            /**
-             * Impressions
-             * @default 0
-             */
-            impressions: number;
-            /**
-             * Clicks
-             * @default 0
-             */
-            clicks: number;
-            /**
-             * Leads
-             * @default 0
-             */
-            leads: number;
-            /**
-             * Registrations
-             * @default 0
-             */
-            registrations: number;
-            /**
-             * Ftds
-             * @default 0
-             */
-            ftds: number;
-            /**
-             * Confirmed Deposits
-             * @default 0
-             */
-            confirmed_deposits: number;
-            /**
-             * Redeposits
-             * @default 0
-             */
-            redeposits: number;
-            /**
-             * Revenue
-             * @default 0.00
-             */
-            revenue: string;
-            /** Cpc */
-            cpc?: string | null;
-            /** Ctr Pct */
-            ctr_pct?: string | null;
-            /** Click Registration Cr Pct */
-            click_registration_cr_pct?: string | null;
-            /** Registration Ftd Cr Pct */
-            registration_ftd_cr_pct?: string | null;
-            /** Cost Per Registration */
-            cost_per_registration?: string | null;
-            /** Cost Per Ftd */
-            cost_per_ftd?: string | null;
-            /** Roi Pct */
-            roi_pct?: string | null;
-            /** Roas */
-            roas?: string | null;
-        };
-        /** AnalyticsPaginationOut */
-        AnalyticsPaginationOut: {
-            /** Page */
-            page: number;
-            /** Page Size */
-            page_size: number;
-            /** Total */
-            total: number;
-            /** Pages */
-            pages: number;
-        };
-        /** AnalyticsPerformanceOut */
-        AnalyticsPerformanceOut: {
-            window: components["schemas"]["AnalyticsWindowOut"];
-            sources: components["schemas"]["AnalyticsSourcesOut"];
-            totals: components["schemas"]["AnalyticsMetricsOut"];
-            total_live_budget?: components["schemas"]["AnalyticsLiveBudgetOut"] | null;
-            /** Total Budget Unavailable Reason */
-            total_budget_unavailable_reason?: string | null;
-            pagination: components["schemas"]["AnalyticsPaginationOut"];
-            filter_options: components["schemas"]["AnalyticsFilterOptionsOut"];
-            /** Rows */
-            rows: components["schemas"]["AnalyticsPerformanceRowOut"][];
-        };
-        /** AnalyticsPerformanceRowOut */
-        AnalyticsPerformanceRowOut: {
-            /**
-             * Spend
-             * @default 0.00
-             */
-            spend: string;
-            /**
-             * Impressions
-             * @default 0
-             */
-            impressions: number;
-            /**
-             * Clicks
-             * @default 0
-             */
-            clicks: number;
-            /**
-             * Leads
-             * @default 0
-             */
-            leads: number;
-            /**
-             * Registrations
-             * @default 0
-             */
-            registrations: number;
-            /**
-             * Ftds
-             * @default 0
-             */
-            ftds: number;
-            /**
-             * Confirmed Deposits
-             * @default 0
-             */
-            confirmed_deposits: number;
-            /**
-             * Redeposits
-             * @default 0
-             */
-            redeposits: number;
-            /**
-             * Revenue
-             * @default 0.00
-             */
-            revenue: string;
-            /** Cpc */
-            cpc?: string | null;
-            /** Ctr Pct */
-            ctr_pct?: string | null;
-            /** Click Registration Cr Pct */
-            click_registration_cr_pct?: string | null;
-            /** Registration Ftd Cr Pct */
-            registration_ftd_cr_pct?: string | null;
-            /** Cost Per Registration */
-            cost_per_registration?: string | null;
-            /** Cost Per Ftd */
-            cost_per_ftd?: string | null;
-            /** Roi Pct */
-            roi_pct?: string | null;
-            /** Roas */
-            roas?: string | null;
-            /** Id */
-            id: string;
-            /** Fb Id */
-            fb_id?: string | null;
-            /** Name */
-            name: string;
-            /**
-             * Level
-             * @enum {string}
-             */
-            level: "campaign" | "adset" | "ad";
-            /** Parent Id */
-            parent_id?: string | null;
-            /** Parent Name */
-            parent_name?: string | null;
-            /**
-             * Has Children
-             * @default false
-             */
-            has_children: boolean;
-            /** Ad Account Id */
-            ad_account_id?: string | null;
-            /** Offer Id */
-            offer_id?: string | null;
-            /** Offer Code */
-            offer_code?: string | null;
-            live_budget?: components["schemas"]["AnalyticsLiveBudgetOut"] | null;
-            /** Budget Unavailable Reason */
-            budget_unavailable_reason?: string | null;
-        };
-        /** AnalyticsSourceOut */
-        AnalyticsSourceOut: {
-            /**
-             * Source
-             * @enum {string}
-             */
-            source: "meta" | "tracker";
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "good" | "degraded" | "missing" | "unknown";
-            /** Last Event At */
-            last_event_at?: string | null;
-            /** Lag Seconds */
-            lag_seconds?: number | null;
-            /**
-             * Unmatched Events
-             * @default 0
-             */
-            unmatched_events: number;
-            /** Note */
-            note?: string | null;
-        };
-        /** AnalyticsSourcesOut */
-        AnalyticsSourcesOut: {
-            meta: components["schemas"]["AnalyticsSourceOut"];
-            tracker: components["schemas"]["AnalyticsSourceOut"];
-        };
-        /** AnalyticsWindowOut */
-        AnalyticsWindowOut: {
-            /**
-             * From Iso
-             * Format: date-time
-             */
-            from_iso: string;
-            /**
-             * To Iso
-             * Format: date-time
-             */
-            to_iso: string;
-            /** Is Live */
-            is_live: boolean;
-            /** Cabinet Day Note */
-            cabinet_day_note?: string | null;
-        };
-        /**
-         * Attribution
-         * @description Окно атрибуции конверсий (preset).
-         */
-        Attribution: {
-            /**
-             * Click Through Days
-             * @default 1
-             */
-            click_through_days: number;
-            /**
-             * View Through Days
-             * @default 1
-             */
-            view_through_days: number;
-        };
-        /**
-         * AutoEnableDisabledIn
-         * @description Тело POST /dashboard/auto-enable-disabled/{fb_ad_id}.
-         *
-         *     reason — опциональный комментарий. Фронт не передаёт тело (disableAutoEnable без body),
-         *     поэтому все поля опциональны.
-         */
-        AutoEnableDisabledIn: {
-            /**
-             * Reason
-             * @description Причина отключения авто-включения (опционально)
-             */
-            reason?: string | null;
-        };
-        /**
-         * AutoEnableDisabledOut
-         * @description Ответ одной записи AdAutoEnableDisabled с JOIN на fb_ads.
-         */
-        AutoEnableDisabledOut: {
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /**
-             * Internal Id
-             * Format: uuid
-             */
-            internal_id: string;
-            /** Ad Name */
-            ad_name?: string | null;
-            /**
-             * Disabled At
-             * Format: date-time
-             */
-            disabled_at: string;
-            /** Reason */
-            reason?: string | null;
-        };
-        /**
-         * AutoEnableToggleRequest
-         * @description Тело PATCH /settings/observer/auto-enable.
-         */
-        AutoEnableToggleRequest: {
-            /** Enabled */
-            enabled: boolean;
-        };
-        /** Body_creative_uniquify_api_tools_creative_uniquify_post */
-        Body_creative_uniquify_api_tools_creative_uniquify_post: {
-            /** Offer Name */
-            offer_name: string;
-            /** Copies */
-            copies: number;
-            /** Files */
-            files: string[];
-        };
-        /** Body_upload_concepts_api_tools_campaigns_upload_post */
-        Body_upload_concepts_api_tools_campaigns_upload_post: {
-            /** Files */
-            files: string[];
-            /** Upload Id */
-            upload_id?: string | null;
-        };
-        /**
-         * BreakdownRowOut
-         * @description Строка разреза по офферу/кампании (за сегодня).
-         */
-        BreakdownRowOut: {
-            /** Key */
-            key: string;
-            /** Label */
-            label: string;
-            /** Spend */
-            spend?: string | null;
-            /**
-             * Clicks
-             * @default 0
-             */
-            clicks: number;
-            /**
-             * Leads
-             * @default 0
-             */
-            leads: number;
-            /**
-             * Registrations
-             * @default 0
-             */
-            registrations: number;
-            /**
-             * Deposits
-             * @default 0
-             */
-            deposits: number;
-            /** Cpl */
-            cpl?: string | null;
-        };
-        /**
-         * Budget
-         * @description Бюджет и стратегия ставок с hard-cap валидацией (money-safe).
-         */
-        Budget: {
-            /**
-             * Level
-             * @default campaign
-             */
-            level: string;
-            /**
-             * Daily Cents
-             * @default 300
-             */
-            daily_cents: number;
-            /** Lifetime Cents */
-            lifetime_cents?: number | null;
-            /**
-             * Bid Strategy
-             * @default COST_CAP
-             */
-            bid_strategy: string;
-            /** Bid Amount Cents */
-            bid_amount_cents?: number | null;
-        };
-        /**
-         * BulkDeleteAdsRequest
-         * @description Список fb_ad_id для удаления (1..500 за запрос).
-         */
-        BulkDeleteAdsRequest: {
-            /** Fb Ad Ids */
-            fb_ad_ids: string[];
-        };
-        /**
-         * BulkDeleteAdsResponse
-         * @description Фактически удалённые fb_ad_id + отменённые orphan-задачи task_queue.
-         */
-        BulkDeleteAdsResponse: {
-            /** Deleted */
-            deleted: string[];
-            /** Count */
-            count: number;
-            /** Cancelled Task Ids */
-            cancelled_task_ids?: number[];
-        };
-        /**
-         * BulkDisableFailed
-         * @description Объявление, для которого задачу создать не удалось.
-         */
-        BulkDisableFailed: {
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /** Reason */
-            reason: string;
-        };
-        /**
-         * BulkDisableIn
-         * @description Тело POST /dashboard/disable-tasks/bulk (массовое отключение).
-         */
-        BulkDisableIn: {
-            /**
-             * Fb Ad Ids
-             * @description Список Meta numeric ad ID (1..50)
-             */
-            fb_ad_ids: string[];
-            /**
-             * Reason
-             * @description Причина отключения
-             * @default manual bulk disable
-             */
-            reason: string;
-            /**
-             * Idempotency Token
-             * @description Client-side токен против двойного submit (общий для всего batch)
-             */
-            idempotency_token: string;
-            /**
-             * Requested By
-             * @description Инициатор (провенанс)
-             * @default api_user
-             */
-            requested_by: string;
-            /**
-             * Requested By Chat Id
-             * @description TG chat_id инициатора
-             */
-            requested_by_chat_id?: number | null;
-        };
-        /**
-         * BulkDisableResultOut
-         * @description Partial-failure ответ bulk-отключения. HTTP 200 даже при частичном успехе.
-         */
-        BulkDisableResultOut: {
-            /** Created */
-            created?: components["schemas"]["TaskQueueRowOut"][];
-            /** Skipped */
-            skipped?: components["schemas"]["BulkDisableSkipped"][];
-            /** Failed */
-            failed?: components["schemas"]["BulkDisableFailed"][];
-        };
-        /**
-         * BulkDisableSkipped
-         * @description Объявление, для которого задача уже существовала (дубль idempotency_key).
-         */
-        BulkDisableSkipped: {
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /** Task Id */
-            task_id?: string | null;
-            /**
-             * Reason
-             * @default duplicate
-             */
-            reason: string;
-        };
-        /**
-         * BulkSnoozeFailed
-         * @description Объявление, которое не удалось снузить (нет ad или нет состояния алерта).
-         */
-        BulkSnoozeFailed: {
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /** Reason */
-            reason: string;
-        };
-        /**
-         * BulkSnoozeIn
-         * @description Тело POST /dashboard/ads/bulk-snooze.
-         */
-        BulkSnoozeIn: {
-            /**
-             * Fb Ad Ids
-             * @description Список Meta numeric ad ID (1..50)
-             */
-            fb_ad_ids: string[];
-            /**
-             * Minutes
-             * @description Снуз в минутах (1..1440)
-             */
-            minutes: number;
-        };
-        /**
-         * BulkSnoozeResultOut
-         * @description Partial-failure ответ bulk-снуза. HTTP 200 даже при частичном успехе.
-         */
-        BulkSnoozeResultOut: {
-            /** Snoozed Until */
-            snoozed_until: string;
-            /** Snoozed */
-            snoozed?: string[];
-            /** Failed */
-            failed?: components["schemas"]["BulkSnoozeFailed"][];
-        };
-        /**
-         * CabinetAutostartPutRequest
-         * @description Тело PUT — расписание автостарта (вкл/выкл + время).
-         */
-        CabinetAutostartPutRequest: {
-            /** Enabled */
-            enabled: boolean;
-            /**
-             * Hour Utc
-             * @description Час запуска (UTC) 0..23
-             */
-            hour_utc: number;
-            /**
-             * Minute Utc
-             * @description Минута запуска 0..59
-             */
-            minute_utc: number;
-        };
-        /**
-         * CabinetAutostartResponse
-         * @description Текущий конфиг автостарта (только расписание; кампании — в allowlist'е).
-         */
-        CabinetAutostartResponse: {
-            /** Enabled */
-            enabled: boolean;
-            /** Hour Utc */
-            hour_utc: number;
-            /** Minute Utc */
-            minute_utc: number;
-        };
-        /**
-         * CampaignAdPlanOut
-         * @description План одного объявления.
-         */
-        CampaignAdPlanOut: {
-            /** Name */
-            name: string;
-            /** Media File Name */
-            media_file_name: string;
-            /** Media Search Name */
-            media_search_name: string;
-            /** Media Path */
-            media_path: string;
-            /** Media Type */
-            media_type: string;
-            /** Url Params */
-            url_params: string;
-        };
-        /**
-         * CampaignAdSetPlanOut
-         * @description План одной группы объявлений.
-         */
-        CampaignAdSetPlanOut: {
-            /** Name */
-            name: string;
-            /** Folder Path */
-            folder_path: string;
-            /** Ads */
-            ads: components["schemas"]["CampaignAdPlanOut"][];
-        };
-        /**
-         * CampaignAllowlistRequest
-         * @description Тело PATCH /settings/observer/campaigns — allowlist кампаний для am-режима (#3).
-         */
-        CampaignAllowlistRequest: {
-            /**
-             * Campaign Ids
-             * @description Список campaign.id для наблюдения. Пусто — без фильтра по кампаниям.
-             */
-            campaign_ids?: string[];
-        };
-        /**
-         * CampaignBlock
-         * @description Одна кампания: список adset'ов + смешанный набор концептов (фото/видео).
-         *
-         *     Тип каждого ad определяется по расширению файла концепта (ref_media_kind),
-         *     не по кампании. concept_refs — единый источник концептов блока.
-         */
-        CampaignBlock: {
-            /** Key */
-            key: string;
-            /** Name */
-            name: string;
-            /** Adsets */
-            adsets: components["schemas"]["AdsetConfig"][];
-            /** Concept Refs */
-            concept_refs?: string[];
-        };
-        /**
-         * CampaignConfig
-         * @description Полный конфиг создания кампании (preset + run в одной модели).
-         */
-        CampaignConfig: {
-            account: components["schemas"]["Account"];
-            /** Offer Code */
-            offer_code: string;
-            /**
-             * Byer Tag
-             * @default MV
-             */
-            byer_tag: string;
-            /**
-             * Objective
-             * @default OUTCOME_SALES
-             */
-            objective: string;
-            /**
-             * Optimization Goal
-             * @default OFFSITE_CONVERSIONS
-             */
-            optimization_goal: string;
-            /**
-             * Custom Event Type
-             * @default PURCHASE
-             */
-            custom_event_type: string;
-            /** Special Ad Categories */
-            special_ad_categories?: string[];
-            /** Destination Link */
-            destination_link: string;
-            /** Url Tags Template */
-            url_tags_template?: string | null;
-            /**
-             * Cta
-             * @default PLAY_GAME
-             */
-            cta: string;
-            /**
-             * Text Optimizations
-             * @default OPT_OUT
-             */
-            text_optimizations: string;
-            /** Start Date */
-            start_date?: string | null;
-            /**
-             * Creo Root
-             * @default
-             */
-            creo_root: string;
-            budget: components["schemas"]["Budget"];
-            targeting: components["schemas"]["Targeting"];
-            attribution?: components["schemas"]["Attribution"];
-            ad_text?: components["schemas"]["AdText"];
-            /** Campaigns */
-            campaigns: components["schemas"]["CampaignBlock"][];
-            /** Copies Per Concept */
-            copies_per_concept?: number | null;
-            /**
-             * Creative Prefix
-             * @default
-             */
-            creative_prefix: string;
-            /**
-             * Code Start
-             * @default 1
-             */
-            code_start: number;
-            /** @default campaign_paused */
-            launch_state: components["schemas"]["LaunchState"];
-        };
-        /**
-         * CampaignConfigIn
-         * @description Плоский конфиг залива от фронта. `to_domain()` → доменный CampaignConfig.
-         *
-         *     Все money-инварианты (hard-cap бюджета, +AQ, дефолты) проверяет уже доменный
-         *     CampaignConfig внутри `to_domain` — здесь сознательно НЕ дублируем валидацию,
-         *     чтобы единый источник правды остался в core.campaign_builder.config.
-         */
-        CampaignConfigIn: {
-            /** Act Id */
-            act_id: string;
-            /** Page Id */
-            page_id: string;
-            /** Pixel Id */
-            pixel_id: string;
-            /**
-             * Tz Offset
-             * @default 0
-             */
-            tz_offset: number | string | null;
-            /** Offer Code */
-            offer_code: string;
-            /** Byer Tag */
-            byer_tag?: string | null;
-            /**
-             * Objective
-             * @default OUTCOME_SALES
-             */
-            objective: string;
-            /**
-             * Optimization Goal
-             * @default OFFSITE_CONVERSIONS
-             */
-            optimization_goal: string;
-            /**
-             * Custom Event Type
-             * @default PURCHASE
-             */
-            custom_event_type: string;
-            /** Special Ad Categories */
-            special_ad_categories?: string[];
-            /** Destination Link */
-            destination_link: string;
-            /**
-             * Cta
-             * @default PLAY_GAME
-             */
-            cta: string;
-            /**
-             * Text Optimizations
-             * @default OPT_OUT
-             */
-            text_optimizations: string;
-            /** Start Date */
-            start_date?: string | null;
-            ad_text?: components["schemas"]["AdTextIn"] | null;
-            /**
-             * Budget Level
-             * @default campaign
-             */
-            budget_level: string;
-            /** Daily Budget Cents */
-            daily_budget_cents: number;
-            /**
-             * Bid Strategy
-             * @default COST_CAP
-             */
-            bid_strategy: string;
-            /** Bid Amount Cents */
-            bid_amount_cents?: number | null;
-            /** Countries */
-            countries?: string[];
-            /**
-             * Age Min
-             * @default 21
-             */
-            age_min: number;
-            /**
-             * Age Max
-             * @default 65
-             */
-            age_max: number;
-            /**
-             * Advantage Audience
-             * @default true
-             */
-            advantage_audience: boolean;
-            /**
-             * Click Through Days
-             * @default 1
-             */
-            click_through_days: number;
-            /**
-             * View Through Days
-             * @default 1
-             */
-            view_through_days: number;
-            /** Campaigns */
-            campaigns: components["schemas"]["CampaignStructureIn"][];
-            /** Copies Per Concept */
-            copies_per_concept?: number | null;
-            /** Creo Root */
-            creo_root?: string | null;
-            /**
-             * Launch State
-             * @default campaign_paused
-             */
-            launch_state: string;
-            /** Url Tags */
-            url_tags?: string | null;
-            /** Naming Template */
-            naming_template?: string | null;
-        };
-        /**
-         * CampaignFolderItem
-         * @description Краткое описание одной папки креативов для UI выбора.
-         */
-        CampaignFolderItem: {
-            /** Name */
-            name: string;
-            /** Path */
-            path: string;
-            /** Adset Count */
-            adset_count: number;
-            /** Creative Count */
-            creative_count: number;
-            /** Media Type */
-            media_type: string;
-            /** Updated At */
-            updated_at: number;
-            /**
-             * Is Valid
-             * @default true
-             */
-            is_valid: boolean;
-            /**
-             * Validation Error
-             * @default
-             */
-            validation_error: string;
-        };
-        /**
-         * CampaignLocationPlanOut
-         * @description Правила выбора гео.
-         */
-        CampaignLocationPlanOut: {
-            /** Add Locations */
-            add_locations: string[];
-            /** Offer Country Name */
-            offer_country_name: string;
-            /** Required Location Type */
-            required_location_type: string;
-            /** Remove Initial Location After Add */
-            remove_initial_location_after_add: boolean;
-            /** Rejected Location Terms */
-            rejected_location_terms: string[];
-        };
-        /**
-         * CampaignManualGuideItemOut
-         * @description Одна строка ручного помощника.
-         */
-        CampaignManualGuideItemOut: {
-            /** Label */
-            label: string;
-            /** Value */
-            value: string;
-            /**
-             * Copyable
-             * @default true
-             */
-            copyable: boolean;
-        };
-        /**
-         * CampaignManualGuideSectionOut
-         * @description Секция ручного помощника.
-         */
-        CampaignManualGuideSectionOut: {
-            /** Title */
-            title: string;
-            /** Items */
-            items: components["schemas"]["CampaignManualGuideItemOut"][];
-        };
-        /**
-         * CampaignOption
-         * @description Кампания для выбора в allowlist сканирования (#3).
-         */
-        CampaignOption: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Selected */
-            selected: boolean;
-        };
-        /**
-         * CampaignPlanOut
-         * @description Сводка по одной кампании в плане.
-         */
-        CampaignPlanOut: {
-            /** Key */
-            key: string;
-            /** Name */
-            name: string;
-            /** Status */
-            status: string;
-            /** Adsets */
-            adsets: components["schemas"]["AdsetPlanOut"][];
-        };
-        /**
-         * CampaignPlanRequest
-         * @description Параметры создания кампании — совпадают с CampaignScriptConfig.
-         */
-        CampaignPlanRequest: {
-            /**
-             * Offer Code
-             * @description Код оффера, например DRC_CR2
-             */
-            offer_code: string;
-            /**
-             * Offer Country Name
-             * @description Полное название страны оффера
-             */
-            offer_country_name: string;
-            /**
-             * Cabinet Id
-             * @description ID рекламного кабинета Facebook
-             */
-            cabinet_id: string;
-            /**
-             * Sub2
-             * @description Значение sub2 для UTM-параметров
-             * @default MV
-             */
-            sub2: string;
-            /**
-             * Folder Name
-             * @description Имя папки в корне FB_Agent_Creo
-             */
-            folder_name: string;
-            /**
-             * Generation Date
-             * @description Дата генерации в формате YYYY-MM-DD (иначе сегодня)
-             */
-            generation_date?: string | null;
-        };
-        /**
-         * CampaignScriptPlanOut
-         * @description Полный план кампании для ручного создания.
-         */
-        CampaignScriptPlanOut: {
-            /** Campaign Name */
-            campaign_name: string;
-            /** Offer Code */
-            offer_code: string;
-            /** Offer Country Name */
-            offer_country_name: string;
-            /** Creative Folder Name */
-            creative_folder_name: string;
-            /** Creative Folder Path */
-            creative_folder_path: string;
-            /** Conversion Event */
-            conversion_event: string;
-            /** Cabinet Id */
-            cabinet_id: string;
-            /** Sub2 */
-            sub2: string;
-            /** Media Type */
-            media_type: string;
-            /** Adset Count */
-            adset_count: number;
-            /** Ad Count */
-            ad_count: number;
-            /** Adsets */
-            adsets: components["schemas"]["CampaignAdSetPlanOut"][];
-            location_plan: components["schemas"]["CampaignLocationPlanOut"];
-            /** Manual Guide */
-            manual_guide: components["schemas"]["CampaignManualGuideSectionOut"][];
-            /** Safety Notes */
-            safety_notes: string[];
-        };
-        /**
-         * CampaignStructureIn
-         * @description Одна кампания в плоской структуре фронта.
-         *
-         *     Несёт `key`/`label`/`adset_count`/`concept_refs`. Доменные имена adset'ов
-         *     и dir/glob генерируются детерминированно в `to_domain` (фронт их не знает).
-         *     `label` — произвольная метка кампании; если задана, добавляется в конец имени
-         *     кампании и каждого adset'а. Пустая/None — ничего не добавляется.
-         */
-        CampaignStructureIn: {
-            /** Key */
-            key: string;
-            /** Label */
-            label?: string | null;
-            /** Adset Count */
-            adset_count: number;
-            /** Concept Refs */
-            concept_refs?: string[];
-        };
-        /**
-         * ChartBucketOut
-         * @description Один бакет /api/dashboard/chart-data (по часам или дням).
-         *
-         *     active_ads — COUNT DISTINCT ad_id в бакете.
-         */
-        ChartBucketOut: {
-            /**
-             * Ts
-             * Format: date-time
-             */
-            ts: string;
-            /** Spend */
-            spend?: string | null;
-            /** Impressions */
-            impressions?: number | null;
-            /** Clicks */
-            clicks?: number | null;
-            /** Leads */
-            leads?: number | null;
-            /** Registrations */
-            registrations?: number | null;
-            /** Deposits */
-            deposits?: number | null;
-            /** Active Ads */
-            active_ads?: number | null;
-        };
-        /**
-         * ChatMessageIn
-         * @description Одно сообщение истории (историю держит клиент и шлёт с каждым запросом).
-         */
-        ChatMessageIn: {
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "user" | "assistant";
-            /** Content */
-            content: string;
-        };
-        /**
-         * CleanupOut
-         * @description Результат пометки run на снос Meta-объектов.
-         */
-        CleanupOut: {
-            /** Run Id */
-            run_id: string;
-            /** Meta Ids */
-            meta_ids: {
-                [key: string]: unknown;
-            };
-            /** Detail */
-            detail: string;
-        };
-        /**
-         * CreativeUniquifyResponse
-         * @description Результат уникализации: куда сохранено и сколько файлов создано.
-         */
-        CreativeUniquifyResponse: {
-            /** Output Dir */
-            output_dir: string;
-            /** Iteration Name */
-            iteration_name: string;
-            /** Files Created */
-            files_created: number;
-            /** Creative Count */
-            creative_count: number;
-            /** Copy Count */
-            copy_count: number;
-            /** Duration Ms */
-            duration_ms: number;
-        };
-        /**
-         * CriticalHealthAlert
-         * @description Активный money-critical, сохранённый watchdog для веб-интерфейса.
-         */
-        CriticalHealthAlert: {
-            /** Id */
-            id: string;
-            /** Kind */
-            kind: string;
-            /**
-             * Severity
-             * @default CRITICAL
-             * @constant
-             */
-            severity: "CRITICAL";
-            /** Title */
-            title: string;
-            /** Message */
-            message: string;
-            /** Account Id */
-            account_id?: string | null;
-            /**
-             * Detected At
-             * Format: date-time
-             */
-            detected_at: string;
-            /** Details */
-            details?: {
-                [key: string]: unknown;
-            };
-        };
-        /**
-         * DailyPointOut
-         * @description Точка подневной серии — дневной итог (UTC-день).
-         */
-        DailyPointOut: {
-            /**
-             * Day
-             * Format: date
-             */
-            day: string;
-            /** Spend */
-            spend?: string | null;
-            /**
-             * Impressions
-             * @default 0
-             */
-            impressions: number;
-            /**
-             * Clicks
-             * @default 0
-             */
-            clicks: number;
-            /**
-             * Leads
-             * @default 0
-             */
-            leads: number;
-            /**
-             * Registrations
-             * @default 0
-             */
-            registrations: number;
-            /**
-             * Deposits
-             * @default 0
-             */
-            deposits: number;
-            /**
-             * Active Ads
-             * @default 0
-             */
-            active_ads: number;
-        };
-        /**
-         * DashboardBatchOut
-         * @description Композитный ответ /api/dashboard/batch — снижает количество fetch'ей на фронте.
-         *
-         *     Контракт: даже если одна из секций упала, остальные возвращаются (см.
-         *     partial-failure поведение в роутере). Списки могут быть пустыми.
-         *
-         *     Секции:
-         *     - recent_disable_tasks: задачи отключения (meta_api_mutation pause_ad / legacy disable)
-         *     - recent_enable_tasks: задачи включения (meta_api_mutation activate_ad / legacy enable)
-         *
-         *     recent_alerts/recent_disable_tasks/recent_enable_tasks типизированы точными моделями
-         *     (AlertEventOut/TaskQueueRowOut) — серилизаторы (alert_event_row_to_out/task_row_to_out)
-         *     уже строят dict ровно под их форму, раньше тип был размыт до dict[str, Any], из-за чего
-         *     фронт был вынужден небезопасно кастовать поля (M9-аудит). recent_incidents/
-         *     enable_recommendations_pending оставлены dict — отдельных моделей под их форму нет.
-         */
-        DashboardBatchOut: {
-            stats: components["schemas"]["DashboardStatsOut"];
-            /** Recent Incidents */
-            recent_incidents?: {
-                [key: string]: unknown;
-            }[];
-            /** Recent Alerts */
-            recent_alerts?: components["schemas"]["AlertEventOut"][];
-            /** Recent Disable Tasks */
-            recent_disable_tasks?: components["schemas"]["TaskQueueRowOut"][];
-            /** Recent Enable Tasks */
-            recent_enable_tasks?: components["schemas"]["TaskQueueRowOut"][];
-            /** Enable Recommendations Pending */
-            enable_recommendations_pending?: {
-                [key: string]: unknown;
-            }[];
-        };
-        /**
-         * DashboardPerformanceOut
-         * @description Тяжёлая агрегация для секции Performance на DashboardPage.
-         */
-        DashboardPerformanceOut: {
-            /** Top Campaigns */
-            top_campaigns?: components["schemas"]["TopCampaignOut"][];
-            /** Offer Leaderboard */
-            offer_leaderboard?: components["schemas"]["OfferLeaderboardRowOut"][];
-            /** Top Rule Violations */
-            top_rule_violations?: components["schemas"]["RuleViolationOut"][];
-        };
-        /**
-         * DashboardStatsOut
-         * @description Сводные счётчики для overview-карточек DashboardPage.
-         *
-         *     Все count-поля — int. observer_status строкой ('running'|'paused'|'unknown').
-         *     last_scan_at — ISO-8601 datetime либо None если за последнюю неделю не было сканов.
-         */
-        DashboardStatsOut: {
-            /**
-             * Total Ads Monitored
-             * @default 0
-             */
-            total_ads_monitored: number;
-            /**
-             * Ads In Normal
-             * @default 0
-             */
-            ads_in_normal: number;
-            /**
-             * Ads In Warning
-             * @default 0
-             */
-            ads_in_warning: number;
-            /**
-             * Ads In Stop
-             * @default 0
-             */
-            ads_in_stop: number;
-            /**
-             * Ads In Claimed
-             * @default 0
-             */
-            ads_in_claimed: number;
-            /**
-             * Ads In Disabled
-             * @default 0
-             */
-            ads_in_disabled: number;
-            /**
-             * Active Incidents
-             * @default 0
-             */
-            active_incidents: number;
-            /** Current Day Spend */
-            current_day_spend?: string | null;
-            /** Last Scan At */
-            last_scan_at?: string | null;
-            /** Last Scan Outcome */
-            last_scan_outcome?: string | null;
-            /**
-             * Scans Today
-             * @default 0
-             */
-            scans_today: number;
-            /**
-             * Scans Today With Errors
-             * @default 0
-             */
-            scans_today_with_errors: number;
-            /**
-             * Observer Status
-             * @default unknown
-             */
-            observer_status: string;
-            /**
-             * Pending Disable Tasks
-             * @default 0
-             */
-            pending_disable_tasks: number;
-            /**
-             * Pending Enable Tasks
-             * @default 0
-             */
-            pending_enable_tasks: number;
-            /**
-             * Failed Tasks 24H
-             * @default 0
-             */
-            failed_tasks_24h: number;
-            /** Scan Blocked Reason */
-            scan_blocked_reason?: string | null;
-        };
-        /**
-         * DisableTaskCreateIn
-         * @description Тело POST /dashboard/disable-tasks.
-         */
-        DisableTaskCreateIn: {
-            /**
-             * Fb Ad Id
-             * @description Meta numeric ad ID
-             */
-            fb_ad_id: string;
-            /**
-             * Requested By
-             * @description Инициатор задачи
-             * @default api_user
-             */
-            requested_by: string;
-            /**
-             * Requested By Chat Id
-             * @description TG chat_id инициатора
-             */
-            requested_by_chat_id?: number | null;
-            /**
-             * Reason
-             * @description Причина отключения
-             * @default manual disable
-             */
-            reason: string;
-        };
-        /** DuplicateSourceAccount */
-        DuplicateSourceAccount: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Currency */
-            currency?: string | null;
-        };
-        /** DuplicateSourceAd */
-        DuplicateSourceAd: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /** Delivery Status */
-            delivery_status?: string | null;
-            /** Creative Thumb Url */
-            creative_thumb_url?: string | null;
-        };
-        /** DuplicateSourceEntity */
-        DuplicateSourceEntity: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-        };
-        /**
-         * EnableRecommendationConfirmIn
-         * @description Тело POST /dashboard/enable-recommendations/{id}/enable.
-         */
-        EnableRecommendationConfirmIn: {
-            /**
-             * Requested By
-             * @default api_user
-             */
-            requested_by: string;
-            /** Requested By Chat Id */
-            requested_by_chat_id?: number | null;
-        };
-        /**
-         * EnableRecommendationRowOut
-         * @description Строка enable_recommendations с JOIN по fb_ads и task_queue.
-         *
-         *     Расхождение от спека: поле 'reason' в реальной модели — recommendation_level
-         *     (ok/warning). Возвращаем оба поля для максимальной совместимости с фронтом.
-         *     metrics_payload — алиас snapshot_metrics.
-         */
-        EnableRecommendationRowOut: {
-            /** Id */
-            id: string;
-            /** Fb Ad Id */
-            fb_ad_id?: string | null;
-            /** Ad Name */
-            ad_name?: string | null;
-            /** Campaign Name */
-            campaign_name?: string | null;
-            /** Reason */
-            reason?: string | null;
-            /** Recommendation Level */
-            recommendation_level?: string | null;
-            /** Metrics Payload */
-            metrics_payload?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Live Batch Started At */
-            live_batch_started_at?: string | null;
-            /** Promoted To Task Id */
-            promoted_to_task_id?: number | null;
-            /** Promoted Task Status */
-            promoted_task_status?: string | null;
-        };
-        /**
-         * EnableTaskRowOut
-         * @description Строка enable-задачи. Идентична disable, только task_type='enable'.
-         */
-        EnableTaskRowOut: {
-            /** Id */
-            id: string;
-            /** Fb Ad Id */
-            fb_ad_id?: string | null;
-            /** Ad Name */
-            ad_name?: string | null;
-            /** Task Type */
-            task_type: string;
-            /** Status */
-            status: string;
-            /** Attempt Count */
-            attempt_count: number;
-            /** Max Attempts */
-            max_attempts: number;
-            /** Requested By */
-            requested_by: string;
-            /** Requested By Chat Id */
-            requested_by_chat_id?: number | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Next Attempt At */
-            next_attempt_at?: string | null;
-            /** Last Error Message */
-            last_error_message?: string | null;
-        };
-        /**
-         * FakeDepositOut
-         * @description Ответ одной записи AdDepositCorrection с JOIN на fb_ads.
-         */
-        FakeDepositOut: {
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /**
-             * Internal Id
-             * Format: uuid
-             */
-            internal_id: string;
-            /** Ad Name */
-            ad_name?: string | null;
-            /** Fake Count */
-            fake_count: number;
-            /** Note */
-            note?: string | null;
-            /** Created At */
-            created_at?: string | null;
-            /** Updated At */
-            updated_at?: string | null;
-        };
-        /**
-         * FakeDepositUpsertIn
-         * @description Тело PUT /fake-deposits/{fb_ad_id}.
-         *
-         *     fake_count >= 0 (отрицательные депозиты физически невозможны).
-         */
-        FakeDepositUpsertIn: {
-            /**
-             * Fake Count
-             * @description Количество фейковых депозитов (>= 0)
-             */
-            fake_count: number;
-            /**
-             * Note
-             * @description Комментарий к корректировке
-             */
-            note?: string | null;
-        };
-        /**
-         * FunnelDerivedOut
-         * @description Производные метрики (None = знаменатель нулевой).
-         */
-        FunnelDerivedOut: {
-            /** Cpc */
-            cpc?: string | null;
-            /** Cpl */
-            cpl?: string | null;
-            /** Cpr */
-            cpr?: string | null;
-            /** Cpa */
-            cpa?: string | null;
-            /** Ctr Pct */
-            ctr_pct?: string | null;
-            /** Cr Click Lead Pct */
-            cr_click_lead_pct?: string | null;
-            /** Cr Lead Reg Pct */
-            cr_lead_reg_pct?: string | null;
-            /** Cr Reg Dep Pct */
-            cr_reg_dep_pct?: string | null;
-        };
-        /**
-         * FunnelTotalsOut
-         * @description Тоталы воронки Meta за окно (Decimal-строки для денег).
-         */
-        FunnelTotalsOut: {
-            /** Spend */
-            spend?: string | null;
-            /**
-             * Impressions
-             * @default 0
-             */
-            impressions: number;
-            /**
-             * Clicks
-             * @default 0
-             */
-            clicks: number;
-            /**
-             * Leads
-             * @default 0
-             */
-            leads: number;
-            /**
-             * Registrations
-             * @default 0
-             */
-            registrations: number;
-            /**
-             * Deposits
-             * @default 0
-             */
-            deposits: number;
-        };
-        /** HTTPValidationError */
-        HTTPValidationError: {
-            /** Detail */
-            detail?: components["schemas"]["ValidationError"][];
-        };
-        /**
-         * HealthDetailsResponse
-         * @description Агрегированный статус всех воркеров из Redis heartbeat-ключей.
-         */
-        HealthDetailsResponse: {
-            /** Workers */
-            workers: components["schemas"]["WorkerStatus"][];
-            /**
-             * Observer Runtime
-             * @description Содержимое Redis ключа observer:runtime
-             */
-            observer_runtime?: {
-                [key: string]: unknown;
-            } | null;
-            /** @description Статус сетевого канала Marketing API (probe из health_watchdog) */
-            meta_api_channel?: components["schemas"]["MetaApiChannelStatus"] | null;
-            /**
-             * Critical Alerts
-             * @description Активные CRITICAL-сигналы watchdog, доступные без Telegram
-             */
-            critical_alerts?: components["schemas"]["CriticalHealthAlert"][];
-            /**
-             * Overall
-             * @enum {string}
-             */
-            overall: "HEALTHY" | "DEGRADED" | "CRITICAL";
-        };
-        /**
-         * HistoryAdOut
-         * @description Строка /history/ads: суммы по объявлению + последние события.
-         */
-        HistoryAdOut: {
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /** Internal Id */
-            internal_id: string;
-            /** Ad Name */
-            ad_name: string;
-            /** Campaign Name */
-            campaign_name: string;
-            /** Ad Account Id */
-            ad_account_id?: string | null;
-            /** Offer Code */
-            offer_code?: string | null;
-            /** Is Active */
-            is_active: boolean;
-            /** Spend */
-            spend: string;
-            /** Leads */
-            leads: number;
-            /** Deposits */
-            deposits: number;
-            /** Last Alert At */
-            last_alert_at?: string | null;
-            /** Last Alert Stage */
-            last_alert_stage?: string | null;
-            /** Last Disable At */
-            last_disable_at?: string | null;
-            /** Alerts Count In Window */
-            alerts_count_in_window: number;
-        };
-        /**
-         * HistoryAlerts
-         * @description Сводка по алертам за период.
-         */
-        HistoryAlerts: {
-            /** Warning Count */
-            warning_count: number;
-            /** Stop Count */
-            stop_count: number;
-            /** By Rule */
-            by_rule: components["schemas"]["HistoryRuleCount"][];
-        };
-        /**
-         * HistoryCampaignOut
-         * @description Строка /history/campaigns: суммы по кампании.
-         */
-        HistoryCampaignOut: {
-            /** Campaign Id */
-            campaign_id: string;
-            /** Fb Campaign Id */
-            fb_campaign_id?: string | null;
-            /** Campaign Name */
-            campaign_name: string;
-            /** Offer Code */
-            offer_code?: string | null;
-            /** Spend */
-            spend: string;
-            /** Leads */
-            leads: number;
-            /** Registrations */
-            registrations: number;
-            /** Deposits */
-            deposits: number;
-            /** Active Ads Count */
-            active_ads_count: number;
-            /** Alerts Count */
-            alerts_count: number;
-            /** Cost Per Lead */
-            cost_per_lead?: string | null;
-        };
-        /**
-         * HistoryEventOut
-         * @description Строка /history/events: один AlertEvent с JOIN'ами.
-         */
-        HistoryEventOut: {
-            /** Id */
-            id: string;
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /** Ad Name */
-            ad_name: string;
-            /** Campaign Name */
-            campaign_name: string;
-            /** Offer Code */
-            offer_code?: string | null;
-            /** Stage */
-            stage: string;
-            /** Matched Rule Codes */
-            matched_rule_codes: string[];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Alert Payload */
-            alert_payload?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /**
-         * HistoryOfferOut
-         * @description Строка /history/offers: суммы по офферу.
-         */
-        HistoryOfferOut: {
-            /** Offer Id */
-            offer_id: string;
-            /** Offer Code */
-            offer_code: string;
-            /** Offer Name */
-            offer_name: string;
-            /** Spend */
-            spend: string;
-            /** Leads */
-            leads: number;
-            /** Registrations */
-            registrations: number;
-            /** Deposits */
-            deposits: number;
-            /** Alerts Count */
-            alerts_count: number;
-            /** Active Ads Count */
-            active_ads_count: number;
-            /** Cost Per Lead */
-            cost_per_lead?: string | null;
-        };
-        /**
-         * HistoryRuleCount
-         * @description Количество срабатываний по конкретному правилу.
-         */
-        HistoryRuleCount: {
-            /** Rule Code */
-            rule_code: string;
-            /** Count */
-            count: number;
-        };
-        /**
-         * HistorySummaryOut
-         * @description Ответ GET /history/summary.
-         */
-        HistorySummaryOut: {
-            /**
-             * From Iso
-             * Format: date-time
-             */
-            from_iso: string;
-            /**
-             * To Iso
-             * Format: date-time
-             */
-            to_iso: string;
-            totals: components["schemas"]["HistoryTotals"];
-            alerts: components["schemas"]["HistoryAlerts"];
-            tasks: components["schemas"]["HistoryTasks"];
-        };
-        /**
-         * HistoryTasks
-         * @description Сводка по задачам (disable/enable) за период.
-         */
-        HistoryTasks: {
-            /** Disable Completed */
-            disable_completed: number;
-            /** Disable Failed */
-            disable_failed: number;
-            /** Enable Completed */
-            enable_completed: number;
-        };
-        /**
-         * HistoryTimelineItem
-         * @description Элемент объединённой ленты alert + task.
-         */
-        HistoryTimelineItem: {
-            /** Event Type */
-            event_type: string;
-            /**
-             * Ts
-             * Format: date-time
-             */
-            ts: string;
-            /** Fb Ad Id */
-            fb_ad_id?: string | null;
-            /** Ad Name */
-            ad_name?: string | null;
-            /** Campaign Id */
-            campaign_id?: string | null;
-            /** Campaign Name */
-            campaign_name?: string | null;
-            /** Stage */
-            stage?: string | null;
-            /** Rule Codes */
-            rule_codes?: string[] | null;
-            /** Task Type */
-            task_type?: string | null;
-            /** Task Status */
-            task_status?: string | null;
-        };
-        /**
-         * HistoryTotals
-         * @description Суммарные метрики за период.
-         */
-        HistoryTotals: {
-            /** Spend */
-            spend: string;
-            /** Impressions */
-            impressions: number;
-            /** Clicks */
-            clicks: number;
-            /** Leads */
-            leads: number;
-            /** Registrations */
-            registrations: number;
-            /** Deposits */
-            deposits: number;
-            /** Active Ads Count */
-            active_ads_count: number;
-        };
-        /**
-         * HourlyPointOut
-         * @description Точка почасовой серии — ЧЕСТНАЯ дельта («сколько в этот час»).
-         */
-        HourlyPointOut: {
-            /**
-             * Ts
-             * Format: date-time
-             */
-            ts: string;
-            /** Spend */
-            spend?: string | null;
-            /**
-             * Impressions
-             * @default 0
-             */
-            impressions: number;
-            /**
-             * Clicks
-             * @default 0
-             */
-            clicks: number;
-            /**
-             * Leads
-             * @default 0
-             */
-            leads: number;
-            /**
-             * Registrations
-             * @default 0
-             */
-            registrations: number;
-            /**
-             * Deposits
-             * @default 0
-             */
-            deposits: number;
-            /**
-             * Active Ads
-             * @default 0
-             */
-            active_ads: number;
-        };
-        /**
-         * IncidentOut
-         * @description AdSnapshotOut + incident-специфичные поля для /dashboard/incidents.
-         */
-        IncidentOut: {
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /** Internal Id */
-            internal_id: string;
-            /** Ad Name */
-            ad_name: string;
-            /** Campaign Name */
-            campaign_name?: string | null;
-            /** Adset Name */
-            adset_name?: string | null;
-            /** Ad Account Id */
-            ad_account_id?: string | null;
-            /** Offer Code */
-            offer_code?: string | null;
-            /** Offer Id */
-            offer_id?: string | null;
-            /**
-             * Alert State
-             * @default normal
-             */
-            alert_state: string;
-            /** Snoozed Until */
-            snoozed_until?: string | null;
-            /** Open State Token */
-            open_state_token?: string | null;
-            /** Last Warning At */
-            last_warning_at?: string | null;
-            /** Last Stop At */
-            last_stop_at?: string | null;
-            /** Is Active */
-            is_active: boolean;
-            /** Last Seen At */
-            last_seen_at?: string | null;
-            /** Delivery Status */
-            delivery_status?: string | null;
-            /** Meta Ad Status */
-            meta_ad_status?: string | null;
-            /** Creative Thumb Url */
-            creative_thumb_url?: string | null;
-            /** Creative Image Url */
-            creative_image_url?: string | null;
-            /** Adset Pixel Id */
-            adset_pixel_id?: string | null;
-            /** Adset Daily Budget */
-            adset_daily_budget?: string | null;
-            /** Adset Lifetime Budget */
-            adset_lifetime_budget?: string | null;
-            /** Adset Budget Remaining */
-            adset_budget_remaining?: string | null;
-            /** Learning Stage */
-            learning_stage?: string | null;
-            /** Stop Rule Codes */
-            stop_rule_codes?: string[];
-            /** Warning Rule Codes */
-            warning_rule_codes?: string[];
-            metrics?: components["schemas"]["MetricsBlock"] | null;
-            /** Incident Open Since */
-            incident_open_since?: string | null;
-            /** Incident Duration Seconds */
-            incident_duration_seconds?: number | null;
-            /**
-             * Transitions Count
-             * @default 0
-             */
-            transitions_count: number;
-        };
-        /**
-         * LaunchIn
-         * @description Запрос запуска залива: конфиг + опц. ссылка на пресет/upload.
-         *
-         *     `config` — каноническая ПЛОСКАЯ форма фронта (`CampaignConfigIn`) ИЛИ вложенный
-         *     `CampaignConfig` (legacy). `domain_config()` нормализует в доменный CampaignConfig.
-         *     `concept_counts_map()` даёт ту же раскладку K, что показал validate (симметрия превью↔залив).
-         */
-        LaunchIn: {
-            /** Config */
-            config: components["schemas"]["CampaignConfigIn"] | components["schemas"]["CampaignConfig"];
-            /** Preset Id */
-            preset_id?: string | null;
-            /** Idempotency Key */
-            idempotency_key?: string | null;
-            /** Concept Counts */
-            concept_counts?: {
-                [key: string]: number;
-            } | null;
-        };
-        /**
-         * LaunchOut
-         * @description Ответ запуска: id созданного run + id задачи.
-         */
-        LaunchOut: {
-            /** Run Id */
-            run_id: string;
-            /** Task Id */
-            task_id: number | null;
-            /** Status */
-            status: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /**
-         * LaunchState
-         * @description Money-инвариант запуска: что именно создаётся на паузе.
-         * @enum {string}
-         */
-        LaunchState: "campaign_paused" | "all_paused";
-        /**
-         * MetaApiChannelStatus
-         * @description Статус сетевого канала Marketing API (auto-stop) по проактивному probe.
-         *
-         *     Пишется health_watchdog в Redis meta_api:channel:health. ONLINE — реальный GET /me
-         *     прошёл; DEGRADED — канал мёртв (network-down / протух токен); UNKNOWN — прободер не
-         *     писал / ключ протух (нет данных, НЕ обязательно отказ).
-         */
-        MetaApiChannelStatus: {
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "ONLINE" | "DEGRADED" | "UNKNOWN";
-            /** Healthy */
-            healthy?: boolean | null;
-            /** Probe Ok */
-            probe_ok?: boolean | null;
-            /** Detail */
-            detail?: string | null;
-            /** Reason */
-            reason?: string | null;
-            /** Checked At */
-            checked_at?: string | null;
-        };
-        /**
-         * MetaPeriodBlockOut
-         * @description Блок Meta «за период»: тоталы + производные + подневная серия.
-         */
-        MetaPeriodBlockOut: {
-            totals: components["schemas"]["FunnelTotalsOut"];
-            derived: components["schemas"]["FunnelDerivedOut"];
-            /** Series Daily */
-            series_daily?: components["schemas"]["DailyPointOut"][];
-        };
-        /**
-         * MetaTodayBlockOut
-         * @description Блок Meta «за сегодня»: тоталы + производные + почасовые дельты.
-         */
-        MetaTodayBlockOut: {
-            totals: components["schemas"]["FunnelTotalsOut"];
-            derived: components["schemas"]["FunnelDerivedOut"];
-            /** Series Hourly */
-            series_hourly?: components["schemas"]["HourlyPointOut"][];
-        };
-        /**
-         * MetricRow
-         * @description Одна строка метрик из ad_metrics (partitioned by cycle_ts).
-         */
-        MetricRow: {
-            /**
-             * Cycle Ts
-             * Format: date-time
-             */
-            cycle_ts: string;
-            /** Spend */
-            spend?: string | null;
-            /** Impressions */
-            impressions?: number | null;
-            /** Clicks */
-            clicks?: number | null;
-            /** Leads */
-            leads?: number | null;
-            /** Deposits */
-            deposits?: number | null;
-            /** Delivery Status */
-            delivery_status?: null;
-        };
-        /**
-         * MetricsBlock
-         * @description Блок метрик (последняя строка ad_metrics за окно 7 дней).
-         *
-         *     Decimal'ы сериализуются как str — стабильный путь без потери точности.
-         */
-        MetricsBlock: {
-            /** Cycle Ts */
-            cycle_ts: string;
-            /** Spend */
-            spend?: string | null;
-            /** Impressions */
-            impressions?: number | null;
-            /** Clicks */
-            clicks?: number | null;
-            /** Ctr */
-            ctr?: string | null;
-            /** Cpc */
-            cpc?: string | null;
-            /** Cpm */
-            cpm?: string | null;
-            /** Reach */
-            reach?: number | null;
-            /** Frequency */
-            frequency?: string | null;
-            /** Leads */
-            leads?: number | null;
-            /** Cost Per Lead */
-            cost_per_lead?: string | null;
-            /** Registrations */
-            registrations?: number | null;
-            /** Cost Per Registration */
-            cost_per_registration?: string | null;
-            /** Deposits */
-            deposits?: number | null;
-        };
-        /**
-         * ObserverSettingsPutRequest
-         * @description Тело PUT /settings/observer — обновление singleton.
-         *
-         *     Валидация: default_interval_seconds должен быть от 30 до 600 секунд.
-         */
-        ObserverSettingsPutRequest: {
-            /** Is Scanning Enabled */
-            is_scanning_enabled: boolean;
-            /**
-             * Default Interval Seconds
-             * @description Интервал сканирования (30–600 секунд)
-             */
-            default_interval_seconds: number;
-            /** Auto Enable Recommendations */
-            auto_enable_recommendations: boolean;
-            /**
-             * Owner Campaign Tag
-             * @description Теги владельца кампаний для owner-scoping. Один или несколько через запятую (например, 'MV' или 'MV,ABC,XYZ') — кампания отслеживается при совпадении с любым. Пусто/null — фильтр выключен, обрабатываются все кампании.
-             */
-            owner_campaign_tag?: string | null;
-            /**
-             * Campaign Ids
-             * @description Allowlist кампаний для am-режима (#3): фильтр am_tabular по campaign.id IN. null — не менять, [] — очистить (без фильтра по кампаниям).
-             */
-            campaign_ids?: string[] | null;
-        };
-        /**
-         * ObserverSettingsResponse
-         * @description Ответ на GET /settings/observer.
-         *
-         *     Поля, которые раньше были в глобальном observer_config, но теперь
-         *     хранятся per-offer в OfferRule, возвращаются как null для совместимости
-         *     с текущим фронтом.
-         */
-        ObserverSettingsResponse: {
-            /** Is Scanning Enabled */
-            is_scanning_enabled: boolean;
-            /** Default Interval Seconds */
-            default_interval_seconds: number;
-            /** Auto Enable Recommendations */
-            auto_enable_recommendations: boolean;
-            /** Owner Campaign Tag */
-            owner_campaign_tag?: string | null;
-            /** Campaign Ids */
-            campaign_ids?: string[];
-            /** Warning Percent Of Stop */
-            warning_percent_of_stop?: null;
-            /** Cpc Warning Percent */
-            cpc_warning_percent?: null;
-            /** Cpl Warning Percent */
-            cpl_warning_percent?: null;
-            /** Cpr Warning Percent */
-            cpr_warning_percent?: null;
-        };
-        /**
-         * ObserverStatusResponse
-         * @description Статус observer-воркера из Redis ключа observer:runtime.
-         *
-         *     Если ключ отсутствует — возвращаются None/unknown значения.
-         */
-        ObserverStatusResponse: {
-            /**
-             * Status
-             * @default unknown
-             */
-            status: string;
-            /** Last Scan At */
-            last_scan_at?: string | null;
-            /** Last Scan Outcome */
-            last_scan_outcome?: string | null;
-            /**
-             * Scans Today
-             * @default 0
-             */
-            scans_today: number;
-            /** Interval Seconds */
-            interval_seconds?: number | null;
-            /** Extra */
-            extra?: {
-                [key: string]: unknown;
-            };
-        };
-        /**
-         * OfferCompareRow
-         * @description Агрегированные метрики одного оффера для /offers/compare.
-         */
-        OfferCompareRow: {
-            /**
-             * Offer Id
-             * Format: uuid
-             */
-            offer_id: string;
-            /** Offer Code */
-            offer_code: string;
-            /** Offer Name */
-            offer_name: string;
-            /** Days */
-            days: number;
-            /** Spend */
-            spend: string;
-            /** Leads */
-            leads: number;
-            /** Registrations */
-            registrations: number;
-            /** Deposits */
-            deposits: number;
-            /** Active Ads Count */
-            active_ads_count: number;
-            /** Stop Alerts Count */
-            stop_alerts_count: number;
-            /** Cost Per Lead */
-            cost_per_lead: string | null;
-            /** Cost Per Registration */
-            cost_per_registration: string | null;
-            /** Cost Per Deposit */
-            cost_per_deposit: string | null;
-        };
-        /**
-         * OfferCreateIn
-         * @description Тело POST /offers.
-         */
-        OfferCreateIn: {
-            /**
-             * Code
-             * @description Уникальный код оффера
-             */
-            code: string;
-            /** Name */
-            name?: string | null;
-            /** Vertical */
-            vertical?: string | null;
-            /** Pixel Id */
-            pixel_id?: string | null;
-            /** Ad Account Ids */
-            ad_account_ids: string[];
-            /** Countries */
-            countries?: string[];
-            /** Country Code */
-            country_code?: string | null;
-            /** Use Vision Creator */
-            use_vision_creator?: boolean | null;
-            /** Notes */
-            notes?: string | null;
-        };
-        /**
-         * OfferLeaderboardRowOut
-         * @description Строка leaderboard'а офферов: метрики + count алертов.
-         */
-        OfferLeaderboardRowOut: {
-            /** Offer Id */
-            offer_id: string;
-            /** Offer Code */
-            offer_code: string;
-            /** Offer Name */
-            offer_name: string;
-            /** Spend */
-            spend?: string | null;
-            /** Leads */
-            leads?: number | null;
-            /** Registrations */
-            registrations?: number | null;
-            /** Deposits */
-            deposits?: number | null;
-            /**
-             * Alerts Count
-             * @default 0
-             */
-            alerts_count: number;
-        };
-        /**
-         * OfferOut
-         * @description Ответ для одного оффера (GET /offers, POST /offers, PUT /offers/{id}).
-         */
-        OfferOut: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Code */
-            code: string;
-            /** Name */
-            name: string;
-            /** Vertical */
-            vertical?: string | null;
-            /** Pixel Id */
-            pixel_id?: string | null;
-            /** Country Code */
-            country_code?: null;
-            /** Is Active */
-            is_active: boolean;
-            /** Ad Account Ids */
-            ad_account_ids?: string[];
-            /** Countries */
-            countries?: string[];
-            /** Cpa Threshold */
-            cpa_threshold?: string | null;
-            /** Created At */
-            created_at?: string | null;
-            /** Updated At */
-            updated_at?: string | null;
-            /** Use Vision Creator */
-            use_vision_creator?: null;
-            /** Notes */
-            notes?: null;
-        };
-        /**
-         * OfferRuleOut
-         * @description Ответ на GET /offers/{id}/rules.
-         *
-         *     Все пороговые поля nullable — правило неактивно при null.
-         *     Если записи OfferRule для оффера нет — возвращаем объект с offer_id=<id>
-         *     и всеми порогами null (дефолтная структура).
-         */
-        OfferRuleOut: {
-            /** Offer Id */
-            offer_id?: string | null;
-            /** Cpa Threshold */
-            cpa_threshold?: string | null;
-            /** Frequency Threshold */
-            frequency_threshold?: string | null;
-            /**
-             * Stop Percent Of Rule
-             * @default 80
-             */
-            stop_percent_of_rule: string;
-            /**
-             * Warning Percent Of Stop
-             * @default 80
-             */
-            warning_percent_of_stop: string;
-        };
-        /**
-         * OfferRuleUpsertIn
-         * @description Тело PUT /offers/{id}/rules — upsert всех пороговых полей.
-         *
-         *     Все поля nullable. Отрицательные пороги запрещены (ge=0).
-         */
-        OfferRuleUpsertIn: {
-            /** Cpa Threshold */
-            cpa_threshold?: number | string | null;
-            /** Frequency Threshold */
-            frequency_threshold?: number | string | null;
-            /**
-             * Stop Percent Of Rule
-             * @default 80
-             */
-            stop_percent_of_rule: number | string;
-            /**
-             * Warning Percent Of Stop
-             * @default 80
-             */
-            warning_percent_of_stop: number | string;
-        };
-        /**
-         * OfferUpdateIn
-         * @description Тело PUT /offers/{id}.
-         *
-         *     code — immutable: если передан, игнорируется (не обновляется).
-         *     Все остальные поля optional.
-         */
-        OfferUpdateIn: {
-            /** Code */
-            code?: string | null;
-            /** Name */
-            name?: string | null;
-            /** Vertical */
-            vertical?: string | null;
-            /** Pixel Id */
-            pixel_id?: string | null;
-            /** Is Active */
-            is_active?: boolean | null;
-            /** Ad Account Ids */
-            ad_account_ids?: string[] | null;
-            /** Countries */
-            countries?: string[] | null;
-            /** Country Code */
-            country_code?: string | null;
-            /** Use Vision Creator */
-            use_vision_creator?: boolean | null;
-            /** Notes */
-            notes?: string | null;
-        };
-        /**
-         * OpenFolderRequest
-         * @description Запрос открытия папки результата.
-         */
-        OpenFolderRequest: {
-            /** Path */
-            path: string;
-        };
-        /**
-         * OwnerTagPatchRequest
-         * @description Тело PATCH /settings/observer/owner-tag — точечное обновление тега.
-         *
-         *     Отдельный PATCH против лост-апдейта (аудит 2026-07-12, C-1): full-PUT из
-         *     закэшированного клиентского состояния молча перезаписывал is_scanning_enabled.
-         */
-        OwnerTagPatchRequest: {
-            /**
-             * Owner Campaign Tag
-             * @description Теги владельца кампаний для owner-scoping. Один или несколько через запятую. Пусто/null — фильтр выключен.
-             */
-            owner_campaign_tag?: string | null;
-        };
-        /**
-         * PresetIn
-         * @description Тело создания/обновления пресета (стабильный конфиг залива).
-         */
-        PresetIn: {
-            /** Name */
-            name: string;
-            /** Act Id */
-            act_id: string;
-            /** Page Id */
-            page_id: string;
-            /** Pixel Id */
-            pixel_id: string;
-            /**
-             * Tz Offset
-             * @default 0
-             */
-            tz_offset: number;
-            /** Offer Code */
-            offer_code?: string | null;
-            /** Byer Tag */
-            byer_tag?: string | null;
-            /**
-             * Objective
-             * @default OUTCOME_SALES
-             */
-            objective: string;
-            /**
-             * Optimization Goal
-             * @default OFFSITE_CONVERSIONS
-             */
-            optimization_goal: string;
-            /**
-             * Custom Event Type
-             * @default PURCHASE
-             */
-            custom_event_type: string;
-            /** Special Ad Categories */
-            special_ad_categories?: string[];
-            /**
-             * Cta
-             * @default PLAY_GAME
-             */
-            cta: string;
-            /**
-             * Text Optimizations
-             * @default OPT_OUT
-             */
-            text_optimizations: string;
-            /**
-             * Click Through Days
-             * @default 1
-             */
-            click_through_days: number;
-            /**
-             * View Through Days
-             * @default 1
-             */
-            view_through_days: number;
-            /** Url Tags Template */
-            url_tags_template?: string | null;
-            /** Naming Template */
-            naming_template?: string | null;
-            /** Extra */
-            extra?: {
-                [key: string]: unknown;
-            };
-        };
-        /**
-         * PresetOut
-         * @description Пресет в ответе API.
-         */
-        PresetOut: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Act Id */
-            act_id: string;
-            /** Page Id */
-            page_id: string;
-            /** Pixel Id */
-            pixel_id: string;
-            /** Tz Offset */
-            tz_offset: number;
-            /** Offer Code */
-            offer_code: string | null;
-            /** Byer Tag */
-            byer_tag: string | null;
-            /** Objective */
-            objective: string;
-            /** Optimization Goal */
-            optimization_goal: string;
-            /** Custom Event Type */
-            custom_event_type: string;
-            /** Special Ad Categories */
-            special_ad_categories: string[];
-            /** Cta */
-            cta: string;
-            /** Text Optimizations */
-            text_optimizations: string;
-            /** Click Through Days */
-            click_through_days: number;
-            /** View Through Days */
-            view_through_days: number;
-            /** Url Tags Template */
-            url_tags_template: string | null;
-            /** Naming Template */
-            naming_template: string | null;
-            /** Extra */
-            extra: {
-                [key: string]: unknown;
-            };
-            /** Created At */
-            created_at: string;
-            /** Updated At */
-            updated_at: string;
-        };
-        /**
-         * RestartSignalResponse
-         * @description Ответ на POST /observer/restart.
-         */
-        RestartSignalResponse: {
-            /** Status */
-            status: string;
-            /** Channel */
-            channel: string;
-        };
-        /**
-         * RulePreviewOut
-         * @description Превью порогов автостопа для CPA + чувствительности.
-         *
-         *     Считается через RuleContext — ТОТ ЖЕ расчёт, что применяет автостоп: цифры в UI
-         *     совпадают с реальными порогами, по которым observer отключает объявления.
-         */
-        RulePreviewOut: {
-            /** Cpa */
-            cpa: string;
-            /** Stop Percent Of Rule */
-            stop_percent_of_rule: string;
-            /** Warning Percent Of Stop */
-            warning_percent_of_stop: string;
-            /** Cost Rules */
-            cost_rules: components["schemas"]["RuleThresholdPreview"][];
-            /** Spend Ranges */
-            spend_ranges: components["schemas"]["SpendRangePreview"][];
-            /** Regs No Dep Stop Count */
-            regs_no_dep_stop_count: number;
-        };
-        /**
-         * RuleThresholdPreview
-         * @description Один порог-правило: при какой $-стоимости сработают стоп и ворнинг.
-         */
-        RuleThresholdPreview: {
-            /** Rule */
-            rule: string;
-            /** Label */
-            label: string;
-            /** Base */
-            base: string;
-            /** Stop */
-            stop: string;
-            /** Warning */
-            warning: string;
-        };
-        /**
-         * RuleViolationOut
-         * @description Топ правил по числу сработок (warning+stop) за окно ?days.
-         */
-        RuleViolationOut: {
-            /** Rule Code */
-            rule_code: string;
-            /** Count */
-            count: number;
-            /** Ads Count */
-            ads_count: number;
-        };
-        /**
-         * RunDetailOut
-         * @description Детали запуска: конфиг-снимок + прогресс + Meta-ID + ошибка.
-         */
-        RunDetailOut: {
-            /** Id */
-            id: string;
-            /** Preset Id */
-            preset_id: string | null;
-            /** Status */
-            status: string;
-            /** Config */
-            config: {
-                [key: string]: unknown;
-            };
-            /** Progress */
-            progress: {
-                [key: string]: unknown;
-            };
-            /** Created Meta Ids */
-            created_meta_ids: {
-                [key: string]: unknown;
-            };
-            /** Error */
-            error: string | null;
-            /** Idempotency Key */
-            idempotency_key: string | null;
-            /** Created At */
-            created_at: string;
-            /** Updated At */
-            updated_at: string;
-        };
-        /**
-         * RunSummaryOut
-         * @description Краткая карточка запуска для списка.
-         */
-        RunSummaryOut: {
-            /** Id */
-            id: string;
-            /** Preset Id */
-            preset_id: string | null;
-            /** Status */
-            status: string;
-            /** Offer Code */
-            offer_code: string | null;
-            /** Idempotency Key */
-            idempotency_key: string | null;
-            /** Error */
-            error: string | null;
-            /** Created At */
-            created_at: string;
-            /** Updated At */
-            updated_at: string;
-        };
-        /**
-         * ScanNowResponse
-         * @description Ответ на POST /settings/observer/scan-now.
-         */
-        ScanNowResponse: {
-            /** Status */
-            status: string;
-        };
-        /**
-         * ScanRunRow
-         * @description Одна строка scan_runs (partitioned by started_at).
-         */
-        ScanRunRow: {
-            /** Id */
-            id: number;
-            /** Scan Id */
-            scan_id: number;
-            /**
-             * Started At
-             * Format: date-time
-             */
-            started_at: string;
-            /** Finished At */
-            finished_at?: string | null;
-            /** Duration Ms */
-            duration_ms?: number | null;
-            /** Outcome */
-            outcome?: string | null;
-            /** Alerts Warning */
-            alerts_warning?: number | null;
-            /** Alerts Stop */
-            alerts_stop?: number | null;
-            /** Metrics Inserted */
-            metrics_inserted?: number | null;
-            /** Error Message */
-            error_message?: string | null;
-            /** Ad Account Id */
-            ad_account_id?: string | null;
-        };
-        /**
-         * ScanRunsResponse
-         * @description Ответ на GET /observer/scan-runs.
-         */
-        ScanRunsResponse: {
-            /** Runs */
-            runs: components["schemas"]["ScanRunRow"][];
-            /** Total */
-            total: number;
-        };
-        /**
-         * ScanningToggleRequest
-         * @description Тело PATCH /settings/observer/scanning.
-         */
-        ScanningToggleRequest: {
-            /** Enabled */
-            enabled: boolean;
-        };
-        /**
-         * SnoozeIn
-         * @description Тело POST /dashboard/ads/{fb_ad_id}/snooze.
-         */
-        SnoozeIn: {
-            /**
-             * Minutes
-             * @description Снуз в минутах (1..1440)
-             */
-            minutes: number;
-        };
-        /**
-         * SnoozeResultOut
-         * @description Результат одиночного снуза.
-         */
-        SnoozeResultOut: {
-            /** Ok */
-            ok: boolean;
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /** Snoozed Until */
-            snoozed_until: string;
-        };
-        /**
-         * SpendPointOut
-         * @description Одна точка ad_metrics для /api/dashboard/spend-history (не бакетированная).
-         */
-        SpendPointOut: {
-            /**
-             * Cycle Ts
-             * Format: date-time
-             */
-            cycle_ts: string;
-            /** Fb Ad Id */
-            fb_ad_id?: string | null;
-            /** Spend */
-            spend?: string | null;
-            /** Impressions */
-            impressions?: number | null;
-            /** Clicks */
-            clicks?: number | null;
-            /** Leads */
-            leads?: number | null;
-            /** Registrations */
-            registrations?: number | null;
-            /** Deposits */
-            deposits?: number | null;
-        };
-        /**
-         * SpendRangePreview
-         * @description Диапазон расхода (% от CPA → $).
-         */
-        SpendRangePreview: {
-            /** Rule */
-            rule: string;
-            /** Label */
-            label: string;
-            /** Stop From */
-            stop_from: string;
-            /** Stop To */
-            stop_to: string;
-            /** Warning From */
-            warning_from: string;
-        };
-        /**
-         * StartCabinetDayResponse
-         * @description Ответ на POST /observer/start-new-cabinet-day.
-         */
-        StartCabinetDayResponse: {
-            /** Status */
-            status: string;
-            /** Archived Date */
-            archived_date: string;
-        };
-        /**
-         * StatsPeriodOut
-         * @description Ответ GET /api/stats/period.
-         */
-        StatsPeriodOut: {
-            /**
-             * From Iso
-             * Format: date-time
-             */
-            from_iso: string;
-            /**
-             * To Iso
-             * Format: date-time
-             */
-            to_iso: string;
-            meta: components["schemas"]["MetaPeriodBlockOut"];
-            tracker: components["schemas"]["TrackerBlockOut"];
-        };
-        /**
-         * StatsTodayOut
-         * @description Ответ GET /api/stats/today.
-         */
-        StatsTodayOut: {
-            /**
-             * Cabinet Day Start
-             * Format: date-time
-             */
-            cabinet_day_start: string;
-            /**
-             * Generated At
-             * Format: date-time
-             */
-            generated_at: string;
-            meta: components["schemas"]["MetaTodayBlockOut"];
-            tracker: components["schemas"]["TrackerBlockOut"];
-            /** Breakdown */
-            breakdown?: components["schemas"]["BreakdownRowOut"][] | null;
-        };
-        /**
-         * SystemReadinessResponse
-         * @description Строгая готовность money-критичного контура, не k8s probe.
-         */
-        SystemReadinessResponse: {
-            /** Ready */
-            ready: boolean;
-            /** Infrastructure Ready */
-            infrastructure_ready: boolean;
-            /** Overall */
-            overall?: ("HEALTHY" | "DEGRADED" | "CRITICAL") | null;
-            /**
-             * Workers Online
-             * @default 0
-             */
-            workers_online: number;
-            /**
-             * Workers Expected
-             * @default 0
-             */
-            workers_expected: number;
-            /** Observer Runtime Status */
-            observer_runtime_status?: string | null;
-            /** Scanning Enabled */
-            scanning_enabled?: boolean | null;
-            /** Meta Api Channel Status */
-            meta_api_channel_status?: ("ONLINE" | "DEGRADED" | "UNKNOWN") | null;
-            /** Blockers */
-            blockers?: string[];
-        };
-        /**
-         * Targeting
-         * @description Таргет с авто-добавлением Антарктиды (+AQ) по SOP.
-         */
-        Targeting: {
-            /** Countries */
-            countries: string[];
-            /**
-             * Add Antarctica
-             * @default true
-             */
-            add_antarctica: boolean;
-            /**
-             * Age Min
-             * @default 21
-             */
-            age_min: number;
-            /**
-             * Age Max
-             * @default 65
-             */
-            age_max: number;
-            /** Location Types */
-            location_types?: string[];
-            /**
-             * Advantage Audience
-             * @default true
-             */
-            advantage_audience: boolean;
-        };
-        /**
-         * TaskQueueRowOut
-         * @description Строка task_queue в формате для фронта.
-         *
-         *     Поля приведены к frontend-контракту: uppercase status, camelCase-дружелюбные имена.
-         *     Числовой id задачи → str (BigInt безопасен в JS только как строка).
-         */
-        TaskQueueRowOut: {
-            /** Id */
-            id: string;
-            /** Fb Ad Id */
-            fb_ad_id?: string | null;
-            /** Ad Name */
-            ad_name?: string | null;
-            /** Task Type */
-            task_type: string;
-            /** Status */
-            status: string;
-            /** Attempt Count */
-            attempt_count: number;
-            /** Max Attempts */
-            max_attempts: number;
-            /** Requested By */
-            requested_by: string;
-            /** Requested By Chat Id */
-            requested_by_chat_id?: number | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Next Attempt At */
-            next_attempt_at?: string | null;
-            /** Last Error Message */
-            last_error_message?: string | null;
-        };
-        /**
-         * TaskRow
-         * @description Одна строка task_queue, относящаяся к данному объявлению.
-         */
-        TaskRow: {
-            /** Id */
-            id: number;
-            /** Task Type */
-            task_type: string;
-            /** Status */
-            status: string;
-            /** Requested By */
-            requested_by: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Completed At */
-            completed_at?: string | null;
-            /** Error Message */
-            error_message?: string | null;
-        };
-        /**
-         * TelegramInviteResponse
-         * @description Готовый invite-код, команда и опциональная Telegram deep-link.
-         */
-        TelegramInviteResponse: {
-            /** Code */
-            code: string;
-            /**
-             * Expires At
-             * Format: date-time
-             */
-            expires_at: string;
-            /**
-             * Role
-             * @default recipient
-             */
-            role: string;
-            /** Auth Deep Link */
-            auth_deep_link?: string | null;
-            /** Activation Command */
-            activation_command: string;
-        };
-        /**
-         * TelegramRecipientResponse
-         * @description Одна строка telegram_recipients для GET /settings/telegram/recipients.
-         */
-        TelegramRecipientResponse: {
-            /** Id */
-            id: string;
-            /** Chat Id */
-            chat_id: number;
-            /** Username */
-            username?: string | null;
-            /** Role */
-            role: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /**
-         * TelegramRecipientsListResponse
-         * @description Список получателей для GET /settings/telegram/recipients.
-         */
-        TelegramRecipientsListResponse: {
-            /** Recipients */
-            recipients: components["schemas"]["TelegramRecipientResponse"][];
-            /** Total */
-            total: number;
-        };
-        /**
-         * TelegramSettingsResponse
-         * @description Ответ на GET /settings/telegram — публичные поля без bot_token_encrypted.
-         */
-        TelegramSettingsResponse: {
-            /**
-             * Is Authorized
-             * @default false
-             */
-            is_authorized: boolean;
-            /**
-             * Poller Status
-             * @default OFFLINE
-             */
-            poller_status: string;
-            /** Bot Username */
-            bot_username?: string | null;
-            /** Auth Deep Link */
-            auth_deep_link?: string | null;
-            /** Activation Command */
-            activation_command?: string | null;
-            /** Auth Invite Expires At */
-            auth_invite_expires_at?: string | null;
-            /** Chat Id */
-            chat_id?: string | null;
-            /** Web App Url */
-            web_app_url?: string | null;
-        };
-        /**
-         * TelegramTokenRequest
-         * @description Тело PUT /settings/telegram/token — новый токен бота в открытом виде.
-         */
-        TelegramTokenRequest: {
-            /**
-             * Bot Token
-             * @description Telegram Bot API токен
-             */
-            bot_token: string;
-        };
-        /**
-         * TelegramWebAppUrlRequest
-         * @description Тело PUT /settings/telegram/web-app-url — URL Mini App (пусто = очистить).
-         */
-        TelegramWebAppUrlRequest: {
-            /**
-             * Web App Url
-             * @description HTTPS-URL Mini App; пусто/None — использовать .env
-             */
-            web_app_url?: string | null;
-        };
-        /**
-         * TmaAdDetailResponse
-         * @description Детальный снимок объявления для AdDetailPage.
-         */
-        TmaAdDetailResponse: {
-            /** Fb Ad Id */
-            fb_ad_id: string;
-            /** Ad Name */
-            ad_name?: string | null;
-            /** Campaign Name */
-            campaign_name?: string | null;
-            /** Adset Name */
-            adset_name?: string | null;
-            /** Offer Code */
-            offer_code?: string | null;
-            /** State */
-            state: string;
-            /** Snooze Until */
-            snooze_until?: string | null;
-            /** Account Id */
-            account_id?: string | null;
-            /**
-             * Can Open In Ads Manager
-             * @default false
-             */
-            can_open_in_ads_manager: boolean;
-            /** Creative Thumb Url */
-            creative_thumb_url?: string | null;
-            /** Creative Image Url */
-            creative_image_url?: string | null;
-            metrics: components["schemas"]["TmaAdMetrics"];
-            /** Recent Alerts */
-            recent_alerts?: components["schemas"]["TmaRecentAlert"][];
-        };
-        /**
-         * TmaAdMetrics
-         * @description Метрики для AdDetailPage (последняя строка ad_metrics). Decimal → str.
-         */
-        TmaAdMetrics: {
-            /** Spend */
-            spend?: string | null;
-            /** Leads */
-            leads?: number | null;
-            /** Deposits */
-            deposits?: number | null;
-            /** Cpc */
-            cpc?: string | null;
-            /** Ctr */
-            ctr?: string | null;
-            /** Registrations */
-            registrations?: number | null;
-            /** Cost Per Lead */
-            cost_per_lead?: string | null;
-        };
-        /**
-         * TmaAuthRequest
-         * @description Тело POST /tma/auth.
-         */
-        TmaAuthRequest: {
-            /**
-             * Init Data
-             * @description Telegram WebApp initData (raw query string)
-             */
-            init_data: string;
-        };
-        /**
-         * TmaAuthResponse
-         * @description Ответ авторизации: сессионный токен + роль recipient'а.
-         */
-        TmaAuthResponse: {
-            /** Token */
-            token: string;
-            /** Role */
-            role: string;
-        };
-        /**
-         * TmaClaimResponse
-         * @description Результат claim (взять под контроль вручную → alert_state='claimed').
-         */
-        TmaClaimResponse: {
-            /** Ok */
-            ok: boolean;
-            /** Alert State */
-            alert_state: string;
-        };
-        /**
-         * TmaDisableRequest
-         * @description Тело POST /tma/ads/{id}/disable.
-         */
-        TmaDisableRequest: {
-            /** Reason */
-            reason?: string | null;
-            /** Token */
-            token?: string | null;
-        };
-        /**
-         * TmaDisableResponse
-         * @description Результат постановки задачи на отключение.
-         */
-        TmaDisableResponse: {
-            /** Ok */
-            ok: boolean;
-            /** Task Id */
-            task_id?: number | null;
-            /** Channel */
-            channel: string;
-            /** Detail */
-            detail: string;
-        };
-        /**
-         * TmaMeResponse
-         * @description Кто я — для проверки сессии фронтом (под guard).
-         */
-        TmaMeResponse: {
-            /** Telegram User Id */
-            telegram_user_id: number;
-            /** Role */
-            role: string;
-        };
-        /**
-         * TmaRecentAlert
-         * @description Одна запись истории алертов (alert_events) для AdDetailPage.
-         */
-        TmaRecentAlert: {
-            /** Stage */
-            stage: string;
-            /** Created At */
-            created_at?: string | null;
-            /** Reason Title */
-            reason_title?: string | null;
-        };
-        /**
-         * TmaSnoozeRequest
-         * @description Тело POST /tma/ads/{id}/snooze.
-         */
-        TmaSnoozeRequest: {
-            /**
-             * Minutes
-             * @description Снуз в минутах (1..1440)
-             */
-            minutes: number;
-        };
-        /**
-         * TmaSnoozeResponse
-         * @description Результат снуза.
-         */
-        TmaSnoozeResponse: {
-            /** Ok */
-            ok: boolean;
-            /** Snoozed Until */
-            snoozed_until: string;
-        };
-        /**
-         * ToolCallOut
-         * @description След вызова инструмента — фронт показывает «что ассистент проверял».
-         */
-        ToolCallOut: {
-            /** Name */
-            name: string;
-            /** Error */
-            error?: string | null;
-        };
-        /**
-         * TopCampaignOut
-         * @description Строка топа кампаний по spend за окно ?days.
-         */
-        TopCampaignOut: {
-            /** Campaign Id */
-            campaign_id: string;
-            /** Fb Campaign Id */
-            fb_campaign_id?: string | null;
-            /** Campaign Name */
-            campaign_name: string;
-            /** Spend */
-            spend?: string | null;
-            /** Leads */
-            leads?: number | null;
-            /** Deposits */
-            deposits?: number | null;
-            /** Cost Per Lead */
-            cost_per_lead?: string | null;
-            /**
-             * Active Ads Count
-             * @default 0
-             */
-            active_ads_count: number;
-        };
-        /**
-         * TrackerBlockOut
-         * @description Блок трекера. available=false — данных нет/запрос упал (ответ не роняем).
-         */
-        TrackerBlockOut: {
-            /**
-             * Available
-             * @default false
-             */
-            available: boolean;
-            /** Day Utc */
-            day_utc?: string | null;
-            /**
-             * Attribution Note
-             * @default
-             */
-            attribution_note: string;
-            totals?: components["schemas"]["TrackerTotalsOut"];
-            /** Series Daily */
-            series_daily?: components["schemas"]["TrackerDailyPointOut"][];
-            /**
-             * Unmatched Events
-             * @default 0
-             */
-            unmatched_events: number;
-            /** Last Event At */
-            last_event_at?: string | null;
-            /** Processing Lag Ms */
-            processing_lag_ms?: number | null;
-            /**
-             * Data Quality
-             * @default unknown
-             */
-            data_quality: string;
-            /**
-             * Backlog
-             * @default 0
-             */
-            backlog: number;
-            /**
-             * Duplicate Events
-             * @default 0
-             */
-            duplicate_events: number;
-            /**
-             * Unsupported Events
-             * @default 0
-             */
-            unsupported_events: number;
-            /** Reconciliation Drift */
-            reconciliation_drift?: number | null;
-            /** Materialization Drift */
-            materialization_drift?: number | null;
-        };
-        /**
-         * TrackerDailyPointOut
-         * @description Точка подневной серии трекера.
-         */
-        TrackerDailyPointOut: {
-            /**
-             * Day
-             * Format: date
-             */
-            day: string;
-            /**
-             * Installs
-             * @default 0
-             */
-            installs: number;
-            /**
-             * Registrations
-             * @default 0
-             */
-            registrations: number;
-            /**
-             * Ftds
-             * @default 0
-             */
-            ftds: number;
-            /**
-             * Deposits
-             * @default 0
-             */
-            deposits: number;
-            /**
-             * Confirmed Deposits
-             * @default 0
-             */
-            confirmed_deposits: number;
-            /**
-             * Redeposits
-             * @default 0
-             */
-            redeposits: number;
-            /** Revenue */
-            revenue?: string | null;
-        };
-        /**
-         * TrackerTotalsOut
-         * @description Тоталы трекера AdSet.pro (UTC-дни).
-         */
-        TrackerTotalsOut: {
-            /**
-             * Installs
-             * @default 0
-             */
-            installs: number;
-            /**
-             * Registrations
-             * @default 0
-             */
-            registrations: number;
-            /**
-             * Ftds
-             * @default 0
-             */
-            ftds: number;
-            /**
-             * Deposits
-             * @default 0
-             */
-            deposits: number;
-            /**
-             * Confirmed Deposits
-             * @default 0
-             */
-            confirmed_deposits: number;
-            /**
-             * Redeposits
-             * @default 0
-             */
-            redeposits: number;
-            /** Revenue */
-            revenue?: string | null;
-            /** Roi Pct */
-            roi_pct?: string | null;
-        };
-        /**
-         * UploadConceptsOut
-         * @description Ответ загрузки концептов: id временной папки + список файлов.
-         */
-        UploadConceptsOut: {
-            /** Upload Id */
-            upload_id: string;
-            /** Upload Dir */
-            upload_dir: string;
-            /** Concepts */
-            concepts: components["schemas"]["UploadedConceptOut"][];
-            /** Added Refs */
-            added_refs: string[];
-            /** Total Bytes */
-            total_bytes: number;
-        };
-        /**
-         * UploadedConceptOut
-         * @description Метаданные одного загруженного концепта (превью для UI).
-         */
-        UploadedConceptOut: {
-            /** Ref */
-            ref: string;
-            /** Original Name */
-            original_name: string;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Content Type */
-            content_type?: string | null;
-        };
-        /**
-         * ValidateIn
-         * @description Запрос dry-run валидации конфига.
-         *
-         *     `config` — каноническая ПЛОСКАЯ форма фронта (`CampaignConfigIn`) ИЛИ вложенный
-         *     `CampaignConfig` (legacy). OpenAPI документирует обе (anyOf), фронтовые типы
-         *     генерируются из плоской. `domain_config()`/`concept_counts_map()` нормализуют вход.
-         */
-        ValidateIn: {
-            /** Config */
-            config: components["schemas"]["CampaignConfigIn"] | components["schemas"]["CampaignConfig"];
-            /** Concept Counts */
-            concept_counts?: {
-                [key: string]: number;
-            } | null;
-        };
-        /**
-         * ValidatePlanOut
-         * @description Результат validate: число объектов + нейминг без создания.
-         */
-        ValidatePlanOut: {
-            /** Offer Code */
-            offer_code: string;
-            /** Launch State */
-            launch_state: string;
-            /** Copies Per Concept */
-            copies_per_concept: number;
-            /** Campaign Count */
-            campaign_count: number;
-            /** Adset Count */
-            adset_count: number;
-            /** Ad Count */
-            ad_count: number;
-            /** Campaigns */
-            campaigns: components["schemas"]["CampaignPlanOut"][];
-        };
-        /** ValidationError */
-        ValidationError: {
-            /** Location */
-            loc: (string | number)[];
-            /** Message */
-            msg: string;
-            /** Error Type */
-            type: string;
-            /** Input */
-            input?: unknown;
-            /** Context */
-            ctx?: Record<string, never>;
-        };
-        /**
-         * VisionEnsureCdpResponse
-         * @description Ответ на POST /vision/ensure-cdp (bootstrap при старте run.sh).
-         *
-         *     Контракт под run.sh: ok|status|action|message. Эндпоинт никогда не падает 5xx —
-         *     при недоступности browser-agent возвращает ok=false с пояснением.
-         */
-        VisionEnsureCdpResponse: {
-            /**
-             * Ok
-             * @default true
-             */
-            ok: boolean;
-            /**
-             * Status
-             * @default UNKNOWN
-             */
-            status: string;
-            /**
-             * Action
-             * @default none
-             */
-            action: string;
-            /**
-             * Message
-             * @default
-             */
-            message: string;
-        };
-        /**
-         * VisionReconnectResponse
-         * @description Ответ на POST /vision/reconnect.
-         */
-        VisionReconnectResponse: {
-            /**
-             * Status
-             * @default reconnected
-             */
-            status: string;
-        };
-        /**
-         * VisionSettingsResponse
-         * @description Ответ на GET /settings/vision — публичные поля VisionConfig + runtime из Redis.
-         */
-        VisionSettingsResponse: {
-            /**
-             * Has Token
-             * @default false
-             */
-            has_token: boolean;
-            /** Token Source */
-            token_source?: string | null;
-            /** Profile Id */
-            profile_id?: string | null;
-            /**
-             * Auto Restart On Missing Cdp
-             * @default true
-             */
-            auto_restart_on_missing_cdp: boolean;
-            /** Runtime Status */
-            runtime_status?: string | null;
-            /** Runtime Status Message */
-            runtime_status_message?: string | null;
-            /**
-             * Cdp Ready
-             * @default false
-             */
-            cdp_ready: boolean;
-            /** Cdp Port */
-            cdp_port?: number | null;
-        };
-        /**
-         * VisionSettingsUpdateRequest
-         * @description Тело PUT /settings/vision — обновить x_token / profile_id / флаг self-heal.
-         */
-        VisionSettingsUpdateRequest: {
-            /** X Token */
-            x_token?: string | null;
-            /** Profile Id */
-            profile_id?: string | null;
-            /** Auto Restart On Missing Cdp */
-            auto_restart_on_missing_cdp?: boolean | null;
-        };
-        /**
-         * WorkerStatus
-         * @description Статус одного воркера по Redis heartbeat.
-         */
-        WorkerStatus: {
-            /** Name */
-            name: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "ONLINE" | "OFFLINE";
-            /** Last Heartbeat At */
-            last_heartbeat_at?: string | null;
-            /** Ttl Seconds */
-            ttl_seconds?: number | null;
-            /** Payload */
-            payload?: {
-                [key: string]: unknown;
-            } | null;
-        };
+  schemas: {
+    /**
+     * AIAnalyzeRequest
+     * @description Тело запроса AI-анализа.
+     */
+    AIAnalyzeRequest: {
+      /**
+       * Block Type
+       * @enum {string}
+       */
+      block_type:
+        | "dashboard_overview"
+        | "ad_detail"
+        | "campaign_summary"
+        | "history_summary";
+      /**
+       * Scope Key
+       * @description 'global' или конкретный ID
+       * @default global
+       */
+      scope_key: string;
+      /**
+       * Force Refresh
+       * @description Игнорировать Redis-кэш
+       * @default false
+       */
+      force_refresh: boolean;
+      /**
+       * Client Data
+       * @description Контекстные данные от клиента (опционально)
+       */
+      client_data?: {
+        [key: string]: unknown;
+      } | null;
     };
-    responses: never;
-    parameters: never;
-    requestBodies: never;
-    headers: never;
-    pathItems: never;
+    /**
+     * AIAnalyzeResponse
+     * @description Ответ AI-анализа.
+     */
+    AIAnalyzeResponse: {
+      /** Block Type */
+      block_type: string;
+      /** Scope Key */
+      scope_key: string;
+      /** Analysis Text */
+      analysis_text: string;
+      /** From Cache */
+      from_cache: boolean;
+      /** Generated At */
+      generated_at: string;
+      /** Model */
+      model: string;
+    };
+    /**
+     * AIChatRequest
+     * @description Запрос чата: история (последнее сообщение — вопрос пользователя).
+     */
+    AIChatRequest: {
+      /** Messages */
+      messages: components["schemas"]["ChatMessageIn"][];
+    };
+    /**
+     * AIChatResponse
+     * @description Ответ ассистента.
+     */
+    AIChatResponse: {
+      /** Answer */
+      answer: string;
+      /** Tool Calls */
+      tool_calls?: components["schemas"]["ToolCallOut"][];
+      /** Generated At */
+      generated_at: string;
+      /** Model */
+      model: string;
+    };
+    /**
+     * AIPulseResponse
+     * @description Почасовой пульс для веб-виджета.
+     *
+     *     important=False → за окно ничего значимого, виджет молчит (text = null).
+     */
+    AIPulseResponse: {
+      /** Important */
+      important: boolean;
+      /** Text */
+      text?: string | null;
+      /** Generated At */
+      generated_at: string;
+    };
+    /**
+     * AdAccountContextResponse
+     * @description Durable campaign account evidence; never a client-editable override.
+     */
+    AdAccountContextResponse: {
+      /** Account Id */
+      account_id: string;
+      /**
+       * State
+       * @enum {string}
+       */
+      state: "ready" | "stale" | "unavailable";
+      /** Timezone Name */
+      timezone_name: string | null;
+      /** Currency */
+      currency: string | null;
+      /** Currency Exponent */
+      currency_exponent: number | null;
+      /** Observed At */
+      observed_at: string | null;
+      /** Next Start Date */
+      next_start_date: string | null;
+      /** Issue */
+      issue: string | null;
+    };
+    /**
+     * AdAccountPage
+     * @description FB-страница, доступная кабинету для промо (id + человекочитаемое имя).
+     */
+    AdAccountPage: {
+      /** Id */
+      id: string;
+      /** Name */
+      name: string;
+    };
+    /**
+     * AdAccountPagesResponse
+     * @description Список страниц кабинета для дропдауна page_id в шаге «Идентичность».
+     */
+    AdAccountPagesResponse: {
+      /** Pages */
+      pages: components["schemas"]["AdAccountPage"][];
+    };
+    /**
+     * AdTextIn
+     * @description Текст объявления в форме фронта (mode none|text, primary).
+     */
+    AdTextIn: {
+      /**
+       * Mode
+       * @default none
+       */
+      mode: string;
+      /**
+       * Primary
+       * @default
+       */
+      primary: string;
+    };
+    /** AdsetDuplicateBudget */
+    AdsetDuplicateBudget: {
+      /**
+       * Level
+       * @enum {string}
+       */
+      level: "ABO" | "CBO";
+      /** Unit Daily Budget */
+      unit_daily_budget: string;
+      /** Total Daily Budget */
+      total_daily_budget: string;
+      /** Currency */
+      currency: string;
+      /** Currency Exponent */
+      currency_exponent: number;
+    };
+    /** AdsetDuplicateCounts */
+    AdsetDuplicateCounts: {
+      /** Campaigns */
+      campaigns: number;
+      /** Adsets */
+      adsets: number;
+      /** Ads */
+      ads: number;
+      /** Total Objects */
+      total_objects: number;
+    };
+    /** AdsetDuplicateGeneratedNames */
+    AdsetDuplicateGeneratedNames: {
+      /** Campaigns */
+      campaigns: string[];
+      /** Adsets */
+      adsets: string[];
+    };
+    /** AdsetDuplicateLaunchIn */
+    AdsetDuplicateLaunchIn: {
+      /** Preview Token */
+      preview_token: string;
+    };
+    /** AdsetDuplicateLaunchOut */
+    AdsetDuplicateLaunchOut: {
+      /** Task Id */
+      task_id: number;
+      /** Status */
+      status: string;
+    };
+    /** AdsetDuplicatePreviewIn */
+    AdsetDuplicatePreviewIn: {
+      /** Source Ad Id */
+      source_ad_id: string;
+      /** Selected Ad Ids */
+      selected_ad_ids: string[];
+      /** Campaign Count */
+      campaign_count: number;
+      /** Adsets Per Campaign */
+      adsets_per_campaign: number;
+      /**
+       * Budget Level
+       * @enum {string}
+       */
+      budget_level: "ABO" | "CBO";
+      /** Daily Budget */
+      daily_budget: string;
+      /** Start Date */
+      start_date?: string | null;
+      /** Campaign Name Base */
+      campaign_name_base?: string | null;
+      /** Adset Name Base */
+      adset_name_base?: string | null;
+      /** Idempotency Token */
+      idempotency_token: string;
+    };
+    /** AdsetDuplicatePreviewOut */
+    AdsetDuplicatePreviewOut: {
+      /** Preview Token */
+      preview_token: string;
+      source: components["schemas"]["AdsetDuplicateSource"];
+      /** Format Code */
+      format_code: string;
+      counts: components["schemas"]["AdsetDuplicateCounts"];
+      budget: components["schemas"]["AdsetDuplicateBudget"];
+      schedule: components["schemas"]["AdsetDuplicateSchedule"];
+      generated_names: components["schemas"]["AdsetDuplicateGeneratedNames"];
+      /** Warnings */
+      warnings: string[];
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+    };
+    /** AdsetDuplicateProgress */
+    AdsetDuplicateProgress: {
+      /** Phase */
+      phase?: string | null;
+      /** Completed */
+      completed?: number | null;
+      /** Total */
+      total?: number | null;
+      /** Message */
+      message?: string | null;
+    } & {
+      [key: string]: unknown;
+    };
+    /** AdsetDuplicateSchedule */
+    AdsetDuplicateSchedule: {
+      /** Timezone Name */
+      timezone_name: string;
+      /** Offset */
+      offset: string;
+      /** Start Time Utc */
+      start_time_utc: string;
+      /** Start Time Local */
+      start_time_local: string;
+    };
+    /** AdsetDuplicateSource */
+    AdsetDuplicateSource: {
+      account: components["schemas"]["DuplicateSourceAccount"];
+      campaign: components["schemas"]["DuplicateSourceEntity"];
+      adset: components["schemas"]["DuplicateSourceEntity"];
+      /** Ads */
+      ads: components["schemas"]["DuplicateSourceAd"][];
+    };
+    /** AdsetDuplicateStatusOut */
+    AdsetDuplicateStatusOut: {
+      /** Task Id */
+      task_id: number;
+      /** Status */
+      status: string;
+      progress: components["schemas"]["AdsetDuplicateProgress"] | null;
+      /** Created Meta Ids */
+      created_meta_ids?: {
+        [key: string]: string | string[];
+      };
+      /** Error */
+      error: string | null;
+    };
+    /**
+     * AdsetPlanOut
+     * @description Сводка по одному adset в плане.
+     */
+    AdsetPlanOut: {
+      /** Name */
+      name: string;
+      /**
+       * Status
+       * @constant
+       */
+      status: "PAUSED";
+      /** Ad Count */
+      ad_count: number;
+    };
+    /**
+     * AlertmanagerAlert
+     * @description The stable subset of Alertmanager webhook v4 used by the control plane.
+     */
+    AlertmanagerAlert: {
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "firing" | "resolved";
+      /** Labels */
+      labels?: {
+        [key: string]: string;
+      };
+      /** Annotations */
+      annotations?: {
+        [key: string]: string;
+      };
+      /**
+       * Startsat
+       * Format: date-time
+       */
+      startsAt: string;
+      /** Endsat */
+      endsAt?: string | null;
+      /**
+       * Generatorurl
+       * @default
+       */
+      generatorURL: string;
+      /** Fingerprint */
+      fingerprint?: string | null;
+    } & {
+      [key: string]: unknown;
+    };
+    /**
+     * AlertmanagerWebhookPayload
+     * @description Bounded Alertmanager webhook envelope.
+     */
+    AlertmanagerWebhookPayload: {
+      /** Version */
+      version: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "firing" | "resolved";
+      /**
+       * Receiver
+       * @default
+       */
+      receiver: string;
+      /**
+       * Groupkey
+       * @default
+       */
+      groupKey: string;
+      /** Alerts */
+      alerts: components["schemas"]["AlertmanagerAlert"][];
+    } & {
+      [key: string]: unknown;
+    };
+    /** AnalyticsBudgetPointOut */
+    AnalyticsBudgetPointOut: {
+      /**
+       * Ts
+       * Format: date-time
+       */
+      ts: string;
+      /** Actual */
+      actual: string | null;
+      /** Base */
+      base: string | null;
+      /** Stop */
+      stop: string | null;
+      /**
+       * Available Ads
+       * @default 0
+       */
+      available_ads: number;
+      /**
+       * Unavailable Ads
+       * @default 0
+       */
+      unavailable_ads: number;
+    };
+    /** AnalyticsDaypartCellOut */
+    AnalyticsDaypartCellOut: {
+      /** Weekday */
+      weekday: number;
+      /** Hour */
+      hour: number;
+      /** Clicks */
+      clicks: number | null;
+      /** Registrations */
+      registrations: number | null;
+      /** Ftds */
+      ftds: number | null;
+    };
+    /** AnalyticsDaypartOut */
+    AnalyticsDaypartOut: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      sources: components["schemas"]["AnalyticsSourcesOut"];
+      /** Issues */
+      issues?: string[];
+      scope: components["schemas"]["OperatorScopeEvidence"];
+      /** Timezone */
+      timezone: string;
+      /**
+       * From Iso
+       * Format: date-time
+       */
+      from_iso: string;
+      /**
+       * To Iso
+       * Format: date-time
+       */
+      to_iso: string;
+      /** Cells */
+      cells: components["schemas"]["AnalyticsDaypartCellOut"][];
+    };
+    /** AnalyticsFilterOptionOut */
+    AnalyticsFilterOptionOut: {
+      /** Value */
+      value: string;
+      /** Label */
+      label: string;
+    };
+    /** AnalyticsFilterOptionsOut */
+    AnalyticsFilterOptionsOut: {
+      /** Accounts */
+      accounts?: components["schemas"]["AnalyticsFilterOptionOut"][];
+      /** Offers */
+      offers?: components["schemas"]["AnalyticsFilterOptionOut"][];
+      /** Campaigns */
+      campaigns?: components["schemas"]["AnalyticsFilterOptionOut"][];
+    };
+    /** AnalyticsLiveBudgetOut */
+    AnalyticsLiveBudgetOut: {
+      /**
+       * Stage
+       * @enum {string}
+       */
+      stage: "click" | "lead" | "registration" | "deposit" | "mixed";
+      /** Base Unit */
+      base_unit?: string | null;
+      /** Stop Unit */
+      stop_unit?: string | null;
+      /** Quantity */
+      quantity?: number | null;
+      /** Base Budget */
+      base_budget: string;
+      /** Stop Budget */
+      stop_budget: string;
+      /** Base Delta */
+      base_delta: string;
+      /** Stop Delta */
+      stop_delta: string;
+    };
+    /** AnalyticsLiveBudgetSeriesOut */
+    AnalyticsLiveBudgetSeriesOut: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      sources: components["schemas"]["AnalyticsSourcesOut"];
+      /** Issues */
+      issues?: string[];
+      scope: components["schemas"]["OperatorScopeEvidence"];
+      window: components["schemas"]["AnalyticsWindowOut"];
+      /** Points */
+      points: components["schemas"]["AnalyticsBudgetPointOut"][];
+    };
+    /** AnalyticsMetricsOut */
+    AnalyticsMetricsOut: {
+      /** Spend */
+      spend: string | null;
+      /** Impressions */
+      impressions: number | null;
+      /** Clicks */
+      clicks: number | null;
+      /** Leads */
+      leads: number | null;
+      /** Registrations */
+      registrations: number | null;
+      /** Ftds */
+      ftds: number | null;
+      /** Confirmed Deposits */
+      confirmed_deposits: number | null;
+      /** Redeposits */
+      redeposits: number | null;
+      /** Revenue */
+      revenue: string | null;
+      /** Cpc */
+      cpc?: string | null;
+      /** Ctr Pct */
+      ctr_pct?: string | null;
+      /** Click Registration Cr Pct */
+      click_registration_cr_pct?: string | null;
+      /** Registration Ftd Cr Pct */
+      registration_ftd_cr_pct?: string | null;
+      /** Cost Per Registration */
+      cost_per_registration?: string | null;
+      /** Cost Per Ftd */
+      cost_per_ftd?: string | null;
+      /** Roi Pct */
+      roi_pct?: string | null;
+      /** Roas */
+      roas?: string | null;
+    };
+    /** AnalyticsPaginationOut */
+    AnalyticsPaginationOut: {
+      /** Page */
+      page: number;
+      /** Page Size */
+      page_size: number;
+      /** Total */
+      total: number;
+      /** Pages */
+      pages: number;
+    };
+    /** AnalyticsPerformanceOut */
+    AnalyticsPerformanceOut: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      /** Issues */
+      issues?: string[];
+      scope: components["schemas"]["OperatorScopeEvidence"];
+      window: components["schemas"]["AnalyticsWindowOut"];
+      sources: components["schemas"]["AnalyticsSourcesOut"];
+      totals: components["schemas"]["AnalyticsMetricsOut"];
+      total_live_budget?:
+        | components["schemas"]["AnalyticsLiveBudgetOut"]
+        | null;
+      /** Total Budget Unavailable Reason */
+      total_budget_unavailable_reason?: string | null;
+      pagination: components["schemas"]["AnalyticsPaginationOut"];
+      filter_options: components["schemas"]["AnalyticsFilterOptionsOut"];
+      /** Rows */
+      rows: components["schemas"]["AnalyticsPerformanceRowOut"][];
+    };
+    /** AnalyticsPerformanceRowOut */
+    AnalyticsPerformanceRowOut: {
+      /** Spend */
+      spend: string | null;
+      /** Impressions */
+      impressions: number | null;
+      /** Clicks */
+      clicks: number | null;
+      /** Leads */
+      leads: number | null;
+      /** Registrations */
+      registrations: number | null;
+      /** Ftds */
+      ftds: number | null;
+      /** Confirmed Deposits */
+      confirmed_deposits: number | null;
+      /** Redeposits */
+      redeposits: number | null;
+      /** Revenue */
+      revenue: string | null;
+      /** Cpc */
+      cpc?: string | null;
+      /** Ctr Pct */
+      ctr_pct?: string | null;
+      /** Click Registration Cr Pct */
+      click_registration_cr_pct?: string | null;
+      /** Registration Ftd Cr Pct */
+      registration_ftd_cr_pct?: string | null;
+      /** Cost Per Registration */
+      cost_per_registration?: string | null;
+      /** Cost Per Ftd */
+      cost_per_ftd?: string | null;
+      /** Roi Pct */
+      roi_pct?: string | null;
+      /** Roas */
+      roas?: string | null;
+      /** Id */
+      id: string;
+      /** Fb Id */
+      fb_id?: string | null;
+      /** Name */
+      name: string;
+      /**
+       * Level
+       * @enum {string}
+       */
+      level: "campaign" | "adset" | "ad";
+      /** Parent Id */
+      parent_id?: string | null;
+      /** Parent Name */
+      parent_name?: string | null;
+      /**
+       * Has Children
+       * @default false
+       */
+      has_children: boolean;
+      /** Ad Account Id */
+      ad_account_id?: string | null;
+      /** Cabinet Timezone */
+      cabinet_timezone: string | null;
+      /** Timezone Known */
+      timezone_known: boolean;
+      /**
+       * Timezone State
+       * @enum {string}
+       */
+      timezone_state: "single" | "mixed" | "unknown";
+      /** Offer Id */
+      offer_id?: string | null;
+      /** Offer Code */
+      offer_code?: string | null;
+      state: components["schemas"]["DataState"];
+      /** Issues */
+      issues?: string[];
+      live_budget?: components["schemas"]["AnalyticsLiveBudgetOut"] | null;
+      /** Budget Unavailable Reason */
+      budget_unavailable_reason?: string | null;
+    };
+    /** AnalyticsSourceOut */
+    AnalyticsSourceOut: {
+      /**
+       * Source
+       * @enum {string}
+       */
+      source: "meta" | "tracker";
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "good" | "degraded" | "missing" | "unknown";
+      /** Last Event At */
+      last_event_at?: string | null;
+      /** Lag Seconds */
+      lag_seconds?: number | null;
+      /**
+       * Unmatched Events
+       * @default 0
+       */
+      unmatched_events: number;
+      /** Timezone Known */
+      timezone_known?: boolean | null;
+      /** Missing Timezone Account Ids */
+      missing_timezone_account_ids?: string[];
+      /** Issues */
+      issues?: string[];
+      /** Note */
+      note?: string | null;
+    };
+    /** AnalyticsSourcesOut */
+    AnalyticsSourcesOut: {
+      meta: components["schemas"]["AnalyticsSourceOut"];
+      tracker: components["schemas"]["AnalyticsSourceOut"];
+    };
+    /** AnalyticsWindowOut */
+    AnalyticsWindowOut: {
+      /**
+       * From Iso
+       * Format: date-time
+       */
+      from_iso: string;
+      /**
+       * To Iso
+       * Format: date-time
+       */
+      to_iso: string;
+      /** Is Live */
+      is_live: boolean;
+      /** Timezone */
+      timezone: string | null;
+      /** Timezone Known */
+      timezone_known: boolean;
+      /**
+       * Timezone State
+       * @enum {string}
+       */
+      timezone_state: "single" | "mixed" | "unknown";
+      /** Missing Timezone Account Ids */
+      missing_timezone_account_ids?: string[];
+      /** Issues */
+      issues?: string[];
+      /** Cabinet Day Note */
+      cabinet_day_note?: string | null;
+    };
+    /**
+     * ApiProblem
+     * @description Stable, non-secret error envelope returned by the HTTP API.
+     */
+    ApiProblem: {
+      /** Code */
+      code: string;
+      /** Message */
+      message: string;
+      /** Correlation Id */
+      correlation_id: string;
+      /** Field Errors */
+      field_errors: {
+        [key: string]: string[];
+      } | null;
+    };
+    /** Body_creative_uniquify_api_tools_creative_uniquify_post */
+    Body_creative_uniquify_api_tools_creative_uniquify_post: {
+      /** Offer Name */
+      offer_name: string;
+      /** Copies */
+      copies: number;
+      /** Files */
+      files: string[];
+    };
+    /** Body_upload_concepts_api_tools_campaigns_upload_post */
+    Body_upload_concepts_api_tools_campaigns_upload_post: {
+      /** Files */
+      files: string[];
+      /** Upload Id */
+      upload_id?: string | null;
+    };
+    /** BrowserCapabilityConsumeRequest */
+    BrowserCapabilityConsumeRequest: {
+      /**
+       * Browser Contract Version
+       * @constant
+       */
+      browser_contract_version: 5;
+      /**
+       * Rpc
+       * @enum {string}
+       */
+      rpc: "execute_graph_call" | "upload_image" | "upload_video";
+      /** Operation */
+      operation: string;
+      /** Session Id */
+      session_id: string;
+      /** Vision Profile Id */
+      vision_profile_id: string;
+      /** Ad Account Id */
+      ad_account_id: string;
+      /**
+       * Authorized Caller
+       * @enum {string}
+       */
+      authorized_caller: "autopause" | "meta_api" | "campaign_creator";
+      /** Task Id */
+      task_id: number;
+      /**
+       * Lease Owner
+       * Format: uuid
+       */
+      lease_owner: string;
+      /** Lease Token */
+      lease_token: number;
+      /** Capability Expires At */
+      capability_expires_at: number;
+      /** Capability Nonce */
+      capability_nonce: string;
+    };
+    /** BrowserMaintenanceCapabilityConsumeRequest */
+    BrowserMaintenanceCapabilityConsumeRequest: {
+      /**
+       * Rpc
+       * @constant
+       */
+      rpc: "recover_browser_profile";
+      /** Vision Profile Id */
+      vision_profile_id: string;
+      /** Maintenance Owner */
+      maintenance_owner: string;
+      /** Capability Expires At */
+      capability_expires_at: number;
+      /** Capability Nonce */
+      capability_nonce: string;
+    };
+    /**
+     * CampaignAdPlanOut
+     * @description План одного объявления.
+     */
+    CampaignAdPlanOut: {
+      /** Name */
+      name: string;
+      /** Media File Name */
+      media_file_name: string;
+      /** Media Search Name */
+      media_search_name: string;
+      /** Media Path */
+      media_path: string;
+      /** Media Type */
+      media_type: string;
+      /** Url Params */
+      url_params: string;
+    };
+    /**
+     * CampaignAdSetPlanOut
+     * @description План одной группы объявлений.
+     */
+    CampaignAdSetPlanOut: {
+      /** Name */
+      name: string;
+      /** Folder Path */
+      folder_path: string;
+      /** Ads */
+      ads: components["schemas"]["CampaignAdPlanOut"][];
+    };
+    /**
+     * CampaignAllowlistRequest
+     * @description Тело PATCH /settings/observer/campaigns — allowlist кампаний для am-режима (#3).
+     */
+    CampaignAllowlistRequest: {
+      /**
+       * Campaign Ids
+       * @description Список campaign.id для наблюдения. Пусто — без фильтра по кампаниям.
+       */
+      campaign_ids?: string[];
+    };
+    /**
+     * CampaignConfigIn
+     * @description Плоский конфиг залива от фронта. `to_domain()` → доменный CampaignConfig.
+     *
+     *     Все money-инварианты (hard-cap бюджета, +AQ, дефолты) проверяет уже доменный
+     *     CampaignConfig внутри `to_domain` — здесь сознательно НЕ дублируем валидацию,
+     *     чтобы единый источник правды остался в core.campaign_builder.config.
+     */
+    CampaignConfigIn: {
+      /** Act Id */
+      act_id: string;
+      /** Page Id */
+      page_id: string;
+      /** Pixel Id */
+      pixel_id: string;
+      /** Offer Code */
+      offer_code: string;
+      /** Byer Tag */
+      byer_tag?: string | null;
+      /**
+       * Objective
+       * @default OUTCOME_SALES
+       */
+      objective: string;
+      /**
+       * Optimization Goal
+       * @default OFFSITE_CONVERSIONS
+       */
+      optimization_goal: string;
+      /**
+       * Custom Event Type
+       * @default PURCHASE
+       */
+      custom_event_type: string;
+      /** Special Ad Categories */
+      special_ad_categories?: string[];
+      /** Destination Link */
+      destination_link: string;
+      /**
+       * Cta
+       * @default PLAY_GAME
+       */
+      cta: string;
+      /**
+       * Text Optimizations
+       * @default OPT_OUT
+       */
+      text_optimizations: string;
+      /** Start Date */
+      start_date?: string | null;
+      ad_text?: components["schemas"]["AdTextIn"] | null;
+      /**
+       * Budget Level
+       * @default campaign
+       */
+      budget_level: string;
+      /** Daily Budget */
+      daily_budget: string;
+      /**
+       * Bid Strategy
+       * @default COST_CAP
+       */
+      bid_strategy: string;
+      /** Bid Amount */
+      bid_amount?: string | null;
+      /** Countries */
+      countries?: string[];
+      /**
+       * Age Min
+       * @default 21
+       */
+      age_min: number;
+      /**
+       * Age Max
+       * @default 65
+       */
+      age_max: number;
+      /**
+       * Advantage Audience
+       * @default true
+       */
+      advantage_audience: boolean;
+      /**
+       * Click Through Days
+       * @default 1
+       */
+      click_through_days: number;
+      /**
+       * View Through Days
+       * @default 1
+       */
+      view_through_days: number;
+      /** Campaigns */
+      campaigns: components["schemas"]["CampaignStructureIn"][];
+      /** Copies Per Concept */
+      copies_per_concept?: number | null;
+      /** Creo Root */
+      creo_root: string;
+      /** Url Tags */
+      url_tags?: string | null;
+      /** Naming Template */
+      naming_template?: string | null;
+    };
+    /** CampaignDraftCampaign */
+    CampaignDraftCampaign: {
+      /** Key */
+      key: string;
+      /** Label */
+      label?: string | null;
+      /** Adset Count */
+      adset_count: number;
+    };
+    /** CampaignDraftConcept */
+    CampaignDraftConcept: {
+      /** Ref */
+      ref: string;
+      /** Original Name */
+      original_name: string;
+      /** Size Bytes */
+      size_bytes: number;
+      /** Content Type */
+      content_type?: string | null;
+      /** Campaign Keys */
+      campaign_keys?: string[];
+    };
+    /** CampaignDraftCreatives */
+    CampaignDraftCreatives: {
+      /** Upload Id */
+      upload_id?: string | null;
+      /** Concepts */
+      concepts?: components["schemas"]["CampaignDraftConcept"][];
+      /** Copies Per Concept */
+      copies_per_concept?: number | null;
+    };
+    /** CampaignDraftDocument */
+    CampaignDraftDocument: {
+      /** Revision */
+      revision: number;
+      state: components["schemas"]["CampaignDraftState-Output"];
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** CampaignDraftEnvelope */
+    CampaignDraftEnvelope: {
+      draft: components["schemas"]["CampaignDraftDocument"] | null;
+    };
+    /** CampaignDraftGoal */
+    CampaignDraftGoal: {
+      /**
+       * Objective
+       * @default OUTCOME_SALES
+       * @constant
+       */
+      objective: "OUTCOME_SALES";
+      /**
+       * Optimization Goal
+       * @default OFFSITE_CONVERSIONS
+       * @constant
+       */
+      optimization_goal: "OFFSITE_CONVERSIONS";
+      /**
+       * Custom Event Type
+       * @default PURCHASE
+       * @constant
+       */
+      custom_event_type: "PURCHASE";
+      /**
+       * Destination Link
+       * @default
+       */
+      destination_link: string;
+      /**
+       * Cta
+       * @default PLAY_GAME
+       */
+      cta: string;
+      /**
+       * Text Optimizations
+       * @default OPT_OUT
+       * @constant
+       */
+      text_optimizations: "OPT_OUT";
+      /**
+       * Start Date
+       * @default
+       */
+      start_date: string;
+      /**
+       * Budget Level
+       * @default campaign
+       * @enum {string}
+       */
+      budget_level: "campaign" | "adset";
+      /**
+       * Daily Budget
+       * @default
+       */
+      daily_budget: string;
+      /**
+       * Bid Amount
+       * @default
+       */
+      bid_amount: string;
+      /**
+       * Bid Strategy
+       * @default COST_CAP
+       * @constant
+       */
+      bid_strategy: "COST_CAP";
+      /** Countries */
+      countries?: string[];
+      /**
+       * Age Min
+       * @default 21
+       */
+      age_min: number;
+      /**
+       * Age Max
+       * @default 65
+       */
+      age_max: number;
+      /**
+       * Advantage Audience
+       * @default true
+       */
+      advantage_audience: boolean;
+      /**
+       * Click Through Days
+       * @default 1
+       * @enum {integer}
+       */
+      click_through_days: 1 | 7 | 28;
+      /**
+       * View Through Days
+       * @default 1
+       * @enum {integer}
+       */
+      view_through_days: 1 | 7 | 28;
+      /**
+       * Ad Text Mode
+       * @default none
+       * @enum {string}
+       */
+      ad_text_mode: "none" | "text";
+      /**
+       * Ad Text Primary
+       * @default
+       */
+      ad_text_primary: string;
+    };
+    /** CampaignDraftIdentity */
+    CampaignDraftIdentity: {
+      /**
+       * Act Id
+       * @default
+       */
+      act_id: string;
+      /**
+       * Page Id
+       * @default
+       */
+      page_id: string;
+      /**
+       * Pixel Id
+       * @default
+       */
+      pixel_id: string;
+      /**
+       * Account Context State
+       * @default unavailable
+       * @enum {string}
+       */
+      account_context_state: "ready" | "stale" | "unavailable";
+      /**
+       * Timezone Name
+       * @default
+       */
+      timezone_name: string;
+      /**
+       * Currency
+       * @default
+       * @enum {string}
+       */
+      currency: "" | "USD";
+      /** Currency Exponent */
+      currency_exponent?: 2 | null;
+      /** Account Context Observed At */
+      account_context_observed_at?: string | null;
+      /** Account Context Issue */
+      account_context_issue?: string | null;
+      /**
+       * Offer Code
+       * @default
+       */
+      offer_code: string;
+      /**
+       * Byer Tag
+       * @default
+       */
+      byer_tag: string;
+    };
+    /** CampaignDraftPutIn */
+    CampaignDraftPutIn: {
+      /** Expected Revision */
+      expected_revision: number;
+      state: components["schemas"]["CampaignDraftState-Input"];
+    };
+    /** CampaignDraftStart */
+    CampaignDraftStart: {
+      /**
+       * Mode
+       * @default new
+       * @enum {string}
+       */
+      mode: "new" | "preset";
+      /** Preset Id */
+      preset_id?: string | null;
+    };
+    /**
+     * CampaignDraftState
+     * @description Only form state that is safe and useful after reload/reconnect.
+     */
+    "CampaignDraftState-Input": {
+      /**
+       * Current Step
+       * @default 1
+       * @enum {integer}
+       */
+      current_step: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      start?: components["schemas"]["CampaignDraftStart"];
+      identity?: components["schemas"]["CampaignDraftIdentity"];
+      goal?: components["schemas"]["CampaignDraftGoal"];
+      structure?: components["schemas"]["CampaignDraftStructure"];
+      creatives?: components["schemas"]["CampaignDraftCreatives"];
+    };
+    /**
+     * CampaignDraftState
+     * @description Only form state that is safe and useful after reload/reconnect.
+     */
+    "CampaignDraftState-Output": {
+      /**
+       * Current Step
+       * @default 1
+       * @enum {integer}
+       */
+      current_step: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      start?: components["schemas"]["CampaignDraftStart"];
+      identity?: components["schemas"]["CampaignDraftIdentity"];
+      goal?: components["schemas"]["CampaignDraftGoal"];
+      structure?: components["schemas"]["CampaignDraftStructure"];
+      creatives?: components["schemas"]["CampaignDraftCreatives"];
+    };
+    /** CampaignDraftStructure */
+    CampaignDraftStructure: {
+      /** Campaigns */
+      campaigns?: components["schemas"]["CampaignDraftCampaign"][];
+    };
+    /**
+     * CampaignFolderItem
+     * @description Краткое описание одной папки креативов для UI выбора.
+     */
+    CampaignFolderItem: {
+      /** Name */
+      name: string;
+      /** Path */
+      path: string;
+      /** Adset Count */
+      adset_count: number;
+      /** Creative Count */
+      creative_count: number;
+      /** Media Type */
+      media_type: string;
+      /** Updated At */
+      updated_at: number;
+      /**
+       * Is Valid
+       * @default true
+       */
+      is_valid: boolean;
+      /**
+       * Validation Error
+       * @default
+       */
+      validation_error: string;
+    };
+    /**
+     * CampaignLocationPlanOut
+     * @description Правила выбора гео.
+     */
+    CampaignLocationPlanOut: {
+      /** Add Locations */
+      add_locations: string[];
+      /** Offer Country Name */
+      offer_country_name: string;
+      /** Required Location Type */
+      required_location_type: string;
+      /** Remove Initial Location After Add */
+      remove_initial_location_after_add: boolean;
+      /** Rejected Location Terms */
+      rejected_location_terms: string[];
+    };
+    /**
+     * CampaignManualGuideItemOut
+     * @description Одна строка ручного помощника.
+     */
+    CampaignManualGuideItemOut: {
+      /** Label */
+      label: string;
+      /** Value */
+      value: string;
+      /**
+       * Copyable
+       * @default true
+       */
+      copyable: boolean;
+    };
+    /**
+     * CampaignManualGuideSectionOut
+     * @description Секция ручного помощника.
+     */
+    CampaignManualGuideSectionOut: {
+      /** Title */
+      title: string;
+      /** Items */
+      items: components["schemas"]["CampaignManualGuideItemOut"][];
+    };
+    /**
+     * CampaignOption
+     * @description Кампания для выбора в allowlist сканирования (#3).
+     */
+    CampaignOption: {
+      /** Id */
+      id: string;
+      /** Name */
+      name: string;
+      /** Selected */
+      selected: boolean;
+    };
+    /**
+     * CampaignPlanOut
+     * @description Сводка по одной кампании в плане.
+     */
+    CampaignPlanOut: {
+      /** Key */
+      key: string;
+      /** Name */
+      name: string;
+      /**
+       * Status
+       * @constant
+       */
+      status: "PAUSED";
+      /** Adsets */
+      adsets: components["schemas"]["AdsetPlanOut"][];
+    };
+    /**
+     * CampaignPlanRequest
+     * @description Параметры создания кампании — совпадают с CampaignScriptConfig.
+     */
+    CampaignPlanRequest: {
+      /**
+       * Offer Code
+       * @description Код оффера, например DRC_CR2
+       */
+      offer_code: string;
+      /**
+       * Offer Country Name
+       * @description Полное название страны оффера
+       */
+      offer_country_name: string;
+      /**
+       * Cabinet Id
+       * @description ID рекламного кабинета Facebook
+       */
+      cabinet_id: string;
+      /**
+       * Sub2
+       * @description Значение sub2 для UTM-параметров
+       * @default MV
+       */
+      sub2: string;
+      /**
+       * Folder Name
+       * @description Имя папки в корне FB_Agent_Creo
+       */
+      folder_name: string;
+      /**
+       * Generation Date
+       * @description Дата генерации в формате YYYY-MM-DD (иначе сегодня)
+       */
+      generation_date?: string | null;
+    };
+    /**
+     * CampaignScriptPlanOut
+     * @description Полный план кампании для ручного создания.
+     */
+    CampaignScriptPlanOut: {
+      /** Campaign Name */
+      campaign_name: string;
+      /** Offer Code */
+      offer_code: string;
+      /** Offer Country Name */
+      offer_country_name: string;
+      /** Creative Folder Name */
+      creative_folder_name: string;
+      /** Creative Folder Path */
+      creative_folder_path: string;
+      /** Conversion Event */
+      conversion_event: string;
+      /** Cabinet Id */
+      cabinet_id: string;
+      /** Sub2 */
+      sub2: string;
+      /** Media Type */
+      media_type: string;
+      /** Adset Count */
+      adset_count: number;
+      /** Ad Count */
+      ad_count: number;
+      /** Adsets */
+      adsets: components["schemas"]["CampaignAdSetPlanOut"][];
+      location_plan: components["schemas"]["CampaignLocationPlanOut"];
+      /** Manual Guide */
+      manual_guide: components["schemas"]["CampaignManualGuideSectionOut"][];
+      /** Safety Notes */
+      safety_notes: string[];
+    };
+    /**
+     * CampaignStructureIn
+     * @description Одна кампания в плоской структуре фронта.
+     *
+     *     Несёт `key`/`label`/`adset_count`/`concept_refs`. Доменные имена adset'ов
+     *     и dir/glob генерируются детерминированно в `to_domain` (фронт их не знает).
+     *     `label` — произвольная метка кампании; если задана, добавляется в конец имени
+     *     кампании и каждого adset'а. Пустая/None — ничего не добавляется.
+     */
+    CampaignStructureIn: {
+      /** Key */
+      key: string;
+      /** Label */
+      label?: string | null;
+      /** Adset Count */
+      adset_count: number;
+      /** Concept Refs */
+      concept_refs: string[];
+    };
+    /**
+     * ChatMessageIn
+     * @description Одно сообщение истории (историю держит клиент и шлёт с каждым запросом).
+     */
+    ChatMessageIn: {
+      /**
+       * Role
+       * @enum {string}
+       */
+      role: "user" | "assistant";
+      /** Content */
+      content: string;
+    };
+    /**
+     * CreativeUniquifyResponse
+     * @description Результат уникализации: куда сохранено и сколько файлов создано.
+     */
+    CreativeUniquifyResponse: {
+      /** Output Dir */
+      output_dir: string;
+      /** Iteration Name */
+      iteration_name: string;
+      /** Files Created */
+      files_created: number;
+      /** Creative Count */
+      creative_count: number;
+      /** Copy Count */
+      copy_count: number;
+      /** Duration Ms */
+      duration_ms: number;
+    };
+    /**
+     * DataState
+     * @enum {string}
+     */
+    DataState: "ready" | "empty" | "partial" | "stale" | "unavailable";
+    /**
+     * DesktopLaunchRequest
+     * @description Platform-selected presentation profile carried into the desktop session.
+     */
+    DesktopLaunchRequest: {
+      /**
+       * Presentation
+       * @enum {string}
+       */
+      presentation: "desktop" | "mobile";
+    };
+    /**
+     * DesktopLaunchResponse
+     * @description A short-lived, single-use URL that establishes a desktop session.
+     */
+    DesktopLaunchResponse: {
+      /** Url */
+      url: string;
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /**
+       * Transport
+       * @constant
+       */
+      transport: "kasm";
+    };
+    /**
+     * DesktopTransportsResponse
+     * @description Configured transport selection exposed to owner launchers.
+     */
+    DesktopTransportsResponse: {
+      /**
+       * Active
+       * @constant
+       */
+      active: "kasm";
+      /** Available */
+      available: "kasm"[];
+    };
+    /** DuplicateSourceAccount */
+    DuplicateSourceAccount: {
+      /** Id */
+      id: string;
+      /** Name */
+      name: string;
+      /** Currency */
+      currency: string;
+      /** Currency Exponent */
+      currency_exponent: number;
+    };
+    /** DuplicateSourceAd */
+    DuplicateSourceAd: {
+      /** Id */
+      id: string;
+      /** Name */
+      name: string;
+      /** Fb Ad Id */
+      fb_ad_id: string;
+      /** Delivery Status */
+      delivery_status?: string | null;
+      /** Creative Thumb Url */
+      creative_thumb_url?: string | null;
+    };
+    /** DuplicateSourceEntity */
+    DuplicateSourceEntity: {
+      /** Id */
+      id: string;
+      /** Name */
+      name: string;
+    };
+    /**
+     * LaunchIn
+     * @description Запрос запуска залива: конфиг + опц. ссылка на пресет/upload.
+     *
+     *     `config` — единственная каноническая плоская форма фронта (`CampaignConfigIn`).
+     */
+    LaunchIn: {
+      config: components["schemas"]["CampaignConfigIn"];
+      /** Preset Id */
+      preset_id?: string | null;
+      /** Draft Revision */
+      draft_revision?: number | null;
+    };
+    /**
+     * LaunchOut
+     * @description Ответ запуска: id созданного run + id задачи.
+     */
+    LaunchOut: {
+      /** Run Id */
+      run_id: string;
+      /** Task Id */
+      task_id: number | null;
+      /** Status */
+      status: string;
+      /** Idempotency Key */
+      idempotency_key: string;
+      /**
+       * Draft Cleared
+       * @default false
+       */
+      draft_cleared: boolean;
+    };
+    /**
+     * ObserverIntervalPatchRequest
+     * @description Точечное обновление интервала без перезаписи runtime-флагов.
+     */
+    ObserverIntervalPatchRequest: {
+      /**
+       * Default Interval Seconds
+       * @description Интервал сканирования (30–600 секунд)
+       */
+      default_interval_seconds: number;
+    };
+    /**
+     * ObserverSettingsResponse
+     * @description Текущая конфигурация observer без удалённых legacy-порогов.
+     */
+    ObserverSettingsResponse: {
+      /** Is Scanning Enabled */
+      is_scanning_enabled: boolean;
+      /** Default Interval Seconds */
+      default_interval_seconds: number;
+      /** Owner Campaign Tag */
+      owner_campaign_tag?: string | null;
+      /** Campaign Ids */
+      campaign_ids?: string[];
+    };
+    /**
+     * OfferCreateIn
+     * @description Тело POST /offers.
+     */
+    OfferCreateIn: {
+      /**
+       * Code
+       * @description Уникальный код оффера
+       */
+      code: string;
+      /** Vertical */
+      vertical?: string | null;
+      /**
+       * Is Active
+       * @default true
+       */
+      is_active: boolean;
+      /** Pixel Id */
+      pixel_id?: string | null;
+      /** Ad Account Ids */
+      ad_account_ids: string[];
+      /** Countries */
+      countries?: string[];
+    };
+    /**
+     * OfferOut
+     * @description Ответ для одного оффера (GET /offers, POST /offers, PUT /offers/{id}).
+     */
+    OfferOut: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Code */
+      code: string;
+      /** Name */
+      name: string;
+      /** Vertical */
+      vertical?: string | null;
+      /** Pixel Id */
+      pixel_id?: string | null;
+      /** Is Active */
+      is_active: boolean;
+      /** Ad Account Ids */
+      ad_account_ids?: string[];
+      /** Countries */
+      countries?: string[];
+      /** Cpa Threshold */
+      cpa_threshold?: string | null;
+      /** Currency */
+      currency?: string | null;
+      /** Created At */
+      created_at?: string | null;
+      /** Updated At */
+      updated_at?: string | null;
+    };
+    /**
+     * OfferRuleOut
+     * @description Ответ на GET /offers/{id}/rules.
+     *
+     *     Все пороговые поля nullable — правило неактивно при null.
+     *     Если записи OfferRule для оффера нет — возвращаем объект с offer_id=<id>
+     *     и всеми порогами null (дефолтная структура).
+     */
+    OfferRuleOut: {
+      /** Offer Id */
+      offer_id?: string | null;
+      /** Cpa Threshold */
+      cpa_threshold?: string | null;
+      /** Currency */
+      currency?: string | null;
+      /** Frequency Threshold */
+      frequency_threshold?: string | null;
+      /**
+       * Stop Percent Of Rule
+       * @default 80
+       */
+      stop_percent_of_rule: string;
+      /**
+       * Warning Percent Of Stop
+       * @default 80
+       */
+      warning_percent_of_stop: string;
+    };
+    /**
+     * OfferRuleUpsertIn
+     * @description Тело PUT /offers/{id}/rules — upsert всех пороговых полей.
+     *
+     *     Monetary/frequency пороги nullable; заданные значения строго положительны.
+     */
+    OfferRuleUpsertIn: {
+      /** Cpa Threshold */
+      cpa_threshold?: number | string | null;
+      /** Currency */
+      currency?: string | null;
+      /** Frequency Threshold */
+      frequency_threshold?: number | string | null;
+      /**
+       * Stop Percent Of Rule
+       * @default 80
+       */
+      stop_percent_of_rule: number | string;
+      /**
+       * Warning Percent Of Stop
+       * @default 80
+       */
+      warning_percent_of_stop: number | string;
+    };
+    /**
+     * OfferUpdateIn
+     * @description Тело PUT /offers/{id}.
+     *
+     *     Identity is immutable and therefore is not accepted in this payload.
+     *     All mutable fields are optional.
+     */
+    OfferUpdateIn: {
+      /** Vertical */
+      vertical?: string | null;
+      /** Pixel Id */
+      pixel_id?: string | null;
+      /** Is Active */
+      is_active?: boolean | null;
+      /** Ad Account Ids */
+      ad_account_ids?: string[] | null;
+      /** Countries */
+      countries?: string[] | null;
+    };
+    /**
+     * OpenFolderRequest
+     * @description Запрос открытия папки результата.
+     */
+    OpenFolderRequest: {
+      /** Path */
+      path: string;
+    };
+    /** OperatorAccount */
+    OperatorAccount: {
+      /** Id */
+      id: string | null;
+      /** Name */
+      name: string | null;
+    };
+    /** OperatorActionItem */
+    OperatorActionItem: {
+      /** Id */
+      id: string;
+      /** Public Id */
+      public_id: string;
+      /**
+       * Kind
+       * @enum {string}
+       */
+      kind: "pause" | "activate" | "scan" | "create" | "duplicate" | "other";
+      state: components["schemas"]["OperatorActionState"];
+      /** Title */
+      title: string;
+      /** Target Id */
+      target_id?: string | null;
+      /** Target Label */
+      target_label: string | null;
+      /**
+       * Requested At
+       * Format: date-time
+       */
+      requested_at: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+      /** Requested By */
+      requested_by: string | null;
+      /** Reason */
+      reason: string | null;
+      /** Correlation Id */
+      correlation_id: string;
+      /** Account Id */
+      account_id: string | null;
+      /** Currency */
+      currency?: string | null;
+      /** Cabinet Timezone */
+      cabinet_timezone: string | null;
+      /** Account Context Observed At */
+      account_context_observed_at: string | null;
+      /** Account Context Issues */
+      account_context_issues: string[];
+    };
+    /**
+     * OperatorActionState
+     * @enum {string}
+     */
+    OperatorActionState:
+      | "queued"
+      | "running"
+      | "confirmed"
+      | "failed"
+      | "cancelled"
+      | "unknown";
+    /** OperatorActionsData */
+    OperatorActionsData: {
+      /** Items */
+      items: components["schemas"]["OperatorActionItem"][];
+    };
+    /** OperatorActionsResponse */
+    OperatorActionsResponse: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      /** Sources */
+      sources: string[];
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      scope: components["schemas"]["OperatorScopeEvidence"];
+      /** Items */
+      items: components["schemas"]["OperatorActionItem"][];
+      /** Next Cursor */
+      next_cursor: number | null;
+    };
+    /**
+     * OperatorAdCommandRequest
+     * @description Optimistic precondition captured from the confirmed ad row.
+     */
+    OperatorAdCommandRequest: {
+      /** Expected Delivery Status */
+      expected_delivery_status: string;
+      /**
+       * Expected As Of
+       * Format: date-time
+       */
+      expected_as_of: string;
+    };
+    /** OperatorAdMetrics */
+    OperatorAdMetrics: {
+      /** Spend */
+      spend: string | null;
+      /** Impressions */
+      impressions: number | null;
+      /** Clicks */
+      clicks: number | null;
+      /** Registrations */
+      registrations: number | null;
+      /** Ftd */
+      ftd: number | null;
+      /** Confirmed Deposits */
+      confirmed_deposits: number | null;
+      /** Cpc */
+      cpc: string | null;
+      /** Cost Per Registration */
+      cost_per_registration: string | null;
+    };
+    /** OperatorAdRow */
+    OperatorAdRow: {
+      /** Id */
+      id: string;
+      /** Fb Ad Id */
+      fb_ad_id: string;
+      /** Name */
+      name: string;
+      /** Campaign Id */
+      campaign_id: string;
+      /** Campaign Name */
+      campaign_name: string;
+      /** Adset Id */
+      adset_id: string;
+      /** Adset Name */
+      adset_name: string;
+      /** Account Id */
+      account_id: string | null;
+      /** Delivery Status */
+      delivery_status: string | null;
+      data_state: components["schemas"]["DataState"];
+      severity: components["schemas"]["OperatorSeverity"];
+      /** As Of */
+      as_of: string | null;
+      metrics: components["schemas"]["OperatorAdMetrics"];
+      active_action: components["schemas"]["OperatorActionItem"] | null;
+    };
+    /** OperatorAdsResponse */
+    OperatorAdsResponse: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      /** Sources */
+      sources: string[];
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      scope: components["schemas"]["OperatorScopeEvidence"];
+      /** Rows */
+      rows: components["schemas"]["OperatorAdRow"][];
+      /** Page */
+      page: number;
+      /** Page Size */
+      page_size: number;
+      /** Total */
+      total: number;
+      /** Pages */
+      pages: number;
+    };
+    /** OperatorAttentionAction */
+    OperatorAttentionAction: {
+      /** Label */
+      label: string;
+      /** Href */
+      href: string;
+    };
+    /** OperatorAttentionData */
+    OperatorAttentionData: {
+      /** Items */
+      items: components["schemas"]["OperatorAttentionItem"][];
+    };
+    /** OperatorAttentionItem */
+    OperatorAttentionItem: {
+      /** Id */
+      id: string;
+      /**
+       * Kind
+       * @enum {string}
+       */
+      kind: "incident" | "action" | "source" | "recommendation";
+      severity: components["schemas"]["OperatorSeverity"];
+      /** Title */
+      title: string;
+      /** Summary */
+      summary: string;
+      /** Reason */
+      reason: string | null;
+      /**
+       * Occurred At
+       * Format: date-time
+       */
+      occurred_at: string;
+      target: components["schemas"]["OperatorAttentionTarget"];
+      action: components["schemas"]["OperatorAttentionAction"] | null;
+    };
+    /** OperatorAttentionTarget */
+    OperatorAttentionTarget: {
+      /**
+       * Kind
+       * @enum {string}
+       */
+      kind: "ad" | "campaign" | "account" | "system";
+      /** Id */
+      id: string | null;
+      /** Label */
+      label: string | null;
+    };
+    /** OperatorCabinetDay */
+    OperatorCabinetDay: {
+      /**
+       * Starts At
+       * Format: date-time
+       */
+      starts_at: string;
+      /**
+       * Ends At
+       * Format: date-time
+       */
+      ends_at: string;
+    };
+    /** OperatorCabinetLedgerRow */
+    OperatorCabinetLedgerRow: {
+      /** Id */
+      id: string;
+      /** Name */
+      name: string;
+      /** Timezone */
+      timezone: string | null;
+      /** Currency */
+      currency?: string | null;
+      state: components["schemas"]["DataState"];
+      severity: components["schemas"]["OperatorSeverity"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      cabinet_day: components["schemas"]["OperatorCabinetDay"] | null;
+      totals: components["schemas"]["OperatorEconomyTotals"];
+      /** Risk Label */
+      risk_label: string;
+      /** Risk Reason */
+      risk_reason: string | null;
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      action: components["schemas"]["OperatorAttentionAction"];
+    };
+    /** OperatorCommandResponse */
+    OperatorCommandResponse: {
+      /** Task Id */
+      task_id: number;
+      /** Public Id */
+      public_id: string;
+      state: components["schemas"]["OperatorActionState"];
+      /** Created */
+      created: boolean;
+      /** Correlation Id */
+      correlation_id: string;
+    };
+    /** OperatorCurrencyGroup */
+    OperatorCurrencyGroup: {
+      /** Id */
+      id: string;
+      /** Currency */
+      currency?: string | null;
+      state: components["schemas"]["DataState"];
+      severity: components["schemas"]["OperatorSeverity"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      totals: components["schemas"]["OperatorEconomyTotals"];
+      /** Cabinets */
+      cabinets: components["schemas"]["OperatorCabinetLedgerRow"][];
+    };
+    /** OperatorDisplayPreferencePutRequest */
+    OperatorDisplayPreferencePutRequest: {
+      /** Timezone Name */
+      timezone_name: string;
+    };
+    /** OperatorDisplayPreferenceResponse */
+    OperatorDisplayPreferenceResponse: {
+      /** Timezone Name */
+      timezone_name: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** OperatorEconomyData */
+    OperatorEconomyData: {
+      totals: components["schemas"]["OperatorEconomyTotals"];
+      /** Series */
+      series: components["schemas"]["OperatorSpendPoint"][];
+    };
+    /** OperatorEconomyTotals */
+    OperatorEconomyTotals: {
+      /** Spend */
+      spend: string | null;
+      /** Base */
+      base: string | null;
+      /** Stop */
+      stop: string | null;
+      /** Base Delta */
+      base_delta: string | null;
+    };
+    /**
+     * OperatorEventItem
+     * @description One immutable alert or terminal command event in the operator feed.
+     */
+    OperatorEventItem: {
+      /**
+       * Event Type
+       * @enum {string}
+       */
+      event_type: "alert" | "task";
+      /**
+       * Ts
+       * Format: date-time
+       */
+      ts: string;
+      /** Fb Ad Id */
+      fb_ad_id?: string | null;
+      /** Ad Name */
+      ad_name?: string | null;
+      /** Campaign Id */
+      campaign_id?: string | null;
+      /** Campaign Name */
+      campaign_name?: string | null;
+      /** Stage */
+      stage?: string | null;
+      /** Rule Codes */
+      rule_codes?: string[] | null;
+      /** Task Type */
+      task_type?: string | null;
+      /** Task Status */
+      task_status?: string | null;
+    };
+    /** OperatorFunnelData */
+    OperatorFunnelData: {
+      /** Stages */
+      stages: components["schemas"]["OperatorFunnelStage"][];
+    };
+    /** OperatorFunnelStage */
+    OperatorFunnelStage: {
+      /**
+       * Key
+       * @enum {string}
+       */
+      key: "clicks" | "registrations" | "ftd" | "confirmed_deposits";
+      /** Label */
+      label: string;
+      /** Count */
+      count: number | null;
+      /** Conversion */
+      conversion: string | null;
+      /** Cost */
+      cost: string | null;
+    };
+    /** OperatorIncidentAckResponse */
+    OperatorIncidentAckResponse: {
+      /** Incident Id */
+      incident_id: string;
+      /**
+       * Status
+       * @constant
+       */
+      status: "acknowledged";
+      /**
+       * Acknowledged At
+       * Format: date-time
+       */
+      acknowledged_at: string;
+      /** Correlation Id */
+      correlation_id: string;
+    };
+    /** OperatorIncidentDetailResponse */
+    OperatorIncidentDetailResponse: {
+      state: components["schemas"]["DataState"];
+      /**
+       * As Of
+       * Format: date-time
+       */
+      as_of: string;
+      /** Freshness Seconds */
+      freshness_seconds: number;
+      /** Sources */
+      sources: string[];
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      /** Timezone */
+      timezone: string;
+      /** Timezone Known */
+      timezone_known: boolean;
+      scope: components["schemas"]["OperatorScopeEvidence"];
+      incident: components["schemas"]["OperatorIncidentItem"];
+    };
+    /**
+     * OperatorIncidentItem
+     * @description Safe incident projection for list and detail operator surfaces.
+     */
+    OperatorIncidentItem: {
+      /** Id */
+      id: string;
+      severity: components["schemas"]["OperatorSeverity"];
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "open" | "acknowledged" | "executing" | "resolved" | "failed";
+      /** Title */
+      title: string;
+      /** Summary */
+      summary: string | null;
+      /** Reason */
+      reason: string | null;
+      /**
+       * Occurred At
+       * Format: date-time
+       */
+      occurred_at: string;
+      /** Account Id */
+      account_id: string | null;
+      target: components["schemas"]["OperatorAttentionTarget"];
+      action: components["schemas"]["OperatorAttentionAction"];
+      /** Requires Usd Evidence */
+      requires_usd_evidence: boolean;
+    };
+    /** OperatorIncidentsResponse */
+    OperatorIncidentsResponse: {
+      state: components["schemas"]["DataState"];
+      /**
+       * As Of
+       * Format: date-time
+       */
+      as_of: string;
+      /** Freshness Seconds */
+      freshness_seconds: number;
+      /** Sources */
+      sources: string[];
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      scope: components["schemas"]["OperatorScopeEvidence"];
+      /** Items */
+      items: components["schemas"]["OperatorIncidentItem"][];
+      /** Page */
+      page: number;
+      /** Page Size */
+      page_size: number;
+      /** Total */
+      total: number;
+      /** Pages */
+      pages: number;
+    };
+    /** OperatorIssue */
+    OperatorIssue: {
+      /** Code */
+      code: string;
+      /** Title */
+      title: string;
+      /** Detail */
+      detail: string | null;
+      severity: components["schemas"]["OperatorSeverity"];
+      /** Correlation Id */
+      correlation_id: string | null;
+    };
+    /** OperatorPortfolioData */
+    OperatorPortfolioData: {
+      /** Currency Groups */
+      currency_groups: components["schemas"]["OperatorCurrencyGroup"][];
+    };
+    /**
+     * OperatorScopeEvidence
+     * @description Validated account context shared by operator and analytics responses.
+     */
+    OperatorScopeEvidence: {
+      /** Account Ids */
+      account_ids: string[];
+      /** Display Timezone */
+      display_timezone: string;
+      /** Cabinet Timezone */
+      cabinet_timezone: string | null;
+      /**
+       * Cabinet Timezone State
+       * @enum {string}
+       */
+      cabinet_timezone_state: "single" | "mixed" | "unknown";
+      /** Missing Timezone Account Ids */
+      missing_timezone_account_ids: string[];
+      /** Currency */
+      currency?: string | null;
+      /**
+       * Currency State
+       * @enum {string}
+       */
+      currency_state: "single" | "mixed" | "unknown";
+      /** Missing Currency Account Ids */
+      missing_currency_account_ids: string[];
+      /** Currency Observed At */
+      currency_observed_at: string | null;
+    };
+    /** OperatorSection[OperatorActionsData] */
+    OperatorSection_OperatorActionsData_: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      /** Sources */
+      sources: string[];
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      data: components["schemas"]["OperatorActionsData"] | null;
+    };
+    /** OperatorSection[OperatorAttentionData] */
+    OperatorSection_OperatorAttentionData_: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      /** Sources */
+      sources: string[];
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      data: components["schemas"]["OperatorAttentionData"] | null;
+    };
+    /** OperatorSection[OperatorEconomyData] */
+    OperatorSection_OperatorEconomyData_: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      /** Sources */
+      sources: string[];
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      data: components["schemas"]["OperatorEconomyData"] | null;
+    };
+    /** OperatorSection[OperatorFunnelData] */
+    OperatorSection_OperatorFunnelData_: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      /** Sources */
+      sources: string[];
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      data: components["schemas"]["OperatorFunnelData"] | null;
+    };
+    /** OperatorSection[OperatorPortfolioData] */
+    OperatorSection_OperatorPortfolioData_: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      /** Sources */
+      sources: string[];
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      data: components["schemas"]["OperatorPortfolioData"] | null;
+    };
+    /** OperatorSection[OperatorSystemData] */
+    OperatorSection_OperatorSystemData_: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      /** Sources */
+      sources: string[];
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      data: components["schemas"]["OperatorSystemData"] | null;
+    };
+    /**
+     * OperatorSeverity
+     * @enum {string}
+     */
+    OperatorSeverity: "ok" | "warning" | "critical" | "unknown";
+    /** OperatorSnapshot */
+    OperatorSnapshot: {
+      meta: components["schemas"]["OperatorSnapshotMeta"];
+      attention: components["schemas"]["OperatorSection_OperatorAttentionData_"];
+      portfolio: components["schemas"]["OperatorSection_OperatorPortfolioData_"];
+      economy: components["schemas"]["OperatorSection_OperatorEconomyData_"];
+      funnel: components["schemas"]["OperatorSection_OperatorFunnelData_"];
+      actions: components["schemas"]["OperatorSection_OperatorActionsData_"];
+      system: components["schemas"]["OperatorSection_OperatorSystemData_"];
+    };
+    /** OperatorSnapshotMeta */
+    OperatorSnapshotMeta: {
+      /** Revision */
+      revision: string;
+      /** Sequence */
+      sequence: number;
+      /**
+       * Generated At
+       * Format: date-time
+       */
+      generated_at: string;
+      /** Timezone */
+      timezone: string;
+      /** Cabinet Timezone */
+      cabinet_timezone: string | null;
+      /** Cabinet Timezone Known */
+      cabinet_timezone_known: boolean;
+      /**
+       * Cabinet Timezone State
+       * @enum {string}
+       */
+      cabinet_timezone_state: "single" | "mixed" | "unknown";
+      /** Missing Timezone Account Ids */
+      missing_timezone_account_ids: string[];
+      /** Currency */
+      currency?: string | null;
+      /**
+       * Currency State
+       * @enum {string}
+       */
+      currency_state: "single" | "mixed" | "unknown";
+      /** Missing Currency Account Ids */
+      missing_currency_account_ids: string[];
+      /** Currency Observed At */
+      currency_observed_at: string | null;
+      /**
+       * Window
+       * @enum {string}
+       */
+      window: "today" | "24h" | "7d" | "30d";
+      account: components["schemas"]["OperatorAccount"];
+      cabinet_day: components["schemas"]["OperatorCabinetDay"];
+    };
+    /** OperatorSpendPoint */
+    OperatorSpendPoint: {
+      /**
+       * At
+       * Format: date-time
+       */
+      at: string;
+      /** Actual */
+      actual: string | null;
+      /** Base */
+      base: string | null;
+      /** Stop */
+      stop: string | null;
+    };
+    /** OperatorSystemData */
+    OperatorSystemData: {
+      severity: components["schemas"]["OperatorSeverity"];
+      /** Monitoring Enabled */
+      monitoring_enabled: boolean | null;
+      /** Last Scan At */
+      last_scan_at: string | null;
+      /** Next Scan At */
+      next_scan_at: string | null;
+      /** Workers */
+      workers: components["schemas"]["OperatorWorkerState"][];
+    };
+    /** OperatorWorkerState */
+    OperatorWorkerState: {
+      /** Id */
+      id: string;
+      /** Label */
+      label: string;
+      severity: components["schemas"]["OperatorSeverity"];
+      /** Status */
+      status: string;
+      /** Last Activity At */
+      last_activity_at: string | null;
+    };
+    /**
+     * OwnerTagPatchRequest
+     * @description Тело PATCH /settings/observer/owner-tag — точечное обновление тега.
+     *
+     *     Отдельный PATCH против лост-апдейта (аудит 2026-07-12, C-1): full-PUT из
+     *     закэшированного клиентского состояния молча перезаписывал is_scanning_enabled.
+     */
+    OwnerTagPatchRequest: {
+      /**
+       * Owner Campaign Tag
+       * @description Теги владельца кампаний для owner-scoping. Один или несколько через запятую. Пусто/null — фильтр выключен.
+       */
+      owner_campaign_tag?: string | null;
+    };
+    /**
+     * PresetIn
+     * @description Тело создания/обновления пресета (стабильный конфиг залива).
+     */
+    PresetIn: {
+      /** Name */
+      name: string;
+      /** Act Id */
+      act_id: string;
+      /** Page Id */
+      page_id: string;
+      /** Pixel Id */
+      pixel_id: string;
+      /** Offer Code */
+      offer_code?: string | null;
+      /** Byer Tag */
+      byer_tag?: string | null;
+      /**
+       * Objective
+       * @default OUTCOME_SALES
+       */
+      objective: string;
+      /**
+       * Optimization Goal
+       * @default OFFSITE_CONVERSIONS
+       */
+      optimization_goal: string;
+      /**
+       * Custom Event Type
+       * @default PURCHASE
+       */
+      custom_event_type: string;
+      /** Special Ad Categories */
+      special_ad_categories?: string[];
+      /**
+       * Cta
+       * @default PLAY_GAME
+       */
+      cta: string;
+      /**
+       * Text Optimizations
+       * @default OPT_OUT
+       */
+      text_optimizations: string;
+      /**
+       * Click Through Days
+       * @default 1
+       */
+      click_through_days: number;
+      /**
+       * View Through Days
+       * @default 1
+       */
+      view_through_days: number;
+      /** Url Tags Template */
+      url_tags_template?: string | null;
+      /** Naming Template */
+      naming_template?: string | null;
+      /** Extra */
+      extra?: {
+        [key: string]: unknown;
+      };
+    };
+    /**
+     * PresetOut
+     * @description Пресет в ответе API.
+     */
+    PresetOut: {
+      /** Id */
+      id: string;
+      /** Name */
+      name: string;
+      /** Act Id */
+      act_id: string;
+      /** Page Id */
+      page_id: string;
+      /** Pixel Id */
+      pixel_id: string;
+      /** Offer Code */
+      offer_code: string | null;
+      /** Byer Tag */
+      byer_tag: string | null;
+      /** Objective */
+      objective: string;
+      /** Optimization Goal */
+      optimization_goal: string;
+      /** Custom Event Type */
+      custom_event_type: string;
+      /** Special Ad Categories */
+      special_ad_categories: string[];
+      /** Cta */
+      cta: string;
+      /** Text Optimizations */
+      text_optimizations: string;
+      /** Click Through Days */
+      click_through_days: number;
+      /** View Through Days */
+      view_through_days: number;
+      /** Url Tags Template */
+      url_tags_template: string | null;
+      /** Naming Template */
+      naming_template: string | null;
+      /** Extra */
+      extra: {
+        [key: string]: unknown;
+      };
+      /** Created At */
+      created_at: string;
+      /** Updated At */
+      updated_at: string;
+    };
+    /**
+     * RulePreviewOut
+     * @description Превью порогов автостопа для CPA + чувствительности.
+     *
+     *     Считается через RuleContext — ТОТ ЖЕ расчёт, что применяет автостоп: цифры в UI
+     *     совпадают с реальными порогами, по которым observer отключает объявления.
+     */
+    RulePreviewOut: {
+      /** Cpa */
+      cpa: string;
+      /** Currency */
+      currency: string;
+      /** Stop Percent Of Rule */
+      stop_percent_of_rule: string;
+      /** Warning Percent Of Stop */
+      warning_percent_of_stop: string;
+      /** Cost Rules */
+      cost_rules: components["schemas"]["RuleThresholdPreview"][];
+      /** Spend Ranges */
+      spend_ranges: components["schemas"]["SpendRangePreview"][];
+      /** Regs No Dep Stop Count */
+      regs_no_dep_stop_count: number;
+    };
+    /**
+     * RuleThresholdPreview
+     * @description Один денежный порог: при какой стоимости сработают стоп и ворнинг.
+     */
+    RuleThresholdPreview: {
+      /** Rule */
+      rule: string;
+      /** Label */
+      label: string;
+      /** Base */
+      base: string;
+      /** Stop */
+      stop: string;
+      /** Warning */
+      warning: string;
+    };
+    /**
+     * RunCommandOut
+     * @description Accepted or replayed abort/resume command lifecycle.
+     */
+    RunCommandOut: {
+      /**
+       * Action
+       * @enum {string}
+       */
+      action: "abort" | "resume";
+      /** Run Id */
+      run_id: string;
+      /** Task Id */
+      task_id: number;
+      /**
+       * State
+       * @enum {string}
+       */
+      state:
+        | "queued"
+        | "running"
+        | "confirmed"
+        | "failed"
+        | "cancelled"
+        | "unknown";
+      /**
+       * Run Status
+       * @enum {string}
+       */
+      run_status:
+        | "queued"
+        | "uniquifying"
+        | "uploading"
+        | "creating"
+        | "succeeded"
+        | "failed"
+        | "cancelled";
+      /** Created */
+      created: boolean;
+      /** Reason */
+      reason: string;
+    };
+    /**
+     * RunControlOptionOut
+     * @description One control and a stable machine-readable availability reason.
+     */
+    RunControlOptionOut: {
+      /** Available */
+      available: boolean;
+      /** Reason */
+      reason: string;
+    };
+    /** RunControlsOut */
+    RunControlsOut: {
+      abort: components["schemas"]["RunControlOptionOut"];
+      resume: components["schemas"]["RunControlOptionOut"];
+    };
+    /**
+     * RunDetailOut
+     * @description Details plus the latest task and safe control availability.
+     */
+    RunDetailOut: {
+      /** Id */
+      id: string;
+      /** Preset Id */
+      preset_id: string | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status:
+        | "queued"
+        | "uniquifying"
+        | "uploading"
+        | "creating"
+        | "succeeded"
+        | "failed"
+        | "cancelled";
+      /** Config */
+      config: {
+        [key: string]: unknown;
+      };
+      progress: components["schemas"]["RunProgressOut"];
+      /** Created Meta Ids */
+      created_meta_ids: {
+        [key: string]: unknown;
+      };
+      /** Failure Class */
+      failure_class:
+        | (
+            | "manual_review"
+            | "safe_retry"
+            | "invalid_config"
+            | "invalid_media"
+            | "unavailable"
+          )
+        | null;
+      /** Idempotency Key */
+      idempotency_key: string | null;
+      /** Created At */
+      created_at: string;
+      /** Updated At */
+      updated_at: string;
+      task: components["schemas"]["RunTaskOut"] | null;
+      controls: components["schemas"]["RunControlsOut"];
+    };
+    /**
+     * RunProgressOut
+     * @description Bounded operator progress; arbitrary worker checkpoint keys stay private.
+     */
+    RunProgressOut: {
+      /**
+       * Stage
+       * @enum {string}
+       */
+      stage:
+        | "queued"
+        | "uniquifying"
+        | "uploading"
+        | "creating"
+        | "succeeded"
+        | "failed"
+        | "cancelled";
+      /** Completed */
+      completed?: number | null;
+      /** Total */
+      total?: number | null;
+    };
+    /**
+     * RunSummaryOut
+     * @description Краткая карточка запуска для списка.
+     */
+    RunSummaryOut: {
+      /** Id */
+      id: string;
+      /** Preset Id */
+      preset_id: string | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status:
+        | "queued"
+        | "uniquifying"
+        | "uploading"
+        | "creating"
+        | "succeeded"
+        | "failed"
+        | "cancelled";
+      /** Offer Code */
+      offer_code: string | null;
+      /** Idempotency Key */
+      idempotency_key: string | null;
+      /** Created At */
+      created_at: string;
+      /** Updated At */
+      updated_at: string;
+    };
+    /**
+     * RunTaskOut
+     * @description Latest durable campaign task and its authoritative action lifecycle.
+     */
+    RunTaskOut: {
+      /** Id */
+      id: number;
+      /**
+       * State
+       * @enum {string}
+       */
+      state:
+        | "queued"
+        | "running"
+        | "confirmed"
+        | "failed"
+        | "cancelled"
+        | "unknown";
+      /**
+       * Queue Status
+       * @enum {string}
+       */
+      queue_status:
+        | "pending"
+        | "retrying"
+        | "running"
+        | "succeeded"
+        | "failed"
+        | "cancelled";
+      /** Outcome */
+      outcome: ("CONFIRMED" | "REJECTED" | "UNKNOWN") | null;
+      /** Attempt Count */
+      attempt_count: number;
+      /** Max Attempts */
+      max_attempts: number;
+      /** Requested By */
+      requested_by: string;
+      /** External Started */
+      external_started: boolean;
+      /** Cancel Requested At */
+      cancel_requested_at: string | null;
+      /** Deadline At */
+      deadline_at: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+      /** Completed At */
+      completed_at: string | null;
+    };
+    /**
+     * ScanNowResponse
+     * @description Ответ на POST /settings/observer/scan-now.
+     */
+    ScanNowResponse: {
+      /**
+       * Status
+       * @constant
+       */
+      status: "queued";
+      /** Task Id */
+      task_id: number;
+      /**
+       * Correlation Id
+       * Format: uuid
+       */
+      correlation_id: string;
+    };
+    /**
+     * ScanningToggleRequest
+     * @description Тело PATCH /settings/observer/scanning.
+     */
+    ScanningToggleRequest: {
+      /** Enabled */
+      enabled: boolean;
+    };
+    /**
+     * SpendRangePreview
+     * @description Диапазон расхода в валюте CPA.
+     */
+    SpendRangePreview: {
+      /** Rule */
+      rule: string;
+      /** Label */
+      label: string;
+      /** Stop From */
+      stop_from: string;
+      /** Stop To */
+      stop_to: string;
+      /** Warning From */
+      warning_from: string;
+    };
+    /**
+     * SystemReadinessResponse
+     * @description Строгая готовность money-критичного контура, не простой liveness probe.
+     */
+    SystemReadinessResponse: {
+      /** Ready */
+      ready: boolean;
+      /** Infrastructure Ready */
+      infrastructure_ready: boolean;
+      /**
+       * Overall
+       * @enum {string}
+       */
+      overall: "HEALTHY" | "DEGRADED" | "CRITICAL";
+      /**
+       * Actors Active
+       * @default 0
+       */
+      actors_active: number;
+      /**
+       * Actors Expected
+       * @default 0
+       */
+      actors_expected: number;
+      /** Scanning Enabled */
+      scanning_enabled?: boolean | null;
+      /** Last Scan At */
+      last_scan_at?: string | null;
+      /** Last Activity At */
+      last_activity_at?: string | null;
+      /**
+       * Stale Money Tasks
+       * @default 0
+       */
+      stale_money_tasks: number;
+      /**
+       * Expired Money Tasks
+       * @default 0
+       */
+      expired_money_tasks: number;
+      /** Blockers */
+      blockers?: string[];
+      /** Degraded */
+      degraded?: string[];
+    };
+    /** TelegramDeliveryErrorSummary */
+    TelegramDeliveryErrorSummary: {
+      /** Delivery Id */
+      delivery_id: number;
+      /** State */
+      state: string;
+      /** Error Code */
+      error_code: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+      /** Correlation Id */
+      correlation_id: string;
+    };
+    /**
+     * TelegramInviteResponse
+     * @description Готовый invite-код, команда и опциональная Telegram deep-link.
+     */
+    TelegramInviteResponse: {
+      /** Code */
+      code: string;
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /**
+       * Role
+       * @default recipient
+       */
+      role: string;
+      /** Auth Deep Link */
+      auth_deep_link?: string | null;
+      /** Activation Command */
+      activation_command: string;
+    };
+    /** TelegramNotificationDiagnosticsResponse */
+    TelegramNotificationDiagnosticsResponse: {
+      /**
+       * As Of
+       * Format: date-time
+       */
+      as_of: string;
+      /**
+       * Webhook State
+       * @enum {string}
+       */
+      webhook_state:
+        | "unconfigured"
+        | "pending"
+        | "applying"
+        | "retry"
+        | "configured"
+        | "failed";
+      /** Webhook Generation */
+      webhook_generation: number;
+      /** Webhook Applied Generation */
+      webhook_applied_generation: number | null;
+      /** Webhook Desired Url */
+      webhook_desired_url: string | null;
+      /** Webhook Remote Url */
+      webhook_remote_url: string | null;
+      /** Webhook Remote Url Matches */
+      webhook_remote_url_matches: boolean;
+      /** Webhook Secret Digest Present */
+      webhook_secret_digest_present: boolean;
+      /** Webhook Remote Pending Update Count */
+      webhook_remote_pending_update_count: number | null;
+      /** Webhook Remote Last Error At */
+      webhook_remote_last_error_at: string | null;
+      /** Webhook Remote Last Error Message */
+      webhook_remote_last_error_message: string | null;
+      /** Webhook Checked At */
+      webhook_checked_at: string | null;
+      /** Webhook Configured At */
+      webhook_configured_at: string | null;
+      /** Webhook Last Error Code */
+      webhook_last_error_code: string | null;
+      /** Webhook Last Error Detail */
+      webhook_last_error_detail: string | null;
+      /**
+       * Gateway State
+       * @enum {string}
+       */
+      gateway_state: "configured" | "auth_error" | "unconfigured";
+      /**
+       * Outbox State
+       * @enum {string}
+       */
+      outbox_state: "idle" | "active" | "degraded";
+      /** Last Webhook Update At */
+      last_webhook_update_at: string | null;
+      /** Inbox Counts */
+      inbox_counts: {
+        [key: string]: number;
+      };
+      /** Delivery Counts */
+      delivery_counts: {
+        [key: string]: number;
+      };
+      /** Command Reply Counts */
+      command_reply_counts: {
+        [key: string]: number;
+      };
+      /** Oldest Pending At */
+      oldest_pending_at: string | null;
+      /** Active Recipients */
+      active_recipients: number;
+      /** Enabled Recipients */
+      enabled_recipients: number;
+      /** Auth Incident Active */
+      auth_incident_active: boolean;
+      /** Recent Errors */
+      recent_errors: components["schemas"]["TelegramDeliveryErrorSummary"][];
+    };
+    /** TelegramRecipientPreferenceRequest */
+    TelegramRecipientPreferenceRequest: {
+      /**
+       * Timezone
+       * @default Europe/Kaliningrad
+       */
+      timezone: string;
+      /**
+       * Min Severity
+       * @default warning
+       * @enum {string}
+       */
+      min_severity: "ok" | "warning" | "critical" | "unknown";
+      /** Quiet Hours Start */
+      quiet_hours_start?: string | null;
+      /** Quiet Hours End */
+      quiet_hours_end?: string | null;
+      /** Digest Local Time */
+      digest_local_time?: string | null;
+      /** Categories */
+      categories?: {
+        [key: string]:
+          | "off"
+          | "inherit"
+          | "ok"
+          | "warning"
+          | "critical"
+          | "unknown";
+      };
+      /**
+       * Is Enabled
+       * @default true
+       */
+      is_enabled: boolean;
+    };
+    /** TelegramRecipientPreferenceResponse */
+    TelegramRecipientPreferenceResponse: {
+      /**
+       * Timezone
+       * @default Europe/Kaliningrad
+       */
+      timezone: string;
+      /**
+       * Min Severity
+       * @default warning
+       * @enum {string}
+       */
+      min_severity: "ok" | "warning" | "critical" | "unknown";
+      /** Quiet Hours Start */
+      quiet_hours_start?: string | null;
+      /** Quiet Hours End */
+      quiet_hours_end?: string | null;
+      /** Digest Local Time */
+      digest_local_time?: string | null;
+      /** Categories */
+      categories?: {
+        [key: string]:
+          | "off"
+          | "inherit"
+          | "ok"
+          | "warning"
+          | "critical"
+          | "unknown";
+      };
+      /**
+       * Is Enabled
+       * @default true
+       */
+      is_enabled: boolean;
+      /** Recipient Id */
+      recipient_id: string;
+      /** Updated At */
+      updated_at?: string | null;
+    };
+    /**
+     * TelegramRecipientResponse
+     * @description Одна строка telegram_recipients для GET /settings/telegram/recipients.
+     */
+    TelegramRecipientResponse: {
+      /** Id */
+      id: string;
+      /** Chat Id */
+      chat_id: number;
+      /** Username */
+      username?: string | null;
+      /** Role */
+      role: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+    };
+    /**
+     * TelegramRecipientsListResponse
+     * @description Список получателей для GET /settings/telegram/recipients.
+     */
+    TelegramRecipientsListResponse: {
+      /** Recipients */
+      recipients: components["schemas"]["TelegramRecipientResponse"][];
+      /** Total */
+      total: number;
+    };
+    /**
+     * TelegramSettingsResponse
+     * @description Ответ на GET /settings/telegram — публичные поля без bot_token_encrypted.
+     */
+    TelegramSettingsResponse: {
+      /**
+       * Is Authorized
+       * @default false
+       */
+      is_authorized: boolean;
+      /** Bot Username */
+      bot_username?: string | null;
+      /** Auth Deep Link */
+      auth_deep_link?: string | null;
+      /** Activation Command */
+      activation_command?: string | null;
+      /** Auth Invite Expires At */
+      auth_invite_expires_at?: string | null;
+      /** Web App Url */
+      web_app_url?: string | null;
+      /** Menu Sync State */
+      menu_sync_state?: ("synced" | "incomplete") | null;
+    };
+    /**
+     * TelegramTokenRequest
+     * @description Тело PUT /settings/telegram/token — новый токен бота в открытом виде.
+     */
+    TelegramTokenRequest: {
+      /**
+       * Bot Token
+       * @description Telegram Bot API токен
+       */
+      bot_token: string;
+    };
+    /**
+     * TelegramWebAppUrlRequest
+     * @description Тело PUT /settings/telegram/web-app-url — URL Mini App (пусто = очистить).
+     */
+    TelegramWebAppUrlRequest: {
+      /**
+       * Web App Url
+       * @description HTTPS-URL Mini App; пусто/None — использовать .env
+       */
+      web_app_url?: string | null;
+    };
+    /**
+     * TelegramWebhookUpdate
+     * @description Minimum Bot API update envelope; unknown fields remain durable verbatim.
+     */
+    TelegramWebhookUpdate: {
+      /** Update Id */
+      update_id: number;
+    } & {
+      [key: string]: unknown;
+    };
+    /**
+     * TmaAuthRequest
+     * @description Тело POST /tma/auth.
+     */
+    TmaAuthRequest: {
+      /**
+       * Init Data
+       * @description Telegram WebApp initData (raw query string)
+       */
+      init_data: string;
+    };
+    /**
+     * TmaAuthResponse
+     * @description Ответ авторизации: сессионный токен + роль recipient'а.
+     */
+    TmaAuthResponse: {
+      /** Token */
+      token: string;
+      /** Role */
+      role: string;
+    };
+    /**
+     * TmaMeResponse
+     * @description Кто я — для проверки сессии фронтом (под guard).
+     */
+    TmaMeResponse: {
+      /** Telegram User Id */
+      telegram_user_id: number;
+      /** Role */
+      role: string;
+    };
+    /**
+     * TmaNavigationResolveRequest
+     * @description Opaque one-time capability received through start_param or the Mini App URL.
+     */
+    TmaNavigationResolveRequest: {
+      /** Token */
+      token: string;
+    };
+    /** TmaNavigationResolveResponse */
+    TmaNavigationResolveResponse: {
+      /**
+       * Target Kind
+       * @enum {string}
+       */
+      target_kind: "ad" | "action" | "incident";
+      /** Target Id */
+      target_id: string;
+    };
+    /**
+     * ToolCallOut
+     * @description След вызова инструмента — фронт показывает «что ассистент проверял».
+     */
+    ToolCallOut: {
+      /** Name */
+      name: string;
+      /** Error */
+      error?: string | null;
+    };
+    /**
+     * UploadConceptsOut
+     * @description Ответ загрузки концептов: id временной папки + список файлов.
+     */
+    UploadConceptsOut: {
+      /** Upload Id */
+      upload_id: string;
+      /** Upload Dir */
+      upload_dir: string;
+      /** Concepts */
+      concepts: components["schemas"]["UploadedConceptOut"][];
+      /** Added Refs */
+      added_refs: string[];
+      /** Total Bytes */
+      total_bytes: number;
+    };
+    /**
+     * UploadedConceptOut
+     * @description Метаданные одного загруженного концепта (превью для UI).
+     */
+    UploadedConceptOut: {
+      /** Ref */
+      ref: string;
+      /** Original Name */
+      original_name: string;
+      /** Size Bytes */
+      size_bytes: number;
+      /** Content Type */
+      content_type?: string | null;
+    };
+    /**
+     * ValidateIn
+     * @description Запрос dry-run валидации конфига.
+     *
+     *     `config` — единственная каноническая плоская форма фронта (`CampaignConfigIn`).
+     */
+    ValidateIn: {
+      config: components["schemas"]["CampaignConfigIn"];
+    };
+    /**
+     * ValidatePlanOut
+     * @description Результат validate: число объектов + нейминг без создания.
+     */
+    ValidatePlanOut: {
+      /** Offer Code */
+      offer_code: string;
+      /**
+       * Creation Policy
+       * @constant
+       */
+      creation_policy: "all_paused";
+      /** Copies Per Concept */
+      copies_per_concept: number;
+      /** Campaign Count */
+      campaign_count: number;
+      /** Adset Count */
+      adset_count: number;
+      /** Ad Count */
+      ad_count: number;
+      /** Campaigns */
+      campaigns: components["schemas"]["CampaignPlanOut"][];
+      /** Start Date */
+      start_date: string;
+      /** Start Time */
+      start_time: string;
+      /** Timezone Name */
+      timezone_name: string;
+      /** Currency */
+      currency: string;
+      /**
+       * Account Context Observed At
+       * Format: date-time
+       */
+      account_context_observed_at: string;
+    };
+    /**
+     * VisionEnsureCdpResponse
+     * @description Ответ на POST /vision/ensure-cdp для platform desktop healer.
+     *
+     *     Контракт: ok|status|action|message. Эндпоинт никогда не падает 5xx; при
+     *     недоступности browser-agent возвращает ok=false с пояснением.
+     */
+    VisionEnsureCdpResponse: {
+      /**
+       * Ok
+       * @default true
+       */
+      ok: boolean;
+      /**
+       * Status
+       * @default UNKNOWN
+       */
+      status: string;
+      /**
+       * Action
+       * @default none
+       */
+      action: string;
+      /**
+       * Message
+       * @default
+       */
+      message: string;
+    };
+    /**
+     * VisionReconnectResponse
+     * @description Ответ на POST /vision/reconnect.
+     */
+    VisionReconnectResponse: {
+      /**
+       * Status
+       * @default reconnected
+       */
+      status: string;
+    };
+    /**
+     * VisionSettingsResponse
+     * @description Public Vision configuration plus a direct browser-agent channel probe.
+     */
+    VisionSettingsResponse: {
+      /**
+       * Has Token
+       * @default false
+       */
+      has_token: boolean;
+      /** Profile Id */
+      profile_id?: string | null;
+      /** Configuration Revision */
+      configuration_revision?: string | null;
+      /**
+       * Channel Status
+       * @default UNKNOWN
+       * @enum {string}
+       */
+      channel_status: "READY" | "DEGRADED" | "UNAVAILABLE" | "UNKNOWN";
+      /** Channel Message */
+      channel_message?: string | null;
+      /** Required Browser Contract Version */
+      required_browser_contract_version: number;
+      /** Browser Contract Version */
+      browser_contract_version?: number | null;
+      /**
+       * Browser Contract Compatible
+       * @default false
+       */
+      browser_contract_compatible: boolean;
+      /** Browser Session Id */
+      browser_session_id?: string | null;
+      /** Live Profile Id */
+      live_profile_id?: string | null;
+      /**
+       * Graph Probe Performed
+       * @default false
+       */
+      graph_probe_performed: boolean;
+      /**
+       * Graph Probe Ok
+       * @default false
+       */
+      graph_probe_ok: boolean;
+    };
+    /**
+     * VisionSettingsUpdateRequest
+     * @description Тело PUT /settings/vision — обновить x_token / profile_id.
+     */
+    VisionSettingsUpdateRequest: {
+      /** X Token */
+      x_token?: string | null;
+      /** Profile Id */
+      profile_id?: string | null;
+    };
+  };
+  responses: never;
+  parameters: never;
+  requestBodies: never;
+  headers: never;
+  pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    healthz_healthz_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
-                };
-            };
-        };
-    };
-    readyz_readyz_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-        };
-    };
-    system_readyz_system_readyz_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SystemReadinessResponse"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SystemReadinessResponse"];
-                };
-            };
-        };
-    };
-    metrics_metrics_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    receive_adsetpro_get_api_v1_postback_adsetpro_get: {
-        parameters: {
-            query?: {
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    receive_adsetpro_postback_api_v1_postback_adsetpro_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Postback-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    snooze_ad_api_dashboard_ads__fb_ad_id__snooze_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                fb_ad_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SnoozeIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SnoozeResultOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    bulk_snooze_ads_api_dashboard_ads_bulk_snooze_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BulkSnoozeIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BulkSnoozeResultOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    bulk_delete_ads_api_dashboard_ads_bulk_delete_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BulkDeleteAdsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BulkDeleteAdsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_ad_timeline_api_ads__fb_ad_id__timeline_get: {
-        parameters: {
-            query?: {
-                /** @description ISO-8601 начало окна */
-                from_iso?: string | null;
-                /** @description ISO-8601 конец окна */
-                to_iso?: string | null;
-                /** @description Включить метрики */
-                include_metrics?: boolean;
-                /** @description Включить алерты */
-                include_alerts?: boolean;
-                /** @description Включить задачи */
-                include_tasks?: boolean;
-            };
-            header?: never;
-            path: {
-                fb_ad_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdTimelineResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    preview_adset_duplicate_api_tools_adset_duplicates_preview_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AdsetDuplicatePreviewIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdsetDuplicatePreviewOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    launch_adset_duplicate_api_tools_adset_duplicates_launch_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AdsetDuplicateLaunchIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdsetDuplicateLaunchOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_adset_duplicate_status_api_tools_adset_duplicates__task_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdsetDuplicateStatusOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    ai_analyze_api_ai_analyze_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AIAnalyzeRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AIAnalyzeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    ai_chat_api_ai_chat_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AIChatRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AIChatResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    ai_pulse_api_ai_pulse_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AIPulseResponse"];
-                };
-            };
-        };
-    };
-    get_analytics_performance_api_analytics_performance_get: {
-        parameters: {
-            query?: {
-                period?: "today" | "custom";
-                from_iso?: string | null;
-                to_iso?: string | null;
-                level?: "campaign" | "adset" | "ad";
-                parent_id?: string | null;
-                account_id?: string | null;
-                offer_id?: string | null;
-                campaign_id?: string | null;
-                search?: string | null;
-                sort?: "name" | "spend" | "clicks" | "registrations" | "ftds" | "confirmed_deposits" | "revenue" | "base_delta";
-                direction?: "asc" | "desc";
-                page?: number;
-                page_size?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AnalyticsPerformanceOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_analytics_live_budget_api_analytics_live_budget_get: {
-        parameters: {
-            query?: {
-                account_id?: string | null;
-                offer_id?: string | null;
-                campaign_id?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AnalyticsLiveBudgetSeriesOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_analytics_daypart_api_analytics_daypart_get: {
-        parameters: {
-            query?: {
-                from_iso?: string | null;
-                to_iso?: string | null;
-                timezone?: string;
-                account_id?: string | null;
-                offer_id?: string | null;
-                campaign_id?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AnalyticsDaypartOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_auto_enable_disabled_api_dashboard_auto_enable_disabled_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AutoEnableDisabledOut"][];
-                };
-            };
-        };
-    };
-    disable_auto_enable_api_dashboard_auto_enable_disabled__fb_ad_id__post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                fb_ad_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["AutoEnableDisabledIn"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AutoEnableDisabledOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    enable_auto_enable_api_dashboard_auto_enable_disabled__fb_ad_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                fb_ad_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_presets_api_tools_campaigns_presets_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresetOut"][];
-                };
-            };
-        };
-    };
-    create_preset_api_tools_campaigns_presets_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PresetIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresetOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_preset_api_tools_campaigns_presets__preset_id__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                preset_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PresetIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresetOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_preset_api_tools_campaigns_presets__preset_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                preset_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    upload_concepts_api_tools_campaigns_upload_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_upload_concepts_api_tools_campaigns_upload_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UploadConceptsOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    validate_config_api_tools_campaigns_validate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ValidateIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ValidatePlanOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    launch_campaign_api_tools_campaigns_launch_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LaunchIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LaunchOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_runs_api_tools_campaigns_runs_get: {
-        parameters: {
-            query?: {
-                /** @description Фильтр по статусу run */
-                status?: string | null;
-                limit?: number;
-                offset?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunSummaryOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_run_api_tools_campaigns_runs__run_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunDetailOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    clone_run_api_tools_campaigns_runs__run_id__clone_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LaunchOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cancel_run_api_tools_campaigns_runs__run_id__cancel_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunSummaryOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cleanup_run_api_tools_campaigns_runs__run_id__cleanup_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CleanupOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_ad_account_timezone_api_campaigns_ad_account_timezone_get: {
-        parameters: {
-            query: {
-                /** @description ID рекламного кабинета (с префиксом act_ или без — нормализуется). */
-                act_id: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdAccountTimezoneResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_ad_account_pages_api_campaigns_ad_account_pages_get: {
-        parameters: {
-            query: {
-                /** @description ID рекламного кабинета (с префиксом act_ или без — нормализуется). */
-                act_id: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdAccountPagesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_ad_snapshots_api_dashboard_ads_get: {
-        parameters: {
-            query?: {
-                /** @description CSV alert_state'ов (warning_sent,stop_sent,...) */
-                alert_state?: string | null;
-                /** @description CSV Meta-ID объявлений */
-                fb_ad_ids?: string | null;
-                include_inactive?: boolean;
-                limit?: number;
-                offset?: number;
-                /** @description Keyset-cursor для виртуализации 1000+ строк. Если задан — offset игнорируется. Получается из заголовка X-Next-Cursor предыдущего ответа. */
-                cursor?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdSnapshotOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_alert_events_api_dashboard_alerts_get: {
-        parameters: {
-            query?: {
-                /** @description warning | stop */
-                stage?: string | null;
-                /** @description Meta-ID объявления */
-                fb_ad_id?: string | null;
-                /** @description ISO-8601 начало окна */
-                from_iso?: string | null;
-                /** @description ISO-8601 конец окна */
-                to_iso?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AlertEventOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_incidents_api_dashboard_incidents_get: {
-        parameters: {
-            query?: {
-                /** @description warning | stop | all */
-                stage?: string;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IncidentOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_dashboard_performance_api_dashboard_performance_get: {
-        parameters: {
-            query?: {
-                /** @description Окно агрегации (дни) */
-                days?: number;
-                limit_campaigns?: number;
-                limit_offers?: number;
-                limit_rules?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DashboardPerformanceOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_dashboard_stats_api_dashboard_stats_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DashboardStatsOut"];
-                };
-            };
-        };
-    };
-    get_dashboard_batch_api_dashboard_batch_get: {
-        parameters: {
-            query?: {
-                incidents_limit?: number;
-                alerts_limit?: number;
-                disable_limit?: number;
-                enable_limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DashboardBatchOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_spend_history_api_dashboard_spend_history_get: {
-        parameters: {
-            query?: {
-                /** @description Окно в часах, max=168 (7d) */
-                hours?: number;
-                /** @description Фильтр по Meta ID ad'а */
-                fb_ad_id?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SpendPointOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_chart_data_api_dashboard_chart_data_get: {
-        parameters: {
-            query?: {
-                /** @description Окно в часах, max=720 (30d) */
-                hours?: number;
-                /** @description hour | day */
-                bucket?: string;
-                /** @description Окно с 00:00 текущих суток кабинета (TZ аккаунта) вместо скользящего hours */
-                cabinet_day?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChartBucketOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_disable_tasks_api_dashboard_disable_tasks_get: {
-        parameters: {
-            query?: {
-                /** @description CSV UPPERCASE статусов (PENDING,RUNNING,FAILED,...) */
-                status?: string | null;
-                /** @description Фильтр по Meta ad ID */
-                fb_ad_id?: string | null;
-                limit?: number;
-                offset?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskQueueRowOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_disable_task_api_dashboard_disable_tasks_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DisableTaskCreateIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskQueueRowOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    bulk_create_disable_tasks_api_dashboard_disable_tasks_bulk_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BulkDisableIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BulkDisableResultOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    retry_disable_task_api_dashboard_disable_tasks__task_id__retry_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskQueueRowOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cancel_disable_task_api_dashboard_disable_tasks__task_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_enable_recommendations_api_dashboard_enable_recommendations_get: {
-        parameters: {
-            query?: {
-                /** @description PENDING (без promoted_to_task_id) | PROMOTED (с promoted_to_task_id) */
-                status?: string | null;
-                limit?: number;
-                offset?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EnableRecommendationRowOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    confirm_enable_recommendation_api_dashboard_enable_recommendations__rec_id__enable_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                rec_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["EnableRecommendationConfirmIn"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskQueueRowOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_enable_tasks_api_dashboard_enable_tasks_get: {
-        parameters: {
-            query?: {
-                /** @description CSV UPPERCASE статусов (PENDING,RUNNING,FAILED,...) */
-                status?: string | null;
-                /** @description Фильтр по Meta ad ID */
-                fb_ad_id?: string | null;
-                limit?: number;
-                offset?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EnableTaskRowOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_fake_deposits_api_fake_deposits_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FakeDepositOut"][];
-                };
-            };
-        };
-    };
-    upsert_fake_deposit_api_fake_deposits__fb_ad_id__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                fb_ad_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FakeDepositUpsertIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FakeDepositOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_fake_deposit_api_fake_deposits__fb_ad_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                fb_ad_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_health_details_api_health_details_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HealthDetailsResponse"];
-                };
-            };
-        };
-    };
-    get_history_summary_api_history_summary_get: {
-        parameters: {
-            query?: {
-                /** @description ISO-8601 начало периода */
-                from_iso?: string | null;
-                /** @description ISO-8601 конец периода */
-                to_iso?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HistorySummaryOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_history_timeline_api_history_timeline_get: {
-        parameters: {
-            query?: {
-                from_iso?: string | null;
-                to_iso?: string | null;
-                campaign_id?: string | null;
-                fb_ad_id?: string | null;
-                stage?: string | null;
-                task_status?: string | null;
-                search?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HistoryTimelineItem"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_history_campaigns_api_history_campaigns_get: {
-        parameters: {
-            query?: {
-                from_iso?: string | null;
-                to_iso?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HistoryCampaignOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_history_events_api_history_events_get: {
-        parameters: {
-            query?: {
-                from_iso?: string | null;
-                to_iso?: string | null;
-                /** @description UUID кампании для drill-down */
-                campaign_id?: string | null;
-                /** @description fb_ad_id конкретного объявления */
-                fb_ad_id?: string | null;
-                /** @description warning | stop */
-                stage?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HistoryEventOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_history_offers_api_history_offers_get: {
-        parameters: {
-            query?: {
-                from_iso?: string | null;
-                to_iso?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HistoryOfferOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_history_ads_api_history_ads_get: {
-        parameters: {
-            query?: {
-                from_iso?: string | null;
-                to_iso?: string | null;
-                /** @description UUID кампании (фильтр) */
-                campaign_id?: string | null;
-                /** @description UUID оффера (фильтр) */
-                offer_id?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HistoryAdOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_observer_status_api_observer_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObserverStatusResponse"];
-                };
-            };
-        };
-    };
-    list_scan_runs_api_observer_scan_runs_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                /** @description all | errors | slow | with_alerts */
-                filter?: string;
-                /** @description ISO-8601 начало окна */
-                from_iso?: string | null;
-                /** @description ISO-8601 конец окна */
-                to_iso?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScanRunsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_new_cabinet_day_api_observer_start_new_cabinet_day_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StartCabinetDayResponse"];
-                };
-            };
-        };
-    };
-    restart_observer_api_observer_restart_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RestartSignalResponse"];
-                };
-            };
-        };
-    };
-    list_offers_api_offers_get: {
-        parameters: {
-            query?: {
-                include_inactive?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfferOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_offer_api_offers_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OfferCreateIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfferOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    compare_offers_api_offers_compare_get: {
-        parameters: {
-            query?: {
-                /** @description Период агрегации (1-90 дней) */
-                days?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfferCompareRow"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_offer_api_offers__offer_id__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                offer_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OfferUpdateIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfferOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_offer_api_offers__offer_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                offer_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_offer_rules_api_offers__offer_id__rules_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                offer_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfferRuleOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    upsert_offer_rules_api_offers__offer_id__rules_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                offer_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OfferRuleUpsertIn"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfferRuleOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    preview_rule_thresholds_api_offers_rules_preview_get: {
-        parameters: {
-            query: {
-                /** @description CPA ($) для расчёта порогов */
-                cpa: number | string;
-                stop_percent_of_rule?: number | string;
-                warning_percent_of_stop?: number | string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RulePreviewOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_cabinet_autostart_api_settings_cabinet_autostart_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CabinetAutostartResponse"];
-                };
-            };
-        };
-    };
-    put_cabinet_autostart_api_settings_cabinet_autostart_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CabinetAutostartPutRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CabinetAutostartResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_observer_settings_api_settings_observer_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObserverSettingsResponse"];
-                };
-            };
-        };
-    };
-    put_observer_settings_api_settings_observer_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ObserverSettingsPutRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObserverSettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    patch_observer_scanning_api_settings_observer_scanning_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScanningToggleRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObserverSettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    patch_observer_owner_tag_api_settings_observer_owner_tag_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OwnerTagPatchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObserverSettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    patch_observer_auto_enable_api_settings_observer_auto_enable_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AutoEnableToggleRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObserverSettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_observer_campaigns_api_settings_observer_campaigns_get: {
-        parameters: {
-            query?: {
-                /** @description Показать и старые кампании (дата в имени старше 14 дней). По умолчанию старьё скрыто, кроме выбранных в allowlist. */
-                include_stale?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CampaignOption"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    patch_observer_campaigns_api_settings_observer_campaigns_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CampaignAllowlistRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ObserverSettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post: {
-        parameters: {
-            query?: {
-                /** @description L10: числовой ID кабинета — резолв из вкладки этого кабинета. Пусто → текущая primary-вкладка (legacy). */
-                ad_account_id?: string | null;
-                /** @description Показать и старые кампании (как в GET /campaigns). */
-                include_stale?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CampaignOption"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    post_scan_now_api_settings_observer_scan_now_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScanNowResponse"];
-                };
-            };
-        };
-    };
-    get_telegram_settings_api_settings_telegram_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramSettingsResponse"];
-                };
-            };
-        };
-    };
-    delete_telegram_settings_api_settings_telegram_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramSettingsResponse"];
-                };
-            };
-        };
-    };
-    put_telegram_web_app_url_api_settings_telegram_web_app_url_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TelegramWebAppUrlRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramSettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    put_telegram_token_api_settings_telegram_token_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TelegramTokenRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramSettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_telegram_recipients_api_settings_telegram_recipients_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramRecipientsListResponse"];
-                };
-            };
-        };
-    };
-    delete_telegram_recipient_api_settings_telegram_recipients__recipient_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                recipient_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramRecipientResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    post_telegram_invite_api_settings_telegram_recipients_invite_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramInviteResponse"];
-                };
-            };
-        };
-    };
-    post_telegram_owner_invite_api_settings_telegram_owner_invite_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TelegramInviteResponse"];
-                };
-            };
-        };
-    };
-    get_vision_settings_api_settings_vision_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VisionSettingsResponse"];
-                };
-            };
-        };
-    };
-    put_vision_settings_api_settings_vision_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["VisionSettingsUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VisionSettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    post_vision_reconnect_api_vision_reconnect_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VisionReconnectResponse"];
-                };
-            };
-        };
-    };
-    post_vision_ensure_cdp_api_vision_ensure_cdp_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VisionEnsureCdpResponse"];
-                };
-            };
-        };
-    };
-    get_stats_today_api_stats_today_get: {
-        parameters: {
-            query?: {
-                /** @description Разрез: offer | campaign (опционально) */
-                breakdown?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StatsTodayOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_stats_period_api_stats_period_get: {
-        parameters: {
-            query?: {
-                /** @description ISO-8601 начало периода */
-                from_iso?: string | null;
-                /** @description ISO-8601 конец периода */
-                to_iso?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StatsPeriodOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    tma_auth_api_tma_auth_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TmaAuthRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TmaAuthResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    tma_me_api_tma_me_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TmaMeResponse"];
-                };
-            };
-        };
-    };
-    tma_ad_detail_api_tma_ads__fb_ad_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                fb_ad_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TmaAdDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    tma_disable_ad_api_tma_ads__fb_ad_id__disable_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                fb_ad_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TmaDisableRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TmaDisableResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    tma_snooze_ad_api_tma_ads__fb_ad_id__snooze_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                fb_ad_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TmaSnoozeRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TmaSnoozeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    tma_claim_ad_api_tma_ads__fb_ad_id__claim_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                fb_ad_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TmaClaimResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    tma_get_cabinet_autostart_api_tma_cabinet_autostart_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CabinetAutostartResponse"];
-                };
-            };
-        };
-    };
-    tma_put_cabinet_autostart_api_tma_cabinet_autostart_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CabinetAutostartPutRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CabinetAutostartResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    creative_uniquify_api_tools_creative_uniquify_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_creative_uniquify_api_tools_creative_uniquify_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CreativeUniquifyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    open_creative_folder_api_tools_creative_uniquify_open_folder_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OpenFolderRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_campaign_creative_folders_api_tools_campaign_create_folders_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CampaignFolderItem"][];
-                };
-            };
-        };
-    };
-    build_campaign_plan_api_tools_campaign_create_plan_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CampaignPlanRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CampaignScriptPlanOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
+  healthz_healthz_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            [key: string]: string;
+          };
+        };
+      };
+    };
+  };
+  readyz_readyz_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            [key: string]: unknown;
+          };
+        };
+      };
+    };
+  };
+  system_readyz_system_readyz_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SystemReadinessResponse"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SystemReadinessResponse"];
+        };
+      };
+    };
+  };
+  metrics_metrics_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": unknown;
+        };
+      };
+    };
+  };
+  receive_adsetpro_get_api_v1_postback_adsetpro_get: {
+    parameters: {
+      query?: {
+        token?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": unknown;
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  preview_adset_duplicate_api_tools_adset_duplicates_preview_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AdsetDuplicatePreviewIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdsetDuplicatePreviewOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  launch_adset_duplicate_api_tools_adset_duplicates_launch_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AdsetDuplicateLaunchIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdsetDuplicateLaunchOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_adset_duplicate_status_api_tools_adset_duplicates__task_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        task_id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdsetDuplicateStatusOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  ai_analyze_api_ai_analyze_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AIAnalyzeRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AIAnalyzeResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  ai_chat_api_ai_chat_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AIChatRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AIChatResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  ai_pulse_api_ai_pulse_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AIPulseResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  receive_alertmanager_webhook_api_v1_integrations_alertmanager_webhook_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        Authorization?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AlertmanagerWebhookPayload"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Invalid Alertmanager webhook secret */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Alertmanager webhook secret is not configured */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_analytics_performance_api_analytics_performance_get: {
+    parameters: {
+      query?: {
+        period?: "today" | "7d" | "30d" | "custom";
+        from_date?: string | null;
+        to_date?: string | null;
+        level?: "campaign" | "adset" | "ad";
+        parent_id?: string | null;
+        account_id?: string | null;
+        offer_id?: string | null;
+        campaign_id?: string | null;
+        search?: string | null;
+        sort?:
+          | "name"
+          | "spend"
+          | "clicks"
+          | "registrations"
+          | "ftds"
+          | "confirmed_deposits"
+          | "revenue"
+          | "base_delta";
+        direction?: "asc" | "desc";
+        page?: number;
+        page_size?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AnalyticsPerformanceOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_analytics_live_budget_api_analytics_live_budget_get: {
+    parameters: {
+      query?: {
+        account_id?: string | null;
+        offer_id?: string | null;
+        campaign_id?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AnalyticsLiveBudgetSeriesOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_analytics_daypart_api_analytics_daypart_get: {
+    parameters: {
+      query?: {
+        from_iso?: string | null;
+        to_iso?: string | null;
+        account_id?: string | null;
+        offer_id?: string | null;
+        campaign_id?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AnalyticsDaypartOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  consume_browser_operation_api_v1_internal_browser_operations_consume_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        "x-browser-authority-token"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["BrowserCapabilityConsumeRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  consume_browser_maintenance_api_v1_internal_browser_maintenance_consume_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        "x-browser-authority-token"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["BrowserMaintenanceCapabilityConsumeRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_campaign_draft_api_tools_campaigns_draft_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CampaignDraftEnvelope"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  put_campaign_draft_api_tools_campaigns_draft_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CampaignDraftPutIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CampaignDraftDocument"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  delete_campaign_draft_api_tools_campaigns_draft_delete: {
+    parameters: {
+      query: {
+        expected_revision: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  list_presets_api_tools_campaigns_presets_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PresetOut"][];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  create_preset_api_tools_campaigns_presets_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PresetIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PresetOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  update_preset_api_tools_campaigns_presets__preset_id__put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        preset_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PresetIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PresetOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  delete_preset_api_tools_campaigns_presets__preset_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        preset_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  upload_concepts_api_tools_campaigns_upload_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "multipart/form-data": components["schemas"]["Body_upload_concepts_api_tools_campaigns_upload_post"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["UploadConceptsOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  validate_config_api_tools_campaigns_validate_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ValidateIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ValidatePlanOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  launch_campaign_api_tools_campaigns_launch_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["LaunchIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["LaunchOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  list_runs_api_tools_campaigns_runs_get: {
+    parameters: {
+      query?: {
+        /** @description Фильтр по статусу run */
+        status?: string | null;
+        limit?: number;
+        offset?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunSummaryOut"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_run_api_tools_campaigns_runs__run_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunDetailOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  abort_run_api_tools_campaigns_runs__run_id__abort_post: {
+    parameters: {
+      query?: never;
+      header: {
+        "Idempotency-Key": string;
+      };
+      path: {
+        run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Replayed command lifecycle or immediately confirmed abort */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunCommandOut"];
+        };
+      };
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunCommandOut"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Owner role required */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Campaign run not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command is unsafe or no longer applicable */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Invalid command input */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  resume_run_api_tools_campaigns_runs__run_id__resume_post: {
+    parameters: {
+      query?: never;
+      header: {
+        "Idempotency-Key": string;
+      };
+      path: {
+        run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Replayed command lifecycle or immediately confirmed abort */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunCommandOut"];
+        };
+      };
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunCommandOut"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Owner role required */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Campaign run not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command is unsafe or no longer applicable */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Invalid command input */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_ad_account_context_api_campaigns_ad_account_context_get: {
+    parameters: {
+      query: {
+        /** @description ID рекламного кабинета (с префиксом act_ или без — нормализуется). */
+        act_id: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdAccountContextResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_ad_account_pages_api_campaigns_ad_account_pages_get: {
+    parameters: {
+      query: {
+        /** @description ID рекламного кабинета (с префиксом act_ или без — нормализуется). */
+        act_id: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdAccountPagesResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  list_desktop_transports_api_desktop_transports_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DesktopTransportsResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  launch_desktop_api_desktop_launch_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DesktopLaunchRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DesktopLaunchResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Not an active owner or invalid origin */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Desktop access is not configured */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  list_offers_api_offers_get: {
+    parameters: {
+      query?: {
+        include_inactive?: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OfferOut"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  create_offer_api_offers_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OfferCreateIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OfferOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  update_offer_api_offers__offer_id__put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        offer_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OfferUpdateIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OfferOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  deactivate_offer_api_offers__offer_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        offer_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_offer_rules_api_offers__offer_id__rules_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        offer_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OfferRuleOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  upsert_offer_rules_api_offers__offer_id__rules_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        offer_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OfferRuleUpsertIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OfferRuleOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  preview_rule_thresholds_api_offers_rules_preview_get: {
+    parameters: {
+      query: {
+        /** @description CPA as an exact major-unit decimal string */
+        cpa: string;
+        currency: string;
+        stop_percent_of_rule?: number | string;
+        warning_percent_of_stop?: number | string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RulePreviewOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_operator_events_api_operator_events_get: {
+    parameters: {
+      query?: {
+        period?: "today" | "7d" | "30d" | "custom";
+        from_date?: string | null;
+        to_date?: string | null;
+        campaign_id?: string | null;
+        fb_ad_id?: string | null;
+        stage?: string | null;
+        task_status?: string | null;
+        search?: string | null;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorEventItem"][];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_operator_snapshot_api_operator_snapshot_get: {
+    parameters: {
+      query?: {
+        account_id?: string | null;
+        window?: "today" | "24h" | "7d" | "30d";
+        timezone?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorSnapshot"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_operator_cabinet_snapshot_api_operator_cabinets__cabinet_id__snapshot_get: {
+    parameters: {
+      query?: {
+        window?: "today" | "24h" | "7d" | "30d";
+        timezone?: string | null;
+      };
+      header?: never;
+      path: {
+        cabinet_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorSnapshot"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_operator_actions_api_operator_actions_get: {
+    parameters: {
+      query?: {
+        account_id?: string | null;
+        limit?: number;
+        before_id?: number | null;
+        state?: string[];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorActionsResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_operator_ads_api_operator_ads_get: {
+    parameters: {
+      query?: {
+        account_id?: string | null;
+        search?: string | null;
+        delivery_status?: string | null;
+        severity?: ("ok" | "warning" | "critical" | "unknown") | null;
+        sort?:
+          | "name"
+          | "spend"
+          | "clicks"
+          | "registrations"
+          | "ftd"
+          | "updated";
+        direction?: "asc" | "desc";
+        page?: number;
+        page_size?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorAdsResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  pause_operator_ad_api_operator_ads__ad_id__pause_post: {
+    parameters: {
+      query?: never;
+      header: {
+        "Idempotency-Key": string;
+        "X-Operator-Principal"?: string;
+      };
+      path: {
+        ad_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OperatorAdCommandRequest"];
+      };
+    };
+    responses: {
+      /** @description Existing command lifecycle state */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorCommandResponse"];
+        };
+      };
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorCommandResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  activate_operator_ad_api_operator_ads__ad_id__activate_post: {
+    parameters: {
+      query?: never;
+      header: {
+        "Idempotency-Key": string;
+        "X-Operator-Principal"?: string;
+      };
+      path: {
+        ad_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OperatorAdCommandRequest"];
+      };
+    };
+    responses: {
+      /** @description Existing command lifecycle state */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorCommandResponse"];
+        };
+      };
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorCommandResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_operator_incidents_api_operator_incidents_get: {
+    parameters: {
+      query?: {
+        account_id?: string | null;
+        severity?: ("ok" | "warning" | "critical" | "unknown")[];
+        status?: (
+          | "open"
+          | "acknowledged"
+          | "executing"
+          | "resolved"
+          | "failed"
+        )[];
+        page?: number;
+        page_size?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorIncidentsResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_operator_incident_api_operator_incidents__incident_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        incident_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorIncidentDetailResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  acknowledge_operator_incident_api_operator_incidents__incident_id__ack_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        "X-Operator-Principal"?: string;
+      };
+      path: {
+        incident_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorIncidentAckResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_display_preference_api_operator_preferences_display_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorDisplayPreferenceResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Active owner required */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Preference store unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  put_display_preference_api_operator_preferences_display_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OperatorDisplayPreferencePutRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorDisplayPreferenceResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Active owner required */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Preference store unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_observer_settings_api_settings_observer_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ObserverSettingsResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  patch_observer_interval_api_settings_observer_interval_patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ObserverIntervalPatchRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ObserverSettingsResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  patch_observer_scanning_api_settings_observer_scanning_patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ScanningToggleRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ObserverSettingsResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  patch_observer_owner_tag_api_settings_observer_owner_tag_patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OwnerTagPatchRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ObserverSettingsResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  list_observer_campaigns_api_settings_observer_campaigns_get: {
+    parameters: {
+      query?: {
+        /** @description Показать и старые кампании (дата в имени старше 14 дней). По умолчанию старьё скрыто, кроме выбранных в allowlist. */
+        include_stale?: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CampaignOption"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  patch_observer_campaigns_api_settings_observer_campaigns_patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CampaignAllowlistRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ObserverSettingsResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post: {
+    parameters: {
+      query?: {
+        /** @description Числовой ID кабинета. Если не задан, используются кабинеты активных офферов. */
+        ad_account_id?: string | null;
+        /** @description Показать и старые кампании (как в GET /campaigns). */
+        include_stale?: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CampaignOption"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  post_scan_now_api_settings_observer_scan_now_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ScanNowResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_telegram_settings_api_settings_telegram_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TelegramSettingsResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  delete_telegram_settings_api_settings_telegram_delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TelegramSettingsResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  put_telegram_web_app_url_api_settings_telegram_web_app_url_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TelegramWebAppUrlRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TelegramSettingsResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  put_telegram_token_api_settings_telegram_token_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TelegramTokenRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TelegramSettingsResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_telegram_recipients_api_settings_telegram_recipients_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TelegramRecipientsListResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  delete_telegram_recipient_api_settings_telegram_recipients__recipient_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        recipient_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TelegramRecipientResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_telegram_recipient_preferences_api_settings_telegram_recipients__recipient_id__preferences_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        recipient_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TelegramRecipientPreferenceResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  put_telegram_recipient_preferences_api_settings_telegram_recipients__recipient_id__preferences_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        recipient_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TelegramRecipientPreferenceRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TelegramRecipientPreferenceResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_telegram_notification_diagnostics_api_settings_telegram_diagnostics_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TelegramNotificationDiagnosticsResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  post_telegram_invite_api_settings_telegram_recipients_invite_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TelegramInviteResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  post_telegram_owner_invite_api_settings_telegram_owner_invite_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TelegramInviteResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_vision_settings_api_settings_vision_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VisionSettingsResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  put_vision_settings_api_settings_vision_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["VisionSettingsUpdateRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VisionSettingsResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  post_vision_reconnect_api_vision_reconnect_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VisionReconnectResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  post_vision_ensure_cdp_api_vision_ensure_cdp_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VisionEnsureCdpResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  receive_telegram_webhook_api_v1_integrations_telegram_webhook_post: {
+    parameters: {
+      query: {
+        bot_generation: number;
+      };
+      header?: {
+        "X-Telegram-Bot-Api-Secret-Token"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TelegramWebhookUpdate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Invalid Telegram webhook secret */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Telegram webhook secret is not configured */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  tma_auth_api_tma_auth_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TmaAuthRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TmaAuthResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  tma_me_api_tma_me_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TmaMeResponse"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  resolve_tma_navigation_api_tma_navigation_resolve_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TmaNavigationResolveRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TmaNavigationResolveResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  creative_uniquify_api_tools_creative_uniquify_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "multipart/form-data": components["schemas"]["Body_creative_uniquify_api_tools_creative_uniquify_post"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreativeUniquifyResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  open_creative_folder_api_tools_creative_uniquify_open_folder_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OpenFolderRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_campaign_creative_folders_api_tools_campaign_create_folders_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CampaignFolderItem"][];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  build_campaign_plan_api_tools_campaign_create_plan_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CampaignPlanRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CampaignScriptPlanOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
 }

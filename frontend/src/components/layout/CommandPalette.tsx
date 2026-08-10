@@ -2,7 +2,7 @@
  * CommandPalette (⌘K) — быстрая навигация и поиск.
  *
  * - Открытие: ⌘K / Ctrl+K (глобальный listener) или клик по SearchTrigger в TopBar.
- * - Источники: статичные разделы + офферы (useOffers) + объявления (useAds), фильтр по query.
+ * - Источники: статичные разделы + офферы + серверный typed-поиск `/operator/ads`.
  * - Клавиатура: ↑/↓ перемещение, Enter — переход, Esc — закрыть (Radix).
  *
  * Рендерится один раз в Shell (всегда смонтирован — отсюда глобальный keydown).
@@ -23,7 +23,7 @@ import {
 
 import { useCommandPalette } from "@/stores/commandPalette";
 import { useOffers } from "@/lib/api/offers";
-import { useAds } from "@/lib/api/ads";
+import { useOperatorAds } from "@/lib/api/operator";
 import { cn } from "@/lib/utils/cn";
 import { truncateAdId } from "@fb/shared";
 
@@ -71,14 +71,21 @@ const PAGES = [
   },
 ] as const;
 
-export function CommandPalette() {
+interface CommandPaletteProps {
+  /** Shell owns the shortcut when the palette itself is lazy-mounted. */
+  manageShortcut?: boolean;
+}
+
+export function CommandPalette({ manageShortcut = true }: CommandPaletteProps) {
   const { open, setOpen, toggle } = useCommandPalette();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const q = query.trim().toLowerCase();
 
   // Глобальная горячая клавиша ⌘K / Ctrl+K.
   useEffect(() => {
+    if (!manageShortcut) return;
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -87,13 +94,14 @@ export function CommandPalette() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggle]);
+  }, [manageShortcut, toggle]);
 
   // Данные для поиска (включаются только при открытой палитре).
   const offersQ = useOffers();
-  const adsQ = useAds({ limit: 50, offset: 0 });
-
-  const q = query.trim().toLowerCase();
+  const adsQ = useOperatorAds(
+    { search: q.length >= 2 ? q : undefined, page: 1, page_size: 10 },
+    { enabled: open && q.length >= 2 },
+  );
 
   const items = useMemo<CommandItem[]>(() => {
     const list: CommandItem[] = [];
@@ -134,17 +142,11 @@ export function CommandPalette() {
         });
       }
 
-      const ads = (adsQ.data?.data ?? [])
-        .filter(
-          (a) =>
-            (a.ad_name ?? "").toLowerCase().includes(q) ||
-            (a.fb_ad_id ?? "").toLowerCase().includes(q),
-        )
-        .slice(0, 6);
+      const ads = (adsQ.data?.rows ?? []).slice(0, 6);
       for (const a of ads) {
         list.push({
           id: `ad:${a.fb_ad_id}`,
-          label: a.ad_name ?? truncateAdId(a.fb_ad_id),
+          label: a.name || truncateAdId(a.fb_ad_id),
           hint: a.fb_ad_id,
           group: "Объявления",
           icon: <Table size={15} />,
@@ -191,11 +193,11 @@ export function CommandPalette() {
         <Dialog.Content
           onKeyDown={onKeyDown}
           aria-describedby={undefined}
-          className="fixed left-1/2 top-[14%] -translate-x-1/2 w-[560px] max-w-[92vw] overflow-hidden rounded-[var(--radius-3)] bg-bg-1 border border-[var(--hairline-strong)] z-[60] focus:outline-none"
+          className="fixed left-1/2 top-[14%] -translate-x-1/2 w-[560px] max-w-[92vw] overflow-hidden rounded-[var(--radius-3)] bg-bg-1 border border-[var(--color-hairline-strong)] z-[60] focus:outline-none"
         >
           <Dialog.Title className="sr-only">Командная палитра</Dialog.Title>
 
-          <div className="flex items-center gap-2.5 px-4 h-12 border-b border-[var(--hairline)]">
+          <div className="flex items-center gap-2.5 px-4 h-12 border-b border-[var(--color-hairline)]">
             <Search size={16} className="text-bg-9 shrink-0" aria-hidden="true" />
             <input
               autoFocus
@@ -205,7 +207,7 @@ export function CommandPalette() {
               aria-label="Поиск"
               className="flex-1 bg-transparent outline-none text-bg-11 text-[14px] font-body placeholder:text-bg-8"
             />
-            <kbd className="font-display text-[10px] bg-bg-3 rounded-[var(--radius-1)] border border-[var(--hairline-strong)] px-[5px] py-px text-bg-9">
+            <kbd className="font-display text-[12px] bg-bg-3 rounded-[var(--radius-1)] border border-[var(--color-hairline-strong)] px-[5px] py-px text-bg-9">
               ESC
             </kbd>
           </div>
@@ -218,7 +220,7 @@ export function CommandPalette() {
             ) : (
               Object.entries(groups).map(([group, groupItems]) => (
                 <div key={group} className="mb-1">
-                  <div className="px-4 py-1.5 font-display text-[10px] uppercase tracking-[0.12em] text-bg-8">
+                  <div className="px-4 py-1.5 font-display text-[12px] uppercase tracking-[0.12em] text-bg-8">
                     {group}
                   </div>
                   {groupItems.map((it) => {
@@ -232,7 +234,7 @@ export function CommandPalette() {
                         onMouseMove={() => setActive(idx)}
                         onClick={() => it.run()}
                         className={cn(
-                          "w-full flex items-center gap-3 px-4 h-9 text-left text-[13.5px] transition-colors",
+                          "flex min-h-11 w-full items-center gap-3 px-4 text-left text-[13.5px] transition-colors",
                           "rounded-[var(--radius-2)]",
                           isActive ? "bg-bg-3 text-accent" : "text-bg-11 hover:bg-bg-2",
                         )}
@@ -242,7 +244,7 @@ export function CommandPalette() {
                         </span>
                         <span className="flex-1 truncate">{it.label}</span>
                         {it.hint && (
-                          <span className="font-display text-[11px] text-bg-8 truncate max-w-[180px]">
+                          <span className="font-display text-[12px] text-bg-8 truncate max-w-[180px]">
                             {it.hint}
                           </span>
                         )}

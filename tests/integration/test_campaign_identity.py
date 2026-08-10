@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Integration: идентичность кампании = fb_campaign_id (HIGH-3, миграция 0020).
+"""Integration: identity is scoped by ad account and Meta campaign ID.
 
 Сценарии:
 1. Одноимённые кампании РАЗНЫХ кабинетов (разные fb_campaign_id) — ДВЕ строки каталога,
    каждая со своим ad_account_id; ads цепляются каждая к своей кампании.
 2. Переименование кампании (тот же fb_campaign_id, новое имя) — строка одна, имя обновлено.
-3. Adoption: legacy-строка без fb_campaign_id получает ID при первом скане с ID
-   (дубль не создаётся).
-4. Adoption-guard: если ID уже занят другой кампанией, legacy-строка с тем же именем
-   НЕ крадёт его (ID остаётся у владельца, обе строки живы).
+3. Пустой/нечисловой fb_campaign_id отклоняется до транзакции: name-only каталог
+   больше не создаётся.
 
 Cleanup prefix-scoped (урок Round 11).
 """
@@ -47,11 +45,11 @@ async def clean_cidt(pg_engine: AsyncEngine):
 def _common(n: int, **overrides) -> dict:
     """Шаблон аргументов upsert_catalog_hierarchy."""
     base = dict(
-        fb_ad_id=f"{PFX}77{n}",
+        fb_ad_id=f"700{n}",
         ad_name=f"{PFX} ad{n}",
-        fb_adset_id=None,
+        fb_adset_id=f"800{n}",
         adset_name=f"{PFX} adset{n}",
-        fb_campaign_id=None,
+        fb_campaign_id=f"900{n}",
         campaign_name=f"{PFX} campaign",
         offer_id=None,
         delivery_status="ACTIVE",
@@ -105,7 +103,7 @@ async def test_same_name_different_cabinets_two_rows(pg_engine: AsyncEngine, cle
                 {"p": f"{PFX}%"},
             )
         ).fetchall()
-    assert [(r[0], r[1]) for r in ad_camps] == [(f"{PFX}771", "9001"), (f"{PFX}772", "9002")]
+    assert [(r[0], r[1]) for r in ad_camps] == [("7001", "9001"), ("7002", "9002")]
 
 
 # Переименование: тот же fb_campaign_id с новым именем обновляет строку, не плодит дубль.
@@ -125,48 +123,18 @@ async def test_rename_same_campaign_updates_row(pg_engine: AsyncEngine, clean_ci
     assert rows[0][1] == f"{PFX} campaign RENAMED"
 
 
-# Adoption: legacy-строка без Graph ID получает его при первом скане с ID — без дубля.
 @pytest.mark.asyncio
-async def test_legacy_row_adopts_graph_id(pg_engine: AsyncEngine, clean_cidt) -> None:
-    # Legacy-скан без ID создаёт строку с fb_campaign_id IS NULL.
-    await upsert_catalog_hierarchy(pg_engine, **_common(1), ad_account_id=None)
-    # Современный скан приносит Graph ID для того же имени.
-    await upsert_catalog_hierarchy(
-        pg_engine, **_common(1, fb_campaign_id="9009"), ad_account_id="111"
-    )
+@pytest.mark.parametrize("campaign_id", [None, "", "campaign-9001", " 9001 "])
+async def test_missing_or_noncanonical_campaign_id_is_rejected(
+    pg_engine: AsyncEngine,
+    clean_cidt,
+    campaign_id: str | None,
+) -> None:
+    with pytest.raises(ValueError, match="canonical numeric Meta campaign id"):
+        await upsert_catalog_hierarchy(
+            pg_engine,
+            **_common(1, fb_campaign_id=campaign_id),
+            ad_account_id="111",
+        )
 
-    rows = await _campaigns(pg_engine)
-    assert len(rows) == 1
-    assert rows[0][0] == "9009" and rows[0][2] == "111"
-
-
-# Adoption-guard: занятый ID не крадётся legacy-строкой с совпадающим именем.
-@pytest.mark.asyncio
-async def test_adoption_guard_does_not_steal_id(pg_engine: AsyncEngine, clean_cidt) -> None:
-    # Кампания с ID 9001 уже существует (кабинет 111).
-    await upsert_catalog_hierarchy(
-        pg_engine, **_common(1, fb_campaign_id="9001"), ad_account_id="111"
-    )
-    # Legacy-строка с тем же именем без ID (исторический скан).
-    await upsert_catalog_hierarchy(pg_engine, **_common(2), ad_account_id=None)
-    assert len(await _campaigns(pg_engine)) == 2
-
-    # Повторный скан кампании 9001: adoption-guard не должен красть ID у владельца
-    # и не должен ломать upsert (UNIQUE violation).
-    await upsert_catalog_hierarchy(
-        pg_engine, **_common(1, fb_campaign_id="9001"), ad_account_id="111"
-    )
-
-    rows = await _campaigns(pg_engine)
-    assert len(rows) == 2
-    assert sum(1 for r in rows if r[0] == "9001") == 1
-
-
-# Fallback без ID: повторный скан того же имени переиспользует строку (старое поведение).
-@pytest.mark.asyncio
-async def test_fallback_without_id_reuses_row(pg_engine: AsyncEngine, clean_cidt) -> None:
-    await upsert_catalog_hierarchy(pg_engine, **_common(1), ad_account_id="111")
-    await upsert_catalog_hierarchy(pg_engine, **_common(1), ad_account_id="111")
-
-    rows = await _campaigns(pg_engine)
-    assert len(rows) == 1 and rows[0][2] == "111"
+    assert await _campaigns(pg_engine) == []

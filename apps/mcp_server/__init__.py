@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
-"""MCP-сервер для FB Stop Bot.
+"""MCP-сервер для FB Agent.
 
 Экспонирует наши AI tools и набор JSON-снимков как ресурсы через
 Model Context Protocol (https://modelcontextprotocol.io). Транспорт — stdio,
 Claude Desktop сам поднимает процесс по конфигу claude_desktop_config.json.
 
 Tools регистрируются через адаптер `tool_adapter.adapt_to_mcp_tool` поверх
-`core.ai_assistant.tools.GLOBAL_REGISTRY`. DRAFT_REQUIRED tools получают
-префикс в description, чтобы LLM понимал — нужен дополнительный шаг
-подтверждения в Telegram.
+`core.ai_assistant.tools.GLOBAL_REGISTRY`.
 """
 
 from __future__ import annotations

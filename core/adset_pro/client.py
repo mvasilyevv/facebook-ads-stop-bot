@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AdsetProClient — async MCP-клиент трекера AdSet.pro.
 
-Архитектура (см. META_INTEGRATION_PLAN.md §4.4 / Этап 6):
+Архитектура:
 - AdSet.pro — независимый от Vision канал post-click статистики.
 - **Реальный API — это MCP-сервер `platform-stats-mcp`** (verify 2026-05-27):
   - base_url: https://adset.pro
@@ -113,9 +113,7 @@ class AdsetProClient:
         max_retries: int = 3,
     ) -> None:
         settings = get_settings()
-        self._api_key = (
-            api_key if api_key is not None else settings.adsetpro_mcp_key.get_secret_value()
-        )
+        self._api_key = api_key or ""
         self._base_url = (base_url or settings.adsetpro_base_url).rstrip("/")
         self._timeout_seconds = (
             timeout_seconds
@@ -389,8 +387,8 @@ class AdsetProClient:
         AdSet.pro может положить в ``structuredContent`` только metadata,
         а реальные строки — JSON-ом в ``content[].text``. Поэтому непустой
         structured row-list имеет приоритет; иначе ищем первый валидный
-        JSON object/array во всех text-items. Если его нет, возвращаем
-        structured object для обратной совместимости.
+        JSON object/array во всех text-items. Если строк данных нет, возвращаем
+        структурированные metadata как фактический ответ провайдера.
         """
         result = rpc_response.get("result")
         if not isinstance(result, dict):

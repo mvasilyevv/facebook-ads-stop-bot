@@ -7,7 +7,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
+import os
+import secrets
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -18,15 +23,17 @@ import grpc
 from clients.python_grpc.v1 import (
     browser_session_pb2,
     browser_session_pb2_grpc,
-    creator_pb2,
-    creator_pb2_grpc,
     scanner_pb2,
     scanner_pb2_grpc,
 )
 from core.browser.circuit_breaker import AsyncCircuitBreaker, CircuitOpenError
+from core.deadlines import bounded_timeout_seconds
+from core.meta_api.identity import require_ad_account_id
 
 logger = logging.getLogger(__name__)
 _RPC_BROWSER_CONTROL_TIMEOUT_SECONDS = 30.0
+_RPC_BROWSER_LIFECYCLE_TIMEOUT_SECONDS = 120.0
+_RPC_SCAN_TIMEOUT_SECONDS = 120.0
 _T = TypeVar("_T")
 
 
@@ -93,6 +100,8 @@ class ScanResult:
     rows: list  # list of ScannedAdRow (из core.scanner.models)
     total_passes: int
     duration_seconds: float
+    # 0 = старый producer без fail-closed metric completeness semantics.
+    metrics_contract_revision: int
     dismissed_modals: list[str] = field(default_factory=list)
     unknown_modal_artifacts: list[str] = field(default_factory=list)
     # Тайминги фаз цикла, заполненные browser-agent'ом
@@ -115,7 +124,6 @@ class BrowserAgentClient:
         await client.start()
         session_id = await client.start_browser()
         rows = await client.run_scan_cycle()
-        await client.stop_browser()
         await client.close()
     """
 
@@ -124,7 +132,6 @@ class BrowserAgentClient:
         self._channel: grpc.aio.Channel | None = None
         self._browser_stub: browser_session_pb2_grpc.BrowserSessionServiceStub | None = None
         self._scanner_stub: scanner_pb2_grpc.ScannerServiceStub | None = None
-        self._creator_stub: creator_pb2_grpc.CreatorServiceStub | None = None
         self._session_id: str | None = None
         self._cdp_port: int | None = None
         # Circuit-breaker для gRPC-вызовов к browser-agent:
@@ -146,7 +153,6 @@ class BrowserAgentClient:
         )
         self._browser_stub = browser_session_pb2_grpc.BrowserSessionServiceStub(self._channel)
         self._scanner_stub = scanner_pb2_grpc.ScannerServiceStub(self._channel)
-        self._creator_stub = creator_pb2_grpc.CreatorServiceStub(self._channel)
         logger.info("gRPC канал открыт: %s:%d", self.config.grpc_host, self.config.grpc_port)
 
     async def close(self) -> None:
@@ -171,7 +177,7 @@ class BrowserAgentClient:
         return await self.start_browser()
 
     async def start_browser(self) -> str:
-        """Запустить Vision профиль и подключиться к браузеру."""
+        """Attach a process-local session to an already-live Vision profile."""
         req = browser_session_pb2.StartBrowserRequest(
             vision_x_token=self.config.vision_x_token,
             vision_api_url=self.config.vision_api_url,
@@ -182,7 +188,7 @@ class BrowserAgentClient:
         )
         resp = await self._browser_stub.StartBrowser(
             req,
-            timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
+            timeout=bounded_timeout_seconds(_RPC_BROWSER_LIFECYCLE_TIMEOUT_SECONDS),
         )
         self._session_id = resp.session_id
         self._cdp_port = resp.profile.cdp_port
@@ -198,27 +204,6 @@ class BrowserAgentClient:
             return None
         return f"http://localhost:{self._cdp_port}"
 
-    async def disconnect_browser(self) -> None:
-        """Отключиться от браузера (не останавливая Vision профиль)."""
-        if not self._session_id:
-            return
-        await self._browser_stub.DisconnectBrowser(
-            browser_session_pb2.DisconnectBrowserRequest(session_id=self._session_id),
-            timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
-        )
-        logger.info("Браузер отключён")
-
-    async def stop_browser(self) -> None:
-        """Полностью остановить браузер и Vision профиль."""
-        if not self._session_id:
-            return
-        await self._browser_stub.StopBrowser(
-            browser_session_pb2.StopBrowserRequest(session_id=self._session_id),
-            timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
-        )
-        logger.info("Браузер остановлен")
-        self._session_id = None
-
     async def reconnect_browser(self) -> str:
         """Переподключиться к браузеру после разрыва."""
         if not self._session_id:
@@ -226,14 +211,11 @@ class BrowserAgentClient:
 
         req = browser_session_pb2.ReconnectBrowserRequest(
             session_id=self._session_id or "",
-            vision_x_token=self.config.vision_x_token,
-            vision_api_url=self.config.vision_api_url,
-            vision_profile_id=self.config.vision_profile_id,
         )
         try:
             resp = await self._browser_stub.ReconnectBrowser(
                 req,
-                timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
+                timeout=bounded_timeout_seconds(_RPC_BROWSER_LIFECYCLE_TIMEOUT_SECONDS),
             )
         except Exception as exc:
             if not _is_missing_browser_session_error(exc):
@@ -244,74 +226,93 @@ class BrowserAgentClient:
         logger.info("Браузер переподключён, session_id=%s", resp.session_id)
         return resp.session_id
 
-    async def hard_reload(self, *, bypass_cache: bool = True) -> bool:
-        """Жёсткая перезагрузка страницы Ads Manager с обходом кеша.
-
-        Возвращает True при успехе, False при ошибке (логирует причину).
-        """
-        if not self._scanner_stub or not self._session_id:
-            logger.warning("hard_reload: нет активной сессии browser-agent")
-            return False
-        req = scanner_pb2.HardReloadPageRequest(
-            session_id=self._session_id,
-            bypass_cache=bypass_cache,
+    async def recover_browser_profile_under_maintenance(
+        self,
+        *,
+        maintenance_owner: str,
+    ) -> str:
+        """Force-restart the canonical Vision profile under an exclusive DB lease."""
+        if len(maintenance_owner) != 32 or any(
+            char not in "0123456789abcdef" for char in maintenance_owner
+        ):
+            raise ValueError("valid browser maintenance owner is required")
+        capability_secret = os.environ.get(
+            "BROWSER_MAINTENANCE_CAPABILITY_SECRET",
+            "",
         )
-        try:
-            resp = await self._scanner_stub.HardReloadPage(
-                req, timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS * 2
+        if len(capability_secret) < 48:
+            raise RuntimeError("browser maintenance capability secret is unavailable")
+        capability_expires_at = int(time.time()) + 30
+        capability_nonce = secrets.token_hex(16)
+        vision_folder_id = self.config.vision_folder_id or ""
+        token_digest = hashlib.sha256(
+            self.config.vision_x_token.encode(),
+        ).hexdigest()
+        capability_payload = "\n".join(
+            (
+                "recover_browser_profile/v1",
+                self.config.vision_profile_id,
+                maintenance_owner,
+                str(capability_expires_at),
+                capability_nonce,
+                self.config.vision_api_url,
+                vision_folder_id,
+                token_digest,
             )
-        except grpc.RpcError as exc:
-            logger.warning("hard_reload: gRPC error: %s", exc)
-            return False
-        if not resp.success:
-            logger.warning("hard_reload: %s", resp.error_message)
-            return False
-        logger.info("hard_reload: success за %d мс", resp.reload_ms)
-        return True
+        ).encode()
+        capability_signature = hmac.new(
+            capability_secret.encode(),
+            capability_payload,
+            hashlib.sha256,
+        ).hexdigest()
+        req = browser_session_pb2.RecoverBrowserProfileRequest(
+            vision_x_token=self.config.vision_x_token,
+            vision_api_url=self.config.vision_api_url,
+            vision_profile_id=self.config.vision_profile_id,
+            vision_folder_id=vision_folder_id,
+            maintenance_owner=maintenance_owner,
+            capability_expires_at=capability_expires_at,
+            capability_nonce=capability_nonce,
+            capability_signature=capability_signature,
+        )
+        resp = await self._browser_stub.RecoverBrowserProfileUnderMaintenance(
+            req,
+            timeout=bounded_timeout_seconds(_RPC_BROWSER_LIFECYCLE_TIMEOUT_SECONDS),
+        )
+        self._session_id = resp.session_id
+        self._cdp_port = resp.profile.cdp_port
+        logger.info(
+            "Vision profile recovered under maintenance, session_id=%s",
+            resp.session_id,
+        )
+        return resp.session_id
 
     async def list_campaigns(
-        self, *, owner_tag: str = "", ad_account_id: str = ""
+        self, *, ad_account_id: str, owner_tag: str = ""
     ) -> list[dict[str, str]]:
         """Live-список кампаний по owner_tag (через Graph campaigns edge, мимо allowlist).
 
-        Возвращает [{"id": ..., "name": ...}, ...]. При ошибке — пустой список (не
-        бросает). session_id не требуется: browser-agent сам берёт активную ads-сессию
-        observer'а (getPreferredSession) с кешированным graph-токеном.
+        Возвращает [{"id": ..., "name": ...}, ...]. Ошибка канала/сессии
+        пробрасывается: unavailable нельзя превращать в подтверждённый пустой список.
+        browser-agent использует только exact process-local session_id этого клиента;
+        fallback на чужую preferred session запрещён.
 
-        ad_account_id (L10, мульти-кабинет): числовой ID кабинета (без префикса act_) —
-        browser-agent откроет/найдёт вкладку именно этого кабинета. Пусто → старое
-        поведение (текущая primary-вкладка).
+        ad_account_id: обязательный числовой ID кабинета. Текущая browser-вкладка
+        никогда не используется как неявная identity.
         """
         if not self._scanner_stub:
-            logger.warning("list_campaigns: нет gRPC-канала browser-agent")
-            return []
+            raise RuntimeError("browser-agent channel is not initialized")
+        account_id = require_ad_account_id(ad_account_id)
         req = scanner_pb2.ListCampaignsRequest(
             session_id=self._session_id or "",
             owner_tag=owner_tag or "",
-            ad_account_id=str(ad_account_id or "").replace("act_", "").strip(),
+            ad_account_id=account_id,
         )
-        try:
-            resp = await self._scanner_stub.ListCampaigns(
-                req, timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS * 2
-            )
-        except grpc.RpcError as exc:
-            logger.warning("list_campaigns: gRPC error: %s", exc)
-            return []
+        resp = await self._scanner_stub.ListCampaigns(
+            req,
+            timeout=bounded_timeout_seconds(_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS * 2),
+        )
         return [{"id": c.id, "name": c.name} for c in resp.campaigns]
-
-    async def navigate(self, url: str, wait_until: str = "domcontentloaded") -> None:
-        """Перейти на URL."""
-        await self._call_with_session_recovery(
-            "навигации",
-            lambda: self._browser_stub.Navigate(
-                browser_session_pb2.NavigateRequest(
-                    session_id=self._session_id or "",
-                    url=url,
-                    wait_until=wait_until,
-                ),
-                timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
-            ),
-        )
 
     async def open_cabinet_tabs(self, ad_account_ids: list[str]) -> list[dict]:
         """Открыть вкладки Ads Manager для кабинетов (фаза подготовки перед сканом).
@@ -320,7 +321,7 @@ class BrowserAgentClient:
         Возвращает per-cabinet результаты: [{ad_account_id, opened, url, error}].
         Ошибка одного кабинета не валит остальные (агрегируется в результат).
         """
-        ids = [str(a) for a in ad_account_ids if str(a).strip()]
+        ids = [require_ad_account_id(account_id) for account_id in ad_account_ids]
         if not ids:
             return []
         # По ~20с на кабинет (page.goto), минимум 60с — открытие нескольких вкладок дольше
@@ -333,7 +334,7 @@ class BrowserAgentClient:
                     session_id=self._session_id or "",
                     ad_account_ids=ids,
                 ),
-                timeout=timeout,
+                timeout=bounded_timeout_seconds(timeout),
             ),
         )
         return [
@@ -348,14 +349,15 @@ class BrowserAgentClient:
 
     async def run_scan_cycle(
         self,
+        *,
+        ad_account_id: str,
         max_scroll_passes: int = 50,
         do_refresh: bool = True,
         reset_scroll_first: bool = True,
         settle_delay_seconds: float = 3.0,
         campaign_ids: list[str] | None = None,
         owner_tag: str | None = None,
-        auto_recover_page: bool = True,
-        ad_account_id: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> AsyncIterator[ScanProgress | ScanResult]:
         """Запустить полный цикл сканирования (am_tabular — единственный источник).
 
@@ -364,23 +366,18 @@ class BrowserAgentClient:
         campaign_ids: allowlist кампаний для am-режима (#3); None → без фильтра по кампаниям.
         owner_tag: если campaign_ids пуст, am сам резолвит campaign.id по owner_tag (тянет
             только свой скоуп, а не весь кабинет). None/"" → без резолва.
-        auto_recover_page: self-heal Layer 2 — если browser-agent не смог сам переоткрыть
-            primary-вкладку Ads Manager (браузер/CDP мертвы) и вернул «страница недоступна»,
-            один раз эскалируем reconnect_browser() и повторяем скан. Gated флагом
-            vision_config.auto_restart_on_missing_cdp (прокидывает observer).
-        ad_account_id: мульти-кабинет — числовой ID кабинета (без act_), который сканируем;
-            browser-agent найдёт/откроет вкладку этого кабинета и сверит act из сниффа.
-            None/"" → legacy одно-кабинетный путь (текущая primary-вкладка).
+        ad_account_id: обязательный числовой ID кабинета; browser-agent открывает
+            его отдельную scan-page и сверяет act из GraphContext.
         """
         # Проверяем circuit-breaker до начала стриминга (включая переход OPEN → HALF_OPEN)
         try:
             await self._circuit_breaker.check_open()
         except CircuitOpenError as exc:
             raise BrowserUnavailableError(exc) from exc
+        account_id = require_ad_account_id(ad_account_id)
 
         yielded_any = False
         recovered_missing_session = False
-        recovered_missing_page = False
 
         while True:
             await self.ensure_browser_session()
@@ -392,13 +389,16 @@ class BrowserAgentClient:
                 settle_delay_seconds=settle_delay_seconds,
                 campaign_ids=campaign_ids or [],
                 owner_tag=owner_tag or "",
-                ad_account_id=ad_account_id or "",
+                ad_account_id=account_id,
             )
 
             stream = None
             completed = False
             try:
-                stream = self._scanner_stub.RunScanCycle(req)
+                rpc_timeout = bounded_timeout_seconds(
+                    timeout_seconds if timeout_seconds is not None else _RPC_SCAN_TIMEOUT_SECONDS
+                )
+                stream = self._scanner_stub.RunScanCycle(req, timeout=rpc_timeout)
                 async for event in stream:
                     if event.HasField("progress"):
                         p = event.progress
@@ -422,6 +422,7 @@ class BrowserAgentClient:
                             rows=rows,
                             total_passes=c.total_passes,
                             duration_seconds=c.duration_seconds,
+                            metrics_contract_revision=c.metrics_contract_revision,
                             dismissed_modals=list(c.dismissed_modals),
                             unknown_modal_artifacts=list(c.unknown_modal_artifacts),
                             phase_timings={
@@ -457,25 +458,6 @@ class BrowserAgentClient:
                     recovered_missing_session = True
                     await self._recover_missing_browser_session(exc, "сканирования")
                     continue
-                # Primary-вкладка недоступна и Layer 1 (browser-agent) не справился —
-                # эскалируем reconnect один раз и повторяем скан (gated auto_recover_page).
-                if (
-                    auto_recover_page
-                    and not yielded_any
-                    and not recovered_missing_page
-                    and _is_missing_primary_page_error(exc)
-                ):
-                    recovered_missing_page = True
-                    logger.warning(
-                        "scan: primary-страница недоступна → reconnect browser + повтор скана"
-                    )
-                    try:
-                        await self.reconnect_browser()
-                    except Exception:
-                        logger.exception("scan: reconnect после page-unavailable не удался")
-                        await self._circuit_breaker.record_failure(exc)
-                        raise
-                    continue
                 # Фиксируем транспортную ошибку в circuit-breaker (не сессионные/page сбои:
                 # page-unavailable — это живой browser-agent без вкладки, не транспортный отказ).
                 if not _is_missing_browser_session_error(
@@ -486,65 +468,6 @@ class BrowserAgentClient:
             finally:
                 if stream is not None and not completed and hasattr(stream, "cancel"):
                     stream.cancel()
-
-    async def start_recording(self, plan_name: str) -> tuple[bool, str]:
-        """Запустить запись плана через recorder в браузере."""
-        resp = await self._call_with_session_recovery(
-            "запуска recorder",
-            lambda: self._creator_stub.StartRecording(
-                creator_pb2.StartRecordingRequest(
-                    session_id=self._session_id or "",
-                    plan_name=plan_name,
-                ),
-                timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
-            ),
-        )
-        return resp.started, resp.message
-
-    async def stop_recording(self) -> tuple[bool, str, int]:
-        """Остановить запись и получить JSON-плана."""
-        resp = await self._call_with_session_recovery(
-            "остановки recorder",
-            lambda: self._creator_stub.StopRecording(
-                creator_pb2.StopRecordingRequest(session_id=self._session_id or ""),
-                timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
-            ),
-        )
-        return resp.stopped, resp.plan_json, resp.recorded_steps
-
-    async def get_recorder_status(self) -> tuple[bool, str, int]:
-        """Получить текущий статус recorder."""
-        resp = await self._call_with_session_recovery(
-            "статуса recorder",
-            lambda: self._creator_stub.GetRecorderStatus(
-                creator_pb2.GetRecorderStatusRequest(session_id=self._session_id or ""),
-                timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
-            ),
-        )
-        return resp.recording, resp.plan_name, resp.recorded_steps
-
-    async def run_plan(
-        self,
-        plan_json: str,
-        variables_json: str,
-    ) -> AsyncIterator["creator_pb2.PlanEvent"]:
-        """Запустить план через executor в браузере. Стримит PlanEvent."""
-        await self.ensure_browser_session()
-        req = creator_pb2.RunPlanRequest(
-            session_id=self._session_id or "",
-            plan_json=plan_json,
-            variables_json=variables_json,
-        )
-        stream = self._creator_stub.RunPlan(req)
-        try:
-            async for event in stream:
-                yield event
-        finally:
-            if hasattr(stream, "cancel"):
-                try:
-                    stream.cancel()
-                except Exception:
-                    pass
 
     async def _call_with_session_recovery(
         self,
@@ -649,6 +572,7 @@ def _proto_to_row(proto) -> object:
     return ScannedAdRow(
         fb_ad_id=proto.fb_ad_id,
         campaign_id=proto.campaign_id,
+        adset_id=proto.adset_id,
         campaign_name=proto.campaign_name,
         adset_name=proto.adset_name,
         ad_name=proto.ad_name,
@@ -673,13 +597,11 @@ def _proto_to_row(proto) -> object:
         cost_per_registration=_dec(proto.cost_per_registration),
         deposits=proto.deposits,
         resolved_offer_code=proto.resolved_offer_code or None,
-        # Волна 1: превью крео + метаданные адсета. getattr-фолбэк "" — устойчивость
-        # к старому pb2 без новых полей (до пересборки browser-agent).
-        creative_thumb_url=getattr(proto, "creative_thumb_url", ""),
-        creative_image_url=getattr(proto, "creative_image_url", ""),
-        adset_pixel_id=getattr(proto, "adset_pixel_id", ""),
-        adset_daily_budget=getattr(proto, "adset_daily_budget", ""),
-        adset_lifetime_budget=getattr(proto, "adset_lifetime_budget", ""),
-        adset_budget_remaining=getattr(proto, "adset_budget_remaining", ""),
-        adset_learning_stage=getattr(proto, "adset_learning_stage", ""),
+        creative_thumb_url=proto.creative_thumb_url,
+        creative_image_url=proto.creative_image_url,
+        adset_pixel_id=proto.adset_pixel_id,
+        adset_daily_budget=proto.adset_daily_budget,
+        adset_lifetime_budget=proto.adset_lifetime_budget,
+        adset_budget_remaining=proto.adset_budget_remaining,
+        adset_learning_stage=proto.adset_learning_stage,
     )

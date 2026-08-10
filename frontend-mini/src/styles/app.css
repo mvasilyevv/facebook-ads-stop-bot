@@ -1,11 +1,24 @@
 @import "tailwindcss";
 /* Единый источник токенов (@fb/shared) — тот же канон, что веб. */
 @import "../../../packages/shared/src/tokens/tokens.css";
+@import "../../../packages/operator-ui/src/styles.css";
 
 html,
 body,
 #root {
   height: 100%;
+}
+
+:root {
+  --tg-viewport-stable-height: 100dvh;
+  --tg-safe-top: env(safe-area-inset-top, 0px);
+  --tg-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --tg-safe-left: env(safe-area-inset-left, 0px);
+  --tg-safe-right: env(safe-area-inset-right, 0px);
+  --tg-content-safe-top: var(--tg-safe-top);
+  --tg-content-safe-bottom: var(--tg-safe-bottom);
+  --tg-content-safe-left: var(--tg-safe-left);
+  --tg-content-safe-right: var(--tg-safe-right);
 }
 
 body {
@@ -16,23 +29,34 @@ body {
   font-size: var(--text-body);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  /* safe-area Telegram (детали — Phase 4B на контейнерах/tab-bar) */
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-/* Slider (components/ui/Slider.tsx) — увеличенный thumb под тач (≥28px),
-   native input[type=range] по умолчанию рисует thumb 12-16px — мало для пальца. */
+* {
+  box-sizing: border-box;
+}
+
+:focus-visible {
+  scroll-margin-top: 72px;
+  scroll-margin-bottom: 88px;
+}
+
+/* The native range owns the full 44px hit box. Track pseudo-elements preserve
+   the quiet 4px visual rail without collapsing the interactive control. */
 .mini-slider {
-  height: 4px;
+  height: 44px;
   -webkit-appearance: none;
   appearance: none;
-  background: var(--color-bg-5);
+  background: transparent;
+}
+.mini-slider::-webkit-slider-runnable-track {
+  height: 4px;
   border-radius: 999px;
+  background: var(--color-bg-5);
 }
 .mini-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
+  margin-top: -12px;
   width: 28px;
   height: 28px;
   border-radius: 50%;
@@ -40,6 +64,11 @@ body {
   border: 3px solid var(--color-bg-0);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
   cursor: pointer;
+}
+.mini-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-bg-5);
 }
 .mini-slider::-moz-range-thumb {
   width: 28px;
@@ -52,4 +81,26 @@ body {
 }
 .mini-slider:disabled::-webkit-slider-thumb {
   cursor: not-allowed;
+}
+.mini-slider:disabled::-moz-range-thumb {
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid CanvasText !important;
+    outline-offset: 2px !important;
+  }
 }

@@ -10,14 +10,29 @@ from __future__ import annotations
 import uuid
 
 from core.models import Base
-from core.models.campaigns import CampaignPreset, CampaignRun
+from core.models.campaigns import CampaignDraft, CampaignPreset, CampaignRun
 from core.models.campaigns.run import CAMPAIGN_RUN_STATUSES
 
 
-# Обе таблицы зарегистрированы в Base.metadata (нужно для create_all/Alembic autogenerate).
+# Обе таблицы зарегистрированы в Base.metadata для Alembic drift-check.
 def test_tables_registered_in_metadata() -> None:
+    assert "campaign_draft" in Base.metadata.tables
     assert "campaign_preset" in Base.metadata.tables
     assert "campaign_run" in Base.metadata.tables
+
+
+def test_campaign_draft_is_singleton_bounded_and_revisioned() -> None:
+    columns = CampaignDraft.__table__.columns
+    assert columns["singleton_key"].primary_key is True
+    assert "owner" in str(columns["singleton_key"].server_default.arg)
+    assert columns["revision"].server_default is not None
+    checks = {constraint.name for constraint in CampaignDraft.__table__.constraints}
+    assert checks >= {
+        "ck_campaign_draft_singleton_owner",
+        "ck_campaign_draft_revision_positive",
+        "ck_campaign_draft_state_object",
+        "ck_campaign_draft_state_bounded",
+    }
 
 
 # CampaignPreset конструируется, name обязателен, jsonb/числовые дефолты заданы на уровне сервера.

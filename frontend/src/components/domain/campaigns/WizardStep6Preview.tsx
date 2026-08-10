@@ -1,13 +1,14 @@
 /**
- * Шаг 6 — Превью dry-run + выбор launch_state.
+ * Шаг 6 — dry-run preview неизменяемого all-paused плана.
  *
  * Вызывает POST /tools/campaigns/validate и показывает план:
  * - число кампаний / adset'ов / ads
  * - нейминг
- * - launch_state (campaign_paused / all_paused)
+ * - явный safety-инвариант: campaign/ad set/ad создаются PAUSED
  */
 
 import { type FC, useEffect } from "react";
+import { safeApiProblemMessage } from "@fb/operator-api";
 import {
   CheckCircle,
   AlertCircle,
@@ -15,10 +16,8 @@ import {
   ChevronDown,
   ChevronRight,
   ShieldCheck,
-  ShieldAlert,
 } from "lucide-react";
 import { useState } from "react";
-import { cn } from "@/lib/utils/cn";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useValidateConfig } from "@/lib/api/campaigns";
@@ -31,31 +30,7 @@ interface WizardStep6PreviewProps {
   onChange: (v: Partial<WizardPreview>) => void;
 }
 
-const LAUNCH_STATE_OPTIONS: {
-  value: "campaign_paused" | "all_paused";
-  icon: typeof ShieldCheck;
-  label: string;
-  desc: string;
-}[] = [
-  {
-    value: "campaign_paused",
-    icon: ShieldCheck,
-    label: "Кампания PAUSED, дети активны",
-    desc: "Дефолт. Спенда нет, модерация идёт. Снимаешь паузу одним тумблером — всё стартует.",
-  },
-  {
-    value: "all_paused",
-    icon: ShieldAlert,
-    label: "Всё PAUSED (кампания + adset'ы + ads)",
-    desc: "Максимальная пауза. Нужно активировать вручную на каждом уровне.",
-  },
-];
-
-export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
-  config,
-  preview,
-  onChange,
-}) => {
+export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({ config, preview, onChange }) => {
   const validateMut = useValidateConfig();
 
   // Автозапуск dry-run при монтировании шага
@@ -86,7 +61,7 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
     <div className="space-y-6">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
+        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 6 · ПРЕВЬЮ
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
@@ -106,17 +81,17 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
           <AlertCircle size={14} className="shrink-0 mt-0.5" />
           <span>
             Без концептов (нет файлов подходящего типа):{" "}
-            <span className="font-mono">{emptyBlocks.join(", ")}</span>. Вернись на шаг 5 —
-            запуск таких кампаний будет отклонён.
+            <span className="font-mono">{emptyBlocks.join(", ")}</span>. Вернись на шаг 5 — запуск
+            таких кампаний будет отклонён.
           </span>
         </div>
       )}
 
       {/* Dry-run plan */}
-      <div className="border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden">
+      <div className="border border-[var(--color-hairline)] rounded-[var(--radius-3)] overflow-hidden">
         {/* Шапка */}
-        <div className="flex items-center justify-between px-4 py-3 bg-bg-2 border-b border-[var(--hairline)]">
-          <span className="font-display text-[11px] tracking-wider uppercase text-bg-8">
+        <div className="flex items-center justify-between px-4 py-3 bg-bg-2 border-b border-[var(--color-hairline)]">
+          <span className="font-display text-[12px] tracking-wider uppercase text-bg-8">
             ПЛАН ЗАЛИВА
           </span>
           <Button
@@ -124,6 +99,7 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
             size="sm"
             onClick={refreshPlan}
             loading={validateMut.isPending}
+            className="min-h-11"
           >
             Пересчитать
           </Button>
@@ -145,9 +121,10 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
               className="flex items-center gap-2 text-[12px] text-danger bg-danger/10 border border-danger/30 rounded-[var(--radius-2)] px-3 py-2"
             >
               <AlertCircle size={13} className="shrink-0" />
-              {validateMut.error instanceof Error
-                ? validateMut.error.message
-                : "Ошибка валидации конфига"}
+              {safeApiProblemMessage(
+                validateMut.error,
+                "Не удалось подтвердить план. Проверьте контекст кабинета и повторите.",
+              )}
             </div>
           )}
 
@@ -155,46 +132,19 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
         </div>
       </div>
 
-      {/* launch_state */}
-      <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
-          СТАТУС ПРИ СОЗДАНИИ (launch_state)
-        </div>
-        <div className="space-y-2">
-          {LAUNCH_STATE_OPTIONS.map(({ value, icon: Icon, label, desc }) => {
-            const isActive = preview.launch_state === value;
-            return (
-              <button
-                key={value}
-                type="button"
-                onClick={() => onChange({ launch_state: value })}
-                className={cn(
-                  "w-full text-left p-4 rounded-[var(--radius-2)] border flex items-start gap-3 transition-all duration-[120ms]",
-                  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-                  isActive
-                    ? "bg-accent-bg border-accent"
-                    : "bg-bg-2 border-[var(--hairline)] hover:border-[var(--hairline-strong)]",
-                )}
-                aria-pressed={isActive}
-              >
-                <Icon
-                  size={18}
-                  className={cn("shrink-0 mt-0.5", isActive ? "text-accent" : "text-bg-8")}
-                />
-                <div>
-                  <div
-                    className={cn(
-                      "font-display text-[13px] font-medium mb-0.5",
-                      isActive ? "text-accent" : "text-bg-11",
-                    )}
-                  >
-                    {label}
-                  </div>
-                  <div className="text-[12px] text-bg-8">{desc}</div>
-                </div>
-              </button>
-            );
-          })}
+      <div
+        role="status"
+        className="flex items-start gap-3 rounded-[var(--radius-2)] border border-warning/35 bg-warning/10 p-4"
+      >
+        <ShieldCheck size={18} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+        <div>
+          <div className="font-display text-[13px] font-medium text-bg-11">
+            Всё создаётся на паузе
+          </div>
+          <div className="mt-1 text-[12px] text-bg-9">
+            Кампания, ad set и ad останутся PAUSED. Активация доступна только отдельным ручным
+            действием после review.
+          </div>
         </div>
       </div>
     </div>
@@ -207,7 +157,7 @@ function PlanView({ plan }: { plan: ValidatePlanOut }) {
   return (
     <div className="space-y-4">
       {/* Счётчики */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
           { label: "Кампаний", value: plan.campaign_count },
           { label: "Adset'ов", value: plan.adset_count },
@@ -216,19 +166,46 @@ function PlanView({ plan }: { plan: ValidatePlanOut }) {
         ].map(({ label, value }) => (
           <div
             key={label}
-            className="border border-[var(--hairline)] rounded-[var(--radius-2)] p-3 bg-bg-1 text-center"
+            className="border border-[var(--color-hairline)] rounded-[var(--radius-2)] p-3 bg-bg-1 text-center"
           >
             <div className="font-display text-[20px] font-medium text-bg-11">{value}</div>
-            <div className="text-[10px] text-bg-8 font-display uppercase tracking-wider mt-0.5">
+            <div className="text-[12px] text-bg-8 font-display uppercase tracking-wider mt-0.5">
               {label}
             </div>
           </div>
         ))}
       </div>
 
+      <div className="rounded-[var(--radius-2)] border border-success/30 bg-success/10 p-3">
+        <div className="flex items-center gap-2 font-display text-[12px] uppercase tracking-wider text-success">
+          <CheckCircle size={13} aria-hidden="true" />
+          Контекст кабинета подтверждён сервером
+        </div>
+        <dl className="mt-2 grid grid-cols-1 gap-x-4 gap-y-2 text-[12px] sm:grid-cols-2">
+          <div>
+            <dt className="text-bg-8">Старт</dt>
+            <dd className="mt-0.5 font-mono text-bg-11">{plan.start_time}</dd>
+          </div>
+          <div>
+            <dt className="text-bg-8">Timezone</dt>
+            <dd className="mt-0.5 text-bg-11">{plan.timezone_name}</dd>
+          </div>
+          <div>
+            <dt className="text-bg-8">Валюта</dt>
+            <dd className="mt-0.5 text-bg-11">{plan.currency}</dd>
+          </div>
+          <div>
+            <dt className="text-bg-8">Снимок Meta</dt>
+            <dd className="mt-0.5 text-bg-11">
+              {new Date(plan.account_context_observed_at).toLocaleString("ru-RU")}
+            </dd>
+          </div>
+        </dl>
+      </div>
+
       {/* Нейминг по кампаниям */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-2">
+        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-2">
           НЕЙМИНГ
         </div>
         <div className="space-y-2">
@@ -243,7 +220,7 @@ function PlanView({ plan }: { plan: ValidatePlanOut }) {
         <CheckCircle size={13} className="text-success" />
         Оффер: <span className="text-bg-11 font-medium">{plan.offer_code}</span>
         <span className="text-bg-8">·</span>
-        launch_state: <span className="text-bg-11 font-mono">{plan.launch_state}</span>
+        Политика: <span className="text-bg-11 font-mono">{plan.creation_policy}</span>
       </div>
     </div>
   );
@@ -255,11 +232,12 @@ function CampaignPlanRow({ campaign }: { campaign: CampaignPlanOut }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden">
+    <div className="border border-[var(--color-hairline)] rounded-[var(--radius-2)] overflow-hidden">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="w-full flex items-center gap-2 px-3 py-2.5 bg-bg-2 hover:bg-bg-3 transition-colors text-left"
+        className="flex min-h-11 w-full items-center gap-2 bg-bg-2 px-3 py-2.5 text-left transition-colors hover:bg-bg-3"
+        aria-expanded={expanded}
       >
         {expanded ? (
           <ChevronDown size={13} className="text-bg-8 shrink-0" />
@@ -270,27 +248,21 @@ function CampaignPlanRow({ campaign }: { campaign: CampaignPlanOut }) {
         <span className="font-mono text-[12px] text-bg-11 flex-1 truncate" title={campaign.name}>
           {campaign.name}
         </span>
-        <span className="text-[10px] text-bg-8 font-display uppercase tracking-wider shrink-0">
+        <span className="text-[12px] text-bg-8 font-display uppercase tracking-wider shrink-0">
           {campaign.adsets.length} adset
           {campaign.adsets.length !== 1 ? "s" : ""}
         </span>
       </button>
       {expanded && (
-        <div className="divide-y divide-[var(--hairline)]">
+        <div className="divide-y divide-[var(--color-hairline)]">
           {campaign.adsets.map((adset) => (
             <div key={adset.name} className="px-6 py-2 flex items-center gap-2 bg-bg-1">
-              <span className="font-mono text-[11px] text-bg-9 flex-1 truncate" title={adset.name}>
+              <span className="font-mono text-[12px] text-bg-9 flex-1 truncate" title={adset.name}>
                 {adset.name}
               </span>
-              <span className="text-[10px] text-bg-8">{adset.ad_count} ads</span>
-              <span
-                className={cn(
-                  "text-[10px] font-display uppercase tracking-wider px-1.5 py-0.5 rounded",
-                  adset.status === "ACTIVE"
-                    ? "bg-success/10 text-success"
-                    : "bg-bg-3 text-bg-8",
-                )}
-              >
+              <span className="text-[12px] text-bg-8">{adset.ad_count} ads</span>
+              <span className="inline-flex items-center gap-1 rounded bg-bg-3 px-1.5 py-0.5 font-display text-[12px] uppercase tracking-wider text-bg-8">
+                <ShieldCheck size={11} aria-hidden="true" />
                 {adset.status}
               </span>
             </div>

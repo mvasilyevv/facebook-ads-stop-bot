@@ -3,7 +3,7 @@
  * Confirm-кнопка активна только если typed === confirmWord.
  * Variants: danger (default, красная) / primary (одобрение).
  */
-import { useState } from "react";
+import { useState, type RefObject } from "react";
 import { Modal, ModalFooter } from "./Modal";
 import { Button } from "./Button";
 import { Input } from "./Input";
@@ -20,6 +20,7 @@ interface ConfirmDialogProps {
   /** danger — для деструктива, primary — для обычного approve. */
   confirmVariant?: "danger" | "primary";
   onConfirm: () => void | Promise<void>;
+  returnFocusRef?: RefObject<HTMLButtonElement | null>;
 }
 
 export function ConfirmDialog({
@@ -32,6 +33,7 @@ export function ConfirmDialog({
   cancelLabel = "Отмена",
   confirmVariant = "danger",
   onConfirm,
+  returnFocusRef,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
@@ -64,6 +66,7 @@ export function ConfirmDialog({
       title={title}
       description={description}
       size="sm"
+      returnFocusRef={returnFocusRef}
     >
       {confirmWord ? (
         <div className="mb-6">

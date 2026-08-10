@@ -37,4 +37,4 @@ make video-batch GEO=KE SLOT=CR2 BG=/path/to/clean.mp4
 Выход `out/<code>_<format>.mp4` → `scripts/video_batch.py` прогоняет через
 `core.creatives.video_uniquifier` (3 уникальные копии) в `~/Documents/FB_Agent_Creo/`.
 `code` в имени файла = `sub3` (джойн-ключ трекера) — облегчает будущий матчинг
-`Creative ↔ fb_ad_id` (см. `docs/roadmap/creative-analytics.md`).
+`Creative ↔ fb_ad_id`.

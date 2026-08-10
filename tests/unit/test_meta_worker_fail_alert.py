@@ -1,170 +1,105 @@
 # -*- coding: utf-8 -*-
-"""Финальный провал money-мутации (pause/permanent/partial) шлёт TG owner'ам."""
+"""Money-failure notifications are owned by the transactional task finalizer."""
 
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 import apps.meta_api_worker.main as mw
-from core.meta_api.schemas import MetaMutationPayload
+from core.meta_api.errors import TokenInvalidError
+from core.tasks.queue import Task
 
 
-def _payload(kind="pause_ad", target="12345"):
-    return MetaMutationPayload(mutation_kind=kind, target_id=target, params={})
-
-
-# Провал pause_ad (auto-stop) → notify_owners с money-текстом и dedup auto_stop_fail
-@pytest.mark.asyncio
-async def test_pause_fail_alerts_owner(monkeypatch):
-    spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(mw, "notify_owners", spy)
-    await mw._alert_money_fail(
-        object(),
-        AsyncMock(),
-        payload=_payload(),
-        requested_by="bot_auto_stop",
-        error="PermanentError(code=368)",
-        kind_label="pause_ad",
-    )
-    spy.assert_awaited_once()
-    kw = spy.await_args.kwargs
-    assert "12345" in kw["text"]
-    assert kw["dedup_key"] == "auto_stop_fail:12345"
-    assert kw["dedup_ttl_seconds"] == 3600
-
-
-# Не-money-мутация (set_adset_budget) → НЕ алертим (не money-стоп)
-@pytest.mark.asyncio
-async def test_non_money_kind_no_alert(monkeypatch):
-    spy = AsyncMock()
-    monkeypatch.setattr(mw, "notify_owners", spy)
-    await mw._alert_money_fail(
-        object(),
-        AsyncMock(),
-        payload=_payload(kind="set_adset_budget"),
-        requested_by="user",
-        error="x",
-        kind_label="set_adset_budget",
-    )
-    spy.assert_not_awaited()
-
-
-# bulk_status_change (пауза) тоже является money-стопом → алертим
-@pytest.mark.asyncio
-async def test_bulk_pause_fail_alerts_owner(monkeypatch):
-    spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(mw, "notify_owners", spy)
-    await mw._alert_money_fail(
-        object(),
-        AsyncMock(),
-        payload=_payload(kind="bulk_status_change", target="99999"),
-        requested_by="user_manual",
-        error="TokenInvalidError",
-        kind_label="bulk_status_change",
-    )
-    spy.assert_awaited_once()
-    kw = spy.await_args.kwargs
-    assert "99999" in kw["text"]
-    assert kw["dedup_key"] == "auto_stop_fail:99999"
-
-
-# requested_by="user" (ручная пауза) → текст содержит «Пауза», не «Авто-стоп»
-@pytest.mark.asyncio
-async def test_manual_pause_actor_label(monkeypatch):
-    spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(mw, "notify_owners", spy)
-    await mw._alert_money_fail(
-        object(),
-        AsyncMock(),
-        payload=_payload(),
-        requested_by="user",
-        error="SomeError",
-        kind_label="pause_ad",
-    )
-    kw = spy.await_args.kwargs
-    assert "Пауза" in kw["text"]
-    assert "Авто-стоп" not in kw["text"]
-
-
-# requested_by="bot_auto_stop" → текст содержит «Авто-стоп»
-@pytest.mark.asyncio
-async def test_autostop_actor_label(monkeypatch):
-    spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(mw, "notify_owners", spy)
-    await mw._alert_money_fail(
-        object(),
-        AsyncMock(),
-        payload=_payload(),
-        requested_by="bot_auto_stop",
-        error="SomeError",
-        kind_label="pause_ad",
-    )
-    kw = spy.await_args.kwargs
-    assert "Авто-стоп" in kw["text"]
-
-
-# ===== Тесты ветки exhausted ValueError / unknown Exception в process_one_task =====
-
-from types import SimpleNamespace  # noqa: E402
-
-
-def _task(attempt_count=10, max_attempts=10, **kwargs):
-    """Задача с исчерпанными ретраями (attempt_count == max_attempts)."""
-    base = dict(
+def _task(*, attempt_count: int = 10, max_attempts: int = 10) -> Task:
+    now = datetime.now(UTC)
+    return Task(
         id=99,
         task_type="meta_api_mutation",
-        payload={"mutation_kind": "pause_ad", "target_id": "777"},
+        status="running",
+        idempotency_key="meta:pause_ad:99",
+        payload={"mutation_kind": "pause_ad", "target_id": "777", "ad_account_id": "123"},
         attempt_count=attempt_count,
         max_attempts=max_attempts,
         requested_by="bot_auto_stop",
-        next_retry_at=None,
         last_error=None,
+        created_at=now,
+        external_started_at=None,
+        result=None,
+        lane="money",
+        priority=100,
+        available_at=now,
+        deadline_at=now + timedelta(seconds=30),
+        lease_owner=uuid.UUID("00000000-0000-0000-0000-000000000103"),
+        lease_token=3,
+        lease_expires_at=now + timedelta(minutes=1),
+        cancel_requested_at=None,
+        cancel_reason=None,
+        correlation_id=uuid.uuid4(),
     )
-    base.update(kwargs)
-    return SimpleNamespace(**base)
 
 
-def _mock_ownership(allowed=True):
-    return SimpleNamespace(allowed=allowed, not_found=False, reason="", foreign_ids=[])
+def _ownership() -> SimpleNamespace:
+    return SimpleNamespace(allowed=True, not_found=False, reason="", foreign_ids=[])
 
 
-# pause_ad с ValueError (исчерпаны ретраи) → _alert_money_fail / notify_owners вызван
+@pytest.fixture(autouse=True)
+def _fenced_external_boundary(monkeypatch) -> None:
+    monkeypatch.setattr(mw, "_preflight_task_control", AsyncMock(return_value=None))
+    monkeypatch.setattr(mw, "mark_external_call_started", AsyncMock(return_value=True))
+
+
 @pytest.mark.asyncio
-async def test_pause_ad_value_error_exhausted_alerts(monkeypatch):
-    spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(mw, "notify_owners", spy)
+@pytest.mark.parametrize("error", [ValueError("bad parse"), RuntimeError("unexpected")])
+async def test_exhausted_money_failure_has_no_post_commit_send(monkeypatch, error) -> None:
+    """The worker finalizes only; mark_failed owns the atomic durable alert."""
     monkeypatch.setattr(mw, "load_owner_tag", AsyncMock(return_value=None))
     monkeypatch.setattr(mw, "load_scanning_enabled", AsyncMock(return_value=True))
-    monkeypatch.setattr(mw, "check_mutation_ownership", AsyncMock(return_value=_mock_ownership()))
-    # Эмулируем ValueError из postprocess (не _IRREVERSIBLE_KINDS → requeue)
-    monkeypatch.setattr(mw, "execute_mutation", AsyncMock(side_effect=ValueError("bad parse")))
-    # Ретраи исчерпаны → requeue_task вернёт False (нет попыток)
+    monkeypatch.setattr(
+        mw,
+        "load_meta_snapshot_freshness",
+        AsyncMock(return_value=SimpleNamespace(fresh=True)),
+    )
+    monkeypatch.setattr(mw, "check_mutation_ownership", AsyncMock(return_value=_ownership()))
+    monkeypatch.setattr(mw, "execute_mutation", AsyncMock(side_effect=error))
     monkeypatch.setattr(mw, "requeue_task", AsyncMock(return_value=False))
+    monkeypatch.setattr(mw, "requeue_unknown_for_reconciliation", AsyncMock(return_value=True))
 
-    await mw.process_one_task(object(), _task(), client=AsyncMock(), redis_client=AsyncMock())
+    await mw.process_one_task(
+        object(),
+        _task(),
+        client=AsyncMock(),
+    )
 
-    spy.assert_awaited_once()
-    kw = spy.await_args.kwargs
-    assert "777" in kw["text"]
 
-
-# pause_ad с произвольным Exception (unknown, исчерпаны ретраи) → _alert_money_fail / notify_owners вызван
 @pytest.mark.asyncio
-async def test_pause_ad_unknown_exception_exhausted_alerts(monkeypatch):
-    spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(mw, "notify_owners", spy)
+async def test_token_invalid_marks_terminal_result_for_atomic_incident_projection(
+    monkeypatch,
+) -> None:
+    terminal = AsyncMock(return_value=True)
     monkeypatch.setattr(mw, "load_owner_tag", AsyncMock(return_value=None))
     monkeypatch.setattr(mw, "load_scanning_enabled", AsyncMock(return_value=True))
-    monkeypatch.setattr(mw, "check_mutation_ownership", AsyncMock(return_value=_mock_ownership()))
-    # Неклассифицированная ошибка → попадает в `except Exception`
-    monkeypatch.setattr(mw, "execute_mutation", AsyncMock(side_effect=RuntimeError("unexpected")))
-    # Ретраи исчерпаны → requeue_task вернёт False
-    monkeypatch.setattr(mw, "requeue_task", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        mw,
+        "load_meta_snapshot_freshness",
+        AsyncMock(return_value=SimpleNamespace(fresh=True)),
+    )
+    monkeypatch.setattr(mw, "check_mutation_ownership", AsyncMock(return_value=_ownership()))
+    monkeypatch.setattr(
+        mw,
+        "execute_mutation",
+        AsyncMock(side_effect=TokenInvalidError("session expired", code=190)),
+    )
+    monkeypatch.setattr(mw, "mark_task_failed", terminal)
 
-    await mw.process_one_task(object(), _task(), client=AsyncMock(), redis_client=AsyncMock())
+    await mw.process_one_task(object(), _task(), client=AsyncMock())
 
-    spy.assert_awaited_once()
-    kw = spy.await_args.kwargs
-    assert "777" in kw["text"]
+    assert terminal.await_args.kwargs["result"] == {
+        "outcome": "REJECTED",
+        "reason": "TokenInvalidError",
+        "requires_meta_reauth": True,
+    }

@@ -40,6 +40,9 @@ async def test_check_health_token_only_default() -> None:
         probe_status_code=0,
         probe_duration_ms=0,
         probe_detail="not_performed",
+        browser_contract_version=5,
+        session_id="session-1",
+        vision_profile_id="profile-1",
     )
     client, cb = _client_with_response(resp)
 
@@ -51,6 +54,9 @@ async def test_check_health_token_only_default() -> None:
     assert out["healthy"] is True
     assert out["probe_performed"] is False
     assert out["probe_detail"] == "not_performed"
+    assert out["browser_contract_version"] == 5
+    assert out["session_id"] == "session-1"
+    assert out["vision_profile_id"] == "profile-1"
 
 
 # full_probe=True: флаг доходит до request, probe-поля поднимаются, таймаут 15с.
@@ -67,19 +73,29 @@ async def test_check_health_full_probe_success() -> None:
         probe_status_code=200,
         probe_duration_ms=321,
         probe_detail="ok",
+        browser_contract_version=5,
+        session_id="session-2",
+        vision_profile_id="profile-2",
     )
     client, cb = _client_with_response(resp)
 
-    out = await client.check_health(full_probe=True)
+    out = await client.check_health(
+        full_probe=True,
+        expected_profile_id="profile-2",
+    )
 
     req = cb.call.call_args.args[1]
     assert req.full_probe is True
+    assert req.expected_vision_profile_id == "profile-2"
     assert cb.call.call_args.kwargs["timeout"] == 15.0
     assert out["probe_performed"] is True
     assert out["probe_ok"] is True
     assert out["probe_status_code"] == 200
     assert out["probe_duration_ms"] == 321
     assert out["probe_detail"] == "ok"
+    assert out["browser_contract_version"] == 5
+    assert out["session_id"] == "session-2"
+    assert out["vision_profile_id"] == "profile-2"
 
 
 # full_probe ловит мёртвый сетевой канал: healthy=False, detail=probe_network_down.
@@ -96,6 +112,9 @@ async def test_check_health_full_probe_network_down() -> None:
         probe_status_code=0,
         probe_duration_ms=0,
         probe_detail="probe_network_down",
+        browser_contract_version=1,
+        session_id="session-1",
+        vision_profile_id="profile-1",
     )
     client, _ = _client_with_response(resp)
 
@@ -105,6 +124,7 @@ async def test_check_health_full_probe_network_down() -> None:
     assert out["detail"] == "probe_network_down"
     assert out["probe_detail"] == "probe_network_down"
     assert out["probe_ok"] is False
+    assert out["browser_contract_version"] == 1
 
 
 # CircuitOpenError (browser-agent недоступен) → healthy=False + probe-поля «not_performed».
@@ -118,6 +138,7 @@ async def test_check_health_circuit_open() -> None:
     out = await client.check_health(full_probe=True)
 
     assert out["healthy"] is False
+    assert out["browser_contract_version"] == 0
     assert "circuit_open" in out["detail"]
     assert out["probe_performed"] is False
     assert out["probe_detail"] == "not_performed"

@@ -3,9 +3,7 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
-
-from sqlalchemy import ARRAY, Boolean, Integer, Numeric, String, text
+from sqlalchemy import ARRAY, Boolean, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models.base import Base, SingletonMixin, Timestamp, UUIDPrimaryKey
@@ -25,35 +23,10 @@ class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
         nullable=False,
         server_default="30",
     )
-    jitter_seconds: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-        server_default="15",
-    )
-    stale_data_threshold_seconds: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-        server_default="600",
-    )
-    install_cost_usd: Mapped[Decimal] = mapped_column(
-        Numeric(10, 2),
-        nullable=False,
-        server_default="0.50",
-    )
-    agent_commission_percent: Mapped[Decimal] = mapped_column(
-        Numeric(5, 2),
-        nullable=False,
-        server_default="30.0",
-    )
     # Дефолт FALSE: чистая установка НЕ начинает наблюдение за кабинетом без явного
     # включения (тумблер «Сканирование» на Панели). Защита от случайного скана чужого
     # кабинета сразу после деплоя. Существующий singleton миграцией не трогается.
     is_scanning_enabled: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        server_default="false",
-    )
-    auto_enable_recommendations: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         server_default="false",
@@ -71,7 +44,8 @@ class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
     # Пусто — без фильтра по кампаниям (owner_campaign_tag всё равно отсекает чужое в пайплайне).
     # Сужает выборку в общем кабинете, чтобы не тянуть чужие ад'ы.
     campaign_ids: Mapped[list[str]] = mapped_column(
-        ARRAY(String),
+        # Baseline type is TEXT[]; keep ORM metadata identical.
+        ARRAY(Text),
         nullable=False,
         server_default=text("'{}'"),
     )

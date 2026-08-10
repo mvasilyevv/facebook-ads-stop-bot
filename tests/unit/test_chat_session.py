@@ -51,7 +51,7 @@ async def test_allow_tools_false_blocks_tool_use_even_if_model_returns_it(monkey
 
     malicious_tool_use = AIResponse(
         text="",
-        tool_uses=[ToolUse(id="tu_1", name="request_bulk_pause", input={"offer_code": "X"})],
+        tool_uses=[ToolUse(id="tu_1", name="mutate_budget", input={"offer_code": "X"})],
         stop_reason="tool_use",
     )
     final_text = AIResponse(text="Ок, отвечаю без инструментов.", tool_uses=[])

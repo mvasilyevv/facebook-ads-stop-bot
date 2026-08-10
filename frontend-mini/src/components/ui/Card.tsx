@@ -29,7 +29,7 @@ export function Card({
     <div
       {...rest}
       className={cn(
-        "bg-[var(--color-bg-1)] border border-[var(--hairline)] rounded-[var(--radius-3)]",
+        "bg-[var(--color-bg-1)] border border-[var(--color-hairline)] rounded-[var(--radius-3)]",
         paddingClass,
         className,
       )}
@@ -37,7 +37,7 @@ export function Card({
       {(eyebrow || title || titleRight) && (
         <div className={cn("mb-3", (eyebrow || title) ? "" : "")}>
           {eyebrow && (
-            <p className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-bg-9)] font-mono mb-1">
+            <p className="text-[12px] uppercase tracking-[0.08em] text-[var(--color-bg-9)] font-mono mb-1">
               {eyebrow}
             </p>
           )}

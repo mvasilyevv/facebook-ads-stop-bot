@@ -8,7 +8,7 @@
 Проверяем сквозную логику двух триггеров поверх реальной схемы Postgres:
 - query_stuck_pause_tasks — задачи pause_ad/bot_auto_stop незавершены дольше N минут;
 - query_desynced_stop_ads — рассинхрон stop_sent ↔ delivery_status=ACTIVE дольше M минут;
-- check_autostop_channel — единый CRITICAL-алерт с дедупом (раз в час, пока не починят).
+- check_autostop_channel — единый CRITICAL-event; PostgreSQL outbox выполняет дедуп.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from apps.health_watchdog.main import (
-    AUTOSTOP_DEDUP_KEY,
+    AUTOSTOP_BACKLOG_INCIDENT_KEY,
     check_autostop_channel,
     query_desynced_stop_ads,
     query_stuck_pause_tasks,
@@ -66,19 +66,23 @@ async def _insert_pause_task(
 ) -> None:
     """Вставляет task_queue с заданным возрастом created_at (минуты назад)."""
     payload = json.dumps(
-        {"mutation_kind": mutation_kind, "target_id": fb_ad_id, "params": {}, "ad_account_id": None}
+        {
+            "mutation_kind": mutation_kind,
+            "target_id": fb_ad_id,
+            "params": {},
+            "ad_account_id": "123",
+        }
     )
-    created_at = _utcnow() - timedelta(minutes=age_minutes)
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
                 """
                 INSERT INTO task_queue
                     (task_type, status, idempotency_key, payload, requested_by,
-                     attempt_count, max_attempts, last_error, created_at, updated_at)
+                     lane, attempt_count, max_attempts, last_error, created_at, updated_at)
                 VALUES
-                    ('meta_api_mutation', :st, :ik, CAST(:pl AS jsonb), :rb,
-                     :ac, 72, :err, :ct, :ct)
+                    ('meta_api_mutation', :st, :ik, CAST(:pl AS jsonb), :rb, 'money',
+                     :ac, 72, :err, NOW() - make_interval(mins => :age_minutes), NOW())
                 """
             ),
             {
@@ -88,7 +92,7 @@ async def _insert_pause_task(
                 "rb": requested_by,
                 "ac": attempt_count,
                 "err": last_error,
-                "ct": created_at,
+                "age_minutes": age_minutes,
             },
         )
 
@@ -109,7 +113,9 @@ async def _insert_ad_with_state(
     last_transition = _utcnow() - timedelta(minutes=transition_age_minutes)
     async with pg_engine.begin() as conn:
         await conn.execute(
-            text("INSERT INTO fb_campaigns (id, campaign_name) VALUES (:i, :n)"),
+            text(
+                "INSERT INTO fb_campaigns (id, campaign_name, ad_account_id) VALUES (:i, :n, '123')"
+            ),
             {"i": campaign_id, "n": f"CMP_{suffix}"},
         )
         await conn.execute(
@@ -310,11 +316,9 @@ async def test_desync_null_delivery_is_ignored(pg_engine, clean_autostop_tables)
 # ====================== Оркестрация check_autostop_channel ======================
 
 
-# Сценарий: отказ канала → ровно один CRITICAL через notify_recipients, дедуп держит повтор
+# Повторные тики доходят до durable notifier с одним event key; Redis не участвует.
 @pytest.mark.asyncio
-async def test_check_autostop_channel_alerts_once(
-    pg_engine, fake_redis_client, clean_autostop_tables
-):
+async def test_check_autostop_channel_reuses_durable_event_key(pg_engine, clean_autostop_tables):
     await _insert_pause_task(pg_engine, fb_ad_id="23010", status="retrying", age_minutes=40)
     await _insert_ad_with_state(
         pg_engine,
@@ -323,39 +327,36 @@ async def test_check_autostop_channel_alerts_once(
         delivery_status="ACTIVE",
         transition_age_minutes=40,
     )
-    notified: list[str] = []
+    notified: list[dict] = []
 
-    async def fake_notify(engine, redis, *, category, text):
-        notified.append(text)
+    async def fake_notify(engine, **kwargs):
+        notified.append(kwargs)
         return True
 
-    with patch("apps.health_watchdog.main.notify_recipients", fake_notify):
+    with patch("apps.health_watchdog.main.notify_recurring_incident", fake_notify):
         first = await check_autostop_channel(
             pg_engine,
-            fake_redis_client,
             stuck_after_minutes=15,
             desync_after_minutes=15,
         )
         second = await check_autostop_channel(
             pg_engine,
-            fake_redis_client,
             stuck_after_minutes=15,
             desync_after_minutes=15,
         )
 
     assert first is True
-    assert second is False  # дедуп: повторно не шлём
-    assert len(notified) == 1
-    assert "23010" in notified[0]  # застрявшая задача
-    assert "55010" in notified[0]  # рассинхрон
-    assert await fake_redis_client.get(AUTOSTOP_DEDUP_KEY) == "1"
+    assert second is True
+    assert len(notified) == 2
+    assert {card["incident_key"] for card in notified} == {AUTOSTOP_BACKLOG_INCIDENT_KEY}
+    rendered_facts = " ".join([notified[0]["summary"], *notified[0]["lines"]])
+    assert "23010" in rendered_facts  # застрявшая задача
+    assert "55010" in rendered_facts  # рассинхрон
 
 
 # Сценарий: канал здоров (нет ни застрявших задач, ни рассинхрона) → молчим
 @pytest.mark.asyncio
-async def test_check_autostop_channel_healthy_no_alert(
-    pg_engine, fake_redis_client, clean_autostop_tables
-):
+async def test_check_autostop_channel_healthy_no_alert(pg_engine, clean_autostop_tables):
     # Свежая задача и корректно отключённое объявление — оба не должны тревожить
     await _insert_pause_task(pg_engine, fb_ad_id="23011", status="retrying", age_minutes=3)
     await _insert_ad_with_state(
@@ -366,42 +367,40 @@ async def test_check_autostop_channel_healthy_no_alert(
         transition_age_minutes=40,
     )
 
-    with patch("apps.health_watchdog.main.notify_recipients", AsyncMock(return_value=True)) as spy:
+    with (
+        patch(
+            "apps.health_watchdog.main.notify_recurring_incident",
+            AsyncMock(return_value=True),
+        ) as notify_spy,
+        patch(
+            "apps.health_watchdog.main.resolve_recurring_incident",
+            AsyncMock(return_value=True),
+        ) as resolve_spy,
+    ):
         sent = await check_autostop_channel(
             pg_engine,
-            fake_redis_client,
             stuck_after_minutes=15,
             desync_after_minutes=15,
         )
 
     assert sent is False
-    spy.assert_not_awaited()
-    assert await fake_redis_client.get(AUTOSTOP_DEDUP_KEY) is None
+    notify_spy.assert_not_awaited()
+    resolve_spy.assert_awaited_once()
+    assert resolve_spy.await_args.kwargs["incident_key"] == AUTOSTOP_BACKLOG_INCIDENT_KEY
 
 
 # Сценарий: run_one_check с engine включает проверку канала авто-стопа в общий прогон
 @pytest.mark.asyncio
-async def test_run_one_check_includes_autostop(pg_engine, fake_redis_client, clean_autostop_tables):
-    # heartbeat'ы живые и observer:runtime свежий — единственный источник алерта это автостоп
-    await fake_redis_client.set("worker:heartbeat:observer", "alive", ex=60)
-    await fake_redis_client.set(
-        "observer:runtime",
-        json.dumps({"worker_status": "scanning", "updated_at": _utcnow().isoformat()}),
-        ex=60,
-    )
+async def test_run_one_check_includes_autostop(pg_engine, clean_autostop_tables):
     await _insert_pause_task(pg_engine, fb_ad_id="23099", status="retrying", age_minutes=40)
-    notified: list[str] = []
+    notified: list[dict] = []
 
-    async def fake_notify(engine, redis, *, category, text):
-        notified.append(text)
+    async def fake_notify(engine, **kwargs):
+        notified.append(kwargs)
         return True
 
-    with patch("apps.health_watchdog.main.notify_recipients", fake_notify):
-        await run_one_check(
-            fake_redis_client,
-            expected_workers=["observer"],
-            engine=pg_engine,
-        )
+    with patch("apps.health_watchdog.main.notify_recurring_incident", fake_notify):
+        await run_one_check(engine=pg_engine)
 
     assert len(notified) == 1
-    assert "23099" in notified[0]
+    assert "23099" in " ".join([notified[0]["summary"], *notified[0]["lines"]])

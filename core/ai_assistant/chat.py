@@ -141,7 +141,6 @@ class ChatSession:
         *,
         client_key: str = "default",
         requested_by: str = "",
-        created_by_chat_id: int | None = None,
     ) -> ChatResponse:
         """Запросить ответ AI на основе истории.
 
@@ -165,7 +164,6 @@ class ChatSession:
             redis_client=self._redis,
             meta_api_client=self._meta_api,
             requested_by=requested_by,
-            created_by_chat_id=created_by_chat_id,
         )
 
         # Дополнительный per-tool rate-limit поверх Redis (опционально).

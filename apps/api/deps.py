@@ -67,8 +67,8 @@ async def get_adset_pro_client(
 ) -> AsyncIterator[AdsetProClient]:
     """Async generator: создаёт `AdsetProClient`, отдаёт его, закрывает после.
 
-    Ключ резолвится из БД (adsetpro_credentials) с фолбэком на .env — ротация
-    без рестарта (см. core.adset_pro.credentials).
+    Ключ резолвится только из БД (adsetpro_credentials). Одноразовый импорт
+    окружения выполняет release migrator до запуска API/воркеров.
     """
     client = await create_adsetpro_client(engine)
     await client.start()

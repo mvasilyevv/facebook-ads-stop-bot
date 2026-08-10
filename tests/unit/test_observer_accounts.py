@@ -25,6 +25,9 @@ def test_normalize_trims_whitespace() -> None:
 
 
 # Мусор (буквы, пусто, None, отрицательные, дробные) отбрасывается в None.
-@pytest.mark.parametrize("raw", [None, "", "  ", "abc", "act_", "12a3", "-5", "1.5"])
+@pytest.mark.parametrize(
+    "raw",
+    [None, "", "  ", "abc", "act_", "12a3", "-5", "1.5", "9" * 33],
+)
 def test_normalize_rejects_garbage(raw: str | None) -> None:
     assert normalize_account_id(raw) is None

@@ -5,9 +5,7 @@ packages:
 
 allowBuilds:
   esbuild: true
-
-# pnpm 10+ читает onlyBuiltDependencies отсюда (раньше было в package.json "pnpm",
-# которое pnpm 11 игнорирует → причина purge-промпта и зависания run.sh).
-onlyBuiltDependencies:
-  - esbuild
-  - "@tailwindcss/oxide"
+  "@tailwindcss/oxide": true
+  # MSW нужен только как test runtime; его install script не является частью
+  # сборки и намеренно запрещён.
+  msw: false

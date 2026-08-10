@@ -8,8 +8,6 @@
 - классификация ошибок Graph → доменные exceptions
 - outbox (task_queue.task_type='meta_api_mutation')
 - audit log в meta_api_audit_log (partitioned by month)
-
-См. META_INTEGRATION_PLAN.md § 3-4.
 """
 
 from core.meta_api.errors import (

@@ -1,22 +1,21 @@
 # -*- coding: utf-8 -*-
 """Unit-тесты асимметричного стоп-флага (is_scanning_enabled как глобальный стоп).
 
-Семантика: пауза сканирования глушит ВКЛЮЧАЮЩИЕ/тратящие действия (autostart-activate,
-enable-toggle, активирующие mutations, enable-рекомендации), но РАЗРЕШАЕТ выключающие
-(disable-toggle, pause_*/bulk pause) — они снижают риск открута. Проверяем каждый гейт
+Семантика: пауза сканирования глушит ВКЛЮЧАЮЩИЕ/тратящие действия
+(активирующие mutations), но РАЗРЕШАЕТ выключающие (pause_*/bulk pause) — они
+снижают риск открута. Проверяем каждый гейт
 в изоляции (monkeypatch модульного load_scanning_enabled, без БД).
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-import apps.cabinet_scheduler.main as cab
-import apps.enable_recommendation_worker.main as ereco
 import apps.meta_api_worker.main as meta
 from core.meta_api.schemas import MetaMutationPayload
 from core.observer.queries import load_scanning_enabled
@@ -83,25 +82,20 @@ async def test_load_scanning_enabled_no_row_defaults_false() -> None:
 
 # pause_ad — выключающая, на паузе разрешена
 def test_is_activating_pause_ad_false() -> None:
-    p = MetaMutationPayload(mutation_kind="pause_ad", target_id="1")
-    assert meta._is_activating_mutation(p) is False
-
-
-# pause_campaign — выключающая
-def test_is_activating_pause_campaign_false() -> None:
-    p = MetaMutationPayload(mutation_kind="pause_campaign", target_id="1")
+    p = MetaMutationPayload(ad_account_id="123", mutation_kind="pause_ad", target_id="1")
     assert meta._is_activating_mutation(p) is False
 
 
 # activate_ad — включающая, на паузе откладывается
 def test_is_activating_activate_ad_true() -> None:
-    p = MetaMutationPayload(mutation_kind="activate_ad", target_id="1")
+    p = MetaMutationPayload(ad_account_id="123", mutation_kind="activate_ad", target_id="1")
     assert meta._is_activating_mutation(p) is True
 
 
 # bulk_status_change с action=pause — выключающая
 def test_is_activating_bulk_pause_false() -> None:
     p = MetaMutationPayload(
+        ad_account_id="123",
         mutation_kind="bulk_status_change",
         target_id="bulk:1",
         params={"action": "pause", "ad_ids": ["1"]},
@@ -109,9 +103,10 @@ def test_is_activating_bulk_pause_false() -> None:
     assert meta._is_activating_mutation(p) is False
 
 
-# bulk_status_change с action=activate — включающая (главный путь autostart)
+# bulk_status_change с action=activate — включающая ручная операция
 def test_is_activating_bulk_activate_true() -> None:
     p = MetaMutationPayload(
+        ad_account_id="123",
         mutation_kind="bulk_status_change",
         target_id="bulk:1",
         params={"action": "activate", "ad_ids": ["1"]},
@@ -119,71 +114,45 @@ def test_is_activating_bulk_activate_true() -> None:
     assert meta._is_activating_mutation(p) is True
 
 
-# create_campaign — не выключающая → на паузе откладывается (money-safe)
-def test_is_activating_create_campaign_true() -> None:
-    p = MetaMutationPayload(mutation_kind="create_campaign", target_id="new")
-    assert meta._is_activating_mutation(p) is True
-
-
-# bulk ПОЛНАЯ форма {object_ids, status:PAUSED} — выключающая (M7-фикс: раньше гейт
-# смотрел только action → полная форма PAUSED ошибочно считалась активирующей)
-def test_is_activating_bulk_full_form_paused_false() -> None:
+# duplicate_adset_structure — не выключающая → на паузе откладывается (money-safe)
+def test_is_activating_duplicate_true() -> None:
     p = MetaMutationPayload(
-        mutation_kind="bulk_status_change",
-        target_id="123",
-        params={"object_ids": ["1", "2"], "status": "PAUSED", "object_type": "ad"},
-    )
-    assert meta._is_activating_mutation(p) is False
-
-
-# bulk ПОЛНАЯ форма status:ACTIVE — включающая (на паузе откладывается)
-def test_is_activating_bulk_full_form_active_true() -> None:
-    p = MetaMutationPayload(
-        mutation_kind="bulk_status_change",
-        target_id="123",
-        params={"object_ids": ["1", "2"], "status": "ACTIVE", "object_type": "ad"},
+        ad_account_id="123",
+        mutation_kind="duplicate_adset_structure",
+        target_id="new",
     )
     assert meta._is_activating_mutation(p) is True
-
-
-# ====================== cabinet_scheduler ======================
-
-
-# На паузе run_one_tick ничего не делает: не читает autostart-конфиг, не создаёт
-# задачу, не дёргает Redis (ни дедуп, ни observer-trigger)
-@pytest.mark.asyncio
-async def test_cabinet_tick_paused_does_nothing(monkeypatch) -> None:
-    monkeypatch.setattr(cab, "load_scanning_enabled", AsyncMock(return_value=False))
-    spy_cfg = AsyncMock()
-    spy_create = AsyncMock()
-    monkeypatch.setattr(cab, "read_autostart_config", spy_cfg)
-    monkeypatch.setattr(cab, "create_mutation_task", spy_create)
-    redis = AsyncMock()
-
-    now = datetime(2026, 6, 5, 6, 0, tzinfo=timezone.utc)
-    summary = await cab.run_one_tick(engine=object(), redis_client=redis, now=now)
-
-    assert summary["outcome"] == "scanning_paused"
-    spy_cfg.assert_not_awaited()
-    spy_create.assert_not_awaited()
-    redis.set.assert_not_awaited()
-    redis.publish.assert_not_awaited()
-
-
-# При включённом сканировании гейт не мешает — управление уходит дальше в обычный путь
-@pytest.mark.asyncio
-async def test_cabinet_tick_enabled_proceeds(monkeypatch) -> None:
-    monkeypatch.setattr(cab, "load_scanning_enabled", AsyncMock(return_value=True))
-    monkeypatch.setattr(cab, "read_autostart_config", AsyncMock(return_value={"enabled": False}))
-    redis = AsyncMock()
-
-    now = datetime(2026, 6, 5, 6, 0, tzinfo=timezone.utc)
-    summary = await cab.run_one_tick(engine=object(), redis_client=redis, now=now)
-
-    assert summary["outcome"] == "disabled"
 
 
 # ====================== meta_api_worker (process_one_task) ======================
+
+
+def _meta_task(task_id: int, payload: dict, *, requested_by: str = "test") -> Task:
+    now = datetime.now(timezone.utc)
+    return Task(
+        id=task_id,
+        task_type="meta_api_mutation",
+        status="running",
+        idempotency_key=f"meta:{task_id}",
+        payload=payload,
+        attempt_count=0,
+        max_attempts=5,
+        requested_by=requested_by,
+        last_error=None,
+        created_at=now,
+        external_started_at=None,
+        result=None,
+        lane="money",
+        priority=0,
+        available_at=now,
+        deadline_at=now + timedelta(seconds=30),
+        lease_owner=uuid.UUID("00000000-0000-0000-0000-000000000106"),
+        lease_token=6,
+        lease_expires_at=now + timedelta(minutes=1),
+        cancel_requested_at=None,
+        cancel_reason=None,
+        correlation_id=uuid.uuid4(),
+    )
 
 
 # activate_ad на паузе → requeue (отложено), execute_mutation НЕ вызывается
@@ -195,12 +164,9 @@ async def test_meta_activate_paused_requeued(monkeypatch) -> None:
     monkeypatch.setattr(meta, "requeue_task", spy_requeue)
     monkeypatch.setattr(meta, "execute_mutation", spy_exec)
 
-    task = SimpleNamespace(
-        id=10,
-        task_type="meta_api_mutation",
-        payload={"mutation_kind": "activate_ad", "target_id": "123"},
-        attempt_count=0,
-        max_attempts=5,
+    task = _meta_task(
+        10,
+        {"mutation_kind": "activate_ad", "target_id": "123", "ad_account_id": "456"},
     )
     await meta.process_one_task(object(), task, client=AsyncMock())
 
@@ -208,7 +174,7 @@ async def test_meta_activate_paused_requeued(monkeypatch) -> None:
     spy_exec.assert_not_awaited()
 
 
-# bulk activate (главный путь autostart) на паузе → requeue, не исполняется
+# Ручной bulk activate на паузе → requeue, не исполняется
 @pytest.mark.asyncio
 async def test_meta_bulk_activate_paused_requeued(monkeypatch) -> None:
     monkeypatch.setattr(meta, "load_scanning_enabled", AsyncMock(return_value=False))
@@ -217,16 +183,14 @@ async def test_meta_bulk_activate_paused_requeued(monkeypatch) -> None:
     monkeypatch.setattr(meta, "requeue_task", spy_requeue)
     monkeypatch.setattr(meta, "execute_mutation", spy_exec)
 
-    task = SimpleNamespace(
-        id=11,
-        task_type="meta_api_mutation",
-        payload={
+    task = _meta_task(
+        11,
+        {
             "mutation_kind": "bulk_status_change",
-            "target_id": "autostart:1",
+            "target_id": "owner-bulk:1",
+            "ad_account_id": "456",
             "params": {"action": "activate", "ad_ids": ["1"]},
         },
-        attempt_count=0,
-        max_attempts=5,
     )
     await meta.process_one_task(object(), task, client=AsyncMock())
 
@@ -242,18 +206,17 @@ async def test_meta_pause_paused_executes(monkeypatch) -> None:
     # owner-проверки — пустой owner_tag пропускает (фильтр выключен).
     monkeypatch.setattr(meta, "load_owner_tag", AsyncMock(return_value=None))
     spy_requeue = AsyncMock()
-    spy_exec = AsyncMock(return_value={"success": True})
+    spy_exec = AsyncMock(return_value={"success": True, "modified_ids": ["123"]})
     monkeypatch.setattr(meta, "requeue_task", spy_requeue)
     monkeypatch.setattr(meta, "execute_mutation", spy_exec)
     monkeypatch.setattr(meta, "mark_task_succeeded", AsyncMock(return_value=True))
     monkeypatch.setattr(meta, "sync_fsm_after_mutation", AsyncMock())
+    monkeypatch.setattr(meta, "_preflight_task_control", AsyncMock(return_value=None))
+    monkeypatch.setattr(meta, "mark_external_call_started", AsyncMock(return_value=True))
 
-    task = SimpleNamespace(
-        id=12,
-        task_type="meta_api_mutation",
-        payload={"mutation_kind": "pause_ad", "target_id": "123"},
-        attempt_count=0,
-        max_attempts=5,
+    task = _meta_task(
+        12,
+        {"mutation_kind": "pause_ad", "target_id": "123", "ad_account_id": "456"},
     )
     await meta.process_one_task(object(), task, client=AsyncMock())
 
@@ -271,19 +234,16 @@ async def test_meta_pause_cancelled_before_external_call_never_executes(monkeypa
         AsyncMock(return_value=SimpleNamespace(fresh=True)),
     )
     monkeypatch.setattr(meta, "mark_external_call_started", AsyncMock(return_value=False))
-    spy_exec = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(meta, "_preflight_task_control", AsyncMock(return_value=None))
+    spy_exec = AsyncMock(return_value={"success": True, "modified_ids": ["123"]})
     monkeypatch.setattr(meta, "execute_mutation", spy_exec)
 
-    task = Task(
-        id=120,
-        task_type="meta_api_mutation",
-        status="running",
-        idempotency_key="auto:pause_ad:123:token",
-        payload={"mutation_kind": "pause_ad", "target_id": "123"},
-        attempt_count=0,
-        max_attempts=5,
+    task = _meta_task(
+        120,
+        {"mutation_kind": "pause_ad", "target_id": "123", "ad_account_id": "456"},
         requested_by="bot_auto_stop",
     )
+    task.idempotency_key = "auto:pause_ad:123:token"
     engine = object()
     await meta.process_one_task(engine, task, client=AsyncMock())
 
@@ -291,22 +251,7 @@ async def test_meta_pause_cancelled_before_external_call_never_executes(monkeypa
         engine,
         task_id=120,
         target_lock_key="123",
+        lease_owner=uuid.UUID("00000000-0000-0000-0000-000000000106"),
+        lease_token=6,
     )
     spy_exec.assert_not_awaited()
-
-
-# ====================== enable_recommendation_worker (run_once) ======================
-
-
-# На паузе run_once пропускает цикл: fetch_candidates не вызывается, в counts есть метка
-@pytest.mark.asyncio
-async def test_enable_reco_paused_skips(monkeypatch) -> None:
-    monkeypatch.setattr(ereco, "load_scanning_enabled", AsyncMock(return_value=False))
-    spy_fetch = AsyncMock()
-    monkeypatch.setattr(ereco, "fetch_candidates", spy_fetch)
-
-    out = await ereco.run_once(object(), redis_client=None, tg_client=None)
-
-    assert out.get("skipped_paused") == 1
-    assert out["candidates"] == 0
-    spy_fetch.assert_not_awaited()

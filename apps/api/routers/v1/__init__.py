@@ -1,63 +1,61 @@
 # -*- coding: utf-8 -*-
-"""Auto-discovery роутеров FastAPI из пакета apps.api.routers.v1.
+"""Fail-fast registry for the versioned FastAPI surface.
 
-Функция `register_all` автоматически находит все Python-модули в этом пакете
-и подключает к приложению роутеры с префиксом `/api`. Это позволяет добавлять
-новые роутеры (например, settings_observer.py, offers.py) без правок main.py.
-
-Условие подключения: модуль должен содержать атрибут `router` типа `APIRouter`.
+Every production router is named explicitly. A missing import, a module
+without ``router: APIRouter`` or an unregistered router file prevents API
+startup instead of silently shipping a partial control plane.
 """
 
 from __future__ import annotations
 
 import importlib
 import logging
-import pkgutil
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.routing import APIRouter
 
 logger = logging.getLogger(__name__)
 
-# Пакет, в котором ищем роутеры.
+ROUTER_MODULES: tuple[str, ...] = (
+    "adset_duplicates",
+    "ai_analyze",
+    "ai_chat_web",
+    "alertmanager_webhook",
+    "analytics",
+    "browser_operations_internal",
+    "campaigns_create",
+    "campaigns_meta",
+    "desktop",
+    "offers",
+    "operator",
+    "operator_preferences",
+    "settings_observer",
+    "settings_telegram",
+    "settings_vision",
+    "telegram_webhook",
+    "tma",
+    "tools",
+)
+
 _PACKAGE = "apps.api.routers.v1"
-_PACKAGE_DIR = Path(__file__).parent
 
 
 def register_all(app: FastAPI) -> None:
-    """Находит все модули в apps.api.routers.v1 и регистрирует их роутеры.
+    """Import and register the complete reviewed router set."""
 
-    Для каждого модуля проверяет наличие атрибута `router: APIRouter`.
-    Если атрибут есть — вызывает `app.include_router(router, prefix="/api")`.
-    Логирует список зарегистрированных роутеров.
-    """
-    registered: list[str] = []
-    skipped: list[str] = []
-
-    for module_info in pkgutil.iter_modules([str(_PACKAGE_DIR)]):
-        module_name = f"{_PACKAGE}.{module_info.name}"
-        try:
-            module = importlib.import_module(module_name)
-        except Exception:
-            logger.exception("Не удалось импортировать модуль роутера: %s", module_name)
-            continue
-
+    for module_name in ROUTER_MODULES:
+        qualified_name = f"{_PACKAGE}.{module_name}"
+        module = importlib.import_module(qualified_name)
         router = getattr(module, "router", None)
-        if isinstance(router, APIRouter):
-            app.include_router(router, prefix="/api")
-            registered.append(module_info.name)
-        else:
-            skipped.append(module_info.name)
+        if not isinstance(router, APIRouter):
+            raise RuntimeError(f"{qualified_name} must expose router: APIRouter")
+        app.include_router(router, prefix="/api")
 
-    if registered:
-        logger.info(
-            "Зарегистрированы роутеры v1 (%d): %s",
-            len(registered),
-            ", ".join(registered),
-        )
-    if skipped:
-        logger.debug(
-            "Модули без атрибута `router` (пропущены): %s",
-            ", ".join(skipped),
-        )
+    logger.info(
+        "Зарегистрирован полный набор роутеров v1 (%d): %s",
+        len(ROUTER_MODULES),
+        ", ".join(ROUTER_MODULES),
+    )
+
+
+__all__ = ["ROUTER_MODULES", "register_all"]

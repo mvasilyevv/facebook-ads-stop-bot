@@ -2,23 +2,23 @@
 """FastAPI роутер для настроек Vision (settings_vision).
 
 Endpoints под /api (благодаря auto-discovery с prefix="/api"):
-- GET  /settings/vision   — VisionConfig + runtime-поля из Redis
+- GET  /settings/vision   — VisionConfig + direct browser-agent gRPC probe
 - PUT  /settings/vision   — обновить x_token / profile_id
 - POST /vision/reconnect  — gRPC ReconnectBrowser к browser-agent
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from apps.api.deps import DepEngine, DepRedis, DepSettings
+from apps.api.deps import DepEngine, DepMetaApiClient, DepSettings
 from apps.api.routers.v1.schemas.settings_vision import (
     VisionEnsureCdpResponse,
     VisionReconnectResponse,
@@ -26,7 +26,18 @@ from apps.api.routers.v1.schemas.settings_vision import (
     VisionSettingsUpdateRequest,
 )
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+from core.meta_api.client import BROWSER_CONTRACT_VERSION
 from core.models.settings.vision_config import VisionConfig
+from core.tasks.browser_fence import (
+    BrowserExclusiveMaintenance,
+    BrowserFenceLeaseLost,
+    BrowserMaintenanceGuard,
+    BrowserMaintenanceOwnerInvalid,
+    BrowserOperationBlocked,
+    BrowserOperationDrainTimeout,
+    BrowserOperationFence,
+)
+from core.vision_runtime import VisionConfigurationError, load_vision_runtime_config
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +46,6 @@ _settings_router = APIRouter(prefix="/settings/vision", tags=["settings"])
 
 # Роутер для /vision (reconnect)
 _vision_router = APIRouter(prefix="/vision", tags=["settings"])
-
-
-# Redis-ключ heartbeat browser-agent.
-_BROWSER_AGENT_HEARTBEAT_KEY = "worker:heartbeat:browser-agent"
 
 
 # ---------------------------------------------------------------------------
@@ -50,9 +57,38 @@ _BROWSER_AGENT_HEARTBEAT_KEY = "worker:heartbeat:browser-agent"
 class _VisionSnapshot:
     """Скалярные поля VisionConfig без ORM-ленивой загрузки."""
 
-    x_token_encrypted: str | None
+    x_token_encrypted: str | None = field(repr=False)
     profile_id: str | None
-    auto_restart_on_missing_cdp: bool
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class _BrowserChannelProbe:
+    """Fail-closed browser readiness bound to one canonical Vision profile."""
+
+    status: str
+    message: str | None
+    browser_contract_version: int | None
+    browser_contract_compatible: bool
+    browser_session_id: str | None = None
+    live_profile_id: str | None = None
+    graph_probe_performed: bool = False
+    graph_probe_ok: bool = False
+    maintenance_recovery_allowed: bool = False
+
+
+def _is_restartable_probe_failure(detail: str) -> bool:
+    normalized = detail.strip().casefold()
+    return any(
+        marker in normalized
+        for marker in (
+            "probe_network_down",
+            "failed to fetch",
+            "networkerror",
+            "network down",
+            "network unavailable",
+        )
+    )
 
 
 def _snapshot(config: VisionConfig | None) -> _VisionSnapshot | None:
@@ -62,7 +98,7 @@ def _snapshot(config: VisionConfig | None) -> _VisionSnapshot | None:
     return _VisionSnapshot(
         x_token_encrypted=config.x_token_encrypted,
         profile_id=config.profile_id,
-        auto_restart_on_missing_cdp=bool(config.auto_restart_on_missing_cdp),
+        updated_at=config.updated_at,
     )
 
 
@@ -71,62 +107,151 @@ async def _load_config(session: AsyncSession) -> VisionConfig | None:
     return await session.scalar(select(VisionConfig).where(VisionConfig.singleton_key == "default"))
 
 
-def _resolve_token_source(
-    snap: _VisionSnapshot | None, settings: object
-) -> tuple[bool, str | None]:
-    """has_token + источник токена с учётом .env-fallback.
+async def _probe_browser_channel(
+    meta_api_client: object | None,
+    *,
+    expected_profile_id: str,
+) -> _BrowserChannelProbe:
+    """Probe the exact configured profile with a real Graph request.
 
-    Vision подключается токеном из БД (vision_config), а при пустой БД — из .env
-    (VISION_X_TOKEN, см. _reconnect_browser). Поэтому «токен задан», если он есть хоть
-    где-то: db (приоритет) → env. Без env-fallback UI показывал «Не задан» при рабочем
-    .env-токене (типичная ситуация после деплоя, когда в БД токен ещё не сохраняли).
+    A preferred or merely connected browser session is not evidence for the
+    configured profile. READY requires contract compatibility, exact live
+    identity and a completed successful Graph probe.
     """
-    if snap and snap.x_token_encrypted:
-        return True, "db"
-    if getattr(settings, "vision_x_token", None):
-        return True, "env"
-    return False, None
-
-
-async def _read_runtime_from_redis(redis: object) -> dict[str, object]:
-    """Считывает runtime-поля браузера из Redis heartbeat-ключа.
-
-    Если ключ отсутствует — возвращает дефолтный словарь с null/False значениями.
-    Heartbeat может содержать JSON или просто строку — пробуем распарсить.
-    """
-    defaults: dict[str, object] = {
-        "runtime_status": None,
-        "runtime_status_message": None,
-        "cdp_ready": False,
-        "cdp_port": None,
-    }
+    expected_profile_id = expected_profile_id.strip()
+    if not expected_profile_id:
+        return _BrowserChannelProbe(
+            "UNAVAILABLE",
+            "canonical Vision profile is not configured",
+            None,
+            False,
+        )
+    if meta_api_client is None:
+        return _BrowserChannelProbe(
+            "UNKNOWN",
+            "API process has no browser-agent channel",
+            None,
+            False,
+        )
     try:
-        value = await redis.get(_BROWSER_AGENT_HEARTBEAT_KEY)
-    except Exception as exc:
-        logger.warning("Ошибка чтения Redis heartbeat browser-agent: %s", exc)
-        return defaults
+        result = await meta_api_client.check_health(  # type: ignore[attr-defined]
+            full_probe=True,
+            expected_profile_id=expected_profile_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - unavailable is a valid operator state
+        logger.warning("browser-agent channel probe failed: %s", type(exc).__name__)
+        return _BrowserChannelProbe(
+            "UNAVAILABLE",
+            "browser-agent channel unavailable",
+            None,
+            False,
+        )
 
-    if value is None:
-        return defaults
+    observed_contract = int(result.get("browser_contract_version") or 0)
+    compatible = observed_contract == BROWSER_CONTRACT_VERSION
+    session_id = str(result.get("session_id") or "").strip() or None
+    live_profile_id = str(result.get("vision_profile_id") or "").strip() or None
+    probe_performed = bool(result.get("probe_performed"))
+    probe_ok = bool(result.get("probe_ok"))
 
-    # Пробуем распарсить JSON-payload.
+    if not compatible:
+        return _BrowserChannelProbe(
+            "DEGRADED",
+            (
+                "browser-agent contract is incompatible "
+                f"(required={BROWSER_CONTRACT_VERSION}, observed={observed_contract})"
+            ),
+            observed_contract or None,
+            False,
+            session_id,
+            live_profile_id,
+            probe_performed,
+            probe_ok,
+        )
+
+    maintenance_recovery_allowed = False
+    if not session_id or not live_profile_id:
+        message = "browser-agent did not prove a concrete live Vision identity"
+        maintenance_recovery_allowed = True
+    elif live_profile_id != expected_profile_id:
+        message = "live Vision profile does not match canonical PostgreSQL configuration"
+        maintenance_recovery_allowed = True
+    elif not probe_performed:
+        message = "browser-agent did not perform the required Graph probe"
+    elif not probe_ok:
+        message = str(result.get("probe_detail") or result.get("detail") or "Graph probe failed")
+        maintenance_recovery_allowed = _is_restartable_probe_failure(message)
+    elif not bool(result.get("healthy")):
+        message = str(result.get("detail") or "browser session is not ready")
+        maintenance_recovery_allowed = _is_restartable_probe_failure(message)
+    else:
+        return _BrowserChannelProbe(
+            "READY",
+            None,
+            observed_contract,
+            True,
+            session_id,
+            live_profile_id,
+            True,
+            True,
+        )
+
+    return _BrowserChannelProbe(
+        "DEGRADED",
+        message[:240],
+        observed_contract,
+        True,
+        session_id,
+        live_profile_id,
+        probe_performed,
+        probe_ok,
+        maintenance_recovery_allowed,
+    )
+
+
+async def _fenced_settings_probe(
+    engine: AsyncEngine,
+    meta_api_client: object | None,
+    *,
+    expected_profile_id: str,
+    maintenance_owner: str = "",
+) -> _BrowserChannelProbe:
+    """Register normal reads, or adopt the exact active maintenance owner."""
     try:
-        data = json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        # Строка не JSON — считаем, что это просто строка-статус.
-        return {
-            "runtime_status": "ONLINE",
-            "runtime_status_message": str(value),
-            "cdp_ready": False,
-            "cdp_port": None,
-        }
-
-    return {
-        "runtime_status": data.get("status") or "ONLINE",
-        "runtime_status_message": data.get("message") or data.get("detail"),
-        "cdp_ready": bool(data.get("cdp_ready", False)),
-        "cdp_port": data.get("cdp_port"),
-    }
+        if maintenance_owner:
+            guard = BrowserMaintenanceGuard(engine, maintenance_owner)
+            async with guard:
+                probe = await _probe_browser_channel(
+                    meta_api_client,
+                    expected_profile_id=expected_profile_id,
+                )
+                await guard.assert_held()
+                return probe
+        async with BrowserOperationFence(
+            engine,
+            operation_kind="vision_settings_probe",
+            target=expected_profile_id[:128],
+        ) as fence:
+            probe = await _probe_browser_channel(
+                meta_api_client,
+                expected_profile_id=expected_profile_id,
+            )
+            await fence.assert_held()
+            return probe
+    except (BrowserMaintenanceOwnerInvalid, BrowserOperationBlocked):
+        return _BrowserChannelProbe(
+            "UNAVAILABLE",
+            "Vision maintenance is active",
+            None,
+            False,
+        )
+    except BrowserFenceLeaseLost:
+        return _BrowserChannelProbe(
+            "UNAVAILABLE",
+            "Vision settings probe lost its maintenance fence",
+            None,
+            False,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -136,35 +261,47 @@ async def _read_runtime_from_redis(redis: object) -> dict[str, object]:
 
 @_settings_router.get("", response_model=VisionSettingsResponse)
 async def get_vision_settings(
+    request: Request,
     engine: DepEngine,
-    redis: DepRedis,
-    settings: DepSettings,
+    meta_api_client: DepMetaApiClient,
 ) -> VisionSettingsResponse:
-    """Возвращает VisionConfig и runtime-поля из Redis.
-
-    has_token = токен есть в БД ИЛИ в .env (token_source говорит, где именно).
-    Runtime-поля берутся из worker:heartbeat:browser-agent.
-    """
+    """Возвращает canonical PostgreSQL VisionConfig и browser-agent status."""
     async with AsyncSession(engine) as session:
         config = await _load_config(session)
         snap = _snapshot(config)
 
-    runtime = await _read_runtime_from_redis(redis)
+    try:
+        runtime = await load_vision_runtime_config(engine)
+    except VisionConfigurationError as exc:
+        probe = _BrowserChannelProbe("UNAVAILABLE", str(exc), None, False)
+    else:
+        probe = await _fenced_settings_probe(
+            engine,
+            meta_api_client,
+            expected_profile_id=runtime.profile_id,
+            maintenance_owner=request.headers.get(
+                "X-FB-Agent-Browser-Maintenance-Owner",
+                "",
+            ),
+        )
 
-    has_token, token_source = _resolve_token_source(snap, settings)
     profile_id: str | None = None
     if snap and snap.profile_id:
-        profile_id = snap.profile_id
+        profile_id = snap.profile_id.strip() or None
 
     return VisionSettingsResponse(
-        has_token=has_token,
-        token_source=token_source,
+        has_token=bool(snap and (snap.x_token_encrypted or "").strip()),
         profile_id=profile_id,
-        auto_restart_on_missing_cdp=snap.auto_restart_on_missing_cdp if snap else True,
-        runtime_status=runtime["runtime_status"],  # type: ignore[arg-type]
-        runtime_status_message=runtime["runtime_status_message"],  # type: ignore[arg-type]
-        cdp_ready=bool(runtime["cdp_ready"]),
-        cdp_port=runtime["cdp_port"],  # type: ignore[arg-type]
+        configuration_revision=snap.updated_at.isoformat() if snap else None,
+        channel_status=probe.status,  # type: ignore[arg-type]
+        channel_message=probe.message,
+        required_browser_contract_version=BROWSER_CONTRACT_VERSION,
+        browser_contract_version=probe.browser_contract_version,
+        browser_contract_compatible=probe.browser_contract_compatible,
+        browser_session_id=probe.browser_session_id,
+        live_profile_id=probe.live_profile_id,
+        graph_probe_performed=probe.graph_probe_performed,
+        graph_probe_ok=probe.graph_probe_ok,
     )
 
 
@@ -172,55 +309,93 @@ async def get_vision_settings(
 async def put_vision_settings(
     body: VisionSettingsUpdateRequest,
     engine: DepEngine,
-    redis: DepRedis,
-    settings: DepSettings,
+    meta_api_client: DepMetaApiClient,
 ) -> VisionSettingsResponse:
-    """Обновляет x_token / profile_id / флаг self-heal в VisionConfig singleton.
+    """Обновляет x_token / profile_id в VisionConfig singleton.
 
     Если x_token передан — шифрует и сохраняет.
     Если profile_id передан — обновляет.
-    Если auto_restart_on_missing_cdp передан — выставляет флаг (None = не трогать).
     Если строки ещё нет — создаёт с server-defaults.
     """
     from core.crypto import encrypt
 
-    async with AsyncSession(engine) as session:
-        config = await _load_config(session)
-        if config is None:
-            config = VisionConfig(
-                x_token_encrypted="",
-                profile_id="",
-            )
-            session.add(config)
+    async def persist() -> _VisionSnapshot:
+        async with AsyncSession(engine) as session:
+            config = await _load_config(session)
+            if config is None:
+                config = VisionConfig(
+                    x_token_encrypted="",
+                    profile_id="",
+                )
+                session.add(config)
 
-        if body.x_token is not None:
-            config.x_token_encrypted = encrypt(body.x_token) if body.x_token else ""
-        if body.profile_id is not None:
-            config.profile_id = body.profile_id
-        if body.auto_restart_on_missing_cdp is not None:
-            config.auto_restart_on_missing_cdp = body.auto_restart_on_missing_cdp
+            if body.x_token is not None:
+                config.x_token_encrypted = encrypt(body.x_token) if body.x_token else ""
+            if body.profile_id is not None:
+                config.profile_id = body.profile_id
+            await session.flush()
+            await session.refresh(config)
+            result = _snapshot(config)
+            if result is None:  # pragma: no cover - the row was just created/loaded
+                raise RuntimeError("Vision configuration snapshot disappeared")
+            await session.commit()
+            return result
 
-        await session.flush()
-        await session.refresh(config)
-        snap = _snapshot(config)
-        await session.commit()
+    requires_exclusive_fence = body.x_token is not None or body.profile_id is not None
+    try:
+        if requires_exclusive_fence:
+            async with BrowserExclusiveMaintenance(
+                engine,
+                operation_kind="vision_config_update",
+            ) as fence:
+                snap = await persist()
+                await fence.assert_held()
+        else:
+            snap = await persist()
+    except BrowserOperationBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Vision maintenance is active; configuration was not changed",
+        ) from exc
+    except BrowserOperationDrainTimeout as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Active browser work did not drain; configuration was not changed",
+        ) from exc
+    except BrowserFenceLeaseLost as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Vision configuration fence was lost; retry after reconciliation",
+        ) from exc
 
-    runtime = await _read_runtime_from_redis(redis)
+    try:
+        runtime = await load_vision_runtime_config(engine)
+    except VisionConfigurationError as exc:
+        probe = _BrowserChannelProbe("UNAVAILABLE", str(exc), None, False)
+    else:
+        probe = await _fenced_settings_probe(
+            engine,
+            meta_api_client,
+            expected_profile_id=runtime.profile_id,
+        )
 
-    has_token, token_source = _resolve_token_source(snap, settings)
     profile_id_val: str | None = None
     if snap and snap.profile_id:
-        profile_id_val = snap.profile_id
+        profile_id_val = snap.profile_id.strip() or None
 
     return VisionSettingsResponse(
-        has_token=has_token,
-        token_source=token_source,
+        has_token=bool(snap and (snap.x_token_encrypted or "").strip()),
         profile_id=profile_id_val,
-        auto_restart_on_missing_cdp=snap.auto_restart_on_missing_cdp if snap else True,
-        runtime_status=runtime["runtime_status"],  # type: ignore[arg-type]
-        runtime_status_message=runtime["runtime_status_message"],  # type: ignore[arg-type]
-        cdp_ready=bool(runtime["cdp_ready"]),
-        cdp_port=runtime["cdp_port"],  # type: ignore[arg-type]
+        configuration_revision=snap.updated_at.isoformat() if snap else None,
+        channel_status=probe.status,  # type: ignore[arg-type]
+        channel_message=probe.message,
+        required_browser_contract_version=BROWSER_CONTRACT_VERSION,
+        browser_contract_version=probe.browser_contract_version,
+        browser_contract_compatible=probe.browser_contract_compatible,
+        browser_session_id=probe.browser_session_id,
+        live_profile_id=probe.live_profile_id,
+        graph_probe_performed=probe.graph_probe_performed,
+        graph_probe_ok=probe.graph_probe_ok,
     )
 
 
@@ -229,37 +404,18 @@ async def put_vision_settings(
 # ---------------------------------------------------------------------------
 
 
-async def _reconnect_browser(engine: AsyncEngine, settings: object) -> None:
-    """Общая логика gRPC ReconnectBrowser. Бросает grpc.RpcError/Exception при сбое.
-
-    Переиспользуется /vision/reconnect и /vision/ensure-cdp. Читает x_token/profile_id
-    из БД (fallback в Settings).
-    """
-    from core.config import reveal_secret
-    from core.crypto import decrypt
-
-    async with AsyncSession(engine) as session:
-        config = await _load_config(session)
-        snap = _snapshot(config)
-
-    x_token = reveal_secret(settings.vision_x_token)  # type: ignore[attr-defined]
-    profile_id = settings.vision_profile_id  # type: ignore[attr-defined]
+async def _browser_agent_client(
+    engine: AsyncEngine,
+    settings: object,
+) -> BrowserAgentClient:
+    """Build a browser-agent client from canonical PostgreSQL credentials."""
+    runtime = await load_vision_runtime_config(engine)
     api_url = settings.vision_api_url  # type: ignore[attr-defined]
-
-    if snap:
-        if snap.x_token_encrypted:
-            try:
-                x_token = decrypt(snap.x_token_encrypted)
-            except Exception as exc:
-                logger.warning("Не удалось расшифровать vision x_token: %s", exc)
-        if snap.profile_id:
-            profile_id = snap.profile_id
-
-    client = BrowserAgentClient(
+    return BrowserAgentClient(
         BrowserAgentConfig(
-            vision_x_token=x_token,
+            vision_x_token=runtime.x_token,
             vision_api_url=api_url,
-            vision_profile_id=profile_id,
+            vision_profile_id=runtime.profile_id,
             # Без folder_id остановленный профиль отсутствует в /list, и reconnect
             # не может вызвать Vision /start, хотя все идентификаторы есть в .env.
             vision_folder_id=os.environ.get("VISION_FOLDER_ID") or None,
@@ -269,9 +425,34 @@ async def _reconnect_browser(engine: AsyncEngine, settings: object) -> None:
             grpc_port=int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051")),
         )
     )
+
+
+async def _reconnect_browser(engine: AsyncEngine, settings: object) -> None:
+    """Connect to the canonical browser profile without forcing its lifecycle."""
+    client = await _browser_agent_client(engine, settings)
     try:
         await client.start()
         await client.reconnect_browser()
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
+async def _recover_browser_profile_under_maintenance(
+    engine: AsyncEngine,
+    settings: object,
+    *,
+    maintenance_owner: str,
+) -> None:
+    """Force-restart Vision only after the caller proved exclusive ownership."""
+    client = await _browser_agent_client(engine, settings)
+    try:
+        await client.start()
+        await client.recover_browser_profile_under_maintenance(
+            maintenance_owner=maintenance_owner,
+        )
     finally:
         try:
             await client.close()
@@ -286,17 +467,39 @@ async def post_vision_reconnect(
 ) -> VisionReconnectResponse:
     """Триггерит gRPC ReconnectBrowser к browser-agent.
 
-    Читает x_token и profile_id из БД (или fallback в Settings).
+    Читает x_token и profile_id только из PostgreSQL.
     Возвращает 503 при недоступности gRPC.
     """
     import grpc
 
     try:
-        await _reconnect_browser(engine, settings)
+        async with BrowserExclusiveMaintenance(
+            engine,
+            operation_kind="vision_reconnect",
+        ) as fence:
+            await _reconnect_browser(engine, settings)
+            await fence.assert_held()
+    except BrowserOperationBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Vision maintenance is active; reconnect was not started",
+        ) from exc
+    except BrowserOperationDrainTimeout as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Active browser work did not drain; reconnect was not started",
+        ) from exc
+    except BrowserFenceLeaseLost as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Vision reconnect fence was lost; state requires reconciliation",
+        ) from exc
+    except VisionConfigurationError as exc:
+        raise HTTPException(status_code=409, detail="Vision runtime не настроен") from exc
     except grpc.RpcError as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"gRPC browser-agent недоступен: {exc}",
+            detail="gRPC browser-agent недоступен",
         ) from exc
     except Exception as exc:
         # LOW (аудит 02.07): голый Exception может нести внутренние детали (пути,
@@ -312,43 +515,99 @@ async def post_vision_reconnect(
 
 @_vision_router.post("/ensure-cdp", response_model=VisionEnsureCdpResponse)
 async def post_vision_ensure_cdp(
+    request: Request,
     engine: DepEngine,
-    redis: DepRedis,
     settings: DepSettings,
+    meta_api_client: DepMetaApiClient,
 ) -> VisionEnsureCdpResponse:
-    """Bootstrap CDP при старте (run.sh): проверяет cdp_ready, при необходимости reconnect.
+    """Bootstrap browser channel: direct probe, then exclusive recovery when needed.
 
-    Никогда не падает 5xx — всегда {ok,status,action,message}. Если CDP уже готов —
-    action=none. Если нет — пытается reconnect; при недоступности browser-agent
-    возвращает ok=false (run.sh покажет мягкий warning, а не ошибку 404/503).
+    Никогда не падает 5xx — всегда {ok,status,action,message}. Если CDP уже готов,
+    action=none. Иначе подтверждённый maintenance owner разрешает ровно один
+    принудительный restart canonical Vision-профиля с обязательным повторным probe.
     """
-    runtime = await _read_runtime_from_redis(redis)
-    if runtime.get("cdp_ready"):
-        return VisionEnsureCdpResponse(
-            ok=True,
-            status="READY",
-            action="none",
-            message=f"CDP готов (порт {runtime.get('cdp_port')})",
-        )
-
+    maintenance_owner = request.headers.get(
+        "X-FB-Agent-Browser-Maintenance-Owner",
+        "",
+    )
     try:
-        await _reconnect_browser(engine, settings)
-    except Exception as exc:
-        logger.warning("ensure-cdp: reconnect не удался: %s", exc)
+        guard = BrowserMaintenanceGuard(engine, maintenance_owner)
+        async with guard:
+            try:
+                runtime = await load_vision_runtime_config(engine)
+            except VisionConfigurationError:
+                return VisionEnsureCdpResponse(
+                    ok=False,
+                    status="UNAVAILABLE",
+                    action="none",
+                    message="Vision is not configured in PostgreSQL",
+                )
+
+            probe = await _probe_browser_channel(
+                meta_api_client,
+                expected_profile_id=runtime.profile_id,
+            )
+            if probe.status == "READY":
+                await guard.assert_held()
+                return VisionEnsureCdpResponse(
+                    ok=True,
+                    status="READY",
+                    action="none",
+                    message="Browser-agent channel is ready",
+                )
+            if not probe.maintenance_recovery_allowed:
+                await guard.assert_held()
+                return VisionEnsureCdpResponse(
+                    ok=False,
+                    status=probe.status,
+                    action="none",
+                    message=probe.message or "Browser channel requires operator action",
+                )
+
+            try:
+                await guard.assert_held()
+                await _recover_browser_profile_under_maintenance(
+                    engine,
+                    settings,
+                    maintenance_owner=maintenance_owner,
+                )
+                await guard.assert_held()
+            except Exception as exc:
+                logger.warning("ensure-cdp: profile recovery failed: %s", type(exc).__name__)
+                return VisionEnsureCdpResponse(
+                    ok=False,
+                    status="UNAVAILABLE",
+                    action="restart",
+                    message="Browser-agent profile recovery failed",
+                )
+
+            probe = await _probe_browser_channel(
+                meta_api_client,
+                expected_profile_id=runtime.profile_id,
+            )
+            await guard.assert_held()
+    except (
+        BrowserMaintenanceOwnerInvalid,
+        BrowserFenceLeaseLost,
+        BrowserOperationBlocked,
+    ) as exc:
+        logger.warning("ensure-cdp: maintenance owner rejected: %s", type(exc).__name__)
         return VisionEnsureCdpResponse(
             ok=False,
             status="UNAVAILABLE",
-            action="reconnect",
-            message=f"Не удалось поднять CDP: {exc}",
+            action="none",
+            message="Platform maintenance ownership is missing or expired",
         )
 
-    runtime = await _read_runtime_from_redis(redis)
-    port = runtime.get("cdp_port")
     return VisionEnsureCdpResponse(
-        ok=True,
-        status="RECONNECTED",
-        action="reconnect",
-        message=f"CDP переподключён (порт {port})" if port else "Reconnect выполнен",
+        ok=probe.status == "READY",
+        status="RECOVERED" if probe.status == "READY" else "UNAVAILABLE",
+        action="restart",
+        message=(
+            "Browser-agent profile recovered"
+            if probe.status == "READY"
+            else "Profile restart completed but the channel is not ready"
+        ),
     )
 
 

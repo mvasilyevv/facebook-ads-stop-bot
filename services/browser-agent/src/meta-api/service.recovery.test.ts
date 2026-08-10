@@ -1,13 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 
 import type { Page } from 'playwright';
 import type { SessionManager } from '../session-manager.js';
-import type { BrowserSession } from '../types.js';
 import { createMetaApiServiceHandlers } from './service.js';
 
-describe('ExecuteGraphCall — восстановление primary-вкладки', () => {
-  it('переоткрывает last known Ads Manager page и завершает Graph GET без 503', async () => {
+describe('ExecuteGraphCallV5 — восстановление interactive-вкладки', () => {
+  it('получает восстановленную Ads Manager page и завершает Graph GET без 503', async () => {
     const page = {
       waitForFunction: async () => undefined,
       evaluate: async () => ({
@@ -17,34 +17,38 @@ describe('ExecuteGraphCall — восстановление primary-вкладк
     } as unknown as Page;
     const session = {
       id: 'session-1',
+      visionProfileId: 'profile-1',
       netFailureStreak: 0,
       healLevel: 0,
-    } as BrowserSession;
+    };
     let ensureCalls = 0;
     const manager = {
       getPreferredSession: () => session,
       getSession: () => session,
-      ensureAdsManagerPage: async () => {
+      ensureInteractivePage: async () => {
         ensureCalls += 1;
         return page;
       },
     } as unknown as SessionManager;
-    const handlers = createMetaApiServiceHandlers(manager, {
-      getPage: () => {
-        throw new Error('Основная страница браузера недоступна');
-      },
-    });
+    const handlers = createMetaApiServiceHandlers(manager);
+
+    const call = new EventEmitter() as EventEmitter & {
+      request: Record<string, unknown>;
+      getDeadline: () => Date;
+    };
+    call.request = {
+      session_id: '',
+      method: 'GET',
+      endpoint: '/act_123',
+      query_params: { fields: 'timezone_offset_hours_utc' },
+      body_json: '',
+      timeout_ms: 30_000,
+    };
+    call.getDeadline = () => new Date(Date.now() + 30_000);
 
     const response = await new Promise<any>((resolve, reject) => {
-      handlers.executeGraphCall(
-        {
-          request: {
-            session_id: '',
-            method: 'GET',
-            endpoint: '/act_123',
-            query_params: { fields: 'timezone_offset_hours_utc' },
-          },
-        },
+      handlers.executeGraphCallV5(
+        call,
         (error: unknown, result: unknown) => (error ? reject(error) : resolve(result)),
       );
     });

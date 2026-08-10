@@ -1,0 +1,547 @@
+groups:
+  - name: fb-agent-recording
+    interval: 15s
+    rules:
+      - record: fb_agent:money_queue_depth:sum
+        expr: sum(fb_agent_task_queue_depth{lane="money",status="pending"})
+      - record: fb_agent:notification_pending_critical:max
+        expr: max(fb_agent_notification_oldest_pending_age_seconds{severity="critical"})
+      - record: fb_agent:snapshot_age:max
+        expr: max(fb_agent_snapshot_age_seconds)
+      - record: fb_agent:delivery_failures_5m:sum
+        expr: sum(fb_agent_notification_delivery_terminal_events_5m{state="dead"})
+
+  - name: fb-agent-alerts
+    interval: 15s
+    rules:
+      - alert: FBBlackboxProbeAbsent
+        expr: absent(probe_success{job="blackbox-http",probe="healthz"}) or absent(probe_success{job="blackbox-http",probe="readyz"})
+        for: 1m
+        labels:
+          severity: critical
+          service: monitoring
+        annotations:
+          summary: Expected public blackbox probe series is absent
+          description: "Prometheus has no {{ $labels.probe }} blackbox series; this is unknown, not healthy."
+
+      - alert: FBApplicationUnavailable
+        expr: probe_success{job="blackbox-http",probe="healthz"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: FB Agent public liveness probe is failing
+          runbook_url: https://github.com/mvasilyevv/FB_Agent/blob/main/deploy/monitoring/README.md
+
+      - alert: FBApplicationNotReady
+        expr: probe_success{job="blackbox-http",probe="readyz"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: FB Agent cannot reach its durable dependencies
+
+      - alert: FBWorkerMetricsTargetDown
+        expr: up{job="fb-agent-runtime",service!="api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: Worker metrics endpoint is unavailable
+          description: "{{ $labels.service }} on {{ $labels.instance }} has not been scraped for two minutes."
+
+      - alert: FBWorkerMetricsAbsent
+        expr: absent(fb_agent_worker_heartbeat_timestamp_seconds) and on() (max(probe_success{job="blackbox-http",probe="readyz"}) == 1)
+        for: 2m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: Application is ready but no worker heartbeat metrics exist
+
+      - alert: FBExpectedWorkerMetricsAbsent
+        expr: |
+          (
+            absent(fb_agent_worker_heartbeat_timestamp_seconds{worker="observer"})
+            or absent(fb_agent_worker_heartbeat_timestamp_seconds{worker="autopause"})
+            or absent(fb_agent_worker_heartbeat_timestamp_seconds{worker="meta_api"})
+            or absent(fb_agent_worker_heartbeat_timestamp_seconds{worker="telegram_delivery"})
+            or absent(fb_agent_worker_heartbeat_timestamp_seconds{worker="telegram_updates"})
+            or absent(fb_agent_worker_heartbeat_timestamp_seconds{worker="cleanup"})
+            or absent(fb_agent_worker_heartbeat_timestamp_seconds{worker="reconciler"})
+            or absent(fb_agent_worker_heartbeat_timestamp_seconds{worker="health_watchdog"})
+            or absent(fb_agent_worker_heartbeat_timestamp_seconds{worker="digest_scheduler"})
+            or absent(fb_agent_worker_heartbeat_timestamp_seconds{worker="tracker_reconciliation_worker"})
+            or absent(fb_agent_worker_heartbeat_timestamp_seconds{worker="campaign_creator"})
+          ) and on() (max(probe_success{job="blackbox-http",probe="readyz"}) == 1)
+        for: 2m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: Expected worker has no metrics series
+          description: "The {{ $labels.worker }} metrics producer is absent while the API is ready."
+
+      - alert: FBWorkerHeartbeatStale
+        expr: (time() - fb_agent_worker_heartbeat_timestamp_seconds > 90) and on(instance) (up{job="fb-agent-runtime"} == 1)
+        for: 1m
+        labels:
+          severity: critical
+          service: worker
+        annotations:
+          summary: Worker heartbeat is stale
+          description: "{{ $labels.worker }} heartbeat is {{ $value | humanizeDuration }} old."
+
+      - alert: FBMoneyQueueDelayed
+        expr: fb_agent_task_oldest_pending_age_seconds{lane="money"} > 10
+        for: 30s
+        labels:
+          severity: critical
+          service: control-plane
+        annotations:
+          summary: Money-lane task exceeded its claim SLO
+
+      - alert: FBMoneyQueueMetricsAbsent
+        expr: absent(fb_agent_task_queue_depth{lane="money",status="pending"})
+        for: 1m
+        labels:
+          severity: critical
+          service: control-plane
+        annotations:
+          summary: Money queue metric is absent
+
+      - alert: FBSnapshotStale
+        expr: fb_agent_snapshot_age_seconds > 60
+        for: 2m
+        labels:
+          severity: warning
+          service: observer
+        annotations:
+          summary: Operator data snapshot is stale
+          description: "{{ $labels.source }} snapshot is {{ $value | humanizeDuration }} old."
+
+      - alert: FBSnapshotMetricAbsent
+        expr: absent(fb_agent_snapshot_age_seconds{source="observer_ads"})
+        for: 1m
+        labels:
+          severity: critical
+          service: observer
+        annotations:
+          summary: Canonical observer snapshot freshness metric is absent
+
+      - alert: FBCriticalNotificationDelayed
+        expr: fb_agent_notification_oldest_pending_age_seconds{severity="critical"} > 10
+        for: 30s
+        labels:
+          severity: critical
+          service: notifications
+        annotations:
+          summary: Critical notification delivery exceeded ten seconds
+
+      - alert: FBNotificationMetricsAbsent
+        expr: absent(fb_agent_notification_metrics_last_refresh_timestamp_seconds) or (time() - fb_agent_notification_metrics_last_refresh_timestamp_seconds > 60)
+        for: 1m
+        labels:
+          severity: critical
+          service: notifications
+        annotations:
+          summary: Durable notification metrics are absent or stale
+
+      - alert: FBNotificationDeliveryLatency
+        expr: fb_agent_notification_delivery_latency_quantile_seconds{state="sent",quantile="0.95"} > 10
+        for: 2m
+        labels:
+          severity: critical
+          service: notifications
+        annotations:
+          summary: Notification commit-to-delivery p95 exceeds ten seconds
+
+      - alert: FBNotificationDeadLetter
+        expr: fb_agent_notification_delivery_terminal_events_5m{state="dead"} > 0
+        labels:
+          severity: critical
+          service: notifications
+        annotations:
+          summary: Telegram notification entered dead-letter state
+
+      - alert: FBHostTextfileCollectorError
+        expr: node_textfile_scrape_error{job="node",role="application"} == 1
+        for: 1m
+        labels:
+          severity: critical
+          service: platform
+        annotations:
+          summary: Host systemd operation metrics cannot be parsed
+          description: "node-exporter rejected at least one root-owned textfile metric."
+
+      - alert: FBNodeExporterDown
+        expr: up{job="node",role="application"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: platform
+        annotations:
+          summary: Application node-exporter scrape is failing
+          description: "Application host {{ $labels.node }}/{{ $labels.instance }} is down."
+
+      - alert: FBMonitoringNodeExporterDown
+        expr: up{job="node",role="monitoring"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: monitoring
+        annotations:
+          summary: Monitoring node-exporter scrape is failing
+          description: "Monitoring host {{ $labels.node }}/{{ $labels.instance }} is down."
+
+      - alert: FBExpectedApplicationHostInventoryAbsent
+        expr: absent(up{job="expected-application-host",role="application"})
+        for: 2m
+        labels:
+          severity: critical
+          service: monitoring
+        annotations:
+          summary: Expected application-host inventory is absent
+          description: "Prometheus has no durable application-host inventory targets."
+
+      - alert: FBNodeExporterSeriesAbsent
+        expr: |
+          count by (node) (
+            up{job="expected-application-host",role="application"}
+          )
+          unless on(node)
+          count by (node) (
+            up{job="node",role="application"}
+          )
+        for: 2m
+        labels:
+          severity: critical
+          service: platform
+        annotations:
+          summary: Expected application node-exporter series disappeared
+          description: "Application host {{ $labels.node }} remains in durable inventory but its node-exporter series is absent."
+
+      - alert: FBHostOperationMetricsAbsent
+        expr: |
+          max by (node, instance) (
+            up{job="node",role="application"} == 1
+          )
+          unless on(node, instance)
+          count by (node, instance) (
+            fb_agent_host_operation_status{role="application"}
+          )
+        for: 2m
+        labels:
+          severity: critical
+          service: platform
+        annotations:
+          summary: Host operation metrics are absent on a healthy node-exporter
+          description: "The root-owned textfile collector is not exposing any FB_Agent host operation state for {{ $labels.node }}/{{ $labels.instance }}."
+
+      - alert: FBPgBackRestBackupFailed
+        expr: fb_agent_host_operation_status{role="application",operation=~"pgbackrest_(full|diff)"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: pgBackRest backup failed
+          description: "{{ $labels.operation }} is in a failed state."
+
+      - alert: FBPgBackRestBackupStuck
+        expr: |
+          fb_agent_host_operation_status{role="application",operation=~"pgbackrest_(full|diff)"} == -1
+          and on(node, instance, operation)
+          (
+            time()
+            - fb_agent_host_operation_last_start_timestamp_seconds{role="application"}
+            > 21600
+          )
+        for: 1m
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: pgBackRest backup has not completed in six hours
+          description: "{{ $labels.operation }} is still running or was interrupted."
+
+      - alert: FBPgBackRestBackupStale
+        expr: |
+          (
+            count by (node, instance) (
+              fb_agent_host_operation_status{role="application"}
+            )
+            unless on(node, instance)
+            max by (node, instance) (
+              fb_agent_host_operation_last_success_timestamp_seconds{role="application",operation=~"pgbackrest_(full|diff)"}
+            )
+          )
+          or
+          (
+            time() - max by (node, instance) (
+              fb_agent_host_operation_last_success_timestamp_seconds{role="application",operation=~"pgbackrest_(full|diff)"}
+            ) > 129600
+          )
+        for: 15m
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: No successful pgBackRest backup is fresh
+          description: "Neither the weekly full nor daily differential schedule has produced a success within 36 hours."
+
+      - alert: FBPgBackRestFullBackupStale
+        expr: |
+          (
+            count by (node, instance) (
+              fb_agent_host_operation_status{role="application"}
+            )
+            unless on(node, instance)
+            fb_agent_host_operation_last_success_timestamp_seconds{role="application",operation="pgbackrest_full"}
+          )
+          or
+          (
+            time()
+            - fb_agent_host_operation_last_success_timestamp_seconds{role="application",operation="pgbackrest_full"}
+            > 691200
+          )
+        for: 15m
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: Weekly pgBackRest full backup is missing or stale
+          description: "The last successful full backup is older than eight days."
+
+      - alert: FBPgBackRestDiffBackupStale
+        expr: |
+          (
+            (
+              count by (node, instance) (
+                fb_agent_host_operation_status{role="application"}
+              )
+              unless on(node, instance)
+              fb_agent_host_operation_last_success_timestamp_seconds{role="application",operation="pgbackrest_diff"}
+            )
+            and on(node, instance)
+            (
+              time()
+              - fb_agent_host_operation_last_success_timestamp_seconds{role="application",operation="pgbackrest_full"}
+              > 216000
+            )
+          )
+          or
+          (
+            time()
+            - fb_agent_host_operation_last_success_timestamp_seconds{role="application",operation="pgbackrest_diff"}
+            > 216000
+          )
+        for: 15m
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: Daily pgBackRest differential backup is missing or stale
+          description: "No differential backup succeeded within 60 hours; the normal Sunday full-backup window is excluded."
+
+      - alert: FBRestoreDrillFailed
+        expr: fb_agent_host_operation_status{role="application",operation="restore_drill"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: Isolated PostgreSQL restore drill failed
+
+      - alert: FBRestoreDrillOverdue
+        expr: |
+          (
+            count by (node, instance) (
+              fb_agent_host_operation_status{role="application"}
+            )
+            unless on(node, instance)
+            fb_agent_host_operation_last_success_timestamp_seconds{role="application",operation="restore_drill"}
+          )
+          or
+          (
+            time()
+            - fb_agent_host_operation_last_success_timestamp_seconds{role="application",operation="restore_drill"}
+            > 3024000
+          )
+        for: 1h
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: Isolated PostgreSQL restore proof is overdue
+          description: "No successful PITR restore drill has completed within 35 days."
+
+      - alert: FBDesktopHealerFailed
+        expr: fb_agent_host_operation_status{role="application",operation="desktop_healer"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: desktop
+        annotations:
+          summary: Desktop/browser control-plane healer failed
+
+      - alert: FBDesktopHealerStuck
+        expr: |
+          fb_agent_host_operation_status{role="application",operation="desktop_healer"} == -1
+          and on(node, instance, operation)
+          (
+            time()
+            - fb_agent_host_operation_last_start_timestamp_seconds{role="application"}
+            > 300
+          )
+        for: 1m
+        labels:
+          severity: critical
+          service: desktop
+        annotations:
+          summary: Desktop/browser healer exceeded five minutes
+
+      - alert: FBDesktopHealerMetricsStale
+        expr: |
+          (
+            (
+              count by (node, instance) (
+                fb_agent_host_operation_status{role="application"}
+              )
+              unless on(node, instance)
+              fb_agent_host_operation_last_completion_timestamp_seconds{role="application",operation="desktop_healer"}
+            )
+            and on(node, instance)
+            (
+              time()
+              - node_boot_time_seconds{job="node",role="application"}
+              > 300
+            )
+          )
+          or
+          (
+            time()
+            - fb_agent_host_operation_last_completion_timestamp_seconds{role="application",operation="desktop_healer"}
+            > 300
+          )
+        for: 2m
+        labels:
+          severity: critical
+          service: desktop
+        annotations:
+          summary: Periodic desktop healer has stopped reporting
+          description: "The systemd timer or the root-owned textfile writer has not completed for five minutes."
+
+      - alert: FBReleaseReconciliationFailed
+        expr: fb_agent_host_operation_status{role="application",operation=~"release(_boot)?_reconcile"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: release
+        annotations:
+          summary: Atomic release reconciliation failed
+          description: "{{ $labels.operation }} requires operator investigation."
+
+      - alert: FBReleaseReconciliationStuck
+        expr: |
+          fb_agent_host_operation_status{role="application",operation=~"release(_boot)?_reconcile"} == -1
+          and on(node, instance, operation)
+          (
+            time()
+            - fb_agent_host_operation_last_start_timestamp_seconds{role="application"}
+            > 185
+          )
+        for: 15s
+        labels:
+          severity: critical
+          service: release
+        annotations:
+          summary: Atomic release reconciliation exceeded its deadline
+
+      - alert: FBBootReconciliationMetricsAbsent
+        expr: |
+          (
+            (
+              node_boot_time_seconds{job="node",role="application"}
+              and on(node, instance)
+              (
+                time()
+                - node_boot_time_seconds{job="node",role="application"}
+                > 600
+              )
+              and on(node, instance)
+              count by (node, instance) (
+                fb_agent_host_operation_status{role="application"}
+              )
+            )
+            unless on(node, instance)
+            fb_agent_host_operation_last_completion_boot_time_seconds{role="application",operation="release_boot_reconcile"}
+          )
+          or
+          (
+            (
+              node_boot_time_seconds{job="node",role="application"}
+              and on(node, instance)
+              (
+                time()
+                - node_boot_time_seconds{job="node",role="application"}
+                > 600
+              )
+              and on(node, instance)
+              count by (node, instance) (
+                fb_agent_host_operation_status{role="application"}
+              )
+            )
+            != on(node, instance)
+            fb_agent_host_operation_last_completion_boot_time_seconds{role="application",operation="release_boot_reconcile"}
+          )
+        for: 2m
+        labels:
+          severity: critical
+          service: release
+        annotations:
+          summary: Boot release reconciler has not reported
+          description: "The host has been up for ten minutes without a reconciliation completed during this boot."
+
+      - alert: FBReleaseRollbackFailed
+        expr: fb_agent_host_operation_status{role="application",operation="release_rollback"} == 0
+        for: 15s
+        labels:
+          severity: critical
+          service: release
+        annotations:
+          summary: Release rollback failed and requires operator action
+          description: "The alert clears only after a successful reconciliation records recovery."
+
+      - alert: FBHostCriticalOperationRecoveredAfterFailure
+        expr: |
+          (
+            (
+              time() - fb_agent_host_operation_last_failure_timestamp_seconds{
+                role="application",
+                operation=~"pgbackrest_(full|diff)|restore_drill|desktop_healer|release(_boot)?_reconcile|release_rollback"
+              } < 900
+            )
+            and on(node, instance, operation)
+            (
+              fb_agent_host_operation_last_recovery_timestamp_seconds{role="application"}
+              >=
+              fb_agent_host_operation_last_failure_timestamp_seconds{role="application"}
+            )
+          )
+          or
+          (
+            increase(fb_agent_host_operation_recoveries_total{
+              role="application",
+              operation=~"pgbackrest_(full|diff)|restore_drill|desktop_healer|release(_boot)?_reconcile|release_rollback"
+            }[15m]) > 0
+          )
+        labels:
+          severity: critical
+          service: platform
+        annotations:
+          summary: Critical host operation failed and then recovered
+          description: "{{ $labels.operation }} recovered, but its durable failure event still requires review."

@@ -135,6 +135,7 @@ class ScanComplete(_message.Message):
         "warnings",
         "empty_reason",
         "rows_with_all_metrics_empty",
+        "metrics_contract_revision",
     )
     ALL_ROWS_FIELD_NUMBER: _ClassVar[int]
     TOTAL_PASSES_FIELD_NUMBER: _ClassVar[int]
@@ -146,6 +147,7 @@ class ScanComplete(_message.Message):
     WARNINGS_FIELD_NUMBER: _ClassVar[int]
     EMPTY_REASON_FIELD_NUMBER: _ClassVar[int]
     ROWS_WITH_ALL_METRICS_EMPTY_FIELD_NUMBER: _ClassVar[int]
+    METRICS_CONTRACT_REVISION_FIELD_NUMBER: _ClassVar[int]
     all_rows: _containers.RepeatedCompositeFieldContainer[ScannedAdRow]
     total_passes: int
     duration_seconds: float
@@ -156,6 +158,7 @@ class ScanComplete(_message.Message):
     warnings: _containers.RepeatedScalarFieldContainer[str]
     empty_reason: str
     rows_with_all_metrics_empty: int
+    metrics_contract_revision: int
     def __init__(
         self,
         all_rows: _Optional[_Iterable[_Union[ScannedAdRow, _Mapping]]] = ...,
@@ -168,6 +171,7 @@ class ScanComplete(_message.Message):
         warnings: _Optional[_Iterable[str]] = ...,
         empty_reason: _Optional[str] = ...,
         rows_with_all_metrics_empty: _Optional[int] = ...,
+        metrics_contract_revision: _Optional[int] = ...,
     ) -> None: ...
 
 class PhaseTimings(_message.Message):
@@ -256,6 +260,7 @@ class ScannedAdRow(_message.Message):
         "adset_lifetime_budget",
         "adset_budget_remaining",
         "adset_learning_stage",
+        "adset_id",
     )
     FB_AD_ID_FIELD_NUMBER: _ClassVar[int]
     CAMPAIGN_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -290,6 +295,7 @@ class ScannedAdRow(_message.Message):
     ADSET_LIFETIME_BUDGET_FIELD_NUMBER: _ClassVar[int]
     ADSET_BUDGET_REMAINING_FIELD_NUMBER: _ClassVar[int]
     ADSET_LEARNING_STAGE_FIELD_NUMBER: _ClassVar[int]
+    ADSET_ID_FIELD_NUMBER: _ClassVar[int]
     fb_ad_id: str
     campaign_name: str
     adset_name: str
@@ -323,6 +329,7 @@ class ScannedAdRow(_message.Message):
     adset_lifetime_budget: str
     adset_budget_remaining: str
     adset_learning_stage: str
+    adset_id: str
     def __init__(
         self,
         fb_ad_id: _Optional[str] = ...,
@@ -358,34 +365,5 @@ class ScannedAdRow(_message.Message):
         adset_lifetime_budget: _Optional[str] = ...,
         adset_budget_remaining: _Optional[str] = ...,
         adset_learning_stage: _Optional[str] = ...,
-    ) -> None: ...
-
-class HardReloadPageRequest(_message.Message):
-    __slots__ = ("session_id", "page_id", "bypass_cache")
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    PAGE_ID_FIELD_NUMBER: _ClassVar[int]
-    BYPASS_CACHE_FIELD_NUMBER: _ClassVar[int]
-    session_id: str
-    page_id: str
-    bypass_cache: bool
-    def __init__(
-        self,
-        session_id: _Optional[str] = ...,
-        page_id: _Optional[str] = ...,
-        bypass_cache: bool = ...,
-    ) -> None: ...
-
-class HardReloadPageResponse(_message.Message):
-    __slots__ = ("success", "error_message", "reload_ms")
-    SUCCESS_FIELD_NUMBER: _ClassVar[int]
-    ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
-    RELOAD_MS_FIELD_NUMBER: _ClassVar[int]
-    success: bool
-    error_message: str
-    reload_ms: int
-    def __init__(
-        self,
-        success: bool = ...,
-        error_message: _Optional[str] = ...,
-        reload_ms: _Optional[int] = ...,
+        adset_id: _Optional[str] = ...,
     ) -> None: ...

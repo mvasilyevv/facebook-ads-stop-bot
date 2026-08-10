@@ -12,11 +12,17 @@ from core.ai_assistant.prompts import (
 )
 
 
-# Существующий v1-скил читается с диска и не пустой
+# Существующий скил читается с диска и не пустой.
 def test_load_skill_reads_existing() -> None:
-    text = load_skill("chat_operator")
+    text = load_skill("pulse_report")
     assert "Telegram" in text
     assert len(text) > 100
+
+
+# Удалённый legacy Telegram-оператор не должен незаметно вернуться.
+def test_removed_chat_operator_skill_stays_absent() -> None:
+    with pytest.raises(PromptNotFoundError):
+        load_skill("chat_operator")
 
 
 # Несуществующий скил — явная PromptNotFoundError, а не пустая строка

@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Unit: FSM-синхронизация после Marketing API mutation (core/meta_api/fsm_sync.py).
-
-Проверяем маршрутизацию mutation_kind → нужный reset, разбор обеих форм bulk-params
-и best-effort (ошибка reset не пробрасывается). reset-функции мокаются — БД не нужна.
-"""
+"""Unit tests for transactional FSM projection after a Meta mutation."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
 import pytest
 
-from core.meta_api.fsm_sync import _resolve_bulk_ad_toggle, sync_fsm_after_mutation
+from core.meta_api.errors import MutationValidationError
+from core.meta_api.fsm_sync import (
+    _resolve_bulk_ad_toggle,
+    sync_fsm_after_mutation_in_transaction,
+)
+from core.meta_api.mutations.bulk_status_change import BulkStatusChangeHandler
 from core.meta_api.schemas import MetaMutationPayload
 
 
@@ -22,211 +21,136 @@ def _payload(
         mutation_kind=kind,
         target_id=target_id,
         params=params or {},
-        ad_account_id=None,
+        ad_account_id="123",
     )
+
+
+class _TransactionalConn:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def execute(self, statement, params):
+        self.calls.append((str(statement), params))
 
 
 # ====================== _resolve_bulk_ad_toggle ======================
 
 
-# Сокращённая форма (drafts/autostart): action=pause → disable по всем ad_ids
+# Canonical bulk action=pause → disable по всем ad_ids
 def test_resolve_bulk_short_pause() -> None:
     ids, is_enable = _resolve_bulk_ad_toggle({"ad_ids": ["1", "2"], "action": "pause"})
     assert ids == ["1", "2"]
     assert is_enable is False
 
 
-# Сокращённая форма: action=activate → enable
+# Canonical action=activate → enable
 def test_resolve_bulk_short_activate() -> None:
     ids, is_enable = _resolve_bulk_ad_toggle({"ad_ids": ["3"], "action": "activate"})
     assert ids == ["3"]
     assert is_enable is True
 
 
-# Сокращённая форма с мусорным action → не трогаем (пустой список)
+# Мусорный action → не трогаем (пустой список)
 def test_resolve_bulk_short_unknown_action_noop() -> None:
     ids, _ = _resolve_bulk_ad_toggle({"ad_ids": ["1"], "action": "delete"})
     assert ids == []
 
 
-# Полная форма object_type=ad + PAUSED → disable
-def test_resolve_bulk_full_ad_paused() -> None:
-    ids, is_enable = _resolve_bulk_ad_toggle(
-        {"object_ids": ["9", "10"], "status": "PAUSED", "object_type": "ad"}
-    )
-    assert ids == ["9", "10"]
-    assert is_enable is False
-
-
-# Полная форма object_type=ad + ACTIVE → enable
-def test_resolve_bulk_full_ad_active() -> None:
-    ids, is_enable = _resolve_bulk_ad_toggle(
-        {"object_ids": ["9"], "status": "ACTIVE", "object_type": "ad"}
-    )
-    assert ids == ["9"]
-    assert is_enable is True
-
-
-# Полная форма object_type=campaign → НЕ трогаем ad_alert_state (нет такого state у кампаний)
-def test_resolve_bulk_full_campaign_skipped() -> None:
-    ids, _ = _resolve_bulk_ad_toggle(
-        {"object_ids": ["9"], "status": "PAUSED", "object_type": "campaign"}
-    )
+def test_resolve_bulk_rejects_removed_full_form() -> None:
+    ids, _ = _resolve_bulk_ad_toggle({"object_ids": ["9"], "status": "PAUSED", "object_type": "ad"})
     assert ids == []
 
 
-# Полная форма object_type=adset → тоже пропускаем
-def test_resolve_bulk_full_adset_skipped() -> None:
-    ids, _ = _resolve_bulk_ad_toggle(
-        {"object_ids": ["9"], "status": "PAUSED", "object_type": "adset"}
+def test_bulk_handler_accepts_only_canonical_ad_contract() -> None:
+    ids, status = BulkStatusChangeHandler._extract_params(
+        {"ad_ids": ["2", "1", "2"], "action": "pause"}
     )
-    assert ids == []
+    assert ids == ["2", "1"]
+    assert status == "PAUSED"
+
+    with pytest.raises(MutationValidationError, match="ad_ids"):
+        BulkStatusChangeHandler._extract_params(
+            {"object_ids": ["1"], "status": "PAUSED", "object_type": "ad"}
+        )
 
 
-# ====================== sync_fsm_after_mutation: маршрутизация ======================
-
-
-# pause_ad → вызывается disable-reset c target_id, enable-reset НЕ вызывается
 @pytest.mark.asyncio
-async def test_sync_pause_ad_calls_disable_reset(monkeypatch) -> None:
-    disable_mock = AsyncMock(return_value=True)
-    enable_mock = AsyncMock(return_value=True)
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_disable_succeeded", disable_mock
+async def test_transactional_pause_projects_only_stoppable_states() -> None:
+    conn = _TransactionalConn()
+
+    await sync_fsm_after_mutation_in_transaction(
+        conn,
+        _payload("pause_ad", target_id="555"),
+        {"outcome": "CONFIRMED", "modified_ids": ["555"]},
     )
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_enable_succeeded", enable_mock
-    )
 
-    await sync_fsm_after_mutation(object(), _payload("pause_ad", target_id="555"))
-
-    disable_mock.assert_awaited_once()
-    assert disable_mock.await_args.kwargs["fb_ad_id"] == "555"
-    enable_mock.assert_not_awaited()
+    sql, params = conn.calls[0]
+    assert params == {"fbid": "555"}
+    assert "alert_state = 'disabled'" in sql
+    assert "warning_sent" in sql
+    assert "stop_sent" in sql
+    assert "claimed" in sql
 
 
-# activate_ad → вызывается enable-reset, disable-reset НЕ вызывается
 @pytest.mark.asyncio
-async def test_sync_activate_ad_calls_enable_reset(monkeypatch) -> None:
-    disable_mock = AsyncMock(return_value=True)
-    enable_mock = AsyncMock(return_value=True)
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_disable_succeeded", disable_mock
+async def test_transactional_activation_cannot_normalize_newer_stop_generation() -> None:
+    conn = _TransactionalConn()
+
+    await sync_fsm_after_mutation_in_transaction(
+        conn,
+        _payload("activate_ad", target_id="777"),
+        {"outcome": "CONFIRMED", "modified_ids": ["777"]},
     )
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_enable_succeeded", enable_mock
-    )
 
-    await sync_fsm_after_mutation(object(), _payload("activate_ad", target_id="777"))
-
-    enable_mock.assert_awaited_once()
-    assert enable_mock.await_args.kwargs["fb_ad_id"] == "777"
-    disable_mock.assert_not_awaited()
+    sql, params = conn.calls[0]
+    assert params == {"fbid": "777"}
+    assert "alert_state = 'disabled'" in sql
+    assert "warning_sent" not in sql
+    assert "stop_sent" not in sql
+    assert "claimed" not in sql
 
 
-# bulk activate → enable-reset вызывается для каждого ad_id
 @pytest.mark.asyncio
-async def test_sync_bulk_activate_calls_enable_per_id(monkeypatch) -> None:
-    disable_mock = AsyncMock(return_value=True)
-    enable_mock = AsyncMock(return_value=True)
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_disable_succeeded", disable_mock
-    )
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_enable_succeeded", enable_mock
-    )
+async def test_transactional_bulk_projects_only_confirmed_ids() -> None:
+    conn = _TransactionalConn()
 
-    await sync_fsm_after_mutation(
-        object(),
-        _payload(
-            "bulk_status_change",
-            target_id="bulk:3",
-            params={"ad_ids": ["1", "2", "3"], "action": "activate"},
-        ),
-    )
-
-    assert enable_mock.await_count == 3
-    called_ids = {c.kwargs["fb_ad_id"] for c in enable_mock.await_args_list}
-    assert called_ids == {"1", "2", "3"}
-    disable_mock.assert_not_awaited()
-
-
-# pause_campaign / set_adset_budget / create_campaign — ad_alert_state НЕ трогаем
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "kind", ["pause_campaign", "activate_campaign", "set_adset_budget", "create_campaign"]
-)
-async def test_sync_non_ad_kinds_noop(monkeypatch, kind: str) -> None:
-    disable_mock = AsyncMock(return_value=True)
-    enable_mock = AsyncMock(return_value=True)
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_disable_succeeded", disable_mock
-    )
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_enable_succeeded", enable_mock
-    )
-
-    await sync_fsm_after_mutation(object(), _payload(kind))
-
-    disable_mock.assert_not_awaited()
-    enable_mock.assert_not_awaited()
-
-
-# Ошибка в reset не должна пробрасываться (best-effort, succeeded-контракт задачи важнее)
-@pytest.mark.asyncio
-async def test_sync_swallows_reset_error(monkeypatch) -> None:
-    async def _boom(*a, **kw):
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr("core.meta_api.fsm_sync.reset_alert_state_after_disable_succeeded", _boom)
-
-    # Не должно бросить наружу.
-    await sync_fsm_after_mutation(object(), _payload("pause_ad"))
-
-
-# H2: bulk с частичным результатом → reset ТОЛЬКО по применённым (result['modified_ids']),
-# а не по всему входному списку. Иначе непримененные ads получают ложный normal/disabled
-# → рассинхрон FSM с Meta → observer слепнет (пережог).
-@pytest.mark.asyncio
-async def test_sync_bulk_partial_marks_only_applied(monkeypatch) -> None:
-    disable_mock = AsyncMock(return_value=True)
-    enable_mock = AsyncMock(return_value=True)
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_disable_succeeded", disable_mock
-    )
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_enable_succeeded", enable_mock
-    )
-
-    await sync_fsm_after_mutation(
-        object(),
+    await sync_fsm_after_mutation_in_transaction(
+        conn,
         _payload(
             "bulk_status_change",
             params={"ad_ids": ["1", "2", "3"], "action": "activate"},
         ),
-        result={"modified_ids": ["1", "3"]},  # "2" не применился (частичный провал)
+        {"outcome": "CONFIRMED", "modified_ids": ["1", "3"]},
     )
 
-    called_ids = {c.kwargs["fb_ad_id"] for c in enable_mock.await_args_list}
-    assert called_ids == {"1", "3"}  # "2" НЕ помечен
-    assert enable_mock.await_count == 2
-    disable_mock.assert_not_awaited()
+    assert [params["fbid"] for _, params in conn.calls] == ["1", "3"]
 
 
-# H2: result без modified_ids (обратная совместимость) → метим все ad_ids (как раньше).
 @pytest.mark.asyncio
-async def test_sync_bulk_no_result_marks_all(monkeypatch) -> None:
-    enable_mock = AsyncMock(return_value=True)
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_disable_succeeded", AsyncMock()
-    )
-    monkeypatch.setattr(
-        "core.meta_api.fsm_sync.reset_alert_state_after_enable_succeeded", enable_mock
+async def test_transactional_bulk_requires_explicit_confirmed_ids() -> None:
+    conn = _TransactionalConn()
+
+    with pytest.raises(ValueError, match="modified_ids is required"):
+        await sync_fsm_after_mutation_in_transaction(
+            conn,
+            _payload(
+                "bulk_status_change",
+                params={"ad_ids": ["1", "2"], "action": "activate"},
+            ),
+            {"outcome": "CONFIRMED"},
+        )
+
+    assert conn.calls == []
+
+
+@pytest.mark.asyncio
+async def test_transactional_non_status_mutation_is_noop() -> None:
+    conn = _TransactionalConn()
+
+    await sync_fsm_after_mutation_in_transaction(
+        conn,
+        _payload("duplicate_adset_structure"),
+        {"outcome": "CONFIRMED", "modified_ids": ["42"]},
     )
 
-    await sync_fsm_after_mutation(
-        object(),
-        _payload("bulk_status_change", params={"ad_ids": ["1", "2"], "action": "activate"}),
-    )
-
-    assert enable_mock.await_count == 2  # без result — все
+    assert conn.calls == []

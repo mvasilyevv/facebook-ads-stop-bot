@@ -1,280 +1,143 @@
-# Production deployment — FB Agent
+# Production deployment
 
-Основной production-контур проекта — один Linux-сервер с Docker Compose, Caddy и
-отдельным Vision webtop. `run.sh` предназначен для локальной разработки. Helm и
-raw Kubernetes-манифесты остаются экспериментальными и не являются поддерживаемым
-способом выкладки money-критичного контура.
+The supported production path is the safety-first platform described in
+[`deploy/bluegreen/README.md`](deploy/bluegreen/README.md). The former
+monolithic Compose, host Vision/Xvfb, local `pg_dump`, long-polling Telegram
+and Helm/K3s release paths are not supported launchers.
 
-## Архитектура
+## Release entrypoint
 
-| Компонент | Размещение | Внешний доступ |
-|---|---|---|
-| Caddy | systemd на хосте | `80/443` |
-| React-панель | Docker, `127.0.0.1:8080` | `https://app.adpulse.su/`, Telegram OIDC session |
-| Telegram Mini App | Docker, `127.0.0.1:8081` | `https://app.adpulse.su/tma/` |
-| FastAPI | Docker, `127.0.0.1:8100` | `/api`, `/ws`, `/healthz`, `/readyz` |
-| Postgres / Redis | Docker, loopback | не публикуются наружу |
-| Vision + KasmVNC | два digest-pinned образа, persistent `/config`, общий X11/IPC | `https://desktop.adpulse.su/` |
-| browser-agent | Docker, network namespace Vision | gRPC через `127.0.0.1:50051` |
-
-Vision и browser-agent разделяют network namespace. Это принципиально: Vision
-выдаёт динамический CDP-порт на loopback, и публиковать диапазон CDP наружу не
-нужно. Webtop публикует `3030` и `50051` только на loopback хоста.
-
-## Требования к серверу
-
-- Ubuntu x86_64, минимум 4 CPU / 8 GB RAM / 40 GB SSD;
-- Docker Engine и Docker Compose v2;
-- Caddy 2;
-- активный firewall: наружу открыты только SSH, `80` и `443`; Kasm работает через WebSocket без публичного UDP;
-- DNS `app.adpulse.su` и `desktop.adpulse.su` указывает на сервер;
-- в BotFather зарегистрированы origin `https://app.adpulse.su` и callback
-  `https://app.adpulse.su/auth/telegram/callback`;
-- swap 4 GB рекомендуется как страховка от пиков сборки/Vision;
-- локальный `.env` с `ENCRYPTION_KEY`, Vision, Telegram и API-секретами.
-
-## Первая установка
-
-### 1. Vision webtop
-
-Существующий `/opt/vision-webtop/config` не удаляется: там находятся профиль,
-cookies и настройки рабочего стола.
-
-Production workflow собирает custom webtop в GHCR и передаёт installer его
-immutable `image@sha256` reference. Installer не пересобирает desktop на VPS и
-не пересоздаёт его при релизах, в которых manifest и desktop secrets не менялись.
-Для ручного запуска укажите тот же immutable artifact:
+CI builds every image once, resolves it to an immutable digest and calls:
 
 ```bash
-DESKTOP_WEBTOP_IMAGE='ghcr.io/owner/repo-vision-webtop@sha256:...' \
-DESKTOP_KASMVNC_IMAGE='ghcr.io/owner/repo-kasmvnc-sidecar@sha256:...' \
-  sudo -E ./scripts/install-vision-webtop.sh
+./scripts/deploy-platform-server.sh \
+  --host deploy@app-host.example \
+  --release-env release-images.env
 ```
 
-Перед первым переносом нужно выключить scanning и дождаться нуля `running`-задач.
-Installer проверяет это fail-closed, сохраняет `/config`, DISPLAY/геометрию,
-Vision profile и CDP port, затем запускает KasmVNC 1.4.0 поверх существующего
-`DISPLAY=:1` через `kasmxproxy` без resize. При любой ошибке compose, `/config` и
-browser-agent возвращаются в предыдущее состояние.
-После установки:
+The remote entrypoint is `scripts/server-platform-release.sh`. It serializes
+deployment and reconciliation with the shared deploy lock, releases the
+desktop independently, proves the pre-migration backup/PITR gate, prepares the
+inactive application colour and changes traffic only after health and contract
+checks pass.
+
+Do not build images on the server and do not invoke Compose files directly for
+a production release. A release is uploaded into a private staging directory,
+verified against `.fb-agent-source-manifest.json`, and published with one
+same-filesystem rename. Reusing a `RELEASE_ID` is read-only and succeeds only
+when both the source manifest and image manifest are byte-identical.
+
+## First platform adoption
+
+First adoption is an explicit maintenance operation. The squashed Alembic
+baseline is fresh-install-only: it never upgrades a database stamped with a
+historical revision. Follow the checklist in `deploy/bluegreen/README.md`;
+keep the incumbent database and its backups untouched while a separate empty
+target database is created, baselined and validated. Switching the runtime DSN
+is a distinct, human-approved cutover step. No release script drops, stamps or
+converts the incumbent database.
+
+The target infra defaults to the dedicated
+`fb_agent_safety_first_pgdata` volume. There is no legacy volume fallback. An
+explicit `POSTGRES_VOLUME` override is accepted only after bootstrap proves
+that the database is empty or claims the complete
+`0001_safety_first_baseline`; the release migrator then runs `alembic check`
+and rejects any extra legacy schema or ORM drift before activation.
+
+Before the first release, provision these root-only prerequisites:
+
+- `/opt/fb-agent/shared/alloy-agent.env` (mode `0600`) with reachable private
+  HTTPS Prometheus, Loki and Tempo ingest URLs;
+- `/opt/fb-agent/shared/desktop-profile-seed` (mode `0700`) containing the
+  independently prepared Vision browser profile. The directory and every
+  entry must be owned by `root:root`; symlinks, special files and
+  group/world-writable entries are rejected. It must include a root-owned
+  mode-`0600`
+  `.fb-agent-vision-profile-v1` file whose exact content is
+  `fb-agent-vision-profile-v1`.
+
+The release never snapshots an incumbent desktop to invent this seed. It
+validates and hashes the seed before database/application activation, copies
+it through an atomic staging directory only into an absent fresh profile, and
+refuses an unmanaged pre-existing config. A root-owned bootstrap marker inside
+the staged profile makes a power-loss retry resumable without treating an
+unknown profile as managed or deleting a profile that may have changed.
+
+Every later Vision mutation persists its pre-change runtime contract and then,
+while the old containers are only stopped, an exact profile snapshot. The
+`snapshot_ready` journal is fsynced before the destructive Compose `down`, so a
+power loss resumes in either the candidate or previous direction without
+inventing profile state.
+
+## Normal operations
 
 ```bash
-curl -u "$DESKTOP_KASM_SERVICE_USER:$DESKTOP_KASM_SERVICE_PASSWORD" \
-  -fsS http://127.0.0.1:8444/ >/dev/null
-# /desktop-readyz снаружи закрыт owner-сессией панели;
-# с хоста проверяем напрямую через loopback, мимо Caddy.
-curl -fsS http://127.0.0.1:8100/desktop-readyz
-docker logs --tail=100 vision-webtop
+# Validate Compose, telemetry and release contracts.
+./scripts/validate-platform-configs.sh --containers
+
+# Inspect the committed active colour.
+python3 scripts/release-state.py get \
+  --state-root /opt/fb-agent/shared/release-state \
+  --source active --field color
+
+# Operate the committed application and desktop lifecycles independently.
+sudo /opt/fb-agent/current/scripts/platform-compose.sh status
+sudo /opt/fb-agent/shared/active-desktop-state/release/scripts/platform-desktop-compose.sh status
+
+# Run a reviewed full backup and isolated restore drill.
+sudo /opt/fb-agent/current/scripts/pgbackrest-admin.sh \
+  --release-env /opt/fb-agent/shared/active-release-images.env \
+  --app-env /opt/fb-agent/shared/active-app.env \
+  --backup-env /opt/fb-agent/shared/pgbackrest.env full
+sudo /opt/fb-agent/current/scripts/pgbackrest-restore-drill.sh \
+  --release-env /opt/fb-agent/shared/active-release-images.env \
+  --app-env /opt/fb-agent/shared/active-app.env \
+  --backup-env /opt/fb-agent/shared/pgbackrest.env
 ```
 
-При первом запуске нужно открыть `https://desktop.adpulse.su/` через launcher
-панели и убедиться, что Vision доступен без повторного логина и изменения Meta-сессии.
+Rollback switches Caddy and singleton worker leases to the previous colour.
+It never downgrades PostgreSQL. Backup replicas are not counted as backups.
 
-#### Экстренный обрыв desktop-доступа
+Desktop/Vision stop and restart paths acquire one renewable PostgreSQL
+maintenance lease. Browser-backed claims take the matching transaction-level
+advisory lock before reading the gate, closing the pre-INSERT snapshot race;
+maintenance then requires scanning disabled and zero running browser tasks.
 
-Logout, истечение сессии и демоция владельца не рвут уже открытый
-WebSocket-туннель Kasm: forward_auth проверяет сессию только в момент
-подключения. Жёсткий потолок жизни туннеля задаёт `stream_timeout 30m` в
-`deploy/caddy/desktop.adpulse.su.caddy` — ревокация вступает в силу максимум через
-30 минут. При обрыве клиент Kasm показывает дисконнект; повторное
-подключение (reconnect или перезагрузка вкладки) заново проходит проверку
-сессии, состояние `DISPLAY=:1` не теряется. Если доступ
-нужно оборвать **немедленно**:
+## Production gates
 
-```bash
-ssh root@62.60.150.133 'docker restart vision-webtop-kasmvnc-1'
-```
-
-Рестарт рвёт активные туннели, но не перезапускает `vision-webtop`, Vision,
-профиль или browser-agent.
-
-### 2. Приложение
-
-Из рабочей копии на операторской машине:
-
-```bash
-./scripts/deploy-server.sh --allow-vision-offline
-```
-
-По умолчанию цель — `root@62.60.150.133`, корень — `/opt/fb-agent`, публичный URL
-— `https://app.adpulse.su`. Значения можно изменить:
-
-```bash
-./scripts/deploy-server.sh \
-  --host root@example.org \
-  --root /opt/fb-agent \
-  --public-url https://app.example.org
-```
-
-Перед записью на сервер доступен честный dry-run rsync:
-
-```bash
-./scripts/deploy-server.sh --dry-run
-```
-
-Deployment:
-
-1. использует существующий server-side `.env`, если он уже есть;
-2. на первой установке генерирует сильный Postgres-пароль и TMA session secret;
-3. валидирует Fernet-ключ, production-флаги, права `0600`, диск и память;
-4. загружает рабочее дерево без `.git`, `.env`, `data/`, зависимостей и build output;
-5. собирает образы с неизменяемым release tag;
-6. делает `pg_dump` перед миграциями, если БД уже существует;
-7. запускает миграции и весь стек, ждёт Docker healthchecks;
-8. проверяет `/healthz` и `/readyz` и только потом переключает `current`;
-9. при ошибке возвращает предыдущие образы. БД автоматически назад не
-   восстанавливается, потому что такой rollback может потерять новые данные.
-
-`--allow-vision-offline` допускается только для первоначальной инфраструктурной
-выкладки и пропускает только проверку Vision API/CDP. Контейнер `vision-webtop`
-уже должен быть запущен: `browser-agent` разделяет его network namespace, поэтому
-при отсутствующем или остановленном контейнере Docker физически не сможет создать
-`browser-agent`, и preflight завершится ошибкой даже с этим флагом. В разрешённом
-degraded-режиме `/readyz` должен быть зелёным, а `/system-readyz` честно остаётся
-красным до входа в Vision и готовности auto-stop контура.
-
-### 3. Caddy и systemd
-
-Сначала зарегистрируйте в BotFather точные production origin и callback, затем
-запишите выданные Client ID/Secret в общий root-only env. Secret читается из
-stdin и не попадает в argv или shell history:
-
-```bash
-sudo /opt/fb-agent/current/scripts/configure-panel-oidc.py \
-  --env-file /opt/fb-agent/shared/.env \
-  --client-id '<numeric-client-id>' \
-  --redirect-uri 'https://app.adpulse.su/auth/telegram/callback'
-# Введите Client Secret и завершите stdin через Ctrl-D.
-```
-
-`install-server-units.sh` запускает полную production-env validation до первого
-изменения Caddy и остановится, если OIDC не настроен.
-
-Создайте `/etc/fb-agent/caddy.env` с правами `0600`:
-
-```dotenv
-PANEL_BASIC_AUTH_USER=operator
-PANEL_BASIC_AUTH_HASH='$2a$...bcrypt-hash...'
-```
-
-Эти credentials используются только hidden break-glass listener на
-`127.0.0.1:8099`; публичный host не содержит BasicAuth. `API_KEY` вручную в этот
-файл копировать не нужно. При установке каждого release
-`scripts/sync-caddy-env.py` читает его из `/opt/fb-agent/shared/.env` как данные
-(без shell `source/eval`) и атомарно обновляет только server-side Caddy env.
-Frontend проходит cookie `forward_auth`, после чего Caddy добавляет ключ в
-upstream; секрет не попадает в JS bundle, browser storage или WebSocket URL.
-
-Break-glass открывается только через SSH tunnel. Панель доступна по loopback IP,
-desktop — по отдельному `.localhost` Host на том же listener:
-
-```bash
-ssh -L 8099:127.0.0.1:8099 root@62.60.150.133
-# Затем открыть http://127.0.0.1:8099 и использовать PANEL_BASIC_AUTH_*.
-# Для desktop открыть http://desktop.localhost:8099.
-```
-
-Затем:
-
-```bash
-sudo /opt/fb-agent/current/scripts/install-server-units.sh
-```
-
-Скрипт атомарно устанавливает Caddy sites `app.adpulse.su` и
-`desktop.adpulse.su`; desktop host допускает только одноразовый redeem/logout и
-cookie-защищённый Kasm upstream. Также устанавливаются:
-
-- `fb-agent.service` — автозапуск текущего release;
-- `fb-agent-backup.timer` — ежедневный `pg_dump`;
-- `fb-agent-healthcheck.timer` — host-level readiness каждые 5 минут.
-
-## Структура релизов
-
-```text
-/opt/fb-agent/
-├── current -> releases/20260713T...-<git-sha>
-├── releases/                       # последние 5 релизов
-├── shared/.env                     # 0600, не находится в release
-└── backups/postgres/               # custom-format dump + sha256
-```
-
-Все Compose-запуски используют стабильное имя проекта `fb_agent`; поэтому volume
-БД, Redis и uploads не меняются между релизами.
-
-## Проверка после выкладки
-
-```bash
-sudo systemctl status fb-agent --no-pager
-sudo /opt/fb-agent/current/scripts/server-compose.sh status
-sudo /opt/fb-agent/current/scripts/server-compose.sh ready
-
-curl -fsS http://127.0.0.1:8100/healthz
-curl -fsS http://127.0.0.1:8100/readyz
-curl -fsS http://127.0.0.1:8100/desktop-readyz
-curl -I https://app.adpulse.su/                # 303 на /auth/login без session cookie
-curl -i https://app.adpulse.su/api/stats/today # 401 + X-Auth-Login-Url без session cookie
-curl -fsS https://app.adpulse.su/tma/ >/dev/null
-curl -fsS https://app.adpulse.su/healthz
-```
-
-`/system-readyz` — более строгая проверка: она учитывает Vision, browser-agent,
-heartbeat money-воркеров, Meta API и включённость сканирования. Её нельзя
-подменять инфраструктурной `/readyz` в процессе деплоя.
-
-Логи:
-
-```bash
-sudo /opt/fb-agent/current/scripts/server-compose.sh logs
-sudo journalctl -u fb-agent -u fb-agent-healthcheck --since today
-```
-
-## Бэкап и восстановление
-
-Ручной бэкап:
-
-```bash
-sudo /opt/fb-agent/current/scripts/backup-postgres.sh
-sudo systemctl start fb-agent-backup.service
-```
-
-Проверка dump без восстановления:
-
-```bash
-sha256sum -c /opt/fb-agent/backups/postgres/<backup>.dump.sha256
-docker compose -p fb_agent exec -T postgres pg_restore --list \
-  </opt/fb-agent/backups/postgres/<backup>.dump >/dev/null
-```
-
-Восстановление — отдельная аварийная операция: остановить writers, сделать ещё
-один backup текущего состояния, восстановить dump в пустую БД, применить
-миграции и только затем снова запускать воркеры. Пошаговый сценарий находится в
-`docs/playbooks/RUNBOOKS.md`.
-
-## Ручной rollback приложения
-
-```bash
-previous=/opt/fb-agent/releases/<release-id>
-sudo ln -sfn "$previous" /opt/fb-agent/current.new
-sudo mv -Tf /opt/fb-agent/current.new /opt/fb-agent/current
-sudo systemctl restart fb-agent
-```
-
-Rollback кода не означает rollback схемы. Перед откатом убедитесь, что старая
-версия совместима с уже применёнными миграциями.
-
-## Локальная разработка
-
-```bash
-cp .env.example .env
-make bootstrap
-./run.sh
-```
-
-Этот путь использует локальные процессы/supervisord и не должен применяться как
-production init system.
-
-## Kubernetes
-
-`helm/` и `k8s/` сохранены для исследований. Пока chart не проходит тот же набор
-readiness, backup/restore и Vision co-location тестов, production поддерживается
-только через Compose-процедуру выше.
+- Candidate API health, readiness and OpenAPI contracts pass before traffic.
+- Candidate Alloy, node-exporter and cAdvisor are running, Alloy reports ready,
+  and all private ingest HTTPS transports respond before application cutover.
+- Desktop cutover requires the exact PostgreSQL Vision profile, a concrete live
+  browser session, a successful full Graph probe, a compatible versioned
+  browser-agent contract and
+  `/desktop-readyz` proving configured credentials, an anonymous `401`
+  challenge and an authenticated `200`.
+- Panel and new desktop connections authorize against the active PostgreSQL
+  owner roster on every forward-auth. Public panel WebSockets and Kasm streams
+  are forcibly bounded to one minute; acceptance must prove that reconnects
+  transparently preserve panel state and Kasm input, clipboard and the active
+  Ads Manager tab, and that a revoked owner cannot reconnect after the current
+  stream closes.
+- Desktop state, readiness credentials, Caddy credentials and systemd units
+  are reconciled from `desktop-transaction.env`. The atomic active-state
+  pointer is the durable commit point; the healer completes either direction
+  after semantic readiness, including after reboot.
+- Root-owned systemd launchers verify the immutable source manifest and sealed
+  release tree before executing app or desktop scripts. The desktop boot gate
+  additionally requires the exact committed healthy Vision container identity;
+  a merely running same-name container is rejected.
+- Full backup, archived post-backup WAL marker and isolated PITR pass before a
+  migration-capable release.
+- The first accepted backup/restore evidence automatically enables and verifies
+  weekly full, daily differential and monthly restore-drill timers. Every later
+  release fails closed if a required timer is disabled or inactive.
+- Images are digest-pinned; the VPS never performs a production build.
+- Caddy switch produces zero deployment 5xx and rollback completes in at most
+  three minutes.
+- Off-host monitoring and backup remain independent of the application host.
+- The migrator sees either an empty database or exactly
+  `0001_safety_first_baseline`; every historical/unversioned non-empty target
+  fails before DDL.
+- Automatic database failover is not enabled until the SLO, restore and chaos
+  prerequisites in the implementation plan are met.

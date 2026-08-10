@@ -1,31 +1,108 @@
 # -*- coding: utf-8 -*-
-"""Owner-scoped резолв ad_id по offer-коду для массовых mutations (bulk pause/activate).
-
-Используется TG-командами /pause /resume. Возвращает только активные объявления
-СВОИХ кампаний (owner-scoping), чтобы массовая операция не задела чужую рекламу
-в общем кабинете.
-"""
+"""Owner-scoped bulk command helpers without autonomous activation paths."""
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
-from datetime import datetime
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.observer.queries import campaign_matches_owner
 
+logger = logging.getLogger(__name__)
+
 MAX_BULK = 50
 
-# LOW (аудит 02.07): SQL-запросы ниже читали ВСЕ совпавшие строки без LIMIT (Python-срез
-# owned[:limit] применялся уже ПОСЛЕ полной выборки в память) — на большом каталоге это
-# unbounded read по offer-код/campaign_ids паттерну. SQL LIMIT ставим с большим запасом
-# над реальными limit'ами вызовов (MAX_BULK=50, _AUTOSTART_MAX_ADS=2000), чтобы:
-# (1) ограничить pathological сканы, (2) НЕ исказить total (второй элемент кортежа —
-# используется вызывающими для честного "усечено до N" сообщения/лога) для любых
-# реалистичных объёмов каталога.
+# Bound catalog reads before applying the stricter operator limit in Python.
+# The larger SQL cap keeps the reported total useful without allowing an
+# unbounded scan when an offer code matches an unexpectedly large catalogue.
 _SQL_ROW_CAP = 20000
+
+
+@dataclass(frozen=True, slots=True)
+class StatusTargetLocks:
+    """Deterministic session locks held through one read-only reconciliation."""
+
+    requested_ad_ids: tuple[str, ...]
+    busy_ad_id: str | None = None
+
+
+@asynccontextmanager
+async def locked_status_targets(
+    engine: AsyncEngine,
+    *,
+    ad_ids: tuple[str, ...] | list[str],
+) -> AsyncIterator[StatusTargetLocks]:
+    """Serialize ambiguous bulk-status reconciliation per immutable ad id.
+
+    A busy target is reported without waiting. Acquired locks remain held until
+    the caller terminalizes the UNKNOWN command, preventing a concurrent money
+    command from crossing the read/finalize boundary.
+    """
+    requested = tuple(sorted({str(ad_id).strip() for ad_id in ad_ids if str(ad_id).strip()}))
+    if not requested:
+        raise ValueError("status target locks require at least one ad id")
+
+    acquired: list[str] = []
+    async with engine.connect() as conn:
+        try:
+            busy_ad_id: str | None = None
+            for ad_id in requested:
+                locked = await conn.scalar(
+                    text("SELECT pg_try_advisory_lock(hashtext(:ad_id))"),
+                    {"ad_id": ad_id},
+                )
+                if not bool(locked):
+                    busy_ad_id = ad_id
+                    break
+                acquired.append(ad_id)
+            await conn.commit()
+            yield StatusTargetLocks(
+                requested_ad_ids=requested,
+                busy_ad_id=busy_ad_id,
+            )
+        finally:
+
+            async def _unlock() -> None:
+                if conn.in_transaction():
+                    await conn.rollback()
+                unlock_failed = False
+                for ad_id in reversed(acquired):
+                    unlocked = await conn.scalar(
+                        text("SELECT pg_advisory_unlock(hashtext(:ad_id))"),
+                        {"ad_id": ad_id},
+                    )
+                    unlock_failed = unlock_failed or not bool(unlocked)
+                await conn.commit()
+                if unlock_failed:
+                    raise RuntimeError("one or more status reconciliation locks were not owned")
+
+            release = asyncio.create_task(_unlock())
+            try:
+                await asyncio.shield(release)
+            except asyncio.CancelledError:
+                release_error: BaseException | None = None
+                try:
+                    await release
+                except BaseException as exc:  # noqa: BLE001
+                    release_error = exc
+                if release_error is not None:
+                    try:
+                        await conn.invalidate()
+                    except Exception:
+                        logger.exception(
+                            "failed to invalidate cancelled reconciliation lock connection"
+                        )
+                raise
+            except Exception:
+                logger.exception("failed to release status reconciliation locks")
+                await conn.invalidate()
 
 
 async def resolve_owner_ad_ids(
@@ -35,15 +112,7 @@ async def resolve_owner_ad_ids(
     owner_tag: str | None = None,
     limit: int = MAX_BULK,
 ) -> tuple[list[str], int]:
-    """Активные fb_ad_id по offer-коду (word-boundary), отфильтрованные owner-тегом.
-
-    Owner-scoping: если owner_tag задан — оставляем только кампании/объявления,
-    чьё название содержит любой owner-тег (через campaign_matches_owner). Защита
-    от массового отключения чужих кампаний в общем кабинете.
-
-    Возвращает (ad_ids[:limit], total_matched_after_owner) — второй элемент нужен,
-    чтобы предупредить пользователя об усечении до limit.
-    """
+    """Resolve active owner-scoped ads for an explicit bulk command."""
     escaped = re.escape(offer_code.lower())
     pattern = rf"(^|[^a-z0-9]){escaped}([^a-z0-9]|$)"
     async with engine.connect() as conn:
@@ -78,75 +147,9 @@ async def resolve_owner_ad_ids(
     return owned[:limit], len(owned)
 
 
-async def resolve_owner_ad_ids_by_campaign_ids(
-    engine: AsyncEngine,
-    *,
-    owner_tag: str | None,
-    campaign_ids: list[str],
-    since: datetime | None = None,
-    limit: int = MAX_BULK,
-) -> tuple[list[str], int]:
-    """Активные fb_ad_id ВЫБРАННЫХ кампаний (по Meta campaign_id), owner-scoped.
-
-    Используется автостартом кабинета по расписанию (money-критично): включаются
-    объявления только тех кампаний, которые (1) пользователь выбрал галочками
-    (campaign_ids = fb_campaigns.fb_campaign_id) и (2) принадлежат владельцу
-    (owner-scoping через campaign_matches_owner). Двойная защита от включения
-    чужих/не тех кампаний в общем кабинете.
-
-    Фильтр свежести (``since``): ``fb_ads.is_active`` монотонно-истинный — он
-    выставляется в TRUE на каждом скане и НИГДЕ не сбрасывается в FALSE, поэтому
-    сам по себе НЕ отличает живые объявления от давно снятых/удалённых. Без
-    фильтра автостарт каждое утро bulk-активировал бы ВСЕ когда-либо
-    отсканированные ad_id выбранных кампаний (включая объявления прошлых
-    cabinet-дней) → нецелевой открут бюджета. Если ``since`` задан, оставляем
-    только объявления со свежим ``last_seen_at >= since`` (т.е. виденные последним
-    сканом кабинета). ``None`` (дефолт) — фильтр выключен, обратная совместимость
-    для вызовов без свежести.
-
-    Если campaign_ids пуст → ([], 0). НЕ включаем всё подряд — это была бы дыра
-    в безопасности (без фильтра сработало бы по всему кабинету).
-
-    Возвращает (ad_ids[:limit], total_matched_after_owner).
-    """
-    clean_ids = [str(c).strip() for c in campaign_ids if c and str(c).strip()]
-    if not clean_ids:
-        return [], 0
-
-    params: dict[str, object] = {"ids": clean_ids, "sql_cap": _SQL_ROW_CAP}
-    freshness_clause = ""
-    if since is not None:
-        freshness_clause = "AND a.last_seen_at >= :since"
-        params["since"] = since
-
-    async with engine.connect() as conn:
-        rows = (
-            await conn.execute(
-                text(
-                    f"""
-                    SELECT DISTINCT a.fb_ad_id, c.campaign_name, a.ad_name
-                    FROM fb_ads a
-                    JOIN fb_adsets s ON s.id = a.adset_id
-                    JOIN fb_campaigns c ON c.id = s.campaign_id
-                    WHERE c.fb_campaign_id = ANY(:ids)
-                      AND a.fb_ad_id IS NOT NULL
-                      AND a.is_active = TRUE
-                      {freshness_clause}
-                    LIMIT :sql_cap
-                    """
-                ),
-                params,
-            )
-        ).all()
-
-    owned: list[str] = []
-    for fb_ad_id, campaign_name, ad_name in rows:
-        if not fb_ad_id:
-            continue
-        if not campaign_matches_owner(
-            campaign_name=campaign_name or "", ad_name=ad_name or "", owner_tag=owner_tag
-        ):
-            continue
-        owned.append(str(fb_ad_id))
-
-    return owned[:limit], len(owned)
+__all__ = [
+    "MAX_BULK",
+    "StatusTargetLocks",
+    "locked_status_targets",
+    "resolve_owner_ad_ids",
+]

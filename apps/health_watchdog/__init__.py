@@ -1,2 +1,2 @@
 # -*- coding: utf-8 -*-
-"""Health Watchdog — мониторит heartbeat'ы воркеров в Redis и алертит в TG."""
+"""Health Watchdog — durable safety checks and live Meta channel probes."""

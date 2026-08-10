@@ -58,8 +58,8 @@ OBSERVER_CYCLES = Counter(
     labelnames=("outcome",),
 )
 
-TRACKER_POSTBACK_EVENTS = Counter(
-    "fb_agent_tracker_postback_events_total",
+ADSETPRO_POSTBACK_EVENTS = Counter(
+    "fb_agent_adsetpro_postback_events_total",
     "Accepted, duplicate and unsupported AdSet.pro postbacks",
     labelnames=("outcome",),
 )
@@ -73,12 +73,6 @@ TRACKER_RECONCILIATION_RUNS = Counter(
 # ---------------------------------------------------------------------------
 # Gauge'ы
 # ---------------------------------------------------------------------------
-
-WORKER_HEARTBEAT_AGE = Gauge(
-    "fb_agent_worker_heartbeat_age_seconds",
-    "Возраст последнего heartbeat воркера (секунды)",
-    labelnames=("worker",),
-)
 
 DISABLE_TASKS_PENDING = Gauge(
     "fb_agent_disable_tasks_pending",

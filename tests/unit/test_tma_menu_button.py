@@ -3,7 +3,7 @@
 
 Quick-tunnel меняет URL при каждом запуске → при сохранении свежего web_app_url
 бот должен сам прописать Menu Button (setChatMenuButton), иначе кнопка mini-app
-остаётся на мёртвом старом туннеле. Best-effort — ошибки не валят сохранение URL.
+остаётся на мёртвом старом туннеле. Ошибки дают явный incomplete result.
 """
 
 from __future__ import annotations
@@ -14,13 +14,26 @@ from unittest.mock import AsyncMock
 import pytest
 
 import apps.api.routers.v1.settings_telegram as st
-import core.telegram.client as cli
+import core.telegram.gateway as gateway
 import core.telegram.menu_button as menu_button
+import core.telegram.outbound_authority as outbound_authority
 import core.telegram.service as svc
+
+
+class _Authority:
+    def __init__(self, authorized: bool = True) -> None:
+        self.authorized = authorized
+
+    async def __aenter__(self) -> bool:
+        return self.authorized
+
+    async def __aexit__(self, *_args) -> None:
+        return None
 
 
 def _fake_client() -> AsyncMock:
     c = AsyncMock()
+    c.credential_fingerprint = "0" * 64
     c.set_chat_menu_button = AsyncMock()
     c.close = AsyncMock()
     return c
@@ -30,10 +43,17 @@ def _fake_client() -> AsyncMock:
 @pytest.mark.asyncio
 async def test_sets_menu_button_when_configured(monkeypatch) -> None:
     monkeypatch.setattr(
-        svc, "load_telegram_config", AsyncMock(return_value=SimpleNamespace(bot_token="123:ABC"))
+        svc,
+        "load_telegram_config",
+        AsyncMock(return_value=SimpleNamespace(bot_token="123:ABC", webhook_generation=7)),
+    )
+    monkeypatch.setattr(
+        outbound_authority,
+        "hold_telegram_outbound_authority",
+        lambda *_args, **_kwargs: _Authority(),
     )
     client = _fake_client()
-    monkeypatch.setattr(cli, "TelegramBotClient", lambda **_kw: client)
+    monkeypatch.setattr(gateway, "TelegramHTMLGateway", lambda **_kw: client)
     monkeypatch.setattr(
         menu_button,
         "load_active_recipients",
@@ -56,7 +76,7 @@ async def test_sets_menu_button_when_configured(monkeypatch) -> None:
 async def test_skips_when_no_config(monkeypatch) -> None:
     monkeypatch.setattr(svc, "load_telegram_config", AsyncMock(return_value=None))
     spy_ctor = AsyncMock()
-    monkeypatch.setattr(cli, "TelegramBotClient", spy_ctor)
+    monkeypatch.setattr(gateway, "TelegramHTMLGateway", spy_ctor)
 
     ok = await st._sync_bot_menu_button(object(), "https://x.trycloudflare.com/tma/")
 
@@ -71,7 +91,7 @@ async def test_skips_when_no_token(monkeypatch) -> None:
         svc, "load_telegram_config", AsyncMock(return_value=SimpleNamespace(bot_token=""))
     )
     spy_ctor = AsyncMock()
-    monkeypatch.setattr(cli, "TelegramBotClient", spy_ctor)
+    monkeypatch.setattr(gateway, "TelegramHTMLGateway", spy_ctor)
 
     ok = await st._sync_bot_menu_button(object(), "https://x.trycloudflare.com/tma/")
 
@@ -83,13 +103,74 @@ async def test_skips_when_no_token(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_returns_false_on_telegram_error(monkeypatch) -> None:
     monkeypatch.setattr(
-        svc, "load_telegram_config", AsyncMock(return_value=SimpleNamespace(bot_token="123:ABC"))
+        svc,
+        "load_telegram_config",
+        AsyncMock(return_value=SimpleNamespace(bot_token="123:ABC", webhook_generation=7)),
+    )
+    monkeypatch.setattr(
+        outbound_authority,
+        "hold_telegram_outbound_authority",
+        lambda *_args, **_kwargs: _Authority(),
     )
     client = _fake_client()
     client.set_chat_menu_button = AsyncMock(side_effect=RuntimeError("tg down"))
-    monkeypatch.setattr(cli, "TelegramBotClient", lambda **_kw: client)
+    monkeypatch.setattr(gateway, "TelegramHTMLGateway", lambda **_kw: client)
 
     ok = await st._sync_bot_menu_button(object(), "https://x.trycloudflare.com/tma/")
 
     assert ok is False
     client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_authority_rejection_makes_zero_menu_button_calls(monkeypatch) -> None:
+    monkeypatch.setattr(
+        svc,
+        "load_telegram_config",
+        AsyncMock(return_value=SimpleNamespace(bot_token="123:ABC", webhook_generation=7)),
+    )
+    client = _fake_client()
+    monkeypatch.setattr(gateway, "TelegramHTMLGateway", lambda **_kw: client)
+    monkeypatch.setattr(
+        outbound_authority,
+        "hold_telegram_outbound_authority",
+        lambda *_args, **_kwargs: _Authority(False),
+    )
+
+    ok = await st._sync_bot_menu_button(
+        object(),
+        "https://x.trycloudflare.com/tma/",
+    )
+
+    assert ok is False
+    client.set_chat_menu_button.assert_not_awaited()
+    client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_authority_is_refenced_before_each_scope(monkeypatch) -> None:
+    monkeypatch.setattr(
+        svc,
+        "load_telegram_config",
+        AsyncMock(return_value=SimpleNamespace(bot_token="123:ABC", webhook_generation=7)),
+    )
+    permits = iter([True, False])
+    monkeypatch.setattr(
+        outbound_authority,
+        "hold_telegram_outbound_authority",
+        lambda *_args, **_kwargs: _Authority(next(permits)),
+    )
+    client = _fake_client()
+    monkeypatch.setattr(gateway, "TelegramHTMLGateway", lambda **_kw: client)
+    monkeypatch.setattr(
+        menu_button,
+        "load_active_recipients",
+        AsyncMock(return_value=[SimpleNamespace(chat_id=123), SimpleNamespace(chat_id=456)]),
+    )
+
+    ok = await st._sync_bot_menu_button(object(), "https://operator.example/tma/")
+
+    assert ok is False
+    client.set_chat_menu_button.assert_awaited_once_with(
+        web_app_url="https://operator.example/tma/"
+    )

@@ -1,10 +1,7 @@
-/**
- * Тесты Badge — FSM-маппинг через @fb/shared хелперы + рендер всех вариантов.
- */
+/** Tests for the presentational Badge primitive. */
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { Badge } from "@/components/ui/Badge";
-import { alertStateToBadgeVariant, taskStatusToBadgeVariant } from "@fb/shared";
 
 describe("Badge", () => {
   // Базовый рендер
@@ -23,58 +20,53 @@ describe("Badge", () => {
 
   // withDot=false скрывает dot
   it("withDot=false — dot отсутствует", () => {
-    const { container } = render(<Badge variant="stop" withDot={false}>STOP</Badge>);
+    const { container } = render(
+      <Badge variant="stop" withDot={false}>
+        STOP
+      </Badge>,
+    );
     expect(container.querySelector("[aria-hidden='true']")).not.toBeInTheDocument();
   });
 
-  // FSM alert_state маппинг через @fb/shared
-  it.each([
-    ["normal", "normal"],
-    ["warning_sent", "warning"],
-    ["stop_sent", "stop"],
-    ["claimed", "claimed"],
-    ["disabled", "disabled"],
-  ] as const)(
-    "alertStateToBadgeVariant(%s) → variant %s рендерится",
-    (state, _variant) => {
-      render(<Badge variant={alertStateToBadgeVariant(state)}>{state}</Badge>);
-      expect(screen.getByText(state)).toBeInTheDocument();
-    },
-  );
-
-  // Task status маппинг через @fb/shared
-  it.each([
-    ["PENDING", "pending"],
-    ["RUNNING", "running"],
-    ["SUCCEEDED", "done"],
-    ["FAILED", "failed"],
-    ["RETRYING", "retrying"],
-    ["CANCELLED", "cancelled"],
-  ] as const)(
-    "taskStatusToBadgeVariant(%s) → variant %s",
-    (status, _expected) => {
-      const variant = taskStatusToBadgeVariant(status);
-      render(<Badge variant={variant as "pending"}>{status}</Badge>);
-      expect(screen.getByText(status)).toBeInTheDocument();
-    },
-  );
-
   // Все 15 вариантов рендерятся
   it.each([
-    "normal", "warning", "stop", "claimed", "disabled",
-    "success", "info", "neutral", "pending", "running",
-    "done", "failed", "retrying", "cancelled", "draft",
-  ] as const)(
-    "вариант %s рендерится без ошибок",
+    "normal",
+    "warning",
+    "stop",
+    "claimed",
+    "disabled",
+    "success",
+    "info",
+    "neutral",
+    "pending",
+    "running",
+    "done",
+    "failed",
+    "retrying",
+    "cancelled",
+  ] as const)("вариант %s рендерится без ошибок", (variant) => {
+    render(<Badge variant={variant}>{variant}</Badge>);
+    expect(screen.getByText(variant)).toBeInTheDocument();
+  });
+
+  it.each(["disabled", "neutral", "cancelled"] as const)(
+    "использует контрастный semantic dot для варианта %s",
     (variant) => {
-      render(<Badge variant={variant}>{variant}</Badge>);
-      expect(screen.getByText(variant)).toBeInTheDocument();
+      const { container } = render(<Badge variant={variant}>{variant}</Badge>);
+      const dot = container.querySelector("[aria-hidden='true']");
+
+      expect(dot).toHaveClass("bg-bg-8");
+      expect(dot).not.toHaveClass("bg-bg-7");
     },
   );
 
   // Размеры
   it.each(["sm", "md"] as const)("size %s рендерится", (size) => {
-    render(<Badge variant="warning" size={size}>OK</Badge>);
+    render(
+      <Badge variant="warning" size={size}>
+        OK
+      </Badge>,
+    );
     expect(screen.getByText("OK")).toBeInTheDocument();
   });
 });

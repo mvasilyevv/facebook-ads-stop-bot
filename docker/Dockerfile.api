@@ -1,10 +1,10 @@
-# FastAPI сервер FB Stop Bot
+# FastAPI сервер FB Agent
 ARG BASE_IMAGE=fb-stop-bot/python-base:latest
 FROM ${BASE_IMAGE} AS runtime
 
 EXPOSE 8100
 
-# Healthcheck через /healthz (k8s liveness; /health не существует — был баг)
+# Platform healthcheck через /healthz.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8100/healthz || exit 1
 

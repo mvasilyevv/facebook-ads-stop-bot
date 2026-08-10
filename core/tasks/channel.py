@@ -1,17 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Предикаты канала отключения/включения рекламы после удаления DOM-канала.
+"""Canonical pause/activate SQL predicates for operator reads.
 
-Отключение/включение идёт через Marketing API: task_type='meta_api_mutation'
-с mutation_kind='pause_ad'/'activate_ad'. Старый DOM-канал (task_type='disable'/
-'enable') удалён, но в БД могут долёживать исторические записи — фолбэк на них
-сохраняем (единообразно с core/telegram/digest_builder.py).
-
-fb_ad_id у meta-мутации лежит в payload->>'target_id'; у legacy-задач — в
-payload->>'fb_ad_id'. target_id_sql() резолвит оба через COALESCE.
-
-Литералы mutation_kind/task_type — наши константы, не пользовательский ввод,
-поэтому подставляются в SQL напрямую (инъекции нет). Единая точка, чтобы и
-apps/api, и core/dashboard читали канал одинаково.
+The only runtime channel is ``task_type='meta_api_mutation'`` with
+``mutation_kind='pause_ad'/'activate_ad'``.  The target identifier always lives
+in ``payload.target_id``.
 """
 
 from __future__ import annotations
@@ -21,40 +13,34 @@ ACTIVATE_KIND = "activate_ad"
 
 
 def disable_channel_sql(alias: str = "tq") -> str:
-    """WHERE-предикат для disable-задач (Marketing API pause_ad + legacy disable)."""
+    """Return the predicate for a canonical Marketing API pause-ad task."""
     return (
-        f"(({alias}.task_type = 'meta_api_mutation' "
-        f"AND {alias}.payload->>'mutation_kind' = 'pause_ad') "
-        f"OR {alias}.task_type = 'disable')"
+        f"({alias}.task_type = 'meta_api_mutation' "
+        f"AND {alias}.payload->>'mutation_kind' = 'pause_ad')"
     )
 
 
 def enable_channel_sql(alias: str = "tq") -> str:
-    """WHERE-предикат для enable-задач (Marketing API activate_ad + legacy enable)."""
+    """Return the predicate for a canonical Marketing API activate-ad task."""
     return (
-        f"(({alias}.task_type = 'meta_api_mutation' "
-        f"AND {alias}.payload->>'mutation_kind' = 'activate_ad') "
-        f"OR {alias}.task_type = 'enable')"
+        f"({alias}.task_type = 'meta_api_mutation' "
+        f"AND {alias}.payload->>'mutation_kind' = 'activate_ad')"
     )
 
 
 def target_id_sql(alias: str = "tq") -> str:
-    """fb_ad_id из payload: target_id (meta-мутация) с фолбэком на legacy fb_ad_id."""
-    return f"COALESCE({alias}.payload->>'target_id', {alias}.payload->>'fb_ad_id')"
+    """Return the canonical Meta target-id expression."""
+    return f"{alias}.payload->>'target_id'"
 
 
 def is_disable_row(task_type: str | None, mutation_kind: str | None) -> bool:
-    """True если строка task_queue — задача отключения (новый канал или legacy)."""
-    return task_type == "disable" or (
-        task_type == "meta_api_mutation" and mutation_kind == "pause_ad"
-    )
+    """Return whether a queue row is a canonical pause-ad task."""
+    return task_type == "meta_api_mutation" and mutation_kind == PAUSE_KIND
 
 
 def is_enable_row(task_type: str | None, mutation_kind: str | None) -> bool:
-    """True если строка task_queue — задача включения (новый канал или legacy)."""
-    return task_type == "enable" or (
-        task_type == "meta_api_mutation" and mutation_kind == "activate_ad"
-    )
+    """Return whether a queue row is a canonical activate-ad task."""
+    return task_type == "meta_api_mutation" and mutation_kind == ACTIVATE_KIND
 
 
 __all__ = [

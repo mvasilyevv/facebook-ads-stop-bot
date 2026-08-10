@@ -1,6 +1,6 @@
 /**
  * TelegramBackButton — управляет нативной кнопкой Telegram BackButton.
- * Показывается только на вложенных экранах (детали, черновики, health и т.п.).
+ * Показывается только на вложенных экранах и вторичных системных страницах.
  * Монтируется один раз в __root и реагирует на смену пути.
  */
 import { useEffect } from "react";
@@ -12,11 +12,13 @@ import { registerBackButton, hideBackButton } from "@/lib/tg";
  * Черновики теперь основной таб (back не нужен).
  */
 const BACK_BUTTON_PATTERNS: RegExp[] = [
+  /^\/cabinets\/.+$/,
   /^\/ads\/.+$/,
+  /^\/actions\/.+$/,
+  /^\/incidents\/.+$/,
+  /^\/system\/sources$/,
   /^\/offers$/,
-  /^\/health$/,
-  /^\/scripts$/,
-  /^\/stats$/,
+  /^\/analytics$/,
   /^\/desktop$/,
 ];
 
@@ -30,6 +32,11 @@ export function TelegramBackButton() {
   const pathname = location.pathname;
 
   useEffect(() => {
+    if (pathname === "/open") {
+      return registerBackButton(() => {
+        void router.navigate({ to: "/", replace: true });
+      });
+    }
     if (needsBackButton(pathname)) {
       const cleanup = registerBackButton(() => {
         void router.history.back();

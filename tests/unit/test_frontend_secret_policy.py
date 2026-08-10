@@ -9,7 +9,6 @@ def test_frontend_build_and_runtime_never_receive_master_api_key() -> None:
     active_build_files = (
         ROOT / "docker" / "Dockerfile.frontend",
         ROOT / "docker-compose.yml",
-        ROOT / "run.sh",
         ROOT / "frontend" / "src" / "vite-env.d.ts",
         ROOT / "frontend" / "src" / "main.tsx",
     )
@@ -31,10 +30,11 @@ def test_frontend_build_and_runtime_never_receive_master_api_key() -> None:
 
 
 def test_desktop_websocket_url_contains_no_secret_query() -> None:
-    source = (ROOT / "frontend" / "src" / "lib" / "websocket" / "useDashboardSocket.ts").read_text(
+    source = (ROOT / "packages" / "operator-api" / "src" / "realtime.ts").read_text(
         encoding="utf-8"
     )
 
+    assert 'path = "/ws/operator"' in source
     assert "new WebSocket(url)" in source
     assert "encodeURIComponent(apiKey)" not in source
-    assert "query-параметр" not in source
+    assert "api_key=" not in source

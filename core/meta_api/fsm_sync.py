@@ -1,143 +1,127 @@
 # -*- coding: utf-8 -*-
-"""FSM-синхронизация ad_alert_state после успешной Marketing API mutation.
+"""Transactional FSM projection after a confirmed Marketing API mutation.
 
 Когда toggle-действие исполняется через Marketing API (а не DOM toggle_executor),
 именно meta_api_worker обязан привести ad_alert_state к реальному состоянию
 объявления — иначе FSM застревает (напр. в 'stop_sent'), хотя объявление уже
 на паузе. Маппинг:
 - pause_ad   / bulk pause    → reset_alert_state_after_disable_succeeded (→ 'disabled')
-- activate_ad / bulk activate → reset_alert_state_after_enable_succeeded  (→ 'normal')
+- activate_ad / bulk activate → 'normal'
 
-Best-effort и идемпотентно: reset-функции сами проверяют допустимость перехода
-(WHERE alert_state IN (...)), а ошибки не роняют succeeded-контракт задачи —
-следующий observer-цикл всё равно увидит реальное состояние.
+The projection is committed in the same transaction as terminal task,
+incident and notification state.  Projection errors therefore fail the whole
+terminal transition instead of publishing a false confirmed result.
 """
 
 from __future__ import annotations
 
-import logging
-
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from core.meta_api.schemas import MetaMutationPayload
-from core.observer.writers import (
-    reset_alert_state_after_disable_succeeded,
-    reset_alert_state_after_enable_succeeded,
-)
 
-logger = logging.getLogger(__name__)
-
-# Сокращённая форма bulk (drafts/autostart): action → семантика toggle.
 _BULK_ACTION_DISABLE = frozenset({"pause", "paused"})
 _BULK_ACTION_ENABLE = frozenset({"activate", "active"})
-# Полная форма bulk: status → семантика toggle.
-_BULK_STATUS_DISABLE = frozenset({"PAUSED"})
-_BULK_STATUS_ENABLE = frozenset({"ACTIVE"})
 
-# Выключающие действия bulk (обе формы) — для асимметричного стоп-гейта meta_api_worker.
-_DEACTIVATING_BULK_ACTIONS = frozenset({"pause", "paused", "disable", "disabled"})
+_DEACTIVATING_BULK_ACTIONS = frozenset({"pause", "paused"})
 
 
 def is_deactivating_bulk(params: dict) -> bool:
-    """True если bulk_status_change ВЫКЛЮЧАЕТ открут (pause) — в любой из форм.
-
-    Используется асимметричным стоп-гейтом: выключающий bulk разрешён даже на паузе
-    сканирования. Покрывает сокращённую (action=pause) и полную (status=PAUSED) формы —
-    единый контракт с _resolve_bulk_ad_toggle. Раньше гейт смотрел только `action`,
-    из-за чего полная форма {object_ids, status:PAUSED} ошибочно считалась активирующей
-    и откладывалась на паузе (хотя это именно выключение, его надо пропускать).
-    """
+    """Return whether the canonical ad bulk action stops spend."""
     action = str(params.get("action") or "").lower().strip()
-    if action:
-        return action in _DEACTIVATING_BULK_ACTIONS
-    status = str(params.get("status") or "").upper().strip()
-    return status in _BULK_STATUS_DISABLE
+    return action in _DEACTIVATING_BULK_ACTIONS
 
 
-async def sync_fsm_after_mutation(
-    engine: AsyncEngine,
+async def sync_fsm_after_mutation_in_transaction(
+    conn: AsyncConnection,
     payload: MetaMutationPayload,
     result: dict | None = None,
 ) -> None:
-    """Привести ad_alert_state к результату успешной mutation. Best-effort.
+    """Project status and terminal task state in one transaction.
 
-    Вызывается meta_api_worker'ом ТОЛЬКО после mark_task_succeeded(applied=True).
-    Для mutation_kind, не меняющих статус объявления — no-op.
-
-    result — dict от execute_mutation (с modified_ids). Для bulk используется, чтобы
-    метить FSM ТОЛЬКО по реально применённым id (H2): частичный провал bulk иначе дал бы
-    ложный disabled/normal по всему входному списку → рассинхрон с Meta → observer слепнет.
+    Errors deliberately propagate so the task, incident/outbox transition and
+    FSM projection commit or roll back together.  Activation is fail-closed:
+    only an older ``disabled`` state may be cleared; a newer warning/stop/claim
+    generation always wins over a late activation result.
     """
     kind = payload.mutation_kind
-    try:
-        if kind == "pause_ad":
-            await reset_alert_state_after_disable_succeeded(engine, fb_ad_id=payload.target_id)
-        elif kind == "activate_ad":
-            await reset_alert_state_after_enable_succeeded(engine, fb_ad_id=payload.target_id)
-        elif kind == "bulk_status_change":
-            await _sync_bulk(engine, payload.params or {}, result)
-        # campaign/adset/budget/create/audience/creative — ad_alert_state не трогают
-    except Exception:
-        logger.warning(
-            "sync_fsm_after_mutation: FSM-sync для kind=%s target=%s упал (некритично)",
-            kind,
-            payload.target_id,
-            exc_info=True,
-        )
+    if kind == "pause_ad":
+        await _reset_disabled_in_transaction(conn, str(payload.target_id))
+        return
+    if kind == "activate_ad":
+        await _reset_enabled_in_transaction(conn, str(payload.target_id))
+        return
+    if kind != "bulk_status_change":
+        return
 
-
-async def _sync_bulk(engine: AsyncEngine, params: dict, result: dict | None = None) -> None:
-    """FSM-sync для bulk_status_change. Только ad-level toggle трогает ad_alert_state.
-
-    H2: метим FSM только по РЕАЛЬНО применённым id (result['modified_ids']), а не по всему
-    входному списку. Частичный провал bulk (часть ads не применилась) иначе пометил бы
-    их ложным disabled/normal → расхождение FSM с Meta → observer слепнет → пережог.
-    """
-    ad_ids, is_enable = _resolve_bulk_ad_toggle(params)
+    ad_ids, is_enable = _resolve_bulk_ad_toggle(payload.params or {})
     if not ad_ids:
         return
-    if isinstance(result, dict) and result.get("modified_ids") is not None:
-        applied = {str(x).strip() for x in result["modified_ids"]}
-        ad_ids = [a for a in ad_ids if a in applied]
-        if not ad_ids:
-            return
-    reset = (
-        reset_alert_state_after_enable_succeeded
-        if is_enable
-        else reset_alert_state_after_disable_succeeded
+    if not isinstance(result, dict) or not isinstance(result.get("modified_ids"), list):
+        raise ValueError("bulk_status_change result contract violated: modified_ids is required")
+    applied = {str(value).strip() for value in result["modified_ids"]}
+    for fb_ad_id in (ad_id for ad_id in ad_ids if ad_id in applied):
+        if is_enable:
+            await _reset_enabled_in_transaction(conn, fb_ad_id)
+        else:
+            await _reset_disabled_in_transaction(conn, fb_ad_id)
+
+
+async def _reset_disabled_in_transaction(
+    conn: AsyncConnection,
+    fb_ad_id: str,
+) -> None:
+    await conn.execute(
+        text(
+            """
+            UPDATE ad_alert_state
+            SET alert_state = 'disabled',
+                last_transition_at = NOW(),
+                updated_at = NOW()
+            WHERE ad_id = (SELECT id FROM fb_ads WHERE fb_ad_id = :fbid)
+              AND alert_state IN ('warning_sent', 'stop_sent', 'claimed')
+            """
+        ),
+        {"fbid": fb_ad_id},
     )
-    for fb_ad_id in ad_ids:
-        await reset(engine, fb_ad_id=fb_ad_id)
+
+
+async def _reset_enabled_in_transaction(
+    conn: AsyncConnection,
+    fb_ad_id: str,
+) -> None:
+    await conn.execute(
+        text(
+            """
+            UPDATE ad_alert_state
+            SET alert_state = 'normal',
+                current_stage = NULL,
+                open_state_token = NULL,
+                warning_rule_codes = '[]'::jsonb,
+                stop_rule_codes = '[]'::jsonb,
+                snoozed_until = NULL,
+                last_transition_at = NOW(),
+                updated_at = NOW()
+            WHERE ad_id = (SELECT id FROM fb_ads WHERE fb_ad_id = :fbid)
+              AND alert_state = 'disabled'
+            """
+        ),
+        {"fbid": fb_ad_id},
+    )
 
 
 def _resolve_bulk_ad_toggle(params: dict) -> tuple[list[str], bool]:
-    """Извлечь (ad_ids, is_enable) из bulk params. ([], _) если не ad-level toggle.
-
-    Поддерживает обе формы (как BulkStatusChangeHandler):
-    - сокращённая: {ad_ids, action: pause|activate} — всегда object_type=ad.
-    - полная: {object_ids, status: PAUSED|ACTIVE, object_type} — только object_type=ad
-      (campaign/adset не имеют ad_alert_state).
-    """
-    # Сокращённая форма (drafts/autostart) — всегда ad-level.
-    if "ad_ids" in params or "action" in params:
-        action = str(params.get("action") or "").lower().strip()
-        ids = [str(x).strip() for x in (params.get("ad_ids") or []) if str(x).strip()]
-        if action in _BULK_ACTION_ENABLE:
-            return ids, True
-        if action in _BULK_ACTION_DISABLE:
-            return ids, False
-        return [], False
-    # Полная форма — синхронизируем только object_type='ad'.
-    object_type = str(params.get("object_type") or "ad").lower()
-    if object_type != "ad":
-        return [], False
-    status = str(params.get("status") or "").upper().strip()
-    ids = [str(x).strip() for x in (params.get("object_ids") or []) if str(x).strip()]
-    if status in _BULK_STATUS_ENABLE:
+    """Extract the canonical ``{ad_ids, action}`` ad toggle."""
+    action = str(params.get("action") or "").lower().strip()
+    ids = [str(x).strip() for x in (params.get("ad_ids") or []) if str(x).strip()]
+    if action in _BULK_ACTION_ENABLE:
         return ids, True
-    if status in _BULK_STATUS_DISABLE:
+    if action in _BULK_ACTION_DISABLE:
         return ids, False
     return [], False
 
 
-__all__ = ["is_deactivating_bulk", "sync_fsm_after_mutation"]
+__all__ = [
+    "is_deactivating_bulk",
+    "sync_fsm_after_mutation_in_transaction",
+]

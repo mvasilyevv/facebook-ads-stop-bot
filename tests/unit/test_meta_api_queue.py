@@ -1,25 +1,85 @@
 # -*- coding: utf-8 -*-
-"""Unit-тесты core.meta_api.queue — pure-функция default_idempotency_key + salt-uuid."""
+"""Unit tests for meta mutation idempotency and queue locks."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from core.meta_api.queue import create_draft_task, create_mutation_task, default_idempotency_key
+from core.meta_api.queue import create_mutation_task, default_idempotency_key
 from core.meta_api.schemas import MetaMutationPayload
+from core.tasks.queue import infer_task_lane, is_money_changing_task
+
+
+@pytest.mark.parametrize(
+    ("mutation_kind", "requested_by", "expected_lane"),
+    [
+        ("pause_ad", "bot_auto_stop", "money"),
+        ("pause_ad", "operator:web", "interactive"),
+        ("activate_ad", "operator:web", "interactive"),
+        ("bulk_status_change", "owner:test", "bulk"),
+        ("duplicate_adset_structure", "owner:test", "bulk"),
+    ],
+)
+def test_mutation_lane_registry_isolates_automatic_pause_from_owner_actions(
+    mutation_kind: str,
+    requested_by: str,
+    expected_lane: str,
+) -> None:
+    assert (
+        infer_task_lane(
+            "meta_api_mutation",
+            {"mutation_kind": mutation_kind},
+            requested_by=requested_by,
+        )
+        == expected_lane
+    )
+
+
+@pytest.mark.parametrize(
+    ("task_type", "payload", "expected"),
+    [
+        ("meta_api_mutation", {"mutation_kind": "pause_ad"}, True),
+        ("meta_api_mutation", {"mutation_kind": "activate_ad"}, True),
+        (
+            "meta_api_mutation",
+            {"mutation_kind": "bulk_status_change", "params": {"action": "pause"}},
+            True,
+        ),
+        (
+            "meta_api_mutation",
+            {"mutation_kind": "bulk_status_change", "params": {"action": "activate"}},
+            True,
+        ),
+        (
+            "meta_api_mutation",
+            {"mutation_kind": "bulk_status_change", "params": {}},
+            False,
+        ),
+        ("meta_api_mutation", {"mutation_kind": "duplicate_adset_structure"}, False),
+        ("observer_scan", {"mutation_kind": "pause_ad"}, False),
+        ("tracker_event_process", {"action": "read"}, False),
+    ],
+)
+def test_money_notification_classification_is_semantic_not_lane(
+    task_type: str,
+    payload: dict[str, object],
+    expected: bool,
+) -> None:
+    assert is_money_changing_task(task_type=task_type, payload=payload) is expected
 
 
 # Одинаковые payload + requested_by + (нет salt) → одинаковый ключ (для дедупа).
 def test_idempotency_key_stable() -> None:
     payload_a = MetaMutationPayload(
+        ad_account_id="123",
         mutation_kind="pause_ad",
         target_id="ad_1",
         params={"reason": "manual"},
     )
     payload_b = MetaMutationPayload(
+        ad_account_id="123",
         mutation_kind="pause_ad",
         target_id="ad_1",
         params={"reason": "manual"},
@@ -31,26 +91,19 @@ def test_idempotency_key_stable() -> None:
 
 # Разный requested_by → разные ключи (auto-bot и user не должны конфликтовать).
 def test_idempotency_key_diff_user() -> None:
-    payload = MetaMutationPayload(mutation_kind="pause_ad", target_id="ad_1")
+    payload = MetaMutationPayload(ad_account_id="123", mutation_kind="pause_ad", target_id="ad_1")
     key_user = default_idempotency_key(payload, requested_by="user_42")
     key_bot = default_idempotency_key(payload, requested_by="bot_auto")
     assert key_user != key_bot
 
 
-# Salt делает каждый ключ уникальным (для DRAFT — каждый новый draft).
-def test_idempotency_key_with_salt() -> None:
-    payload = MetaMutationPayload(mutation_kind="pause_ad", target_id="ad_1")
-    key_1 = default_idempotency_key(payload, requested_by="ai", salt="2026-05-27T10:00:00")
-    key_2 = default_idempotency_key(payload, requested_by="ai", salt="2026-05-27T10:01:00")
-    assert key_1 != key_2
-
-
 # Ключ влезает в VARCHAR(128) ограничение БД.
 def test_idempotency_key_length() -> None:
     payload = MetaMutationPayload(
-        mutation_kind="set_adset_budget",
+        ad_account_id="123",
+        mutation_kind="pause_ad",
         target_id="120999888777666",
-        params={"daily_budget_cents": 5000, "currency": "USD"},
+        params={"reason": "test"},
     )
     key = default_idempotency_key(payload, requested_by="ai_assistant")
     assert len(key) <= 128
@@ -58,18 +111,24 @@ def test_idempotency_key_length() -> None:
 
 # Префикс meta: + mutation_kind + target_id виден в ключе — удобно искать в БД.
 def test_idempotency_key_has_prefix() -> None:
-    payload = MetaMutationPayload(mutation_kind="pause_ad", target_id="ad_999")
+    payload = MetaMutationPayload(ad_account_id="123", mutation_kind="pause_ad", target_id="ad_999")
     key = default_idempotency_key(payload, requested_by="user")
-    assert key.startswith("meta:pause_ad:ad_999:")
+    assert key.startswith("meta:pause_ad:123:ad_999:")
 
 
 # Разный params → разный ключ.
 def test_idempotency_key_params_matter() -> None:
     a = MetaMutationPayload(
-        mutation_kind="set_adset_budget", target_id="as_1", params={"daily": 1000}
+        ad_account_id="123",
+        mutation_kind="pause_ad",
+        target_id="as_1",
+        params={"daily": 1000},
     )
     b = MetaMutationPayload(
-        mutation_kind="set_adset_budget", target_id="as_1", params={"daily": 2000}
+        ad_account_id="123",
+        mutation_kind="pause_ad",
+        target_id="as_1",
+        params={"daily": 2000},
     )
     key_a = default_idempotency_key(a, requested_by="ai")
     key_b = default_idempotency_key(b, requested_by="ai")
@@ -77,7 +136,13 @@ def test_idempotency_key_params_matter() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["pause_ad", "activate_ad"])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "pause_ad",
+        "activate_ad",
+    ],
+)
 async def test_single_ad_mutations_use_shared_target_lock(kind: str) -> None:
     """Pause/activate writers serialize on the same fb_ad_id advisory key."""
     captured: dict = {}
@@ -86,12 +151,39 @@ async def test_single_ad_mutations_use_shared_target_lock(kind: str) -> None:
         captured.update(kwargs)
         return 1
 
-    payload = MetaMutationPayload(mutation_kind=kind, target_id="1200123456789")
+    payload = MetaMutationPayload(
+        ad_account_id="123", mutation_kind=kind, target_id="1200123456789"
+    )
     with patch("core.meta_api.queue.create_task", fake_create_task):
         await create_mutation_task(object(), payload=payload, requested_by="test")
 
     assert captured["target_lock_key"] == "1200123456789"
     assert captured["target_lock_keys"] == ()
+
+
+@pytest.mark.asyncio
+async def test_mutation_forwards_telegram_origin_to_task_queue() -> None:
+    """The command service may persist the Telegram actor with the money task."""
+    captured: dict = {}
+
+    async def fake_create_task(engine, **kwargs):
+        captured.update(kwargs)
+        return 1
+
+    payload = MetaMutationPayload(
+        ad_account_id="123",
+        mutation_kind="pause_ad",
+        target_id="1200123456789",
+    )
+    with patch("core.meta_api.queue.create_task", fake_create_task):
+        await create_mutation_task(
+            object(),
+            payload=payload,
+            requested_by="telegram:operator",
+            created_by_chat_id=777,
+        )
+
+    assert captured["created_by_chat_id"] == 777
 
 
 @pytest.mark.asyncio
@@ -104,6 +196,7 @@ async def test_bulk_mutation_locks_every_ad_in_deterministic_order() -> None:
         return 1
 
     payload = MetaMutationPayload(
+        ad_account_id="123",
         mutation_kind="bulk_status_change",
         target_id="bulk:3",
         params={"ad_ids": ["3", "1", "3", "2"], "action": "pause"},
@@ -113,60 +206,3 @@ async def test_bulk_mutation_locks_every_ad_in_deterministic_order() -> None:
 
     assert captured["target_lock_key"] is None
     assert captured["target_lock_keys"] == ("1", "2", "3")
-
-
-# ====================== MID-5: draft salt = timestamp + uuid4 (без коллизий) ======================
-
-
-# MID-5: два create_draft_task в одну и ту же секунду (замороженное время) → РАЗНЫЕ
-# idempotency_key. Раньше salt=isoformat → одинаковый ISO при двойном клике →
-# одинаковый ключ → ON CONFLICT DO NOTHING глотал второй draft. uuid4 разводит ключи.
-@pytest.mark.asyncio
-async def test_draft_salt_unique_on_same_second_double_click() -> None:
-    payload = MetaMutationPayload(mutation_kind="pause_ad", target_id="ad_777")
-
-    captured_keys: list[str] = []
-
-    async def fake_create_task(engine, **kwargs):
-        captured_keys.append(kwargs["idempotency_key"])
-        return len(captured_keys)  # уникальный id, не None
-
-    # Замораживаем время на одну и ту же секунду для обоих вызовов — эмулируем
-    # двойной клик в пределах одной секунды (worst case для salt=isoformat).
-    frozen = datetime(2026, 7, 2, 12, 0, 0, tzinfo=timezone.utc)
-    frozen_dt = MagicMock()
-    frozen_dt.now = MagicMock(return_value=frozen)
-
-    with (
-        patch("core.meta_api.queue.create_task", fake_create_task),
-        patch("core.meta_api.queue.datetime", frozen_dt),
-    ):
-        engine = AsyncMock()
-        await create_draft_task(engine, payload=payload, requested_by="ai")
-        await create_draft_task(engine, payload=payload, requested_by="ai")
-
-    assert len(captured_keys) == 2
-    # Ключевой инвариант MID-5: даже при идентичном timestamp ключи РАЗНЫЕ (uuid4-компонент).
-    assert captured_keys[0] != captured_keys[1], (
-        "два draft в одну секунду дали одинаковый idempotency_key — коллизия MID-5 не устранена"
-    )
-
-
-# MID-5: salt всё ещё содержит timestamp (для читаемости/дебага), но детерминизм
-# сломан uuid4 — тот же payload+requested_by даёт разные ключи на каждом вызове.
-@pytest.mark.asyncio
-async def test_draft_salt_nondeterministic_across_calls() -> None:
-    payload = MetaMutationPayload(mutation_kind="activate_ad", target_id="ad_1")
-    captured_keys: list[str] = []
-
-    async def fake_create_task(engine, **kwargs):
-        captured_keys.append(kwargs["idempotency_key"])
-        return len(captured_keys)
-
-    with patch("core.meta_api.queue.create_task", fake_create_task):
-        engine = AsyncMock()
-        for _ in range(5):
-            await create_draft_task(engine, payload=payload, requested_by="ai")
-
-    # Все 5 ключей уникальны — draft'ы не глотаются дедупом.
-    assert len(set(captured_keys)) == 5

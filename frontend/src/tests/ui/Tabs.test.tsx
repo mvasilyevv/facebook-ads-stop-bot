@@ -73,7 +73,12 @@ describe("Tabs", () => {
     const user = userEvent.setup();
     render(
       <Tabs value="a" onValueChange={onChange}>
-        <TabsList items={[{ value: "a", label: "A" }, { value: "b", label: "B" }]} />
+        <TabsList
+          items={[
+            { value: "a", label: "A" },
+            { value: "b", label: "B" },
+          ]}
+        />
       </Tabs>,
     );
     await user.click(screen.getByRole("tab", { name: "B" }));

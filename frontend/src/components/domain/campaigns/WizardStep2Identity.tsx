@@ -1,7 +1,7 @@
 /**
  * Шаг 2 — Идентичность + Оффер.
  *
- * Поля: act_id, page_id, pixel_id, tz_offset, offer_code, byer_tag.
+ * Поля: act_id, page_id, pixel_id, offer_code, byer_tag.
  * Если шаг 1 был "preset" — поля предзаполнены из пресета.
  *
  * Дерайв из оффера: при выборе offer_code, совпавшего с оффером из useOffers,
@@ -9,32 +9,22 @@
  * pixel_id и goal.countries. Все поля редактируемы. Страница НЕ свойство оффера —
  * выбирается из дропдауна страниц кабинета.
  *
- * Таймзона кабинета подтягивается автоматически по act_id (blur): TZ зафиксирована
- * при создании кабинета, её нельзя выбрать руками без ошибки. На ошибке авто-подхвата —
- * фолбэк на ручной ввод с ПОЛНЫМ диапазоном UTC (−12..+14, включая отрицательные).
+ * IANA timezone, currency и точность денег приходят только из свежего durable
+ * account snapshot. Клиент не может их редактировать или подменить.
  *
  * Тем же blur'ом (общий дедуп) тянем список FB-страниц кабинета: если подтянулись —
  * page_id выбирается дропдауном, иначе остаётся ручной ввод ID.
  */
 
-import { useRef, useState, type FC } from "react";
-import { Loader2 } from "lucide-react";
+import { useEffect, useRef, useState, type FC } from "react";
+import { validateCampaignIdentity } from "@fb/features/campaigns";
+import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { useAdAccountPages, useAdAccountTimezone } from "@/lib/api/campaigns";
+import { useAdAccountContext, useAdAccountPages } from "@/lib/api/campaigns";
 import { useOffers } from "@/lib/api/offers";
 import type { Offer } from "@fb/shared";
 import type { WizardGoal, WizardIdentity } from "@/stores/campaignWizard";
-
-/**
- * Оффер с новым полем дерайва. countries ещё нет в generated.ts (gen:api не гоняем) —
- * объявляем локально и читаем из useOffers().data через безопасный каст
- * (бэк OfferOut уже отдаёт это поле).
- */
-type WizardOffer = Offer & {
-  countries?: string[] | null;
-  cpa_threshold?: number | string | null;
-};
 
 interface WizardStep2IdentityProps {
   values: WizardIdentity;
@@ -45,71 +35,93 @@ interface WizardStep2IdentityProps {
   errors?: Partial<Record<keyof WizardIdentity, string>>;
 }
 
-/** Полный диапазон смещений UTC для ручного фолбэка: от −12 до +14 (включая отрицательные). */
-const TZ_FALLBACK_OPTIONS = Array.from({ length: 14 - -12 + 1 }, (_, i) => {
-  const h = i - 12;
-  const sign = h < 0 ? "-" : "+";
-  return { value: String(h), label: `UTC${sign}${String(Math.abs(h)).padStart(2, "0")}:00` };
-});
-
-/** Форматирует смещение часов в "UTC±HH:00" (зеркало backend _tz_offset_to_str). */
-function formatTzOffset(hours: number): string {
-  const sign = hours < 0 ? "-" : "+";
-  return `UTC${sign}${String(Math.abs(hours)).padStart(2, "0")}:00`;
-}
-
 export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
   values,
   onChange,
   onGoalChange,
   errors = {},
 }) => {
-  const tzMutation = useAdAccountTimezone();
+  const contextMutation = useAdAccountContext();
   const pagesMutation = useAdAccountPages();
   const offersQuery = useOffers();
-  // Авто-подхват TZ упал → показываем ручной фолбэк-контрол.
-  const [tzFallback, setTzFallback] = useState(false);
   // Подтянутые страницы кабинета → дропдаун выбора page_id. Пусто/ошибка → ручной ввод.
   const [pages, setPages] = useState<{ id: string; name: string }[]>([]);
   // Кабинеты выбранного оффера при дерайве (>1 → Select выбора кабинета).
   const [offerAccounts, setOfferAccounts] = useState<string[]>([]);
-  // Дедуп: не фетчить повторно тот же act_id на каждом blur (бьёт по живой
-  // Vision-сессии + строка в meta_api_audit_log на каждый клик).
+  // Durable context read is cheap; pages still use the live read channel.
   const lastFetchedAct = useRef<string | null>(null);
 
-  const offers = (offersQuery.data ?? []) as WizardOffer[];
+  const offers: Offer[] = offersQuery.data ?? [];
 
-  // Подтягиваем TZ кабинета И список страниц по конкретному act_id.
-  // Один фетч на act_id (общий дедуп) — защита от лишних обращений к Vision.
+  const prefillOfferCpa = (currency: string, offerCode: string) => {
+    if (!onGoalChange) return;
+    const offer = offers.find((candidate) => candidate.code === offerCode);
+    const offerCurrency = offer?.currency?.trim().toUpperCase();
+    const cpa = offer?.cpa_threshold?.trim() ?? "";
+    if (offerCurrency === currency && /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(cpa)) {
+      onGoalChange({ bid_amount: cpa });
+    }
+  };
+
+  // Подтягиваем authoritative account context и список страниц по конкретному act_id.
   const fetchAccountMetaFor = (rawActId: string) => {
     const actId = rawActId.trim();
-    if (!actId || actId === lastFetchedAct.current) return;
+    if (!/^(?:act_)?[0-9]+$/.test(actId) || actId === lastFetchedAct.current) return;
     lastFetchedAct.current = actId;
-    tzMutation.mutate(actId, {
+    contextMutation.mutate(actId, {
       onSuccess: (data) => {
-        setTzFallback(false);
-        onChange({ tz_offset: data.tz_offset_hours, timezone_name: data.timezone_name });
+        if (lastFetchedAct.current !== actId) return;
+        onChange({
+          account_context_state: data.state,
+          timezone_name: data.timezone_name ?? "",
+          currency: data.currency === "USD" ? "USD" : "",
+          currency_exponent: data.currency_exponent === 2 ? 2 : null,
+          account_context_observed_at: data.observed_at,
+          account_context_issue: data.issue,
+        });
+        if (data.state === "ready" && data.currency) {
+          prefillOfferCpa(data.currency, values.offer_code);
+          if (data.next_start_date && onGoalChange) {
+            onGoalChange({ start_date: data.next_start_date });
+          }
+        }
       },
       onError: () => {
-        // Авто-подхват не удался — даём ручной ввод с полным диапазоном + разрешаем
-        // повторить фетч тем же act_id (сбрасываем дедуп).
+        if (lastFetchedAct.current !== actId) return;
         lastFetchedAct.current = null;
-        setTzFallback(true);
+        onChange({
+          account_context_state: "unavailable",
+          timezone_name: "",
+          currency: "",
+          currency_exponent: null,
+          account_context_observed_at: null,
+          account_context_issue: "account_context_request_failed",
+        });
       },
     });
     pagesMutation.mutate(actId, {
       onSuccess: (data) => {
+        if (lastFetchedAct.current !== actId) return;
         // Непустой массив → дропдаун; пустой → остаётся ручной ввод page_id.
         setPages(data.pages);
       },
       onError: () => {
+        if (lastFetchedAct.current !== actId) return;
         // Не удалось подтянуть страницы — фолбэк на ручной ввод page_id.
         setPages([]);
       },
     });
   };
 
-  // blur по Ad Account ID — фетч TZ+страниц по текущему значению act_id.
+  // A preset can populate act_id without a blur. Debounce typing, but resolve it
+  // automatically as soon as the numeric account ID is complete.
+  useEffect(() => {
+    const timer = window.setTimeout(() => fetchAccountMetaFor(values.act_id), 300);
+    return () => window.clearTimeout(timer);
+    // Mutations are intentionally deduplicated by lastFetchedAct.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values.act_id]);
+
   const fetchAccountMeta = () => fetchAccountMetaFor(values.act_id);
 
   // Дерайв из выбранного оффера: act_id (1 авто / >1 Select / 0 ручной),
@@ -137,10 +149,12 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
       onGoalChange({ countries: offer.countries.map((c) => c.toUpperCase()) });
     }
 
-    // Целевой CPA оффера (из правил, доллары) → префилл бида «Целевой CPA, $» (центы, редактируемо).
-    const cpa = Number(offer.cpa_threshold);
-    if (onGoalChange && Number.isFinite(cpa) && cpa > 0) {
-      onGoalChange({ bid_amount_cents: Math.round(cpa * 100) });
+    // CPA belongs to a currency. It is copied only after exact account-currency match.
+    if (onGoalChange) {
+      onGoalChange({ bid_amount: "" });
+      if (values.account_context_state === "ready" && values.currency) {
+        prefillOfferCpa(values.currency, code);
+      }
     }
 
     // Авто-кабинет → сразу тянем его TZ и страницы (как при blur).
@@ -149,29 +163,47 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
 
   // Выбор кабинета из Select (оффер с >1 кабинетом). act_id меняется → TZ перефетчится.
   const handleAccountSelect = (actId: string) => {
-    onChange({ act_id: actId });
+    lastFetchedAct.current = null;
+    setPages([]);
+    onChange({
+      act_id: actId,
+      page_id: "",
+      account_context_state: "unavailable",
+      timezone_name: "",
+      currency: "",
+      currency_exponent: null,
+      account_context_observed_at: null,
+      account_context_issue: null,
+    });
     fetchAccountMetaFor(actId);
   };
+
+  const selectedOffer = offers.find((offer) => offer.code === values.offer_code);
+  const offerCurrency = selectedOffer?.currency?.trim().toUpperCase() ?? "";
+  const offerCurrencyMismatch =
+    values.account_context_state === "ready" &&
+    Boolean(selectedOffer?.cpa_threshold) &&
+    (!offerCurrency || offerCurrency !== values.currency);
 
   return (
     <div className="space-y-6">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
+        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 2 · ИДЕНТИЧНОСТЬ
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
           Кабинет и оффер
         </h2>
         <p className="text-[13px] text-bg-9 mt-1">
-          Сначала выберите оффер — кабинет, пиксель, гео и целевой CPA подтянутся
-          автоматически. Страницу укажете ниже.
+          Сначала выберите оффер — кабинет, пиксель, гео и целевой CPA подтянутся автоматически.
+          Страницу укажете ниже.
         </p>
       </div>
 
       {/* Оффер — первым: выбор оффера дерайвит кабинет/пиксель/гео/CPA */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
+        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-3">
           ОФФЕР И БАЙЕР
         </div>
         {/* Комбобокс-подсказки из активных офферов (вне grid — datalist не занимает место). */}
@@ -182,7 +214,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
             </option>
           ))}
         </datalist>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {/* Свободный ввод разрешён, .toUpperCase() сохраняется. Совпадение
               с оффером каталога → дерайв act_id/pixel/countries/CPA. */}
           <Input
@@ -211,7 +243,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
 
       {/* Кабинет */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
+        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-3">
           РЕКЛАМНЫЙ КАБИНЕТ
         </div>
         {/* Оффер с несколькими кабинетами — выбор кабинета залива (без фан-аута). */}
@@ -224,82 +256,119 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
               value={offerAccounts.includes(values.act_id) ? values.act_id : ""}
               onChange={(e) => handleAccountSelect(e.target.value)}
             />
-            <p className="text-[11px] text-bg-8 mt-1.5">
+            <p className="text-[12px] text-bg-8 mt-1.5">
               У оффера несколько кабинетов — выберите, на какой заливать.
             </p>
           </div>
         )}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
             label="Ad Account ID"
             placeholder="act_123456789"
             value={values.act_id}
-            onChange={(e) => onChange({ act_id: e.target.value })}
+            onChange={(e) => {
+              lastFetchedAct.current = null;
+              setPages([]);
+              onChange({
+                act_id: e.target.value,
+                page_id: "",
+                account_context_state: "unavailable",
+                timezone_name: "",
+                currency: "",
+                currency_exponent: null,
+                account_context_observed_at: null,
+                account_context_issue: null,
+              });
+            }}
             onBlur={fetchAccountMeta}
             errorMessage={errors.act_id}
             helpText="Числовой ID с префиксом act_ или без"
           />
-          {tzFallback ? (
-            <div className="flex flex-col gap-1.5">
-              <Select
-                label="Timezone"
-                options={TZ_FALLBACK_OPTIONS}
-                value={String(values.tz_offset)}
-                onChange={(e) =>
-                  onChange({ tz_offset: Number(e.target.value), timezone_name: "(вручную)" })
-                }
-              />
-              <p className="text-[11px] text-bg-8">
-                Авто-подхват не удался — укажите таймзону кабинета вручную.
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] font-display tracking-wider uppercase text-bg-9">
-                Timezone
-              </label>
-              <div className="flex h-8 items-center gap-2 rounded-[var(--radius-2)] border border-[var(--hairline-strong)] bg-bg-2 px-3 text-[13.5px] text-bg-11">
-                {tzMutation.isPending ? (
-                  <>
-                    <Loader2 aria-hidden="true" size={14} className="animate-spin text-bg-9" />
-                    <span className="text-bg-9">Подтягиваю таймзону кабинета…</span>
-                  </>
-                ) : values.timezone_name ? (
-                  <span>
-                    {formatTzOffset(values.tz_offset)} · {values.timezone_name}
-                  </span>
-                ) : (
-                  <span className="text-bg-9">
-                    Заполните Ad Account ID — таймзона подтянется автоматически
-                  </span>
-                )}
-              </div>
-              {errors.tz_offset && (
-                <span className="text-[11px] text-danger font-display">{errors.tz_offset}</span>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[12px] font-display tracking-wider uppercase text-bg-9">
+              Контекст кабинета
+            </label>
+            <div
+              className={[
+                "min-h-20 rounded-[var(--radius-2)] border px-3 py-2.5 text-[13px]",
+                values.account_context_state === "ready"
+                  ? "border-success/35 bg-success/10"
+                  : values.account_context_state === "stale"
+                    ? "border-warning/35 bg-warning/10"
+                    : "border-[var(--color-hairline-strong)] bg-bg-2",
+              ].join(" ")}
+              role="status"
+            >
+              {contextMutation.isPending ? (
+                <div className="flex items-center gap-2 text-bg-9">
+                  <Loader2 aria-hidden="true" size={14} className="animate-spin" />
+                  Проверяю снимок кабинета…
+                </div>
+              ) : values.account_context_state === "ready" ? (
+                <>
+                  <div className="flex items-center gap-2 font-medium text-success">
+                    <CheckCircle2 aria-hidden="true" size={14} />
+                    Подтверждено
+                  </div>
+                  <div className="mt-1 text-bg-11">
+                    {values.timezone_name} · {values.currency}
+                  </div>
+                  <div className="mt-1 text-[12px] text-bg-8">
+                    Точность: {values.currency_exponent} · снимок{" "}
+                    {formatObservedAt(values.account_context_observed_at)}
+                  </div>
+                </>
+              ) : values.act_id.trim() ? (
+                <>
+                  <div className="flex items-center gap-2 font-medium text-warning">
+                    <AlertTriangle aria-hidden="true" size={14} />
+                    {values.account_context_state === "stale"
+                      ? "Снимок устарел"
+                      : "Контекст недоступен"}
+                  </div>
+                  <div className="mt-1 text-[12px] text-bg-9">
+                    Запуск заблокирован до свежего подтверждения Meta.
+                  </div>
+                </>
+              ) : (
+                <span className="text-bg-9">
+                  Укажите Ad Account ID — timezone и валюта подтянутся из снимка Meta
+                </span>
               )}
             </div>
-          )}
+            {errors.account_context_state && (
+              <span className="text-[12px] text-danger font-display">
+                {errors.account_context_state}
+              </span>
+            )}
+            {offerCurrencyMismatch && (
+              <span className="text-[12px] text-danger font-display">
+                Валюта CPA оффера ({offerCurrency || "не подтверждена"}) не совпадает с{" "}
+                {values.currency}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Страница и пиксель */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
+        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-3">
           СТРАНИЦА И ПИКСЕЛЬ
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {pagesMutation.isPending ? (
             // Спиннер во время фетча страниц — финальный контрол ещё неизвестен.
             <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] font-display tracking-wider uppercase text-bg-9">
+              <label className="text-[12px] font-display tracking-wider uppercase text-bg-9">
                 Facebook Page ID
               </label>
-              <div className="flex h-8 items-center gap-2 rounded-[var(--radius-2)] border border-[var(--hairline-strong)] bg-bg-2 px-3 text-[13.5px] text-bg-9">
+              <div className="flex h-8 items-center gap-2 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 px-3 text-[13.5px] text-bg-9">
                 <Loader2 aria-hidden="true" size={14} className="animate-spin text-bg-9" />
                 <span>Подтягиваю страницы кабинета…</span>
               </div>
               {errors.page_id && (
-                <span className="text-[11px] text-danger font-display">{errors.page_id}</span>
+                <span className="text-[12px] text-danger font-display">{errors.page_id}</span>
               )}
             </div>
           ) : pages.length > 0 ? (
@@ -332,26 +401,26 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
           />
         </div>
       </div>
-
     </div>
   );
 };
+
+function formatObservedAt(value: string | null): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return parsed.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 // ─── Валидация ────────────────────────────────────────────────────────────────
 
 export function validateIdentity(
   values: WizardIdentity,
 ): Partial<Record<keyof WizardIdentity, string>> {
-  const errors: Partial<Record<keyof WizardIdentity, string>> = {};
-
-  if (!values.act_id.trim()) errors.act_id = "Обязательное поле";
-  if (!values.page_id.trim()) errors.page_id = "Обязательное поле";
-  if (!values.pixel_id.trim()) errors.pixel_id = "Обязательное поле";
-  if (!values.offer_code.trim()) errors.offer_code = "Обязательное поле";
-  // Деньги: TZ кабинета должна быть подтверждена (авто-подхват / ручной выбор /
-  // пресет) — иначе бэк тихо подставит дефолт и старт кампании уедет на часы.
-  if (!values.timezone_name.trim())
-    errors.tz_offset = "Подтвердите таймзону: введите Ad Account ID";
-
-  return errors;
+  return validateCampaignIdentity(values);
 }

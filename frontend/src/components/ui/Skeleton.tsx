@@ -48,14 +48,3 @@ export function Skeleton({
     />
   );
 }
-
-/** Сопоставленный ряд Skeleton.Row для таблиц. */
-export function SkeletonRows({ count = 5 }: { count?: number }) {
-  return (
-    <>
-      {Array.from({ length: count }, (_, i) => (
-        <Skeleton key={i} variant="row" />
-      ))}
-    </>
-  );
-}

@@ -50,7 +50,7 @@ export function Switch({ checked, onChange, label, disabled, id }: SwitchProps) 
         {/* Thumb */}
         <div
           className={cn(
-            "absolute top-1 left-1 w-4 h-4 rounded-full bg-[#0a0a0b] transition-transform duration-[var(--dur-base)]",
+            "absolute top-1 left-1 w-4 h-4 rounded-full bg-bg-0 transition-transform duration-[var(--dur-base)]",
             checked && "translate-x-5",
           )}
         />

@@ -5,7 +5,7 @@
  *
  * Три вида сообщений в ленте (`kind`):
  *   - "user" / "assistant" — обычный диалог, уходят в тело запроса (последние 12).
- *   - "notification" — 📟 почасовой пульс кабинета (GET /ai/pulse), в тело запроса
+ *   - "notification" — 📟 почасовой пульс кабинета (POST /ai/pulse), в тело запроса
  *     НЕ попадает (иначе ассистент отвечал бы на собственные пуши как на вопрос).
  *
  * Пульс: fetchPulse() дёргает /ai/pulse; сервер кэширует ответ на календарный час
@@ -59,11 +59,10 @@ function errorToAssistantText(err: unknown): string {
     if (err.status === 429) {
       return "Лимит запросов исчерпан, попробуй позже";
     }
-    const detail = typeof err.detail === "string" ? err.detail : err.message;
-    return `Ассистент недоступен: ${detail}`;
+    return `Ассистент недоступен: ${err.message}`;
   }
-  const detail = err instanceof Error ? err.message : "нет соединения с сервером";
-  return `Ассистент недоступен: ${detail}`;
+  const message = err instanceof Error ? err.message : "нет соединения с сервером";
+  return `Ассистент недоступен: ${message}`;
 }
 
 interface ChatWidgetState {

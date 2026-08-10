@@ -52,6 +52,8 @@ _warn_pct = st.decimals(
 def _make_ctx(cpa: Decimal, warn_pct: Decimal) -> RuleContext:
     """Создаёт RuleContext с разумными значениями."""
     return RuleContext(
+        currency="USD",
+        currency_exponent=2,
         cpa_amount=cpa,
         warning_percent_of_stop=warn_pct,
         stop_percent_of_base=Decimal("80"),

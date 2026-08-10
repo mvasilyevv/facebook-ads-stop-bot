@@ -2,26 +2,41 @@
  * Тест OffersPage: CRUD офферов и редактор 6 порогов.
  * Адаптирован под новый дизайн-канон — Badge теперь "active"/"inactive".
  */
+import type { ComponentType } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { Offer, OfferRules } from "@fb/shared";
 
+const routeState = vi.hoisted(() => ({ filter: "all", role: "owner" }));
+
 // Мок роутера
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: () => ({ component: (c: unknown) => c }),
+  createFileRoute: () => (options: { component: ComponentType }) => ({
+    ...options,
+    useSearch: () => ({ filter: routeState.filter }),
+  }),
   useNavigate: () => vi.fn(),
+}));
+
+vi.mock("@/lib/auth", () => ({
+  getStoredRole: () => routeState.role,
 }));
 
 // Мок TG
 vi.mock("@/lib/tg", () => ({
   haptic: { impact: vi.fn(), notify: vi.fn(), selection: vi.fn() },
-  tgConfirm: vi.fn().mockResolvedValue(true),
   tgAlert: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Мок MiniHeader
 vi.mock("@/components/layout/MiniHeader", () => ({
-  MiniHeader: ({ title, right }: { title: string; right?: React.ReactNode }) => (
+  MiniHeader: ({
+    title,
+    right,
+  }: {
+    title: string;
+    right?: React.ReactNode;
+  }) => (
     <header>
       <span>{title}</span>
       {right}
@@ -39,9 +54,6 @@ const MOCK_OFFERS: Offer[] = [
     is_active: true,
     created_at: null,
     updated_at: null,
-    country_code: null,
-    use_vision_creator: null,
-    notes: null,
   },
   {
     id: "uuid-2",
@@ -51,9 +63,6 @@ const MOCK_OFFERS: Offer[] = [
     is_active: false,
     created_at: null,
     updated_at: null,
-    country_code: null,
-    use_vision_creator: null,
-    notes: null,
   },
 ];
 
@@ -62,6 +71,7 @@ const MOCK_OFFERS: Offer[] = [
 const MOCK_RULES: OfferRules = {
   offer_id: "uuid-1",
   cpa_threshold: "20.00",
+  currency: "USD",
   frequency_threshold: "3.0",
   stop_percent_of_rule: "100.00",
   warning_percent_of_stop: "80.00",
@@ -70,23 +80,28 @@ const MOCK_RULES: OfferRules = {
 const mockUseOffers = vi.fn();
 const mockUseCreateOffer = vi.fn();
 const mockUseUpdateOffer = vi.fn();
-const mockUseDeleteOffer = vi.fn();
 const mockUseOfferRules = vi.fn();
 const mockUseUpdateOfferRules = vi.fn();
+const mockUseRulesPreview = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   useOffers: () => mockUseOffers(),
   useCreateOffer: () => mockUseCreateOffer(),
   useUpdateOffer: () => mockUseUpdateOffer(),
-  useDeleteOffer: () => mockUseDeleteOffer(),
   useOfferRules: (id: string) => mockUseOfferRules(id),
   useUpdateOfferRules: () => mockUseUpdateOfferRules(),
+  useRulesPreview: (...args: unknown[]) => mockUseRulesPreview(...args),
 }));
 
-import OffersTestWrapper from "./Offers.test.helper";
+import { Route } from "@/routes/offers/index";
+
+const OffersTestWrapper = (Route as unknown as { component: ComponentType })
+  .component;
 
 describe("OffersPage", () => {
   beforeEach(() => {
+    routeState.filter = "all";
+    routeState.role = "owner";
     mockUseOffers.mockReturnValue({
       data: MOCK_OFFERS,
       isLoading: false,
@@ -101,10 +116,6 @@ describe("OffersPage", () => {
       mutateAsync: vi.fn().mockResolvedValue({}),
       isPending: false,
     });
-    mockUseDeleteOffer.mockReturnValue({
-      mutateAsync: vi.fn().mockResolvedValue({}),
-      isPending: false,
-    });
     mockUseOfferRules.mockReturnValue({
       data: MOCK_RULES,
       isLoading: false,
@@ -113,6 +124,11 @@ describe("OffersPage", () => {
       mutateAsync: vi.fn().mockResolvedValue(MOCK_RULES),
       isPending: false,
     });
+    mockUseRulesPreview.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+    });
   });
 
   // Список офферов отображается
@@ -120,15 +136,33 @@ describe("OffersPage", () => {
     render(<OffersTestWrapper />);
     expect(screen.getByText("GH_AVI")).toBeInTheDocument();
     expect(screen.getByText("NG_CR2")).toBeInTheDocument();
+    expect(screen.getByText(/Активных: 1 · выключено: 1/i)).toBeInTheDocument();
   });
 
-  // Активный оффер имеет badge "active", неактивный — "inactive"
-  it("активный оффер имеет badge 'active', неактивный — 'inactive'", () => {
+  it("показывает статусы офферов понятными русскими метками", () => {
     render(<OffersTestWrapper />);
-    // Одна карточка с "active" (GH_AVI активен)
-    expect(screen.getAllByText(/^active$/i).length).toBeGreaterThanOrEqual(1);
-    // Одна карточка с "inactive" (NG_CR2 неактивен)
-    expect(screen.getAllByText(/^inactive$/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Активен").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Выключен").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps the web active-state filter in typed URL state", () => {
+    routeState.filter = "inactive";
+    render(<OffersTestWrapper />);
+    expect(screen.queryByText("GH_AVI")).not.toBeInTheDocument();
+    expect(screen.getByText("NG_CR2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Выключенные" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("is read-only for a notification recipient", () => {
+    routeState.role = "recipient";
+    render(<OffersTestWrapper />);
+    expect(
+      screen.getByText(/каталог доступен только для чтения/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Новый/i })).toBeDisabled();
   });
 
   // Клик по офферу открывает bottom sheet с деталями
@@ -140,7 +174,10 @@ describe("OffersPage", () => {
     // В sheet появляются кнопки действий
     expect(screen.getByText("Редактировать")).toBeInTheDocument();
     expect(screen.getByText("Пороги")).toBeInTheDocument();
-    expect(screen.getByText("Удалить")).toBeInTheDocument();
+    expect(screen.getByText("Выключить")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Закрыть" })).toHaveClass(
+      "size-11",
+    );
   });
 
   // Кнопка "Пороги" показывает только рабочие пороги (CPA + Frequency);
@@ -150,13 +187,25 @@ describe("OffersPage", () => {
     const card = screen.getByRole("button", { name: /Оффер GH_AVI/i });
     fireEvent.click(card);
     fireEvent.click(screen.getByText("Пороги"));
-    expect(screen.getByLabelText(/CPA порог/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/CPA ставка/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Frequency порог/i)).toBeInTheDocument();
     // Неактивные пороги в форме отсутствовать (не вводить в заблуждение).
-    expect(screen.queryByLabelText(/Spend без события/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText(/Spend без события/i),
+    ).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/CPM порог/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/CTR порог/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Funnel ratio/i)).not.toBeInTheDocument();
+    const sheet = screen.getByRole("dialog");
+    expect(sheet).toHaveClass(
+      "max-h-[calc(var(--tg-viewport-stable-height,100dvh)-max(var(--tg-content-safe-top,0px),env(safe-area-inset-top)))]",
+    );
+    expect(sheet.querySelector("[data-sheet-scroll]")).toHaveClass(
+      "overflow-y-auto",
+    );
+    expect(
+      screen.getByRole("button", { name: "Сохранить пороги" }).parentElement,
+    ).toHaveClass("sticky", "bottom-0");
   });
 
   // Кнопка "+ Новый" открывает форму создания
@@ -181,12 +230,26 @@ describe("OffersPage", () => {
     // Мульти-кабинет: без ID кабинета сабмит блокируется валидацией
     const accountsInput = screen.getByLabelText(/Рекламные кабинеты/i);
     fireEvent.change(accountsInput, { target: { value: "act_111, 222" } });
+    fireEvent.change(screen.getByLabelText(/FB Pixel ID/i), {
+      target: { value: "9988776655" },
+    });
+
+    fireEvent.change(screen.getByLabelText(/Вертикаль/i), {
+      target: { value: "finance" },
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "Активен" }));
 
     fireEvent.click(screen.getByText("Создать оффер"));
 
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith(
-        expect.objectContaining({ code: "DRC_NEW", ad_account_ids: ["111", "222"] }),
+        expect.objectContaining({
+          code: "DRC_NEW",
+          vertical: "finance",
+          pixel_id: "9988776655",
+          is_active: false,
+          ad_account_ids: ["111", "222"],
+        }),
       );
     });
   });
@@ -198,29 +261,33 @@ describe("OffersPage", () => {
 
     render(<OffersTestWrapper />);
     fireEvent.click(screen.getByRole("button", { name: /Новый/i }));
-    fireEvent.change(screen.getByLabelText(/Код оффера/i), { target: { value: "DRC_NEW" } });
+    fireEvent.change(screen.getByLabelText(/Код оффера/i), {
+      target: { value: "DRC_NEW" },
+    });
     fireEvent.click(screen.getByText("Создать оффер"));
 
     await waitFor(() => {
       expect(screen.getByText(/минимум один ID кабинета/i)).toBeInTheDocument();
     });
+    expect(screen.getByLabelText(/Рекламные кабинеты/i)).toHaveFocus();
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
-  // Удаление требует tgConfirm и вызывает deleteOffer
-  it("удаление оффера вызывает tgConfirm, затем deleteOffer", async () => {
-    const { tgConfirm } = await import("@/lib/tg");
+  it("выключение оффера использует единственный update-путь", async () => {
     const mutateAsync = vi.fn().mockResolvedValue({});
-    mockUseDeleteOffer.mockReturnValue({ mutateAsync, isPending: false });
-
+    mockUseUpdateOffer.mockReturnValue({ mutateAsync, isPending: false });
     render(<OffersTestWrapper />);
     const card = screen.getByRole("button", { name: /Оффер GH_AVI/i });
     fireEvent.click(card);
-    fireEvent.click(screen.getByText("Удалить"));
+    fireEvent.click(screen.getByText("Выключить"));
+    expect(screen.getByText("Подтвердить выключение")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Подтвердить выключение"));
 
     await waitFor(() => {
-      expect(tgConfirm).toHaveBeenCalled();
-      expect(mutateAsync).toHaveBeenCalledWith({ id: "uuid-1" });
+      expect(mutateAsync).toHaveBeenCalledWith({
+        id: "uuid-1",
+        payload: { is_active: false },
+      });
     });
   });
 

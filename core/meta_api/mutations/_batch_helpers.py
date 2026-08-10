@@ -1,114 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Helpers для Graph API Batch — построение payload и парсинг ответа.
-
-Batch API в Marketing API позволяет одним HTTP-запросом сделать несколько
-суб-запросов, причём сабжи могут ссылаться друг на друга через JSONPath:
-    "{result=campaign:$.id}"  — где "campaign" — это значение поля "name"
-    из batch entry, имеющего {"name":"campaign", ...}.
-
-Контракт sub-request:
-    {
-        "method": "POST",
-        "relative_url": "act_X/campaigns",
-        "body": "name=...&objective=...",        # form-encoded, как query string
-        "name": "campaign",                       # имя для cross-reference (опционально)
-    }
-
-Документация: https://developers.facebook.com/docs/graph-api/batch-requests
-
-ВАЖНО: значения form-encoded body НЕ url-encod'ятся целиком через quote_plus.
-Meta распознаёт JSONPath refs (`{result=name:$.path}`) в raw тексте body —
-если их закодировать в `%7Bresult%3D...%7D`, Meta не свяжет batch entries и
-вернёт error 100. Поэтому используется минимальный encoder: кодируются только
-form-разделители (`&`, `+`, пробел, `%`, `#`, CR/LF) и не-ASCII через UTF-8.
-Символы `{ } : $ . =` остаются как есть; парсер form-encoded body везде
-обрабатывает первый `=` как разделитель ключ/значение.
-"""
+"""Helpers for the canonical independent Graph status batch."""
 
 from __future__ import annotations
 
 import json
-from typing import Any
-from urllib.parse import quote_plus
+from typing import Any, Literal
+
+from core.meta_api.mutations.base import classify_meta_mutation_evidence
 
 # Максимум sub-requests за один Batch API вызов.
 MAX_BATCH_ENTRIES = 50
-
-# Байты, обязательно требующие percent-encoding внутри value form-encoded body.
-# Всё, что не входит сюда и не управляющий/не-ASCII символ — оставляем как есть,
-# чтобы JSONPath refs (`{result=name:$.id}`) дошли до Meta нетронутыми.
-_VALUE_ESCAPE_BYTES = frozenset(
-    {
-        0x26,  # &  — разделитель пар
-        0x2B,  # +  — кодировка пробела
-        0x25,  # %  — литерал процента (иначе url-decode сломается)
-        0x23,  # #  — фрагмент URL
-        0x0D,  # \r
-        0x0A,  # \n
-    }
-)
-
-
-def _encode_value(text: str) -> str:
-    """Минимальный form-encoder для value batch entry.body.
-
-    Сохраняет JSONPath refs `{result=name:$.id}` нетронутыми — кодируются
-    только form-разделители и не-ASCII (через UTF-8 bytes).
-    """
-    out: list[str] = []
-    for byte in text.encode("utf-8"):
-        if byte == 0x20:
-            out.append("+")
-        elif byte in _VALUE_ESCAPE_BYTES or byte < 0x20 or byte > 0x7E:
-            out.append(f"%{byte:02X}")
-        else:
-            out.append(chr(byte))
-    return "".join(out)
-
-
-def encode_batch_body(params: dict[str, Any]) -> str:
-    """Закодировать params как form-encoded строку для batch entry.body.
-
-    Значения-list/dict сериализуются в JSON, иначе передаются как строка.
-    Ключ кодируется стандартно через quote_plus, value — через минимальный
-    encoder (сохраняет JSONPath refs).
-    """
-    encoded_parts: list[str] = []
-    for key, value in params.items():
-        if value is None:
-            continue
-        if isinstance(value, (list, dict)):
-            value_str = json.dumps(value)
-        elif isinstance(value, bool):
-            value_str = "true" if value else "false"
-        else:
-            value_str = str(value)
-        encoded_parts.append(f"{quote_plus(key)}={_encode_value(value_str)}")
-    return "&".join(encoded_parts)
 
 
 def make_batch_entry(
     *,
     method: str,
     relative_url: str,
-    body_params: dict[str, Any] | None = None,
-    name: str | None = None,
-    omit_response_on_success: bool = False,
 ) -> dict[str, Any]:
-    """Построить одну запись batch.
-
-    Args:
-        method: HTTP-метод ("POST", "GET", "DELETE").
-        relative_url: путь без host и API version. Может содержать JSONPath-ссылки
-            вроде "{result=campaign:$.id}/copies" — Meta их разрешит.
-        body_params: параметры для form-encoded body (используется при POST).
-        name: имя для cross-reference из других entries.
-        omit_response_on_success: не возвращать body саб-ответа если 2xx
-            (экономит размер ответа на больших batch).
-
-    Returns:
-        dict со структурой batch entry.
-    """
+    """Build one independent Graph batch entry."""
     if not method or not isinstance(method, str):
         raise ValueError(f"method обязателен и должен быть str, получено {method!r}")
     method_up = method.upper()
@@ -118,19 +27,10 @@ def make_batch_entry(
         raise ValueError("relative_url не должен быть пустым")
     validate_relative_url(relative_url)
 
-    entry: dict[str, Any] = {
+    return {
         "method": method_up,
         "relative_url": relative_url,
     }
-    if body_params:
-        entry["body"] = encode_batch_body(body_params)
-    if name:
-        if not name.replace("_", "").replace("-", "").isalnum():
-            raise ValueError(f"batch entry name: разрешены [A-Za-z0-9_-], получено {name!r}")
-        entry["name"] = name
-    if omit_response_on_success:
-        entry["omit_response_on_success"] = True
-    return entry
 
 
 def validate_relative_url(url: str) -> None:
@@ -139,6 +39,7 @@ def validate_relative_url(url: str) -> None:
     Запрещаем:
     - абсолютные URL (https://, http://)
     - ведущий /  (Meta хочет относительный путь от graph.facebook.com/vXX/)
+    - cross-entry template syntax (canonical batch entries are independent)
     """
     if not isinstance(url, str):
         raise ValueError(f"relative_url должен быть str, получено {type(url).__name__}")
@@ -146,6 +47,8 @@ def validate_relative_url(url: str) -> None:
         raise ValueError(f"relative_url должен быть относительным (без host), получено {url!r}")
     if url.startswith("/"):
         raise ValueError(f"relative_url не должен начинаться с /, получено {url!r}")
+    if any(char in url for char in "{}$"):
+        raise ValueError("relative_url must not contain cross-entry templates")
 
 
 def build_batch_payload(entries: list[dict[str, Any]]) -> str:
@@ -164,13 +67,18 @@ def parse_batch_response(
     response: Any,
     *,
     expected_count: int | None = None,
+    success_evidence: Literal["transport", "mutation_ack"] = "transport",
 ) -> list[dict[str, Any]]:
     """Распарсить ответ Batch API в список нормализованных sub-results.
 
     Meta возвращает массив объектов: [{code, body, headers}, ...] в том же
     порядке, что и batch entries. Иногда элемент = null (timeout/skipped).
 
-    Возвращает list[{index, success, code, body, error?}]. Никогда не бросает.
+    ``transport`` подходит для read-only batch: HTTP 2xx достаточно для чтения.
+    ``mutation_ack`` требует тот же exact ``success=true`` evidence contract,
+    что и одиночная mutation. Возвращает
+    list[{index, success, code, body, mutation_evidence?, error?}].
+    Никогда не бросает.
     """
     items: list[Any]
     if isinstance(response, list):
@@ -191,6 +99,18 @@ def parse_batch_response(
             for i in range(count)
         ]
 
+    if expected_count is not None and len(items) > expected_count:
+        return [
+            {
+                "index": index,
+                "success": False,
+                "code": 0,
+                "body": None,
+                "error": "unexpected_batch_response_count",
+            }
+            for index in range(expected_count)
+        ]
+
     results: list[dict[str, Any]] = []
     for idx, item in enumerate(items):
         if not isinstance(item, dict):
@@ -200,7 +120,7 @@ def parse_batch_response(
                     "success": False,
                     "code": 0,
                     "body": None,
-                    "error": "missing_sub_result",
+                    "error": "null_response",
                 }
             )
             continue
@@ -215,41 +135,58 @@ def parse_batch_response(
         elif isinstance(body_raw, dict):
             body_parsed = body_raw
 
-        success = 200 <= code < 300
+        transport_success = 200 <= code < 300
+        mutation_evidence = (
+            classify_meta_mutation_evidence(body_parsed)
+            if success_evidence == "mutation_ack" and transport_success
+            else None
+        )
+        success = transport_success and (
+            success_evidence == "transport" or mutation_evidence == "confirmed"
+        )
         entry: dict[str, Any] = {
             "index": idx,
             "success": success,
             "code": code,
             "body": body_parsed,
         }
+        if mutation_evidence is not None:
+            entry["mutation_evidence"] = mutation_evidence
         if not success:
-            err_field = body_parsed.get("error") if isinstance(body_parsed, dict) else None
-            if isinstance(err_field, dict):
-                entry["error"] = err_field.get("message") or err_field.get("type") or "graph_error"
+            if transport_success and mutation_evidence == "rejected":
+                entry["error"] = "mutation_rejected"
+            elif transport_success and mutation_evidence == "unknown":
+                entry["error"] = "ambiguous_mutation_ack"
             else:
-                entry["error"] = "non_2xx"
+                err_field = body_parsed.get("error") if isinstance(body_parsed, dict) else None
+                if isinstance(err_field, dict):
+                    entry["error"] = (
+                        err_field.get("message") or err_field.get("type") or "graph_error"
+                    )
+                else:
+                    entry["error"] = "non_2xx"
         results.append(entry)
+
+    if expected_count is not None and len(results) < expected_count:
+        results.extend(
+            {
+                "index": index,
+                "success": False,
+                "code": 0,
+                "body": None,
+                "error": "missing_response",
+            }
+            for index in range(len(results), expected_count)
+        )
     return results
-
-
-def jsonpath_ref(name: str, path: str = "$.id") -> str:
-    """Сахар: построить JSONPath-ссылку на результат другого entry.
-
-    Пример:
-        jsonpath_ref("campaign", "$.id") → "{result=campaign:$.id}"
-    """
-    if not name or not name.replace("_", "").replace("-", "").isalnum():
-        raise ValueError(f"jsonpath_ref name: разрешены [A-Za-z0-9_-], получено {name!r}")
-    return f"{{result={name}:{path}}}"
 
 
 def classify_sub_failure(sub: dict[str, Any]):
     """Классифицировать провалившийся sub-result по Graph-кодам из body.
 
-    Общий помощник для bulk_status_change/create_campaign (M-1/M-2, аудит
-    2026-07-12): достаёт error.code/error_subcode из body и прогоняет через
-    classify_graph_error. null-саб (timeout) и body без error-структуры →
-    code=None → TemporaryError (могла быть сеть).
+    Достаёт error.code/error_subcode из bulk_status_change response и прогоняет
+    через classify_graph_error. null-саб (timeout) и body без error-структуры
+    дают code=None → TemporaryError (могла быть сеть).
     """
     from core.meta_api.errors import classify_graph_error
 

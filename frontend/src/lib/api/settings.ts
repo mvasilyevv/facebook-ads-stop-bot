@@ -1,372 +1,242 @@
-/**
- * API-хуки для настроек: observer, telegram, vision, health.
- *
- * Эндпоинты:
- *   GET  /api/settings/observer          → ObserverConfig
- *   PUT  /api/settings/observer          → ObserverConfig
- *   POST /api/settings/observer/scan-now → ScanNowResponse
- *   GET  /api/health/details             → HealthDetails
- *   GET  /api/observer/status            → ObserverStatus
- *   GET  /api/settings/telegram          → TelegramSettings
- *   PUT  /api/settings/telegram/token    → TelegramSettings
- *   GET  /api/settings/vision            → VisionSettingsResponse
- *   PUT  /api/settings/vision            → VisionSettingsResponse
- *   POST /api/settings/vision/reconnect  → { ok: boolean }
- */
+/** Generated OpenAPI hooks for observer, Telegram and Vision settings. */
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { components } from "@fb/shared/api/generated";
+import { createOperatorDisplayPreferenceHooks, dataOrThrow } from "@fb/operator-api";
+import { generatedApi, generatedFetchApi } from "./generatedClient";
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiSend } from "./client";
-import type { HealthDetails, ObserverConfig, ObserverStatus, TelegramSettings } from "@fb/shared";
+export type ObserverConfig = components["schemas"]["ObserverSettingsResponse"];
+export type TelegramSettings = components["schemas"]["TelegramSettingsResponse"];
+export type TelegramNotificationDiagnostics =
+  components["schemas"]["TelegramNotificationDiagnosticsResponse"];
+export type TelegramRecipient = components["schemas"]["TelegramRecipientResponse"];
+export type TelegramRecipientPreferences =
+  components["schemas"]["TelegramRecipientPreferenceResponse"];
+export type TelegramRecipientPreferenceRequest =
+  components["schemas"]["TelegramRecipientPreferenceRequest"];
+export type VisionSettingsResponse = components["schemas"]["VisionSettingsResponse"];
+export type CampaignOption = components["schemas"]["CampaignOption"];
+export type TelegramOwnerInvite = components["schemas"]["TelegramInviteResponse"];
 
-/** Ответ настроек Vision — не вынесен в @fb/shared, описываем здесь. */
-export interface VisionSettingsResponse {
-  has_token: boolean;
-  /** Где взят токен: "db" | "env" | null (нет нигде). */
-  token_source?: string | null;
-  profile_id?: string | null;
-  auto_restart_on_missing_cdp: boolean;
-  runtime_status?: string | null;
-  runtime_status_message?: string | null;
-  cdp_ready: boolean;
-  cdp_port?: number | null;
-}
+const observerKey = ["get", "/api/settings/observer"] as const;
+const telegramKey = ["get", "/api/settings/telegram"] as const;
+const telegramRecipientsKey = ["get", "/api/settings/telegram/recipients"] as const;
+const visionKey = ["get", "/api/settings/vision"] as const;
 
-// ─── Health ──────────────────────────────────────────────────────────────────
-
-export function useHealthDetails() {
-  return useQuery<HealthDetails>({
-    queryKey: ["health", "details"],
-    queryFn: ({ signal }) => apiGet<HealthDetails>("/health/details", undefined, signal),
-    staleTime: 15_000,
-    refetchInterval: 30_000,
-  });
-}
-
-// ─── Observer status ──────────────────────────────────────────────────────────
-
-export function useObserverStatus() {
-  return useQuery<ObserverStatus>({
-    queryKey: ["observer", "status"],
-    queryFn: ({ signal }) => apiGet<ObserverStatus>("/observer/status", undefined, signal),
-    staleTime: 10_000,
-    refetchInterval: 20_000,
-  });
-}
-
-// ─── Observer settings ────────────────────────────────────────────────────────
+export const { useOperatorDisplayPreference, useUpdateOperatorDisplayPreference } =
+  createOperatorDisplayPreferenceHooks(generatedApi);
 
 export function useObserverSettings() {
-  return useQuery<ObserverConfig>({
-    queryKey: ["settings", "observer"],
-    queryFn: ({ signal }) => apiGet<ObserverConfig>("/settings/observer", undefined, signal),
-    staleTime: 60_000,
-  });
+  return generatedApi.useQuery("get", "/api/settings/observer", {}, { staleTime: 60_000 });
 }
 
-export function useUpdateObserverSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
-    meta: { suppressGlobalError: true },
-    mutationFn: (data: Partial<ObserverConfig>) =>
-      apiSend<ObserverConfig>("PUT", "/settings/observer", data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["settings", "observer"] });
-    },
-  });
-}
-
-// ─── Cabinet autostart (расписание авто-включения кабинета) ────────────────────
-
-/** Конфиг автостарта: в HH:MM UTC включаются объявления отслеживаемых кампаний. */
-export interface CabinetAutostart {
-  enabled: boolean;
-  hour_utc: number;
-  minute_utc: number;
-}
-
-export function useCabinetAutostart() {
-  return useQuery<CabinetAutostart>({
-    queryKey: ["settings", "cabinet-autostart"],
-    queryFn: ({ signal }) =>
-      apiGet<CabinetAutostart>("/settings/cabinet-autostart", undefined, signal),
-    staleTime: 30_000,
-  });
-}
-
-export function useUpdateCabinetAutostart() {
+export function useUpdateObserverInterval() {
   const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
-    mutationFn: (data: CabinetAutostart) =>
-      apiSend<CabinetAutostart>("PUT", "/settings/cabinet-autostart", data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["settings", "cabinet-autostart"] });
-    },
+    mutationFn: (default_interval_seconds: number) =>
+      dataOrThrow(
+        generatedFetchApi.PATCH("/api/settings/observer/interval", {
+          body: { default_interval_seconds },
+        }),
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: observerKey }),
   });
 }
 
-export function useScanNow() {
-  const qc = useQueryClient();
-  return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
-    meta: { suppressGlobalError: true },
-    mutationFn: () => apiSend<{ ok: boolean }>("POST", "/settings/observer/scan-now"),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["observer"] });
-    },
-  });
+function invalidateObserver(qc: ReturnType<typeof useQueryClient>) {
+  return () => void qc.invalidateQueries({ queryKey: observerKey });
 }
-
-/** Рестарт observer-воркера (POST /observer/restart — pubsub-сигнал graceful stop). */
-export function useRestartObserver() {
-  const qc = useQueryClient();
-  return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
-    meta: { suppressGlobalError: true },
-    mutationFn: () => apiSend<{ status: string; channel: string }>("POST", "/observer/restart"),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["observer"] });
-    },
-  });
-}
-
-/** Переключение only is_scanning_enabled (PATCH /settings/observer/scanning). */
 export function useToggleScanning() {
   const qc = useQueryClient();
   return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
     meta: { suppressGlobalError: true },
     mutationFn: (enabled: boolean) =>
-      apiSend<ObserverConfig>("PATCH", "/settings/observer/scanning", { enabled }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["settings", "observer"] });
-      qc.invalidateQueries({ queryKey: ["observer"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
-    },
+      dataOrThrow(
+        generatedFetchApi.PATCH("/api/settings/observer/scanning", { body: { enabled } }),
+      ),
+    onSuccess: invalidateObserver(qc),
   });
 }
-
-/**
- * Точечное обновление owner_campaign_tag (PATCH /settings/observer/owner-tag).
- * Анти лост-апдейт (аудит 2026-07-12, C-1): full-PUT из кэша молча откатывал
- * is_scanning_enabled — тег сохраняем только точечным PATCH.
- */
 export function useUpdateOwnerTag() {
   const qc = useQueryClient();
   return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
     meta: { suppressGlobalError: true },
-    mutationFn: (ownerCampaignTag: string | null) =>
-      apiSend<ObserverConfig>("PATCH", "/settings/observer/owner-tag", {
-        owner_campaign_tag: ownerCampaignTag,
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["settings", "observer"] });
-      qc.invalidateQueries({ queryKey: ["settings", "observer", "campaigns"] });
-    },
-  });
-}
-
-/** Переключение only auto_enable_recommendations (PATCH /settings/observer/auto-enable). */
-export function useToggleAutoEnable() {
-  const qc = useQueryClient();
-  return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
-    meta: { suppressGlobalError: true },
-    mutationFn: (enabled: boolean) =>
-      apiSend<ObserverConfig>("PATCH", "/settings/observer/auto-enable", { enabled }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["settings", "observer"] });
-    },
-  });
-}
-
-export interface AutoEnableExclusion {
-  fb_ad_id: string;
-  internal_id: string;
-  ad_name?: string | null;
-  disabled_at: string;
-  reason?: string | null;
-}
-
-export function useAutoEnableExclusions() {
-  return useQuery<AutoEnableExclusion[]>({
-    queryKey: ["settings", "auto-enable-exclusions"],
-    queryFn: ({ signal }) =>
-      apiGet<AutoEnableExclusion[]>("/dashboard/auto-enable-disabled", undefined, signal),
-    staleTime: 30_000,
-  });
-}
-
-export function useRemoveAutoEnableExclusion() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (fbAdId: string) =>
-      apiSend<null>("DELETE", `/dashboard/auto-enable-disabled/${encodeURIComponent(fbAdId)}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["settings", "auto-enable-exclusions"] });
-    },
-  });
-}
-
-// ─── Отслеживаемые кампании (allowlist) ─────────────────────────────────────────
-
-/** Кампания-кандидат для allowlist: id (fb_campaign_id), имя, выбрана ли сейчас. */
-export interface CampaignOption {
-  id: string;
-  name: string;
-  selected: boolean;
-}
-
-/**
- * Список накопленных observer'ом кампаний по owner_tag (GET /settings/observer/campaigns).
- * includeStale=false (дефолт): бэк прячет кампании с датой в имени старше 14 дней,
- * кроме уже выбранных в allowlist (решение владельца 03.07 — старьё мешает выбирать).
- */
-export function useObserverCampaigns(includeStale = false) {
-  return useQuery<CampaignOption[]>({
-    queryKey: ["settings", "observer", "campaigns", { includeStale }],
-    queryFn: ({ signal }) =>
-      apiGet<CampaignOption[]>(
-        "/settings/observer/campaigns",
-        { include_stale: includeStale },
-        signal,
+    mutationFn: (owner_campaign_tag: string | null) =>
+      dataOrThrow(
+        generatedFetchApi.PATCH("/api/settings/observer/owner-tag", {
+          body: { owner_campaign_tag },
+        }),
       ),
-    staleTime: 30_000,
+    onSuccess: invalidateObserver(qc),
   });
 }
-
-/** Live-резолв всех кампаний владельца через browser-agent (POST /campaigns/refresh). */
+export function useObserverCampaigns(includeStale = false) {
+  return generatedApi.useQuery(
+    "get",
+    "/api/settings/observer/campaigns",
+    { params: { query: { include_stale: includeStale } } },
+    { staleTime: 30_000 },
+  );
+}
 export function useRefreshObserverCampaigns() {
   const qc = useQueryClient();
   return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
     meta: { suppressGlobalError: true },
-    mutationFn: (includeStale: boolean = false) =>
-      apiSend<CampaignOption[]>(
-        "POST",
-        `/settings/observer/campaigns/refresh?include_stale=${includeStale}`,
+    mutationFn: (includeStale: boolean) =>
+      dataOrThrow(
+        generatedFetchApi.POST("/api/settings/observer/campaigns/refresh", {
+          params: { query: { include_stale: includeStale } },
+        }),
       ),
-    onSuccess: (data, includeStale) => {
-      qc.setQueryData(["settings", "observer", "campaigns", { includeStale }], data);
-    },
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["get", "/api/settings/observer/campaigns"] }),
   });
 }
-
-/** Сохранить allowlist отслеживаемых кампаний (PATCH /settings/observer/campaigns). */
 export function useSetCampaignAllowlist() {
   const qc = useQueryClient();
   return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
     meta: { suppressGlobalError: true },
     mutationFn: (campaign_ids: string[]) =>
-      apiSend<ObserverConfig>("PATCH", "/settings/observer/campaigns", { campaign_ids }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["settings", "observer"] });
-      qc.invalidateQueries({ queryKey: ["settings", "observer", "campaigns"] });
-    },
+      dataOrThrow(
+        generatedFetchApi.PATCH("/api/settings/observer/campaigns", { body: { campaign_ids } }),
+      ),
+    onSuccess: invalidateObserver(qc),
   });
 }
 
-// ─── Telegram settings ────────────────────────────────────────────────────────
+export function useScanObserverNow() {
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: () => dataOrThrow(generatedFetchApi.POST("/api/settings/observer/scan-now")),
+  });
+}
 
 export function useTelegramSettings() {
-  return useQuery<TelegramSettings>({
-    queryKey: ["settings", "telegram"],
-    queryFn: ({ signal }) => apiGet<TelegramSettings>("/settings/telegram", undefined, signal),
-    staleTime: 30_000,
+  return generatedApi.useQuery("get", "/api/settings/telegram", {}, { staleTime: 30_000 });
+}
+export function useTelegramNotificationDiagnostics() {
+  return generatedApi.useQuery(
+    "get",
+    "/api/settings/telegram/diagnostics",
+    {},
+    { staleTime: 15_000, refetchInterval: 30_000 },
+  );
+}
+export function useTelegramRecipients() {
+  return generatedApi.useQuery(
+    "get",
+    "/api/settings/telegram/recipients",
+    {},
+    { staleTime: 30_000 },
+  );
+}
+export function useTelegramRecipientPreferences(recipientId: string | null) {
+  return generatedApi.useQuery(
+    "get",
+    "/api/settings/telegram/recipients/{recipient_id}/preferences",
+    { params: { path: { recipient_id: recipientId ?? "" } } },
+    { enabled: Boolean(recipientId), staleTime: 30_000 },
+  );
+}
+export function useCreateTelegramRecipientInvite() {
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: () =>
+      dataOrThrow(generatedFetchApi.POST("/api/settings/telegram/recipients/invite")),
   });
 }
-
-export interface TelegramOwnerInvite {
-  code: string;
-  expires_at: string;
-  role: "owner";
-  auth_deep_link: string | null;
-  activation_command: string;
+export function useUpdateTelegramWebAppUrl() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (web_app_url: string | null) =>
+      dataOrThrow(
+        generatedFetchApi.PUT("/api/settings/telegram/web-app-url", {
+          body: { web_app_url },
+        }),
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: telegramKey }),
+  });
 }
-
+export function useUpdateTelegramRecipientPreferences() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: ({
+      recipientId,
+      body,
+    }: {
+      recipientId: string;
+      body: TelegramRecipientPreferenceRequest;
+    }) =>
+      dataOrThrow(
+        generatedFetchApi.PUT("/api/settings/telegram/recipients/{recipient_id}/preferences", {
+          params: { path: { recipient_id: recipientId } },
+          body,
+        }),
+      ),
+    onSuccess: () =>
+      void qc.invalidateQueries({
+        queryKey: ["get", "/api/settings/telegram/recipients/{recipient_id}/preferences"],
+      }),
+  });
+}
+export function useDeleteTelegramRecipient() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (recipientId: string) =>
+      dataOrThrow(
+        generatedFetchApi.DELETE("/api/settings/telegram/recipients/{recipient_id}", {
+          params: { path: { recipient_id: recipientId } },
+        }),
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: telegramRecipientsKey }),
+  });
+}
 export function useCreateTelegramOwnerInvite() {
   const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
-    mutationFn: () => apiSend<TelegramOwnerInvite>("POST", "/settings/telegram/owner-invite"),
-    onSuccess: (invite) => {
-      // Показываем готовую ссылку сразу, не ожидая повторного GET.
-      qc.setQueryData<TelegramSettings>(["settings", "telegram"], (current) =>
-        current
-          ? {
-              ...current,
-              auth_deep_link: invite.auth_deep_link,
-              activation_command: invite.activation_command,
-              auth_invite_expires_at: invite.expires_at,
-            }
-          : current,
-      );
-      qc.invalidateQueries({ queryKey: ["settings", "telegram"] });
-    },
+    mutationFn: () => dataOrThrow(generatedFetchApi.POST("/api/settings/telegram/owner-invite")),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: telegramKey }),
   });
 }
-
 export function useUpdateTelegramToken() {
   const qc = useQueryClient();
   return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
     meta: { suppressGlobalError: true },
     mutationFn: (bot_token: string) =>
-      apiSend<TelegramSettings>("PUT", "/settings/telegram/token", { bot_token }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["settings", "telegram"] });
-    },
+      dataOrThrow(generatedFetchApi.PUT("/api/settings/telegram/token", { body: { bot_token } })),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: telegramKey }),
   });
 }
-
 export function useDeleteTelegramToken() {
   const qc = useQueryClient();
   return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
     meta: { suppressGlobalError: true },
-    // L3: бэк-маршрут — DELETE /settings/telegram (очистка token+chat_id).
-    // /settings/telegram/token не существует (был 405).
-    mutationFn: () => apiSend<TelegramSettings>("DELETE", "/settings/telegram"),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["settings", "telegram"] });
-    },
+    mutationFn: () => dataOrThrow(generatedFetchApi.DELETE("/api/settings/telegram")),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: telegramKey }),
   });
 }
-
-// ─── Vision settings ──────────────────────────────────────────────────────────
 
 export function useVisionSettings() {
-  return useQuery<VisionSettingsResponse>({
-    queryKey: ["settings", "vision"],
-    queryFn: ({ signal }) => apiGet<VisionSettingsResponse>("/settings/vision", undefined, signal),
-    staleTime: 20_000,
-  });
+  return generatedApi.useQuery("get", "/api/settings/vision", {}, { staleTime: 20_000 });
 }
-
 export function useUpdateVisionSettings() {
   const qc = useQueryClient();
   return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
     meta: { suppressGlobalError: true },
-    mutationFn: (data: { x_token?: string; profile_id?: string }) =>
-      apiSend<VisionSettingsResponse>("PUT", "/settings/vision", data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["settings", "vision"] });
-    },
+    mutationFn: (body: components["schemas"]["VisionSettingsUpdateRequest"]) =>
+      dataOrThrow(generatedFetchApi.PUT("/api/settings/vision", { body })),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: visionKey }),
   });
 }
-
 export function useReconnectVision() {
   const qc = useQueryClient();
   return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
     meta: { suppressGlobalError: true },
-    mutationFn: () => apiSend<{ ok: boolean }>("POST", "/settings/vision/reconnect"),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["settings", "vision"] });
-    },
+    mutationFn: () => dataOrThrow(generatedFetchApi.POST("/api/vision/reconnect")),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: visionKey }),
   });
 }

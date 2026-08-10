@@ -11,7 +11,7 @@ const PULSE_EPOCH = Date.now();
 interface PulseDotProps {
   /** Диаметр в px. */
   size?: number;
-  /** CSS-цвет (var(--success) и т.п.). */
+  /** CSS-цвет (var(--color-success) и т.п.). */
   color: string;
   className?: string;
   style?: CSSProperties;

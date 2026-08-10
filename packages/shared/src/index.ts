@@ -10,10 +10,14 @@ export * from "./tokens/tokens";
 // ─── API-типы ────────────────────────────────────────────────────────────────
 export * from "./api/types";
 
-// ─── Константы FSM / правил / мутаций ────────────────────────────────────────
-export * from "./constants/states";
+// ─── Operator console: public contracts and pure view-models ────────────────
+export * from "./operator/contracts";
+export * from "./operator/chartModel";
+export * from "./operator/commandIntent";
+export * from "./operator/viewModel";
+
+// ─── Константы правил / мутаций ───────────────────────────────────────────────
 export * from "./constants/rules";
-export * from "./constants/mutations";
 export * from "./constants/campaignEnums";
 
 // ─── Форматтеры ──────────────────────────────────────────────────────────────
@@ -22,7 +26,5 @@ export * from "./format/time";
 export * from "./format/id";
 
 // ─── Доменные хелперы ────────────────────────────────────────────────────────
-export * from "./domain/badge";
-export * from "./domain/diff";
-export * from "./domain/expiry";
 export * from "./domain/geo";
+export * from "./domain/campaignRunReview";

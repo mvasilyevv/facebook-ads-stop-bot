@@ -1,86 +1,178 @@
-/**
- * /ads/$fbAdId — deep-link drawer деталей объявления.
- *
- * Грузит snapshot из списка (useAds кэш) и рендерит AdDrawer.
- * Закрытие → navigate к /ads.
- */
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { ArrowLeft } from "lucide-react";
 
-import { createFileRoute, useRouter, useParams } from "@tanstack/react-router";
-import { useMemo } from "react";
+import { formatZonedDateTime, timezoneEvidenceLabel } from "@fb/shared/format/time";
+import { formatSpend } from "@fb/shared/format/number";
+import { confirmedOperatorCurrency, formatOperatorCount } from "@fb/shared/operator/adsViewModel";
+import { adsForRealtimeState, severityForDataState } from "@fb/shared/operator/viewModel";
+import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
+import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
-import { AdDrawer } from "@/components/domain/ads/AdDrawer";
-import { useAds, useAdTimeline } from "@/lib/api/ads";
-import { useStatsToday } from "@/lib/api/stats";
-import type { AdSnapshot } from "@fb/shared";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { AdCommandButtons, OperatorSeverityBadge } from "@/features/operator/OperatorAds";
+import { operatorProblemMessage, useOperatorAds } from "@/lib/api/operator";
 
-export const Route = createFileRoute("/ads/$fbAdId")({
-  component: AdDetailRoute,
-});
+export const Route = createFileRoute("/ads/$fbAdId")({ component: AdDetailRoute });
 
 function AdDetailRoute() {
-  const router = useRouter();
-  const { fbAdId } = useParams({ from: "/ads/$fbAdId" });
-  const trackerQ = useStatsToday();
+  const { fbAdId } = Route.useParams();
+  const realtimeStatus = useOperatorRealtimeStatus();
+  const ads = useOperatorAds({ search: fbAdId, page: 1, page_size: 10 });
+  const displayPayload = ads.data
+    ? adsForRealtimeState(ads.data, realtimeStatus === "connected" && !ads.isError)
+    : null;
+  const ad = displayPayload?.rows.find((candidate) => candidate.fb_ad_id === fbAdId) ?? null;
 
-  function close() {
-    void router.navigate({ to: "/ads" });
+  if (ads.isError && !ads.data) {
+    return (
+      <ErrorState
+        title="Карточка объявления недоступна"
+        error={operatorProblemMessage(ads.error)}
+        onRetry={() => void ads.refetch()}
+      />
+    );
   }
 
-  // Ищем snapshot в общем списке (обычно уже в кэше).
-  const { data, isLoading: adsLoading } = useAds({ limit: 1000, offset: 0 });
-  const fromList = useMemo(
-    () => data?.data.find((a) => a.fb_ad_id === fbAdId) ?? null,
-    [data, fbAdId],
-  );
+  if (ads.isPending && !ads.data) {
+    return (
+      <div role="status" aria-label="Загрузка объявления">
+        <Skeleton className="h-72 w-full" />
+      </div>
+    );
+  }
 
-  // Фолбэк: timeline для холодного deep-link без кэша.
-  const { data: timeline, isLoading: timelineLoading } = useAdTimeline(fbAdId, {
-    include_metrics: true,
-    include_alerts: true,
-    include_tasks: false,
-  });
+  if (!ad && displayPayload?.state === "empty") {
+    return (
+      <EmptyState
+        title="Объявление не найдено"
+        description="Оно отсутствует в актуальном операторском каталоге или ссылка устарела."
+        action={
+          <Link
+            to="/ads"
+            className="inline-flex min-h-11 items-center rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] px-4 text-[14px] text-bg-11"
+          >
+            К объявлениям
+          </Link>
+        }
+      />
+    );
+  }
 
-  // Холодный deep-link: snapshot нет в кэше useAds, есть только timeline
-  // (без alert_state — AdTimelineResponse его не отдаёт). Раньше сюда
-  // подставлялся alert_state: "normal", что рисовало ложную «Норму» для
-  // объявления, которое на самом деле могло быть в STOP/WARNING/DISABLED.
-  // Синтетический snapshot — только для полей, реально известных из timeline;
-  // alert_state оставляем placeholder-значением и явно помечаем stateUnknown,
-  // чтобы AdDrawer НЕ доверял ему и показал нейтральный статус.
-  const ad: AdSnapshot | null = useMemo(() => {
-    if (fromList) return fromList;
-    if (!timeline) return null;
-    return {
-      fb_ad_id: timeline.fb_ad_id,
-      internal_id: timeline.internal_id,
-      ad_name: timeline.ad_name,
-      campaign_name: timeline.campaign_name ?? null,
-      adset_name: timeline.adset_name ?? null,
-      offer_code: timeline.offer_code ?? null,
-      offer_id: null,
-      alert_state: "normal", // placeholder — реальный статус неизвестен, см. stateUnknown ниже
-      is_active: true,
-      last_seen_at: null,
-      stop_rule_codes: [],
-      warning_rule_codes: [],
-      metrics: null,
-    } satisfies AdSnapshot;
-  }, [fromList, timeline]);
-
-  // true только для синтетического ad из timeline-фолбэка (fromList отсутствует).
-  const stateUnknown = !fromList && ad !== null;
-
-  const isLoading = adsLoading || (timelineLoading && !fromList);
+  if (!ad) {
+    return (
+      <EmptyState
+        title="Карточка не подтверждена"
+        description="Дождитесь сверки live-снимка. Отсутствие строки не считается подтверждённым нулём."
+      />
+    );
+  }
+  const scope = displayPayload?.scope;
+  const currency = confirmedOperatorCurrency(scope);
+  const timestampTimezone =
+    scope?.cabinet_timezone_state === "single" ? scope.cabinet_timezone : scope?.display_timezone;
+  const timezoneLabel = scope
+    ? timezoneEvidenceLabel(scope.cabinet_timezone, scope.cabinet_timezone_state)
+    : timezoneEvidenceLabel(null, "unknown");
+  const timezoneContext =
+    scope?.cabinet_timezone_state === "single"
+      ? timezoneLabel
+      : `${timezoneLabel}${scope?.display_timezone ? ` · отображение ${scope.display_timezone}` : ""}`;
 
   return (
-    <AdDrawer
-      ad={ad}
-      onClose={close}
-      isLoading={isLoading}
-      fbAdId={fbAdId}
-      stateUnknown={stateUnknown}
-      trackerData={trackerQ.data?.tracker}
-      trackerDataLoading={trackerQ.isLoading}
-    />
+    <article className="mx-auto max-w-5xl">
+      <Link
+        to="/ads"
+        className="mb-4 inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] px-2 text-[14px] text-bg-9 outline-none hover:text-bg-11 focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <ArrowLeft aria-hidden="true" size={16} /> Объявления
+      </Link>
+
+      <header className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5 sm:p-7">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <OperatorSeverityBadge severity={severityForDataState(ad.severity, ad.data_state)} />
+              <DataStateBadge state={ad.data_state} />
+            </div>
+            <h1 className="mt-4 break-words font-display text-[clamp(28px,5vw,44px)] font-medium leading-tight text-bg-11">
+              {ad.name}
+            </h1>
+            <p className="mt-2 break-all font-numeric text-[13px] text-bg-8">
+              Meta ID {ad.fb_ad_id}
+            </p>
+          </div>
+          <AdCommandButtons ad={ad} />
+        </div>
+        {ad.data_state !== "ready" ? (
+          <div className="mt-5">
+            <DataStateNotice state={ad.data_state} />
+          </div>
+        ) : null}
+      </header>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_.8fr]">
+        <section
+          className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5"
+          aria-labelledby="ad-economy"
+        >
+          <h2 id="ad-economy" className="m-0 font-display text-[20px] text-bg-11">
+            Экономика и воронка
+          </h2>
+          <dl className="mt-5 grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-4">
+            <Metric label="Расход" value={formatSpend(ad.metrics.spend, currency)} />
+            <Metric label="Показы" value={formatOperatorCount(ad.metrics.impressions)} />
+            <Metric label="Клики" value={formatOperatorCount(ad.metrics.clicks)} />
+            <Metric label="Регистрации" value={formatOperatorCount(ad.metrics.registrations)} />
+            <Metric label="FTD" value={formatOperatorCount(ad.metrics.ftd)} />
+            <Metric label="Депозиты" value={formatOperatorCount(ad.metrics.confirmed_deposits)} />
+            <Metric label="CPC" value={formatSpend(ad.metrics.cpc, currency)} />
+            <Metric
+              label="Цена регистрации"
+              value={formatSpend(ad.metrics.cost_per_registration, currency)}
+            />
+          </dl>
+        </section>
+
+        <section
+          className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5"
+          aria-labelledby="ad-context"
+        >
+          <h2 id="ad-context" className="m-0 font-display text-[20px] text-bg-11">
+            Контекст
+          </h2>
+          <dl className="mt-5 grid gap-4 text-[14px]">
+            <Field label="Доставка" value={ad.delivery_status ?? "Не подтверждено"} />
+            <Field label="Кампания" value={ad.campaign_name} />
+            <Field label="Адсет" value={ad.adset_name} />
+            <Field label="Кабинет" value={ad.account_id ?? "Не указан"} />
+            <Field
+              label="Данные на"
+              value={timestampTimezone ? formatZonedDateTime(ad.as_of, timestampTimezone) : "—"}
+            />
+            <Field label="Часовой пояс" value={timezoneContext} />
+          </dl>
+        </section>
+      </div>
+    </article>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-[12px] text-bg-8">{label}</dt>
+      <dd className="mt-1 font-numeric text-[18px] text-bg-11">{value}</dd>
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid gap-1 border-b border-[var(--color-hairline)] pb-3 last:border-0">
+      <dt className="text-[12px] text-bg-8">{label}</dt>
+      <dd className="m-0 break-words text-bg-11">{value}</dd>
+    </div>
   );
 }

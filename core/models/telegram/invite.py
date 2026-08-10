@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, DateTime, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models.base import Base, CreatedAtOnly, UUIDPrimaryKey
@@ -30,6 +30,10 @@ class TelegramInvite(UUIDPrimaryKey, CreatedAtOnly, Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "role IN ('owner', 'recipient')",
+            name="telegram_invite_role",
+        ),
         UniqueConstraint("code", name="uq_telegram_invites_code"),
         Index(
             "ix_invites_active",

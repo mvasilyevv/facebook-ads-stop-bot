@@ -5,7 +5,7 @@
 }
 
 (panel_session_auth) {
-	forward_auth 127.0.0.1:8100 {
+	forward_auth 127.0.0.1:18100 {
 		uri /auth/verify
 		# The verifier trusts only its Redis cookie. Strip all client-controlled
 		# identities, credentials and upgrade headers from the auth subrequest.
@@ -13,22 +13,26 @@
 		header_up -Authorization
 		header_up -Proxy-Authorization
 		header_up -X-API-Key
+		header_up -X-Operator-Principal
+		header_up -X-Verified-Operator-Principal
 		header_up -X-Panel-Telegram-User-Id
 		header_up -X-Panel-Role
 		header_up -X-Desktop-Telegram-User-Id
 		header_up -X-Desktop-Role
 		header_up -Connection
 		header_up -Upgrade
+		copy_headers X-Verified-Operator-Principal
 	}
 }
 
 (desktop_session_auth) {
-	forward_auth 127.0.0.1:8100 {
+	forward_auth 127.0.0.1:18100 {
 		uri /desktop-auth/verify
 		header_up -Remote-User
 		header_up -Authorization
 		header_up -Proxy-Authorization
 		header_up -X-API-Key
+		header_up -X-Operator-Principal
 		header_up -X-Panel-Telegram-User-Id
 		header_up -X-Panel-Role
 		header_up -X-Desktop-Telegram-User-Id
@@ -60,25 +64,117 @@ app.adpulse.su {
 	# Telegram OIDC, then cookie-protected panel/API/WS and desktop transport.
 	route {
 		handle /healthz {
-			reverse_proxy 127.0.0.1:8100
+			reverse_proxy 127.0.0.1:18100
 		}
 
 		handle /readyz {
-			reverse_proxy 127.0.0.1:8100
+			reverse_proxy 127.0.0.1:18100
 		}
 
 		handle /api/v1/postback/* {
 			log_skip
 			header Cache-Control "no-store"
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up -X-API-Key
+				header_up -X-Operator-Principal
 			}
 		}
 
-		# Telegram Mini App keeps its independent initData/Bearer trust boundary.
-		handle /api/tma/* {
-			reverse_proxy 127.0.0.1:8100 {
+		# Telegram authenticates this single endpoint with its dedicated secret
+		# header. It must not traverse the operator session forward_auth boundary.
+		handle /api/v1/integrations/telegram/webhook {
+			log_skip
+			reverse_proxy 127.0.0.1:18100 {
+				header_up -Authorization
+				header_up -Proxy-Authorization
 				header_up -X-API-Key
+				header_up -X-Operator-Principal
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
+			}
+		}
+
+		# Alertmanager has its own scoped Bearer credential. Preserve only that
+		# Authorization header and bypass operator/TMA authentication explicitly.
+			handle /api/v1/integrations/alertmanager/webhook {
+				log_skip
+				header Cache-Control "no-store"
+			reverse_proxy 127.0.0.1:18100 {
+				header_up -Proxy-Authorization
+				header_up -X-API-Key
+				header_up -X-Operator-Principal
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
+				}
+			}
+
+			# Browser-agent consumes a single-use database authority grant through
+			# this exact header-authenticated POST. Keep the credential out of logs
+			# and never mix it with panel, API-key, TMA or desktop identities.
+			@browser_authority_consume {
+				method POST
+				path /api/v1/internal/browser-operations/consume
+			}
+			handle @browser_authority_consume {
+				log_skip
+				header Cache-Control "no-store"
+				reverse_proxy 127.0.0.1:18100 {
+					header_up -Remote-User
+					header_up -Authorization
+					header_up -Proxy-Authorization
+					header_up -X-API-Key
+					header_up -X-Operator-Principal
+					header_up -X-Verified-Operator-Principal
+					header_up -X-Panel-Telegram-User-Id
+					header_up -X-Panel-Role
+					header_up -X-Desktop-Telegram-User-Id
+					header_up -X-Desktop-Role
+					header_up -X-Telegram-Init-Data
+					header_up -Cookie
+					header_up -Connection
+					header_up -Upgrade
+					header_up X-Browser-Authority-Token {http.request.header.X-Browser-Authority-Token}
+				}
+			}
+
+			# Vision recovery uses a separate durable consume contract. It is
+			# exact-path POST-only and receives only the browser authority token;
+			# no panel, TMA, desktop, cookie or API-key identity crosses it.
+			@browser_maintenance_consume {
+				method POST
+				path /api/v1/internal/browser-maintenance/consume
+			}
+			handle @browser_maintenance_consume {
+				log_skip
+				header Cache-Control "no-store"
+				reverse_proxy 127.0.0.1:18100 {
+					header_up -Remote-User
+					header_up -Authorization
+					header_up -Proxy-Authorization
+					header_up -X-API-Key
+					header_up -X-Operator-Principal
+					header_up -X-Verified-Operator-Principal
+					header_up -X-Panel-Telegram-User-Id
+					header_up -X-Panel-Role
+					header_up -X-Desktop-Telegram-User-Id
+					header_up -X-Desktop-Role
+					header_up -X-Telegram-Init-Data
+					header_up -Cookie
+					header_up -Connection
+					header_up -Upgrade
+					header_up X-Browser-Authority-Token {http.request.header.X-Browser-Authority-Token}
+				}
+			}
+
+			# Telegram Mini App keeps its independent initData/Bearer trust boundary.
+			handle /api/tma/* {
+				reverse_proxy 127.0.0.1:18100 {
+				header_up -X-API-Key
+				header_up -X-Operator-Principal
 			}
 		}
 
@@ -87,52 +183,80 @@ app.adpulse.su {
 			header Authorization "Bearer *"
 		}
 		handle @tma_bearer_api {
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up -X-API-Key
+				header_up -X-Operator-Principal
+			}
+		}
+
+		# Browser WebSocket clients cannot set Authorization. Only the operator
+		# endpoint carrying a non-empty TMA signed-session subprotocol bypasses
+		# panel cookies; the backend verifies the token before accepting the WS.
+		@tma_operator_ws {
+			path /ws/operator
+			header_regexp tma_protocol Sec-WebSocket-Protocol `(?i)(^|[[:space:]]*,[[:space:]]*)tma\.[A-Za-z0-9._~-]+([[:space:]]*,|$)`
+		}
+		handle @tma_operator_ws {
+			log_skip
+			reverse_proxy 127.0.0.1:18100 {
+				header_up -X-API-Key
+				header_up -X-Operator-Principal
+				header_up -Remote-User
+				header_up -Authorization
+				header_up -Proxy-Authorization
+				header_up -X-Panel-Telegram-User-Id
+				header_up -X-Panel-Role
+				header_up -X-Desktop-Telegram-User-Id
+				header_up -X-Desktop-Role
 			}
 		}
 
 		# Public Telegram OIDC endpoints. Ticket-bearing requests are never logged.
 		handle /auth/login {
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up -Authorization
 				header_up -Proxy-Authorization
 				header_up -X-API-Key
+				header_up -X-Operator-Principal
 			}
 		}
 
 		handle /auth/telegram/start {
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up -Authorization
 				header_up -Proxy-Authorization
 				header_up -X-API-Key
+				header_up -X-Operator-Principal
 			}
 		}
 
 		handle /auth/telegram/callback {
 			log_skip
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up -Authorization
 				header_up -Proxy-Authorization
 				header_up -X-API-Key
+				header_up -X-Operator-Principal
 			}
 		}
 
 		handle /auth/redeem {
 			log_skip
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up -Authorization
 				header_up -Proxy-Authorization
 				header_up -X-API-Key
+				header_up -X-Operator-Principal
 			}
 		}
 
 		handle /auth/logout {
 			log_skip
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up -Authorization
 				header_up -Proxy-Authorization
 				header_up -X-API-Key
+				header_up -X-Operator-Principal
 			}
 		}
 
@@ -143,29 +267,32 @@ app.adpulse.su {
 
 		handle /desktop-readyz {
 			import panel_session_auth
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up -Remote-User
 				header_up -Authorization
 				header_up -Proxy-Authorization
 				header_up -X-API-Key
+				header_up -X-Operator-Principal
 			}
 		}
 
 		handle /desktop-kasm-readyz {
 			import panel_session_auth
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up -Remote-User
 				header_up -Authorization
 				header_up -Proxy-Authorization
 				header_up -X-API-Key
+				header_up -X-Operator-Principal
 			}
 		}
 
 		handle /api/* {
 			import panel_session_auth
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				# Overwrite, never preserve, any browser-supplied master key.
 				header_up X-API-Key {$API_KEY}
+				header_up -X-Operator-Principal
 				header_up -Remote-User
 				header_up -Authorization
 				header_up -Proxy-Authorization
@@ -179,8 +306,13 @@ app.adpulse.su {
 		handle /ws/* {
 			import panel_session_auth
 			log_skip
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
+				# Cookie forward_auth runs only when the socket opens. Force a fresh
+				# PostgreSQL owner check at least once per minute after revocation.
+				stream_timeout 1m
 				header_up X-API-Key {$API_KEY}
+				header_up -X-Operator-Principal
+				header_up -X-Verified-Operator-Principal
 				header_up -Remote-User
 				header_up -Authorization
 				header_up -Proxy-Authorization
@@ -192,12 +324,17 @@ app.adpulse.su {
 		}
 
 		handle /tma* {
-			reverse_proxy 127.0.0.1:8081
+			# Navigation capabilities arrive in the initial query string. Keep
+			# them out of access logs, referrers and intermediary caches.
+			log_skip
+			header Cache-Control "no-store"
+			header Referrer-Policy "no-referrer"
+			reverse_proxy 127.0.0.1:18081
 		}
 
 		handle {
 			import panel_session_auth
-			reverse_proxy 127.0.0.1:8080
+			reverse_proxy 127.0.0.1:18080
 		}
 	}
 }
@@ -210,8 +347,10 @@ http://127.0.0.1:8099 {
 		import breakglass_auth
 
 		handle /api/* {
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up X-API-Key {$API_KEY}
+				header_up -X-Operator-Principal
+				header_up -X-Verified-Operator-Principal
 				header_up -Remote-User
 				header_up -Authorization
 				header_up -Proxy-Authorization
@@ -224,8 +363,10 @@ http://127.0.0.1:8099 {
 
 		handle /ws/* {
 			log_skip
-			reverse_proxy 127.0.0.1:8100 {
+			reverse_proxy 127.0.0.1:18100 {
 				header_up X-API-Key {$API_KEY}
+				header_up -X-Operator-Principal
+				header_up -X-Verified-Operator-Principal
 				header_up -Remote-User
 				header_up -Authorization
 				header_up -Proxy-Authorization
@@ -237,7 +378,7 @@ http://127.0.0.1:8099 {
 		}
 
 		handle {
-			reverse_proxy 127.0.0.1:8080
+			reverse_proxy 127.0.0.1:18080
 		}
 	}
 }

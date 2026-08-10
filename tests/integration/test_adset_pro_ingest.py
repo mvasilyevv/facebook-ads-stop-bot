@@ -155,6 +155,60 @@ async def test_ingest_without_fb_ad_id_leaves_fk_null(pg_engine, clean_adsetpro_
     assert row.fb_ad_fk is None
 
 
+@pytest.mark.asyncio
+async def test_ingest_preserves_unknown_revenue_separately_from_known_zero(
+    pg_engine,
+    clean_adsetpro_events,
+) -> None:
+    now = datetime.now(UTC)
+    unknown = await ingest_postback(
+        pg_engine,
+        PostbackEvent(
+            click_id="revenue-unknown",
+            fb_ad_id=None,
+            event_type="ftd",
+            revenue=None,
+            currency="USD",
+            received_at=now,
+            raw={},
+        ),
+    )
+    known_zero = await ingest_postback(
+        pg_engine,
+        PostbackEvent(
+            click_id="revenue-known-zero",
+            fb_ad_id=None,
+            event_type="ftd",
+            revenue=Decimal("0"),
+            currency="USD",
+            received_at=now + timedelta(seconds=1),
+            raw={},
+        ),
+    )
+
+    async with pg_engine.connect() as conn:
+        stored = dict(
+            (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT click_id, revenue
+                        FROM adsetpro_postback_events
+                        WHERE id IN (:unknown_id, :known_zero_id)
+                        """
+                    ),
+                    {
+                        "unknown_id": unknown.event_id,
+                        "known_zero_id": known_zero.event_id,
+                    },
+                )
+            ).all()
+        )
+
+    assert stored["revenue-unknown"] is None
+    assert stored["revenue-known-zero"] == Decimal("0")
+
+
 # Разные event_type на одном click_id (например ftd + redep) — это РАЗНЫЕ события,
 # обе строки должны быть вставлены, дубля нет.
 @pytest.mark.asyncio
@@ -219,7 +273,7 @@ async def test_ingest_unknown_fb_ad_id_no_match(pg_engine, clean_adsetpro_events
 
 
 @pytest.mark.asyncio
-async def test_legacy_exact_attribution_normalizes_act_account_prefix(
+async def test_name_only_attribution_is_not_guessed(
     pg_engine, fb_ad_fixture, clean_adsetpro_events
 ) -> None:
     account = str(uuid.uuid4().int % 10**12)
@@ -240,7 +294,7 @@ async def test_legacy_exact_attribution_normalizes_act_account_prefix(
         ).one()
         await conn.execute(
             text("UPDATE fb_campaigns SET ad_account_id = :account WHERE id = :id"),
-            {"account": f"act_{account}", "id": hierarchy[0]},
+            {"account": account, "id": hierarchy[0]},
         )
 
     event = PostbackEvent(
@@ -259,8 +313,8 @@ async def test_legacy_exact_attribution_normalizes_act_account_prefix(
     )
 
     result = await ingest_postback(pg_engine, event)
-    assert result.fb_ad_fk == fb_ad_fixture.ad_id
-    assert result.attribution_status == "matched_legacy"
+    assert result.fb_ad_fk is None
+    assert result.attribution_status == "unmatched"
 
 
 @pytest.mark.asyncio

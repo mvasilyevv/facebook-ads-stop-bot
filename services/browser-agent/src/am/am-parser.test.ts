@@ -200,6 +200,7 @@ test('buildScannedRow: маппинг конверсий и метрик', () =>
     adsetName: 'adset-1',
     campaignName: 'CR2 | KE | MV | 30.05',
     campaignId: '120203451234560078',
+    adsetId: '120203451234560079',
     effectiveStatus: 'ACTIVE',
     budget: '$5',
   });
@@ -207,6 +208,7 @@ test('buildScannedRow: маппинг конверсий и метрик', () =>
   assert.equal(row.campaign_name, 'CR2 | KE | MV | 30.05');
   // campaign_id прокидывается в каталог (allowlist «Кампании для сканирования»).
   assert.equal(row.campaign_id, '120203451234560078');
+  assert.equal(row.adset_id, '120203451234560079');
   assert.equal(row.delivery_status, 'ACTIVE');
   assert.equal(row.spend, '0.01');
   assert.equal(row.impressions, 8);

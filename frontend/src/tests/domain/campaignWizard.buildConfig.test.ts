@@ -12,12 +12,6 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { useWizardStore } from "@/stores/campaignWizard";
 import type { UploadedConcept } from "@/stores/campaignWizard";
 
-const TOMORROW = (() => {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
-})();
-
 /** Заполняет минимальный валидный стор для buildConfig. */
 function seedStore(concepts: UploadedConcept[], campaigns: { key: string }[]) {
   const store = useWizardStore.getState();
@@ -25,7 +19,12 @@ function seedStore(concepts: UploadedConcept[], campaigns: { key: string }[]) {
     act_id: "act_123",
     page_id: "page_456",
     pixel_id: "pixel_789",
-    tz_offset: 0,
+    account_context_state: "ready",
+    timezone_name: "America/New_York",
+    currency: "USD",
+    currency_exponent: 2,
+    account_context_observed_at: "2026-07-29T08:30:00Z",
+    account_context_issue: null,
     offer_code: "GH_AVI",
     byer_tag: "MV",
   });
@@ -36,10 +35,10 @@ function seedStore(concepts: UploadedConcept[], campaigns: { key: string }[]) {
     destination_link: "https://trk.example.com/click",
     cta: "PLAY_GAME",
     text_optimizations: "OPT_OUT",
-    start_date: TOMORROW,
+    start_date: "2099-07-30",
     budget_level: "campaign",
-    daily_budget_cents: 20000,
-    bid_amount_cents: 500,
+    daily_budget: "200.00",
+    bid_amount: "5.00",
     bid_strategy: "COST_CAP",
     countries: ["GH"],
     age_min: 18,
@@ -51,10 +50,20 @@ function seedStore(concepts: UploadedConcept[], campaigns: { key: string }[]) {
     ad_text_primary: "",
   });
   store.setStructure({
-    campaigns: campaigns.map((c) => ({ ...c, adset_count: 3, concept_refs: [] })),
+    campaigns: campaigns.map((c) => ({ ...c, adset_count: 3 })),
   });
   store.setCreatives({ upload_id: "upload-abc", concepts, copies_per_concept: null });
-  store.setPreview({ launch_state: "campaign_paused", plan: null });
+  store.setPreview({ plan: null });
+}
+
+function assignedConcept(campaignKey: string): UploadedConcept {
+  return {
+    ref: `${campaignKey}.jpg`,
+    original_name: `${campaignKey}.jpg`,
+    size_bytes: 1024,
+    content_type: "image/jpeg",
+    campaign_keys: [campaignKey],
+  };
 }
 
 describe("buildConfig — concept_refs из назначения", () => {
@@ -65,41 +74,63 @@ describe("buildConfig — concept_refs из назначения", () => {
   it("кампания получает смешанные концепты (фото+видео) без kind-фильтра", () => {
     // Кампания получает и фото, и видео — kind-фильтр убран, медиа смешанные.
     const concepts: UploadedConcept[] = [
-      { ref: "img.jpg", original_name: "img.jpg", size_bytes: 1, content_type: "image/jpeg", campaign_keys: ["c1"] },
-      { ref: "clip.mp4", original_name: "clip.mp4", size_bytes: 1, content_type: "video/mp4", campaign_keys: ["c1"] },
+      {
+        ref: "img.jpg",
+        original_name: "img.jpg",
+        size_bytes: 1,
+        content_type: "image/jpeg",
+        campaign_keys: ["c1"],
+      },
+      {
+        ref: "clip.mp4",
+        original_name: "clip.mp4",
+        size_bytes: 1,
+        content_type: "video/mp4",
+        campaign_keys: ["c1"],
+      },
     ];
     seedStore(concepts, [{ key: "c1" }]);
     const config = useWizardStore.getState().buildConfig();
     expect(config.campaigns[0]!.concept_refs).toEqual(["img.jpg", "clip.mp4"]);
   });
 
-  it("концепт без назначения (пустой campaign_keys) → ни в одну кампанию", () => {
-    // Пустой campaign_keys = концепт лежит в пуле «не распределены», не идёт никуда.
+  it("концепт без назначения блокирует сборку конфига", () => {
+    // Пустой campaign_keys остаётся в пуле и не может тихо запустить пустые кампании.
     const concepts: UploadedConcept[] = [
-      { ref: "img1.jpg", original_name: "img1.jpg", size_bytes: 1024, content_type: "image/jpeg", campaign_keys: [] },
+      {
+        ref: "img1.jpg",
+        original_name: "img1.jpg",
+        size_bytes: 1024,
+        content_type: "image/jpeg",
+        campaign_keys: [],
+      },
     ];
-    seedStore(concepts, [
-      { key: "camp1" },
-      { key: "camp2" },
-    ]);
+    seedStore(concepts, [{ key: "camp1" }, { key: "camp2" }]);
 
-    const config = useWizardStore.getState().buildConfig();
-
-    expect(config.campaigns).toHaveLength(2);
-    expect(config.campaigns[0]!.concept_refs).toEqual([]);
-    expect(config.campaigns[1]!.concept_refs).toEqual([]);
+    expect(() => useWizardStore.getState().buildConfig()).toThrow(
+      "Для кампании camp1 не назначен ни один креатив",
+    );
   });
 
   it("концепт с обоими ключами → попадает в обе кампании", () => {
     // Явное назначение в обе кампании (и фото, и видео — без фильтра по типу).
     const concepts: UploadedConcept[] = [
-      { ref: "img1.jpg", original_name: "img1.jpg", size_bytes: 1024, content_type: "image/jpeg", campaign_keys: ["camp1", "camp2"] },
-      { ref: "vid1.mp4", original_name: "vid1.mp4", size_bytes: 2048, content_type: "video/mp4", campaign_keys: ["camp1", "camp2"] },
+      {
+        ref: "img1.jpg",
+        original_name: "img1.jpg",
+        size_bytes: 1024,
+        content_type: "image/jpeg",
+        campaign_keys: ["camp1", "camp2"],
+      },
+      {
+        ref: "vid1.mp4",
+        original_name: "vid1.mp4",
+        size_bytes: 2048,
+        content_type: "video/mp4",
+        campaign_keys: ["camp1", "camp2"],
+      },
     ];
-    seedStore(concepts, [
-      { key: "camp1" },
-      { key: "camp2" },
-    ]);
+    seedStore(concepts, [{ key: "camp1" }, { key: "camp2" }]);
 
     const config = useWizardStore.getState().buildConfig();
 
@@ -110,13 +141,22 @@ describe("buildConfig — concept_refs из назначения", () => {
   it("концепт с campaign_keys=['camp1'] → попадает только в camp1, не в camp2", () => {
     // Привязка по ключу работает независимо от типа медиа.
     const concepts: UploadedConcept[] = [
-      { ref: "img1.jpg", original_name: "img1.jpg", size_bytes: 1024, content_type: "image/jpeg", campaign_keys: ["camp1"] },
-      { ref: "vid1.mp4", original_name: "vid1.mp4", size_bytes: 2048, content_type: "video/mp4", campaign_keys: ["camp2"] },
+      {
+        ref: "img1.jpg",
+        original_name: "img1.jpg",
+        size_bytes: 1024,
+        content_type: "image/jpeg",
+        campaign_keys: ["camp1"],
+      },
+      {
+        ref: "vid1.mp4",
+        original_name: "vid1.mp4",
+        size_bytes: 2048,
+        content_type: "video/mp4",
+        campaign_keys: ["camp2"],
+      },
     ];
-    seedStore(concepts, [
-      { key: "camp1" },
-      { key: "camp2" },
-    ]);
+    seedStore(concepts, [{ key: "camp1" }, { key: "camp2" }]);
 
     const config = useWizardStore.getState().buildConfig();
 
@@ -129,13 +169,22 @@ describe("buildConfig — concept_refs из назначения", () => {
   it("смесь: концепт в обеих кампаниях + концепт только в одной", () => {
     // shared привязан к обеим; only_c1 — только к camp1.
     const concepts: UploadedConcept[] = [
-      { ref: "shared.jpg", original_name: "shared.jpg", size_bytes: 512, content_type: "image/jpeg", campaign_keys: ["camp1", "camp2"] },
-      { ref: "only_c1.mp4", original_name: "only_c1.mp4", size_bytes: 512, content_type: "video/mp4", campaign_keys: ["camp1"] },
+      {
+        ref: "shared.jpg",
+        original_name: "shared.jpg",
+        size_bytes: 512,
+        content_type: "image/jpeg",
+        campaign_keys: ["camp1", "camp2"],
+      },
+      {
+        ref: "only_c1.mp4",
+        original_name: "only_c1.mp4",
+        size_bytes: 512,
+        content_type: "video/mp4",
+        campaign_keys: ["camp1"],
+      },
     ];
-    seedStore(concepts, [
-      { key: "camp1" },
-      { key: "camp2" },
-    ]);
+    seedStore(concepts, [{ key: "camp1" }, { key: "camp2" }]);
 
     const config = useWizardStore.getState().buildConfig();
 
@@ -147,18 +196,16 @@ describe("buildConfig — concept_refs из назначения", () => {
     expect(c2?.concept_refs).toEqual(["shared.jpg"]);
   });
 
-  it("нет концептов → concept_refs пустые массивы (не падает)", () => {
-    // Пустой upload не должен крашить buildConfig.
+  it("нет концептов → fail-closed до запуска", () => {
     seedStore([], [{ key: "camp1" }]);
-    const config = useWizardStore.getState().buildConfig();
-    expect(config.campaigns[0]!.concept_refs).toEqual([]);
+    expect(() => useWizardStore.getState().buildConfig()).toThrow(
+      "Для кампании camp1 не назначен ни один креатив",
+    );
   });
 
-  it("нет кампаний → campaigns пустой массив", () => {
-    // Корнер-кейс: структура без кампаний.
+  it("нет кампаний → fail-closed до запуска", () => {
     seedStore([], []);
-    const config = useWizardStore.getState().buildConfig();
-    expect(config.campaigns).toEqual([]);
+    expect(() => useWizardStore.getState().buildConfig()).toThrow("Добавьте хотя бы одну кампанию");
   });
 });
 
@@ -169,10 +216,39 @@ describe("buildConfig — url_tags отсутствует в конфиге", ()
 
   it("buildConfig не включает поле url_tags (вычисляется бэком по SOP)", () => {
     // url_tags не должен редактироваться пользователем — бэк генерирует его сам.
-    seedStore([], [{ key: "camp1" }]);
+    seedStore([assignedConcept("camp1")], [{ key: "camp1" }]);
     const config = useWizardStore.getState().buildConfig();
     // url_tags должен быть undefined или отсутствовать (не редактируется пользователем)
     expect((config as unknown as Record<string, unknown>)["url_tags"]).toBeUndefined();
+  });
+});
+
+describe("buildConfig — account context остаётся server-owned", () => {
+  beforeEach(() => {
+    useWizardStore.getState().reset();
+  });
+
+  it("не отправляет timezone, currency или evidence timestamp клиентом", () => {
+    seedStore([assignedConcept("camp1")], [{ key: "camp1" }]);
+
+    const config = useWizardStore.getState().buildConfig() as unknown as Record<string, unknown>;
+
+    expect(config["timezone_name"]).toBeUndefined();
+    expect(config["currency"]).toBeUndefined();
+    expect(config["currency_exponent"]).toBeUndefined();
+    expect(config["account_context_observed_at"]).toBeUndefined();
+    expect(config["tz_offset"]).toBeUndefined();
+    expect(config["daily_budget"]).toBe("200.00");
+    expect(config["bid_amount"]).toBe("5.00");
+  });
+
+  it("не собирает launch config без ready account context", () => {
+    seedStore([assignedConcept("camp1")], [{ key: "camp1" }]);
+    useWizardStore.getState().setIdentity({ account_context_state: "stale" });
+
+    expect(() => useWizardStore.getState().buildConfig()).toThrow(
+      "USD-контекст кабинета не подтверждён",
+    );
   });
 });
 
@@ -181,17 +257,17 @@ describe("buildConfig — ad_text контракт {mode, primary}", () => {
     useWizardStore.getState().reset();
   });
 
-  it("mode=none → {mode: 'none'}", () => {
+  it("mode=none keeps the generated required primary field empty", () => {
     // По умолчанию текст объявления отключён.
-    seedStore([], [{ key: "s1" }]);
+    seedStore([assignedConcept("s1")], [{ key: "s1" }]);
     // goal.ad_text_mode = "none" по умолчанию
     const config = useWizardStore.getState().buildConfig();
-    expect(config.ad_text).toEqual({ mode: "none" });
+    expect(config.ad_text).toEqual({ mode: "none", primary: "" });
   });
 
   it("mode=text + primary → {mode: 'text', primary: '...'}", () => {
     // При включённом тексте primary обязателен.
-    seedStore([], [{ key: "s1" }]);
+    seedStore([assignedConcept("s1")], [{ key: "s1" }]);
     useWizardStore.getState().setGoal({ ad_text_mode: "text", ad_text_primary: "Привет мир" });
     const config = useWizardStore.getState().buildConfig();
     expect(config.ad_text).toEqual({ mode: "text", primary: "Привет мир" });

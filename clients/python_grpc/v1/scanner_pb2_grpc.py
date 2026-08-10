@@ -41,12 +41,6 @@ class ScannerServiceStub(object):
             response_deserializer=v1_dot_scanner__pb2.ScanCycleEvent.FromString,
             _registered_method=True,
         )
-        self.HardReloadPage = channel.unary_unary(
-            "/fb_agent.scanner.v1.ScannerService/HardReloadPage",
-            request_serializer=v1_dot_scanner__pb2.HardReloadPageRequest.SerializeToString,
-            response_deserializer=v1_dot_scanner__pb2.HardReloadPageResponse.FromString,
-            _registered_method=True,
-        )
         self.ListCampaigns = channel.unary_unary(
             "/fb_agent.scanner.v1.ScannerService/ListCampaigns",
             request_serializer=v1_dot_scanner__pb2.ListCampaignsRequest.SerializeToString,
@@ -62,12 +56,6 @@ class ScannerServiceServicer(object):
         """Полный цикл сканирования через am_tabular (graph-канал UI, active replication).
         Стримит один ScanComplete (DOM-парсинг/скролл выпилены).
         """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def HardReloadPage(self, request, context):
-        """Жёсткая перезагрузка страницы с очисткой кеша (через CDP Network.clearBrowserCache)."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
@@ -88,11 +76,6 @@ def add_ScannerServiceServicer_to_server(servicer, server):
             servicer.RunScanCycle,
             request_deserializer=v1_dot_scanner__pb2.RunScanCycleRequest.FromString,
             response_serializer=v1_dot_scanner__pb2.ScanCycleEvent.SerializeToString,
-        ),
-        "HardReloadPage": grpc.unary_unary_rpc_method_handler(
-            servicer.HardReloadPage,
-            request_deserializer=v1_dot_scanner__pb2.HardReloadPageRequest.FromString,
-            response_serializer=v1_dot_scanner__pb2.HardReloadPageResponse.SerializeToString,
         ),
         "ListCampaigns": grpc.unary_unary_rpc_method_handler(
             servicer.ListCampaigns,
@@ -130,36 +113,6 @@ class ScannerService(object):
             "/fb_agent.scanner.v1.ScannerService/RunScanCycle",
             v1_dot_scanner__pb2.RunScanCycleRequest.SerializeToString,
             v1_dot_scanner__pb2.ScanCycleEvent.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def HardReloadPage(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.scanner.v1.ScannerService/HardReloadPage",
-            v1_dot_scanner__pb2.HardReloadPageRequest.SerializeToString,
-            v1_dot_scanner__pb2.HardReloadPageResponse.FromString,
             options,
             channel_credentials,
             insecure,

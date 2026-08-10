@@ -2,7 +2,7 @@
 """Публичный API пакета core.ai_assistant.tools.
 
 Импорт пакета регистрирует все tool-классы в GLOBAL_REGISTRY (side-effect import
-modules ops/meta/drafts/creative).
+modules ops/meta/creative).
 
 Основные сущности:
 - GLOBAL_REGISTRY (ToolRegistry) — реестр всех зарегистрированных tool'ов.
@@ -17,7 +17,6 @@ import logging
 from typing import Any
 
 from core.ai_assistant.tools import creative as _creative  # noqa: F401, E402
-from core.ai_assistant.tools import drafts as _drafts  # noqa: F401, E402
 from core.ai_assistant.tools import meta as _meta  # noqa: F401, E402
 
 # Side-effect импорты — регистрируют tool-классы в GLOBAL_REGISTRY.

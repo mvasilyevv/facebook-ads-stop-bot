@@ -1,8 +1,0 @@
-[Unit]
-Description=Probe-driven самовосстановление Vision-канала (browser-agent): probe → L1 ensure-cdp → L2 refresh
-After=fb-browser-agent.service xvfb.service vision.service docker.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/vision-cdp-heal.sh
-TimeoutStartSec=300

@@ -45,11 +45,10 @@ scratch/
 .logs/
 logs/
 recordings/
-supervisord.pid
-supervisord.log
 *.pid
 playwright-report/
 test-results/
+**/coverage/
 npm-debug.log*
 
 # Зависимости и сборка фронтенда (pnpm monorepo)
@@ -58,8 +57,8 @@ node_modules/
 frontend/dist/
 frontend-mini/dist/
 packages/*/dist/
-# Артефакт TS-сборки browser-agent: пересобирается npm run build (run.sh:746 + оба
-# Dockerfile перед `node dist/index.js`). НЕ трекаем — иначе drift src≠артефакт (BA-5).
+# Артефакт TS-сборки browser-agent пересобирают CI и Dockerfile перед
+# `node dist/index.js`. Не трекаем, чтобы исключить drift src и артефакта.
 services/browser-agent/dist/
 **/.tanstack/
 frontend/storybook-static/

@@ -5,7 +5,7 @@
 - Историю диалога держит КЛИЕНТ (React-state) и шлёт с каждым запросом —
   серверного состояния нет, максимум 12 сообщений за запрос.
 - Инструменты только READ_ONLY + CREATIVE: подтверждать money-черновики в вебе
-  нечем (кнопки dr_ok живут в Telegram), поэтому draft-инструменты канал
+  не ставит mutation-задачи, поэтому write-инструменты канал
   не видит и не исполняет (guard в ChatSession по risk-уровню).
 - Rate-limit 30/час per IP (Redis, паттерн /ai/analyze) + встроенный лимитер
   ChatSession. READ-инструменты Meta используют общий MetaApiClient из API lifespan.
@@ -168,7 +168,7 @@ async def ai_chat(
     return JSONResponse(content=payload.model_dump())
 
 
-@router.get("/ai/pulse", response_model=AIPulseResponse)
+@router.post("/ai/pulse", response_model=AIPulseResponse)
 async def ai_pulse(
     request: Request,
     engine: DepEngine,
@@ -183,7 +183,10 @@ async def ai_pulse(
     вызывается и возвращается important=false (виджет молчит). Результат
     кэшируется на календарный час — повторные опросы и вторые вкладки бесплатны.
     """
-    _ = request  # авторизация — общими middleware (X-API-Key), per-IP лимит не нужен: кэш почасовой
+    # POST is intentional: a cache miss may trigger a paid provider call. The
+    # shared middleware therefore enforces both owner auth and exact panel
+    # Origin instead of exposing a side effect through ambient-cookie GET.
+    _ = request  # per-IP limit is unnecessary because the cache is global/hourly
     now = datetime.now(UTC)
     hour_key = f"{now:%Y-%m-%dT%H}"
     cache_key = f"{_PULSE_CACHE_PREFIX}{hour_key}"

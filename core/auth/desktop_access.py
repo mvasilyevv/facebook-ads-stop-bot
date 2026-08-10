@@ -8,14 +8,16 @@ import json
 import secrets
 import time
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlencode, urlsplit
 
-DESKTOP_SESSION_COOKIE = "__Secure-adpulse_desktop_session_v3"
+DesktopPresentation = Literal["desktop", "mobile"]
+
+DESKTOP_SESSION_COOKIE = "__Secure-adpulse_desktop_session_v5"
 DESKTOP_PRINCIPAL = "adpulse-desktop"
 
-_TICKET_PREFIX = "desktop_access:v3:ticket:"
-_SESSION_PREFIX = "desktop_access:v3:session:"
+_TICKET_PREFIX = "desktop_access:v5:ticket:"
+_SESSION_PREFIX = "desktop_access:v5:session:"
 
 
 class DesktopAccessError(ValueError):
@@ -29,6 +31,7 @@ class DesktopGrant:
     issued_at: int
     expires_at: int
     expected_hostname: str
+    presentation: DesktopPresentation
 
 
 @dataclass(frozen=True)
@@ -37,8 +40,14 @@ class DesktopSession:
     source: str
     issued_at: int
     expires_at: int
-    owner_checked_at: int
     expected_hostname: str
+    presentation: DesktopPresentation
+
+
+def _presentation(value: str) -> DesktopPresentation:
+    if value not in {"desktop", "mobile"}:
+        raise DesktopAccessError("Некорректный desktop presentation profile")
+    return value
 
 
 def _digest_key(prefix: str, token: str) -> str:
@@ -71,11 +80,13 @@ async def create_desktop_ticket(
     telegram_user_id: int,
     source: str,
     expected_hostname: str,
+    presentation: DesktopPresentation,
     ttl: int,
     now: int | None = None,
 ) -> tuple[str, DesktopGrant]:
     current = int(time.time()) if now is None else int(now)
     hostname = expected_hostname.strip().lower().rstrip(".")
+    resolved_presentation = _presentation(presentation)
     if telegram_user_id <= 0 or ttl <= 0 or not source or not hostname:
         raise DesktopAccessError("Нельзя создать desktop ticket")
     ticket = secrets.token_urlsafe(48)
@@ -85,6 +96,7 @@ async def create_desktop_ticket(
         issued_at=current,
         expires_at=current + ttl,
         expected_hostname=hostname,
+        presentation=resolved_presentation,
     )
     created = await redis.set(
         _digest_key(_TICKET_PREFIX, ticket),
@@ -113,6 +125,7 @@ async def consume_desktop_ticket(
             issued_at=int(payload["issued_at"]),
             expires_at=int(payload["expires_at"]),
             expected_hostname=str(payload["expected_hostname"]).strip().lower().rstrip("."),
+            presentation=_presentation(str(payload["presentation"])),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise DesktopAccessError("Повреждён desktop ticket") from exc
@@ -133,11 +146,13 @@ async def create_desktop_session(
     telegram_user_id: int,
     source: str,
     expected_hostname: str,
+    presentation: DesktopPresentation,
     ttl: int,
     now: int | None = None,
 ) -> tuple[str, DesktopSession]:
     current = int(time.time()) if now is None else int(now)
     hostname = expected_hostname.strip().lower().rstrip(".")
+    resolved_presentation = _presentation(presentation)
     if telegram_user_id <= 0 or ttl <= 0 or not source or not hostname:
         raise DesktopAccessError("Нельзя создать desktop-сессию")
     token = secrets.token_urlsafe(48)
@@ -146,8 +161,8 @@ async def create_desktop_session(
         source=source,
         issued_at=current,
         expires_at=current + ttl,
-        owner_checked_at=current,
         expected_hostname=hostname,
+        presentation=resolved_presentation,
     )
     created = await redis.set(
         _digest_key(_SESSION_PREFIX, token),
@@ -176,8 +191,8 @@ async def load_desktop_session(
             source=str(payload["source"]),
             issued_at=int(payload["issued_at"]),
             expires_at=int(payload["expires_at"]),
-            owner_checked_at=int(payload["owner_checked_at"]),
             expected_hostname=str(payload["expected_hostname"]).strip().lower().rstrip("."),
+            presentation=_presentation(str(payload["presentation"])),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         await redis.delete(key)
@@ -194,27 +209,6 @@ async def load_desktop_session(
     return session
 
 
-async def mark_desktop_owner_checked(
-    redis: Any, token: str, session: DesktopSession, now: int
-) -> DesktopSession | None:
-    """Refresh owner verification only while the original session still exists.
-
-    ``XX`` is intentional: a concurrent logout must win and may never be
-    undone by an owner recheck that started just before the deletion.
-    """
-    updated = DesktopSession(**{**asdict(session), "owner_checked_at": int(now)})
-    remaining = updated.expires_at - int(now)
-    if remaining <= 0:
-        return None
-    refreshed = await redis.set(
-        _digest_key(_SESSION_PREFIX, token),
-        json.dumps(asdict(updated), separators=(",", ":")),
-        ex=remaining,
-        xx=True,
-    )
-    return updated if refreshed else None
-
-
 async def delete_desktop_session(redis: Any, token: str | None) -> None:
     if token:
         await redis.delete(_digest_key(_SESSION_PREFIX, token))
@@ -225,6 +219,7 @@ __all__ = [
     "DESKTOP_PRINCIPAL",
     "DesktopAccessError",
     "DesktopGrant",
+    "DesktopPresentation",
     "DesktopSession",
     "build_desktop_launch_url",
     "consume_desktop_ticket",
@@ -232,5 +227,4 @@ __all__ = [
     "create_desktop_ticket",
     "delete_desktop_session",
     "load_desktop_session",
-    "mark_desktop_owner_checked",
 ]

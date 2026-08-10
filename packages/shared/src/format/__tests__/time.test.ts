@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { formatRelativeTime, formatTimeOfDay, formatDateTime, formatDuration } from "../time";
+import {
+  formatDateTime,
+  formatDuration,
+  formatRelativeTime,
+  formatTimeOfDay,
+  formatZonedDateTime,
+  formatZonedTime,
+  timezoneEvidenceLabel,
+} from "../time";
 
 describe("formatDateTime", () => {
   // ISO строка → UTC datetime без микросекунд
@@ -9,7 +17,9 @@ describe("formatDateTime", () => {
 
   // Объект Date
   it("принимает Date объект", () => {
-    expect(formatDateTime(new Date("2026-01-01T00:00:00Z"))).toBe("2026-01-01 00:00");
+    expect(formatDateTime(new Date("2026-01-01T00:00:00Z"))).toBe(
+      "2026-01-01 00:00",
+    );
   });
 
   // null → "—"
@@ -143,5 +153,30 @@ describe("formatDuration", () => {
   // Ноль
   it("0 секунд → 0s", () => {
     expect(formatDuration(0)).toBe("0s");
+  });
+});
+
+describe("operator timezone formatting", () => {
+  it("uses the cabinet timezone, not the browser timezone", () => {
+    expect(formatZonedTime("2026-07-19T00:30:00Z", "Europe/Kaliningrad")).toBe(
+      "02:30",
+    );
+    expect(
+      formatZonedDateTime("2026-07-19T00:30:00Z", "Europe/Kaliningrad"),
+    ).toContain("19.07.2026");
+  });
+
+  it("fails closed for an invalid timezone", () => {
+    expect(formatZonedTime("2026-07-19T00:30:00Z", "invalid/timezone")).toBe(
+      "—",
+    );
+  });
+
+  it("labels single, mixed and unknown evidence without inventing UTC", () => {
+    expect(timezoneEvidenceLabel("Asia/Tokyo", "single")).toBe("Asia/Tokyo");
+    expect(timezoneEvidenceLabel(null, "mixed")).toBe(
+      "Несколько часовых поясов · границы по каждому кабинету",
+    );
+    expect(timezoneEvidenceLabel(null, "unknown")).toBe("Не подтверждён");
   });
 });

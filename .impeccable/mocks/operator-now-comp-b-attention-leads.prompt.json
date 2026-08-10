@@ -1,0 +1,9 @@
+{
+  "id": "attention-leads",
+  "direction": "Точный журнал",
+  "prompt": "Ranked attention ведет первый экран, рядом остается полная проверяемая шкала портфеля; ниже находятся lifecycle действий и короткая воронка. На мобильном сохраняется порядок attention, scale, actions, funnel.",
+  "renderer": "local-html-css",
+  "source": "operator-now-compositions.html?variant=b",
+  "viewports": ["1440x900", "390x844"],
+  "approved": false
+}

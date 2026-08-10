@@ -131,7 +131,7 @@ class AuditedMetaApiClient(MetaApiClient):
         initiated_by: str,
         **kwargs: Any,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(operation_engine=engine, **kwargs)
         self._engine = engine
         self._initiated_by = initiated_by
 

@@ -2,7 +2,7 @@
 """Unit-тесты owner-scoping на ПУТИ ИСПОЛНЕНИЯ (защита чужих объявлений в шаренном кабинете).
 
 Покрывают: вердикт check_mutation_ownership/check_ad_ownership по уровням целей,
-bulk-семантику, NULL owner_tag (фильтр выключен), custom_audience/create_campaign,
+bulk-семантику, NULL owner_tag (фильтр выключен), duplicate_adset_structure,
 а также маршрутизацию в meta_api_worker (строгая fail-policy: чужое → fail;
 своё-но-не-в-каталоге → выключающее requeue / включающее fail). Единственный канал
 act — Marketing API (DOM-toggle и toggle_executor удалены).
@@ -11,7 +11,8 @@ act — Marketing API (DOM-toggle и toggle_executor удалены).
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import uuid
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -20,6 +21,7 @@ import apps.meta_api_worker.main as meta
 import core.meta_api.ownership as own
 from core.meta_api.ownership import OwnershipDecision, check_mutation_ownership
 from core.meta_api.schemas import MetaMutationPayload
+from core.tasks.queue import Task
 
 # ====================== check_mutation_ownership: одиночные цели ======================
 
@@ -28,7 +30,7 @@ from core.meta_api.schemas import MetaMutationPayload
 @pytest.mark.asyncio
 async def test_mut_pause_ad_own(monkeypatch) -> None:
     monkeypatch.setattr(own, "_resolve_ad", AsyncMock(return_value=("CR2 | MV | GH", "ad1")))
-    p = MetaMutationPayload(mutation_kind="pause_ad", target_id="123")
+    p = MetaMutationPayload(ad_account_id="123", mutation_kind="pause_ad", target_id="123")
     d = await check_mutation_ownership(object(), p, owner_tag="MV")
     assert d.allowed is True
 
@@ -37,7 +39,7 @@ async def test_mut_pause_ad_own(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_mut_pause_ad_foreign(monkeypatch) -> None:
     monkeypatch.setattr(own, "_resolve_ad", AsyncMock(return_value=("CR2 | ABC | GH", "ad1")))
-    p = MetaMutationPayload(mutation_kind="pause_ad", target_id="123")
+    p = MetaMutationPayload(ad_account_id="123", mutation_kind="pause_ad", target_id="123")
     d = await check_mutation_ownership(object(), p, owner_tag="MV")
     assert d.allowed is False
     assert d.not_found is False
@@ -47,7 +49,7 @@ async def test_mut_pause_ad_foreign(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_mut_pause_ad_not_found(monkeypatch) -> None:
     monkeypatch.setattr(own, "_resolve_ad", AsyncMock(return_value=None))
-    p = MetaMutationPayload(mutation_kind="pause_ad", target_id="123")
+    p = MetaMutationPayload(ad_account_id="123", mutation_kind="pause_ad", target_id="123")
     d = await check_mutation_ownership(object(), p, owner_tag="MV")
     assert d.allowed is False
     assert d.not_found is True
@@ -57,41 +59,9 @@ async def test_mut_pause_ad_not_found(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_mut_activate_ad_foreign(monkeypatch) -> None:
     monkeypatch.setattr(own, "_resolve_ad", AsyncMock(return_value=("X | ABC", "a")))
-    p = MetaMutationPayload(mutation_kind="activate_ad", target_id="1")
+    p = MetaMutationPayload(ad_account_id="123", mutation_kind="activate_ad", target_id="1")
     d = await check_mutation_ownership(object(), p, owner_tag="MV")
     assert d.allowed is False
-
-
-# pause_campaign: своя кампания → allow, чужая → reject
-@pytest.mark.asyncio
-async def test_mut_campaign_own_and_foreign(monkeypatch) -> None:
-    monkeypatch.setattr(own, "_resolve_campaign", AsyncMock(return_value="CR2 | MV"))
-    p = MetaMutationPayload(mutation_kind="pause_campaign", target_id="c1")
-    assert (await check_mutation_ownership(object(), p, owner_tag="MV")).allowed is True
-
-    monkeypatch.setattr(own, "_resolve_campaign", AsyncMock(return_value="CR2 | ABC"))
-    assert (await check_mutation_ownership(object(), p, owner_tag="MV")).allowed is False
-
-
-# set_adset_budget: резолв adset→campaign, чужое → reject
-@pytest.mark.asyncio
-async def test_mut_adset_foreign(monkeypatch) -> None:
-    monkeypatch.setattr(own, "_resolve_adset", AsyncMock(return_value="X | ABC"))
-    p = MetaMutationPayload(
-        mutation_kind="set_adset_budget", target_id="as1", params={"daily": 5000}
-    )
-    d = await check_mutation_ownership(object(), p, owner_tag="MV")
-    assert d.allowed is False
-
-
-# set_ad_creative резолвится как ad-level
-@pytest.mark.asyncio
-async def test_mut_set_ad_creative_own(monkeypatch) -> None:
-    monkeypatch.setattr(own, "_resolve_ad", AsyncMock(return_value=("CR2 | MV", "a")))
-    p = MetaMutationPayload(
-        mutation_kind="set_ad_creative", target_id="1", params={"creative_id": "9"}
-    )
-    assert (await check_mutation_ownership(object(), p, owner_tag="MV")).allowed is True
 
 
 # NULL/пустой owner_tag → разрешено всё, резолвер НЕ вызывается (фильтр выключен)
@@ -99,52 +69,10 @@ async def test_mut_set_ad_creative_own(monkeypatch) -> None:
 async def test_mut_null_owner_tag_allows_without_resolve(monkeypatch) -> None:
     spy = AsyncMock()
     monkeypatch.setattr(own, "_resolve_ad", spy)
-    p = MetaMutationPayload(mutation_kind="pause_ad", target_id="1")
+    p = MetaMutationPayload(ad_account_id="123", mutation_kind="pause_ad", target_id="1")
     assert (await check_mutation_ownership(object(), p, owner_tag=None)).allowed is True
     assert (await check_mutation_ownership(object(), p, owner_tag="   ")).allowed is True
     spy.assert_not_awaited()
-
-
-# custom_audience вне owner-scope → allow, резолвер не вызван
-@pytest.mark.asyncio
-async def test_mut_custom_audience_allowed(monkeypatch) -> None:
-    spy = AsyncMock()
-    monkeypatch.setattr(own, "_resolve_ad", spy)
-    p = MetaMutationPayload(
-        mutation_kind="custom_audience", target_id="", params={"subtype": "CUSTOM"}
-    )
-    assert (await check_mutation_ownership(object(), p, owner_tag="MV")).allowed is True
-    spy.assert_not_awaited()
-
-
-# create_campaign: owner-тег в имени → allow; без тега → reject
-@pytest.mark.asyncio
-async def test_mut_create_campaign_name_scoping() -> None:
-    ok = MetaMutationPayload(
-        mutation_kind="create_campaign",
-        target_id="new",
-        params={"campaign": {"name": "CR2 | MV | x"}},
-    )
-    assert (await check_mutation_ownership(object(), ok, owner_tag="MV")).allowed is True
-    bad = MetaMutationPayload(
-        mutation_kind="create_campaign", target_id="new", params={"campaign": {"name": "CR2 | ABC"}}
-    )
-    assert (await check_mutation_ownership(object(), bad, owner_tag="MV")).allowed is False
-
-
-# duplicate_campaign: источник свой → allow, чужой → reject, не найден → reject not_found
-@pytest.mark.asyncio
-async def test_mut_duplicate_campaign(monkeypatch) -> None:
-    p = MetaMutationPayload(
-        mutation_kind="duplicate_campaign", target_id="src", params={"new_name": "n"}
-    )
-    monkeypatch.setattr(own, "_resolve_campaign", AsyncMock(return_value="CR2 | MV"))
-    assert (await check_mutation_ownership(object(), p, owner_tag="MV")).allowed is True
-    monkeypatch.setattr(own, "_resolve_campaign", AsyncMock(return_value="CR2 | ABC"))
-    assert (await check_mutation_ownership(object(), p, owner_tag="MV")).allowed is False
-    monkeypatch.setattr(own, "_resolve_campaign", AsyncMock(return_value=None))
-    d = await check_mutation_ownership(object(), p, owner_tag="MV")
-    assert d.allowed is False and d.not_found is True
 
 
 @pytest.mark.asyncio
@@ -152,6 +80,7 @@ async def test_mut_duplicate_adset_structure_checks_source_ad_and_generated_name
     monkeypatch,
 ) -> None:
     payload = MetaMutationPayload(
+        ad_account_id="123",
         mutation_kind="duplicate_adset_structure",
         target_id="draft",
         params={
@@ -175,6 +104,7 @@ async def test_mut_duplicate_adset_structure_rejects_generated_name_without_owne
     monkeypatch,
 ) -> None:
     payload = MetaMutationPayload(
+        ad_account_id="123",
         mutation_kind="duplicate_adset_structure",
         target_id="draft",
         params={
@@ -195,6 +125,7 @@ async def test_mut_duplicate_adset_structure_rejects_foreign_source_before_names
     monkeypatch,
 ) -> None:
     payload = MetaMutationPayload(
+        ad_account_id="123",
         mutation_kind="duplicate_adset_structure",
         target_id="draft",
         params={
@@ -226,6 +157,7 @@ async def test_bulk_all_own(monkeypatch) -> None:
         AsyncMock(return_value={"1": ("CR2 | MV", "a1"), "2": ("X | MV", "a2")}),
     )
     p = MetaMutationPayload(
+        ad_account_id="123",
         mutation_kind="bulk_status_change",
         target_id="b",
         params={"ad_ids": ["1", "2"], "action": "pause"},
@@ -242,6 +174,7 @@ async def test_bulk_one_foreign(monkeypatch) -> None:
         AsyncMock(return_value={"1": ("CR2 | MV", "a1"), "2": ("X | ABC", "a2")}),
     )
     p = MetaMutationPayload(
+        ad_account_id="123",
         mutation_kind="bulk_status_change",
         target_id="b",
         params={"ad_ids": ["1", "2"], "action": "pause"},
@@ -259,6 +192,7 @@ async def test_bulk_one_not_found(monkeypatch) -> None:
         own, "_resolve_ads_batch", AsyncMock(return_value={"1": ("CR2 | MV", "a1")})
     )  # "2" отсутствует
     p = MetaMutationPayload(
+        ad_account_id="123",
         mutation_kind="bulk_status_change",
         target_id="b",
         params={"ad_ids": ["1", "2"], "action": "pause"},
@@ -269,30 +203,44 @@ async def test_bulk_one_not_found(monkeypatch) -> None:
     assert "2" in d.foreign_ids
 
 
-# bulk полная форма object_type=campaign, чужая кампания → reject
-@pytest.mark.asyncio
-async def test_bulk_full_form_campaign_foreign(monkeypatch) -> None:
-    monkeypatch.setattr(own, "_resolve_campaigns_batch", AsyncMock(return_value={"10": "X | ABC"}))
-    p = MetaMutationPayload(
-        mutation_kind="bulk_status_change",
-        target_id="10",
-        params={"object_ids": ["10"], "status": "PAUSED", "object_type": "campaign"},
-    )
-    d = await check_mutation_ownership(object(), p, owner_tag="MV")
-    assert d.allowed is False
-    assert "10" in d.foreign_ids
-
-
 # ====================== meta_api_worker routing ======================
 
 
-def _meta_task(kind: str, target: str = "1", params: dict | None = None) -> SimpleNamespace:
-    payload = {"mutation_kind": kind, "target_id": target}
+def _meta_task(kind: str, target: str = "1", params: dict | None = None) -> Task:
+    now = datetime.now(UTC)
+    payload = {"mutation_kind": kind, "target_id": target, "ad_account_id": "123"}
     if params is not None:
         payload["params"] = params
-    return SimpleNamespace(
-        id=1, task_type="meta_api_mutation", payload=payload, attempt_count=0, max_attempts=5
+    return Task(
+        id=1,
+        task_type="meta_api_mutation",
+        status="running",
+        idempotency_key=f"meta:{kind}:1",
+        payload=payload,
+        attempt_count=0,
+        max_attempts=5,
+        requested_by="test",
+        last_error=None,
+        created_at=now,
+        external_started_at=None,
+        result=None,
+        lane="money",
+        priority=0,
+        available_at=now,
+        deadline_at=now + timedelta(seconds=30),
+        lease_owner=uuid.UUID("00000000-0000-0000-0000-000000000104"),
+        lease_token=4,
+        lease_expires_at=now + timedelta(minutes=1),
+        cancel_requested_at=None,
+        cancel_reason=None,
+        correlation_id=uuid.uuid4(),
     )
+
+
+@pytest.fixture(autouse=True)
+def _fenced_external_boundary(monkeypatch) -> None:
+    monkeypatch.setattr(meta, "_preflight_task_control", AsyncMock(return_value=None))
+    monkeypatch.setattr(meta, "mark_external_call_started", AsyncMock(return_value=True))
 
 
 # Чужое объявление → mark_task_failed, без execute и без requeue
@@ -372,7 +320,7 @@ async def test_worker_allowed_executes(monkeypatch) -> None:
         "check_mutation_ownership",
         AsyncMock(return_value=OwnershipDecision(allowed=True, reason="ok")),
     )
-    spy_exec = AsyncMock(return_value={"success": True})
+    spy_exec = AsyncMock(return_value={"success": True, "modified_ids": ["1"]})
     monkeypatch.setattr(meta, "execute_mutation", spy_exec)
     monkeypatch.setattr(meta, "mark_task_succeeded", AsyncMock(return_value=True))
     monkeypatch.setattr(meta, "sync_fsm_after_mutation", AsyncMock())
@@ -387,7 +335,7 @@ async def test_worker_null_owner_tag_executes(monkeypatch) -> None:
     monkeypatch.setattr(meta, "load_scanning_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(meta, "load_owner_tag", AsyncMock(return_value=None))
     # check_mutation_ownership НЕ мокаем — реальная, с owner_tag=None вернёт allowed
-    spy_exec = AsyncMock(return_value={"success": True})
+    spy_exec = AsyncMock(return_value={"success": True, "modified_ids": ["1"]})
     monkeypatch.setattr(meta, "execute_mutation", spy_exec)
     monkeypatch.setattr(meta, "mark_task_succeeded", AsyncMock(return_value=True))
     monkeypatch.setattr(meta, "sync_fsm_after_mutation", AsyncMock())

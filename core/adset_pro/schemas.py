@@ -9,16 +9,17 @@
 - StatsQueryResponse — рассыпает MCP `structuredContent.data[]` в ConversionRow.
 - ConversionRow     — нормализованная строка конверсии (ext_sub8 = fb_ad_id).
 
-Все dataclass frozen — DTO, не мутируются. См. META_INTEGRATION_PLAN.md §4.4
-+ live verify-комментарий в client.py.
+Все dataclass frozen — DTO, не мутируются.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
+
+from core.money import validated_currency_code
 
 # В AdSet.pro поле ext_sub8 хранит fb_ad_id — это контракт новой наливки в трекер.
 # Меняется только при общей перенастройке трекера.
@@ -50,17 +51,18 @@ class ConversionRow:
     """Одна строка конверсии из AdSet.pro.
 
     Поле fb_ad_id извлекается из ext_sub8 (контракт новой наливки).
-    revenue хранится как Decimal — для дальнейшего попадания в RuleContext без
-    потери точности.
+    revenue хранится как Decimal, а отсутствие/невалидность — как None, чтобы
+    неизвестное значение не превращалось в подтверждённый ноль.
     """
 
     click_id: str
     fb_ad_id: str | None
     event_type: str
-    revenue: Decimal
-    currency: str
+    revenue: Decimal | None
+    currency: str | None
     occurred_at: datetime | None
     raw: dict[str, Any] = field(default_factory=dict)
+    issues: tuple[str, ...] = ()
 
     @classmethod
     def from_api_row(cls, row: dict[str, Any]) -> ConversionRow:
@@ -69,7 +71,8 @@ class ConversionRow:
         Маппинг полей — best-effort с учётом того, что схема ответа может меняться:
         - click_id берётся из click_id/clickid/id (что нашли первым).
         - fb_ad_id берётся из ext_sub8 (контракт).
-        - revenue парсится из строки в Decimal; пусто/None → 0.
+        - revenue парсится из строки в Decimal; пусто/None остаётся unknown.
+        - невалидный/non-finite revenue остаётся unknown с quality issue.
         - occurred_at пытаемся распарсить из ISO-формата; неудача → None.
         """
         click_id = str(
@@ -82,11 +85,21 @@ class ConversionRow:
         ad_id_raw = row.get(EXT_SUB_FIELD_FOR_AD_ID)
         fb_ad_id = str(ad_id_raw) if ad_id_raw not in (None, "") else None
 
-        revenue_raw = row.get("revenue", row.get("event_revenue", 0))
-        try:
-            revenue = Decimal(str(revenue_raw)) if revenue_raw not in (None, "") else Decimal(0)
-        except (ValueError, ArithmeticError):
-            revenue = Decimal(0)
+        revenue_raw = row["revenue"] if "revenue" in row else row.get("event_revenue")
+        issues: tuple[str, ...] = ()
+        if revenue_raw is None or (isinstance(revenue_raw, str) and not revenue_raw.strip()):
+            revenue = None
+            issues = ("revenue_missing",)
+        else:
+            try:
+                revenue = Decimal(str(revenue_raw))
+            except (InvalidOperation, ValueError):
+                revenue = None
+                issues = ("revenue_invalid",)
+            else:
+                if not revenue.is_finite():
+                    revenue = None
+                    issues = ("revenue_invalid",)
 
         occurred_at_raw = (
             row.get("occurred_at")
@@ -108,9 +121,10 @@ class ConversionRow:
             fb_ad_id=fb_ad_id,
             event_type=str(row.get("event_type") or row.get("status") or ""),
             revenue=revenue,
-            currency=str(row.get("currency") or row.get("event_currency") or "USD"),
+            currency=validated_currency_code(row.get("currency") or row.get("event_currency")),
             occurred_at=occurred_at,
             raw=dict(row),
+            issues=issues,
         )
 
 
@@ -140,8 +154,8 @@ class PostbackEvent:
     click_id: str
     fb_ad_id: str | None
     event_type: str
-    revenue: Decimal
-    currency: str
+    revenue: Decimal | None
+    currency: str | None
     received_at: datetime
     raw: dict[str, Any] = field(default_factory=dict)
     source: str = "adsetpro"

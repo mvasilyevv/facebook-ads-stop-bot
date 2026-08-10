@@ -50,9 +50,26 @@ class _FakeClient:
         return self._resp
 
 
+class _HarmlessBrowserOperationFence:
+    """Unit-test substitute for the PostgreSQL-backed operation fence."""
+
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> _HarmlessBrowserOperationFence:
+        return self
+
+    async def assert_held(self) -> None:
+        return None
+
+    async def __aexit__(self, *_args: Any) -> bool:
+        return False
+
+
 def _client_for(monkeypatch, fake: _FakeClient) -> TestClient:
     """FastAPI-приложение только с этим роутером; engine-dep и client замоканы."""
     monkeypatch.setattr(mod, "_build_meta_client", lambda engine: fake)
+    monkeypatch.setattr(mod, "BrowserOperationFence", _HarmlessBrowserOperationFence)
     app = FastAPI()
     app.include_router(router, prefix="/api")
     app.dependency_overrides[get_engine] = lambda: object()
@@ -79,7 +96,7 @@ def test_two_pages(monkeypatch) -> None:
             {"id": "222", "name": "Brand B"},
         ]
     }
-    # Канал закрыли в finally, срабатывание через целевой ad_account_id для self-heal вкладок.
+    # Канал закрыли в finally; account identity передана явно.
     assert fake.closed is True
     assert fake.last_kwargs is not None
     assert fake.last_kwargs["ad_account_id"] == "act_123"
@@ -120,12 +137,12 @@ def test_skip_item_without_id_and_empty_name(monkeypatch) -> None:
     assert r.json() == {"pages": [{"id": "333", "name": ""}]}
 
 
-# Пустой act_id → 400 (до обращения к Meta).
+# Пустой/ненормализуемый act_id → единый Api validation status 422 до Meta.
 def test_empty_act_id(monkeypatch) -> None:
     fake = _FakeClient(resp={"data": []})
     client = _client_for(monkeypatch, fake)
     r = client.get("/api/campaigns/ad-account-pages", params={"act_id": "  act_  "})
-    assert r.status_code == 400
+    assert r.status_code == 422
 
 
 # act_id без обязательного query-параметра → 422 (валидация FastAPI).

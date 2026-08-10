@@ -11,7 +11,13 @@ from decimal import Decimal
 
 import pytest
 
-from core.observer.pipeline import build_rule_context
+from core.observer.pipeline import (
+    InvalidOfferSensitivityError,
+    MissingOfferCpaError,
+)
+from core.observer.pipeline import (
+    build_rule_context as _build_rule_context,
+)
 from core.observer.queries import OfferRules
 from core.rules.types import (
     CPC_PERCENT_OF_CPA,
@@ -32,9 +38,19 @@ def _offer(*, cpa, stop_pct=None, warn_pct=None) -> OfferRules:
         code="X",
         name="X",
         cpa_threshold=cpa,
+        currency="USD",
         frequency_threshold=None,
         stop_percent_of_rule=stop_pct,
         warning_percent_of_stop=warn_pct,
+    )
+
+
+def build_rule_context(offer: OfferRules, **kwargs) -> RuleContext:
+    return _build_rule_context(
+        offer,
+        account_currency="USD",
+        currency_exponent=2,
+        **kwargs,
     )
 
 
@@ -55,18 +71,33 @@ def test_base_percents_are_fixed_constants():
 def test_base_percent_not_overridable():
     with pytest.raises(TypeError):
         RuleContext(
+            currency="USD",
+            currency_exponent=2,
             cpa_amount=Decimal("3"),
             warning_percent_of_stop=Decimal("80"),
             cpc_percent_stop=Decimal("99"),
         )
 
 
-# Дефолт (нет offer_rules → None) даёт 80/80 — прежнее поведение: CPA $3 → CPC стоп $0.05, ворнинг $0.04.
-def test_default_sensitivity_is_80_80():
-    ctx = build_rule_context(_offer(cpa=Decimal("3")))
-    assert ctx.cpc_base_stop_threshold == Decimal("0.06")
-    assert ctx.cpc_stop_threshold == Decimal("0.05")
-    assert ctx.cpc_warning_threshold == Decimal("0.04")
+@pytest.mark.parametrize(
+    ("stop_pct", "warn_pct"),
+    [
+        (None, Decimal("80")),
+        (Decimal("80"), None),
+        (Decimal("0"), Decimal("80")),
+        (Decimal("101"), Decimal("80")),
+        (Decimal("80"), Decimal("NaN")),
+    ],
+)
+def test_missing_or_unsafe_sensitivity_fails_closed(stop_pct, warn_pct):
+    with pytest.raises(InvalidOfferSensitivityError):
+        build_rule_context(_offer(cpa=Decimal("3"), stop_pct=stop_pct, warn_pct=warn_pct))
+
+
+@pytest.mark.parametrize("cpa", [None, Decimal("0"), Decimal("-1"), Decimal("NaN")])
+def test_missing_or_unsafe_cpa_fails_closed(cpa):
+    with pytest.raises(MissingOfferCpaError):
+        build_rule_context(_offer(cpa=cpa))
 
 
 # Per-offer stop_percent_of_rule меняет порог стопа, база правила остаётся фиксированной.

@@ -1,82 +1,60 @@
 # -*- coding: utf-8 -*-
-"""Pure-хелперы для вычисления runtime-полей Telegram-конфига.
+"""Pure helpers for Telegram settings runtime fields.
 
-Все функции принимают ORM-модель TelegramConfig (или None, если строки ещё нет)
-и дополнительные зависимости (Redis, httpx), возвращают готовые значения для API-ответа.
-Не обращаются к БД напрямую — только читают переданные объекты.
+The configured token is read from a detached snapshot.  Public bot identity is
+resolved from Telegram directly; Redis is neither truth nor a compatibility
+cache for the notification plane.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+import secrets
+
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
 
-# Redis-ключ и TTL для кэша имени бота.
-_BOT_USERNAME_CACHE_KEY = "tg:bot_username"
-_BOT_USERNAME_CACHE_TTL = 3600  # секунд
-
-# Порог «живости» poller'а в секундах.
-_POLLER_ONLINE_THRESHOLD_SECONDS = 60
-
 
 def compute_is_authorized(config: object | None) -> bool:
-    """Возвращает True, если bot_token_encrypted заполнен.
+    """Return whether the stored bot credential is currently enabled.
 
     Args:
         config: ORM-объект TelegramConfig или None.
     """
     if config is None:
         return False
+    if getattr(config, "is_enabled", True) is not True:
+        return False
     token = getattr(config, "bot_token_encrypted", None)
     return bool(token)
 
 
-async def compute_poller_status(config: object | None) -> str:
-    """Возвращает 'ONLINE' если poller обновил heartbeat не позднее 60 секунд назад.
+async def compute_bot_username(
+    config: object | None,
+    *,
+    engine: AsyncEngine,
+) -> str | None:
+    """Resolve the configured bot username from Telegram ``getMe``.
 
-    Args:
-        config: ORM-объект TelegramConfig или None.
-    """
-    if config is None:
-        return "OFFLINE"
-    heartbeat = getattr(config, "poller_heartbeat_at", None)
-    if heartbeat is None:
-        return "OFFLINE"
-    # poller_heartbeat_at может быть timezone-aware или naive.
-    now = datetime.now(UTC)
-    if heartbeat.tzinfo is None:
-        heartbeat = heartbeat.replace(tzinfo=UTC)
-    delta = now - heartbeat
-    if delta <= timedelta(seconds=_POLLER_ONLINE_THRESHOLD_SECONDS):
-        return "ONLINE"
-    return "OFFLINE"
-
-
-async def compute_bot_username(config: object | None, redis: object) -> str | None:
-    """Возвращает username бота через кэш Redis или запрос к Telegram getMe.
-
-    Порядок:
-    1. Если config None или токен отсутствует — None.
-    2. Проверяет кэш Redis по ключу 'tg:bot_username'.
-    3. При кэш-miss — расшифровывает токен, вызывает /getMe, кэширует результат.
-    4. При любой ошибке httpx — возвращает None (не пробрасывает).
-
-    Args:
-        config: ORM-объект TelegramConfig или None.
-        redis: Redis async-клиент (redis.asyncio.Redis).
+    ``None`` is an explicit unknown value when no token is configured, the
+    encrypted token cannot be opened, or Telegram cannot confirm the identity.
     """
     if not compute_is_authorized(config):
         return None
 
-    # Пробуем кэш.
     try:
-        cached = await redis.get(_BOT_USERNAME_CACHE_KEY)
-        if cached:
-            return cached
-    except Exception as exc:
-        logger.warning("Не удалось прочитать кэш bot_username из Redis: %s", exc)
+        bot_generation = int(getattr(config, "webhook_generation", 0) or 0)
+        fingerprint_value = getattr(config, "credential_fingerprint", None)
+        credential_fingerprint = str(fingerprint_value or "")
+        if bot_generation <= 0 or len(credential_fingerprint) != 64:
+            return None
+        # Validate the detached public digest before constructing a gateway.
+        from core.telegram.outbound_authority import credential_fingerprint_bytes
+
+        credential_fingerprint_bytes(credential_fingerprint)
+    except (TypeError, ValueError):
+        return None
 
     # Расшифровываем токен и запрашиваем /getMe.
     try:
@@ -89,27 +67,73 @@ async def compute_bot_username(config: object | None, redis: object) -> str | No
         if not token:
             return None
     except Exception as exc:
-        logger.warning("Не удалось расшифровать bot_token_encrypted: %s", exc)
+        # Decrypt/provider exceptions are not trusted log payloads: they can
+        # accidentally retain credential material supplied by an adapter.
+        logger.warning(
+            "Не удалось расшифровать bot_token_encrypted (error_type=%s)",
+            type(exc).__name__,
+        )
         return None
 
+    gateway = None
     try:
-        import httpx
+        from core.telegram.gateway import TelegramHTMLGateway
+        from core.telegram.outbound_authority import hold_telegram_outbound_authority
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
-            resp.raise_for_status()
-            data = resp.json()
-        username: str | None = data.get("result", {}).get("username")
-        if username:
-            # Кэшируем результат.
-            try:
-                await redis.set(_BOT_USERNAME_CACHE_KEY, username, ex=_BOT_USERNAME_CACHE_TTL)
-            except Exception as exc:
-                logger.warning("Не удалось сохранить bot_username в кэш Redis: %s", exc)
-        return username
+        gateway = TelegramHTMLGateway(token, timeout_seconds=5.0)
+        if not secrets.compare_digest(
+            gateway.credential_fingerprint,
+            credential_fingerprint,
+        ):
+            logger.warning("Telegram settings credential fingerprint mismatch")
+            return None
+        async with hold_telegram_outbound_authority(
+            engine,
+            bot_generation=bot_generation,
+            credential_fingerprint=credential_fingerprint,
+        ) as authorized:
+            if not authorized:
+                return None
+            identity = await gateway.get_me()
+        username_value = identity.get("username")
+        return str(username_value) if username_value else None
     except Exception as exc:
-        logger.warning("Ошибка запроса getMe к Telegram API: %s", exc)
+        from core.telegram.gateway import TelegramFailureKind, TelegramGatewayError
+
+        if isinstance(exc, TelegramGatewayError) and exc.kind is TelegramFailureKind.UNAUTHORIZED:
+            from core.telegram.notifications import (
+                open_telegram_auth_incident_in_transaction,
+            )
+            from core.telegram.outbound_authority import (
+                telegram_failure_authority_is_current,
+            )
+
+            async with engine.begin() as conn:
+                await open_telegram_auth_incident_in_transaction(
+                    conn,
+                    error_code="telegram_unauthorized",
+                    credential_fingerprint=credential_fingerprint,
+                    source="settings_get_me",
+                )
+                if not await telegram_failure_authority_is_current(
+                    conn,
+                    bot_generation=bot_generation,
+                    credential_fingerprint=credential_fingerprint,
+                ):
+                    await conn.rollback()
+        # httpx exceptions retain the full request URL, which contains the bot
+        # token. Log only the type and never the exception representation.
+        logger.warning(
+            "Ошибка запроса getMe к Telegram API (error_type=%s)",
+            type(exc).__name__,
+        )
         return None
+    finally:
+        if gateway is not None:
+            try:
+                await gateway.close()
+            except Exception:
+                logger.debug("Не удалось закрыть Telegram gateway", exc_info=True)
 
 
 def compute_auth_deep_link(

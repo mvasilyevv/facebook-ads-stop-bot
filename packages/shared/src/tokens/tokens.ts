@@ -1,46 +1,48 @@
 /**
  * Design tokens — ЕДИНЫЙ ИСТОЧНИК для веба и mini app.
- * Соответствует docs/frontend_design.md §1 и handoff-макетам docs/frontend_mockups/.
+ * Соответствует актуальному контракту в docs/frontend_design.md.
  *
- * CSS-зеркало — ./tokens.css (@theme для Tailwind 4). Инвариант-тест (Phase 1A)
- * проверяет, что значения здесь побитно совпадают с :root в tokens.css.
+ * CSS-зеркало — ./tokens.css (@theme для Tailwind 4). Инвариант-тест проверяет,
+ * что весь public namespace совпадает с :root и Tailwind theme.
  *
  * Dark-only. Острые углы (radius 0 по умолчанию). Accent — warm off-white.
  */
 
 export const colors = {
   // Surfaces — graphite scale (12 ступеней)
-  bg0: "#0a0a0b",
-  bg1: "#101012",
-  bg2: "#16161a",
-  bg3: "#1c1c21",
-  bg4: "#232329",
-  bg5: "#2c2c33",
-  bg6: "#38383f",
-  bg7: "#4a4a52",
-  bg8: "#7a7a84",
-  bg9: "#92929c",
-  bg10: "#a8a8b0",
-  bg11: "#e4e4e7",
+  bg0: "#0b0d10",
+  bg1: "#0e1114",
+  bg2: "#14181b",
+  bg3: "#1a1f22",
+  bg4: "#202629",
+  bg5: "#292f32",
+  bg6: "#34383a",
+  bg7: "#545a5d",
+  bg8: "#858a8d",
+  bg9: "#a09f9a",
+  bg10: "#c3beb4",
+  bg11: "#e7e1d5",
 
   // Accent — warm off-white (общий emphasis)
-  accent: "#f5f1e8",
-  accentMuted: "#bdb8ab",
-  accentBg: "#2a2823",
+  accent: "#b8a36a",
+  accentMuted: "#9f8e5e",
+  accentBg: "#1d1a13",
 
   // Active — тёплый амбер (пульс/активная строка, вариант A)
-  active: "#e8b339",
-  activeBg: "#2a2412",
+  active: "#b8a36a",
+  activeBg: "#211c11",
 
   // Semantic — яркое кодирование статусов (вариант C)
-  success: "#34d399",
-  successBg: "#10241c",
-  warning: "#fbbf24",
-  warningBg: "#2a2008",
-  danger: "#f87171",
-  dangerBg: "#2a1414",
-  info: "#60a5fa",
-  infoBg: "#0f1f33",
+  success: "#86a77b",
+  successBg: "#121a13",
+  warning: "#b8a36a",
+  warningBg: "#211c11",
+  danger: "#cf6259",
+  dangerBg: "#281513",
+  info: "#91a0aa",
+  infoBg: "#151b1f",
+  hairline: "#292f32",
+  hairlineStrong: "#34383a",
 } as const;
 
 /** FSM-state цвета, привязанные к alert_state (lowercase canon).
@@ -54,21 +56,21 @@ export const fsmColors = {
 } as const;
 
 export const fonts = {
-  display: '"JetBrains Mono", "SF Mono", "Menlo", ui-monospace, monospace',
-  body: '"Inter Tight", "SF Pro Text", system-ui, sans-serif',
+  display: '"Commissioner", "SF Pro Display", system-ui, sans-serif',
+  body: '"Commissioner", "SF Pro Text", system-ui, sans-serif',
   numeric: '"JetBrains Mono", tabular-nums, monospace',
 } as const;
 
 /** Размерная шкала текста (px), §1.2.2. */
 export const fontSizes = {
-  display: 56,
-  title1: 32,
+  display: 48,
+  title1: 36,
   title2: 22,
   title3: 16,
-  body: 14,
-  bodySm: 13,
+  body: 16,
+  bodySm: 14,
   caption: 12,
-  micro: 10,
+  micro: 12,
 } as const;
 
 /** Spacing — 4px baseline (§1.3). */
@@ -88,10 +90,10 @@ export const space = {
 /** Radius — мягкие углы (направление A+C). */
 export const radius = {
   0: 0,
-  1: 6,
-  2: 10,
-  3: 14,
-  4: 18,
+  1: 2,
+  2: 4,
+  3: 6,
+  4: 8,
   full: 9999,
 } as const;
 
@@ -104,12 +106,12 @@ export const motion = {
   durSlow: "400ms",
 } as const;
 
-/** Layout — viewport ≥1280 (§1.8). */
+/** Responsive shell layout (§1.8). */
 export const layout = {
-  sidebarWidth: 240,
+  sidebarWidth: 196,
   sidebarWidthCollapsed: 64,
   topbarHeight: 56,
-  contentPaddingX: 32,
+  contentPaddingX: 36,
   contentPaddingY: 24,
 } as const;
 

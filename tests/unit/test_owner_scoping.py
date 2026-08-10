@@ -53,7 +53,7 @@ def test_owner_tag_case_insensitive() -> None:
     assert campaign_matches_owner(campaign_name="MV | GH | CR2", ad_name="x", owner_tag="mv")
 
 
-# Пустой/None owner_tag → фильтр выключен, любая кампания проходит (обратная совместимость)
+# Пустой/None owner_tag означает явную настройку «весь кабинет».
 def test_owner_tag_disabled_when_empty() -> None:
     assert campaign_matches_owner(campaign_name="MZ Artemteam", ad_name="x", owner_tag=None)
     assert campaign_matches_owner(campaign_name="MZ Artemteam", ad_name="x", owner_tag="")

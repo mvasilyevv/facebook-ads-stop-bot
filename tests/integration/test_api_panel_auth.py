@@ -56,15 +56,19 @@ def _settings(**overrides) -> Settings:
         "panel_auth_session_ttl_seconds": 43_200,
         "panel_auth_ticket_ttl_seconds": 60,
         "panel_auth_state_ttl_seconds": 600,
-        "panel_auth_owner_recheck_seconds": 0,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
 
 
-def _app(pg_engine, fake_redis_client, settings: Settings):
+class _UnavailableRedis:
+    def __getattr__(self, name: str):
+        raise AssertionError(f"panel auth touched unavailable Redis: {name}")
+
+
+def _app(pg_engine, settings: Settings):
     app = create_app()
-    app.state.redis = fake_redis_client
+    app.state.redis = _UnavailableRedis()
     app.dependency_overrides[get_engine] = lambda: pg_engine
     app.dependency_overrides[get_settings] = lambda: settings
     return app
@@ -84,17 +88,17 @@ async def _start(client: AsyncClient, return_to: str = "/") -> str:
 
 @pytest.mark.asyncio
 async def test_owner_flow_uses_callback_ticket_then_secure_12h_cookie(
-    pg_engine, fake_redis_client, panel_recipient, monkeypatch
+    pg_engine, panel_recipient, monkeypatch
 ):
     owner_id = 88000001
     await panel_recipient(owner_id, "owner")
-    app = _app(pg_engine, fake_redis_client, _settings())
+    app = _app(pg_engine, _settings())
     monkeypatch.setattr(
         "apps.api.routers.panel_auth._exchange_code", lambda **_kwargs: _async_value("token")
     )
     monkeypatch.setattr(
         "apps.api.routers.panel_auth._load_jwks",
-        lambda _redis, **_kwargs: _async_value({"keys": []}),
+        lambda **_kwargs: _async_value({"keys": []}),
     )
     monkeypatch.setattr(
         "apps.api.routers.panel_auth.verify_telegram_id_token",
@@ -117,8 +121,17 @@ async def test_owner_flow_uses_callback_ticket_then_secure_12h_cookie(
         assert callback.headers["location"].startswith("/auth/redeem?ticket=")
         assert PANEL_SESSION_COOKIE not in callback.headers.get("set-cookie", "")
         ticket = parse_qs(urlsplit(callback.headers["location"]).query)["ticket"][0]
-        keys = await fake_redis_client.keys("panel_auth:v1:ticket:*")
-        assert len(keys) == 1 and ticket not in keys[0]
+        async with pg_engine.connect() as conn:
+            stored = (
+                (
+                    await conn.execute(
+                        text("SELECT encode(ticket_digest, 'hex') FROM panel_login_tickets")
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert len(stored) == 1 and ticket not in stored
 
         redeemed = await client.get(callback.headers["location"], follow_redirects=False)
         assert redeemed.status_code == 303 and redeemed.headers["location"] == "/campaigns"
@@ -126,7 +139,9 @@ async def test_owner_flow_uses_callback_ticket_then_secure_12h_cookie(
         assert f"{PANEL_SESSION_COOKIE}=" in cookie
         assert "HttpOnly" in cookie and "Secure" in cookie and "SameSite=lax" in cookie
         assert "Path=/" in cookie and "Max-Age=43200" in cookie
-        assert (await client.get("/auth/verify")).status_code == 200
+        verified = await client.get("/auth/verify")
+        assert verified.status_code == 200
+        assert verified.headers["x-verified-operator-principal"] == f"panel:{owner_id}"
 
         replay = await client.get(callback.headers["location"], follow_redirects=False)
         assert replay.status_code == 403 and "уже был использован" in replay.text
@@ -136,7 +151,7 @@ async def test_owner_flow_uses_callback_ticket_then_secure_12h_cookie(
         assert "Max-Age=0" in logout.headers["set-cookie"]
         denied = await client.get(
             "/auth/verify",
-            headers={"X-Forwarded-Uri": "/api/stats/today"},
+            headers={"X-Forwarded-Uri": "/api/operator/snapshot"},
             follow_redirects=False,
         )
         assert denied.status_code == 401
@@ -144,18 +159,16 @@ async def test_owner_flow_uses_callback_ticket_then_secure_12h_cookie(
 
 
 @pytest.mark.asyncio
-async def test_state_replay_and_non_owner_fail_closed(
-    pg_engine, fake_redis_client, panel_recipient, monkeypatch
-):
+async def test_state_replay_and_non_owner_fail_closed(pg_engine, panel_recipient, monkeypatch):
     user_id = 88000002
     await panel_recipient(user_id, "recipient")
-    app = _app(pg_engine, fake_redis_client, _settings())
+    app = _app(pg_engine, _settings())
     monkeypatch.setattr(
         "apps.api.routers.panel_auth._exchange_code", lambda **_kwargs: _async_value("token")
     )
     monkeypatch.setattr(
         "apps.api.routers.panel_auth._load_jwks",
-        lambda _redis, **_kwargs: _async_value({"keys": []}),
+        lambda **_kwargs: _async_value({"keys": []}),
     )
     monkeypatch.setattr(
         "apps.api.routers.panel_auth.verify_telegram_id_token",
@@ -180,18 +193,18 @@ async def test_state_replay_and_non_owner_fail_closed(
 
 
 @pytest.mark.asyncio
-async def test_role_revocation_invalidates_existing_session_within_recheck_window(
-    pg_engine, fake_redis_client, panel_recipient, monkeypatch
+async def test_role_revocation_invalidates_existing_session_on_next_request(
+    pg_engine, panel_recipient, monkeypatch
 ):
     owner_id = 88000003
     await panel_recipient(owner_id, "owner")
-    app = _app(pg_engine, fake_redis_client, _settings(panel_auth_owner_recheck_seconds=0))
+    app = _app(pg_engine, _settings())
     monkeypatch.setattr(
         "apps.api.routers.panel_auth._exchange_code", lambda **_kwargs: _async_value("token")
     )
     monkeypatch.setattr(
         "apps.api.routers.panel_auth._load_jwks",
-        lambda _redis, **_kwargs: _async_value({"keys": []}),
+        lambda **_kwargs: _async_value({"keys": []}),
     )
     monkeypatch.setattr(
         "apps.api.routers.panel_auth.verify_telegram_id_token",

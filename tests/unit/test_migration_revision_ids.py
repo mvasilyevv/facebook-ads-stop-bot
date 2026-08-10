@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Длина alembic revision id ≤ 32 символов (колонка alembic_version — varchar(32)).
+"""Alembic revision IDs fit the default ``alembic_version`` varchar(32).
 
-Инцидент деплоя 02.07: ревизия '0032_tracker_aggregate_revenue_precision'
-(40 символов) падала StringDataRightTruncationError на UPDATE alembic_version —
-прод откатился. CI это не ловит (тесты не гоняют alembic upgrade), поэтому
-контракт фиксируем статически по всем файлам миграций.
+This protects deployment before PostgreSQL can reject an overlong revision
+during the version-table update. CI also executes the fresh baseline itself.
 """
 
 from __future__ import annotations
@@ -35,3 +33,14 @@ def test_all_revision_ids_fit_version_column():
         f"revision id длиннее {MAX_REVISION_LEN} символов (упадёт UPDATE alembic_version): "
         + "; ".join(violations)
     )
+
+
+def test_fresh_baseline_emits_targetable_campaign_run_events() -> None:
+    sql = (VERSIONS_DIR / "0001_safety_first_baseline.sql").read_text(encoding="utf-8")
+
+    assert (
+        "CREATE TRIGGER trg_campaign_run_operator_notify "
+        "AFTER INSERT OR DELETE OR UPDATE ON public.campaign_run "
+        "FOR EACH ROW EXECUTE FUNCTION "
+        "public.notify_fb_operator_event('campaign_run', 'id');"
+    ) in sql

@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Async-обвязка для telegram_config / telegram_recipients / telegram_invites.
-
-Минимальный набор функций для poller'а и базовых handlers. Расширяется по мере
-миграции других telegram-фич.
-"""
+"""Async access to Telegram configuration, recipients and invites."""
 
 from __future__ import annotations
 
@@ -14,8 +10,9 @@ from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from core.config import get_settings, reveal_secret
+from core.config import Settings, get_settings, reveal_secret
 from core.crypto import decrypt, encrypt
+from core.telegram.owner_roster import lock_owner_roster
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +22,9 @@ class TelegramConfig:
     """Snapshot telegram_config из БД."""
 
     bot_token: str  # уже расшифрован
-    chat_id: int | None
-    poller_offset: int
-    poller_heartbeat_at: datetime | None
+    webhook_ready: bool
+    webhook_generation: int
+    updated_at: datetime
 
 
 @dataclass(frozen=True)
@@ -35,9 +32,10 @@ class _StoredTelegramConfig:
     """Сырые поля singleton-строки до расшифровки токена."""
 
     bot_token_encrypted: str
-    chat_id: int | None
-    poller_offset: int
-    poller_heartbeat_at: datetime | None
+    is_enabled: bool
+    webhook_ready: bool
+    webhook_generation: int
+    updated_at: datetime
 
 
 async def _select_telegram_config(conn: AsyncConnection) -> _StoredTelegramConfig | None:
@@ -46,8 +44,13 @@ async def _select_telegram_config(conn: AsyncConnection) -> _StoredTelegramConfi
         await conn.execute(
             text(
                 """
-                SELECT bot_token_encrypted, chat_id,
-                       poller_offset, poller_heartbeat_at
+                SELECT bot_token_encrypted, is_enabled,
+                       (
+                           webhook_state = 'configured'
+                           AND webhook_operation = 'configure'
+                           AND webhook_applied_generation = webhook_generation
+                       ) AS webhook_ready,
+                       webhook_generation, updated_at
                 FROM telegram_config
                 WHERE singleton_key = 'default'
                 """
@@ -58,24 +61,48 @@ async def _select_telegram_config(conn: AsyncConnection) -> _StoredTelegramConfi
         return None
     return _StoredTelegramConfig(
         bot_token_encrypted=str(row[0] or ""),
-        chat_id=row[1],
-        poller_offset=int(row[2] or 0),
-        poller_heartbeat_at=row[3],
+        is_enabled=bool(row[1]),
+        webhook_ready=bool(row[2]),
+        webhook_generation=int(row[3]),
+        updated_at=row[4],
     )
 
 
-async def _bootstrap_telegram_config_from_env(
+async def bootstrap_telegram_config_from_env(
     engine: AsyncEngine,
-) -> _StoredTelegramConfig | None:
-    """Однократно создаёт отсутствующий singleton из ``TELEGRAM_BOT_TOKEN``.
+    *,
+    settings: Settings | None = None,
+) -> bool:
+    """Однократно импортирует ``TELEGRAM_BOT_TOKEN`` в отсутствующий singleton.
 
-    Существующая строка, включая пустую после явного DELETE в UI, всегда
-    авторитетна. ``ON CONFLICT DO NOTHING`` делает одновременный старт нескольких
-    воркеров безопасным: победившая запись затем перечитывается из БД.
+    Это явная release/bootstrap-команда, а не runtime fallback. Существующая
+    строка, включая пустой tombstone после явного DELETE в UI, всегда
+    авторитетна. ``ON CONFLICT DO NOTHING`` делает повторный и параллельный
+    запуск безопасным.
+
+    Returns:
+        ``True`` только если текущий вызов создал singleton.
     """
-    token = reveal_secret(get_settings().telegram_bot_token).strip()
+
+    async with engine.connect() as conn:
+        exists = await conn.scalar(
+            text(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM telegram_config
+                    WHERE singleton_key = 'default'
+                )
+                """
+            )
+        )
+    if exists:
+        return False
+
+    resolved_settings = settings or get_settings()
+    token = reveal_secret(resolved_settings.telegram_bot_token).strip()
     if not token:
-        return None
+        return False
 
     try:
         encrypted = encrypt(token)
@@ -86,53 +113,91 @@ async def _bootstrap_telegram_config_from_env(
             "Не удалось зашифровать TELEGRAM_BOT_TOKEN для telegram_config (error_type=%s)",
             type(exc).__name__,
         )
-        return None
+        raise RuntimeError(
+            f"Telegram token bootstrap encryption failed (error_type={type(exc).__name__})"
+        ) from None
+
+    from core.telegram.gateway import telegram_credential_fingerprint
+    from core.telegram.webhook_configuration import (
+        bind_webhook_generation,
+        resolve_webhook_target,
+    )
+
+    try:
+        target = resolve_webhook_target(
+            frontend_origin=resolved_settings.frontend_origin,
+            secret_token=resolved_settings.telegram_webhook_secret,
+        )
+    except ValueError:
+        target = None
 
     async with engine.begin() as conn:
         inserted = (
             await conn.execute(
                 text(
                     """
-                    INSERT INTO telegram_config (singleton_key, bot_token_encrypted)
-                    VALUES ('default', :bot_token_encrypted)
+                    INSERT INTO telegram_config
+                        (singleton_key, bot_token_encrypted,
+                         bot_token_fingerprint, is_enabled,
+                         webhook_generation, webhook_operation,
+                         webhook_desired_url, webhook_secret_digest,
+                         webhook_state, webhook_scheduled_at)
+                    VALUES
+                        ('default', :bot_token_encrypted,
+                         :bot_token_fingerprint, TRUE,
+                         :webhook_generation, :webhook_operation,
+                         :webhook_desired_url, :webhook_secret_digest,
+                         CAST(:webhook_state AS VARCHAR(16)),
+                         CASE
+                             WHEN CAST(:webhook_state AS VARCHAR(16)) = 'pending'
+                             THEN NOW()
+                             ELSE NULL
+                         END)
                     ON CONFLICT (singleton_key) DO NOTHING
                     RETURNING singleton_key
                     """
                 ),
-                {"bot_token_encrypted": encrypted},
+                {
+                    "bot_token_encrypted": encrypted,
+                    "bot_token_fingerprint": bytes.fromhex(telegram_credential_fingerprint(token)),
+                    "webhook_generation": 1 if target is not None else 0,
+                    "webhook_operation": ("configure" if target is not None else None),
+                    "webhook_desired_url": (
+                        bind_webhook_generation(target.url, 1) if target is not None else None
+                    ),
+                    "webhook_secret_digest": (target.secret_digest if target is not None else None),
+                    "webhook_state": "pending" if target is not None else "unconfigured",
+                },
             )
         ).first()
-        stored = await _select_telegram_config(conn)
 
     if inserted is not None:
         logger.info(
-            "telegram_config создан из TELEGRAM_BOT_TOKEN; дальнейшие настройки из БД "
-            "имеют приоритет"
+            "telegram_config создан из bootstrap environment (webhook_target_configured=%s)",
+            target is not None,
         )
-    return stored
+    return inserted is not None
 
 
 async def load_telegram_config(engine: AsyncEngine) -> TelegramConfig | None:
     """Читает singleton telegram_config + расшифровывает токен.
 
-    На чистой БД один раз создаёт отсутствующую строку из ``TELEGRAM_BOT_TOKEN``.
-    Существующая строка из UI (даже пустая после явного отключения) приоритетна.
-    Возвращает None, если ни БД, ни env не настроены или токен пустой/невалидный.
+    Runtime-источник — только PostgreSQL. Отсутствующая строка и tombstone после
+    явного отключения одинаково fail closed; окружение здесь не читается.
+    Возвращает None, если DB-конфигурация отсутствует, отключена или невалидна.
     """
     async with engine.connect() as conn:
         stored = await _select_telegram_config(conn)
 
     if stored is None:
-        stored = await _bootstrap_telegram_config_from_env(engine)
-        if stored is None:
-            return None
+        return None
 
     enc = stored.bot_token_encrypted
-    if not enc:
+    if not stored.is_enabled or not enc:
         return None
 
     try:
-        token = decrypt(enc)
+        token = decrypt(enc).strip()
     except Exception as exc:
         logger.error(
             "Не смог расшифровать bot_token_encrypted (error_type=%s)",
@@ -145,48 +210,39 @@ async def load_telegram_config(engine: AsyncEngine) -> TelegramConfig | None:
 
     return TelegramConfig(
         bot_token=token,
-        chat_id=stored.chat_id,
-        poller_offset=stored.poller_offset,
-        poller_heartbeat_at=stored.poller_heartbeat_at,
+        webhook_ready=stored.webhook_ready,
+        webhook_generation=stored.webhook_generation,
+        updated_at=stored.updated_at,
     )
 
 
-async def load_poller_offset(engine: AsyncEngine) -> int:
-    """Текущий long-polling offset."""
+async def telegram_generation_is_authoritative(
+    engine: AsyncEngine,
+    *,
+    bot_generation: int,
+) -> bool:
+    """Return whether a TMA/inbox generation is the enabled DB authority."""
+    if bot_generation <= 0:
+        return False
     async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT poller_offset FROM telegram_config WHERE singleton_key = 'default'")
-            )
-        ).first()
-    return int(row[0]) if row and row[0] is not None else 0
-
-
-async def save_poller_offset(engine: AsyncEngine, offset: int) -> None:
-    """Сохранить offset после обработки batch'а апдейтов."""
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                UPDATE telegram_config
-                SET poller_offset = :off, updated_at = NOW()
-                WHERE singleton_key = 'default'
-                """
-            ),
-            {"off": int(offset)},
-        )
-
-
-async def touch_poller_heartbeat(engine: AsyncEngine) -> None:
-    """Heartbeat poller'а — отметить что он живой."""
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                UPDATE telegram_config
-                SET poller_heartbeat_at = NOW(), updated_at = NOW()
-                WHERE singleton_key = 'default'
-                """
+        return bool(
+            await conn.scalar(
+                text(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM telegram_config
+                        WHERE singleton_key = 'default'
+                          AND is_enabled
+                          AND bot_token_encrypted <> ''
+                          AND webhook_operation = 'configure'
+                          AND webhook_state = 'configured'
+                          AND webhook_applied_generation = webhook_generation
+                          AND webhook_generation = :bot_generation
+                    )
+                    """
+                ),
+                {"bot_generation": int(bot_generation)},
             )
         )
 
@@ -344,59 +400,125 @@ async def find_active_invite(engine: AsyncEngine, code: str) -> dict | None:
 async def consume_invite_and_create_recipient(
     engine: AsyncEngine,
     *,
-    invite_id,
+    code: str,
     chat_id: int,
     telegram_user_id: int,
     username: str | None,
     display_name: str | None,
-    role: str = "recipient",
-) -> Recipient:
-    """Помечает invite как использованный + создаёт recipient'а в одной транзакции."""
+) -> Recipient | None:
+    """Atomically consume an active invite and create exactly one recipient.
+
+    The role is read only from the row returned by the guarded UPDATE. Two
+    concurrent `/start` requests for one code therefore cannot both mint an
+    owner recipient.
+    """
+    if not code:
+        return None
     async with engine.begin() as conn:
-        # mark invite as used
-        await conn.execute(
-            text(
-                """
-                UPDATE telegram_invites
-                SET used_at = NOW(), used_by = :used_by
-                WHERE id = :iid
-                """
-            ),
-            {
-                "iid": invite_id,
-                "used_by": f"{telegram_user_id}",
-            },
-        )
+        await lock_owner_roster(conn)
+        invite = (
+            await conn.execute(
+                text(
+                    """
+                    UPDATE telegram_invites
+                    SET used_at = clock_timestamp(), used_by = :used_by
+                    WHERE code = :code
+                      AND used_at IS NULL
+                      AND revoked_at IS NULL
+                      AND expires_at > clock_timestamp()
+                      AND (
+                          role <> 'owner'
+                          OR NOT EXISTS (
+                              SELECT 1
+                              FROM telegram_recipients r
+                              WHERE r.role = 'owner'
+                                AND r.revoked_at IS NULL
+                          )
+                      )
+                    RETURNING id, role
+                    """
+                ),
+                {"code": code, "used_by": str(telegram_user_id)},
+            )
+        ).first()
+        if invite is None:
+            # The recipient transaction may have committed while the webhook
+            # worker crashed before finalizing its inbox/reply transaction.
+            # Reprocessing that same Telegram update must reproduce success,
+            # not turn the already-consumed invite into an error.
+            existing = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT r.role, r.username
+                        FROM telegram_invites i
+                        JOIN telegram_recipients r ON r.invite_id = i.id
+                        WHERE i.code = :code
+                          AND i.used_at IS NOT NULL
+                          AND i.used_by = :used_by
+                          AND r.chat_id = :chat_id
+                          AND r.telegram_user_id = :telegram_user_id
+                          AND r.revoked_at IS NULL
+                        LIMIT 1
+                        """
+                    ),
+                    {
+                        "code": code,
+                        "used_by": str(telegram_user_id),
+                        "chat_id": int(chat_id),
+                        "telegram_user_id": int(telegram_user_id),
+                    },
+                )
+            ).first()
+            if existing is None:
+                return None
+            return Recipient(
+                chat_id=int(chat_id),
+                telegram_user_id=int(telegram_user_id),
+                username=existing.username,
+                role=str(existing.role),
+            )
+        invite_id = invite.id
+        role = str(invite.role)
+
         # upsert recipient
-        await conn.execute(
-            text(
-                """
-                INSERT INTO telegram_recipients
-                    (chat_id, telegram_user_id, username, display_name, role, invite_id)
-                VALUES
-                    (:cid, :uid, :un, :dn, :role, :iid)
-                ON CONFLICT (chat_id, telegram_user_id) DO UPDATE
-                SET username = EXCLUDED.username,
-                    display_name = EXCLUDED.display_name,
-                    role = EXCLUDED.role,
-                    invite_id = EXCLUDED.invite_id,
-                    revoked_at = NULL
-                """
-            ),
-            {
-                "cid": int(chat_id),
-                "uid": int(telegram_user_id),
-                "un": username,
-                "dn": display_name,
-                "role": role,
-                "iid": invite_id,
-            },
-        )
+        recipient_row = (
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO telegram_recipients
+                        (chat_id, telegram_user_id, username, display_name, role, invite_id)
+                    VALUES
+                        (:cid, :uid, :un, :dn, :role, :iid)
+                    ON CONFLICT (chat_id, telegram_user_id) DO UPDATE
+                    SET username = EXCLUDED.username,
+                        display_name = EXCLUDED.display_name,
+                        role = CASE
+                            WHEN telegram_recipients.role = 'owner'
+                                 AND telegram_recipients.revoked_at IS NULL
+                            THEN 'owner'
+                            ELSE EXCLUDED.role
+                        END,
+                        invite_id = EXCLUDED.invite_id,
+                        revoked_at = NULL
+                    RETURNING role, username
+                    """
+                ),
+                {
+                    "cid": int(chat_id),
+                    "uid": int(telegram_user_id),
+                    "un": username,
+                    "dn": display_name,
+                    "role": role,
+                    "iid": invite_id,
+                },
+            )
+        ).one()
     return Recipient(
         chat_id=int(chat_id),
         telegram_user_id=int(telegram_user_id),
-        username=username,
-        role=role,
+        username=recipient_row.username,
+        role=str(recipient_row.role),
     )
 
 
@@ -408,6 +530,7 @@ def is_now_aware(dt: datetime | None) -> bool:
 __all__ = [
     "Recipient",
     "TelegramConfig",
+    "bootstrap_telegram_config_from_env",
     "consume_invite_and_create_recipient",
     "find_active_invite",
     "find_recipient",
@@ -415,8 +538,6 @@ __all__ = [
     "is_now_aware",
     "load_active_recipients",
     "load_owner_recipients",
-    "load_poller_offset",
     "load_telegram_config",
-    "save_poller_offset",
-    "touch_poller_heartbeat",
+    "telegram_generation_is_authoritative",
 ]

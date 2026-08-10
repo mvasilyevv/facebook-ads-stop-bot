@@ -10,26 +10,25 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as StatsIndexRouteImport } from './routes/stats/index'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as RemoteDesktopIndexRouteImport } from './routes/remote-desktop/index'
 import { Route as OffersIndexRouteImport } from './routes/offers/index'
-import { Route as HistoryIndexRouteImport } from './routes/history/index'
+import { Route as IncidentsIndexRouteImport } from './routes/incidents/index'
 import { Route as CampaignsIndexRouteImport } from './routes/campaigns/index'
 import { Route as AnalyticsIndexRouteImport } from './routes/analytics/index'
 import { Route as AdsIndexRouteImport } from './routes/ads/index'
+import { Route as ActionsIndexRouteImport } from './routes/actions/index'
+import { Route as SystemSourcesRouteImport } from './routes/system/sources'
 import { Route as OffersIdRouteImport } from './routes/offers/$id'
+import { Route as IncidentsIncidentIdRouteImport } from './routes/incidents/$incidentId'
+import { Route as CabinetsCabinetIdRouteImport } from './routes/cabinets/$cabinetId'
 import { Route as AdsFbAdIdRouteImport } from './routes/ads/$fbAdId'
+import { Route as ActionsActionIdRouteImport } from './routes/actions/$actionId'
 import { Route as CampaignsCreateIndexRouteImport } from './routes/campaigns/create/index'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const StatsIndexRoute = StatsIndexRouteImport.update({
-  id: '/stats/',
-  path: '/stats/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsIndexRoute = SettingsIndexRouteImport.update({
@@ -47,9 +46,9 @@ const OffersIndexRoute = OffersIndexRouteImport.update({
   path: '/offers/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const HistoryIndexRoute = HistoryIndexRouteImport.update({
-  id: '/history/',
-  path: '/history/',
+const IncidentsIndexRoute = IncidentsIndexRouteImport.update({
+  id: '/incidents/',
+  path: '/incidents/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CampaignsIndexRoute = CampaignsIndexRouteImport.update({
@@ -67,14 +66,39 @@ const AdsIndexRoute = AdsIndexRouteImport.update({
   path: '/ads/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ActionsIndexRoute = ActionsIndexRouteImport.update({
+  id: '/actions/',
+  path: '/actions/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SystemSourcesRoute = SystemSourcesRouteImport.update({
+  id: '/system/sources',
+  path: '/system/sources',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OffersIdRoute = OffersIdRouteImport.update({
   id: '/offers/$id',
   path: '/offers/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const IncidentsIncidentIdRoute = IncidentsIncidentIdRouteImport.update({
+  id: '/incidents/$incidentId',
+  path: '/incidents/$incidentId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CabinetsCabinetIdRoute = CabinetsCabinetIdRouteImport.update({
+  id: '/cabinets/$cabinetId',
+  path: '/cabinets/$cabinetId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdsFbAdIdRoute = AdsFbAdIdRouteImport.update({
   id: '/ads/$fbAdId',
   path: '/ads/$fbAdId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ActionsActionIdRoute = ActionsActionIdRouteImport.update({
+  id: '/actions/$actionId',
+  path: '/actions/$actionId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CampaignsCreateIndexRoute = CampaignsCreateIndexRouteImport.update({
@@ -85,104 +109,132 @@ const CampaignsCreateIndexRoute = CampaignsCreateIndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
+  '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
   '/offers/$id': typeof OffersIdRoute
+  '/system/sources': typeof SystemSourcesRoute
+  '/actions/': typeof ActionsIndexRoute
   '/ads/': typeof AdsIndexRoute
   '/analytics/': typeof AnalyticsIndexRoute
   '/campaigns/': typeof CampaignsIndexRoute
-  '/history/': typeof HistoryIndexRoute
+  '/incidents/': typeof IncidentsIndexRoute
   '/offers/': typeof OffersIndexRoute
   '/remote-desktop/': typeof RemoteDesktopIndexRoute
   '/settings/': typeof SettingsIndexRoute
-  '/stats/': typeof StatsIndexRoute
   '/campaigns/create/': typeof CampaignsCreateIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
+  '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
   '/offers/$id': typeof OffersIdRoute
+  '/system/sources': typeof SystemSourcesRoute
+  '/actions': typeof ActionsIndexRoute
   '/ads': typeof AdsIndexRoute
   '/analytics': typeof AnalyticsIndexRoute
   '/campaigns': typeof CampaignsIndexRoute
-  '/history': typeof HistoryIndexRoute
+  '/incidents': typeof IncidentsIndexRoute
   '/offers': typeof OffersIndexRoute
   '/remote-desktop': typeof RemoteDesktopIndexRoute
   '/settings': typeof SettingsIndexRoute
-  '/stats': typeof StatsIndexRoute
   '/campaigns/create': typeof CampaignsCreateIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/actions/$actionId': typeof ActionsActionIdRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
+  '/cabinets/$cabinetId': typeof CabinetsCabinetIdRoute
+  '/incidents/$incidentId': typeof IncidentsIncidentIdRoute
   '/offers/$id': typeof OffersIdRoute
+  '/system/sources': typeof SystemSourcesRoute
+  '/actions/': typeof ActionsIndexRoute
   '/ads/': typeof AdsIndexRoute
   '/analytics/': typeof AnalyticsIndexRoute
   '/campaigns/': typeof CampaignsIndexRoute
-  '/history/': typeof HistoryIndexRoute
+  '/incidents/': typeof IncidentsIndexRoute
   '/offers/': typeof OffersIndexRoute
   '/remote-desktop/': typeof RemoteDesktopIndexRoute
   '/settings/': typeof SettingsIndexRoute
-  '/stats/': typeof StatsIndexRoute
   '/campaigns/create/': typeof CampaignsCreateIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/cabinets/$cabinetId'
+    | '/incidents/$incidentId'
     | '/offers/$id'
+    | '/system/sources'
+    | '/actions/'
     | '/ads/'
     | '/analytics/'
     | '/campaigns/'
-    | '/history/'
+    | '/incidents/'
     | '/offers/'
     | '/remote-desktop/'
     | '/settings/'
-    | '/stats/'
     | '/campaigns/create/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/cabinets/$cabinetId'
+    | '/incidents/$incidentId'
     | '/offers/$id'
+    | '/system/sources'
+    | '/actions'
     | '/ads'
     | '/analytics'
     | '/campaigns'
-    | '/history'
+    | '/incidents'
     | '/offers'
     | '/remote-desktop'
     | '/settings'
-    | '/stats'
     | '/campaigns/create'
   id:
     | '__root__'
     | '/'
+    | '/actions/$actionId'
     | '/ads/$fbAdId'
+    | '/cabinets/$cabinetId'
+    | '/incidents/$incidentId'
     | '/offers/$id'
+    | '/system/sources'
+    | '/actions/'
     | '/ads/'
     | '/analytics/'
     | '/campaigns/'
-    | '/history/'
+    | '/incidents/'
     | '/offers/'
     | '/remote-desktop/'
     | '/settings/'
-    | '/stats/'
     | '/campaigns/create/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ActionsActionIdRoute: typeof ActionsActionIdRoute
   AdsFbAdIdRoute: typeof AdsFbAdIdRoute
+  CabinetsCabinetIdRoute: typeof CabinetsCabinetIdRoute
+  IncidentsIncidentIdRoute: typeof IncidentsIncidentIdRoute
   OffersIdRoute: typeof OffersIdRoute
+  SystemSourcesRoute: typeof SystemSourcesRoute
+  ActionsIndexRoute: typeof ActionsIndexRoute
   AdsIndexRoute: typeof AdsIndexRoute
   AnalyticsIndexRoute: typeof AnalyticsIndexRoute
   CampaignsIndexRoute: typeof CampaignsIndexRoute
-  HistoryIndexRoute: typeof HistoryIndexRoute
+  IncidentsIndexRoute: typeof IncidentsIndexRoute
   OffersIndexRoute: typeof OffersIndexRoute
   RemoteDesktopIndexRoute: typeof RemoteDesktopIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
-  StatsIndexRoute: typeof StatsIndexRoute
   CampaignsCreateIndexRoute: typeof CampaignsCreateIndexRoute
 }
 
@@ -193,13 +245,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/stats/': {
-      id: '/stats/'
-      path: '/stats'
-      fullPath: '/stats/'
-      preLoaderRoute: typeof StatsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/': {
@@ -223,11 +268,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OffersIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/history/': {
-      id: '/history/'
-      path: '/history'
-      fullPath: '/history/'
-      preLoaderRoute: typeof HistoryIndexRouteImport
+    '/incidents/': {
+      id: '/incidents/'
+      path: '/incidents'
+      fullPath: '/incidents/'
+      preLoaderRoute: typeof IncidentsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/campaigns/': {
@@ -251,6 +296,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/actions/': {
+      id: '/actions/'
+      path: '/actions'
+      fullPath: '/actions/'
+      preLoaderRoute: typeof ActionsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/system/sources': {
+      id: '/system/sources'
+      path: '/system/sources'
+      fullPath: '/system/sources'
+      preLoaderRoute: typeof SystemSourcesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/offers/$id': {
       id: '/offers/$id'
       path: '/offers/$id'
@@ -258,11 +317,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OffersIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/incidents/$incidentId': {
+      id: '/incidents/$incidentId'
+      path: '/incidents/$incidentId'
+      fullPath: '/incidents/$incidentId'
+      preLoaderRoute: typeof IncidentsIncidentIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cabinets/$cabinetId': {
+      id: '/cabinets/$cabinetId'
+      path: '/cabinets/$cabinetId'
+      fullPath: '/cabinets/$cabinetId'
+      preLoaderRoute: typeof CabinetsCabinetIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ads/$fbAdId': {
       id: '/ads/$fbAdId'
       path: '/ads/$fbAdId'
       fullPath: '/ads/$fbAdId'
       preLoaderRoute: typeof AdsFbAdIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/actions/$actionId': {
+      id: '/actions/$actionId'
+      path: '/actions/$actionId'
+      fullPath: '/actions/$actionId'
+      preLoaderRoute: typeof ActionsActionIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/campaigns/create/': {
@@ -277,16 +357,20 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ActionsActionIdRoute: ActionsActionIdRoute,
   AdsFbAdIdRoute: AdsFbAdIdRoute,
+  CabinetsCabinetIdRoute: CabinetsCabinetIdRoute,
+  IncidentsIncidentIdRoute: IncidentsIncidentIdRoute,
   OffersIdRoute: OffersIdRoute,
+  SystemSourcesRoute: SystemSourcesRoute,
+  ActionsIndexRoute: ActionsIndexRoute,
   AdsIndexRoute: AdsIndexRoute,
   AnalyticsIndexRoute: AnalyticsIndexRoute,
   CampaignsIndexRoute: CampaignsIndexRoute,
-  HistoryIndexRoute: HistoryIndexRoute,
+  IncidentsIndexRoute: IncidentsIndexRoute,
   OffersIndexRoute: OffersIndexRoute,
   RemoteDesktopIndexRoute: RemoteDesktopIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
-  StatsIndexRoute: StatsIndexRoute,
   CampaignsCreateIndexRoute: CampaignsCreateIndexRoute,
 }
 export const routeTree = rootRouteImport

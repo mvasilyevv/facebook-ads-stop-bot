@@ -2,11 +2,11 @@
 """Integration: мульти-кабинет M1 — scan set из офферов + ad_account_id в каталоге.
 
 Покрывает:
-1. resolve_scan_account_ids — union по активным офферам, дедуп, сортировка,
-   неактивные офферы игнорируются, мусорные значения отбрасываются.
+1. resolve_scan_account_ids — union по нормализованным связям активных офферов,
+   дедуп, сортировка; неактивные офферы игнорируются.
 2. list_offers_without_accounts — активные офферы с пустым списком кабинетов.
-3. upsert_catalog_hierarchy — пишет fb_campaigns.ad_account_id; повторный upsert
-   с None НЕ затирает уже известную привязку (COALESCE-семантика).
+3. upsert_catalog_hierarchy — требует явные account/campaign IDs и пишет
+   fb_campaigns.ad_account_id.
 
 Cleanup prefix-scoped (урок Round 11): не трогаем чужие строки при random-порядке.
 """
@@ -18,8 +18,10 @@ import uuid
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.ad_account_catalog import ad_account_catalog
 from core.observer.accounts import list_offers_without_accounts, resolve_scan_account_ids
 from core.observer.writers import upsert_catalog_hierarchy
 
@@ -50,22 +52,29 @@ async def clean_mcab(pg_engine: AsyncEngine):
 async def _insert_offer(
     engine: AsyncEngine, *, code: str, accounts: list[str], is_active: bool = True
 ) -> None:
-    """Вставка оффера с заданным списком кабинетов."""
+    """Insert an offer and replace its normalized membership in one transaction."""
     async with engine.begin() as conn:
-        await conn.execute(
-            text(
+        offer_id = (
+            await conn.execute(
+                text(
+                    """
+                INSERT INTO offers (id, code, name, is_active)
+                VALUES (:id, :code, :name, :act)
+                RETURNING id
                 """
-                INSERT INTO offers (id, code, name, is_active, ad_account_ids)
-                VALUES (:id, :code, :name, :act, :accs)
-                """
-            ),
-            {
-                "id": uuid.uuid4(),
-                "code": code,
-                "name": f"Тест {code}",
-                "act": is_active,
-                "accs": accounts,
-            },
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "code": code,
+                    "name": f"Тест {code}",
+                    "act": is_active,
+                },
+            )
+        ).scalar_one()
+        await ad_account_catalog.replace_offer_accounts(
+            conn,
+            offer_id=offer_id,
+            account_ids=accounts,
         )
 
 
@@ -86,15 +95,125 @@ async def test_resolve_scan_account_ids_union(pg_engine: AsyncEngine, clean_mcab
     assert result == sorted(result)
 
 
-# Мусор в ad_account_ids (буквы, act_-префикс) нормализуется/отбрасывается.
 @pytest.mark.asyncio
-async def test_resolve_scan_account_ids_normalizes(pg_engine: AsyncEngine, clean_mcab) -> None:
-    await _insert_offer(pg_engine, code=f"{PFX}_C", accounts=["act_777", "garbage", ""])
+async def test_replace_is_atomic_when_an_account_id_is_invalid(
+    pg_engine: AsyncEngine,
+    clean_mcab,
+) -> None:
+    await _insert_offer(pg_engine, code=f"{PFX}_C", accounts=["777"])
 
-    result = await resolve_scan_account_ids(pg_engine)
+    with pytest.raises(ValueError, match="explicit numeric account id"):
+        async with pg_engine.begin() as conn:
+            offer_id = await conn.scalar(
+                text("SELECT id FROM offers WHERE code = :code"),
+                {"code": f"{PFX}_C"},
+            )
+            await ad_account_catalog.replace_offer_accounts(
+                conn,
+                offer_id=offer_id,
+                account_ids=["888", "garbage"],
+            )
 
-    assert "777" in result
-    assert "garbage" not in result and "" not in result and "act_777" not in result
+    async with pg_engine.connect() as conn:
+        accounts = await ad_account_catalog.list_by_offer(conn, offer_ids=[offer_id])
+    assert accounts[offer_id] == ["777"]
+
+
+@pytest.mark.asyncio
+async def test_replace_rolls_back_deleted_links_when_insert_fails(
+    pg_engine: AsyncEngine,
+    clean_mcab,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _insert_offer(pg_engine, code=f"{PFX}_ROLLBACK", accounts=["778"])
+
+    async def _return_missing_account(conn, account_ids):
+        return ("779",)
+
+    monkeypatch.setattr(ad_account_catalog, "create_accounts", _return_missing_account)
+    with pytest.raises(IntegrityError):
+        async with pg_engine.begin() as conn:
+            offer_id = await conn.scalar(
+                text("SELECT id FROM offers WHERE code = :code"),
+                {"code": f"{PFX}_ROLLBACK"},
+            )
+            await ad_account_catalog.replace_offer_accounts(
+                conn,
+                offer_id=offer_id,
+                account_ids=["779"],
+            )
+
+    async with pg_engine.connect() as conn:
+        accounts = await ad_account_catalog.list_by_offer(conn, offer_ids=[offer_id])
+    assert accounts[offer_id] == ["778"]
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_invalid_account_identity(
+    pg_engine: AsyncEngine,
+    clean_mcab,
+) -> None:
+    with pytest.raises(IntegrityError):
+        async with pg_engine.begin() as conn:
+            await conn.execute(text("INSERT INTO ad_accounts (account_id) VALUES ('act_777')"))
+
+
+@pytest.mark.asyncio
+async def test_membership_rejects_missing_account_fk(
+    pg_engine: AsyncEngine,
+    clean_mcab,
+) -> None:
+    async with pg_engine.begin() as conn:
+        offer_id = (
+            await conn.execute(
+                text("INSERT INTO offers (code, name) VALUES (:code, :code) RETURNING id"),
+                {"code": f"{PFX}_FK"},
+            )
+        ).scalar_one()
+
+    with pytest.raises(IntegrityError):
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO offer_ad_accounts (offer_id, account_id) "
+                    "VALUES (:offer_id, '98765432101234567890')"
+                ),
+                {"offer_id": offer_id},
+            )
+
+
+@pytest.mark.asyncio
+async def test_account_delete_is_restricted_while_linked(
+    pg_engine: AsyncEngine,
+    clean_mcab,
+) -> None:
+    await _insert_offer(pg_engine, code=f"{PFX}_RESTRICT", accounts=["654321"])
+
+    with pytest.raises(IntegrityError):
+        async with pg_engine.begin() as conn:
+            await conn.execute(text("DELETE FROM ad_accounts WHERE account_id = '654321'"))
+
+
+@pytest.mark.asyncio
+async def test_offer_delete_cascades_membership_but_preserves_account(
+    pg_engine: AsyncEngine,
+    clean_mcab,
+) -> None:
+    await _insert_offer(pg_engine, code=f"{PFX}_ORPHAN", accounts=["654322"])
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM offers WHERE code = :code"),
+            {"code": f"{PFX}_ORPHAN"},
+        )
+    async with pg_engine.connect() as conn:
+        accounts = await ad_account_catalog.list_accounts(conn)
+        membership_exists = await conn.scalar(
+            text("SELECT 1 FROM offer_ad_accounts WHERE account_id = '654322'")
+        )
+
+    assert "654322" in accounts
+    assert membership_exists is None
 
 
 # Активный оффер с пустым списком кабинетов попадает в warning-список.
@@ -109,43 +228,31 @@ async def test_list_offers_without_accounts(pg_engine: AsyncEngine, clean_mcab) 
     assert f"{PFX}_FULL" not in missing
 
 
-# upsert пишет ad_account_id кампании; повторный upsert с None не затирает привязку.
 @pytest.mark.asyncio
-async def test_upsert_catalog_keeps_account_on_none(pg_engine: AsyncEngine, clean_mcab) -> None:
+async def test_upsert_catalog_rejects_missing_account(pg_engine: AsyncEngine, clean_mcab) -> None:
     common = dict(
-        fb_ad_id=f"{PFX}9001",
+        fb_ad_id="9001",
         ad_name=f"{PFX} ad",
-        fb_adset_id=None,
+        fb_adset_id="8101",
         adset_name=f"{PFX} adset",
-        fb_campaign_id=None,
+        fb_campaign_id="8001",
         campaign_name=f"{PFX} campaign",
         offer_id=None,
         delivery_status="ACTIVE",
     )
-    # Первый скан из кабинета 555 — привязка записана.
-    await upsert_catalog_hierarchy(pg_engine, **common, ad_account_id="555")
-    # Повторный скан без кабинета (fallback) — привязка должна сохраниться.
-    await upsert_catalog_hierarchy(pg_engine, **common, ad_account_id=None)
-
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT ad_account_id FROM fb_campaigns WHERE campaign_name = :n"),
-                {"n": f"{PFX} campaign"},
-            )
-        ).first()
-    assert row is not None and row[0] == "555"
+    with pytest.raises(ValueError, match="explicit numeric account id"):
+        await upsert_catalog_hierarchy(pg_engine, **common, ad_account_id=None)  # type: ignore[arg-type]
 
 
 # Скан из другого кабинета обновляет привязку (кампания переехала/пересоздана).
 @pytest.mark.asyncio
 async def test_upsert_catalog_updates_account(pg_engine: AsyncEngine, clean_mcab) -> None:
     common = dict(
-        fb_ad_id=f"{PFX}9002",
+        fb_ad_id="9002",
         ad_name=f"{PFX} ad2",
-        fb_adset_id=None,
+        fb_adset_id="8102",
         adset_name=f"{PFX} adset2",
-        fb_campaign_id=None,
+        fb_campaign_id="8002",
         campaign_name=f"{PFX} campaign2",
         offer_id=None,
         delivery_status="ACTIVE",

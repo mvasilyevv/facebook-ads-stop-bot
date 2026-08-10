@@ -18,8 +18,17 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from apps.meta_api_worker.main import process_one_task
-from core.meta_api.queue import claim_pending_task, create_mutation_task
+from core.meta_api.queue import (
+    claim_browser_ready_mutation_task,
+    create_mutation_task,
+)
 from core.meta_api.schemas import MetaMutationPayload
+from tests.integration.scan_evidence import begin_complete_test_scan, finish_complete_test_scan
+
+pytestmark = pytest.mark.usefixtures(
+    "fresh_browser_readiness",
+    "known_test_cabinet_timezones",
+)
 
 
 @pytest_asyncio.fixture
@@ -48,7 +57,16 @@ async def ad_with_state(pg_engine: AsyncEngine):
             {"i": offer_id, "c": f"FSY_{suffix}", "n": f"FSM-sync offer {suffix}"},
         )
         await conn.execute(
-            text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
+            text(
+                "INSERT INTO offer_rules (offer_id, cpa_threshold, currency) "
+                "VALUES (:offer_id, 10, 'USD')"
+            ),
+            {"offer_id": offer_id},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO fb_campaigns (id, campaign_name, offer_id, ad_account_id) VALUES (:i, :n, :o, '123')"
+            ),
             {"i": campaign_id, "n": f"CMP_{suffix}", "o": offer_id},
         )
         await conn.execute(
@@ -61,6 +79,7 @@ async def ad_with_state(pg_engine: AsyncEngine):
         )
 
     async def _seed(initial_state: str) -> str:
+        scan_id = await begin_complete_test_scan(pg_engine, account_id="123")
         stage = (
             "warning"
             if initial_state == "warning_sent"
@@ -71,21 +90,23 @@ async def ad_with_state(pg_engine: AsyncEngine):
             await conn.execute(
                 text(
                     """
-                    INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend)
-                    VALUES (gen_random_uuid(), :ad_id, now(), 10)
+                    INSERT INTO ad_metrics (id, ad_id, cycle_ts, scan_id, currency, spend)
+                    VALUES (gen_random_uuid(), :ad_id, now(), :scan_id, 'USD', 10)
                     ON CONFLICT (ad_id, cycle_ts) DO NOTHING
                     """
                 ),
-                {"ad_id": ad_id},
+                {"ad_id": ad_id, "scan_id": scan_id},
             )
             await conn.execute(
                 text(
                     """
                     INSERT INTO ad_alert_state
                         (id, ad_id, alert_state, current_stage, open_state_token,
-                         warning_rule_codes, stop_rule_codes, last_transition_at)
+                         warning_rule_codes, stop_rule_codes, last_scan_id,
+                         last_transition_at)
                     VALUES (:id, :a, :st, :stg, :tok,
-                            '["w1"]'::jsonb, '["s1"]'::jsonb, NOW() - INTERVAL '1 hour')
+                            '["w1"]'::jsonb, '["s1"]'::jsonb, :scan_id,
+                            NOW() - INTERVAL '1 hour')
                     """
                 ),
                 {
@@ -94,8 +115,10 @@ async def ad_with_state(pg_engine: AsyncEngine):
                     "st": initial_state,
                     "stg": stage,
                     "tok": uuid.uuid4(),
+                    "scan_id": scan_id,
                 },
             )
+        await finish_complete_test_scan(pg_engine, scan_id=scan_id, rows_total=1)
         return fb_ad_id
 
     yield fb_ad_id, _seed
@@ -124,28 +147,52 @@ async def _read_alert_state(pg_engine: AsyncEngine, fb_ad_id: str) -> str:
     return row[0] if row else "<none>"
 
 
-async def _run_one(pg_engine, payload: MetaMutationPayload, *, idem: str, monkeypatch) -> None:
+async def _run_one(
+    pg_engine,
+    payload: MetaMutationPayload,
+    *,
+    idem: str,
+    requested_by: str,
+    lane: str,
+    monkeypatch,
+) -> None:
     """create pending → claim → process_one_task с мок-success dispatch."""
     await create_mutation_task(
         pg_engine,
         payload=payload,
-        requested_by="bot_auto_stop",
+        requested_by=requested_by,
         status="pending",
         idempotency_key=idem,
     )
-    claim = await claim_pending_task(pg_engine)
+    claim = await claim_browser_ready_mutation_task(pg_engine, lanes=(lane,))
     assert claim.task is not None
 
     async def _fake_dispatch(client, p):
-        # H2: для bulk_status_change modified_ids = реальные ad_ids из params (а не
-        # синтетический target_id типа "autostart:1"), иначе _sync_bulk отфильтрует всё.
+        # For bulk_status_change, terminal projection must receive the exact IDs
+        # confirmed by Meta rather than the synthetic queue target.
         if p.mutation_kind == "bulk_status_change":
             params = p.params or {}
-            ad_ids = params.get("ad_ids") or params.get("object_ids") or []
+            ad_ids = params.get("ad_ids") or []
             modified_ids = [str(x).strip() for x in ad_ids if str(x).strip()]
         else:
             modified_ids = [p.target_id]
-        return {"success": True, "graph_response": {"ok": True}, "modified_ids": modified_ids}
+        result = {
+            "success": True,
+            "graph_response": {"ok": True},
+            "modified_ids": modified_ids,
+        }
+        if p.mutation_kind == "bulk_status_change":
+            result.update(
+                {
+                    "succeeded": len(modified_ids),
+                    "failed": 0,
+                    "sub_results": [
+                        {"id": object_id, "success": True, "code": 200}
+                        for object_id in modified_ids
+                    ],
+                }
+            )
+        return result
 
     import apps.meta_api_worker.main as worker_main
 
@@ -160,9 +207,16 @@ async def test_pause_ad_success_sets_disabled(pg_engine, ad_with_state, monkeypa
     await seed("stop_sent")
 
     payload = MetaMutationPayload(
-        mutation_kind="pause_ad", target_id=fb_ad_id, params={}, ad_account_id=None
+        mutation_kind="pause_ad", target_id=fb_ad_id, params={}, ad_account_id="123"
     )
-    await _run_one(pg_engine, payload, idem=f"auto:pause_ad:{fb_ad_id}:t1", monkeypatch=monkeypatch)
+    await _run_one(
+        pg_engine,
+        payload,
+        idem=f"auto:pause_ad:{fb_ad_id}:t1",
+        requested_by="bot_auto_stop",
+        lane="money",
+        monkeypatch=monkeypatch,
+    )
 
     assert await _read_alert_state(pg_engine, fb_ad_id) == "disabled"
 
@@ -174,44 +228,41 @@ async def test_activate_ad_success_sets_normal(pg_engine, ad_with_state, monkeyp
     await seed("disabled")
 
     payload = MetaMutationPayload(
-        mutation_kind="activate_ad", target_id=fb_ad_id, params={}, ad_account_id=None
+        mutation_kind="activate_ad", target_id=fb_ad_id, params={}, ad_account_id="123"
     )
     await _run_one(
-        pg_engine, payload, idem=f"auto:activate_ad:{fb_ad_id}:t1", monkeypatch=monkeypatch
+        pg_engine,
+        payload,
+        idem=f"owner-confirmed:activate_ad:{fb_ad_id}:t1",
+        requested_by="operator:web:owner",
+        lane="interactive",
+        monkeypatch=monkeypatch,
     )
 
     assert await _read_alert_state(pg_engine, fb_ad_id) == "normal"
 
 
-# bulk activate (autostart) success → каждый ad из ad_ids переходит в normal
+# Owner-confirmed bulk activate success → каждый ad из ad_ids переходит в normal
 @pytest.mark.asyncio
-async def test_bulk_activate_sets_normal(pg_engine, ad_with_state, monkeypatch) -> None:
+async def test_owner_confirmed_bulk_activate_sets_normal(
+    pg_engine, ad_with_state, monkeypatch
+) -> None:
     fb_ad_id, seed = ad_with_state
     await seed("disabled")
 
     payload = MetaMutationPayload(
         mutation_kind="bulk_status_change",
-        target_id="autostart:1",
+        target_id="owner-confirmed:1",
         params={"ad_ids": [fb_ad_id], "action": "activate"},
-        ad_account_id=None,
+        ad_account_id="123",
     )
-    await _run_one(pg_engine, payload, idem=f"autostart:bulk:{fb_ad_id}", monkeypatch=monkeypatch)
+    await _run_one(
+        pg_engine,
+        payload,
+        idem=f"owner-confirmed:bulk:{fb_ad_id}",
+        requested_by="operator:web:owner",
+        lane="bulk",
+        monkeypatch=monkeypatch,
+    )
 
     assert await _read_alert_state(pg_engine, fb_ad_id) == "normal"
-
-
-# pause_campaign success → ad_alert_state НЕ трогается (у кампаний нет ad-state)
-@pytest.mark.asyncio
-async def test_pause_campaign_does_not_touch_ad_state(
-    pg_engine, ad_with_state, monkeypatch
-) -> None:
-    fb_ad_id, seed = ad_with_state
-    await seed("stop_sent")
-
-    payload = MetaMutationPayload(
-        mutation_kind="pause_campaign", target_id="999888777", params={}, ad_account_id=None
-    )
-    await _run_one(pg_engine, payload, idem=f"manual:pausecmp:{fb_ad_id}", monkeypatch=monkeypatch)
-
-    # ad остался в stop_sent — кампанийная mutation не должна была его двигать
-    assert await _read_alert_state(pg_engine, fb_ad_id) == "stop_sent"

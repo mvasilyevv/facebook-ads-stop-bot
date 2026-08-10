@@ -3,29 +3,32 @@
 
 `build_campaign_spec(config)` — чистая функция без I/O: разворачивает CampaignConfig
 в план объектов (campaign → adsets → ads) с отрендеренными именами, телами Graph API
-и статусами по launch_state. Используется для dry-run/validate (UI-превью) и как
-вход для воркера-исполнителя.
+и единым fail-closed статусом PAUSED. Используется для dry-run/validate
+(UI-превью) и как вход для воркера-исполнителя.
 
-Тела объектов (campaign/adset/creative/ad) — порт из `scripts/fb_launch.py` без форка
-логики. Канал исполнения (ExecuteGraphCall через Vision + MediaUploader) живёт в воркере;
-здесь только спека и параметризованный порядок шагов.
+Тела объектов (campaign/adset/creative/ad) определены здесь как единый канонический
+контракт. Канал исполнения (ExecuteGraphCall через Vision + MediaUploader) живёт
+в воркере; здесь только спека и параметризованный порядок шагов.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Final, Literal
 
 from core.campaign_builder.config import (
     CampaignBlock,
     CampaignConfig,
-    LaunchState,
 )
 from core.campaign_builder.naming import render_name
 from core.campaign_builder.uniquify import block_code_span, build_code_layout
 
 # ---------------------- спека (план объектов) ----------------------
+
+CreationPolicy = Literal["all_paused"]
+ALL_PAUSED_CREATION_POLICY: Final[CreationPolicy] = "all_paused"
+CREATED_OBJECT_STATUS: Final = "PAUSED"
 
 
 @dataclass(frozen=True)
@@ -34,7 +37,7 @@ class AdSpec:
 
     code: str  # OFFER_CRxxx, идёт в имя ad/creative и sub3
     url_tags: str
-    status: str  # ACTIVE | PAUSED по launch_state
+    status: str  # всегда PAUSED до отдельного ручного review
 
 
 @dataclass(frozen=True)
@@ -63,17 +66,9 @@ class CampaignSpec:
     """Полный план запуска (все кампании конфига)."""
 
     offer_code: str
-    launch_state: LaunchState
+    creation_policy: CreationPolicy
     copies_per_concept: int
     campaigns: list[CampaignSpec_Block] = field(default_factory=list)
-
-
-# ---------------------- статусы по launch_state ----------------------
-
-
-def _child_status(launch_state: LaunchState) -> str:
-    """Статус adset'ов и ads: ACTIVE при campaign_paused, иначе PAUSED."""
-    return "ACTIVE" if launch_state == LaunchState.CAMPAIGN_PAUSED else "PAUSED"
 
 
 # ---------------------- тела объектов (Graph API) ----------------------
@@ -84,19 +79,19 @@ def campaign_body(cfg: CampaignConfig, name: str) -> dict:
     body = {
         "name": name,
         "objective": cfg.objective,
-        "status": "PAUSED",
+        "status": CREATED_OBJECT_STATUS,
         "special_ad_categories": cfg.special_ad_categories,
     }
     if cfg.budget.level == "campaign":  # CBO: бюджет+стратегия на кампании
-        body["daily_budget"] = cfg.budget.daily_cents
+        body["daily_budget"] = cfg.budget.daily_minor_units
         body["bid_strategy"] = cfg.budget.bid_strategy
         # bid_amount (cost/bid cap) — поле adset'а, НЕ кампании: Meta его на кампании
         # игнорирует, и adset под COST_CAP-кампанией без bid_amount падает «Invalid parameter».
     return body
 
 
-def adset_body(cfg: CampaignConfig, name: str, status: str) -> dict:
-    """Тело adset. campaign_id подставляется на исполнении (batch JSONPath / id)."""
+def adset_body(cfg: CampaignConfig, name: str) -> dict:
+    """Тело PAUSED adset. campaign_id подставляется на исполнении."""
     body: dict = {
         "name": name,
         "billing_event": "IMPRESSIONS",
@@ -123,17 +118,17 @@ def adset_body(cfg: CampaignConfig, name: str, status: str) -> dict:
             },
         },
         "start_time": cfg.start_time,
-        "status": status,
+        "status": CREATED_OBJECT_STATUS,
     }
     if cfg.budget.level == "adset":  # ABO: бюджет+стратегия+cap на адсете
-        body["daily_budget"] = cfg.budget.daily_cents
+        body["daily_budget"] = cfg.budget.daily_minor_units
         body["bid_strategy"] = cfg.budget.bid_strategy
-        if cfg.budget.bid_amount_cents:
-            body["bid_amount"] = cfg.budget.bid_amount_cents
-    elif cfg.budget.bid_amount_cents:
+        if cfg.budget.bid_minor_units is not None:
+            body["bid_amount"] = cfg.budget.bid_minor_units
+    elif cfg.budget.bid_minor_units is not None:
         # CBO: бюджет+стратегия на кампании, но cap (bid_amount) — поле adset'а.
         # Без него COST_CAP/BID_CAP adset падает «Invalid parameter» (subcode 1815857).
-        body["bid_amount"] = cfg.budget.bid_amount_cents
+        body["bid_amount"] = cfg.budget.bid_minor_units
     return body
 
 
@@ -205,13 +200,13 @@ def video_creative_body(
     }
 
 
-def ad_body(name: str, adset_id: str, creative_id: str, status: str) -> dict:
-    """Тело ad (adset_id и creative_id подставляются на исполнении)."""
+def ad_body(name: str, adset_id: str, creative_id: str) -> dict:
+    """Тело PAUSED ad (adset_id и creative_id подставляются на исполнении)."""
     return {
         "name": name,
         "adset_id": adset_id,
         "creative": {"creative_id": creative_id},
-        "status": status,
+        "status": CREATED_OBJECT_STATUS,
     }
 
 
@@ -225,8 +220,8 @@ def _ensure_ad_id_url_tag(template: str) -> str:
     if _SUB8_QUERY_KEY_RE.search(normalized):
         return normalized
 
-    # Preserve a legacy fragment and insert the tracking key before it instead
-    # of accidentally turning it into part of the fragment value.
+    # Preserve an existing URL fragment and insert the tracking key before it
+    # instead of accidentally turning it into part of the fragment value.
     base, fragment_marker, fragment = normalized.partition("#")
     separator = "" if not base or base.endswith(("?", "&")) else "&"
     return f"{base}{separator}{_AD_ID_URL_TAG}{fragment_marker}{fragment}"
@@ -270,7 +265,6 @@ def _build_block(
     code_start — смещение нумерации для этого блока (накопленное по предыдущим блокам),
     чтобы коды были глобально уникальны в заливе (см. build_campaign_spec).
     """
-    child_status = _child_status(cfg.launch_state)
     camp_name = render_name(
         block.name, byer=cfg.byer_tag, offer=cfg.offer_code, date_label=cfg.date_label
     )
@@ -291,14 +285,14 @@ def _build_block(
         )
         codes = layout[adset_index] if adset_index < len(layout) else []
         ads = [
-            AdSpec(code=code, url_tags=url_tags_of(cfg, code), status=child_status)
+            AdSpec(code=code, url_tags=url_tags_of(cfg, code), status=CREATED_OBJECT_STATUS)
             for code in codes
         ]
         adsets.append(
             AdsetSpec(
                 name=adset_name,
-                body=adset_body(cfg, adset_name, child_status),
-                status=child_status,
+                body=adset_body(cfg, adset_name),
+                status=CREATED_OBJECT_STATUS,
                 ads=ads,
             )
         )
@@ -307,15 +301,12 @@ def _build_block(
         key=block.key,
         name=camp_name,
         body=campaign_body(cfg, camp_name),
-        status="PAUSED",
+        status=CREATED_OBJECT_STATUS,
         adsets=adsets,
     )
 
 
-def build_campaign_spec(
-    cfg: CampaignConfig,
-    concept_counts: Mapping[str, int] | None = None,
-) -> CampaignSpec:
+def build_campaign_spec(cfg: CampaignConfig) -> CampaignSpec:
     """Чистая функция: CampaignConfig → план объектов (для dry-run/validate/воркера).
 
     Раскладка K концептов × N adset'ов (= число adset'ов блока): total ads = K×N,
@@ -323,11 +314,9 @@ def build_campaign_spec(
     раскладка применяется исполнителем (build_uniquification_plan через общий
     build_code_layout) — превью побитово совпадает с заливом (money-инвариант HIGH-1).
 
-    concept_counts — число концептов K по каждому блоку (ключ = block.key). Когда задан
-    (validate/launch знают, сколько файлов загружено), превью показывает ИСТИННУЮ
-    раскладку залива. Когда None — фолбэк: предполагается 1 концепт на блок (adset i = 1
-    ad, коды сквозные CR001..CR_N, БЕЗ дубля CR001 в разных adset). Фолбэк занижает
-    число ads, если концептов реально больше одного, но НЕ врёт кодами.
+    Единственный источник количества концептов — ``block.concept_refs``. Пустой
+    блок отклоняется: превью не имеет права придумывать один концепт, которого нет,
+    иначе подтверждённый оператором план расходится с фактическим заливом.
 
     Нумерация кодов СКВОЗНАЯ по всему заливу: блок B продолжает с номера, на котором
     кончился блок A (накопление block_code_span). Иначе sub3=CRxxx коллизирует между
@@ -343,7 +332,9 @@ def build_campaign_spec(
     code_start = cfg.code_start  # база сквозной нумерации (per-offer на launch)
     for index, block in enumerate(cfg.campaigns):
         copies = len(block.adsets)  # число adset-слотов = adset'ы блока (как исполнитель)
-        concept_count = concept_counts.get(block.key, 1) if concept_counts is not None else 1
+        concept_count = len(block.concept_refs)
+        if concept_count < 1:
+            raise ValueError(f"campaign block {block.key!r} has no concept_refs")
         if index == 0:
             reported_copies = copies
         blocks.append(_build_block(cfg, block, copies, concept_count, code_start=code_start))
@@ -351,7 +342,7 @@ def build_campaign_spec(
 
     return CampaignSpec(
         offer_code=cfg.offer_code,
-        launch_state=cfg.launch_state,
+        creation_policy=ALL_PAUSED_CREATION_POLICY,
         copies_per_concept=reported_copies,
         campaigns=blocks,
     )
@@ -369,7 +360,7 @@ def total_code_span(cfg: CampaignConfig) -> int:
 #
 # Реальный I/O (ExecuteGraphCall через Vision + MediaUploader) живёт в воркере
 # (Волна 2). Здесь — чистый, тестируемый план шагов: фиксирует порядок
-# campaign → adsets → upload media → creatives → ads и статусы по launch_state.
+# campaign → adsets → upload media → creatives → ads; все создаваемые объекты PAUSED.
 # Воркер итерирует по этим шагам, подставляя реальные Meta-ID между батчами.
 
 
@@ -383,22 +374,22 @@ class ExecStep:
 
     kind: str  # один из EXEC_STEP_ORDER
     campaign_key: str
-    status: str  # статус создаваемых объектов на этом шаге (PAUSED/ACTIVE/"" для upload)
+    status: str  # PAUSED для создаваемых объектов, "" для upload/creative
 
 
 def plan_execution_steps(spec: CampaignSpec) -> list[ExecStep]:
     """Чистый план шагов исполнения по спеке (без I/O).
 
     Для каждой кампании порядок строго: campaign → adsets → upload → creatives →
-    ads. campaign всегда PAUSED, adsets/ads — по launch_state (ACTIVE при
-    campaign_paused). upload media статуса не имеет.
+    ads. campaign/adsets/ads всегда PAUSED; upload/creative статуса не имеют.
     """
     steps: list[ExecStep] = []
     for block in spec.campaigns:
-        child_status = block.adsets[0].status if block.adsets else _child_status(spec.launch_state)
-        steps.append(ExecStep(kind="campaign", campaign_key=block.key, status="PAUSED"))
-        steps.append(ExecStep(kind="adsets", campaign_key=block.key, status=child_status))
+        steps.append(
+            ExecStep(kind="campaign", campaign_key=block.key, status=CREATED_OBJECT_STATUS)
+        )
+        steps.append(ExecStep(kind="adsets", campaign_key=block.key, status=CREATED_OBJECT_STATUS))
         steps.append(ExecStep(kind="upload", campaign_key=block.key, status=""))
         steps.append(ExecStep(kind="creatives", campaign_key=block.key, status=""))
-        steps.append(ExecStep(kind="ads", campaign_key=block.key, status=child_status))
+        steps.append(ExecStep(kind="ads", campaign_key=block.key, status=CREATED_OBJECT_STATUS))
     return steps

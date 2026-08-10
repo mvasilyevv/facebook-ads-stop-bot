@@ -1,0 +1,92 @@
+# Run on each application host when the central monitoring stack is off-host.
+# The ingest URLs must be private (Tailscale/WireGuard/VPC), never public HTTP.
+
+name: fb_agent_telemetry_agent
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
+x-inventory-labels: &inventory-labels
+  com.fb-agent.managed: "true"
+  com.fb-agent.cluster-id: ${FB_AGENT_BOOTSTRAP_CLUSTER_ID:?set FB_AGENT_BOOTSTRAP_CLUSTER_ID}
+  com.fb-agent.purpose: telemetry
+  com.fb-agent.release: ${FB_AGENT_TELEMETRY_RELEASE_ID:?set FB_AGENT_TELEMETRY_RELEASE_ID}
+
+services:
+  node-exporter:
+    image: ${NODE_EXPORTER_IMAGE:?set NODE_EXPORTER_IMAGE to image@sha256}
+    restart: unless-stopped
+    command:
+      - '--path.rootfs=/host'
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.textfile.directory=/var/lib/node_exporter/textfile_collector'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|var/lib/docker)($$|/)'
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+      - /var/lib/node_exporter/textfile_collector:/var/lib/node_exporter/textfile_collector:ro
+    networks: [telemetry]
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    labels: *inventory-labels
+
+  cadvisor:
+    image: ${CADVISOR_IMAGE:?set CADVISOR_IMAGE to image@sha256}
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks: [telemetry]
+    logging: *logging
+    labels: *inventory-labels
+
+  alloy-agent:
+    image: ${ALLOY_IMAGE:?set ALLOY_IMAGE to image@sha256}
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    env_file: ${ALLOY_AGENT_ENV_FILE:-.env.agent}
+    extra_hosts:
+      # Same-host monitoring resolves this to Docker's host gateway. Off-host
+      # deployments simply do not use the name.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./alloy/agent.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_agent_data:/var/lib/alloy/data
+    networks:
+      telemetry:
+      platform:
+        aliases: ["${ALLOY_AGENT_NETWORK_ALIAS:-alloy-agent}"]
+    ports:
+      - "127.0.0.1:${ALLOY_AGENT_HOST_PORT:-12345}:12345"
+    expose:
+      - "4317"
+      - "4318"
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    labels: *inventory-labels
+
+networks:
+  telemetry:
+  platform:
+    name: fb_agent_safety_first_platform
+    external: true
+
+volumes:
+  alloy_agent_data:

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.adset_pro.queries import (
@@ -20,7 +21,23 @@ from core.adset_pro.queries import (
     load_external_registrations_batch,
 )
 from core.cabinet_day import is_cabinet_day_reset_scan
-from core.observer.enable_grace import EnableGrace, grace_is_active
+from core.meta_api.account_tz import (
+    resolve_required_account_currency,
+    resolve_required_cabinet_day,
+)
+from core.meta_api.identity import require_ad_account_id
+from core.money import (
+    InvalidCurrencyAmountError,
+    currency_exponent,
+    require_currency_exponent,
+    validated_currency_code,
+)
+from core.observer.cabinet_supervisor import CabinetLease
+from core.observer.enable_grace import (
+    EnableGrace,
+    clear_enable_grace_for_currency_mismatch,
+    grace_is_active,
+)
 from core.observer.queries import (
     OfferRules,
     campaign_matches_owner,
@@ -38,7 +55,6 @@ from core.observer.writers import (
     apply_fsm_transition,
     insert_metrics,
     mark_disabled_when_offline,
-    maybe_create_disable_task,
     reopen_reactivated_alert_state,
     upsert_catalog_hierarchy,
 )
@@ -47,6 +63,35 @@ from core.rules.types import RuleContext, RuleEvaluation
 from core.scanner.models import ScannedAdRow
 
 logger = logging.getLogger(__name__)
+
+
+class MissingOfferCpaError(ValueError):
+    """The matched offer has no safe monetary baseline for rule evaluation."""
+
+
+class InvalidOfferSensitivityError(ValueError):
+    """The matched offer has no safe, complete sensitivity configuration."""
+
+
+class OfferCurrencyMismatchError(ValueError):
+    """The offer rule currency is absent or differs from the Meta cabinet."""
+
+
+async def _database_cycle_timestamp(engine: AsyncEngine) -> datetime:
+    """Return the authoritative boundary for one observer cycle.
+
+    Tracker projection timestamps are written by PostgreSQL. Using the Python
+    host clock as the exclusive query boundary can therefore hide an already
+    committed event when the database clock is even slightly ahead, producing
+    a false no-deposit auto-stop. Keep explicit timestamps for deterministic
+    callers, but source the production default from the same clock that owns
+    the persisted evidence.
+    """
+    async with engine.connect() as conn:
+        observed_at = (await conn.execute(text("SELECT clock_timestamp()"))).scalar_one()
+    if getattr(observed_at, "tzinfo", None) is None:
+        raise RuntimeError("PostgreSQL returned an invalid timezone-aware cycle timestamp")
+    return observed_at.astimezone(timezone.utc)
 
 
 def with_effective_tracker_registrations(
@@ -78,9 +123,12 @@ class CycleResult:
     disable_tasks_created: int = 0
     # Кейс куратора: строки, где срабатывания правил подавлены активным enable-grace.
     rows_grace_suppressed: int = 0
+    # Any row-level persistence/evaluation failure makes the cabinet snapshot
+    # partial. It must never be reported fresh/healthy after silently skipping
+    # a row that could have changed a money decision.
+    row_errors: list[str] = field(default_factory=list)
+    currency_mismatch_offers: list[str] = field(default_factory=list)
     transitions: list[str] = field(default_factory=list)
-    # fb_ad_ids, для которых выполнен тихий sync инцидента → disabled (ад уже OFF в Meta)
-    synced_offline_disabled: list[str] = field(default_factory=list)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
 
@@ -88,6 +136,8 @@ class CycleResult:
 def build_rule_context(
     offer: OfferRules,
     *,
+    account_currency: str,
+    currency_exponent: int,
     external_deposits: int = 0,
     frequency_current: Decimal | None = None,
     impressions: int | None = None,
@@ -95,15 +145,17 @@ def build_rule_context(
 ) -> RuleContext:
     """OfferRules → RuleContext с минимальным набором параметров.
 
-    cpa_amount = cpa_threshold из offer_rules; если не задан — Decimal('100') как
-    нейтральный default чтобы правила не падали по делению на ноль. Без adaptive.
+    cpa_amount = cpa_threshold из offer_rules. NULL, non-finite и неположительное
+    значение fail-closed: без подтверждённого monetary baseline правила нельзя
+    ни вычислять, ни превращать в auto-pause.
     external_deposits — из AdSet.pro трекера, защищают от STOP при наличии депозита,
     которого Meta Ads Manager ещё не видит.
 
     frequency-anomaly (правило 7, #37) — opt-in per-offer через offer.frequency_threshold:
     NULL/0 → правило выключено для этого оффера; задан → stop-порог = frequency_threshold,
-    warning — свёртка 80% (как у CPC/CPL/CPR). Только абсолютный порог, без истории роста
-    за час (поле frequency_1h_ago удалено из RuleContext как мёртвое — см. core/rules/types.py).
+    warning — подтверждённый per-offer процент от stop (как у CPC/CPL/CPR).
+    Только абсолютный порог, без истории роста за час (поле frequency_1h_ago удалено
+    из RuleContext как мёртвое — см. core/rules/types.py).
 
     impressions/reach: кладём в RuleContext ВСЕГДА — для диагностики и будущих правил.
     Гейты-минимумы по показам/охвату УБРАНЫ (решение байера): guardrail (cpc/cpl/cpr при
@@ -111,17 +163,34 @@ def build_rule_context(
     (перекрут вреднее статистической нерепрезентативности). От шумового выброса частоты на
     старте (freq 50-100 при крошечном reach) защищает только frequency_outlier_cap.
     """
-    # LOW (аудит 02.07): `or` (не `if is None`) осознан — трактует и None, И 0 как
-    # "порог не задан" → нейтральный default. Это НЕ money-баг: cpa_amount=0 в правилах
-    # означает мгновенный STOP всего (любой расход/CPC/CPL превышает 0% от базы) —
-    # опаснее дефолта 100. Вход теперь заперт на уровне API (OfferRuleUpsertIn.cpa_threshold
-    # gt=0, apps/api/routers/v1/schemas/offers.py) — 0 просто не долетает сюда с формы.
-    # Этот фолбэк остаётся как последний рубеж (прямые записи в БД в обход API).
-    cpa = offer.cpa_threshold or Decimal("100")
-    # Чувствительность per-offer: при каком % правила срабатывает стоп/ворнинг.
-    # Дефолт 80/80 (как было захардкожено) при отсутствии offer_rules-строки.
-    warning_pct = offer.warning_percent_of_stop or Decimal("80")
-    stop_pct = offer.stop_percent_of_rule or Decimal("80")
+    cpa = offer.cpa_threshold
+    if cpa is None or not cpa.is_finite() or cpa <= 0:
+        raise MissingOfferCpaError(f"offer {offer.code!r} has no positive finite cpa_threshold")
+    account_currency, currency_exponent = require_currency_exponent(
+        account_currency,
+        currency_exponent,
+    )
+    offer_currency = validated_currency_code(offer.currency)
+    if offer_currency != account_currency:
+        raise OfferCurrencyMismatchError(
+            f"offer {offer.code!r} currency {offer.currency!r} "
+            f"does not match cabinet {account_currency!r}"
+        )
+    warning_pct = offer.warning_percent_of_stop
+    stop_pct = offer.stop_percent_of_rule
+    if (
+        warning_pct is None
+        or stop_pct is None
+        or not warning_pct.is_finite()
+        or not stop_pct.is_finite()
+        or warning_pct <= 0
+        or warning_pct > 100
+        or stop_pct <= 0
+        or stop_pct > 100
+    ):
+        raise InvalidOfferSensitivityError(
+            f"offer {offer.code!r} has no confirmed sensitivity configuration"
+        )
 
     freq_threshold = offer.frequency_threshold
     freq_enabled = freq_threshold is not None and freq_threshold > 0
@@ -133,18 +202,25 @@ def build_rule_context(
         freq_stop = Decimal("3.5")
         freq_warning = Decimal("2.5")
 
-    return RuleContext(
-        cpa_amount=cpa,
-        warning_percent_of_stop=warning_pct,
-        stop_percent_of_base=stop_pct,
-        external_deposits=external_deposits,
-        frequency_anomaly_enabled=freq_enabled,
-        frequency_current=frequency_current if freq_enabled else None,
-        frequency_stop_threshold=freq_stop,
-        frequency_warning_threshold=freq_warning,
-        impressions=impressions,
-        reach=reach,
-    )
+    try:
+        return RuleContext(
+            currency=account_currency,
+            currency_exponent=currency_exponent,
+            cpa_amount=cpa,
+            warning_percent_of_stop=warning_pct,
+            stop_percent_of_base=stop_pct,
+            external_deposits=external_deposits,
+            frequency_anomaly_enabled=freq_enabled,
+            frequency_current=frequency_current if freq_enabled else None,
+            frequency_stop_threshold=freq_stop,
+            frequency_warning_threshold=freq_warning,
+            impressions=impressions,
+            reach=reach,
+        )
+    except InvalidCurrencyAmountError as exc:
+        raise MissingOfferCpaError(
+            f"offer {offer.code!r} has invalid CPA precision for {account_currency}"
+        ) from exc
 
 
 def _row_to_metrics_dict(row: ScannedAdRow) -> dict[str, Any]:
@@ -199,9 +275,8 @@ async def process_scan_rows(
     scan_id: int | None = None,
     cycle_ts: datetime | None = None,
     owner_tag: str | None = None,
-    ad_account_id: str | None = None,
-    enable_grace_map: dict[str, EnableGrace] | None = None,
-    tracker_day_start: datetime | None = None,
+    ad_account_id: str,
+    cabinet_lease: CabinetLease | None = None,
 ) -> CycleResult:
     """Один scan-цикл. Идемпотентен по (ad_id, cycle_ts) и (idempotency_key).
 
@@ -209,31 +284,38 @@ async def process_scan_rows(
         rows: список ScannedAdRow которые пришли от scanner gRPC.
         scan_id: монотонный счётчик (для аналитики и связи с alert_events).
         cycle_ts: общий timestamp цикла — используется в ad_metrics + alert_events.
-                   Дефолт — NOW.
+                   Дефолт — PostgreSQL clock_timestamp(), чтобы граница и
+                   persisted tracker evidence жили на одном clock source.
         owner_tag: owner-scoping. Если задан — строки кампаний без этого тега
                    полностью игнорируются (не пишем метрики, не оцениваем правила,
                    не дизейблим). NULL — фильтр выключен. Защита от работы с чужими
                    кампаниями в общем рекламном кабинете.
-        ad_account_id: кабинет, из которого пришли строки (мульти-кабинет);
-                   пишется в fb_campaigns.ad_account_id. None — fallback-скан без
-                   привязки (существующие значения в каталоге не затираются).
-        enable_grace_map: карта fb_ad_id → EnableGrace (кейс куратора «держать до
-                   цены лида»): под активным grace срабатывания правил подавляются
-                   целиком (без алерта и без авто-стопа) до истечения времени или
-                   спенд-капа. Загружается вызывающим один раз на цикл. None — выкл.
-        tracker_day_start: начало текущих суток кабинета в UTC. Tracker registration/
-                   deposit merge использует интервал [tracker_day_start, cycle_ts),
-                   а не скользящие 24 часа. None — UTC-полночь для legacy callers.
+        ad_account_id: обязательный кабинет, из которого пришли строки;
+                   пишется в fb_campaigns.ad_account_id.
+        Cabinet-day timezone and durable enable-grace are resolved from
+                   PostgreSQL. Missing/invalid IANA timezone raises before any
+                   metric, FSM, incident or money-task write.
 
     Returns:
         CycleResult с метриками цикла.
     """
     if cycle_ts is None:
-        cycle_ts = datetime.now(timezone.utc)
-    if tracker_day_start is None:
-        tracker_day_start = cycle_ts.replace(hour=0, minute=0, second=0, microsecond=0)
-    if tracker_day_start > cycle_ts:
-        raise ValueError("tracker_day_start must not be later than cycle_ts")
+        cycle_ts = await _database_cycle_timestamp(engine)
+    if cycle_ts.tzinfo is None:
+        raise ValueError("cycle_ts must be timezone-aware")
+    ad_account_id = require_ad_account_id(ad_account_id)
+    cabinet_day = await resolve_required_cabinet_day(
+        engine,
+        account_id=ad_account_id,
+        now=cycle_ts,
+    )
+    account_currency = await resolve_required_account_currency(
+        engine,
+        account_id=ad_account_id,
+        now=cycle_ts,
+    )
+    account_currency_exponent = currency_exponent(account_currency)
+    tracker_day_start = cabinet_day.starts_at
 
     result = CycleResult(scan_id=scan_id, rows_total=len(rows))
 
@@ -283,14 +365,18 @@ async def process_scan_rows(
                 result=result,
                 owner_tag=owner_tag,
                 ad_account_id=ad_account_id,
+                account_currency=account_currency,
+                account_currency_exponent=account_currency_exponent,
                 is_cabinet_reset=is_cabinet_reset,
-                enable_grace_map=enable_grace_map,
+                cabinet_day_start=tracker_day_start,
+                cabinet_lease=cabinet_lease,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "observer: ошибка обработки fb_ad_id=%s, продолжаю остальные",
                 row.fb_ad_id,
             )
+            result.row_errors.append(f"{row.fb_ad_id}:{type(exc).__name__}")
 
     result.finished_at = datetime.now(timezone.utc)
     return result
@@ -307,12 +393,19 @@ async def _process_one_row(
     cycle_ts: datetime,
     result: CycleResult,
     owner_tag: str | None = None,
-    ad_account_id: str | None = None,
+    ad_account_id: str,
+    account_currency: str,
+    account_currency_exponent: int,
     is_cabinet_reset: bool = False,
     external_registrations: dict[str, int] | None = None,
-    enable_grace_map: dict[str, EnableGrace] | None = None,
+    cabinet_day_start: datetime,
+    cabinet_lease: CabinetLease | None = None,
 ) -> None:
     """Обработка одной строки. Вынесено отдельно ради читаемости + try/except в caller'е."""
+
+    # Production actors pass the fence into every write transaction. Tests may
+    # omit only the lease, never the cabinet identity.
+    fence_kwargs = {"cabinet_lease": cabinet_lease} if cabinet_lease is not None else {}
 
     # Meta and AdSet.pro may report the same registration with different delay.
     # Keep the immutable scanner DTO and use the confirmed maximum, never a sum.
@@ -343,9 +436,9 @@ async def _process_one_row(
             engine,
             fb_ad_id=row.fb_ad_id,
             ad_name=row.ad_name,
-            fb_adset_id=None,
+            fb_adset_id=row.adset_id,
             adset_name=row.adset_name,
-            fb_campaign_id=row.campaign_id or None,
+            fb_campaign_id=row.campaign_id,
             campaign_name=row.campaign_name,
             offer_id=None,
             delivery_status=row.delivery_status,
@@ -357,16 +450,19 @@ async def _process_one_row(
             adset_lifetime_budget=row.adset_lifetime_budget,
             adset_budget_remaining=row.adset_budget_remaining,
             adset_learning_stage=row.adset_learning_stage,
+            **fence_kwargs,
         )
         if await insert_metrics(
             engine,
             ad_id=ad_id,
             cycle_ts=cycle_ts,
             scan_id=scan_id,
+            currency=account_currency,
             metrics=_row_to_metrics_dict(row),
+            **fence_kwargs,
         ):
             return
-        return
+        raise RuntimeError("ad_metrics_insert_failed")
 
     result.rows_with_offer += 1
 
@@ -375,9 +471,9 @@ async def _process_one_row(
         engine,
         fb_ad_id=row.fb_ad_id,
         ad_name=row.ad_name,
-        fb_adset_id=None,
+        fb_adset_id=row.adset_id,
         adset_name=row.adset_name,
-        fb_campaign_id=row.campaign_id or None,
+        fb_campaign_id=row.campaign_id,
         campaign_name=row.campaign_name,
         offer_id=matched_offer.offer_id,
         delivery_status=row.delivery_status,
@@ -389,16 +485,67 @@ async def _process_one_row(
         adset_lifetime_budget=row.adset_lifetime_budget,
         adset_budget_remaining=row.adset_budget_remaining,
         adset_learning_stage=row.adset_learning_stage,
+        **fence_kwargs,
     )
 
     # --- Метрики (партиционированная таблица) ---
     metrics = _row_to_metrics_dict(row)
-    await insert_metrics(engine, ad_id=ad_id, cycle_ts=cycle_ts, scan_id=scan_id, metrics=metrics)
+    metrics_inserted = await insert_metrics(
+        engine,
+        ad_id=ad_id,
+        cycle_ts=cycle_ts,
+        scan_id=scan_id,
+        currency=account_currency,
+        metrics=metrics,
+        **fence_kwargs,
+    )
+    if not metrics_inserted:
+        # Never evaluate rules or mutate the FSM from a snapshot that was not
+        # durably recorded. Otherwise a partition/DB failure could create an
+        # auto-pause while the scan itself appeared healthy and unauditable.
+        raise RuntimeError("ad_metrics_insert_failed")
+
+    if matched_offer.currency != account_currency:
+        marker = f"{matched_offer.code}:{matched_offer.currency or 'unknown'}!={account_currency}"
+        if marker not in result.currency_mismatch_offers:
+            result.currency_mismatch_offers.append(marker)
+        raise OfferCurrencyMismatchError(
+            f"offer {matched_offer.code!r} currency "
+            f"{matched_offer.currency!r} does not match cabinet {account_currency!r}"
+        )
+
+    current = states.get(row.fb_ad_id)
+    if (
+        current is not None
+        and current.enable_grace_until is not None
+        and (
+            current.enable_grace_currency != account_currency
+            or current.enable_grace_currency_exponent != account_currency_exponent
+        )
+    ):
+        await clear_enable_grace_for_currency_mismatch(
+            engine,
+            ad_id=current.ad_id,
+            currency=account_currency,
+            currency_exponent=account_currency_exponent,
+            cabinet_lease=cabinet_lease,
+        )
+        current = replace(
+            current,
+            enable_grace_until=None,
+            enable_grace_spend_cap=None,
+            enable_grace_baseline_spend=None,
+            enable_grace_cabinet_day_start=None,
+            enable_grace_currency=None,
+            enable_grace_currency_exponent=None,
+        )
 
     # --- Оценка правил (одна функция возвращает оба уровня severity) ---
     ad_external_deposits = external_deposits.get(row.fb_ad_id, 0) if row.fb_ad_id else 0
     ctx = build_rule_context(
         matched_offer,
+        account_currency=account_currency,
+        currency_exponent=account_currency_exponent,
         external_deposits=ad_external_deposits,
         frequency_current=row.frequency,
         impressions=row.impressions,
@@ -414,11 +561,35 @@ async def _process_one_row(
     # коды ДО decide(): иначе FSM ушёл бы в stop_sent без задачи и после окна grace
     # повторный STOP уже не сработал бы (FSM однонаправленная). Выход из grace —
     # по времени ИЛИ по спенд-капу (~1×CPA) — дальше обычные правила.
-    grace = (enable_grace_map or {}).get(row.fb_ad_id)
+    grace = None
+    if (
+        current is not None
+        and current.enable_grace_until is not None
+        and current.enable_grace_spend_cap is not None
+        and current.enable_grace_baseline_spend is not None
+        and current.enable_grace_cabinet_day_start is not None
+        and current.enable_grace_currency is not None
+        and current.enable_grace_currency_exponent is not None
+    ):
+        grace = EnableGrace(
+            until=current.enable_grace_until,
+            spend_cap=current.enable_grace_spend_cap,
+            baseline_spend=current.enable_grace_baseline_spend,
+            cabinet_day_start=current.enable_grace_cabinet_day_start,
+            currency=current.enable_grace_currency,
+            currency_exponent=current.enable_grace_currency_exponent,
+        )
     if (
         grace is not None
         and (stop_codes or warning_codes)
-        and grace_is_active(grace, now=cycle_ts, spend=row.spend)
+        and grace_is_active(
+            grace,
+            now=cycle_ts,
+            spend=row.spend,
+            cabinet_day_start=cabinet_day_start,
+            currency=account_currency,
+            currency_exponent=account_currency_exponent,
+        )
     ):
         logger.info(
             "observer: enable-grace активен fb_ad_id=%s (до %s, cap=%s, spend=%s) — "
@@ -433,13 +604,16 @@ async def _process_one_row(
         result.rows_grace_suppressed += 1
 
     # --- FSM ---
-    current = states.get(row.fb_ad_id)
     # H3: реактивированный disabled-ад (снова ACTIVE в кабинете — мимо enable-пути) →
     # reopen в normal, иначе FSM застрянет в disabled и повторный STOP не сработает.
     if current and should_reopen_disabled(current.alert_state, row.delivery_status):
         # reopen срабатывает только если ад в disabled дольше кулдауна (защита от лага
         # Meta effective_status на свежем disable). True → реально сброшен в normal.
-        if await reopen_reactivated_alert_state(engine, ad_id=ad_id):
+        if await reopen_reactivated_alert_state(
+            engine,
+            ad_id=ad_id,
+            **fence_kwargs,
+        ):
             logger.info(
                 "observer: reopen disabled→normal (реактивирован ACTIVE) fb_ad_id=%s",
                 row.fb_ad_id,
@@ -448,14 +622,16 @@ async def _process_one_row(
     elif current and should_sync_disabled(current.alert_state, row.delivery_status):
         # Зеркало reopen: ад завис в инциденте, но в Meta уже OFF (наша pause упала или
         # выключили вручную) → штатный fsm_sync не отработал. Приводим FSM к disabled.
-        if await mark_disabled_when_offline(engine, ad_id=ad_id):
+        if await mark_disabled_when_offline(
+            engine,
+            ad_id=ad_id,
+            **fence_kwargs,
+        ):
             logger.info(
                 "observer: sync %s→disabled (ад OFF, fsm_sync не отработал) fb_ad_id=%s",
                 current.alert_state,
                 row.fb_ad_id,
             )
-            # Собираем для нотификации owner'а (отправка в observer_worker — redis там есть).
-            result.synced_offline_disabled.append(row.fb_ad_id)
             # Инцидент закрыт; метрики OFF-ада заморожены — FSM/disable-task дальше не гоняем.
             return
     fsm_input = FsmInput(
@@ -475,16 +651,20 @@ async def _process_one_row(
 
     # --- Persist FSM + event ---
     # Детали сработавших правил (value/threshold) → в alert_events.metrics_json,
-    # чтобы renderer показал «CPL $9.56 (стоп $3.00)» без реконструкции свёрнутых
+    # чтобы renderer показал точное значение и валюту без реконструкции свёрнутых
     # порогов. В ad_metrics не попадает — insert_metrics уже выполнен выше.
     hits_payload = _hits_payload(evaluation)
     metrics_for_event = {**metrics, "_hits": hits_payload} if hits_payload else metrics
-    await apply_fsm_transition(
+    task_id = await apply_fsm_transition(
         engine,
         ad_id=ad_id,
         transition=transition,
         metrics_snapshot=metrics_for_event,
         scan_id=scan_id,
+        fb_ad_id=row.fb_ad_id,
+        ad_account_id=ad_account_id,
+        currency=account_currency,
+        **fence_kwargs,
     )
 
     if transition.emit_alert:
@@ -497,14 +677,8 @@ async def _process_one_row(
     # частота скана — про свежесть данных, а не про нотификации.
     _bump_state_counters(result, transition.new_state)
 
-    # --- Outbox: disable task если auto-stop ---
-    task_id = await maybe_create_disable_task(
-        engine,
-        transition=transition,
-        fb_ad_id=row.fb_ad_id,
-        open_token=transition.new_open_token,
-        ad_account_id=ad_account_id,
-    )
+    # FSM, incident, notification event and auto-pause task commit together in
+    # apply_fsm_transition. There is no crash window between those side effects.
     if task_id is not None:
         result.disable_tasks_created += 1
 

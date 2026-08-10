@@ -8,8 +8,7 @@
 
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -73,6 +72,33 @@ async def test_readyz_returns_200_when_pg_and_redis_ok(pg_engine, fake_redis_cli
     assert payload["ready"] is True
     assert payload["postgres"] is True
     assert payload["redis"] is True
+    assert payload["degraded"] == []
+
+
+@pytest.mark.asyncio
+async def test_readyz_keeps_postgres_control_plane_ready_when_redis_is_down(
+    pg_engine,
+) -> None:
+    unavailable_redis = AsyncMock()
+    unavailable_redis.ping.side_effect = ConnectionError("redis unavailable")
+    app = _make_app_with_overrides(engine=pg_engine, redis=unavailable_redis)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        first = await ac.get("/readyz")
+        cached = await ac.get("/readyz")
+
+    assert first.status_code == 200
+    assert first.json() == {
+        "ready": True,
+        "postgres": True,
+        "redis": False,
+        "degraded": ["redis_unavailable"],
+        "cached": False,
+    }
+    assert cached.status_code == 200
+    assert cached.json()["postgres"] is True
+    assert cached.json()["redis"] is False
+    assert cached.json()["degraded"] == ["redis_unavailable"]
 
 
 # Повторный вызов /readyz в пределах TTL отдаёт результат из кэша.
@@ -90,24 +116,28 @@ async def test_readyz_uses_ttl_cache(pg_engine, fake_redis_client) -> None:
     assert second.json()["ready"] is True
 
 
-async def _set_business_health_online(redis, worker_names: list[str]) -> None:
-    now = datetime.now(UTC).isoformat()
-    for worker_name in worker_names:
-        await redis.set(
-            f"worker:heartbeat:{worker_name}",
-            json.dumps({"worker": worker_name, "ts": now}),
-            ex=60,
-        )
-    await redis.set(
-        "observer:runtime",
-        json.dumps({"status": "running", "updated_at": now}),
-        ex=60,
-    )
-    await redis.set(
-        "meta_api:channel:health",
-        json.dumps({"healthy": True, "probe_ok": True, "checked_at": now}),
-        ex=60,
-    )
+def _durable_scan_state(*, enabled: bool, activity_at: datetime | None) -> dict:
+    return {
+        "enabled": enabled,
+        "last_scan_at": activity_at,
+        "last_scan_outcome": "success" if activity_at else None,
+        "next_scan_at": None,
+        "actors": (
+            [
+                {
+                    "ad_account_id": "123456",
+                    "owner_instance": None,
+                    "lease_expires_at": None,
+                    "stage": "idle",
+                    "last_progress_at": activity_at,
+                    "last_snapshot_at": activity_at,
+                    "error": None,
+                }
+            ]
+            if activity_at
+            else []
+        ),
+    }
 
 
 @pytest.mark.asyncio
@@ -116,14 +146,16 @@ async def test_system_readyz_returns_200_only_for_live_business_contour(
     fake_redis_client,
     monkeypatch,
 ) -> None:
-    expected_workers = ["observer", "browser-agent"]
-    monkeypatch.setenv("EXPECTED_WORKERS", ",".join(expected_workers))
+    now = datetime.now(UTC)
     monkeypatch.setattr(
         health_router,
-        "load_scanning_enabled",
-        AsyncMock(return_value=True),
+        "fetch_operator_scan_state",
+        AsyncMock(return_value=_durable_scan_state(enabled=True, activity_at=now)),
     )
-    await _set_business_health_online(fake_redis_client, expected_workers)
+    monkeypatch.setattr(
+        health_router, "resolve_scan_account_ids", AsyncMock(return_value=["123456"])
+    )
+    monkeypatch.setattr(health_router, "_load_money_task_failures", AsyncMock(return_value=(0, 0)))
 
     app = _make_app_with_overrides(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -134,13 +166,43 @@ async def test_system_readyz_returns_200_only_for_live_business_contour(
         "ready": True,
         "infrastructure_ready": True,
         "overall": "HEALTHY",
-        "workers_online": 2,
-        "workers_expected": 2,
-        "observer_runtime_status": "running",
+        "actors_active": 1,
+        "actors_expected": 1,
         "scanning_enabled": True,
-        "meta_api_channel_status": "ONLINE",
+        "last_scan_at": now.isoformat().replace("+00:00", "Z"),
+        "last_activity_at": now.isoformat().replace("+00:00", "Z"),
+        "stale_money_tasks": 0,
+        "expired_money_tasks": 0,
         "blockers": [],
+        "degraded": [],
     }
+
+
+@pytest.mark.asyncio
+async def test_system_readyz_does_not_consult_optional_redis(
+    pg_engine,
+    monkeypatch,
+) -> None:
+    unavailable_redis = AsyncMock()
+    unavailable_redis.ping.side_effect = ConnectionError("redis unavailable")
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        health_router,
+        "fetch_operator_scan_state",
+        AsyncMock(return_value=_durable_scan_state(enabled=True, activity_at=now)),
+    )
+    monkeypatch.setattr(
+        health_router, "resolve_scan_account_ids", AsyncMock(return_value=["123456"])
+    )
+    monkeypatch.setattr(health_router, "_load_money_task_failures", AsyncMock(return_value=(0, 0)))
+    app = _make_app_with_overrides(engine=pg_engine, redis=unavailable_redis)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/system-readyz")
+
+    assert resp.status_code == 200
+    assert resp.json()["ready"] is True
+    unavailable_redis.ping.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -149,12 +211,16 @@ async def test_system_readyz_reports_offline_business_contour(
     fake_redis_client,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("EXPECTED_WORKERS", "observer,browser-agent")
+    stale_at = datetime.now(UTC) - timedelta(minutes=5)
     monkeypatch.setattr(
         health_router,
-        "load_scanning_enabled",
-        AsyncMock(return_value=True),
+        "fetch_operator_scan_state",
+        AsyncMock(return_value=_durable_scan_state(enabled=True, activity_at=stale_at)),
     )
+    monkeypatch.setattr(
+        health_router, "resolve_scan_account_ids", AsyncMock(return_value=["123456"])
+    )
+    monkeypatch.setattr(health_router, "_load_money_task_failures", AsyncMock(return_value=(0, 0)))
 
     app = _make_app_with_overrides(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -164,9 +230,8 @@ async def test_system_readyz_reports_offline_business_contour(
     assert resp.status_code == 503
     assert payload["infrastructure_ready"] is True
     assert payload["overall"] == "CRITICAL"
-    assert "offline_workers:observer,browser-agent" in payload["blockers"]
-    assert "observer_runtime_missing" in payload["blockers"]
-    assert "meta_api_channel_unknown" in payload["blockers"]
+    assert "stale_cabinet_actors:123456" in payload["blockers"]
+    assert any(item.startswith("scan_snapshot_stale:") for item in payload["blockers"])
 
 
 @pytest.mark.asyncio
@@ -175,13 +240,15 @@ async def test_system_readyz_treats_operator_pause_as_not_business_ready(
     fake_redis_client,
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("EXPECTED_WORKERS", "observer")
     monkeypatch.setattr(
         health_router,
-        "load_scanning_enabled",
-        AsyncMock(return_value=False),
+        "fetch_operator_scan_state",
+        AsyncMock(return_value=_durable_scan_state(enabled=False, activity_at=None)),
     )
-    await _set_business_health_online(fake_redis_client, ["observer"])
+    monkeypatch.setattr(
+        health_router, "resolve_scan_account_ids", AsyncMock(return_value=["123456"])
+    )
+    monkeypatch.setattr(health_router, "_load_money_task_failures", AsyncMock(return_value=(0, 0)))
 
     app = _make_app_with_overrides(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

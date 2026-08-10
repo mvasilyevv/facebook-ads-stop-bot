@@ -20,15 +20,12 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 # Воркер-процессы + mcp, создающие собственный движок (НЕ через core.db.get_engine).
 _WORKER_ENGINE_FILES = [
     "apps/health_watchdog/main.py",
-    "apps/cabinet_scheduler/main.py",
-    "apps/enable_recommendation_worker/main.py",
-    "apps/tracker_aggregator_worker/main.py",
-    "apps/creator_recorder/main.py",
+    "apps/tracker_reconciliation_worker/main.py",
     "apps/digest_scheduler/main.py",
     "apps/reconciler_worker/main.py",
     "apps/cleanup_worker/main.py",
-    "apps/creator_worker/main.py",
-    "apps/telegram_poller/main.py",
+    "apps/telegram_delivery_worker/main.py",
+    "apps/telegram_update_worker/main.py",
     "apps/meta_api_worker/main.py",
     "apps/mcp_server/context.py",
     "apps/observer_worker/main.py",
@@ -55,6 +52,16 @@ def test_make_worker_engine_applies_pool() -> None:
 def test_worker_uses_pool_kwargs(rel: str) -> None:
     src = (_REPO_ROOT / rel).read_text(encoding="utf-8")
     if "create_async_engine(" not in src:
+        if rel in {
+            "apps/telegram_delivery_worker/main.py",
+            "apps/telegram_update_worker/main.py",
+        }:
+            assert "make_worker_engine(get_settings().database_url)" in src
+            assert "owns_engine = engine is None" in src
+            assert "if owns_engine:" in src
+            assert "await engine.dispose()" in src
+            assert "get_engine" not in src
+            return
         pytest.skip(f"{rel}: нет create_async_engine")
     assert "**WORKER_ENGINE_KWARGS" in src, f"{rel}: движок без консервативного пула"
     assert "from core.db import WORKER_ENGINE_KWARGS" in src, f"{rel}: нет импорта пул-конфига"

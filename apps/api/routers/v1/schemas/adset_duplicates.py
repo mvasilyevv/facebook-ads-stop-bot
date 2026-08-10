@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -14,7 +15,7 @@ from core.adset_duplicates.service import (
     MAX_SELECTED_ADS,
     MAX_TOTAL_ADS,
 )
-from core.meta_api.mutations.set_adset_budget import MAX_DAILY_BUDGET_CENTS
+from core.meta_api.budget_limits import MAX_DAILY_BUDGET_MAJOR
 
 NumericMetaId = Annotated[str, Field(min_length=1, max_length=32, pattern=r"^\d+$")]
 
@@ -27,7 +28,11 @@ class AdsetDuplicatePreviewIn(BaseModel):
     campaign_count: int = Field(ge=1, le=MAX_CAMPAIGN_COUNT)
     adsets_per_campaign: int = Field(ge=1, le=MAX_ADSETS_PER_CAMPAIGN)
     budget_level: Literal["ABO", "CBO"]
-    daily_budget_cents: int = Field(ge=1, le=MAX_DAILY_BUDGET_CENTS)
+    daily_budget: str = Field(
+        min_length=1,
+        max_length=32,
+        pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
+    )
     start_date: date | None = None
     campaign_name_base: str | None = Field(default=None, min_length=1, max_length=300)
     adset_name_base: str | None = Field(default=None, min_length=1, max_length=300)
@@ -41,6 +46,14 @@ class AdsetDuplicatePreviewIn(BaseModel):
     @classmethod
     def normalize_budget_level(cls, value: Any) -> Any:
         return value.strip().upper() if isinstance(value, str) else value
+
+    @field_validator("daily_budget")
+    @classmethod
+    def validate_daily_budget_range(cls, value: str) -> str:
+        amount = Decimal(value)
+        if amount <= 0 or amount > MAX_DAILY_BUDGET_MAJOR:
+            raise ValueError(f"daily_budget должен быть > 0 и <= {MAX_DAILY_BUDGET_MAJOR:f}")
+        return value
 
     @model_validator(mode="after")
     def validate_selected_ads_and_total(self) -> "AdsetDuplicatePreviewIn":
@@ -58,7 +71,8 @@ class DuplicateSourceEntity(BaseModel):
 
 
 class DuplicateSourceAccount(DuplicateSourceEntity):
-    currency: str | None = None
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    currency_exponent: int = Field(ge=0, le=3)
 
 
 class DuplicateSourceAd(DuplicateSourceEntity):
@@ -83,9 +97,10 @@ class AdsetDuplicateCounts(BaseModel):
 
 class AdsetDuplicateBudget(BaseModel):
     level: Literal["ABO", "CBO"]
-    unit_daily_budget_cents: int
-    total_daily_budget_cents: int
-    currency: str
+    unit_daily_budget: str = Field(pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+    total_daily_budget: str = Field(pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    currency_exponent: int = Field(ge=0, le=3)
 
 
 class AdsetDuplicateSchedule(BaseModel):
@@ -117,13 +132,16 @@ class AdsetDuplicatePreviewOut(BaseModel):
 class AdsetDuplicateLaunchIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    preview_token: str = Field(min_length=20, max_length=128)
+    preview_token: str = Field(
+        min_length=43,
+        max_length=43,
+        pattern=r"^[A-Za-z0-9_-]{43}$",
+    )
 
 
 class AdsetDuplicateLaunchOut(BaseModel):
     task_id: int
     status: str
-    expires_at: datetime
 
 
 class AdsetDuplicateProgress(BaseModel):
@@ -141,7 +159,6 @@ class AdsetDuplicateStatusOut(BaseModel):
     progress: AdsetDuplicateProgress | None
     created_meta_ids: dict[str, str | list[str]] = Field(default_factory=dict)
     error: str | None
-    expires_at: datetime | None = None
 
 
 __all__ = [

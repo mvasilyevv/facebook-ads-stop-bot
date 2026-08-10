@@ -1,7 +1,8 @@
 // Тест: Shell и Sidebar рендерятся без краша в роутер-обёртке.
 
-import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -12,30 +13,41 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Shell } from "@/components/layout/Shell";
 import { Sidebar } from "@/components/layout/Sidebar";
-import { useObserverSettings } from "@/lib/api/settings";
 
-// Моки status-хуков — не нужен реальный fetch в smoke.
-vi.mock("@/lib/api/settings", () => ({
-  useHealthDetails: () => ({
-    data: {
-      workers: [{ name: "observer", status: "ONLINE" }],
-      observer_runtime: { status: "running" },
-      meta_api_channel: { status: "ONLINE" },
-      overall: "HEALTHY",
-    },
+const operatorSnapshotMock = vi.hoisted(() => ({
+  data: undefined as unknown,
+}));
+const operatorRealtimeStatusMock = vi.hoisted(() => ({
+  value: "connected" as "connecting" | "connected" | "reconnecting",
+}));
+
+vi.mock("@fb/operator-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@fb/operator-api")>()),
+  useOperatorRealtimeStatus: () => operatorRealtimeStatusMock.value,
+}));
+
+vi.mock("@/lib/api/operator", () => ({
+  fetchOperatorActionProjectionsForRealtime: vi.fn(),
+  fetchOperatorSnapshotForRealtime: vi.fn(),
+  useOperatorSnapshot: () => ({
+    data: operatorSnapshotMock.data,
     isLoading: false,
     isError: false,
   }),
+}));
+
+beforeEach(() => {
+  operatorSnapshotMock.data = undefined;
+  operatorRealtimeStatusMock.value = "connected";
+});
+
+// Моки status-хуков — не нужен реальный fetch в smoke.
+vi.mock("@/lib/api/settings", () => ({
   useObserverSettings: vi.fn(() => ({
     data: { is_scanning_enabled: true },
     isLoading: false,
     isError: false,
   })),
-  useObserverStatus: () => ({
-    data: { status: "running", last_scan_at: null },
-    isLoading: false,
-    isError: false,
-  }),
   useToggleScanning: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
@@ -94,8 +106,27 @@ describe("Shell — smoke-рендер", () => {
     );
     const openButton = await screen.findByRole("button", { name: "Открыть навигацию" });
     fireEvent.click(openButton);
-    expect(screen.getByRole("dialog", { name: "Навигация" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Навигация" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Закрыть меню" })).toBeInTheDocument();
+  });
+
+  it("возвращает keyboard focus на кнопку мобильной навигации после Escape", async () => {
+    const user = userEvent.setup();
+    const router = makeAppRouter(() => <div />);
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    const openButton = await screen.findByRole("button", {
+      name: "Открыть навигацию",
+    });
+    await user.click(openButton);
+    expect(await screen.findByRole("dialog", { name: "Навигация" })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(openButton).toHaveFocus());
   });
 
   // Тест: brand-mark присутствует в DOM.
@@ -111,22 +142,20 @@ describe("Shell — smoke-рендер", () => {
     });
   });
 
-  it("показывает единый CTA в global status bar при паузе", async () => {
-    vi.mocked(useObserverSettings).mockReturnValue({
-      data: { is_scanning_enabled: false },
-      isLoading: false,
-      isError: false,
-    } as ReturnType<typeof useObserverSettings>);
+  it("показывает action-first мобильную навигацию", async () => {
     const router = makeAppRouter(() => <div />);
     render(
       <QueryClientProvider client={makeQueryClient()}>
         <RouterProvider router={router} />
       </QueryClientProvider>,
     );
-
-    expect(await screen.findByText("Мониторинг на паузе")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Включить мониторинг" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Диагностика" })).toBeInTheDocument();
+    const navigation = await screen.findByRole("navigation", {
+      name: "Основная мобильная навигация",
+    });
+    expect(navigation).toHaveTextContent("Сейчас");
+    expect(navigation).toHaveTextContent("Действия");
+    expect(navigation).toHaveTextContent("Реклама");
+    expect(navigation).toHaveTextContent("Ещё");
   });
 });
 
@@ -156,6 +185,80 @@ describe("Sidebar — smoke-рендер с роутером", () => {
       const links = screen.getAllByRole("link");
       expect(links.length).toBeGreaterThan(0);
     });
+  });
+
+  it("соответствует утверждённой иерархии и 44px touch targets", async () => {
+    const router = makeSidebarRouter();
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const navigation = await screen.findByRole("navigation", { name: "Основная навигация" });
+    const links = within(navigation).getAllByRole("link");
+    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual([
+      "Сейчас",
+      "Действия",
+      "Объявления",
+      "Кампании",
+      "Создание",
+      "Офферы",
+      "Аналитика",
+      "Источники и воркеры",
+      "Рабочий стол",
+      "Настройки",
+    ]);
+    expect(within(navigation).getByRole("link", { name: "Источники и воркеры" })).toHaveAttribute(
+      "href",
+      "/system/sources",
+    );
+    for (const link of links) expect(link).toHaveClass("min-h-11");
+    expect(screen.getByRole("button", { name: "Свернуть меню" })).toHaveClass("size-11");
+  });
+
+  it("includes unknown action outcomes in the attention badge", async () => {
+    operatorSnapshotMock.data = {
+      actions: {
+        state: "ready",
+        data: {
+          items: [{ state: "unknown" }],
+        },
+      },
+    };
+    const router = makeSidebarRouter();
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const actions = await screen.findByRole("link", { name: "Действия" });
+    expect(actions).toHaveTextContent("Действия1");
+  });
+
+  it("не показывает устаревший action badge при переподключении", async () => {
+    operatorRealtimeStatusMock.value = "reconnecting";
+    operatorSnapshotMock.data = {
+      actions: {
+        state: "ready",
+        data: { items: [{ state: "failed" }] },
+      },
+    };
+    const router = makeSidebarRouter();
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+
+    const actions = await screen.findByRole("link", { name: "Действия" });
+    expect(actions).toHaveTextContent("Действия—");
+    expect(actions).not.toHaveTextContent("Действия1");
+    expect(within(actions).getByLabelText("Количество действий не подтверждено")).toHaveAttribute(
+      "data-state",
+      "unknown",
+    );
   });
 
   // Тест: активная ссылка "/" имеет aria-current="page".

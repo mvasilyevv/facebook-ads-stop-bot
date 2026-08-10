@@ -1,0 +1,41 @@
+{
+  "title": "FB Agent · Точный журнал · экран «Сейчас»",
+  "question": "Визуальный мир уже выбран. Теперь выберите иерархию первого экрана: что оператор должен увидеть раньше — общую сверку, причину риска или выполняемую команду?",
+  "options": [
+    {
+      "id": "ledger-leads",
+      "label": "A · Шкала ведёт",
+      "kicker": "СПОКОЙНАЯ СВЕРКА",
+      "thesis": "Общая spend/base/stop-шкала — главный объект. Риск и действия остаются рядом, но не перебивают картину портфеля.",
+      "case": "Лучше всего для непрерывного наблюдения и сравнения кабинетов на одной финансовой оси.",
+      "risk": "До конкретной причины риска взгляд доходит на один шаг позже.",
+      "viewport": "Desktop: шкала слева, attention и actions справа. Mobile: attention → шкала → actions.",
+      "sketch": ".impeccable/mocks/operator-now-comp-a-ledger-leads.png"
+    },
+    {
+      "id": "attention-leads",
+      "label": "B · Внимание ведёт",
+      "kicker": "РЕКОМЕНДОВАНО",
+      "thesis": "Ranked attention открывает экран, а полная сверка остаётся рядом и объясняет доказательство риска.",
+      "case": "Сильнее всего соответствует приоритетам минимального перерасхода и скорости осознанной реакции owner.",
+      "risk": "Активный инцидент заметнее и делает экран менее нейтральным в аварийный момент.",
+      "viewport": "Desktop: причина риска слева, шкала справа. Mobile: attention → шкала → actions.",
+      "sketch": ".impeccable/mocks/operator-now-comp-b-attention-leads.png"
+    },
+    {
+      "id": "split-reconciliation",
+      "label": "C · Сверка и журнал",
+      "kicker": "КОМАНДА В ФОКУСЕ",
+      "thesis": "Портфель и command lifecycle делят первый ряд; причины риска раскрываются ниже на полной ширине.",
+      "case": "Лучше всего во время выполнения money-action и последующей reconciliation.",
+      "risk": "Уже запущенная команда может визуально опередить новый более опасный breach.",
+      "viewport": "Desktop: шкала и action journal рядом. Mobile: actions → attention → шкала.",
+      "sketch": ".impeccable/mocks/operator-now-comp-c-split-reconciliation.png"
+    }
+  ],
+  "reroll": false,
+  "canon": false,
+  "steer": true,
+  "selectedOptionId": "ledger-leads",
+  "selectedAt": "2026-08-08"
+}

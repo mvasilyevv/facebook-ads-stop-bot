@@ -41,34 +41,16 @@ class BrowserSessionServiceStub(object):
             response_deserializer=v1_dot_browser__session__pb2.StartBrowserResponse.FromString,
             _registered_method=True,
         )
-        self.DisconnectBrowser = channel.unary_unary(
-            "/fb_agent.browser_session.v1.BrowserSessionService/DisconnectBrowser",
-            request_serializer=v1_dot_browser__session__pb2.DisconnectBrowserRequest.SerializeToString,
-            response_deserializer=v1_dot_browser__session__pb2.DisconnectBrowserResponse.FromString,
-            _registered_method=True,
-        )
-        self.StopBrowser = channel.unary_unary(
-            "/fb_agent.browser_session.v1.BrowserSessionService/StopBrowser",
-            request_serializer=v1_dot_browser__session__pb2.StopBrowserRequest.SerializeToString,
-            response_deserializer=v1_dot_browser__session__pb2.StopBrowserResponse.FromString,
-            _registered_method=True,
-        )
         self.ReconnectBrowser = channel.unary_unary(
             "/fb_agent.browser_session.v1.BrowserSessionService/ReconnectBrowser",
             request_serializer=v1_dot_browser__session__pb2.ReconnectBrowserRequest.SerializeToString,
             response_deserializer=v1_dot_browser__session__pb2.StartBrowserResponse.FromString,
             _registered_method=True,
         )
-        self.GetSessionInfo = channel.unary_unary(
-            "/fb_agent.browser_session.v1.BrowserSessionService/GetSessionInfo",
-            request_serializer=v1_dot_browser__session__pb2.GetSessionInfoRequest.SerializeToString,
-            response_deserializer=v1_dot_browser__session__pb2.GetSessionInfoResponse.FromString,
-            _registered_method=True,
-        )
-        self.Navigate = channel.unary_unary(
-            "/fb_agent.browser_session.v1.BrowserSessionService/Navigate",
-            request_serializer=v1_dot_browser__session__pb2.NavigateRequest.SerializeToString,
-            response_deserializer=v1_dot_browser__session__pb2.NavigateResponse.FromString,
+        self.RecoverBrowserProfileUnderMaintenance = channel.unary_unary(
+            "/fb_agent.browser_session.v1.BrowserSessionService/RecoverBrowserProfileUnderMaintenance",
+            request_serializer=v1_dot_browser__session__pb2.RecoverBrowserProfileRequest.SerializeToString,
+            response_deserializer=v1_dot_browser__session__pb2.StartBrowserResponse.FromString,
             _registered_method=True,
         )
         self.OpenCabinetTabs = channel.unary_unary(
@@ -77,33 +59,15 @@ class BrowserSessionServiceStub(object):
             response_deserializer=v1_dot_browser__session__pb2.OpenCabinetTabsResponse.FromString,
             _registered_method=True,
         )
-        self.StreamSessionStatus = channel.unary_stream(
-            "/fb_agent.browser_session.v1.BrowserSessionService/StreamSessionStatus",
-            request_serializer=v1_dot_browser__session__pb2.StreamSessionStatusRequest.SerializeToString,
-            response_deserializer=v1_dot_browser__session__pb2.SessionStatusEvent.FromString,
-            _registered_method=True,
-        )
 
 
 class BrowserSessionServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def StartBrowser(self, request, context):
-        """Запустить Vision профиль и подключиться через CDP.
-        Возвращает session_id для всех последующих вызовов.
+        """Создать process-local browser-agent сессию, подключившись только к уже
+        живому Vision CDP. Этот RPC никогда не запускает и не рестартует профиль.
         """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def DisconnectBrowser(self, request, context):
-        """Отключиться от браузера (закрыть CDP, не останавливая Vision профиль)."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def StopBrowser(self, request, context):
-        """Полностью остановить Vision профиль (disconnect + stop profile)."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
@@ -114,14 +78,10 @@ class BrowserSessionServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
-    def GetSessionInfo(self, request, context):
-        """Получить информацию о сессии (URL, контексты, страницы)."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def Navigate(self, request, context):
-        """Перейти на URL."""
+    def RecoverBrowserProfileUnderMaintenance(self, request, context):
+        """Принудительно перезапустить canonical Vision-профиль и подключиться заново.
+        Вызывается только API control plane после проверки PostgreSQL maintenance lease.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
@@ -135,12 +95,6 @@ class BrowserSessionServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
-    def StreamSessionStatus(self, request, context):
-        """Стриминг статусов сессии (heartbeat, ошибки, смена страницы)."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
 
 def add_BrowserSessionServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -149,40 +103,20 @@ def add_BrowserSessionServiceServicer_to_server(servicer, server):
             request_deserializer=v1_dot_browser__session__pb2.StartBrowserRequest.FromString,
             response_serializer=v1_dot_browser__session__pb2.StartBrowserResponse.SerializeToString,
         ),
-        "DisconnectBrowser": grpc.unary_unary_rpc_method_handler(
-            servicer.DisconnectBrowser,
-            request_deserializer=v1_dot_browser__session__pb2.DisconnectBrowserRequest.FromString,
-            response_serializer=v1_dot_browser__session__pb2.DisconnectBrowserResponse.SerializeToString,
-        ),
-        "StopBrowser": grpc.unary_unary_rpc_method_handler(
-            servicer.StopBrowser,
-            request_deserializer=v1_dot_browser__session__pb2.StopBrowserRequest.FromString,
-            response_serializer=v1_dot_browser__session__pb2.StopBrowserResponse.SerializeToString,
-        ),
         "ReconnectBrowser": grpc.unary_unary_rpc_method_handler(
             servicer.ReconnectBrowser,
             request_deserializer=v1_dot_browser__session__pb2.ReconnectBrowserRequest.FromString,
             response_serializer=v1_dot_browser__session__pb2.StartBrowserResponse.SerializeToString,
         ),
-        "GetSessionInfo": grpc.unary_unary_rpc_method_handler(
-            servicer.GetSessionInfo,
-            request_deserializer=v1_dot_browser__session__pb2.GetSessionInfoRequest.FromString,
-            response_serializer=v1_dot_browser__session__pb2.GetSessionInfoResponse.SerializeToString,
-        ),
-        "Navigate": grpc.unary_unary_rpc_method_handler(
-            servicer.Navigate,
-            request_deserializer=v1_dot_browser__session__pb2.NavigateRequest.FromString,
-            response_serializer=v1_dot_browser__session__pb2.NavigateResponse.SerializeToString,
+        "RecoverBrowserProfileUnderMaintenance": grpc.unary_unary_rpc_method_handler(
+            servicer.RecoverBrowserProfileUnderMaintenance,
+            request_deserializer=v1_dot_browser__session__pb2.RecoverBrowserProfileRequest.FromString,
+            response_serializer=v1_dot_browser__session__pb2.StartBrowserResponse.SerializeToString,
         ),
         "OpenCabinetTabs": grpc.unary_unary_rpc_method_handler(
             servicer.OpenCabinetTabs,
             request_deserializer=v1_dot_browser__session__pb2.OpenCabinetTabsRequest.FromString,
             response_serializer=v1_dot_browser__session__pb2.OpenCabinetTabsResponse.SerializeToString,
-        ),
-        "StreamSessionStatus": grpc.unary_stream_rpc_method_handler(
-            servicer.StreamSessionStatus,
-            request_deserializer=v1_dot_browser__session__pb2.StreamSessionStatusRequest.FromString,
-            response_serializer=v1_dot_browser__session__pb2.SessionStatusEvent.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -229,66 +163,6 @@ class BrowserSessionService(object):
         )
 
     @staticmethod
-    def DisconnectBrowser(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.browser_session.v1.BrowserSessionService/DisconnectBrowser",
-            v1_dot_browser__session__pb2.DisconnectBrowserRequest.SerializeToString,
-            v1_dot_browser__session__pb2.DisconnectBrowserResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def StopBrowser(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.browser_session.v1.BrowserSessionService/StopBrowser",
-            v1_dot_browser__session__pb2.StopBrowserRequest.SerializeToString,
-            v1_dot_browser__session__pb2.StopBrowserResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
     def ReconnectBrowser(
         request,
         target,
@@ -319,7 +193,7 @@ class BrowserSessionService(object):
         )
 
     @staticmethod
-    def GetSessionInfo(
+    def RecoverBrowserProfileUnderMaintenance(
         request,
         target,
         options=(),
@@ -334,39 +208,9 @@ class BrowserSessionService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            "/fb_agent.browser_session.v1.BrowserSessionService/GetSessionInfo",
-            v1_dot_browser__session__pb2.GetSessionInfoRequest.SerializeToString,
-            v1_dot_browser__session__pb2.GetSessionInfoResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def Navigate(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.browser_session.v1.BrowserSessionService/Navigate",
-            v1_dot_browser__session__pb2.NavigateRequest.SerializeToString,
-            v1_dot_browser__session__pb2.NavigateResponse.FromString,
+            "/fb_agent.browser_session.v1.BrowserSessionService/RecoverBrowserProfileUnderMaintenance",
+            v1_dot_browser__session__pb2.RecoverBrowserProfileRequest.SerializeToString,
+            v1_dot_browser__session__pb2.StartBrowserResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -397,36 +241,6 @@ class BrowserSessionService(object):
             "/fb_agent.browser_session.v1.BrowserSessionService/OpenCabinetTabs",
             v1_dot_browser__session__pb2.OpenCabinetTabsRequest.SerializeToString,
             v1_dot_browser__session__pb2.OpenCabinetTabsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def StreamSessionStatus(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_stream(
-            request,
-            target,
-            "/fb_agent.browser_session.v1.BrowserSessionService/StreamSessionStatus",
-            v1_dot_browser__session__pb2.StreamSessionStatusRequest.SerializeToString,
-            v1_dot_browser__session__pb2.SessionStatusEvent.FromString,
             options,
             channel_credentials,
             insecure,

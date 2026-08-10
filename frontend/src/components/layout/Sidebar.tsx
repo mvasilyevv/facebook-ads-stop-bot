@@ -1,25 +1,27 @@
 /**
- * Sidebar — full-height боковая навигация (канон design_handoff/web-dashboard.jsx).
+ * Sidebar — full-height боковая навигация operator web.
  *
  * Структура:
- *   - Brand-хедер (56px): 26×26 accent-квадрат «FB» + «STOP BOT / operator».
- *   - Nav-группы с numbered eyebrow (01 OPERATE / 02 SYSTEM).
- *     Item: 36px, icon + label + опциональный count-badge. Active = bg-2 fill +
+ *   - Brand-хедер (56px): registration-mark «FB» + «FB Agent / operator».
+ *   - Сгруппированная навигация продукта и системы.
+ *     Item: не менее 44px, icon + label + опциональный count-badge. Active = bg-2 fill +
  *     accent text + 3px accent left-bar.
  *   - Footer: ТОЛЬКО collapse-toggle (worker-статус живёт в TopBar, не дублируем).
  *
  * Count-badges (реальные данные):
  *   - Объявления: ads_in_warning + ads_in_stop (активные инциденты, из stats).
- * 240px expanded / 64px collapsed (state в Zustand).
+ * 196px expanded / 64px collapsed (state в Zustand).
  */
 
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
   LayoutDashboard,
+  Activity,
   Layers,
   Radar,
   Tag,
   BarChart3,
+  Database,
   Settings,
   MonitorUp,
   PanelLeft,
@@ -28,7 +30,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useUiStore } from "@/stores/ui";
-import { useDashboardStats } from "@/lib/api/dashboard";
+import { useOperatorSnapshot } from "@/lib/api/operator";
+import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { cn } from "@/lib/utils/cn";
 
 interface NavItem {
@@ -36,7 +39,7 @@ interface NavItem {
   label: string;
   icon: LucideIcon;
   /** Ключ для подстановки count-badge. */
-  badgeKey?: "ads";
+  badgeKey?: "actions";
   /** Вложенные пункты (отрисовываются с отступом под родителем). */
   children?: NavItem[];
 }
@@ -50,10 +53,17 @@ interface NavGroup {
 const NAV_GROUPS: NavGroup[] = [
   {
     eyebrowNum: "01",
-    eyebrow: "OPERATE",
+    eyebrow: "ОПЕРАЦИИ",
     items: [
-      { to: "/", label: "Обзор", icon: LayoutDashboard },
-      { to: "/ads", label: "Объявления", icon: Layers, badgeKey: "ads" },
+      { to: "/", label: "Сейчас", icon: LayoutDashboard },
+      { to: "/actions", label: "Действия", icon: Activity, badgeKey: "actions" },
+    ],
+  },
+  {
+    eyebrowNum: "02",
+    eyebrow: "РЕКЛАМА",
+    items: [
+      { to: "/ads", label: "Объявления", icon: Layers },
       {
         to: "/campaigns",
         label: "Кампании",
@@ -61,13 +71,18 @@ const NAV_GROUPS: NavGroup[] = [
         children: [{ to: "/campaigns/create", label: "Создание", icon: Rocket }],
       },
       { to: "/offers", label: "Офферы", icon: Tag },
-      { to: "/analytics", label: "Аналитика", icon: BarChart3 },
     ],
   },
   {
-    eyebrowNum: "02",
-    eyebrow: "SYSTEM",
+    eyebrowNum: "03",
+    eyebrow: "АНАЛИТИКА",
+    items: [{ to: "/analytics", label: "Аналитика", icon: BarChart3 }],
+  },
+  {
+    eyebrowNum: "04",
+    eyebrow: "СИСТЕМА",
     items: [
+      { to: "/system/sources", label: "Источники и воркеры", icon: Database },
       { to: "/remote-desktop", label: "Рабочий стол", icon: MonitorUp },
       { to: "/settings", label: "Настройки", icon: Settings },
     ],
@@ -86,9 +101,19 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
   const { location } = useRouterState();
 
   // Реальные count-badges (кэшируются, разделяются с Dashboard).
-  const { data: stats } = useDashboardStats();
-  const adsBadge = stats ? (stats.ads_in_warning ?? 0) + (stats.ads_in_stop ?? 0) : 0;
-  const badgeFor = (key?: "ads"): number => (key === "ads" ? adsBadge : 0);
+  const { data: operatorSnapshot } = useOperatorSnapshot({ window: "today" });
+  const realtimeStatus = useOperatorRealtimeStatus();
+  const actionBadge: number | null =
+    realtimeStatus === "connected" && operatorSnapshot?.actions.state === "ready"
+      ? (operatorSnapshot.actions.data?.items.filter(
+          (item) =>
+            item.state === "queued" ||
+            item.state === "running" ||
+            item.state === "failed" ||
+            item.state === "unknown",
+        ).length ?? 0)
+      : null;
+  const badgeFor = (key?: "actions"): number | null => (key === "actions" ? actionBadge : 0);
 
   // Активность по самому длинному совпавшему пути: на /campaigns/create
   // горит только «Создание», а «Кампании» — приглушённо как родитель.
@@ -118,33 +143,32 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
         aria-current={opts.active ? "page" : undefined}
         title={collapsed ? item.label : undefined}
         className={cn(
-          "relative flex w-full items-center gap-[11px] no-underline transition-colors",
-          "rounded-[var(--radius-2)] text-[13px]",
-          opts.child ? "h-8" : "h-9",
+          "relative flex w-full items-center gap-[11px] border-l border-transparent no-underline transition-colors",
+          "min-h-11 py-2 text-[14px]",
           collapsed ? "justify-center px-0" : opts.child ? "pl-[42px] pr-5" : "px-5",
           opts.active
-            ? "bg-bg-2 text-accent"
+            ? "border-accent bg-bg-1 text-bg-11"
             : opts.muted
               ? "text-accent-muted hover:bg-bg-1"
               : "text-bg-10 hover:bg-bg-1 hover:text-bg-11",
         )}
       >
         {opts.active && (
-          <span
-            aria-hidden="true"
-            className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-accent"
-          />
+          <span aria-hidden="true" className="absolute -left-px inset-y-0 w-px bg-accent" />
         )}
         <item.icon size={opts.child ? 15 : 18} strokeWidth={1.6} aria-hidden="true" />
         {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
-        {!collapsed && item.badgeKey && badge > 0 && (
+        {!collapsed && item.badgeKey && badge !== 0 && (
           <span
+            role={badge === null ? "status" : undefined}
+            aria-label={badge === null ? "Количество действий не подтверждено" : undefined}
+            data-state={badge === null ? "unknown" : "ready"}
             className={cn(
-              "font-display text-[11px] tabular-nums",
-              opts.active ? "text-accent" : "text-bg-9",
+              "font-display text-[12px] tabular-nums",
+              badge === null ? "text-bg-9" : opts.active ? "text-accent" : "text-bg-9",
             )}
           >
-            {badge}
+            {badge === null ? <span aria-hidden="true">—</span> : badge}
           </span>
         )}
       </Link>
@@ -155,7 +179,7 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
     <aside
       data-collapsed={collapsed || undefined}
       className={cn(
-        "flex flex-col overflow-hidden border-r border-[var(--hairline)] bg-bg-0",
+        "flex flex-col overflow-hidden border-r border-[var(--color-hairline)] bg-bg-0",
         mobile
           ? "h-full w-[min(82vw,280px)]"
           : "col-start-1 col-end-2 row-start-1 row-end-3 hidden md:flex",
@@ -164,37 +188,37 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
       {/* Brand-хедер (56px, совпадает с высотой TopBar) */}
       <div
         className={cn(
-          "flex h-14 shrink-0 items-center gap-2.5 border-b border-[var(--hairline)]",
+          "flex h-14 shrink-0 items-center gap-2.5 border-b border-[var(--color-hairline)]",
           collapsed ? "justify-center px-0" : "px-5",
         )}
       >
         <div
           aria-hidden="true"
-          className="flex size-[26px] shrink-0 items-center justify-center rounded-[var(--radius-1)] bg-accent"
+          className="flex size-[26px] shrink-0 items-center justify-center border border-accent bg-transparent"
         >
-          <span className="font-display text-[14px] font-bold text-bg-0">FB</span>
+          <span className="font-numeric text-[12px] font-bold text-accent">FB</span>
         </div>
         {!collapsed && (
           <div className="min-w-0">
             <div className="font-display text-[13px] font-semibold leading-[1.1] text-bg-11">
-              STOP BOT
+              FB Agent
             </div>
-            <div className="text-[10px] tracking-[0.04em] text-bg-9">operator</div>
+            <div className="text-[12px] tracking-[0.04em] text-bg-9">operator</div>
           </div>
         )}
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto py-3">
+      <nav aria-label="Основная навигация" className="flex-1 overflow-y-auto py-3">
         {NAV_GROUPS.map((group) => (
           <div key={group.eyebrowNum} className="mb-3.5">
             {!collapsed ? (
-              <div className="mb-2 px-5 font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
+              <div className="mb-2 px-5 font-display text-[12px] font-semibold uppercase tracking-[0.08em] text-bg-9">
                 <span className="mr-1.5 text-accent-muted">{group.eyebrowNum}</span>
                 {group.eyebrow}
               </div>
             ) : (
-              <div className="mx-4 mb-2 h-px bg-[var(--hairline)]" aria-hidden="true" />
+              <div className="mx-4 mb-2 h-px bg-[var(--color-hairline)]" aria-hidden="true" />
             )}
             {group.items.map((item) => {
               const childActive = item.children?.some((c) => pathActive(c.to)) ?? false;
@@ -214,7 +238,7 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
                       {/* Направляющая линия вложенности */}
                       <span
                         aria-hidden="true"
-                        className="absolute left-[27px] top-0 bottom-1.5 w-px bg-[var(--hairline)]"
+                        className="absolute left-[27px] top-0 bottom-1.5 w-px bg-[var(--color-hairline)]"
                       />
                       {item.children.map((c) =>
                         renderLink(c, { active: pathActive(c.to), child: true }),
@@ -231,7 +255,7 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
       {/* Footer — mobile close / desktop collapse-toggle */}
       <div
         className={cn(
-          "flex items-center border-t border-[var(--hairline)] py-3",
+          "flex items-center border-t border-[var(--color-hairline)] py-3",
           mobile ? "justify-stretch px-4" : collapsed ? "justify-center px-0" : "justify-end px-4",
         )}
       >
@@ -239,7 +263,7 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
           <button
             type="button"
             onClick={onNavigate}
-            className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--hairline-strong)] text-[13px] text-bg-10 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            className="inline-flex min-h-11 w-full items-center justify-center gap-2 border border-[var(--color-hairline-strong)] text-[14px] text-bg-10 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             <X size={15} aria-hidden="true" />
             Закрыть меню
@@ -249,7 +273,7 @@ export function Sidebar({ mobile = false, onNavigate }: SidebarProps) {
             type="button"
             onClick={toggleSidebar}
             aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
-            className="inline-flex size-7 items-center justify-center rounded-[var(--radius-2)] text-bg-9 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            className="inline-flex size-11 items-center justify-center text-bg-9 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             <PanelLeft size={16} aria-hidden="true" />
           </button>

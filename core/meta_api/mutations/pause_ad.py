@@ -17,7 +17,11 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
-from core.meta_api.mutations.base import require_numeric_id, success_result
+from core.meta_api.mutations.base import (
+    require_meta_success_ack,
+    require_numeric_id,
+    success_result,
+)
 from core.meta_api.schemas import MetaMutationPayload
 
 
@@ -35,5 +39,9 @@ class PauseAdHandler:
             method="POST",
             endpoint=f"/{ad_id}",
             query_params={"status": "PAUSED"},
+        )
+        graph_response = require_meta_success_ack(
+            graph_response,
+            endpoint=f"/{ad_id}",
         )
         return success_result(graph_response=graph_response, modified_ids=[ad_id])

@@ -3,18 +3,17 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import "@fontsource/jetbrains-mono/400.css";
-import "@fontsource/jetbrains-mono/500.css";
-import "@fontsource/jetbrains-mono/600.css";
-import "@fontsource/inter-tight/400.css";
-import "@fontsource/inter-tight/500.css";
-import "@fontsource/inter-tight/600.css";
+import "./styles/fonts.css";
 import "./styles/app.css";
 
 import { routeTree } from "./routeTree.gen";
 
 // Mini App смонтирован под /tma/ (Vite base + router basepath).
-const router = createRouter({ routeTree, basepath: "/tma", defaultPreload: "intent" });
+const router = createRouter({
+  routeTree,
+  basepath: "/tma",
+  defaultPreload: "intent",
+});
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -23,7 +22,13 @@ declare module "@tanstack/react-router" {
 }
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 10_000, refetchOnWindowFocus: false } },
+  defaultOptions: {
+    queries: {
+      staleTime: 10_000,
+      refetchOnWindowFocus: false,
+      retry: (failureCount) => failureCount < 2,
+    },
+  },
 });
 
 const rootEl = document.getElementById("root");

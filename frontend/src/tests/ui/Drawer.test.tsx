@@ -7,11 +7,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { Drawer } from "@/components/ui/Drawer";
 
-function OpenDrawer({
-  onOpenChange = vi.fn(),
-}: {
-  onOpenChange?: (v: boolean) => void;
-}) {
+function OpenDrawer({ onOpenChange = vi.fn() }: { onOpenChange?: (v: boolean) => void }) {
   return (
     <Drawer open title="Тест Drawer" onOpenChange={onOpenChange}>
       <p>Содержимое</p>
@@ -73,6 +69,32 @@ describe("Drawer", () => {
       </Drawer>,
     );
     expect(screen.getByText("Footer content")).toBeInTheDocument();
+  });
+
+  it("не выходит за границы viewport шириной 360px", () => {
+    const originalInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 360,
+    });
+
+    try {
+      render(
+        <Drawer open title="Мобильная панель" width={640} onOpenChange={vi.fn()}>
+          body
+        </Drawer>,
+      );
+
+      expect(screen.getByRole("dialog", { name: "Мобильная панель" })).toHaveStyle({
+        width: "100%",
+        maxWidth: "640px",
+      });
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: originalInnerWidth,
+      });
+    }
   });
 
   // Focus-trap: первый фокусируемый элемент получает фокус при открытии

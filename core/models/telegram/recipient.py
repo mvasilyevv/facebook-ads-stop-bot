@@ -6,7 +6,16 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,6 +43,10 @@ class TelegramRecipient(UUIDPrimaryKey, CreatedAtOnly, Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "role IN ('owner', 'recipient')",
+            name="telegram_recipient_role",
+        ),
         UniqueConstraint(
             "chat_id",
             "telegram_user_id",
@@ -43,6 +56,12 @@ class TelegramRecipient(UUIDPrimaryKey, CreatedAtOnly, Base):
             "ix_recipients_active",
             "chat_id",
             postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index(
+            "uq_telegram_recipients_single_active_owner",
+            "role",
+            unique=True,
+            postgresql_where=text("role = 'owner' AND revoked_at IS NULL"),
         ),
         Index("ix_recipients_role", "role"),
     )

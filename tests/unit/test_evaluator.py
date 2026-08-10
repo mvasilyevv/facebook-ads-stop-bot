@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from core.domain import AlertStage, EnableRecommendationLevel
-from core.rules.evaluator import determine_enable_recommendation_level, evaluate_stop_rules
+import pytest
+
+from core.domain import AlertStage
+from core.rules.evaluator import evaluate_stop_rules
 from core.rules.types import RuleContext
 from core.scanner.models import ScannedAdRow
 
@@ -41,6 +43,8 @@ def _make_row(**kwargs) -> ScannedAdRow:
 def _make_ctx(**kwargs) -> RuleContext:
     """Создаёт контекст правил с CPA=5 и warning=80%."""
     defaults = {
+        "currency": "USD",
+        "currency_exponent": 2,
         "cpa_amount": Decimal("5.00"),
         "warning_percent_of_stop": Decimal("80"),
         "stop_percent_of_base": Decimal("100"),
@@ -81,6 +85,62 @@ def test_click_stage_returns_cpc_warning_after_cent_rounding():
 
     assert result.stage == AlertStage.WARNING
     assert result.matched_rule_codes == ["cpc_stop"]
+
+
+@pytest.mark.parametrize("derived_cpc", [Decimal("0.0004"), Decimal("0.0005")])
+def test_kwd_subminor_cpc_is_not_rounded_into_stop(derived_cpc: Decimal) -> None:
+    row = _make_row(
+        spend=Decimal("0.000"),
+        clicks=1,
+        cpc=derived_cpc,
+    )
+    ctx = _make_ctx(
+        currency="KWD",
+        currency_exponent=3,
+        cpa_amount=Decimal("0.062"),
+    )
+
+    result = evaluate_stop_rules(row, ctx)
+
+    assert ctx.cpc_stop_threshold == Decimal("0.001")
+    assert result.stage is None
+
+
+def test_currency_exponent_controls_money_summary_precision() -> None:
+    row = _make_row(
+        spend=Decimal("20"),
+        clicks=1,
+        cpc=Decimal("20"),
+    )
+    ctx = _make_ctx(
+        currency="JPY",
+        currency_exponent=0,
+        cpa_amount=Decimal("1000"),
+    )
+
+    result = evaluate_stop_rules(row, ctx)
+
+    assert result.stage == AlertStage.STOP
+    assert result.stop_hits[0].summary.startswith("CPC 20 ")
+    assert ".00" not in result.stop_hits[0].summary
+
+
+def test_kwd_money_summary_preserves_third_decimal() -> None:
+    row = _make_row(
+        spend=Decimal("0.001"),
+        clicks=1,
+        cpc=Decimal("0.001"),
+    )
+    ctx = _make_ctx(
+        currency="KWD",
+        currency_exponent=3,
+        cpa_amount=Decimal("0.062"),
+    )
+
+    result = evaluate_stop_rules(row, ctx)
+
+    assert result.stage == AlertStage.STOP
+    assert result.stop_hits[0].summary.startswith("CPC 0.001 ")
 
 
 # Проверяем что отдельные проценты CPC переопределяют legacy-настройки только для шага клика.
@@ -415,129 +475,6 @@ def test_deposit_without_registration_stays_on_pre_registration_ladder():
 
     assert result.stage == AlertStage.STOP
     assert result.matched_rule_codes == ["cpl_stop"]
-
-
-# Проверяем что OFF-объявление с лидами без рег/депов получает OK, если метрики не нарушены.
-def test_enable_recommendation_returns_ok_for_lead_recovery_without_registration():
-    row = _make_row(
-        delivery_status="OFF",
-        spend=Decimal("0.10"),
-        clicks=5,
-        cpc=Decimal("0.02"),
-        leads=1,
-        cost_per_lead=Decimal("0.20"),
-        registrations=0,
-        deposits=0,
-    )
-    ctx = _make_ctx()
-    stop_evaluation = evaluate_stop_rules(row, ctx)
-
-    result = determine_enable_recommendation_level(
-        row,
-        ctx,
-        stop_evaluation=stop_evaluation,
-    )
-
-    assert stop_evaluation.stage is None
-    assert result == EnableRecommendationLevel.OK
-
-
-# Проверяем что OFF-объявление только с кликами получает OK после выхода из stop/warning.
-def test_enable_recommendation_returns_ok_for_click_only_recovery():
-    row = _make_row(
-        delivery_status="OFF",
-        spend=Decimal("0.08"),
-        clicks=2,
-        cpc=Decimal("0.04"),
-        leads=0,
-        registrations=0,
-        deposits=0,
-    )
-    ctx = _make_ctx()
-
-    result = determine_enable_recommendation_level(row, ctx)
-
-    assert result == EnableRecommendationLevel.OK
-
-
-# Проверяем что partial metrics на стадии регистрации блокируют recommendation даже без stop-сигнала.
-def test_enable_recommendation_blocks_partial_registration_metrics():
-    row = _make_row(
-        delivery_status="OFF",
-        spend=Decimal("0.80"),
-        clicks=20,
-        cpc=Decimal("0.04"),
-        leads=4,
-        cost_per_lead=Decimal("0.20"),
-        registrations=2,
-        cost_per_registration=None,
-        deposits=0,
-    )
-    ctx = _make_ctx()
-
-    result = determine_enable_recommendation_level(row, ctx)
-
-    assert result is None
-
-
-# Проверяем что подтверждённые регистрации с нормальным CPR дают безопасную OK-рекомендацию.
-def test_enable_recommendation_returns_ok_for_confirmed_registration_recovery():
-    row = _make_row(
-        delivery_status="OFF",
-        spend=Decimal("0.80"),
-        clicks=20,
-        cpc=Decimal("0.04"),
-        leads=4,
-        cost_per_lead=Decimal("0.20"),
-        registrations=2,
-        cost_per_registration=Decimal("0.40"),
-        deposits=0,
-    )
-    ctx = _make_ctx()
-
-    result = determine_enable_recommendation_level(row, ctx)
-
-    assert result == EnableRecommendationLevel.OK
-
-
-# Проверяем что депозит без регистрации не считается безопасным recovery-сигналом для включения.
-def test_enable_recommendation_ignores_deposit_without_registration():
-    row = _make_row(
-        delivery_status="OFF",
-        spend=Decimal("0.40"),
-        clicks=20,
-        cpc=Decimal("0.02"),
-        leads=1,
-        cost_per_lead=Decimal("0.20"),
-        registrations=0,
-        cost_per_registration=None,
-        deposits=1,
-    )
-    ctx = _make_ctx()
-
-    result = determine_enable_recommendation_level(row, ctx)
-
-    assert result is None
-
-
-# Проверяем, что OFF-объявление без расхода и без активности больше не получает OK-рекомендацию.
-def test_enable_recommendation_blocks_zero_spend_off_ad():
-    row = _make_row(
-        delivery_status="OFF",
-        spend=Decimal("0"),
-        clicks=0,
-        cpc=None,
-        leads=0,
-        cost_per_lead=None,
-        registrations=0,
-        cost_per_registration=None,
-        deposits=0,
-    )
-    ctx = _make_ctx()
-
-    result = determine_enable_recommendation_level(row, ctx)
-
-    assert result is None
 
 
 # Проверяем что CPM и частота сами по себе не создают алерт или ранний сигнал.

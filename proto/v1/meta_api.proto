@@ -16,7 +16,9 @@ service MetaApiService {
   // Path формат: "/me", "/act_XXX/insights", "/{ad_id}", "/{campaign_id}/copies" и т.д.
   // Параметры в query_params, тело в body_json.
   // access_token подставляется автоматически из page source.
-  rpc ExecuteGraphCall(ExecuteGraphCallRequest) returns (ExecuteGraphCallResponse);
+  // The v5 suffix is intentional: a v5 client must receive UNIMPLEMENTED from
+  // every pre-v5 server, including for read-only calls.
+  rpc ExecuteGraphCallV5(ExecuteGraphCallRequest) returns (ExecuteGraphCallResponse);
 
   // Проверить готовность Marketing API канала: жива ли Vision-сессия,
   // на правильной ли странице (Ads Manager), извлекается ли токен.
@@ -37,7 +39,7 @@ service MetaApiService {
 }
 
 message ExecuteGraphCallRequest {
-  // ID активной browser-сессии. Если пустой — используется preferred session.
+  // Exact active browser session. Required for every write/status reconciliation.
   string session_id = 1;
 
   // HTTP метод: "GET", "POST", "DELETE". Регистронезависимо.
@@ -59,10 +61,23 @@ message ExecuteGraphCallRequest {
   // Таймаут запроса в миллисекундах (по умолчанию 30_000 в browser-agent).
   optional int32 timeout_ms = 6;
 
-  // Мульти-кабинет: числовой ID кабинета (без act_) — fetch исполняется из вкладки
-  // этого кабинета («человеческий» паттерн). Пусто → текущая primary-вкладка
-  // (backward-compat; токен EAAB общий для всех кабинетов юзера).
-  string ad_account_id = 7;
+  // Явный числовой ID кабинета (без act_). ОБЯЗАТЕЛЕН для любого Graph write
+  // и status-reconciliation; сервер отклоняет пустое значение до внешнего вызова.
+  // Read-only /act_N endpoints также маршрутизируются по этому кабинету.
+  optional string ad_account_id = 7;
+
+  // Exact canonical Vision profile paired with session_id. Money operations
+  // fail closed if either identity is absent or the live pair differs.
+  string vision_profile_id = 8;
+
+  // Short-lived single-use capability issued by the fenced queue worker.
+  string authorized_caller = 9;
+  int64 task_id = 10;
+  string lease_owner = 11;
+  int64 lease_token = 12;
+  int64 capability_expires_at = 13;
+  string capability_nonce = 14;
+  string capability_signature = 15;
 }
 
 message ExecuteGraphCallResponse {
@@ -107,6 +122,11 @@ message CheckMetaApiHealthRequest {
   // канале (Failed to fetch). full_probe ловит это. Дороже — для watchdog/диагностики,
   // не для частых проверок. По умолчанию false (дешёвый token-only режим).
   bool full_probe = 2;
+
+  // Canonical PostgreSQL Vision profile required by the caller. When set,
+  // browser-agent must probe that exact live session and must never fall back
+  // to an unrelated preferred session.
+  string expected_vision_profile_id = 3;
 }
 
 message CheckMetaApiHealthResponse {
@@ -143,15 +163,26 @@ message CheckMetaApiHealthResponse {
   // Детали probe: "ok", "probe_network_down", "probe_token_invalid",
   // "meta_error:<code>" (Meta-side ошибка, но канал жив), "not_performed".
   string probe_detail = 10;
+
+  // Версия semantic contract между Python control plane и browser-agent.
+  // Любое изменение обязательной авторизации или lifecycle-семантики требует
+  // bump, даже если protobuf-поля аддитивны: release gate не должен принять
+  // старый сервер, который проигнорирует новый safety-контракт.
+  uint32 browser_contract_version = 11;
+
+  // Concrete live identity used for this probe. Both fields are required for
+  // an operator READY verdict; configured identity alone is not liveness.
+  string session_id = 12;
+  string vision_profile_id = 13;
 }
 
 // ======================== Media upload ========================
 
 message UploadImageRequest {
-  // ID активной browser-сессии. Если пустой — preferred session.
+  // Exact active browser session. Preferred-session fallback is forbidden.
   string session_id = 1;
 
-  // Ad account ID с префиксом "act_". Картинка цепляется к этому аккаунту.
+  // Обязательный явный числовой ID кабинета (без act_).
   string ad_account_id = 2;
 
   // Имя файла (нужно для form-data поля filename и для определения расширения).
@@ -163,13 +194,20 @@ message UploadImageRequest {
   // Бинарные данные файла целиком. Single-shot — ограничено max gRPC сообщением (~50MB).
   bytes file_bytes = 5;
 
-  // Альтернатива file_bytes: URL откуда Meta сама скачает картинку.
-  // Если задан — file_bytes игнорируется; multipart не отправляется.
-  // Должен быть HTTPS. Используется для источников в S3/CDN.
-  string image_url = 6;
+  // URL-backed upload был удалён из safety-first контракта: campaign builder
+  // загружает только доказанные байты. Номера и имена зарезервированы, чтобы
+  // старый клиент не мог случайно переиспользовать их с другой семантикой.
+  reserved 6, 7;
+  reserved "image_url", "name";
 
-  // Имя картинки для Meta (при URL-загрузке). Если пустое — Meta назначает сама.
-  string name = 7;
+  string vision_profile_id = 8;
+  string authorized_caller = 9;
+  int64 task_id = 10;
+  string lease_owner = 11;
+  int64 lease_token = 12;
+  int64 capability_expires_at = 13;
+  string capability_nonce = 14;
+  string capability_signature = 15;
 }
 
 message UploadImageResponse {
@@ -191,10 +229,10 @@ message UploadImageResponse {
 }
 
 message UploadVideoChunk {
-  // ID активной browser-сессии. Заполняется ТОЛЬКО в первом чанке (init).
+  // Exact active browser session. Заполняется ТОЛЬКО в первом чанке (init).
   string session_id = 1;
 
-  // Ad account ID с префиксом "act_". ТОЛЬКО в первом чанке.
+  // Обязательный явный числовой ID кабинета (без act_). ТОЛЬКО в первом чанке.
   string ad_account_id = 2;
 
   // Имя файла. ТОЛЬКО в первом чанке.
@@ -215,6 +253,16 @@ message UploadVideoChunk {
   // True если это init-only chunk (только метаданные, без bytes).
   // Полезно когда удобнее отделить init от первого transfer-чанка.
   bool is_init = 8;
+
+  // Exact identity and single-use fenced authorization; first chunk only.
+  string vision_profile_id = 9;
+  string authorized_caller = 10;
+  int64 task_id = 11;
+  string lease_owner = 12;
+  int64 lease_token = 13;
+  int64 capability_expires_at = 14;
+  string capability_nonce = 15;
+  string capability_signature = 16;
 }
 
 message UploadVideoResponse {

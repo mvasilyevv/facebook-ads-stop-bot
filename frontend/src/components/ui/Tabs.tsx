@@ -55,8 +55,8 @@ export function TabsList({
       className={cn(
         "inline-flex items-center",
         variant === "underline"
-          ? "gap-1 border-b border-[var(--hairline)] w-full"
-          : "gap-1 bg-bg-2 border border-[var(--hairline)] p-1 rounded-[var(--radius-2)]",
+          ? "gap-1 border-b border-[var(--color-hairline)] w-full"
+          : "gap-1 bg-bg-2 border border-[var(--color-hairline)] p-1 rounded-[var(--radius-2)]",
         className,
       )}
     >
@@ -66,7 +66,7 @@ export function TabsList({
           value={it.value}
           disabled={it.disabled}
           className={cn(
-            "inline-flex items-center gap-2 font-display transition-colors duration-[120ms]",
+            "inline-flex min-h-11 items-center gap-2 font-display transition-colors duration-[120ms]",
             "disabled:opacity-40 disabled:cursor-not-allowed",
             "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
             variant === "underline"
@@ -76,7 +76,7 @@ export function TabsList({
                   "data-[state=active]:border-accent data-[state=active]:text-bg-11 data-[state=active]:font-semibold",
                 ]
               : [
-                  "h-7 px-3 text-[11.5px] uppercase tracking-wider rounded-[var(--radius-1)]",
+                  "h-11 px-3 text-[12px] uppercase tracking-wider rounded-[var(--radius-1)]",
                   "text-bg-9 hover:text-bg-11",
                   "data-[state=active]:bg-bg-4 data-[state=active]:text-accent",
                 ],
@@ -84,7 +84,7 @@ export function TabsList({
         >
           {it.label}
           {it.count != null ? (
-            <span className="text-[10px] font-display tabular-nums border border-[var(--hairline)] px-1 leading-tight rounded-[var(--radius-1)]">
+            <span className="text-[12px] font-display tabular-nums border border-[var(--color-hairline)] px-1 leading-tight rounded-[var(--radius-1)]">
               {it.count}
             </span>
           ) : null}

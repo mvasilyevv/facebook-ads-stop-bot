@@ -1,42 +1,52 @@
 /**
- * WorkerPulse — worker-chip для TopBar (канон design_handoff/dashboard-shared.jsx).
+ * WorkerPulse — компактный статус источников и воркеров для TopBar.
  *
  * Пульс-точка + mono «N/M воркеров», dotted-underline. Цвет:
  *   все живы → bg-10 (нейтрально), 1–2 down → warning (жёлтый), 3+ → danger.
  * При hover/focus — popover со списком воркеров (online/offline).
  *
- * Данные: GET /health/details (useHealthDetails). Worker-статус живёт ТОЛЬКО
- * здесь (в Sidebar не дублируется).
+ * Данные: канонический operator snapshot. Cached/reconnecting состояние никогда
+ * не отображается зелёным.
  */
 
 import { useState } from "react";
+import { useOperatorRealtimeStatus } from "@fb/operator-api";
+import { severityForDataState, snapshotForRealtimeState } from "@fb/shared/operator/viewModel";
 import { PulseDot } from "@/components/data/PulseDot";
-import { useHealthDetails } from "@/lib/api/settings";
+import { useOperatorSnapshot } from "@/lib/api/operator";
 
 export function WorkerPulse() {
-  const { data, isError } = useHealthDetails();
+  const { data, isError } = useOperatorSnapshot({ window: "today" });
+  const realtimeStatus = useOperatorRealtimeStatus();
   const [open, setOpen] = useState(false);
 
-  const workers = data?.workers ?? [];
+  const snapshot = data ? snapshotForRealtimeState(data, realtimeStatus === "connected") : null;
+  const systemState = snapshot?.system.state ?? "unavailable";
+  const workers = snapshot?.system.data?.workers ?? [];
+  const confirmed = systemState === "ready";
   const total = workers.length;
-  const online = workers.filter((w) => w.status === "ONLINE").length;
+  const online = confirmed ? workers.filter((worker) => worker.severity === "ok").length : 0;
   const down = total - online;
 
   // Цвет по числу упавших (канон: 0 → success, 1-2 → warning, 3+ → danger).
   const color =
-    isError || total === 0
-      ? "var(--bg-8)"
+    isError || !confirmed || total === 0
+      ? "var(--color-bg-8)"
       : down === 0
-        ? "var(--success)"
+        ? "var(--color-success)"
         : down <= 2
-          ? "var(--warning)"
-          : "var(--danger)";
+          ? "var(--color-warning)"
+          : "var(--color-danger)";
 
-  const label = total > 0 ? `${online}/${total} воркеров` : "—/— воркеров";
-  const ariaLabel = total > 0 ? `Воркеры: ${label}` : "Воркеры: статус неизвестен";
+  const label = confirmed
+    ? `${online}/${total} воркеров`
+    : total > 0
+      ? `—/${total} воркеров`
+      : "—/— воркеров";
+  const ariaLabel = confirmed ? `Воркеры: ${label}` : "Воркеры: статус не подтверждён";
   // Текст-цвет чипа: при наличии down — семантический, иначе bg-10.
   const textClass =
-    down > 0 && total > 0
+    confirmed && down > 0 && total > 0
       ? down <= 2
         ? "text-warning"
         : "text-danger"
@@ -63,7 +73,7 @@ export function WorkerPulse() {
         onKeyDown={(event) => {
           if (event.key === "Escape") setOpen(false);
         }}
-        className={`inline-flex min-h-7 cursor-pointer items-center gap-1.5 border-b border-dotted border-bg-7 px-1 pb-px font-display text-[12px] tracking-[0.02em] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${textClass}`}
+        className={`inline-flex min-h-11 cursor-pointer items-center gap-1.5 border-b border-dotted border-bg-7 px-2 font-display text-[12px] tracking-[0.02em] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${textClass}`}
       >
         <PulseDot size={7} color={color} />
         <span className="tabular-nums whitespace-nowrap">{label}</span>
@@ -73,46 +83,56 @@ export function WorkerPulse() {
         <div
           id="worker-status-popover"
           role="tooltip"
-          className="absolute right-0 top-[calc(100%+8px)] z-[80] w-[248px] rounded-[var(--radius-3)] border border-[var(--hairline-strong)] bg-bg-3 p-3"
+          className="absolute right-0 top-[calc(100%+8px)] z-[80] w-[248px] rounded-[var(--radius-3)] border border-[var(--color-hairline-strong)] bg-bg-3 p-3"
         >
           <div className="mb-2 flex items-center justify-between">
-            <span className="font-display text-[10px] font-semibold uppercase tracking-[0.12em] text-bg-9">
+            <span className="font-display text-[12px] font-semibold uppercase tracking-[0.08em] text-bg-9">
               ВОРКЕРЫ
             </span>
-            <span className="font-display text-[11px] tabular-nums" style={{ color }}>
-              {online}/{total} online
+            <span className="font-display text-[12px] tabular-nums" style={{ color }}>
+              {confirmed ? `${online}/${total} в работе` : "Не подтверждено"}
             </span>
           </div>
           <div className="flex flex-col">
-            {sorted.map((w) => (
-              <div
-                key={w.name}
-                className="grid grid-cols-[auto_1fr_auto] items-center gap-2 border-t border-[var(--hairline)] py-1"
-              >
-                <span
-                  aria-hidden="true"
-                  className="size-1.5 shrink-0 rounded-full"
-                  style={{
-                    background: w.status === "ONLINE" ? "var(--success)" : "var(--danger)",
-                  }}
-                />
-                <span
-                  className={`truncate font-display text-[12px] ${
-                    w.status === "ONLINE" ? "text-bg-10" : "text-bg-11"
-                  }`}
+            {sorted.map((w) => {
+              const severity = severityForDataState(w.severity, systemState);
+              return (
+                <div
+                  key={w.id}
+                  className="grid grid-cols-[auto_1fr_auto] items-center gap-2 border-t border-[var(--color-hairline)] py-1"
                 >
-                  {w.name}
-                </span>
-                <span
-                  className="text-[10px]"
-                  style={{
-                    color: w.status === "ONLINE" ? "var(--bg-8)" : "var(--danger)",
-                  }}
-                >
-                  {w.status === "ONLINE" ? "up" : "down"}
-                </span>
-              </div>
-            ))}
+                  <span
+                    aria-hidden="true"
+                    className="size-1.5 shrink-0 rounded-full"
+                    style={{
+                      background:
+                        severity === "ok"
+                          ? "var(--color-success)"
+                          : severity === "warning"
+                            ? "var(--color-warning)"
+                            : severity === "critical"
+                              ? "var(--color-danger)"
+                              : "var(--color-bg-8)",
+                    }}
+                  />
+                  <span
+                    className={`truncate font-display text-[12px] ${
+                      severity === "ok" ? "text-bg-10" : "text-bg-11"
+                    }`}
+                  >
+                    {w.label}
+                  </span>
+                  <span
+                    className="text-[12px]"
+                    style={{
+                      color: severity === "critical" ? "var(--color-danger)" : "var(--color-bg-8)",
+                    }}
+                  >
+                    {confirmed ? w.status : "не подтверждено"}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

@@ -13,19 +13,10 @@ interface EmptyStateProps {
   className?: string;
 }
 
-export function EmptyState({
-  icon,
-  title,
-  description,
-  action,
-  className,
-}: EmptyStateProps) {
+export function EmptyState({ icon, title, description, action, className }: EmptyStateProps) {
   return (
     <div
-      className={cn(
-        "flex flex-col items-center justify-center text-center py-12 px-4",
-        className,
-      )}
+      className={cn("flex flex-col items-center justify-center text-center py-12 px-4", className)}
     >
       {icon ? (
         <div aria-hidden="true" className="text-bg-8 mb-6">

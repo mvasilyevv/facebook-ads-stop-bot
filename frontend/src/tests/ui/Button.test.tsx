@@ -18,7 +18,11 @@ describe("Button", () => {
   it("primary вариант — кнопка доступна для клика", async () => {
     const onClick = vi.fn();
     const user = userEvent.setup();
-    render(<Button variant="primary" onClick={onClick}>Ок</Button>);
+    render(
+      <Button variant="primary" onClick={onClick}>
+        Ок
+      </Button>,
+    );
     await user.click(screen.getByRole("button"));
     expect(onClick).toHaveBeenCalledOnce();
   });
@@ -27,7 +31,11 @@ describe("Button", () => {
   it("disabled — клик не срабатывает", async () => {
     const onClick = vi.fn();
     const user = userEvent.setup();
-    render(<Button disabled onClick={onClick}>Нельзя</Button>);
+    render(
+      <Button disabled onClick={onClick}>
+        Нельзя
+      </Button>,
+    );
     const btn = screen.getByRole("button");
     expect(btn).toBeDisabled();
     await user.click(btn);
@@ -52,13 +60,14 @@ describe("Button", () => {
   );
 
   // Sizes smoke
-  it.each(["xs", "sm", "md", "lg", "icon"] as const)(
-    "size %s рендерится",
-    (size) => {
-      render(<Button size={size} aria-label={size}>{size}</Button>);
-      expect(screen.getByRole("button")).toBeInTheDocument();
-    },
-  );
+  it.each(["xs", "sm", "md", "lg", "icon"] as const)("size %s рендерится", (size) => {
+    render(
+      <Button size={size} aria-label={size}>
+        {size}
+      </Button>,
+    );
+    expect(screen.getByRole("button")).toBeInTheDocument();
+  });
 
   // fullWidth
   it("fullWidth добавляет w-full класс", () => {
@@ -68,7 +77,11 @@ describe("Button", () => {
 
   // leftIcon не показывается при loading
   it("leftIcon скрыт во время loading", () => {
-    render(<Button loading leftIcon={<span data-testid="icon" />}>Текст</Button>);
+    render(
+      <Button loading leftIcon={<span data-testid="icon" />}>
+        Текст
+      </Button>,
+    );
     expect(screen.queryByTestId("icon")).not.toBeInTheDocument();
   });
 

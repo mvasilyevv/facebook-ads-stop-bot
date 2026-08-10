@@ -48,12 +48,7 @@ interface ProgressBarProps extends HTMLAttributes<HTMLDivElement> {
   thickness?: number;
 }
 
-export function ProgressBar({
-  value,
-  thickness = 2,
-  className,
-  ...rest
-}: ProgressBarProps) {
+export function ProgressBar({ value, thickness = 2, className, ...rest }: ProgressBarProps) {
   const indeterminate = value === undefined;
 
   return (
@@ -71,7 +66,10 @@ export function ProgressBar({
         style={
           indeterminate
             ? undefined
-            : { width: `${Math.min(100, Math.max(0, value ?? 0))}%`, transition: "width 200ms ease" }
+            : {
+                width: `${Math.min(100, Math.max(0, value ?? 0))}%`,
+                transition: "width 200ms ease",
+              }
         }
         className={cn(
           "h-full bg-accent",

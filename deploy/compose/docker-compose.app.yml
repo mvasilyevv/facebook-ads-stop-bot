@@ -1,0 +1,293 @@
+# Digest-only application plane.  Run as project fb_agent_blue or
+# fb_agent_green.  Durable data belongs to docker-compose.infra.yml.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-runtime-labels: &runtime-labels
+  com.fb-agent.managed: "true"
+  com.fb-agent.cluster-id: ${FB_AGENT_BOOTSTRAP_CLUSTER_ID:?set FB_AGENT_BOOTSTRAP_CLUSTER_ID}
+  com.fb-agent.purpose: app
+  com.fb-agent.color: ${APP_COLOR:?set APP_COLOR}
+  com.fb-agent.release: ${RELEASE_ID:?set RELEASE_ID}
+
+x-runtime-environment: &runtime-environment
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  REDIS_URL: redis://redis:6379/0
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  BROWSER_AGENT_HOST: vision-webtop
+  BROWSER_AGENT_GRPC_HOST: vision-webtop
+  BROWSER_AGENT_GRPC_PORT: "50051"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy-agent:4317
+  OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.10}
+  FB_AGENT_RELEASE: ${RELEASE_ID:?set RELEASE_ID}
+  FB_AGENT_DEPLOYMENT_COLOR: ${APP_COLOR:?set APP_COLOR}
+
+x-worker-common: &worker-common
+  image: ${WORKERS_IMAGE:?set WORKERS_IMAGE to image@sha256}
+  restart: unless-stopped
+  init: true
+  logging: *logging
+  mem_limit: 384m
+  oom_score_adj: 200
+  env_file: ${APP_ENV_FILE:?set APP_ENV_FILE}
+  networks: [platform]
+  profiles: [workers]
+  expose: ["9464"]
+  labels:
+    <<: *runtime-labels
+    com.fb-agent.metrics: "true"
+    com.fb-agent.metrics.port: "9464"
+
+services:
+  # Migration is explicitly invoked before either color starts.  The wrapper
+  # owns a PostgreSQL advisory lock for the full bootstrap/Alembic process.
+  migrator:
+    image: ${WORKERS_IMAGE:?set WORKERS_IMAGE to image@sha256}
+    restart: "no"
+    init: true
+    logging: *logging
+    env_file: ${APP_ENV_FILE:?set APP_ENV_FILE}
+    environment:
+      <<: *runtime-environment
+      WORKER_TYPE: migrate
+      MIGRATION_LOCK_TIMEOUT_SECONDS: ${MIGRATION_LOCK_TIMEOUT_SECONDS:-180}
+    entrypoint: ["python", "-m", "scripts.run-migrations-locked"]
+    networks: [platform]
+    profiles: [migration]
+    labels: *runtime-labels
+
+  adoption_importer:
+    image: ${WORKERS_IMAGE:?set WORKERS_IMAGE to image@sha256}
+    restart: "no"
+    init: true
+    logging: *logging
+    env_file: ${APP_ENV_FILE:?set APP_ENV_FILE}
+    environment:
+      <<: *runtime-environment
+    entrypoint: ["python", "/app/scripts/adopt-first-release.py"]
+    volumes:
+      - ${ADOPTION_BUNDLE_FILE:?set ADOPTION_BUNDLE_FILE}:/run/fb-agent/adoption-bundle-v1.json:ro
+    networks: [platform]
+    profiles: [adoption]
+    labels: *runtime-labels
+
+  telegram_webhook_configurator:
+    image: ${WORKERS_IMAGE:?set WORKERS_IMAGE to image@sha256}
+    restart: "no"
+    init: true
+    logging: *logging
+    env_file: ${APP_ENV_FILE:?set APP_ENV_FILE}
+    entrypoint: ["python", "/app/scripts/configure-telegram-webhook.py"]
+    networks: [platform]
+    profiles: [release]
+    labels: *runtime-labels
+
+  api:
+    image: ${API_IMAGE:?set API_IMAGE to image@sha256}
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    mem_limit: 512m
+    oom_score_adj: -200
+    env_file:
+      - ${APP_ENV_FILE:?set APP_ENV_FILE}
+      - ${BROWSER_MAINTENANCE_ENV_FILE:?set BROWSER_MAINTENANCE_ENV_FILE}
+      - ${BROWSER_AUTHORITY_ENV_FILE:?set BROWSER_AUTHORITY_ENV_FILE}
+    environment:
+      <<: *runtime-environment
+      OTEL_SERVICE_NAME: api
+      CAMPAIGN_UPLOAD_ROOT: /var/lib/fb_agent/campaign_uploads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${APP_API_PORT:?set APP_API_PORT}:8100"
+    expose: ["8100"]
+    volumes:
+      - campaign_uploads:/var/lib/fb_agent/campaign_uploads
+      - ${DESKTOP_READINESS_DIR:-/opt/fb-agent/shared/desktop-readiness}:/run/fb-agent-desktop-readiness:ro
+    networks: [platform]
+    labels:
+      <<: *runtime-labels
+      com.fb-agent.metrics: "true"
+      com.fb-agent.metrics.port: "8100"
+      com.fb-agent.service: api
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8100/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  frontend:
+    image: ${FRONTEND_IMAGE:?set FRONTEND_IMAGE to image@sha256}
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    ports:
+      - "127.0.0.1:${APP_WEB_PORT:?set APP_WEB_PORT}:80"
+    networks: [platform]
+    labels:
+      <<: *runtime-labels
+      com.fb-agent.service: frontend
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  mini-app:
+    image: ${MINI_APP_IMAGE:?set MINI_APP_IMAGE to image@sha256}
+    restart: unless-stopped
+    init: true
+    logging: *logging
+    ports:
+      - "127.0.0.1:${APP_TMA_PORT:?set APP_TMA_PORT}:80"
+    networks: [platform]
+    labels:
+      <<: *runtime-labels
+      com.fb-agent.service: mini-app
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/tma/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  observer:
+    <<: *worker-common
+    oom_score_adj: -400
+    stop_grace_period: 60s
+    environment:
+      <<: *runtime-environment
+      WORKER_TYPE: observer
+      OBSERVER_CABINET_CONCURRENCY: ${OBSERVER_CABINET_CONCURRENCY:-2}
+      OBSERVER_SCAN_DEADLINE_SECONDS: ${OBSERVER_SCAN_DEADLINE_SECONDS:-120}
+    labels:
+      <<: *runtime-labels
+      com.fb-agent.metrics: "true"
+      com.fb-agent.metrics.port: "9464"
+      com.fb-agent.service: observer
+
+  autopause_worker:
+    <<: *worker-common
+    env_file:
+      - ${APP_ENV_FILE:?set APP_ENV_FILE}
+      - ${BROWSER_AUTOPAUSE_ENV_FILE:?set BROWSER_AUTOPAUSE_ENV_FILE}
+    entrypoint: ["python", "-m", "apps.autopause_worker.main"]
+    oom_score_adj: -450
+    stop_grace_period: 60s
+    environment:
+      <<: *runtime-environment
+      OTEL_SERVICE_NAME: autopause_worker
+      META_API_WORKER_NAME: autopause
+      META_API_WORKER_LANES: money
+      META_API_LEASE_SECONDS: "60"
+    labels:
+      <<: *runtime-labels
+      com.fb-agent.metrics: "true"
+      com.fb-agent.metrics.port: "9464"
+      com.fb-agent.service: autopause_worker
+      com.fb-agent.money: "true"
+
+  meta_api:
+    <<: *worker-common
+    env_file:
+      - ${APP_ENV_FILE:?set APP_ENV_FILE}
+      - ${BROWSER_META_API_ENV_FILE:?set BROWSER_META_API_ENV_FILE}
+    oom_score_adj: -400
+    stop_grace_period: 60s
+    environment:
+      <<: *runtime-environment
+      WORKER_TYPE: meta_api
+      META_API_WORKER_NAME: meta_api
+      META_API_WORKER_LANES: interactive,bulk,background
+      META_API_LEASE_SECONDS: "60"
+    labels:
+      <<: *runtime-labels
+      com.fb-agent.metrics: "true"
+      com.fb-agent.metrics.port: "9464"
+      com.fb-agent.service: meta_api
+
+  telegram_delivery_worker:
+    <<: *worker-common
+    entrypoint: ["python", "-m", "apps.telegram_delivery_worker.main"]
+    environment:
+      <<: *runtime-environment
+      OTEL_SERVICE_NAME: telegram_delivery_worker
+    labels:
+      <<: *runtime-labels
+      com.fb-agent.metrics: "true"
+      com.fb-agent.metrics.port: "9464"
+      com.fb-agent.service: telegram_delivery_worker
+
+  telegram_update_worker:
+    <<: *worker-common
+    entrypoint: ["python", "-m", "apps.telegram_update_worker.main"]
+    environment:
+      <<: *runtime-environment
+      OTEL_SERVICE_NAME: telegram_update_worker
+    labels:
+      <<: *runtime-labels
+      com.fb-agent.metrics: "true"
+      com.fb-agent.metrics.port: "9464"
+      com.fb-agent.service: telegram_update_worker
+
+  cleanup:
+    <<: *worker-common
+    environment:
+      <<: *runtime-environment
+      WORKER_TYPE: cleanup
+
+  reconciler:
+    <<: *worker-common
+    environment:
+      <<: *runtime-environment
+      WORKER_TYPE: reconciler
+
+  health_watchdog:
+    <<: *worker-common
+    environment:
+      <<: *runtime-environment
+      WORKER_TYPE: health_watchdog
+
+  digest_scheduler:
+    <<: *worker-common
+    environment:
+      <<: *runtime-environment
+      WORKER_TYPE: digest_scheduler
+
+  tracker_reconciliation_worker:
+    <<: *worker-common
+    environment:
+      <<: *runtime-environment
+      WORKER_TYPE: tracker_reconciliation_worker
+
+  campaign_creator:
+    <<: *worker-common
+    env_file:
+      - ${APP_ENV_FILE:?set APP_ENV_FILE}
+      - ${BROWSER_CAMPAIGN_CREATOR_ENV_FILE:?set BROWSER_CAMPAIGN_CREATOR_ENV_FILE}
+    stop_grace_period: 60s
+    environment:
+      <<: *runtime-environment
+      WORKER_TYPE: campaign_creator
+      CAMPAIGN_UPLOAD_ROOT: /var/lib/fb_agent/campaign_uploads
+    volumes:
+      - campaign_uploads:/var/lib/fb_agent/campaign_uploads
+
+networks:
+  platform:
+    name: fb_agent_safety_first_platform
+    external: true
+
+volumes:
+  campaign_uploads:
+    name: fb_agent_safety_first_campaign_uploads
+    external: true

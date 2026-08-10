@@ -67,23 +67,26 @@ def is_special(value: str) -> bool:
 
 
 _DEFAULT_RETENTION: dict[str, str] = {
-    "ad_library_scan": "14 days",
-    "ad_library_ad_orphan": "14 days",
-    "ad_library_snapshot": "14 days",
-    "ad_library_media_orphan": "immediate",
     "ad_metrics": "90 days",
     "alert_events": "365 days",
     "scan_runs": "30 days",
     "meta_api_audit_log": "30 days",
-    "meta_api_webhook_event": "90 days",
-    "tracker_postback": "60 days",
     "adsetpro_postback_events": "60 days",
     "task_queue_completed": "30 days",
     "task_queue_failed": "90 days",
-    "enable_recommendations": "30 days",
+    "adset_duplicate_previews_expired": "immediate",
+    "browser_operation_capabilities_expired": "immediate",
     "telegram_invites_expired": "30 days",
-    "cabinet_day_archives": "365 days",
-    "ad_library_winner_archive": "forever",
+    "operator_revision_events": "7 days",
+    # Durable notification/idempotency boundaries.  Only terminal rows are
+    # eligible; active incidents, queued deliveries and leased webhook work are
+    # preserved regardless of age.
+    "incidents_terminal": "365 days",
+    "notification_events_terminal": "365 days",
+    "telegram_action_tokens_terminal": "90 days",
+    "telegram_navigation_tokens_terminal": "30 days",
+    "telegram_updates_terminal": "90 days",
+    "telegram_command_replies_terminal": "90 days",
     "ai_cache": "redis_ttl_only",
 }
 

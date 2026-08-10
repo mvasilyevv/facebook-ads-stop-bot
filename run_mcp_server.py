@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entrypoint MCP-сервера FB Stop Bot (stdio transport).
+"""Entrypoint MCP-сервера FB Agent (stdio transport).
 
 Запускается Claude Desktop через config `claude_desktop_config.json` —
 см. `docs/MCP_SETUP.md`. Также можно стартовать вручную для smoke-теста:

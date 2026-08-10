@@ -1,10 +1,11 @@
-// ESLint flat config. Запрещает прямой el.click() и el.value=... внутри
-// creator/steps/, чтобы все взаимодействия шли через humanizer.ts.
+// Minimal flat config for every browser-agent TypeScript source. Type-aware
+// correctness remains enforced by `tsc`; this pass catches syntax/control-flow
+// mistakes without depending on a retired feature-specific directory.
 const tsParser = require('@typescript-eslint/parser');
 
 module.exports = [
   {
-    files: ['src/creator/steps/**/*.ts'],
+    files: ['src/**/*.ts'],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -13,17 +14,10 @@ module.exports = [
       },
     },
     rules: {
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector: "CallExpression[callee.property.name='click']",
-          message: 'Используй humanClick() из humanizer.ts',
-        },
-        {
-          selector: "AssignmentExpression[left.property.name='value']",
-          message: 'Используй humanType() из humanizer.ts',
-        },
-      ],
+      'no-constant-condition': ['error', { checkLoops: false }],
+      'no-debugger': 'error',
+      'no-duplicate-imports': 'error',
+      'no-unreachable': 'error',
     },
   },
 ];

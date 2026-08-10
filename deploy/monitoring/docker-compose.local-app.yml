@@ -1,0 +1,40 @@
+# Optional same-host overlay. Do not use on the preferred off-host monitoring
+# node; application telemetry arrives there through docker-compose.agent.yml.
+
+services:
+  prometheus:
+    networks: [monitoring, platform]
+
+  alloy:
+    networks:
+      monitoring:
+      platform:
+        aliases: [alloy-agent]
+
+  browser-agent-metrics:
+    image: ${ALLOY_IMAGE:?set ALLOY_IMAGE to image@sha256}
+    restart: unless-stopped
+    command:
+      - run
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/browser-agent-local.alloy:/etc/alloy/config.alloy:ro
+      - browser_agent_metrics_data:/var/lib/alloy/data
+    networks: [monitoring, platform]
+    depends_on:
+      - prometheus
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  monitoring:
+  platform:
+    name: fb_agent_safety_first_platform
+    external: true
+
+volumes:
+  browser_agent_metrics_data:

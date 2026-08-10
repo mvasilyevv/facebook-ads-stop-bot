@@ -2,11 +2,13 @@
 """Интеграционные тесты для core.tasks.queue — реальная БД.
 
 Покрывает контракты: idempotency_key, FOR UPDATE SKIP LOCKED, exponential backoff,
-reconcile stuck running, cancel stale drafts.
+reconcile stuck running.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 
 import pytest
@@ -14,14 +16,22 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from core.tasks import (
-    cancel_stale_drafts,
     claim_next_task,
     create_task,
     mark_succeeded,
     reconcile_stuck_running,
     requeue_for_retry,
 )
-from core.tasks.queue import get_task_by_idempotency_key
+from core.tasks.queue import (
+    checkpoint_duplicate_adset_structure,
+    claim_browser_ready_task,
+    defer_unknown_reconciliation,
+    get_task_by_idempotency_key,
+    requeue_duplicate_recovery,
+    requeue_unknown_for_reconciliation,
+    resolve_status_reconciliation_not_applied,
+)
+from core.tasks.wakeup import TaskQueueWakeup
 
 
 @pytest_asyncio.fixture
@@ -41,11 +51,11 @@ async def clean_task_queue(pg_engine):
 @pytest.mark.asyncio
 async def test_create_task_idempotent(pg_engine, clean_task_queue) -> None:
     key = f"idem-{uuid.uuid4().hex[:8]}"
-    payload = {"fb_ad_id": "12345"}
+    payload = {"source": "test", "target_id": "12345"}
 
     first_id = await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=key,
         payload=payload,
         requested_by="test",
@@ -54,7 +64,7 @@ async def test_create_task_idempotent(pg_engine, clean_task_queue) -> None:
 
     second_id = await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=key,
         payload=payload,
         requested_by="test",
@@ -65,8 +75,55 @@ async def test_create_task_idempotent(pg_engine, clean_task_queue) -> None:
     task = await get_task_by_idempotency_key(pg_engine, idempotency_key=key)
     assert task is not None
     assert task.id == first_id
-    assert task.payload["fb_ad_id"] == "12345"
+    assert task.payload["target_id"] == "12345"
     assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_committed_money_task_wakes_listener_before_poll_reconciliation(
+    pg_engine,
+    clean_task_queue,
+    fresh_browser_readiness,
+) -> None:
+    """The wakeup is fast, while the following claim remains DB-authoritative."""
+    wakeup = TaskQueueWakeup(
+        pg_engine.url.render_as_string(hide_password=False),
+        task_type="meta_api_mutation",
+        lanes=("money",),
+        reconcile_seconds=5,
+    )
+    stop = asyncio.Event()
+    listener_task = asyncio.create_task(wakeup.run(stop))
+    await asyncio.wait_for(wakeup.ready.wait(), timeout=2)
+    started = time.perf_counter()
+    try:
+        task_id = await create_task(
+            pg_engine,
+            task_type="meta_api_mutation",
+            idempotency_key=f"notify-money-{uuid.uuid4().hex}",
+            payload={
+                "mutation_kind": "pause_ad",
+                "target_id": "notify-test-ad",
+                "ad_account_id": "123",
+            },
+            requested_by="bot_auto_stop",
+            lane="money",
+        )
+        assert task_id is not None
+        assert await asyncio.wait_for(wakeup.wait_for_work(stop), timeout=1) is True
+        assert time.perf_counter() - started < 1
+
+        claim = await claim_browser_ready_task(
+            pg_engine,
+            task_type="meta_api_mutation",
+            lanes=("money",),
+            worker_id=uuid.uuid4(),
+        )
+        assert claim.task is not None
+        assert claim.task.id == task_id
+    finally:
+        stop.set()
+        await asyncio.wait_for(listener_task, timeout=2)
 
 
 # Сценарий: claim атомарно переводит pending → running
@@ -75,20 +132,20 @@ async def test_claim_marks_running(pg_engine, clean_task_queue) -> None:
     key = f"claim-{uuid.uuid4().hex[:8]}"
     await create_task(
         pg_engine,
-        task_type="enable",
+        task_type="observer_scan",
         idempotency_key=key,
-        payload={"fb_ad_id": "999"},
+        payload={"source": "test", "target_id": "999"},
         requested_by="test",
     )
 
-    claim = await claim_next_task(pg_engine, task_type="enable")
+    claim = await claim_next_task(pg_engine, task_type="observer_scan")
     assert claim.queue_empty is False
     assert claim.task is not None
     assert claim.task.status == "running"
-    assert claim.task.payload["fb_ad_id"] == "999"
+    assert claim.task.payload["target_id"] == "999"
 
     # Второй claim того же типа — пусто (уже захвачено)
-    second = await claim_next_task(pg_engine, task_type="enable")
+    second = await claim_next_task(pg_engine, task_type="observer_scan")
     assert second.queue_empty is True
     assert second.task is None
 
@@ -98,25 +155,172 @@ async def test_claim_marks_running(pg_engine, clean_task_queue) -> None:
 async def test_claim_filters_by_type(pg_engine, clean_task_queue) -> None:
     await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=f"d-{uuid.uuid4().hex[:6]}",
-        payload={"fb_ad_id": "1"},
+        payload={"source": "test", "target_id": "1"},
         requested_by="test",
     )
     await create_task(
         pg_engine,
-        task_type="enable",
+        task_type="tracker_event_process",
         idempotency_key=f"e-{uuid.uuid4().hex[:6]}",
-        payload={"fb_ad_id": "2"},
+        payload={"source": "test", "target_id": "2"},
         requested_by="test",
     )
 
-    # Воркер enable не должен схватить disable-задачу
-    disable_claim = await claim_next_task(pg_engine, task_type="disable")
-    enable_claim = await claim_next_task(pg_engine, task_type="enable")
+    observer_claim = await claim_next_task(pg_engine, task_type="observer_scan")
+    tracker_claim = await claim_next_task(pg_engine, task_type="tracker_event_process")
 
-    assert disable_claim.task.payload["fb_ad_id"] == "1"
-    assert enable_claim.task.payload["fb_ad_id"] == "2"
+    assert observer_claim.task.payload["target_id"] == "1"
+    assert tracker_claim.task.payload["target_id"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_browser_maintenance_blocks_external_claims_until_expiry(
+    pg_engine,
+    clean_task_queue,
+) -> None:
+    await create_task(
+        pg_engine,
+        task_type="observer_scan",
+        idempotency_key=f"maintenance-observer-{uuid.uuid4().hex[:6]}",
+        payload={"source": "test", "target_id": "1"},
+        requested_by="test",
+    )
+    await create_task(
+        pg_engine,
+        task_type="tracker_event_process",
+        idempotency_key=f"maintenance-tracker-{uuid.uuid4().hex[:6]}",
+        payload={"source": "test", "target_id": "2"},
+        requested_by="test",
+    )
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO system_config (key, value, description)
+                VALUES (
+                  'browser_maintenance',
+                  jsonb_build_object(
+                    'owner', 'test',
+                    'expires_at', to_char(
+                      clock_timestamp() + interval '5 minutes',
+                      'YYYY-MM-DD"T"HH24:MI:SS.USOF'
+                    )
+                  ),
+                  'test'
+                )
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                """
+            )
+        )
+    try:
+        blocked = await claim_next_task(pg_engine, task_type="observer_scan")
+        unaffected = await claim_next_task(
+            pg_engine,
+            task_type="tracker_event_process",
+        )
+        assert blocked.queue_empty is True
+        assert unaffected.task is not None
+
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    UPDATE system_config
+                    SET value = jsonb_set(
+                      value,
+                      '{expires_at}',
+                      to_jsonb(
+                        to_char(
+                          clock_timestamp() - interval '1 second',
+                          'YYYY-MM-DD"T"HH24:MI:SS.USOF'
+                        )
+                      )
+                    )
+                    WHERE key = 'browser_maintenance'
+                    """
+                )
+            )
+        released = await claim_next_task(pg_engine, task_type="observer_scan")
+        assert released.task is not None
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(text("DELETE FROM system_config WHERE key = 'browser_maintenance'"))
+
+
+@pytest.mark.asyncio
+async def test_browser_claim_snapshot_is_serialized_with_maintenance_commit(
+    pg_engine,
+    clean_task_queue,
+) -> None:
+    """A claim begun before gate INSERT must observe it after the shared lock."""
+    await create_task(
+        pg_engine,
+        task_type="observer_scan",
+        idempotency_key=f"fenced-observer-{uuid.uuid4().hex[:6]}",
+        payload={"source": "test", "target_id": "1"},
+        requested_by="test",
+    )
+    await create_task(
+        pg_engine,
+        task_type="tracker_event_process",
+        idempotency_key=f"fenced-tracker-{uuid.uuid4().hex[:6]}",
+        payload={"source": "test", "target_id": "2"},
+        requested_by="test",
+    )
+    async with pg_engine.begin() as cleanup:
+        await cleanup.execute(text("DELETE FROM system_config WHERE key = 'browser_maintenance'"))
+
+    try:
+        async with pg_engine.begin() as maintenance:
+            await maintenance.execute(
+                text(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                      hashtext('fb-agent'),
+                      hashtext('browser-maintenance')
+                    )
+                    """
+                )
+            )
+            waiting_claim = asyncio.create_task(
+                claim_next_task(pg_engine, task_type="observer_scan")
+            )
+            await asyncio.sleep(0.1)
+            assert not waiting_claim.done()
+
+            # Non-browser work never participates in the browser fence.
+            tracker_claim = await asyncio.wait_for(
+                claim_next_task(pg_engine, task_type="tracker_event_process"),
+                timeout=2,
+            )
+            assert tracker_claim.task is not None
+
+            await maintenance.execute(
+                text(
+                    """
+                    INSERT INTO system_config (key, value, description)
+                    VALUES (
+                      'browser_maintenance',
+                      jsonb_build_object(
+                        'owner', 'concurrency-test',
+                        'expires_at', clock_timestamp() + interval '5 minutes'
+                      ),
+                      'test'
+                    )
+                    """
+                )
+            )
+
+        blocked_claim = await asyncio.wait_for(waiting_claim, timeout=2)
+        assert blocked_claim.queue_empty is True
+        assert blocked_claim.task is None
+    finally:
+        async with pg_engine.begin() as cleanup:
+            await cleanup.execute(
+                text("DELETE FROM system_config WHERE key = 'browser_maintenance'")
+            )
 
 
 # Сценарий: mark_succeeded ставит completed_at и status
@@ -125,13 +329,20 @@ async def test_mark_succeeded(pg_engine, clean_task_queue) -> None:
     key = f"ok-{uuid.uuid4().hex[:8]}"
     task_id = await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=key,
-        payload={"fb_ad_id": "1"},
+        payload={"source": "test", "target_id": "1"},
         requested_by="test",
     )
-    await claim_next_task(pg_engine, task_type="disable")
-    await mark_succeeded(pg_engine, task_id=task_id, result={"final_state": "false"})
+    claim = await claim_next_task(pg_engine, task_type="observer_scan")
+    assert claim.task is not None
+    await mark_succeeded(
+        pg_engine,
+        task_id=task_id,
+        result={"final_state": "false"},
+        lease_owner=claim.task.lease_owner,
+        lease_token=claim.task.lease_token,
+    )
 
     async with pg_engine.connect() as conn:
         row = (
@@ -147,17 +358,19 @@ async def test_mark_succeeded(pg_engine, clean_task_queue) -> None:
 
 # Сценарий: requeue_for_retry — exponential backoff + attempt_count++
 @pytest.mark.asyncio
-async def test_requeue_increments_attempts_and_sets_next_retry(pg_engine, clean_task_queue) -> None:
+async def test_requeue_increments_attempts_and_sets_available_at(
+    pg_engine, clean_task_queue
+) -> None:
     key = f"retry-{uuid.uuid4().hex[:8]}"
     task_id = await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=key,
-        payload={"fb_ad_id": "1"},
+        payload={"source": "test", "target_id": "1"},
         requested_by="test",
         max_attempts=5,
     )
-    claim = await claim_next_task(pg_engine, task_type="disable")
+    claim = await claim_next_task(pg_engine, task_type="observer_scan")
     assert claim.task is not None
 
     retried = await requeue_for_retry(
@@ -166,6 +379,8 @@ async def test_requeue_increments_attempts_and_sets_next_retry(pg_engine, clean_
         error="network glitch",
         attempt_count=claim.task.attempt_count,
         max_attempts=claim.task.max_attempts,
+        lease_owner=claim.task.lease_owner,
+        lease_token=claim.task.lease_token,
     )
     assert retried is True
 
@@ -173,7 +388,7 @@ async def test_requeue_increments_attempts_and_sets_next_retry(pg_engine, clean_
         row = (
             await conn.execute(
                 text(
-                    "SELECT status, attempt_count, next_retry_at, last_error "
+                    "SELECT status, attempt_count, available_at, last_error "
                     "FROM task_queue WHERE id = :i"
                 ),
                 {"i": task_id},
@@ -185,19 +400,181 @@ async def test_requeue_increments_attempts_and_sets_next_retry(pg_engine, clean_
     assert "network glitch" in row[3]
 
 
+@pytest.mark.parametrize(
+    "writer",
+    (
+        "retry",
+        "unknown",
+        "defer_unknown",
+        "duplicate_checkpoint",
+        "duplicate_recovery",
+        "status_reconciliation",
+    ),
+)
+@pytest.mark.asyncio
+async def test_expired_lease_rejects_every_claimed_task_writer_without_mutation(
+    pg_engine,
+    clean_task_queue,
+    fresh_browser_readiness,
+    writer: str,
+) -> None:
+    """Owner/token identity is insufficient once its lease authority expired."""
+    duplicate = writer in {"duplicate_checkpoint", "duplicate_recovery"}
+    payload = {
+        "source": "expired-lease-test",
+        "target_id": "12345",
+    }
+    if duplicate:
+        payload.update(
+            {
+                "mutation_kind": "duplicate_adset_structure",
+                "ad_account_id": "123",
+                "params": {},
+            }
+        )
+    task_type = "meta_api_mutation" if duplicate else "observer_scan"
+    task_id = await create_task(
+        pg_engine,
+        task_type=task_type,
+        idempotency_key=f"expired-{writer}-{uuid.uuid4().hex}",
+        payload=payload,
+        requested_by="test",
+        max_attempts=5,
+    )
+    assert task_id is not None
+    if duplicate:
+        claim = await claim_browser_ready_task(
+            pg_engine,
+            task_type=task_type,
+            lanes=("bulk",),
+        )
+    else:
+        claim = await claim_next_task(pg_engine, task_type=task_type)
+    assert claim.task is not None
+    task = claim.task
+
+    checkpoint = {
+        "outcome": "UNKNOWN",
+        "checkpoint_type": "duplicate_adset_structure",
+        "checkpoint_version": 2,
+        "phase": "recovery_retrying",
+        "partial_fail": True,
+        "created_ids": {
+            "campaigns": ["1001"],
+            "adsets": ["2001"],
+            "ads": ["3001"],
+        },
+        "failed_steps": [{"step": "verify", "error": "deadline"}],
+        "cleanup_failures": [{"id": "2001", "error": "transport"}],
+        "recovery_requested": True,
+    }
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET lease_expires_at = clock_timestamp() - interval '1 second',
+                    external_started_at = CASE
+                        WHEN :needs_reconciliation THEN clock_timestamp()
+                        ELSE external_started_at
+                    END,
+                    result = CASE
+                        WHEN :needs_reconciliation
+                            THEN jsonb_build_object(
+                                'outcome', 'UNKNOWN',
+                                'reconcile_required', true
+                            )
+                        ELSE result
+                    END
+                WHERE id = :task_id
+                """
+            ),
+            {
+                "task_id": task.id,
+                "needs_reconciliation": writer == "status_reconciliation",
+            },
+        )
+
+    snapshot_sql = text(
+        """
+        SELECT status, attempt_count, available_at, deadline_at, last_error,
+               result, lease_owner, lease_token, lease_expires_at, updated_at
+        FROM task_queue
+        WHERE id = :task_id
+        """
+    )
+    async with pg_engine.connect() as conn:
+        before = dict((await conn.execute(snapshot_sql, {"task_id": task.id})).one()._mapping)
+
+    if writer == "retry":
+        applied = await requeue_for_retry(
+            pg_engine,
+            task_id=task.id,
+            error="must not apply",
+            attempt_count=task.attempt_count,
+            max_attempts=task.max_attempts,
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+            lane=task.lane,
+        )
+    elif writer == "unknown":
+        applied = await requeue_unknown_for_reconciliation(
+            pg_engine,
+            task=task,
+            error="must not apply",
+        )
+    elif writer == "defer_unknown":
+        applied = await defer_unknown_reconciliation(
+            pg_engine,
+            task=task,
+            error="must not apply",
+        )
+    elif writer == "duplicate_checkpoint":
+        applied = await checkpoint_duplicate_adset_structure(
+            pg_engine,
+            task_id=task.id,
+            checkpoint={**checkpoint, "recovery_requested": False},
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+        )
+    elif writer == "duplicate_recovery":
+        applied = await requeue_duplicate_recovery(
+            pg_engine,
+            task_id=task.id,
+            checkpoint=checkpoint,
+            error="must not apply",
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+        )
+    else:
+        applied = await resolve_status_reconciliation_not_applied(
+            pg_engine,
+            task_id=task.id,
+            effective_status="ACTIVE",
+            lease_owner=task.lease_owner,
+            lease_token=task.lease_token,
+        )
+
+    assert applied in {False, None}
+    async with pg_engine.connect() as conn:
+        after = dict((await conn.execute(snapshot_sql, {"task_id": task.id})).one()._mapping)
+    assert after == before
+
+
 # Сценарий: исчерпан max_attempts → status='failed', а не retrying
 @pytest.mark.asyncio
 async def test_requeue_marks_failed_at_max_attempts(pg_engine, clean_task_queue) -> None:
     key = f"fail-{uuid.uuid4().hex[:8]}"
     task_id = await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=key,
-        payload={"fb_ad_id": "1"},
+        payload={"source": "test", "target_id": "1"},
         requested_by="test",
         max_attempts=3,
     )
-    await claim_next_task(pg_engine, task_type="disable")
+    claim = await claim_next_task(pg_engine, task_type="observer_scan")
+    assert claim.task is not None
 
     # При attempt_count=2 + max_attempts=3 → новая попытка = 3 = max_attempts → failed
     retried = await requeue_for_retry(
@@ -206,6 +583,8 @@ async def test_requeue_marks_failed_at_max_attempts(pg_engine, clean_task_queue)
         error="persistent error",
         attempt_count=2,
         max_attempts=3,
+        lease_owner=claim.task.lease_owner,
+        lease_token=claim.task.lease_token,
     )
     assert retried is False
 
@@ -226,17 +605,20 @@ async def test_reconcile_stuck_running(pg_engine, clean_task_queue) -> None:
     key = f"stuck-{uuid.uuid4().hex[:8]}"
     task_id = await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=key,
-        payload={"fb_ad_id": "1"},
+        payload={"source": "test", "target_id": "1"},
         requested_by="test",
     )
-    await claim_next_task(pg_engine, task_type="disable")
+    await claim_next_task(pg_engine, task_type="observer_scan")
 
     # Симулируем что воркер «крашнулся» 1 час назад
     async with pg_engine.begin() as conn:
         await conn.execute(
-            text("UPDATE task_queue SET updated_at = NOW() - interval '1 hour' WHERE id = :i"),
+            text(
+                "UPDATE task_queue SET updated_at = NOW() - interval '1 hour', "
+                "lease_expires_at = NOW() - interval '1 second' WHERE id = :i"
+            ),
             {"i": task_id},
         )
 
@@ -254,61 +636,27 @@ async def test_reconcile_stuck_running(pg_engine, clean_task_queue) -> None:
     assert "stuck timeout" in (row[1] or "")
 
 
-# Сценарий: cancel_stale_drafts отменяет drafts старше 24h
-@pytest.mark.asyncio
-async def test_cancel_stale_drafts(pg_engine, clean_task_queue) -> None:
-    key = f"draft-{uuid.uuid4().hex[:8]}"
-    task_id = await create_task(
-        pg_engine,
-        task_type="meta_api_mutation",
-        idempotency_key=key,
-        payload={"ad_id": "1"},
-        requested_by="ai",
-        status="draft",
-    )
-
-    # Симулируем что draft создан 25h назад
-    async with pg_engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE task_queue SET created_at = NOW() - interval '25 hours' WHERE id = :i"),
-            {"i": task_id},
-        )
-
-    n = await cancel_stale_drafts(pg_engine, older_than_seconds=24 * 3600)
-    assert n >= 1
-
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT status, completed_at FROM task_queue WHERE id = :i"),
-                {"i": task_id},
-            )
-        ).first()
-    assert row[0] == "cancelled"
-    assert row[1] is not None
-
-
-# Сценарий: claim не возвращает задачу с next_retry_at в будущем
+# Сценарий: claim не возвращает задачу с available_at в будущем
 @pytest.mark.asyncio
 async def test_claim_skips_future_retry(pg_engine, clean_task_queue) -> None:
     key = f"future-{uuid.uuid4().hex[:8]}"
     task_id = await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=key,
-        payload={"fb_ad_id": "1"},
+        payload={"source": "test", "target_id": "1"},
         requested_by="test",
     )
-    # Ставим next_retry_at в будущее и status='retrying'
+    # Ставим available_at в будущее и status='retrying'
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
                 "UPDATE task_queue SET status = 'retrying', "
-                "next_retry_at = NOW() + interval '1 hour' WHERE id = :i"
+                "available_at = NOW() + interval '1 hour' WHERE id = :i"
             ),
             {"i": task_id},
         )
 
-    claim = await claim_next_task(pg_engine, task_type="disable")
+    claim = await claim_next_task(pg_engine, task_type="observer_scan")
     assert claim.queue_empty is True
     assert claim.task is None

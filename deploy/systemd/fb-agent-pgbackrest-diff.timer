@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily FB Agent pgBackRest differential backup
+
+[Timer]
+OnCalendar=Mon..Sat *-*-* 02:15:00 Europe/Kaliningrad
+Persistent=true
+RandomizedDelaySec=10m
+Unit=fb-agent-pgbackrest-diff.service
+
+[Install]
+WantedBy=timers.target

@@ -192,6 +192,8 @@ def meta_api_ad_row_to_scanned_row(
 
     return ScannedAdRow(
         fb_ad_id=api_row.fb_ad_id,
+        campaign_id=api_row.fb_campaign_id or "",
+        adset_id=api_row.fb_adset_id or "",
         campaign_name=api_row.campaign_name,
         adset_name=api_row.adset_name,
         ad_name=api_row.name,
@@ -219,30 +221,3 @@ def meta_api_ad_row_to_scanned_row(
         deposits=deposits,
         resolved_offer_code=resolved_offer_code,
     )
-
-
-# ====================== meta_api_observation upsert ======================
-
-
-def meta_observation_payload(api_row: MetaApiAdRow) -> dict[str, Any]:
-    """Сформировать словарь для UPSERT в meta_api_observation.
-
-    api_metrics — JSON со spend/impressions/cpc/cpm и actions, как в observer.
-    """
-    return {
-        "last_api_observed_at": api_row.observed_at or datetime.now(timezone.utc),
-        "meta_ad_status": api_row.configured_status,
-        "effective_status": api_row.effective_status,
-        "account_id": api_row.ad_account_id,
-        "api_metrics": {
-            "spend": str(api_row.spend),
-            "impressions": api_row.impressions,
-            "clicks": api_row.clicks,
-            "reach": api_row.reach,
-            "cpc": str(api_row.cpc) if api_row.cpc is not None else None,
-            "ctr": str(api_row.ctr) if api_row.ctr is not None else None,
-            "cpm": str(api_row.cpm) if api_row.cpm is not None else None,
-            "frequency": str(api_row.frequency) if api_row.frequency is not None else None,
-            "actions": api_row.actions,
-        },
-    }

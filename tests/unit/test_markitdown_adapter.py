@@ -79,6 +79,7 @@ def test_resolve_explicit():
 
 # реальный smoke: csv → markdown (если markitdown установлен)
 @pytest.mark.skipif(shutil.which("markitdown") is None, reason="markitdown не установлен")
+@pytest.mark.timeout(30)
 async def test_real_csv_conversion(tmp_path):
     src = tmp_path / "t.csv"
     src.write_text("name,val\nA,1\nB,2\n")

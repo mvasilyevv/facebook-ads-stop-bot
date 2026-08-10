@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react";
-import { Input, SearchInput } from "../src/components/ui/Input";
+import { Input } from "../src/components/ui/Input";
 
 const meta: Meta<typeof Input> = {
   title: "UI/Input",
@@ -30,8 +30,12 @@ export const Disabled: Story = {
   args: { label: "Readonly", value: "read-only value", disabled: true },
 };
 
-export const Search: StoryObj<typeof SearchInput> = {
-  render: () => <SearchInput placeholder="Поиск объявлений..." shortcutKey="/" />,
+export const Search: Story = {
+  args: {
+    type: "search",
+    "aria-label": "Поиск объявлений",
+    placeholder: "Поиск объявлений...",
+  },
 };
 
 export const Sizes: Story = {

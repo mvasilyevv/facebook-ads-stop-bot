@@ -18,6 +18,13 @@ from core.ai_assistant.tools.base import RiskLevel
 _WEB_RISKS = frozenset({RiskLevel.READ_ONLY, RiskLevel.CREATIVE})
 
 
+def test_paid_pulse_route_is_post_only() -> None:
+    from apps.api.routers.v1.ai_chat_web import router
+
+    route = next(route for route in router.routes if getattr(route, "path", None) == "/ai/pulse")
+    assert route.methods == {"POST"}
+
+
 def _request_mock() -> MagicMock:
     req = MagicMock()
     req.headers = {}
@@ -41,21 +48,21 @@ def test_web_session_schemas_exclude_drafts() -> None:
     session = ChatSession(allow_tools=True, allowed_risk_levels=_WEB_RISKS)
     assert session._allowed_tool_names is not None
     assert not any(n.startswith("request_") for n in session._allowed_tool_names)
-    assert "get_worker_health" in session._allowed_tool_names
+    assert "get_worker_health" not in session._allowed_tool_names
     assert "analyze_creative" in session._allowed_tool_names
 
 
 # Guard исполнения: модель галлюцинирует draft-инструмент → отказ, НЕ исполнение
 @pytest.mark.asyncio
-async def test_web_session_blocks_hallucinated_draft_tool() -> None:
-    # Первый ответ — tool_use запрещённого request_bulk_pause, второй — обычный текст
+async def test_web_session_blocks_hallucinated_write_tool() -> None:
+    # Первый ответ — tool_use неизвестной write-операции, второй — обычный текст.
     fake_ai = MagicMock()
     fake_ai.is_available = True
     fake_ai.chat = AsyncMock(
         side_effect=[
             AIResponse(
                 text="",
-                tool_uses=[ToolUse(id="t1", name="request_bulk_pause", input={"offer_code": "X"})],
+                tool_uses=[ToolUse(id="t1", name="mutate_budget", input={"offer_code": "X"})],
             ),
             AIResponse(text="Понял, действия доступны в Telegram."),
         ]

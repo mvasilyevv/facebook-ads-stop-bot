@@ -103,7 +103,9 @@ async def test_ingest_inserts_event_and_processing_task_in_one_transaction() -> 
             _Result(),  # advisory lock
             _Result(),  # exact one-shot dedupe lookup
             _Result([(11, received_at)]),  # event insert
+            _Result([(received_at,)]),  # PostgreSQL scheduler clock
             _Result([(91,)]),  # durable task insert
+            _Result(),  # transactional pg_notify wakeup hint
         ]
     )
 
@@ -116,8 +118,15 @@ async def test_ingest_inserts_event_and_processing_task_in_one_transaction() -> 
     sql = [statement for statement, _ in engine.conn.executed]
     assert "pg_advisory_xact_lock" in sql[0]
     assert "INSERT INTO adsetpro_postback_events" in sql[2]
-    assert "INSERT INTO task_queue" in sql[3]
-    assert "tracker_event_process" in sql[3]
+    assert "clock_timestamp()" in sql[3]
+    assert "INSERT INTO task_queue" in sql[4]
+    assert "pg_notify" in sql[5]
+    task_params = engine.conn.executed[4][1]
+    assert task_params["tt"] == "tracker_event_process"
+    assert task_params["lane"] == "background"
+    assert task_params["deadline_at"] > received_at
+    assert task_params["correlation_id"] is not None
+    assert engine.conn.executed[5][1]["channel"] == "fb_task_queue"
 
 
 @pytest.mark.asyncio
@@ -187,6 +196,5 @@ async def test_one_shot_ignores_provider_delivery_id_for_dedupe_key() -> None:
     assert engine.conn.executed[0][1]["lock_key"] == "adsetpro:click:click-1:ftd"
     dedupe_sql, dedupe_params = engine.conn.executed[1]
     assert "click_id = :click_id" in dedupe_sql
-    assert "replace(lower(trim(event_type)), ' ', '_')" in dedupe_sql
-    assert "END = :event_type" in dedupe_sql
+    assert "event_type = :event_type" in dedupe_sql
     assert dedupe_params["click_id"] == "click-1"

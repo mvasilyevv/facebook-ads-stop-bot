@@ -1,0 +1,45 @@
+# Browser-agent release lifecycle is independent from the application colors.
+# It intentionally shares Vision's network namespace so Vision API and dynamic
+# CDP ports remain loopback-only.
+
+services:
+  browser-agent:
+    image: ${BROWSER_AGENT_IMAGE:?set BROWSER_AGENT_IMAGE to image@sha256}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${BROWSER_CONTROL_ENV_FILE:?set BROWSER_CONTROL_ENV_FILE}
+    environment:
+      GRPC_PORT: "50051"
+      WORKER_METRICS_PORT: "9464"
+      BROWSER_AUTHORITY_CONSUME_URL: ${BROWSER_AUTHORITY_CONSUME_URL:?set BROWSER_AUTHORITY_CONSUME_URL}
+      BROWSER_MAINTENANCE_CONSUME_URL: ${BROWSER_MAINTENANCE_CONSUME_URL:?set BROWSER_MAINTENANCE_CONSUME_URL}
+      BROWSER_AGENT_AM_COLUMNS_QS: ${BROWSER_AGENT_AM_COLUMNS_QS:-}
+    network_mode: "container:vision-webtop"
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "const n=require('net').connect(50051,'127.0.0.1');n.on('connect',()=>{n.end();process.exit(0)});n.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),3000)"
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    labels:
+      com.fb-agent.managed: "true"
+      com.fb-agent.cluster-id: ${FB_AGENT_BOOTSTRAP_CLUSTER_ID:?set FB_AGENT_BOOTSTRAP_CLUSTER_ID}
+      com.fb-agent.purpose: vision
+      com.fb-agent.service: browser-agent
+      com.fb-agent.release: ${RELEASE_ID:?set RELEASE_ID}
+      # The process shares Vision's network namespace, so Docker discovery has
+      # no container IP for this label. Alloy uses the explicit
+      # vision-webtop:9464 target declared in its host-agent configuration.
+      com.fb-agent.metrics: "true"
+      com.fb-agent.metrics.address: vision-webtop
+      com.fb-agent.metrics.port: "9464"

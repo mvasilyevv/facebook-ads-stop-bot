@@ -1,403 +1,354 @@
-/**
- * AdsPage — список объявлений под канон ads-mini.jsx.
- * MiniHeader → поиск + горизонтальные чип-фильтры → список строк AdRow.
- * Мультивыбор состояний, клиентский поиск по useMemo, лимит 120 строк.
- */
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useMemo } from "react";
-import { Search, ChevronRight } from "lucide-react";
 import {
-  alertStateCssVar,
-  deriveGeoFromNames,
-  formatSpend,
-  normalizeAlertState,
-  ALERT_STATE_LABELS,
-} from "@fb/shared";
-import type { AdSnapshot } from "@fb/shared";
-import { useDashboardAds } from "@/lib/api";
-import { haptic } from "@/lib/tg";
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
+
+import type { OperatorSeverity } from "@fb/shared/operator/contracts";
+import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
+import {
+  operatorCabinetOptions,
+  parseOperatorAdsRouteSearch,
+  type OperatorAdsDirection,
+  type OperatorAdsRouteSearch,
+  type OperatorAdsSort,
+  type OperatorCabinetOption,
+} from "@fb/shared/operator/routeFilters";
+import { adsForRealtimeState } from "@fb/shared/operator/viewModel";
+import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
+import { useOperatorRealtimeStatus } from "@fb/operator-api";
+
 import { MiniHeader } from "@/components/layout/MiniHeader";
-import { Skeleton } from "@/components/ui";
-import { cn } from "@/lib/cn";
+import { Button, EmptyState, ErrorState, Skeleton } from "@/components/ui";
+import { Sheet } from "@/components/ui/Sheet";
+import { MiniOperatorAdCard } from "@/features/operator/OperatorAds";
+import {
+  operatorProblemMessage,
+  useOperatorAds,
+  useOperatorSnapshot,
+} from "@/lib/operatorApi";
+import { haptic } from "@/lib/tg";
 
 export const Route = createFileRoute("/ads/")({
   component: AdsPage,
+  validateSearch: parseOperatorAdsRouteSearch,
 });
 
-// ─── Константы фильтров ───────────────────────────────────────────────────────
-
-/** Канонические id фильтров совпадают с alert_state в БД */
-const STATE_FILTERS: { id: string; label: string }[] = [
-  { id: "normal",       label: "Норма"    },
-  { id: "warning_sent", label: "Предупр." },
-  { id: "stop_sent",    label: "Стоп"     },
-  { id: "claimed",      label: "В работе" },
-  { id: "disabled",     label: "Откл."    },
+const SEVERITIES: Array<{ value: OperatorSeverity | ""; label: string }> = [
+  { value: "", label: "Все состояния" },
+  { value: "critical", label: "Опасность" },
+  { value: "warning", label: "Внимание" },
+  { value: "ok", label: "Норма" },
+  { value: "unknown", label: "Неизвестно" },
 ];
 
-// fsmColor удалён: подстановка state в имя токена давала несуществующий
-// var(--fsm-warning_sent) → невидимая точка для warning/stop (баг).
-// Канонический маппинг state→токен — alertStateCssVar из @fb/shared.
-
-// ─── Строка объявления ────────────────────────────────────────────────────────
-
-interface AdRowProps {
-  ad: AdSnapshot;
-  onClick: () => void;
-}
-
-function AdRow({ ad, onClick }: AdRowProps) {
-  const state = normalizeAlertState(ad.alert_state);
-  const stateLabel = ALERT_STATE_LABELS[state];
-  const stateColor = alertStateCssVar(state);
-
-  // Имя объявления (fallback → fb_ad_id)
-  const name = ad.ad_name ?? ad.fb_ad_id;
-
-  // Гео из имени кампании/adset — единый алгоритм с web (@fb/shared).
-  const geoCode = deriveGeoFromNames(ad.campaign_name, ad.adset_name);
-
-  // Spend и CPL из metrics
-  const spend  = ad.metrics?.spend  != null ? parseFloat(String(ad.metrics.spend))         : null;
-  const cpl    = ad.metrics?.cost_per_lead != null ? parseFloat(String(ad.metrics.cost_per_lead)) : null;
-  const cplHigh = cpl != null && cpl > 30;
-
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        haptic.selection();
-        onClick();
-      }}
-      className="w-full text-left bg-transparent border-none active:bg-bg-2"
-      style={{
-        display:             "grid",
-        gridTemplateColumns: "40px 1fr auto auto",
-        gap:                 10,
-        alignItems:          "center",
-        padding:             "10px 14px",
-        minHeight:           44,
-        cursor:              "pointer",
-        font:                "inherit",
-        color:               "inherit",
-        borderBottom:        "1px solid var(--hairline)",
-      }}
-    >
-      {/* Гео-плашка */}
-      <div
-        style={{
-          width:           40,
-          height:          26,
-          background:      "var(--bg-2)",
-          border:          "1px solid var(--hairline)",
-          borderRadius:    "var(--radius-1)",
-          display:         "flex",
-          alignItems:      "center",
-          justifyContent:  "center",
-          flexShrink:      0,
-        }}
-      >
-        <span
-          className="font-display tabular-nums"
-          style={{ fontSize: 8, color: "var(--bg-8)" }}
-        >
-          {geoCode}
-        </span>
-      </div>
-
-      {/* Имя + состояние */}
-      <div style={{ minWidth: 0 }}>
-        <div
-          className="font-display"
-          style={{
-            fontSize:     13,
-            color:        "var(--bg-11)",
-            overflow:     "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace:   "nowrap",
-          }}
-        >
-          {name}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-          <span
-            aria-hidden
-            style={{
-              width:        6,
-              height:       6,
-              borderRadius: "50%",
-              background:   stateColor,
-              flexShrink:   0,
-            }}
-          />
-          <span style={{ fontSize: 11, color: "var(--bg-9)" }}>{stateLabel}</span>
-        </div>
-      </div>
-
-      {/* Spend + CPL */}
-      <div style={{ textAlign: "right" }}>
-        <div
-          className="font-display tabular-nums"
-          style={{ fontSize: 13, color: "var(--bg-11)" }}
-        >
-          {spend != null ? formatSpend(spend) : "—"}
-        </div>
-        <div
-          className="font-display tabular-nums"
-          style={{
-            fontSize:  11,
-            color:     cplHigh ? "var(--danger)" : "var(--bg-9)",
-            marginTop: 3,
-          }}
-        >
-          {cpl != null ? `CPL ${formatSpend(cpl)}` : "—"}
-        </div>
-      </div>
-
-      {/* Шеврон */}
-      <ChevronRight size={14} style={{ color: "var(--bg-8)", flexShrink: 0 }} />
-    </button>
-  );
-}
-
-// extractGeo удалён — заменён на deriveGeoFromNames из @fb/shared (единый
-// алгоритм с web: KNOWN_GEOS + токенизация; старый regex не находил «CR2_GH»).
-
-// ─── Skeleton-строка ──────────────────────────────────────────────────────────
-
-function AdRowSkeleton() {
-  return (
-    <div
-      style={{
-        display:             "grid",
-        gridTemplateColumns: "40px 1fr auto auto",
-        gap:                 10,
-        alignItems:          "center",
-        padding:             "10px 14px",
-        minHeight:           44,
-        borderBottom:        "1px solid var(--hairline)",
-      }}
-    >
-      <Skeleton className="h-[26px] w-[40px]" />
-      <div className="space-y-1.5">
-        <Skeleton className="h-3 w-3/4" />
-        <Skeleton className="h-2.5 w-1/3" />
-      </div>
-      <div className="space-y-1.5 text-right">
-        <Skeleton className="h-3 w-12" />
-        <Skeleton className="h-2.5 w-10" />
-      </div>
-      <Skeleton className="h-3 w-3" />
-    </div>
-  );
-}
-
-// ─── Основная страница ────────────────────────────────────────────────────────
+const SORTS: Array<{ value: OperatorAdsSort; label: string }> = [
+  { value: "updated", label: "Обновление" },
+  { value: "spend", label: "Расход" },
+  { value: "clicks", label: "Клики" },
+  { value: "registrations", label: "Регистрации" },
+  { value: "ftd", label: "FTD" },
+  { value: "name", label: "Название" },
+];
 
 function AdsPage() {
-  const navigate = useNavigate();
-  const [search, setSearch]   = useState("");
-  const [activeStates, setActiveStates] = useState<string[]>([]);
+  const search = Route.useSearch();
+  const navigate = useNavigate({ from: "/ads/" });
+  const realtimeStatus = useOperatorRealtimeStatus();
+  const [draftSearch, setDraftSearch] = useState(search.q ?? "");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filterTriggerRef = useRef<HTMLButtonElement>(null);
+  const snapshot = useOperatorSnapshot({ window: "today" });
+  const cabinets = operatorCabinetOptions(snapshot.data);
+  const page = search.page ?? 1;
+  const query = useOperatorAds({
+    search: search.q,
+    account_id: search.account_id,
+    severity: search.severity,
+    sort: search.sort ?? "updated",
+    direction: search.direction ?? "desc",
+    page,
+    page_size: 30,
+  });
+  const payload = query.data;
+  const displayPayload = payload
+    ? adsForRealtimeState(
+        payload,
+        realtimeStatus === "connected" && !query.isError,
+      )
+    : null;
+  const displayState = displayPayload?.state;
+  const displayRows = displayPayload?.rows;
+  const currency = confirmedOperatorCurrency(displayPayload?.scope);
+  const confirmedEmpty =
+    realtimeStatus === "connected" &&
+    !query.isError &&
+    displayState === "empty";
+  const activeFilterCount =
+    Number(Boolean(search.q)) +
+    Number(Boolean(search.account_id)) +
+    Number(Boolean(search.severity)) +
+    Number(Boolean(search.sort && search.sort !== "updated")) +
+    Number(Boolean(search.direction && search.direction !== "desc"));
 
-  // Загружаем без серверного фильтра — фильтруем на клиенте (мультивыбор)
-  const { data: allAds = [], isLoading } = useDashboardAds("", "");
+  useEffect(() => setDraftSearch(search.q ?? ""), [search.q]);
 
-  // Клиентская фильтрация: состояния + поиск, сортировка по spend desc
-  const rows = useMemo(() => {
-    let result = allAds as AdSnapshot[];
-
-    // Фильтр по состоянию (мультивыбор)
-    if (activeStates.length > 0) {
-      result = result.filter((ad) =>
-        activeStates.includes(normalizeAlertState(ad.alert_state)),
-      );
-    }
-
-    // Поиск: по имени, кампании, adset, офферу, fb_ad_id
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter((ad) => {
-        const name     = (ad.ad_name ?? "").toLowerCase();
-        const campaign = (ad.campaign_name ?? "").toLowerCase();
-        const adset    = (ad.adset_name ?? "").toLowerCase();
-        const offer    = (ad.offer_code ?? "").toLowerCase();
-        const id       = ad.fb_ad_id.toLowerCase();
-        return (
-          name.includes(q) ||
-          campaign.includes(q) ||
-          adset.includes(q) ||
-          offer.includes(q) ||
-          id.includes(q)
-        );
-      });
-    }
-
-    // Сортировка по spend desc
-    return [...result].sort((a, b) => {
-      const sa = a.metrics?.spend != null ? parseFloat(String(a.metrics.spend)) : 0;
-      const sb = b.metrics?.spend != null ? parseFloat(String(b.metrics.spend)) : 0;
-      return sb - sa;
-    });
-  }, [allAds, activeStates, search]);
-
-  const shown = rows.slice(0, 120);
-  const overflow = rows.length - shown.length;
-
-  /** Переключить чип состояния (повторный клик снимает) */
-  const toggleState = (id: string) => {
+  function patchSearch(next: Partial<OperatorAdsRouteSearch>) {
     haptic.selection();
-    setActiveStates((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
-  };
+    void navigate({
+      search: (previous) => ({ ...previous, ...next }),
+      replace: true,
+    });
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    patchSearch({ q: draftSearch.trim() || undefined, page: undefined });
+    setFiltersOpen(false);
+  }
 
   return (
-    <div className="flex flex-col">
-      {/* ── Шапка ── */}
+    <div className="flex flex-col pb-5">
       <MiniHeader
         eyebrowNum="04"
         eyebrow="УПРАВЛЕНИЕ"
         title="Объявления"
         right={
-          <span
-            className="font-display tabular-nums"
-            style={{ fontSize: 12, color: "var(--bg-9)" }}
-          >
-            {rows.length.toLocaleString("en-US")}
-          </span>
+          displayState ? <DataStateBadge state={displayState} compact /> : null
         }
       />
 
-      {/* ── Поиск и фильтры (обычный блок под шапкой) ── */}
-      <div className="px-4 pt-3 pb-0 border-b border-[var(--hairline)]">
-        {/* Поле поиска */}
-        <div style={{ position: "relative", marginBottom: 10 }}>
+      <div className="border-b border-[var(--color-hairline)] px-4 py-3">
+        <Button
+          ref={filterTriggerRef}
+          type="button"
+          variant="secondary"
+          fullWidth
+          aria-label="Открыть фильтры объявлений"
+          aria-haspopup="dialog"
+          aria-expanded={filtersOpen}
+          onClick={() => {
+            haptic.selection();
+            setFiltersOpen(true);
+          }}
+        >
+          <Filter size={16} aria-hidden="true" />
+          Фильтры{activeFilterCount ? ` · ${activeFilterCount}` : ""}
+        </Button>
+      </div>
+
+      <Sheet
+        open={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        eyebrow="УПРАВЛЕНИЕ"
+        title="Фильтры объявлений"
+        returnFocusRef={filterTriggerRef}
+      >
+        <AdsFilterFields
+          search={search}
+          draftSearch={draftSearch}
+          cabinets={cabinets}
+          onDraftSearch={setDraftSearch}
+          onChange={patchSearch}
+          onSubmit={submit}
+        />
+      </Sheet>
+
+      {payload && displayState && displayState !== "ready" ? (
+        <div className="px-4 pt-3">
+          <DataStateNotice
+            state={displayState}
+            issues={displayPayload?.issues ?? []}
+            compact
+          />
+        </div>
+      ) : null}
+
+      <section className="grid gap-3 px-4 pt-4" aria-label="Объявления">
+        {query.isError && !payload ? (
+          <ErrorState
+            message={operatorProblemMessage(query.error)}
+            onRetry={() => void query.refetch()}
+          />
+        ) : query.isPending && !payload ? (
+          <div
+            role="status"
+            aria-label="Загрузка объявлений"
+            className="grid gap-3"
+          >
+            {Array.from({ length: 5 }, (_, index) => (
+              <Skeleton key={index} className="h-40 w-full" />
+            ))}
+          </div>
+        ) : displayRows?.length ? (
+          displayRows.map((ad) => (
+            <MiniOperatorAdCard key={ad.id} ad={ad} currency={currency} />
+          ))
+        ) : confirmedEmpty ? (
+          <EmptyState
+            title="Объявлений не найдено"
+            description="Сервер подтвердил пустой результат. Измените фильтр или поиск."
+          />
+        ) : (
+          <EmptyState
+            title="Список не подтверждён"
+            description="Дождитесь сверки live-снимка. Неподтверждённый результат не считается нулём."
+          />
+        )}
+      </section>
+
+      {displayPayload && displayPayload.pages > 1 ? (
+        <nav
+          aria-label="Страницы объявлений"
+          className="mt-4 flex items-center justify-between gap-2 px-4"
+        >
+          <Button
+            variant="secondary"
+            disabled={page <= 1 || query.isFetching}
+            onClick={() => patchSearch({ page: page - 1 })}
+          >
+            <ChevronLeft aria-hidden="true" size={16} /> Назад
+          </Button>
+          <span className="text-[14px] text-bg-9" aria-live="polite">
+            {page} / {displayPayload.pages}
+          </span>
+          <Button
+            variant="secondary"
+            disabled={page >= displayPayload.pages || query.isFetching}
+            onClick={() => patchSearch({ page: page + 1 })}
+          >
+            Далее <ChevronRight aria-hidden="true" size={16} />
+          </Button>
+        </nav>
+      ) : null}
+    </div>
+  );
+}
+
+function AdsFilterFields({
+  search,
+  draftSearch,
+  cabinets,
+  onDraftSearch,
+  onChange,
+  onSubmit,
+}: {
+  search: OperatorAdsRouteSearch;
+  draftSearch: string;
+  cabinets: OperatorCabinetOption[];
+  onDraftSearch: (value: string) => void;
+  onChange: (next: Partial<OperatorAdsRouteSearch>) => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  return (
+    <form onSubmit={onSubmit} className="grid gap-4 pb-4">
+      <label className="grid gap-1.5 text-[14px] text-bg-9">
+        <span>Поиск объявлений</span>
+        <span className="relative block">
           <Search
-            size={15}
-            style={{
-              position:  "absolute",
-              left:      10,
-              top:       "50%",
-              transform: "translateY(-50%)",
-              color:     "var(--bg-9)",
-              flexShrink: 0,
-            }}
+            aria-hidden="true"
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-bg-8"
+            size={16}
           />
           <input
             type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Поиск"
-            aria-label="Поиск по объявлениям"
-            className={cn(
-              "w-full outline-none",
-              "bg-bg-2 border border-[var(--hairline-strong)] rounded-[var(--radius-2)]",
-              "text-bg-11 placeholder:text-bg-8",
-              "font-display text-[14px]",
-            )}
-            style={{
-              height:     40,
-              padding:    "0 10px 0 34px",
-              boxSizing:  "border-box",
-            }}
+            aria-label="Поиск объявлений"
+            value={draftSearch}
+            onChange={(event) => onDraftSearch(event.target.value)}
+            placeholder="Название, кампания или ID"
+            className="min-h-11 w-full rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 pl-10 pr-3 text-[16px] text-bg-11 outline-none placeholder:text-bg-8 focus:border-accent"
           />
-        </div>
+        </span>
+      </label>
+      <FilterSelect
+        label="Кабинет"
+        value={search.account_id ?? ""}
+        onChange={(value) =>
+          onChange({ account_id: value || undefined, page: undefined })
+        }
+      >
+        <option value="">Все кабинеты</option>
+        {cabinets.map((cabinet) => (
+          <option key={cabinet.value} value={cabinet.value}>
+            {cabinet.label}
+          </option>
+        ))}
+      </FilterSelect>
+      <FilterSelect
+        label="Риск"
+        value={search.severity ?? ""}
+        onChange={(value) =>
+          onChange({
+            severity: (value || undefined) as OperatorSeverity | undefined,
+            page: undefined,
+          })
+        }
+      >
+        {SEVERITIES.map((severity) => (
+          <option key={severity.value || "all"} value={severity.value}>
+            {severity.label}
+          </option>
+        ))}
+      </FilterSelect>
+      <FilterSelect
+        label="Сортировка"
+        value={search.sort ?? "updated"}
+        onChange={(value) =>
+          onChange({ sort: value as OperatorAdsSort, page: undefined })
+        }
+      >
+        {SORTS.map((sort) => (
+          <option key={sort.value} value={sort.value}>
+            {sort.label}
+          </option>
+        ))}
+      </FilterSelect>
+      <FilterSelect
+        label="Направление"
+        value={search.direction ?? "desc"}
+        onChange={(value) =>
+          onChange({
+            direction: value as OperatorAdsDirection,
+            page: undefined,
+          })
+        }
+      >
+        <option value="desc">По убыванию</option>
+        <option value="asc">По возрастанию</option>
+      </FilterSelect>
+      <Button type="submit" fullWidth>
+        Применить поиск
+      </Button>
+    </form>
+  );
+}
 
-        {/* Горизонтальный ряд чипов состояний */}
-        <div
-          role="group"
-          aria-label="Фильтр по состоянию"
-          style={{
-            display:    "flex",
-            gap:        6,
-            overflowX:  "auto",
-            paddingBottom: 10,
-          }}
-        >
-          {STATE_FILTERS.map((f) => {
-            const on = activeStates.includes(f.id);
-            return (
-              <button
-                key={f.id}
-                type="button"
-                aria-pressed={on}
-                onClick={() => toggleState(f.id)}
-                className="font-display"
-                style={{
-                  flexShrink:  0,
-                  height:      30,
-                  padding:     "0 12px",
-                  borderRadius: "9999px",
-                  border:      `1px solid ${on ? "var(--accent)" : "var(--hairline-strong)"}`,
-                  background:  on ? "var(--accent-bg)" : "transparent",
-                  color:       on ? "var(--accent)" : "var(--bg-10)",
-                  font:        "inherit",
-                  fontSize:    12,
-                  fontWeight:  500,
-                  cursor:      "pointer",
-                  display:     "inline-flex",
-                  alignItems:  "center",
-                  gap:         6,
-                }}
-              >
-                <span
-                  aria-hidden
-                  style={{
-                    width:        6,
-                    height:       6,
-                    borderRadius: "50%",
-                    // M-20: alertStateCssVar (не var(--fsm-${id})) — токенов
-                    // --fsm-warning_sent/stop_sent нет, точки были невидимы.
-                    background:   alertStateCssVar(normalizeAlertState(f.id)),
-                    flexShrink:   0,
-                  }}
-                />
-                {f.label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── Список строк ── */}
-      <div>
-        {isLoading ? (
-          // Skeleton при загрузке
-          [...Array(6)].map((_, i) => <AdRowSkeleton key={i} />)
-        ) : shown.length === 0 ? (
-          // Пустое состояние
-          <div className="py-10 text-center">
-            <p style={{ fontSize: 13, color: "var(--bg-9)" }}>Ничего не найдено</p>
-          </div>
-        ) : (
-          <>
-            {shown.map((ad) => (
-              <AdRow
-                key={ad.fb_ad_id}
-                ad={ad}
-                onClick={() =>
-                  void navigate({
-                    to:     "/ads/$fbAdId",
-                    params: { fbAdId: ad.fb_ad_id },
-                  })
-                }
-              />
-            ))}
-            {overflow > 0 && (
-              <div
-                style={{
-                  padding:   16,
-                  textAlign: "center",
-                  fontSize:  12,
-                  color:     "var(--bg-8)",
-                }}
-              >
-                +{overflow.toLocaleString("en-US")} ещё · уточни фильтр
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label className="grid gap-1.5 text-[14px] text-bg-9">
+      <span>{label}</span>
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-h-11 w-full rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 px-3 text-[16px] text-bg-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        {children}
+      </select>
+    </label>
   );
 }

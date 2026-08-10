@@ -1,0 +1,224 @@
+import { useRef, useState, type ReactNode } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Filter } from "lucide-react";
+
+import type { OperatorActionState } from "@fb/shared/operator/contracts";
+import {
+  operatorCabinetOptions,
+  parseOperatorActionsRouteSearch,
+  type OperatorActionsRouteSearch,
+  type OperatorCabinetOption,
+} from "@fb/shared/operator/routeFilters";
+import { actionsForRealtimeState } from "@fb/shared/operator/viewModel";
+import { useOperatorRealtimeStatus } from "@fb/operator-api";
+import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
+
+import { ActionList } from "@/features/operator/OperatorDashboard";
+import { Button } from "@/components/ui/Button";
+import { Drawer } from "@/components/ui/Drawer";
+import { ErrorState } from "@/components/ui/ErrorState";
+import {
+  operatorProblemMessage,
+  useOperatorActions,
+  useOperatorSnapshot,
+} from "@/lib/api/operator";
+
+export const Route = createFileRoute("/actions/")({
+  component: ActionsPage,
+  validateSearch: parseOperatorActionsRouteSearch,
+});
+
+const ACTION_STATES: Array<{ value: OperatorActionState | ""; label: string }> = [
+  { value: "", label: "Все состояния" },
+  { value: "queued", label: "В очереди" },
+  { value: "running", label: "Выполняются" },
+  { value: "unknown", label: "Уточняются" },
+  { value: "failed", label: "Ошибки" },
+  { value: "cancelled", label: "Отменены" },
+  { value: "confirmed", label: "Подтверждены" },
+];
+
+function ActionsPage() {
+  const search = Route.useSearch();
+  const navigate = useNavigate({ from: "/actions/" });
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filterTriggerRef = useRef<HTMLButtonElement>(null);
+  const realtimeStatus = useOperatorRealtimeStatus();
+  const snapshot = useOperatorSnapshot({ window: "today" });
+  const cabinets = operatorCabinetOptions(snapshot.data);
+  const query = useOperatorActions({
+    account_id: search.account_id,
+    state: search.state ? [search.state] : [],
+  });
+  const projections = query.data?.pages.map((page) =>
+    actionsForRealtimeState(page, realtimeStatus === "connected" && !query.isError),
+  );
+  const items = projections?.flatMap((page) => page.items) ?? [];
+  const projection = projections?.[0];
+  const dataState = projection?.state ?? (query.isPending ? "stale" : "unavailable");
+  const activeFilterCount = Number(Boolean(search.state)) + Number(Boolean(search.account_id));
+
+  function patchSearch(next: Partial<OperatorActionsRouteSearch>) {
+    void navigate({
+      search: (previous) => ({ ...previous, ...next }),
+      replace: true,
+    });
+  }
+
+  if (query.isError && !query.data) {
+    return (
+      <ErrorState
+        title="Действия недоступны"
+        error={operatorProblemMessage(query.error)}
+        onRetry={() => void query.refetch()}
+      />
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-5xl">
+      <header className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <div className="font-display text-[12px] uppercase tracking-[.08em] text-bg-8">
+            Операторский контур
+          </div>
+          <h1 className="m-0 mt-2 font-display text-[clamp(28px,4vw,42px)] font-medium text-bg-11">
+            Действия
+          </h1>
+          <p className="mt-2 text-[16px] text-bg-9">
+            Lifecycle от постановки в очередь до подтверждённого результата.
+          </p>
+        </div>
+        <DataStateBadge state={dataState} />
+      </header>
+
+      <div className="mb-4 md:hidden">
+        <Button
+          ref={filterTriggerRef}
+          type="button"
+          variant="secondary"
+          className="min-h-11 w-full"
+          leftIcon={<Filter aria-hidden="true" />}
+          aria-label="Открыть фильтры действий"
+          aria-haspopup="dialog"
+          aria-expanded={filtersOpen}
+          onClick={() => setFiltersOpen(true)}
+        >
+          Фильтры{activeFilterCount ? ` · ${activeFilterCount}` : ""}
+        </Button>
+        <Drawer
+          open={filtersOpen}
+          onOpenChange={setFiltersOpen}
+          title="Фильтры действий"
+          description="Кабинет и состояние lifecycle"
+          width={480}
+          returnFocusRef={filterTriggerRef}
+        >
+          <ActionFilterFields search={search} cabinets={cabinets} onChange={patchSearch} stacked />
+        </Drawer>
+      </div>
+
+      <section
+        aria-label="Фильтры действий"
+        className="mb-4 hidden rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-4 md:block"
+      >
+        <ActionFilterFields search={search} cabinets={cabinets} onChange={patchSearch} />
+      </section>
+
+      <section className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5">
+        <h2 className="m-0 font-display text-[20px] text-bg-11">Очередь и история</h2>
+        <p className="mt-1 text-[14px] text-bg-9">
+          Unknown означает проверку фактического результата, а не успешное завершение.
+        </p>
+        {dataState !== "ready" && !query.isPending ? (
+          <DataStateNotice state={dataState} issues={projection?.issues ?? []} />
+        ) : null}
+        {query.isPending && !items.length ? (
+          <div role="status" className="py-12 text-center text-[16px] text-bg-9">
+            Загрузка действий…
+          </div>
+        ) : (
+          <ActionList items={items} />
+        )}
+        {query.hasNextPage ? (
+          <Button
+            variant="secondary"
+            className="mt-5 min-h-11 w-full"
+            loading={query.isFetchingNextPage}
+            onClick={() => void query.fetchNextPage()}
+          >
+            Показать предыдущие
+          </Button>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function ActionFilterFields({
+  search,
+  cabinets,
+  onChange,
+  stacked = false,
+}: {
+  search: OperatorActionsRouteSearch;
+  cabinets: OperatorCabinetOption[];
+  onChange: (next: Partial<OperatorActionsRouteSearch>) => void;
+  stacked?: boolean;
+}) {
+  return (
+    <div className={stacked ? "grid gap-4" : "grid gap-3 md:grid-cols-2"}>
+      <FilterSelect
+        label="Кабинет"
+        value={search.account_id ?? ""}
+        onChange={(value) => onChange({ account_id: value || undefined })}
+      >
+        <option value="">Все кабинеты</option>
+        {cabinets.map((cabinet) => (
+          <option key={cabinet.value} value={cabinet.value}>
+            {cabinet.label}
+          </option>
+        ))}
+      </FilterSelect>
+      <FilterSelect
+        label="Состояние действия"
+        value={search.state ?? ""}
+        onChange={(value) =>
+          onChange({ state: (value || undefined) as OperatorActionState | undefined })
+        }
+      >
+        {ACTION_STATES.map((state) => (
+          <option key={state.value || "all"} value={state.value}>
+            {state.label}
+          </option>
+        ))}
+      </FilterSelect>
+    </div>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label className="grid gap-1.5 text-[14px] text-bg-9">
+      <span>{label}</span>
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-h-11 w-full rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-0 px-3 text-[14px] text-bg-11 outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+      >
+        {children}
+      </select>
+    </label>
+  );
+}

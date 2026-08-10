@@ -1,30 +1,22 @@
+name: fb_agent_vision
+
 services:
   webtop:
     image: ${DESKTOP_WEBTOP_IMAGE:?set DESKTOP_WEBTOP_IMAGE to an immutable image@sha256 reference}
     container_name: vision-webtop
     restart: unless-stopped
-    ipc: shareable
     shm_size: 2gb
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-Europe/Kaliningrad}
-      TITLE: Vision Desktop
-      CUSTOM_USER: ${CUSTOM_USER:-abc}
-      DISPLAY_WIDTH: "1366"
-      DISPLAY_HEIGHT: "768"
-      DISPLAY_DPI: "96"
-      SELKIES_IS_MANUAL_RESOLUTION_MODE: "true|locked"
-      SELKIES_MANUAL_WIDTH: "1366"
-      SELKIES_MANUAL_HEIGHT: "768"
-      SELKIES_SCALING_DPI: "96"
+      DESKTOP_KASM_SERVICE_USER: ${DESKTOP_KASM_SERVICE_USER:?set DESKTOP_KASM_SERVICE_USER}
+      DESKTOP_KASM_SERVICE_PASSWORD: ${DESKTOP_KASM_SERVICE_PASSWORD:?set DESKTOP_KASM_SERVICE_PASSWORD}
     ports:
-      - "127.0.0.1:3030:3030"
       - "127.0.0.1:50051:50051"
       - "127.0.0.1:8444:8444"
     volumes:
       - ./config:/config
-      - x11-socket:/tmp/.X11-unix
     networks:
       fb-agent:
         aliases:
@@ -35,46 +27,20 @@ services:
         max-size: "20m"
         max-file: "5"
     healthcheck:
-      # The production image installs Vision as /usr/bin/Vision. Match the
-      # executable name instead of a historical install path, otherwise a live
-      # desktop is marked unhealthy and the KasmVNC sidecar never starts.
-      test: ["CMD-SHELL", "DISPLAY=:1 xdpyinfo >/dev/null 2>&1 && pgrep -x Vision >/dev/null"]
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
       interval: 10s
       timeout: 5s
       retries: 18
       start_period: 30s
-
-  kasmvnc:
-    image: ${DESKTOP_KASMVNC_IMAGE:?set DESKTOP_KASMVNC_IMAGE to an immutable image@sha256 reference}
-    restart: unless-stopped
-    network_mode: service:webtop
-    ipc: service:webtop
-    depends_on:
-      webtop:
-        condition: service_healthy
-    environment:
-      DESKTOP_KASM_SERVICE_USER: ${DESKTOP_KASM_SERVICE_USER:?set DESKTOP_KASM_SERVICE_USER}
-      DESKTOP_KASM_SERVICE_PASSWORD: ${DESKTOP_KASM_SERVICE_PASSWORD:?set DESKTOP_KASM_SERVICE_PASSWORD}
-    volumes:
-      - x11-socket:/tmp/.X11-unix
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
-      interval: 15s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
     security_opt:
       - no-new-privileges:true
-
-volumes:
-  x11-socket:
+    labels:
+      com.fb-agent.managed: "true"
+      com.fb-agent.cluster-id: ${FB_AGENT_BOOTSTRAP_CLUSTER_ID:?set FB_AGENT_BOOTSTRAP_CLUSTER_ID}
+      com.fb-agent.purpose: vision
+      com.fb-agent.release: ${FB_AGENT_VISION_RELEASE_ID:?set FB_AGENT_VISION_RELEASE_ID}
 
 networks:
   fb-agent:
-    name: fb_agent_default
+    name: fb_agent_safety_first_platform
     external: true

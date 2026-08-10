@@ -4,13 +4,14 @@
  * Секции:
  *   - Цель оптимизации — read-only «Зашито по SOP» (objective/optimization_goal/
  *     custom_event_type/bid_strategy/billing/text_optimizations не редактируются)
- *   - Бюджет (budget_level CBO/ABO, daily_budget_cents, bid_amount_cents=целевой CPA)
+ *   - Бюджет (major-unit decimal strings in the confirmed cabinet currency)
  *   - Таргет (countries+AQ, age_min/max, advantage_audience)
  *   - Атрибуция (click_through_days, view_through_days)
  *   - Назначение (destination_link, cta, start_date)
  */
 
-import { type FC, useEffect, useState } from "react";
+import { type FC } from "react";
+import { validateCampaignGoal } from "@fb/features/campaigns";
 import { CALL_TO_ACTIONS } from "@fb/shared";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
@@ -21,6 +22,8 @@ import type { WizardGoal } from "@/stores/campaignWizard";
 interface WizardStep3GoalProps {
   values: WizardGoal;
   onChange: (v: Partial<WizardGoal>) => void;
+  currency: string | null;
+  currencyExponent: number | null;
   errors?: Partial<Record<keyof WizardGoal, string>>;
 }
 
@@ -45,12 +48,29 @@ const ATTRIBUTION_DAYS_OPTIONS = [
   { value: "28", label: "28 дней" },
 ];
 
-export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, errors = {} }) => {
+function asAttributionDays(value: string): 1 | 7 | 28 {
+  return value === "7" ? 7 : value === "28" ? 28 : 1;
+}
+
+export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
+  values,
+  onChange,
+  currency,
+  currencyExponent,
+  errors = {},
+}) => {
+  const currencyLabel = currency || "валюта не подтверждена";
+  const precisionLabel =
+    currencyExponent == null
+      ? "Точность не подтверждена"
+      : currencyExponent === 0
+        ? "Только целые единицы"
+        : `До ${currencyExponent} знаков после разделителя`;
   return (
     <div className="space-y-7">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
+        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 3 · ЦЕЛЬ И БЮДЖЕТ
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
@@ -68,13 +88,13 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
           {SOP_LOCKED.map((item) => (
             <span
               key={item}
-              className="inline-flex h-7 items-center rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 px-3 font-display text-[12px] text-bg-9"
+              className="inline-flex h-7 items-center rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 px-3 font-display text-[12px] text-bg-9"
             >
               {item}
             </span>
           ))}
         </div>
-        <p className="mt-2 text-[11px] text-bg-8">
+        <p className="mt-2 text-[12px] text-bg-8">
           Эти параметры одинаковы для всех кампаний кабинета и не редактируются.
         </p>
       </section>
@@ -82,7 +102,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
       {/* Бюджет */}
       <section>
         <SectionLabel>БЮДЖЕТ</SectionLabel>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Select
             label="Уровень бюджета"
             options={BUDGET_LEVEL_OPTIONS}
@@ -91,21 +111,25 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
               onChange({ budget_level: e.target.value as WizardGoal["budget_level"] })
             }
           />
-          <DollarInput
-            label="Дневной бюджет ($)"
-            cents={values.daily_budget_cents}
-            onCents={(cents) => onChange({ daily_budget_cents: cents })}
-            errorMessage={errors.daily_budget_cents}
-            helpText="Hard cap: $100 000 / день"
+          <CurrencyAmountInput
+            label={`Дневной бюджет (${currencyLabel})`}
+            value={values.daily_budget}
+            onValue={(daily_budget) => onChange({ daily_budget })}
+            errorMessage={errors.daily_budget}
+            helpText={
+              currency
+                ? `Hard cap: 100 000 ${currency} / день · ${precisionLabel}`
+                : "Сначала подтвердите кабинет"
+            }
             placeholder="Введите сумму"
           />
           {/* Целевой CPA = bid_amount для COST_CAP (обязателен) */}
-          <DollarInput
-            label="Целевой CPA, $"
-            cents={values.bid_amount_cents}
-            onCents={(cents) => onChange({ bid_amount_cents: cents })}
-            errorMessage={errors.bid_amount_cents}
-            helpText="Cost cap — цена за результат"
+          <CurrencyAmountInput
+            label={`Целевой CPA (${currencyLabel})`}
+            value={values.bid_amount}
+            onValue={(bid_amount) => onChange({ bid_amount })}
+            errorMessage={errors.bid_amount}
+            helpText={`Cost cap — цена за результат · ${precisionLabel}`}
             placeholder="Из оффера или вручную"
           />
         </div>
@@ -116,7 +140,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
         <SectionLabel>ТАРГЕТ</SectionLabel>
         <div className="space-y-4">
           <div>
-            <div className="text-[11px] font-display tracking-wider uppercase text-bg-9 mb-1.5">
+            <div className="text-[12px] font-display tracking-wider uppercase text-bg-9 mb-1.5">
               Страны <span className="text-bg-8">(AQ добавляется автоматически)</span>
             </div>
             <CountryMultiSelect
@@ -129,7 +153,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
             />
           </div>
 
-          <div className="grid grid-cols-3 gap-4 items-end">
+          <div className="grid grid-cols-1 gap-4 items-end sm:grid-cols-3">
             <Input
               label="Возраст от"
               type="number"
@@ -161,18 +185,18 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
       {/* Атрибуция */}
       <section>
         <SectionLabel>АТРИБУЦИЯ</SectionLabel>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Select
             label="Click-through (дни)"
             options={ATTRIBUTION_DAYS_OPTIONS}
             value={String(values.click_through_days)}
-            onChange={(e) => onChange({ click_through_days: Number(e.target.value) })}
+            onChange={(e) => onChange({ click_through_days: asAttributionDays(e.target.value) })}
           />
           <Select
             label="View-through (дни)"
             options={ATTRIBUTION_DAYS_OPTIONS}
             value={String(values.view_through_days)}
-            onChange={(e) => onChange({ view_through_days: Number(e.target.value) })}
+            onChange={(e) => onChange({ view_through_days: asAttributionDays(e.target.value) })}
           />
         </div>
       </section>
@@ -180,13 +204,13 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
       {/* Назначение */}
       <section>
         <SectionLabel>НАЗНАЧЕНИЕ</SectionLabel>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
             label="Дата старта"
             type="date"
             value={values.start_date}
             onChange={(e) => onChange({ start_date: e.target.value })}
-            helpText="Дефолт: завтра"
+            helpText="По умолчанию — следующий календарный день кабинета"
             errorMessage={errors.start_date}
           />
           <Select
@@ -209,10 +233,12 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
         <div className="mt-4">
           {/* url_tags и text_optimizations (OPT_OUT) вычисляются/зашиты бэком по SOP — редактирование убрано */}
           <div className="flex flex-col gap-1">
-            <div className="text-[11px] font-display tracking-wider uppercase text-bg-9">
+            <div className="text-[12px] font-display tracking-wider uppercase text-bg-9">
               URL Tags
             </div>
-            <div className="text-[12px] text-bg-8 italic">Трекинг по SOP — бэк вычисляет автоматически</div>
+            <div className="text-[12px] text-bg-8 italic">
+              Трекинг по SOP — бэк вычисляет автоматически
+            </div>
           </div>
         </div>
         {/* Ad text */}
@@ -243,57 +269,31 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
 
 // ─── Вспомогательные компоненты ───────────────────────────────────────────────
 
-/**
- * Денежное поле в долларах с хранением в центах.
- *
- * Локальное строковое состояние позволяет полностью стереть значение и набрать
- * новое (промежуточные "", "12." не коммитятся в стор — нет snap-back к старому
- * числу). type="text" + inputMode="decimal" убирает нативные стрелки-степперы.
- * При внешнем изменении центов (reset/preset) текст ре-синхронизируется.
- */
-function DollarInput({
+/** Exact major-unit input; conversion to Meta minor units happens only server-side. */
+function CurrencyAmountInput({
   label,
-  cents,
-  onCents,
+  value,
+  onValue,
   errorMessage,
   helpText,
   placeholder,
 }: {
   label: string;
-  cents: number;
-  onCents: (cents: number) => void;
+  value: string;
+  onValue: (value: string) => void;
   errorMessage?: string;
   helpText?: string;
   placeholder?: string;
 }) {
-  // 0/отрицательные центы → пустая строка (поле показывает placeholder, не «0»).
-  const centsToStr = (c: number) => (c > 0 ? String(c / 100) : "");
-  const [text, setText] = useState(() => centsToStr(cents));
-
-  // Ре-синхронизация только при реальном внешнем изменении центов.
-  // Если локально пусто/промежуточно — не трогаем (parse != cents → resync лишь
-  // когда стор сменился извне, а не из-за нашего же ввода).
-  useEffect(() => {
-    const parsed = parseFloat(text);
-    const localCents = isNaN(parsed) ? NaN : Math.round(parsed * 100);
-    if (localCents !== cents) setText(centsToStr(cents));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cents]);
-
-  const handle = (v: string) => {
-    setText(v);
-    const parsed = parseFloat(v);
-    if (!isNaN(parsed) && parsed >= 0) onCents(Math.round(parsed * 100));
-  };
-
   return (
     <Input
       label={label}
       type="text"
       inputMode="decimal"
-      value={text}
+      value={value}
+      maxLength={32}
       placeholder={placeholder}
-      onChange={(e) => handle(e.target.value)}
+      onChange={(e) => onValue(e.target.value)}
       errorMessage={errorMessage}
       helpText={helpText}
     />
@@ -302,7 +302,7 @@ function DollarInput({
 
 function SectionLabel({ children }: { children: string }) {
   return (
-    <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
+    <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-3">
       {children}
     </div>
   );
@@ -310,22 +310,9 @@ function SectionLabel({ children }: { children: string }) {
 
 // ─── Валидация ────────────────────────────────────────────────────────────────
 
-export function validateGoal(values: WizardGoal): Partial<Record<keyof WizardGoal, string>> {
-  // url_tags убран из WizardGoal — бэк вычисляет по SOP
-  const errors: Partial<Record<keyof WizardGoal, string>> = {};
-
-  if (!values.destination_link.trim()) errors.destination_link = "Укажите трекинг-ссылку";
-  if (values.daily_budget_cents < 100) errors.daily_budget_cents = "Минимум $1";
-  if (values.daily_budget_cents > 10_000_000) errors.daily_budget_cents = "Максимум $100 000/день";
-  // Целевой CPA обязателен — COST_CAP без bid_amount бэк отклонит (money-инвариант)
-  if (values.bid_amount_cents <= 0) errors.bid_amount_cents = "Укажите целевой CPA";
-  if (values.countries.length === 0) errors.countries = "Укажите хотя бы одну страну";
-  if (!values.start_date) {
-    errors.start_date = "Укажите дату старта";
-  } else if (values.start_date < new Date().toISOString().slice(0, 10)) {
-    // Дата в прошлом → Meta отклонит залив на шаге 7 невнятной ошибкой. Ловим раньше.
-    errors.start_date = "Дата старта не может быть в прошлом";
-  }
-
-  return errors;
+export function validateGoal(
+  values: WizardGoal,
+  currencyExponent: number | null,
+): Partial<Record<keyof WizardGoal, string>> {
+  return validateCampaignGoal(values, currencyExponent);
 }

@@ -20,20 +20,50 @@ Money-дубль кампании закрывается на четырёх р�
 
 from __future__ import annotations
 
+import asyncio
 import inspect
-from unittest.mock import AsyncMock
+import uuid
+from contextlib import nullcontext
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import apps.reconciler_worker.worker as rw
+import core.campaign_builder.execute as campaign_execute
 from apps.campaign_creator_worker import LoadedRun
 from core.campaign_builder.execute import (
     CampaignExecutionError,
     PartialCreateError,
     classify_execution_error,
 )
-from core.meta_api.errors import PermanentError, TemporaryError
+from core.meta_api.errors import (
+    BrowserReadinessRejectedError,
+    PermanentError,
+    TemporaryError,
+)
+from core.tasks.irreversible_control import CreatorTaskControlAbort
 from core.tasks.queue import IRREVERSIBLE_TASK_TYPES, reconcile_stuck_running
+
+
+class _UnitControl:
+    def __init__(self, **kwargs) -> None:
+        task = kwargs.get("task")
+        self.external_started = bool(
+            task is not None and getattr(task, "external_started_at", None) is not None
+        )
+
+    async def check(self) -> None:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _no_db_task_control(monkeypatch) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    monkeypatch.setattr(worker, "CreatorTaskControl", _UnitControl)
+
 
 # ====================== CRIT-1: reconcile исключает campaign_create ======================
 
@@ -50,7 +80,8 @@ async def test_reconcile_excludes_campaign_create_unconditionally(monkeypatch) -
     captured: dict = {}
 
     class _FakeResult:
-        rowcount = 0
+        def all(self):
+            return []
 
     class _FakeConn:
         async def execute(self, stmt, params):
@@ -84,7 +115,8 @@ async def test_reconcile_keeps_both_guards_with_exclude_kinds(monkeypatch) -> No
     captured: dict = {}
 
     class _FakeResult:
-        rowcount = 0
+        def all(self):
+            return []
 
     class _FakeConn:
         async def execute(self, stmt, params):
@@ -104,7 +136,7 @@ async def test_reconcile_keeps_both_guards_with_exclude_kinds(monkeypatch) -> No
             return _FakeBegin()
 
     await reconcile_stuck_running(
-        _FakeEngine(), exclude_kinds=frozenset({"create_campaign", "duplicate_campaign"})
+        _FakeEngine(), exclude_kinds=frozenset({"duplicate_adset_structure"})
     )
     sql = captured["sql"]
     assert "task_type NOT IN" in sql
@@ -113,14 +145,6 @@ async def test_reconcile_keeps_both_guards_with_exclude_kinds(monkeypatch) -> No
 
 
 # ====================== HIGH-3: reconciler заводит campaign_create-стак ==================
-
-
-# render_campaign_create_alert: HTML + count + указание на ручную проверку Meta.
-def test_render_campaign_create_alert_html() -> None:
-    txt = rw.render_campaign_create_alert(2)
-    assert "<b>2</b>" in txt
-    assert "campaign_create" in txt
-    assert "вручную" in txt
 
 
 # run_once: fail_stuck_campaign_create вызывается ПЕРЕД reconcile_stuck_running и считается.
@@ -136,10 +160,11 @@ async def test_run_once_calls_fail_campaign_create_before_reconcile(monkeypatch)
         order.append("reconcile")
         return 0
 
-    monkeypatch.setattr(rw, "fail_irreversible_stuck", AsyncMock(return_value=0))
+    monkeypatch.setattr(rw, "expire_overdue", AsyncMock(return_value=0))
+    monkeypatch.setattr(rw, "prepare_duplicate_recovery", AsyncMock(return_value=0))
+    monkeypatch.setattr(rw, "fail_duplicate_without_checkpoint", AsyncMock(return_value=0))
     monkeypatch.setattr(rw, "fail_stuck_campaign_create", fake_fail_campaign)
     monkeypatch.setattr(rw, "reconcile_stuck_running", fake_reconcile)
-    monkeypatch.setattr(rw, "cancel_old_drafts", AsyncMock(return_value=0))
 
     counts = await rw.run_once(object())
 
@@ -147,41 +172,9 @@ async def test_run_once_calls_fail_campaign_create_before_reconcile(monkeypatch)
     assert counts["campaign_create_failed"] == 0
 
 
-# run_once: при campaign_create_failed>0 шлётся алерт.
-@pytest.mark.asyncio
-async def test_run_once_alerts_when_campaign_create_failed(monkeypatch) -> None:
-    monkeypatch.setattr(rw, "fail_irreversible_stuck", AsyncMock(return_value=0))
-    monkeypatch.setattr(rw, "fail_stuck_campaign_create", AsyncMock(return_value=3))
-    monkeypatch.setattr(rw, "reconcile_stuck_running", AsyncMock(return_value=0))
-    monkeypatch.setattr(rw, "cancel_old_drafts", AsyncMock(return_value=0))
-    alert_spy = AsyncMock()
-    monkeypatch.setattr(rw, "_maybe_alert_campaign_create", alert_spy)
-
-    counts = await rw.run_once(object())
-
-    assert counts["campaign_create_failed"] == 3
-    alert_spy.assert_awaited_once()
-    assert alert_spy.await_args.args[1] == 3
-
-
-# run_once: при campaign_create_failed==0 алерт НЕ шлётся.
-@pytest.mark.asyncio
-async def test_run_once_no_campaign_alert_when_zero(monkeypatch) -> None:
-    monkeypatch.setattr(rw, "fail_irreversible_stuck", AsyncMock(return_value=0))
-    monkeypatch.setattr(rw, "fail_stuck_campaign_create", AsyncMock(return_value=0))
-    monkeypatch.setattr(rw, "reconcile_stuck_running", AsyncMock(return_value=0))
-    monkeypatch.setattr(rw, "cancel_old_drafts", AsyncMock(return_value=0))
-    alert_spy = AsyncMock()
-    monkeypatch.setattr(rw, "_maybe_alert_campaign_create", alert_spy)
-
-    await rw.run_once(object())
-    alert_spy.assert_not_awaited()
-
-
-# _maybe_alert_campaign_create: count<=0 — мгновенный no-op без обращения к БД.
-@pytest.mark.asyncio
-async def test_maybe_alert_campaign_zero_noop() -> None:
-    await rw._maybe_alert_campaign_create(object(), 0)
+def test_reconciler_has_no_post_commit_campaign_alert_path() -> None:
+    assert not hasattr(rw, "_maybe_alert_campaign_create")
+    assert not hasattr(rw, "render_campaign_create_alert")
 
 
 # ====================== HIGH-2: classify учитывает irreversible_attempted ===============
@@ -217,6 +210,46 @@ def test_classify_pre_post_transient_stays_transient() -> None:
     assert classify_execution_error(err) == "transient"
 
 
+def test_presend_readiness_rejection_overrides_local_external_boundary_marker() -> None:
+    cause = BrowserReadinessRejectedError("local circuit open before browser dispatch")
+    created = {"campaigns": [], "adsets": [], "creatives": [], "ads": []}
+
+    with pytest.raises(CampaignExecutionError) as raised:
+        campaign_execute._raise_for_failure(  # noqa: SLF001
+            created,
+            cause,
+            failed_step="creating_campaign",
+            campaign_create_attempted=True,
+        )
+
+    assert not isinstance(raised.value, PartialCreateError)
+    assert raised.value.__cause__ is cause
+    assert raised.value.irreversible_attempted is False
+    assert classify_execution_error(raised.value) == "transient"
+
+
+def test_readiness_rejection_after_confirmed_create_remains_partial() -> None:
+    cause = BrowserReadinessRejectedError("upload rejected before its Meta dispatch")
+    created = {
+        "campaigns": ["campaign-1"],
+        "adsets": [],
+        "creatives": [],
+        "ads": [],
+    }
+
+    with pytest.raises(PartialCreateError) as raised:
+        campaign_execute._raise_for_failure(  # noqa: SLF001
+            created,
+            cause,
+            failed_step="uploading",
+            campaign_create_attempted=True,
+        )
+
+    assert raised.value.created_ids["campaigns"] == ["campaign-1"]
+    assert raised.value.__cause__ is cause
+    assert classify_execution_error(raised.value) == "partial"
+
+
 # Permanent-причина (например, валидация) без attempted → permanent.
 def test_classify_pre_post_permanent() -> None:
     err = CampaignExecutionError("bad config")
@@ -241,6 +274,7 @@ class _SpyClient:
 def _make_task():
     from core.tasks.queue import Task
 
+    now = datetime.now(UTC)
     return Task(
         id=42,
         task_type="campaign_create",
@@ -250,6 +284,20 @@ def _make_task():
         attempt_count=1,
         max_attempts=5,
         requested_by="reconciler",
+        last_error=None,
+        created_at=now,
+        external_started_at=None,
+        result=None,
+        lane="bulk",
+        priority=0,
+        available_at=now,
+        deadline_at=now + timedelta(minutes=5),
+        lease_owner=uuid.UUID("00000000-0000-0000-0000-000000000042"),
+        lease_token=9,
+        lease_expires_at=now + timedelta(minutes=30),
+        cancel_requested_at=None,
+        cancel_reason=None,
+        correlation_id=uuid.uuid4(),
     )
 
 
@@ -278,7 +326,7 @@ async def test_worker_skips_run_in_creating(monkeypatch) -> None:
     exec_spy.assert_not_awaited()  # повторного залива нет
     assert client.calls == []
     finalize_spy.assert_awaited_once()  # run уведён в failed
-    mark_failed_spy.assert_awaited_once()  # task уведён в failed (НЕ retry)
+    mark_failed_spy.assert_not_awaited()  # task закрывается атомарно вместе с run
 
 
 # Re-claim run в нетерминальном статусе, но с created_meta_ids → тоже НЕ переисполняем.
@@ -303,6 +351,33 @@ async def test_worker_skips_run_with_created_ids(monkeypatch) -> None:
 
     exec_spy.assert_not_awaited()
     assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_preexisting_boundary_without_meta_retry(monkeypatch) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    monkeypatch.setattr(
+        worker,
+        "load_run",
+        AsyncMock(return_value=LoadedRun(id="run-1", config={}, status="queued")),
+    )
+    monkeypatch.setattr(worker, "_run_has_created_meta_ids", AsyncMock(return_value=False))
+    finalize = AsyncMock(return_value=True)
+    monkeypatch.setattr(worker, "finalize_run_failed", finalize)
+    execute = AsyncMock()
+    monkeypatch.setattr(worker, "execute_campaign_spec", execute)
+    task = _make_task()
+    task.external_started_at = datetime.now(UTC)
+    client = _SpyClient()
+
+    await worker.process_one_task(object(), task, client=client, uploader=object())
+
+    execute.assert_not_awaited()
+    assert client.calls == []
+    result = finalize.await_args.kwargs["task_result"]
+    assert result["outcome"] == "UNKNOWN"
+    assert result["reason"] == "preexisting_external_boundary"
 
 
 # Терминальный 'failed' run — старый guard остаётся (быстрый no-op, execute не зовётся).
@@ -338,3 +413,136 @@ def test_build_uniquification_plan_signature_stable() -> None:
     # cfg, block, concepts, copies — публичный контракт исполнителя (execute.py зовёт).
     assert params[:3] == ["cfg", "block", "concepts"]
     assert "copies" in sig.parameters
+
+
+@pytest.mark.asyncio
+async def test_campaign_worker_uses_durable_gate_without_preclaim_rpc(
+    monkeypatch,
+) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    stop = asyncio.Event()
+    task = _make_task()
+    claim = AsyncMock(
+        return_value=SimpleNamespace(
+            queue_empty=False,
+            task=task,
+            browser_profile_id="campaign-profile-1",
+            browser_readiness_generation=4,
+        )
+    )
+
+    async def process(*_args, **_kwargs) -> None:
+        stop.set()
+
+    monkeypatch.setattr(worker, "_claim", claim)
+    monkeypatch.setattr(worker, "process_one_task", process)
+    client = MagicMock()
+    client.operation_authority.return_value = nullcontext()
+
+    await worker.task_loop(
+        object(),
+        stop,
+        client=client,
+        uploader=object(),
+    )
+
+    claim.assert_awaited_once()
+    client.operation_authority.assert_called_once_with(
+        caller="campaign_creator",
+        task_id=task.id,
+        lease_owner=task.lease_owner,
+        lease_token=task.lease_token,
+        vision_profile_id="campaign-profile-1",
+        browser_readiness_generation=4,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_winning_first_meta_boundary_makes_zero_meta_calls(monkeypatch) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    class _CancelAtBoundary(_UnitControl):
+        async def begin_external(self, _operation: str) -> None:
+            raise CreatorTaskControlAbort("cancel_requested", external_started=False)
+
+    async def _execute(*_args, client, **_kwargs):
+        await client.execute_graph_call(method="POST", endpoint="/act_1/campaigns")
+
+    async def _direct(_control, operation_factory):
+        return await operation_factory()
+
+    delegate = AsyncMock()
+    control = _CancelAtBoundary()
+    task = _make_task()
+    monkeypatch.setattr(worker, "parse_run_config", lambda _cfg: SimpleNamespace())
+    monkeypatch.setattr(worker, "resolve_concepts_from_config", lambda _cfg: {})
+    monkeypatch.setattr(worker, "build_campaign_spec", lambda _cfg: object())
+    monkeypatch.setattr(worker, "set_run_status", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker, "execute_campaign_spec", _execute)
+    monkeypatch.setattr(worker, "run_with_task_control", _direct)
+    cancel_finalize = AsyncMock(return_value=True)
+    monkeypatch.setattr(worker, "finalize_run_cancelled", cancel_finalize)
+    retry = AsyncMock(return_value=True)
+    monkeypatch.setattr(worker, "requeue_for_retry", retry)
+
+    await worker._execute_run(
+        object(),
+        task,
+        run_id="run-1",
+        config={},
+        client=delegate,
+        uploader=AsyncMock(),
+        control=control,
+    )
+
+    delegate.execute_graph_call.assert_not_awaited()
+    retry.assert_not_awaited()
+    cancel_finalize.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_transient_after_campaign_boundary_is_unknown_not_retried(monkeypatch) -> None:
+    import apps.campaign_creator_worker.main as worker
+
+    class _StartedControl(_UnitControl):
+        async def begin_external(self, _operation: str) -> None:
+            self.external_started = True
+
+    async def _execute(*_args, client, **_kwargs):
+        await client.execute_graph_call(method="POST", endpoint="/act_1/campaigns")
+
+    async def _direct(_control, operation_factory):
+        return await operation_factory()
+
+    from core.meta_api.errors import TemporaryError
+
+    delegate = AsyncMock()
+    delegate.execute_graph_call.side_effect = TemporaryError("response lost")
+    control = _StartedControl()
+    task = _make_task()
+    monkeypatch.setattr(worker, "parse_run_config", lambda _cfg: SimpleNamespace())
+    monkeypatch.setattr(worker, "resolve_concepts_from_config", lambda _cfg: {})
+    monkeypatch.setattr(worker, "build_campaign_spec", lambda _cfg: object())
+    monkeypatch.setattr(worker, "set_run_status", AsyncMock(return_value=True))
+    monkeypatch.setattr(worker, "execute_campaign_spec", _execute)
+    monkeypatch.setattr(worker, "run_with_task_control", _direct)
+    failed = AsyncMock(return_value=True)
+    retry = AsyncMock(return_value=True)
+    monkeypatch.setattr(worker, "finalize_run_failed", failed)
+    monkeypatch.setattr(worker, "requeue_for_retry", retry)
+
+    await worker._execute_run(
+        object(),
+        task,
+        run_id="run-1",
+        config={},
+        client=delegate,
+        uploader=AsyncMock(),
+        control=control,
+    )
+
+    retry.assert_not_awaited()
+    result = failed.await_args.kwargs["task_result"]
+    assert result["outcome"] == "UNKNOWN"
+    assert result["manual_review_required"] is True

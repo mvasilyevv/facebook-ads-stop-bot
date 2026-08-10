@@ -23,11 +23,11 @@ from core.config import Settings, reveal_secret, safe_url_for_log
 _SECRET_FIELDS = [
     "postgres_password",
     "telegram_bot_token",
+    "telegram_webhook_secret",
+    "alertmanager_webhook_secret",
     "encryption_key",
     "encryption_key_verify",
     "api_key",
-    "vision_x_token",
-    "sentry_dsn",
     "tma_session_secret",
     "anthropic_api_key",
     "openai_api_key",
@@ -66,8 +66,8 @@ def test_empty_secretstr_is_falsy() -> None:
 
 # (б) get_secret_value() отдаёт исходную строку без искажений.
 def test_get_secret_value_roundtrip() -> None:
-    settings = Settings(vision_x_token="tok_abc123XYZ")
-    assert settings.vision_x_token.get_secret_value() == "tok_abc123XYZ"
+    settings = Settings(telegram_bot_token="tok_abc123XYZ")
+    assert settings.telegram_bot_token.get_secret_value() == "tok_abc123XYZ"
 
 
 # (б) Money-критичный потребитель: Fernet(ENCRYPTION_KEY) шифрует/расшифровывает

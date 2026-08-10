@@ -2,7 +2,51 @@
 // детект разлогина/чекпоинта (MID X-16: слепой канал = слитый бюджет).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickPreferredThumb, retryTransient, isLoginRequiredResponse } from './am-fetch.js';
+import {
+  acquireGraphContext,
+  invalidateGraphContext,
+  isLoginRequiredResponse,
+  pickPreferredThumb,
+  retryTransient,
+  runAmScanWithContext,
+} from './am-fetch.js';
+
+test('GraphContext cache is isolated by session and ad account', async () => {
+  const sessionId = 'session-two-cabinets';
+  const requestedAccounts = ['111', '222'];
+  let reloads = 0;
+  let requestListener: ((request: { url(): string }) => void) | undefined;
+  const page = {
+    on: (event: string, listener: (request: { url(): string }) => void) => {
+      if (event === 'request') requestListener = listener;
+    },
+    off: (event: string, listener: (request: { url(): string }) => void) => {
+      if (event === 'request' && requestListener === listener) requestListener = undefined;
+    },
+    reload: async () => {
+      const account = requestedAccounts[reloads];
+      reloads += 1;
+      requestListener?.({
+        url: () =>
+          `https://adsmanager-graph.facebook.com/v22.0/act_${account}/am_tabular?access_token=token-${account}`,
+      });
+    },
+  };
+
+  invalidateGraphContext(sessionId, '111');
+  invalidateGraphContext(sessionId, '222');
+  const first = await acquireGraphContext(page as any, sessionId, { expectedActId: '111' });
+  const second = await acquireGraphContext(page as any, sessionId, { expectedActId: '222' });
+  const firstAgain = await acquireGraphContext(page as any, sessionId, {
+    expectedActId: '111',
+  });
+
+  assert.equal(first.ctx.actId, 'act_111');
+  assert.equal(second.ctx.actId, 'act_222');
+  assert.equal(firstAgain.ctx.accessToken, 'token-111');
+  assert.equal(firstAgain.sniffed, false);
+  assert.equal(reloads, 2);
+});
 
 // Предпочитаем кадр с is_preferred=true (Meta помечает «главный» кадр видео).
 test('pickPreferredThumb: берёт is_preferred', () => {
@@ -168,4 +212,42 @@ test('isLoginRequiredResponse: чистый ответ / пустой вход �
   assert.equal(isLoginRequiredResponse({ data: [] }), false);
   assert.equal(isLoginRequiredResponse(null), false);
   assert.equal(isLoginRequiredResponse(undefined), false);
+});
+
+test('gRPC AbortSignal прерывает in-page fetch текущего am-скана', async () => {
+  const abort = new AbortController();
+  let startedResolve!: () => void;
+  const started = new Promise<void>((resolve) => { startedResolve = resolve; });
+  let finishFetch!: (value: Record<string, unknown>) => void;
+  let abortEvaluations = 0;
+  const page = {
+    evaluate: async (_fn: any, args: any) => {
+      if (args && typeof args === 'object' && 'url' in args) {
+        startedResolve();
+        return new Promise<Record<string, unknown>>((resolve) => { finishFetch = resolve; });
+      }
+      if (typeof args === 'string') {
+        abortEvaluations += 1;
+        finishFetch?.({ __amError: true, __amCancelled: true, message: 'AbortError' });
+      }
+      return undefined;
+    },
+  };
+  const pending = runAmScanWithContext(
+    page as any,
+    {
+      accessToken: 'token',
+      actId: 'act_123',
+      apiVersion: 'v22.0',
+      graphOrigin: 'https://adsmanager-graph.facebook.com',
+    },
+    { campaignIds: [], datePreset: 'today' },
+    { signal: abort.signal, operationId: 'scan-cancel-test' },
+  );
+
+  await started;
+  abort.abort('grpc_cancelled');
+
+  await assert.rejects(pending, /cancelled/);
+  assert.ok(abortEvaluations >= 1);
 });

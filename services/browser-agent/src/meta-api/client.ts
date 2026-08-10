@@ -6,6 +6,13 @@
 // запрос исходит из того же session-context, что и DOM-операции.
 
 import type { Page } from 'playwright';
+import { randomUUID } from 'crypto';
+import {
+  bindAbortSignalToPage,
+  clearInPageFetchOperation,
+  raceWithAbort,
+} from '../in-page-abort.js';
+import { assertCanonicalGraphMethodSemantics } from './operation-capability.js';
 
 // Версия Marketing API. Не использовать "latest", фиксируем явно.
 // При обновлении (раз в год) — синхронизировать с настройками в core/config.py.
@@ -34,6 +41,11 @@ export interface GraphApiCallResult {
   };
 }
 
+export interface GraphApiCallOptions {
+  signal?: AbortSignal;
+  operationId?: string;
+}
+
 export interface MetaApiHealthResult {
   healthy: boolean;
   currentUrl: string;
@@ -53,6 +65,7 @@ export interface CheckHealthOptions {
   fullProbe?: boolean;
   // TTL кеша probe-результата на эту страницу (мс). Защита от частых запросов к Meta.
   cacheTtlMs?: number;
+  signal?: AbortSignal;
 }
 
 // Таймаут реального probe-fetch (короче дефолтного 30с — health должен быть быстрым).
@@ -97,9 +110,19 @@ const _PROBE_NOT_PERFORMED = {
 export async function executeGraphCall(
   page: Page,
   params: GraphApiCallParams,
+  options: GraphApiCallOptions = {},
 ): Promise<GraphApiCallResult> {
+  assertCanonicalGraphMethodSemantics(
+    params.method,
+    params.endpoint,
+    params.queryParams || {},
+    params.bodyJson ?? '',
+  );
   const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const apiVersion = META_API_VERSION;
+  const operationId = options.operationId ?? `meta:${randomUUID()}`;
+  const t0 = Date.now();
+  const abortBinding = bindAbortSignalToPage(page, operationId, options.signal);
 
   // Передаём minimal параметры внутрь page.evaluate (нельзя передавать функции/классы).
   const evalParams = {
@@ -109,24 +132,28 @@ export async function executeGraphCall(
     bodyJson: params.bodyJson ?? null,
     timeoutMs,
     apiVersion,
+    operationId,
   };
 
-  // H4: на свежеоткрытой вкладке кабинета (ensureAdsManagerPage) EAA-токен ещё не
-  // в DOM — ждём его появления ПЕРЕД fetch, иначе page.evaluate вернёт code=-1
-  // TokenNotFound и мутация (pause/activate) фейлится с первой попытки. Если не
-  // дождались за 10с — продолжаем: евал вернёт -1 → SessionUnavailableError → requeue.
   try {
-    await page.waitForFunction(
-      () => /EAA[A-Za-z0-9_-]{100,}/.test(document.documentElement.innerHTML),
-      { timeout: 10_000 },
-    );
-  } catch {
-    // токен не появился — не блокируем, ниже евал отдаст -1 (Temporary → retry)
-  }
+    // On a freshly-created control page the token may appear asynchronously.
+    // Cancellation must not be swallowed by the token warm-up timeout.
+    try {
+      await raceWithAbort(
+        page.waitForFunction(
+          () => /EAA[A-Za-z0-9_-]{100,}/.test(document.documentElement.innerHTML),
+          { timeout: 10_000 },
+        ),
+        options.signal,
+      );
+    } catch {
+      if (options.signal?.aborted) {
+        return cancelledGraphResult(t0, 'gRPC request cancelled before Graph fetch completed');
+      }
+      // Token-not-found is returned below as -1 and remains safely retryable.
+    }
 
-  const t0 = Date.now();
-  try {
-    const result = await page.evaluate(async (args) => {
+    const result = await raceWithAbort(page.evaluate(async (args) => {
       // Извлечь access_token из page source.
       // Используем расширенный regex (EAA*, не только EAAbs*) — на случай если Meta
       // поменяет префикс. Минимум 100 символов — отсекает шум.
@@ -141,6 +168,17 @@ export async function executeGraphCall(
       }
       const token = match[0];
 
+      const root = globalThis as typeof globalThis & {
+        __fbAgentFetchAbort?: {
+          controllers: Map<string, Set<AbortController>>;
+          cancelled: Set<string>;
+        };
+      };
+      const state = root.__fbAgentFetchAbort ??= {
+        controllers: new Map<string, Set<AbortController>>(),
+        cancelled: new Set<string>(),
+      };
+
       // Построить URL: https://graph.facebook.com/v22.0/<endpoint>?<params>&access_token=<token>
       const url = new URL(`https://graph.facebook.com/${args.apiVersion}${args.endpoint}`);
       for (const [key, value] of Object.entries(args.queryParams)) {
@@ -150,7 +188,11 @@ export async function executeGraphCall(
 
       // AbortController для таймаута.
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), args.timeoutMs);
+      const controllers = state.controllers.get(args.operationId) ?? new Set<AbortController>();
+      controllers.add(controller);
+      state.controllers.set(args.operationId, controllers);
+      if (state.cancelled.has(args.operationId)) controller.abort('grpc_cancelled');
+      const timeoutId = setTimeout(() => controller.abort('deadline_exceeded'), args.timeoutMs);
 
       try {
         const fetchOptions: RequestInit = {
@@ -166,17 +208,17 @@ export async function executeGraphCall(
         }
 
         const response = await fetch(url.toString(), fetchOptions);
-        clearTimeout(timeoutId);
-
         const text = await response.text();
         return {
           status_code: response.status,
           response_json: text,
         };
       } catch (err: any) {
-        clearTimeout(timeoutId);
-        const errMessage = err?.name === 'AbortError'
-          ? `Timeout после ${args.timeoutMs}мс`
+        const cancelled = state.cancelled.has(args.operationId);
+        const errMessage = cancelled
+          ? 'gRPC request cancelled; external result is unknown'
+          : err?.name === 'AbortError'
+            ? `Timeout после ${args.timeoutMs}мс`
           : String(err?.message ?? err);
         return {
           status_code: 0,
@@ -184,8 +226,12 @@ export async function executeGraphCall(
             error: { code: -2, type: 'NetworkError', message: errMessage },
           }),
         };
+      } finally {
+        clearTimeout(timeoutId);
+        controllers.delete(controller);
+        if (controllers.size === 0) state.controllers.delete(args.operationId);
       }
-    }, evalParams);
+    }, evalParams), options.signal);
 
     const durationMs = Date.now() - t0;
 
@@ -199,6 +245,9 @@ export async function executeGraphCall(
       error: parsedError,
     };
   } catch (err: any) {
+    if (options.signal?.aborted) {
+      return cancelledGraphResult(t0, 'gRPC request cancelled during Graph fetch');
+    }
     // Это ошибка на уровне page.evaluate (например, page закрылся, browser упал).
     return {
       statusCode: 0,
@@ -218,7 +267,30 @@ export async function executeGraphCall(
         fbtraceId: '',
       },
     };
+  } finally {
+    abortBinding.dispose();
+    // Never let best-effort browser cleanup keep the role lock forever after
+    // the local AbortSignal has already made the external outcome UNKNOWN.
+    void clearInPageFetchOperation(page, operationId);
   }
+}
+
+function cancelledGraphResult(startedAt: number, message: string): GraphApiCallResult {
+  const responseJson = JSON.stringify({
+    error: { code: -2, type: 'NetworkError', message },
+  });
+  return {
+    statusCode: 0,
+    responseJson,
+    durationMs: Date.now() - startedAt,
+    error: {
+      code: -2,
+      subcode: 0,
+      type: 'NetworkError',
+      message,
+      fbtraceId: '',
+    },
+  };
 }
 
 /**
@@ -265,13 +337,16 @@ export async function checkMetaApiHealth(
       };
     }
 
-    const tokenInfo = await page.evaluate(() => {
-      const match = document.documentElement.innerHTML.match(/EAA[A-Za-z0-9_-]{100,}/);
-      return {
-        present: !!match,
-        length: match ? match[0].length : 0,
-      };
-    });
+    const tokenInfo = await raceWithAbort(
+      page.evaluate(() => {
+        const match = document.documentElement.innerHTML.match(/EAA[A-Za-z0-9_-]{100,}/);
+        return {
+          present: !!match,
+          length: match ? match[0].length : 0,
+        };
+      }),
+      opts?.signal,
+    );
 
     if (!tokenInfo.present) {
       return {
@@ -304,7 +379,10 @@ export async function checkMetaApiHealth(
     if (cached && cached.expiresAt > now) {
       verdict = cached;
     } else {
-      verdict = await runNetworkProbe(page);
+      verdict = await runNetworkProbe(page, opts.signal);
+      if (opts.signal?.aborted) {
+        throw new Error('health probe cancelled');
+      }
       _probeCache.set(page, { ...verdict, expiresAt: now + ttl });
     }
 
@@ -337,12 +415,18 @@ export async function checkMetaApiHealth(
  * Классифицирует результат как «канал мёртв» (network/token) или «канал жив»
  * (200 / Meta-side ошибка вроде rate-limit). Никогда не бросает.
  */
-async function runNetworkProbe(page: Page): Promise<ProbeVerdict> {
+async function runNetworkProbe(
+  page: Page,
+  signal?: AbortSignal,
+): Promise<ProbeVerdict> {
   const result = await executeGraphCall(page, {
     method: 'GET',
     endpoint: '/me',
     queryParams: { fields: 'id' },
     timeoutMs: PROBE_TIMEOUT_MS,
+  }, {
+    signal,
+    operationId: `health:${randomUUID()}`,
   });
 
   const base = {

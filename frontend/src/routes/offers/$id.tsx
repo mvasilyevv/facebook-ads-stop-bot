@@ -101,7 +101,12 @@ function OfferRulesPage() {
             disabled={updateMutation.isPending}
           />
           <div className="flex items-center gap-2 justify-end mt-6">
-            <Button type="button" variant="ghost" onClick={handleBack} disabled={updateMutation.isPending}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={handleBack}
+              disabled={updateMutation.isPending}
+            >
               Отмена
             </Button>
             <Button

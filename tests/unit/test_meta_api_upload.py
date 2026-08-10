@@ -3,9 +3,9 @@
 
 Покрываем:
 - upload_image: вызывает UploadImage stub, возвращает image_hash.
-- upload_image: валидация (act_ префикс, пустой bytes, размер > 8MB).
-- upload_image: ошибка ok=False с TOKEN_NOT_FOUND → SessionUnavailableError.
-- upload_image: ok=False с другим текстом → PermanentError.
+- upload_image: канонизация account identity, пустой bytes, размер > 8MB.
+- upload_image: legacy/unstructured ok=False остаётся ambiguous.
+- upload_image: структурированный Graph rejection → PermanentError.
 - upload_video_from_bytes: chunked stream — корректное разбиение на чанки.
 - upload_video: ValueError если файла нет / пустой.
 - _video_chunks: первый чанк содержит метаданные, остальные — нет.
@@ -16,15 +16,53 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import grpc
 import pytest
 
 from clients.python_grpc.v1 import meta_api_pb2
-from core.meta_api.errors import PermanentError, SessionUnavailableError
+from core.meta_api.errors import (
+    AmbiguousResultError,
+    BrowserReadinessRejectedError,
+    PermanentError,
+)
 from core.meta_api.upload import (
     DEFAULT_VIDEO_CHUNK_SIZE,
     MAX_IMAGE_SIZE_BYTES,
     MediaUploader,
 )
+
+
+class _RpcFailure(grpc.RpcError):
+    def __init__(self, code: grpc.StatusCode, details: str) -> None:
+        self._code = code
+        self._details = details
+
+    def code(self) -> grpc.StatusCode:
+        return self._code
+
+    def details(self) -> str:
+        return self._details
+
+
+def _operation_authorization(session_id: str) -> dict[str, object]:
+    return {
+        "session_id": session_id,
+        "vision_profile_id": "profile-1",
+        "authorized_caller": "campaign_creator",
+        "task_id": 101,
+        "lease_owner": "00000000-0000-0000-0000-000000000101",
+        "lease_token": 7,
+        "capability_expires_at": 2_000_000_000,
+        "capability_nonce": "nonce-1",
+        "capability_signature": "signature-1",
+    }
+
+
+def _bind_operation_authorization(client: MagicMock) -> None:
+    client.prepare_operation_authorization = AsyncMock(
+        return_value=_operation_authorization(client.session_id)
+    )
+    client._controlled_presend_readiness_error = AsyncMock(return_value=None)
 
 
 def _make_client(stub_response_upload_image=None, stub_response_upload_video=None) -> MagicMock:
@@ -35,7 +73,22 @@ def _make_client(stub_response_upload_image=None, stub_response_upload_video=Non
     stub.UploadImage = AsyncMock(return_value=stub_response_upload_image)
     stub.UploadVideo = AsyncMock(return_value=stub_response_upload_video)
     client._stub = stub
+    _bind_operation_authorization(client)
     return client
+
+
+def test_upload_image_contract_is_byte_only() -> None:
+    fields = meta_api_pb2.UploadImageRequest.DESCRIPTOR.fields_by_name
+    assert "file_bytes" in fields
+    assert "image_url" not in fields
+    assert "name" not in fields
+    assert not hasattr(MediaUploader, "upload_image_from_url")
+
+    proto_source = (
+        Path(__file__).resolve().parents[2] / "proto" / "v1" / "meta_api.proto"
+    ).read_text()
+    assert 'reserved "image_url", "name";' in proto_source
+    assert "reserved 6, 7;" in proto_source
 
 
 # upload_image: успешный ответ → возвращает image_hash.
@@ -57,18 +110,21 @@ async def test_upload_image_returns_hash() -> None:
     client._stub.UploadImage.assert_awaited_once()
     call_args = client._stub.UploadImage.call_args
     request = call_args.args[0]
-    assert request.ad_account_id == "act_123"
+    assert request.ad_account_id == "123"
     assert request.file_bytes == b"binary-image-data"
     assert request.session_id == "test-session"
+    client._remember_campaign_uploaded_image_hash.assert_called_once_with(
+        "abc123hash",
+        ad_account_id="123",
+    )
 
 
-# upload_image: ad_account_id без act_ префикса → ValueError.
 @pytest.mark.asyncio
 async def test_upload_image_rejects_bad_account_id() -> None:
     client = _make_client()
     uploader = MediaUploader(client)
-    with pytest.raises(ValueError, match="act_"):
-        await uploader.upload_image("123", b"data")
+    with pytest.raises(ValueError, match="explicit numeric account id"):
+        await uploader.upload_image("not-an-account", b"data")
     client._stub.UploadImage.assert_not_awaited()
 
 
@@ -92,9 +148,9 @@ async def test_upload_image_rejects_oversize() -> None:
         await uploader.upload_image("act_123", big_bytes)
 
 
-# upload_image: ok=False с TOKEN_NOT_FOUND → SessionUnavailableError.
+# Legacy normal-response readiness sentinel is not proof of pre-send rejection.
 @pytest.mark.asyncio
-async def test_upload_image_session_unavailable_on_token_missing() -> None:
+async def test_upload_image_legacy_token_response_is_ambiguous() -> None:
     response = meta_api_pb2.UploadImageResponse(
         image_hash="",
         ok=False,
@@ -103,7 +159,7 @@ async def test_upload_image_session_unavailable_on_token_missing() -> None:
     client = _make_client(stub_response_upload_image=response)
     uploader = MediaUploader(client)
 
-    with pytest.raises(SessionUnavailableError):
+    with pytest.raises(AmbiguousResultError, match="unstructured upload failure"):
         await uploader.upload_image("act_123", b"data")
 
 
@@ -122,9 +178,9 @@ async def test_upload_image_permanent_error_on_graph_failure() -> None:
         await uploader.upload_image("act_123", b"data")
 
 
-# upload_image: ok=True но пустой hash → PermanentError.
+# ok=True without the committed object identity cannot be safely retried.
 @pytest.mark.asyncio
-async def test_upload_image_empty_hash_on_success_is_permanent() -> None:
+async def test_upload_image_empty_hash_on_success_is_ambiguous() -> None:
     response = meta_api_pb2.UploadImageResponse(
         image_hash="",
         ok=True,
@@ -133,7 +189,66 @@ async def test_upload_image_empty_hash_on_success_is_permanent() -> None:
     client = _make_client(stub_response_upload_image=response)
     uploader = MediaUploader(client)
 
-    with pytest.raises(PermanentError, match="image_hash пустой"):
+    with pytest.raises(AmbiguousResultError, match="ok=true без image_hash"):
+        await uploader.upload_image("act_123", b"data")
+
+
+@pytest.mark.asyncio
+async def test_upload_image_propagates_presend_readiness_rejection() -> None:
+    client = _make_client()
+    rpc_error = _RpcFailure(
+        grpc.StatusCode.FAILED_PRECONDITION,
+        "exact session is unavailable",
+    )
+    client._stub.UploadImage.side_effect = rpc_error
+    readiness_error = BrowserReadinessRejectedError("image rejected before Meta dispatch")
+    client._controlled_presend_readiness_error.return_value = readiness_error
+    uploader = MediaUploader(client)
+
+    with pytest.raises(BrowserReadinessRejectedError) as raised:
+        await uploader.upload_image("act_123", b"data")
+
+    assert raised.value is readiness_error
+    client._controlled_presend_readiness_error.assert_awaited_once_with(
+        rpc_error,
+        endpoint="/act_123/adimages",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    (
+        grpc.StatusCode.ABORTED,
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+    ),
+)
+async def test_upload_image_postdispatch_transport_loss_is_ambiguous(
+    status: grpc.StatusCode,
+) -> None:
+    client = _make_client()
+    rpc_error = _RpcFailure(status, "response lost")
+    client._stub.UploadImage.side_effect = rpc_error
+    client._controlled_presend_readiness_error.return_value = None
+    uploader = MediaUploader(client)
+
+    with pytest.raises(AmbiguousResultError, match="after upload dispatch"):
+        await uploader.upload_image("act_123", b"data")
+
+
+@pytest.mark.asyncio
+async def test_upload_image_authorization_rejection_remains_permanent() -> None:
+    client = _make_client()
+    rpc_error = _RpcFailure(
+        grpc.StatusCode.PERMISSION_DENIED,
+        "capability rejected",
+    )
+    client._stub.UploadImage.side_effect = rpc_error
+    client._controlled_presend_readiness_error.return_value = None
+    uploader = MediaUploader(client)
+
+    with pytest.raises(PermanentError, match="authorization rejected"):
         await uploader.upload_image("act_123", b"data")
 
 
@@ -158,6 +273,7 @@ async def test_upload_video_small_file_one_chunk() -> None:
     client.session_id = "sess1"
     client._stub = MagicMock()
     client._stub.UploadVideo = fake_upload_video
+    _bind_operation_authorization(client)
 
     uploader = MediaUploader(client, chunk_size=1024)
 
@@ -167,12 +283,16 @@ async def test_upload_video_small_file_one_chunk() -> None:
     assert video_id == "999888"
     assert len(captured_chunks) == 1
     first = captured_chunks[0]
-    assert first.ad_account_id == "act_777"
+    assert first.ad_account_id == "777"
     assert first.file_size == 500
     assert first.session_id == "sess1"
     assert first.is_last_chunk is True
     assert first.chunk_index == 0
     assert first.chunk_bytes == small_data
+    client._remember_campaign_uploaded_video_id.assert_called_once_with(
+        "999888",
+        ad_account_id="777",
+    )
 
 
 # upload_video_from_bytes: большой файл → несколько чанков, только первый с метаданными.
@@ -196,6 +316,7 @@ async def test_upload_video_big_file_multiple_chunks() -> None:
     client.session_id = "sess2"
     client._stub = MagicMock()
     client._stub.UploadVideo = fake_upload_video
+    _bind_operation_authorization(client)
 
     chunk_size = 100
     uploader = MediaUploader(client, chunk_size=chunk_size)
@@ -207,7 +328,7 @@ async def test_upload_video_big_file_multiple_chunks() -> None:
     assert len(captured_chunks) == 3
 
     # Первый чанк — с метаданными.
-    assert captured_chunks[0].ad_account_id == "act_777"
+    assert captured_chunks[0].ad_account_id == "777"
     assert captured_chunks[0].filename == "hero.mp4"
     assert captured_chunks[0].file_size == 250
     assert captured_chunks[0].chunk_index == 0
@@ -224,6 +345,10 @@ async def test_upload_video_big_file_multiple_chunks() -> None:
     assert captured_chunks[2].chunk_index == 2
     assert captured_chunks[2].is_last_chunk is True
     assert len(captured_chunks[2].chunk_bytes) == 50
+    client._remember_campaign_uploaded_video_id.assert_called_once_with(
+        "555",
+        ad_account_id="777",
+    )
 
 
 # upload_video: несуществующий путь → ValueError.
@@ -255,7 +380,7 @@ async def test_upload_video_real_file_chunks(tmp_path: Path) -> None:
     video_file.write_bytes(payload)
 
     response = meta_api_pb2.UploadVideoResponse(
-        video_id="vid_999",
+        video_id="999",
         ok=True,
         error="",
         chunks_processed=3,
@@ -271,20 +396,25 @@ async def test_upload_video_real_file_chunks(tmp_path: Path) -> None:
     client.session_id = "s"
     client._stub = MagicMock()
     client._stub.UploadVideo = fake_upload
+    _bind_operation_authorization(client)
 
     uploader = MediaUploader(client, chunk_size=100)
     video_id = await uploader.upload_video("act_999", video_file)
 
-    assert video_id == "vid_999"
+    assert video_id == "999"
     assert len(captured) == 3
     # Перепроверим reassembly: сумма chunk_bytes == исходные данные.
     reassembled = b"".join(c.chunk_bytes for c in captured)
     assert reassembled == payload
+    client._remember_campaign_uploaded_video_id.assert_called_once_with(
+        "999",
+        ad_account_id="999",
+    )
 
 
-# upload_video: ok=False с TOKEN_NOT_FOUND → SessionUnavailableError.
+# Legacy normal-response readiness sentinel is not proof of pre-send rejection.
 @pytest.mark.asyncio
-async def test_upload_video_session_unavailable(tmp_path: Path) -> None:
+async def test_upload_video_legacy_token_response_is_ambiguous(tmp_path: Path) -> None:
     video_file = tmp_path / "test.mp4"
     video_file.write_bytes(b"data")
 
@@ -303,9 +433,10 @@ async def test_upload_video_session_unavailable(tmp_path: Path) -> None:
     client.session_id = "s"
     client._stub = MagicMock()
     client._stub.UploadVideo = fake_upload
+    _bind_operation_authorization(client)
 
     uploader = MediaUploader(client)
-    with pytest.raises(SessionUnavailableError):
+    with pytest.raises(AmbiguousResultError, match="unstructured upload failure"):
         await uploader.upload_video("act_999", video_file)
 
 
@@ -330,10 +461,42 @@ async def test_upload_video_permanent_error(tmp_path: Path) -> None:
     client.session_id = "s"
     client._stub = MagicMock()
     client._stub.UploadVideo = fake_upload
+    _bind_operation_authorization(client)
 
     uploader = MediaUploader(client)
     with pytest.raises(PermanentError, match="invalid video format"):
         await uploader.upload_video("act_999", video_file)
+
+
+@pytest.mark.asyncio
+async def test_upload_video_propagates_presend_contract_rejection() -> None:
+    rpc_error = _RpcFailure(
+        grpc.StatusCode.UNIMPLEMENTED,
+        "v5 upload contract is unavailable",
+    )
+
+    async def fail_after_authorized_first_chunk(chunk_iterator, timeout=None):  # noqa: ASYNC109
+        first = await anext(chunk_iterator)
+        assert first.vision_profile_id == "profile-1"
+        raise rpc_error
+
+    client = MagicMock()
+    client.session_id = "session-video"
+    client._stub = MagicMock()
+    client._stub.UploadVideo = fail_after_authorized_first_chunk
+    _bind_operation_authorization(client)
+    readiness_error = BrowserReadinessRejectedError("video rejected before Meta dispatch")
+    client._controlled_presend_readiness_error.return_value = readiness_error
+    uploader = MediaUploader(client)
+
+    with pytest.raises(BrowserReadinessRejectedError) as raised:
+        await uploader.upload_video_from_bytes("act_123", b"video")
+
+    assert raised.value is readiness_error
+    client._controlled_presend_readiness_error.assert_awaited_once_with(
+        rpc_error,
+        endpoint="/act_123/advideos",
+    )
 
 
 # MediaUploader: chunk_size <= 0 → ValueError в конструкторе.
@@ -365,7 +528,7 @@ async def test_wait_video_ready_polls_until_ready() -> None:
         ]
     )
     uploader = MediaUploader(client)
-    ok = await uploader.wait_video_ready("vid1", timeout=5, interval=0.001)
+    ok = await uploader.wait_video_ready("vid1", ad_account_id="123", timeout=5, interval=0.001)
     assert ok is True
     assert client.execute_graph_call.await_count == 2
 
@@ -377,7 +540,7 @@ async def test_wait_video_ready_raises_on_error() -> None:
     client.execute_graph_call = AsyncMock(return_value={"status": {"video_status": "error"}})
     uploader = MediaUploader(client)
     with pytest.raises(PermanentError):
-        await uploader.wait_video_ready("vid1", timeout=5, interval=0.001)
+        await uploader.wait_video_ready("vid1", ad_account_id="123", timeout=5, interval=0.001)
 
 
 # wait_video_ready: таймаут (всё ещё processing) → False, залив НЕ роняется.
@@ -386,7 +549,7 @@ async def test_wait_video_ready_timeout_returns_false() -> None:
     client = MagicMock()
     client.execute_graph_call = AsyncMock(return_value={"status": {"video_status": "processing"}})
     uploader = MediaUploader(client)
-    ok = await uploader.wait_video_ready("vid1", timeout=0.01, interval=0.005)
+    ok = await uploader.wait_video_ready("vid1", ad_account_id="123", timeout=0.01, interval=0.005)
     assert ok is False
 
 
@@ -398,8 +561,26 @@ async def test_wait_video_ready_swallows_read_errors() -> None:
         side_effect=[RuntimeError("network blip"), {"status": {"video_status": "ready"}}]
     )
     uploader = MediaUploader(client)
-    ok = await uploader.wait_video_ready("vid1", timeout=5, interval=0.001)
+    ok = await uploader.wait_video_ready("vid1", ad_account_id="123", timeout=5, interval=0.001)
     assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_wait_video_ready_does_not_swallow_readiness_rejection() -> None:
+    client = MagicMock()
+    rejection = BrowserReadinessRejectedError("status read rejected before dispatch")
+    client.execute_graph_call = AsyncMock(side_effect=rejection)
+    uploader = MediaUploader(client)
+
+    with pytest.raises(BrowserReadinessRejectedError) as raised:
+        await uploader.wait_video_ready(
+            "vid1",
+            ad_account_id="123",
+            timeout=5,
+            interval=0.001,
+        )
+
+    assert raised.value is rejection
 
 
 # get_video_thumbnail_url: берёт preferred-миниатюру (Meta требует её в video_data).
@@ -415,7 +596,9 @@ async def test_get_video_thumbnail_url_returns_preferred() -> None:
         }
     )
     uploader = MediaUploader(client)
-    url = await uploader.get_video_thumbnail_url("vid1", retries=1, interval=0.001)
+    url = await uploader.get_video_thumbnail_url(
+        "vid1", ad_account_id="123", retries=1, interval=0.001
+    )
     assert url == "https://a/2.jpg"
 
 
@@ -425,5 +608,25 @@ async def test_get_video_thumbnail_url_empty_returns_blank() -> None:
     client = MagicMock()
     client.execute_graph_call = AsyncMock(return_value={"data": []})
     uploader = MediaUploader(client)
-    url = await uploader.get_video_thumbnail_url("vid1", retries=2, interval=0.001)
+    url = await uploader.get_video_thumbnail_url(
+        "vid1", ad_account_id="123", retries=2, interval=0.001
+    )
     assert url == ""
+
+
+@pytest.mark.asyncio
+async def test_get_video_thumbnail_does_not_swallow_readiness_rejection() -> None:
+    client = MagicMock()
+    rejection = BrowserReadinessRejectedError("thumbnail read rejected before dispatch")
+    client.execute_graph_call = AsyncMock(side_effect=rejection)
+    uploader = MediaUploader(client)
+
+    with pytest.raises(BrowserReadinessRejectedError) as raised:
+        await uploader.get_video_thumbnail_url(
+            "vid1",
+            ad_account_id="123",
+            retries=2,
+            interval=0.001,
+        )
+
+    assert raised.value is rejection

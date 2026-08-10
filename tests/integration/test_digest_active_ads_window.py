@@ -58,7 +58,9 @@ async def _seed_ads(engine: AsyncEngine, *, fresh: int, stale: int) -> None:
             {"i": offer_id, "c": "TST_ACT", "n": "Test active"},
         )
         await conn.execute(
-            text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
+            text(
+                "INSERT INTO fb_campaigns (id, campaign_name, offer_id, ad_account_id) VALUES (:i, :n, :o, '123')"
+            ),
             {"i": campaign_id, "n": "CMP_ACT", "o": offer_id},
         )
         await conn.execute(

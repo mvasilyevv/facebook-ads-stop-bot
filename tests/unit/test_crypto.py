@@ -9,7 +9,6 @@ rotate_encryption_key использует raw SQL (нужна БД) — пок�
 
 from __future__ import annotations
 
-import multiprocessing
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -58,10 +57,11 @@ def test_verify_key_mismatch_raises() -> None:
         crypto.verify_encryption_key(key2, token)
 
 
-# verify_encryption_key: пустой verify-токен (старые инсталляции) → пропуск без исключения
-def test_verify_key_empty_token_passes() -> None:
+# Missing verification material must never start an unverified runtime.
+def test_verify_key_empty_token_fails_closed() -> None:
     key = Fernet.generate_key().decode()
-    crypto.verify_encryption_key(key, "")  # warning, но не бросает
+    with pytest.raises(crypto.EncryptionKeyMissingError, match="ENCRYPTION_KEY_VERIFY"):
+        crypto.verify_encryption_key(key, "")
 
 
 # verify_encryption_key: тот же ключ, но зашифрован НЕ эталонный plaintext → RuntimeError
@@ -96,34 +96,23 @@ def test_adsetpro_bytea_reencrypt_roundtrip() -> None:
         fernet_old.decrypt(new_blob)
 
 
-# --- C-1: fail-fast при пустом ключе + единый bootstrap ensure_encryption_key ---
+# --- Fail-closed runtime secret loading ---
 
 
 # C-1(а): _get_fernet при пустом ENCRYPTION_KEY → явная ошибка, .env НЕ дописывается.
 # Раньше воркер тихо генерировал свой ключ и дописывал в .env (гонка → порча токенов).
-def test_get_fernet_missing_key_raises_and_does_not_write_env(monkeypatch, tmp_path) -> None:
+def test_get_fernet_missing_key_raises(monkeypatch) -> None:
     monkeypatch.setattr(crypto, "_fernet", None)  # сбрасываем кэш модуля
-    # Пустой ключ в настройках.
-    monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
     fake_settings = SimpleNamespace(encryption_key="", encryption_key_verify="")
     monkeypatch.setattr("core.config.get_settings", lambda: fake_settings)
-
-    env = tmp_path / ".env"
-    env.write_text("SOME_OTHER=1\n", encoding="utf-8")
-    before = env.read_text(encoding="utf-8")
 
     with pytest.raises(crypto.EncryptionKeyMissingError, match="ENCRYPTION_KEY не задан"):
         crypto._get_fernet()
 
-    # .env не тронут — ключ не самогенерировался.
-    assert env.read_text(encoding="utf-8") == before
-    assert "ENCRYPTION_KEY" not in env.read_text(encoding="utf-8")
-
 
 # C-1: encrypt/decrypt поверх _get_fernet тоже падают явной ошибкой при пустом ключе.
-def test_encrypt_with_missing_key_raises(monkeypatch, tmp_path) -> None:
+def test_encrypt_with_missing_key_raises(monkeypatch) -> None:
     monkeypatch.setattr(crypto, "_fernet", None)
-    monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
     fake_settings = SimpleNamespace(encryption_key="", encryption_key_verify="")
     monkeypatch.setattr("core.config.get_settings", lambda: fake_settings)
 
@@ -131,106 +120,16 @@ def test_encrypt_with_missing_key_raises(monkeypatch, tmp_path) -> None:
         crypto.encrypt("secret")
 
 
-# C-1(б): ensure_encryption_key идемпотентен — второй вызов не меняет ключ.
-def test_ensure_encryption_key_idempotent(monkeypatch, tmp_path) -> None:
-    # M-13: изоляция от реального окружения (в CI ENCRYPTION_KEY задан → env-first
-    # закорачивал бы генерацию и тест терял смысл).
-    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
-    monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
-    env = tmp_path / ".env"
-    env.write_text("FOO=bar\n", encoding="utf-8")
+def test_get_fernet_missing_verify_token_raises(monkeypatch) -> None:
+    monkeypatch.setattr(crypto, "_fernet", None)
+    fake_settings = SimpleNamespace(
+        encryption_key=Fernet.generate_key().decode(),
+        encryption_key_verify="",
+    )
+    monkeypatch.setattr("core.config.get_settings", lambda: fake_settings)
 
-    key1 = crypto.ensure_encryption_key()
-    assert key1  # ключ сгенерирован
-    # Валидный Fernet-ключ.
-    Fernet(key1.encode())
-    assert env.read_text(encoding="utf-8").count("ENCRYPTION_KEY=") == 1
-
-    key2 = crypto.ensure_encryption_key()
-    assert key2 == key1  # второй вызов вернул тот же ключ
-    # Ровно одна строка ENCRYPTION_KEY в .env — повторной записи не было.
-    assert env.read_text(encoding="utf-8").count("ENCRYPTION_KEY=") == 1
-
-
-# C-1: ensure_encryption_key не трогает уже заданный ключ (существующий побеждает).
-def test_ensure_encryption_key_keeps_existing(monkeypatch, tmp_path) -> None:
-    # M-13: изоляция от реального окружения (в CI ENCRYPTION_KEY задан → env-first
-    # закорачивал бы генерацию и тест терял смысл).
-    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
-    monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
-    existing = Fernet.generate_key().decode()
-    env = tmp_path / ".env"
-    env.write_text(f"ENCRYPTION_KEY={existing}\n", encoding="utf-8")
-
-    result = crypto.ensure_encryption_key()
-    assert result == existing
-    assert env.read_text(encoding="utf-8").count("ENCRYPTION_KEY=") == 1
-
-
-# Хелпер для конкурентного теста: должен быть на модульном уровне (picklable для spawn).
-def _worker_ensure_key(project_root: str) -> None:
-    import core.crypto as _c
-
-    _c._project_root = lambda: project_root  # type: ignore[assignment]
-    _c.ensure_encryption_key()
-
-
-# C-1(в): конкурентный вызов ensure_encryption_key из N процессов → ровно один ключ.
-# Гонка была money-багом: без flock+double-check каждый процесс дописывал свой ключ.
-def test_ensure_encryption_key_concurrent_single_key(monkeypatch, tmp_path) -> None:
-    # M-13: изоляция от реального окружения (в CI ENCRYPTION_KEY задан → env-first
-    # закорачивал бы генерацию и тест терял смысл).
-    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
-    env = tmp_path / ".env"
-    env.write_text("BASE=1\n", encoding="utf-8")
-
-    ctx = multiprocessing.get_context("spawn")
-    procs = [ctx.Process(target=_worker_ensure_key, args=(str(tmp_path),)) for _ in range(8)]
-    for p in procs:
-        p.start()
-    for p in procs:
-        p.join(timeout=30)
-        assert p.exitcode == 0
-
-    content = env.read_text(encoding="utf-8")
-    # Ровно одна строка ENCRYPTION_KEY несмотря на 8 параллельных процессов.
-    assert content.count("ENCRYPTION_KEY=") == 1
-
-    # И этот единственный ключ — валидный Fernet-ключ.
-    key_line = next(ln for ln in content.splitlines() if ln.startswith("ENCRYPTION_KEY="))
-    Fernet(key_line.split("=", 1)[1].encode())
-
-
-# C-1: double-check внутри flock — если ключ появился, пока ждали lock, генерации нет.
-# Симулируем: _read_env_key возвращает "" на быстром пути, затем реальный ключ под lock.
-def test_ensure_encryption_key_double_check_skips_generation(monkeypatch, tmp_path) -> None:
-    # M-13: изоляция от реального окружения (в CI ENCRYPTION_KEY задан → env-first
-    # закорачивал бы генерацию и тест терял смысл).
-    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
-    monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
-    existing = Fernet.generate_key().decode()
-    env = tmp_path / ".env"
-    # На диске ключ УЖЕ есть (его записал «параллельный» процесс).
-    env.write_text(f"ENCRYPTION_KEY={existing}\n", encoding="utf-8")
-
-    calls = {"n": 0}
-    real_read = crypto._read_env_key
-
-    def fake_read(var: str = "ENCRYPTION_KEY") -> str:
-        calls["n"] += 1
-        # Первый (быстрый, до lock) вызов — как будто ключа ещё нет → идём в критсекцию.
-        if calls["n"] == 1:
-            return ""
-        # Второй (double-check под lock) — ключ уже на диске.
-        return real_read(var)
-
-    monkeypatch.setattr(crypto, "_read_env_key", fake_read)
-
-    result = crypto.ensure_encryption_key()
-    assert result == existing
-    # Ключ не перегенерирован — осталась одна исходная строка.
-    assert env.read_text(encoding="utf-8").count("ENCRYPTION_KEY=") == 1
-    assert calls["n"] >= 2  # был и быстрый путь, и double-check под lock
+    with pytest.raises(crypto.EncryptionKeyMissingError, match="ENCRYPTION_KEY_VERIFY"):
+        crypto._get_fernet()
 
 
 # --- MID-18: rotate_encryption_key — атомарность (collect-all-then-write) ---
@@ -288,9 +187,7 @@ def _patch_fake_engine(monkeypatch, conn: _FakeConn) -> None:
 # Все поля расшифровываются старым ключом → перешифровка проходит одной транзакцией,
 # UPDATE выполняется для каждой затронутой таблицы (без частично перешифрованного состояния).
 @pytest.mark.asyncio
-async def test_rotate_encryption_key_success_writes_all(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
-
+async def test_rotate_encryption_key_success_writes_all(monkeypatch) -> None:
     old_key = Fernet.generate_key().decode()
     new_key = Fernet.generate_key().decode()
     fernet_old = Fernet(old_key.encode())
@@ -318,9 +215,7 @@ async def test_rotate_encryption_key_success_writes_all(monkeypatch, tmp_path) -
 # Одно поле не расшифровывается старым ключом → EncryptionKeyRotationError ДО записи,
 # ни один UPDATE не должен был уйти (частично перешифрованного состояния не возникает).
 @pytest.mark.asyncio
-async def test_rotate_encryption_key_partial_failure_writes_nothing(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
-
+async def test_rotate_encryption_key_partial_failure_writes_nothing(monkeypatch) -> None:
     old_key = Fernet.generate_key().decode()
     new_key = Fernet.generate_key().decode()
     fernet_old = Fernet(old_key.encode())
@@ -349,11 +244,7 @@ async def test_rotate_encryption_key_partial_failure_writes_nothing(monkeypatch,
 
 # Список проблемных полей попадает в текст исключения (для алерта/лога вызывающей стороны).
 @pytest.mark.asyncio
-async def test_rotate_encryption_key_error_message_lists_problem_fields(
-    monkeypatch, tmp_path
-) -> None:
-    monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
-
+async def test_rotate_encryption_key_error_message_lists_problem_fields(monkeypatch) -> None:
     old_key = Fernet.generate_key().decode()
     new_key = Fernet.generate_key().decode()
     fernet_wrong = Fernet(Fernet.generate_key())
@@ -370,32 +261,3 @@ async def test_rotate_encryption_key_error_message_lists_problem_fields(
 
     with pytest.raises(crypto.EncryptionKeyRotationError, match=r"telegram_config\[7\]"):
         await crypto.rotate_encryption_key(old_key, new_key)
-
-
-# M-13 (аудит 2026-07-12): _read_env_key берёт ENCRYPTION_KEY из os.environ, если задан,
-# даже когда .env-файла нет / он содержит другое значение. env-only деплой (k8s Secret).
-def test_read_env_key_prefers_os_environ(monkeypatch, tmp_path) -> None:
-    # .env-файл содержит СТАРЫЙ ключ, env-переменная — новый.
-    env_file = tmp_path / ".env"
-    env_file.write_text("ENCRYPTION_KEY=file-value\n", encoding="utf-8")
-    monkeypatch.setattr(crypto, "_env_path", lambda: str(env_file))
-    monkeypatch.setenv("ENCRYPTION_KEY", "env-value")
-    assert crypto._read_env_key() == "env-value"
-
-
-# Без env-переменной падаем на .env-файл (прежнее bare-metal поведение сохранено).
-def test_read_env_key_falls_back_to_file(monkeypatch, tmp_path) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text("ENCRYPTION_KEY=file-value\n", encoding="utf-8")
-    monkeypatch.setattr(crypto, "_env_path", lambda: str(env_file))
-    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
-    assert crypto._read_env_key() == "file-value"
-
-
-# Пустая env-переменная не перебивает файл (пустое = не задано).
-def test_read_env_key_empty_env_falls_back(monkeypatch, tmp_path) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text("ENCRYPTION_KEY=file-value\n", encoding="utf-8")
-    monkeypatch.setattr(crypto, "_env_path", lambda: str(env_file))
-    monkeypatch.setenv("ENCRYPTION_KEY", "   ")
-    assert crypto._read_env_key() == "file-value"

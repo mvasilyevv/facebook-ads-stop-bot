@@ -50,14 +50,6 @@ class Offer(UUIDPrimaryKey, Timestamp, Base):
         nullable=False,
         server_default=text("true"),
     )
-    # Мульти-кабинет (MULTI_CABINET_PLAN.md): рекламные кабинеты, в которых живёт оффер
-    # (числовые ID без префикса act_). Scan set observer'а = union по активным офферам.
-    # Пустой список — оффер не участвует в скане (warning в TG); валидация min 1 — на API.
-    ad_account_ids: Mapped[list[str]] = mapped_column(
-        ARRAY(String),
-        nullable=False,
-        server_default=text("'{}'"),
-    )
     # Гео оффера (ISO-2 upper, мультигео). Визард префиллит goal.countries из этого
     # списка. Пустой — гео не задано (вводится вручную в шаге «Параметры»).
     countries: Mapped[list[str]] = mapped_column(
@@ -72,9 +64,10 @@ class Offer(UUIDPrimaryKey, Timestamp, Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    rule_stats: Mapped[list["OfferRuleStat"]] = relationship(  # noqa: F821
-        "OfferRuleStat",
+    ad_account_links: Mapped[list["OfferAdAccount"]] = relationship(  # noqa: F821
+        "OfferAdAccount",
         back_populates="offer",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        order_by="OfferAdAccount.account_id",
     )

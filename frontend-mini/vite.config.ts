@@ -27,11 +27,20 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@fb/operator-api": path.resolve(__dirname, "../packages/operator-api/src"),
+      "@fb/operator-ui": path.resolve(__dirname, "../packages/operator-ui/src"),
       "@fb/shared": path.resolve(__dirname, "../packages/shared/src"),
     },
+    dedupe: ["react", "react-dom"],
   },
   optimizeDeps: {
-    exclude: ["@fb/shared"],
+    exclude: ["@fb/shared", "@fb/operator-api", "@fb/operator-ui"],
+    // @fb/operator-api is linked source, so Vite cannot discover these nested
+    // imports during its initial crawl unless they are explicit.
+    include: [
+      "@fb/operator-api > openapi-fetch",
+      "@fb/operator-api > openapi-react-query",
+    ],
   },
   server: {
     port: 5175,

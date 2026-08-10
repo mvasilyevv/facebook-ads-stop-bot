@@ -38,8 +38,6 @@ class CampaignPreset(UUIDPrimaryKey, Timestamp, Base):
     act_id: Mapped[str] = mapped_column(String(64), nullable=False)
     page_id: Mapped[str] = mapped_column(String(64), nullable=False)
     pixel_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    tz_offset: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-
     # Дефолты оффера/байера для run (run может переопределить).
     offer_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     byer_tag: Mapped[str | None] = mapped_column(String(64), nullable=True)

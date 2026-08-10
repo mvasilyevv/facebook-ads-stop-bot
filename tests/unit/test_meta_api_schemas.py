@@ -19,12 +19,14 @@ def test_payload_roundtrip() -> None:
     data = payload.to_dict()
     restored = MetaMutationPayload.from_dict(data)
     assert restored == payload
+    assert restored.ad_account_id == "555"
 
 
 # Неизвестный mutation_kind должен бросить ValueError на конструкции.
 def test_payload_rejects_unknown_kind() -> None:
     with pytest.raises(ValueError, match="Неизвестный mutation_kind"):
         MetaMutationPayload(
+            ad_account_id="123",
             mutation_kind="self_destruct",
             target_id="123",
         )
@@ -33,12 +35,20 @@ def test_payload_rejects_unknown_kind() -> None:
 # Все объявленные MUTATION_KINDS принимаются.
 def test_all_mutation_kinds_accepted() -> None:
     for kind in MUTATION_KINDS:
-        payload = MetaMutationPayload(mutation_kind=kind, target_id="123")
+        payload = MetaMutationPayload(ad_account_id="123", mutation_kind=kind, target_id="123")
         assert payload.mutation_kind == kind
 
 
-# from_dict терпит отсутствующие optional поля.
-def test_from_dict_partial() -> None:
-    payload = MetaMutationPayload.from_dict({"mutation_kind": "pause_ad", "target_id": "999"})
-    assert payload.params == {}
-    assert payload.ad_account_id is None
+def test_from_dict_rejects_missing_account_identity() -> None:
+    with pytest.raises(KeyError, match="ad_account_id"):
+        MetaMutationPayload.from_dict({"mutation_kind": "pause_ad", "target_id": "999"})
+
+
+@pytest.mark.parametrize("account_id", [None, "", "act_", "abc", True])
+def test_payload_rejects_invalid_account_identity(account_id: object) -> None:
+    with pytest.raises(ValueError, match="explicit numeric account id"):
+        MetaMutationPayload(
+            mutation_kind="pause_ad",
+            target_id="999",
+            ad_account_id=account_id,  # type: ignore[arg-type]
+        )

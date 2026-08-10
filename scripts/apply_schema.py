@@ -1,279 +1,188 @@
 # -*- coding: utf-8 -*-
-"""Применить новую схему к Postgres (полный wipe + create).
+"""Destructive schema reset followed by the single fresh-install baseline.
 
 Алгоритм:
 1. Проверить что есть DATABASE_URL.
-2. DROP SCHEMA public CASCADE + CREATE SCHEMA public + GRANT.
-3. CREATE EXTENSION IF NOT EXISTS pgcrypto (нужен для gen_random_uuid()).
-4. Импортировать все ORM-классы (регистрация в Base.metadata).
-5. Base.metadata.create_all() — создаёт 35 таблиц.
-6. Для 7 партиционированных таблиц — создать партиции на текущий + следующий месяц.
-7. Записать в system_config дефолтную retention_policy.
+2. DROP SCHEMA public CASCADE + recreate PostgreSQL 16's safe public ACL.
+3. Выполнить ``alembic upgrade head`` на пустой схеме.
 
-ВНИМАНИЕ: безвозвратно удаляет всю текущую БД. Запуск только после backup_secrets.py.
+Baseline владеет таблицами, constraints, functions, triggers, views и
+DEFAULT-партициями.  Stamp/create_all и compatibility bootstrap запрещены.
+
+ВНИМАНИЕ: безвозвратно удаляет всю схему. Использовать только для
+явно disposable dev/test базы, никогда не для production/cutover/restore.
 
 Использование:
-    python scripts/apply_schema.py [--confirm-drop]
+    FB_AGENT_DISPOSABLE_DATABASE_URL=postgresql+asyncpg://... \
+    FB_AGENT_ALLOW_DESTRUCTIVE_RESET=I_UNDERSTAND_THIS_DELETES_DATA \
+      python scripts/apply_schema.py \
+        --confirm-drop \
+        --confirm-database fb_stop_bot_dev
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
-import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+MIGRATION_DATABASE_URL_ENV = "FB_AGENT_MIGRATION_DATABASE_URL"
+DISPOSABLE_DATABASE_URL_ENV = "FB_AGENT_DISPOSABLE_DATABASE_URL"
+DESTRUCTIVE_RESET_ENV = "FB_AGENT_ALLOW_DESTRUCTIVE_RESET"
+DESTRUCTIVE_RESET_CONFIRMATION = "I_UNDERSTAND_THIS_DELETES_DATA"
+_ALLOWED_DISPOSABLE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "postgres"})
+_ALLOWED_DATABASE_SUFFIXES = ("_dev", "_test")
 
 
-def _get_database_url() -> str:
-    env_vars: dict[str, str] = {}
-    env_file = Path(__file__).resolve().parent.parent / ".env"
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            env_vars[k.strip()] = v.strip().strip('"').strip("'")
-    for k in (
-        "DATABASE_URL",
-        "POSTGRES_HOST",
-        "POSTGRES_PORT",
-        "POSTGRES_DB",
-        "POSTGRES_USER",
-        "POSTGRES_PASSWORD",
-    ):
-        if os.environ.get(k):
-            env_vars[k] = os.environ[k]
+def _validated_database_url(value: str) -> str:
+    """Return one explicit async PostgreSQL DSN for DROP and Alembic.
 
-    db_url = env_vars.get("DATABASE_URL")
-    if not db_url:
-        host = env_vars.get("POSTGRES_HOST", "127.0.0.1")
-        port = env_vars.get("POSTGRES_PORT", "5432")
-        db_name = env_vars.get("POSTGRES_DB")
-        user = env_vars.get("POSTGRES_USER")
-        password = env_vars.get("POSTGRES_PASSWORD", "")
-        if not (db_name and user):
-            raise RuntimeError("Не нашёл POSTGRES_DB+POSTGRES_USER")
-        from urllib.parse import quote_plus
+    ``apply_schema`` is deliberately destructive, so silently letting the
+    subprocess rediscover a different database from ``.env`` is not safe.
+    The dedicated override is consumed by ``migrations/env.py`` and is the
+    exact string used by the engine that drops ``public``.
+    """
 
-        db_url = f"postgresql+asyncpg://{user}:{quote_plus(password)}@{host}:{port}/{db_name}"
-    if db_url.startswith("postgresql://"):
-        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return db_url
+    try:
+        url = make_url(value)
+    except Exception as exc:  # SQLAlchemy raises several URL parse errors.
+        raise RuntimeError("DATABASE_URL is not a valid SQLAlchemy URL") from exc
+    if url.get_backend_name() != "postgresql":
+        raise RuntimeError("DATABASE_URL must use PostgreSQL")
+    if url.drivername not in {"postgresql", "postgresql+asyncpg"}:
+        raise RuntimeError("DATABASE_URL must use the asyncpg PostgreSQL driver")
+    if not url.username or not url.host or not url.database:
+        raise RuntimeError("DATABASE_URL must include user, host and database")
+    normalized = url.set(
+        drivername="postgresql+asyncpg",
+        port=url.port or 5432,
+    )
+    return normalized.render_as_string(hide_password=False)
 
 
-# 8 партиционированных таблиц + столбец-партиция
-_PARTITIONED_TABLES: list[tuple[str, str]] = [
-    ("ad_metrics", "cycle_ts"),
-    ("alert_events", "created_at"),
-    ("scan_runs", "started_at"),
-    ("meta_api_audit_log", "created_at"),
-    ("meta_api_webhook_event", "received_at"),
-    ("ad_library_snapshot", "scanned_at"),
-    ("tracker_postback", "received_at"),
-    ("adsetpro_postback_events", "received_at"),
-]
+def _get_disposable_database_url() -> str:
+    """Load only the dedicated destructive-reset DSN.
+
+    Generic ``DATABASE_URL``, ``POSTGRES_*`` and ``.env`` are intentionally
+    ignored: they are normal runtime inputs and therefore unsafe authority for
+    ``DROP SCHEMA``.
+    """
+
+    value = os.environ.get(DISPOSABLE_DATABASE_URL_ENV, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"{DISPOSABLE_DATABASE_URL_ENV} is required; runtime DATABASE_URL is ignored"
+        )
+    return _validated_database_url(value)
 
 
-def _month_bounds(year: int, month: int) -> tuple[str, str]:
-    """Возвращает (from, to) для PARTITION OF — начало текущего и следующего месяца."""
-    if month == 12:
-        next_year, next_month = year + 1, 1
-    else:
-        next_year, next_month = year, month + 1
-    return f"{year:04d}-{month:02d}-01", f"{next_year:04d}-{next_month:02d}-01"
+def _validate_disposable_target(database_url: str, *, confirmed_database: str) -> str:
+    """Fail closed unless every independent disposable-target proof matches."""
+
+    if os.environ.get(DESTRUCTIVE_RESET_ENV) != DESTRUCTIVE_RESET_CONFIRMATION:
+        raise RuntimeError(f"{DESTRUCTIVE_RESET_ENV} must equal {DESTRUCTIVE_RESET_CONFIRMATION}")
+
+    url = make_url(_validated_database_url(database_url))
+    database = str(url.database or "")
+    host = str(url.host or "").lower()
+    if host not in _ALLOWED_DISPOSABLE_HOSTS:
+        raise RuntimeError(
+            "destructive reset is allowed only on loopback or the local Compose postgres host"
+        )
+    if not database.endswith(_ALLOWED_DATABASE_SUFFIXES):
+        raise RuntimeError("disposable database name must end with _dev or _test")
+    if not confirmed_database or confirmed_database != database:
+        raise RuntimeError("typed --confirm-database value does not match the DSN database")
+    return url.render_as_string(hide_password=False)
 
 
 async def _drop_and_recreate_schema(engine) -> None:
-    """DROP SCHEMA public CASCADE + CREATE SCHEMA public."""
+    """Recreate ``public`` with PostgreSQL 16's database-owner-only CREATE ACL."""
     async with engine.begin() as conn:
         logger.info("DROP SCHEMA public CASCADE...")
         await conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
-        await conn.execute(text("CREATE SCHEMA public"))
-        await conn.execute(text("GRANT ALL ON SCHEMA public TO PUBLIC"))
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
-    logger.info("Schema public пересоздана + pgcrypto enabled")
+        await conn.execute(text("CREATE SCHEMA public AUTHORIZATION pg_database_owner"))
+        await conn.execute(text("GRANT USAGE ON SCHEMA public TO PUBLIC"))
+    logger.info("Schema public пересоздана; все DB-объекты создаст Alembic baseline")
 
 
-async def _create_all_tables(engine) -> None:
-    """Импорт моделей и Base.metadata.create_all()."""
-    # ВАЖНО: импорт здесь чтобы сначала упала проверка DATABASE_URL
-    from core.models import Base  # noqa: PLC0415
+async def _upgrade_head(database_url: str | None = None) -> int:
+    """Run the same Alembic command used by release migrator containers."""
 
-    logger.info("Регистрация %d моделей...", len(Base.metadata.tables))
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("All tables created.")
+    environment = dict(os.environ)
+    if database_url is not None:
+        environment[MIGRATION_DATABASE_URL_ENV] = _validated_database_url(database_url)
 
-
-async def _create_first_partitions(engine) -> None:
-    """Для каждой партиционированной таблицы создаёт партиции текущего + следующего месяца."""
-    now = datetime.now(timezone.utc)
-    current_from, current_to = _month_bounds(now.year, now.month)
-    if now.month == 12:
-        next_from, next_to = _month_bounds(now.year + 1, 1)
-        if now.month + 1 > 12:
-            next_next_from, next_next_to = _month_bounds(now.year + 1, 2)
-        else:
-            next_next_from, next_next_to = _month_bounds(now.year, now.month + 2)
-    else:
-        next_from, next_to = _month_bounds(now.year, now.month + 1)
-        if now.month + 2 > 12:
-            next_next_from, next_next_to = _month_bounds(now.year + 1, (now.month + 2) - 12)
-        else:
-            next_next_from, next_next_to = _month_bounds(now.year, now.month + 2)
-
-    async with engine.begin() as conn:
-        for table, _col in _PARTITIONED_TABLES:
-            for year_month, fr, to in [
-                (f"{now.year:04d}_{now.month:02d}", current_from, current_to),
-                (
-                    next_from.replace("-", "_")[:7],
-                    next_from,
-                    next_to,
-                ),
-            ]:
-                part_name = f"{table}_{year_month}"
-                stmt = (
-                    f"CREATE TABLE IF NOT EXISTS {part_name} "
-                    f"PARTITION OF {table} FOR VALUES FROM ('{fr}') TO ('{to}')"
-                )
-                logger.info("  %s [%s, %s)", part_name, fr, to)
-                await conn.execute(text(stmt))
-            # M-6 (аудит 2026-07-12): DEFAULT-партиция как safety-net. На свежей БД
-            # (bootstrap: apply_schema + alembic stamp head — миграция 0031 штампуется,
-            # не выполняется) её раньше не было вовсе: любой пропуск месячной партиции →
-            # INSERT падал «no partition of relation found for row» = потеря scan-метрик/
-            # депозитов (деньги). Зеркалит migration 0031 для upgrade-пути.
-            default_name = f"{table}_default"
-            await conn.execute(
-                text(f"CREATE TABLE IF NOT EXISTS {default_name} PARTITION OF {table} DEFAULT")
-            )
-            logger.info("  %s DEFAULT", default_name)
-    logger.info("Партиции созданы (текущий + следующий месяц + default).")
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "alembic",
+        "upgrade",
+        "head",
+        cwd=PROJECT_ROOT,
+        env=environment,
+    )
+    return await process.wait()
 
 
-async def _seed_retention_policy(engine) -> None:
-    """Записать дефолтную retention_policy в system_config."""
-    policy = {
-        "ad_library_scan": "14 days",
-        "ad_library_ad_orphan": "14 days",
-        "ad_library_snapshot": "14 days",
-        "ad_library_media_orphan": "immediate",
-        "ad_metrics": "90 days",
-        "alert_events": "365 days",
-        "scan_runs": "30 days",
-        "meta_api_audit_log": "30 days",
-        "meta_api_webhook_event": "90 days",
-        "tracker_postback": "60 days",
-        "adsetpro_postback_events": "60 days",
-        "task_queue_completed": "30 days",
-        "task_queue_failed": "90 days",
-        "enable_recommendations": "30 days",
-        "telegram_invites_expired": "30 days",
-        "cabinet_day_archives": "365 days",
-        "ad_library_winner_archive": "forever",
-        "ai_cache": "redis_ttl_only",
-    }
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                INSERT INTO system_config (key, value, description)
-                VALUES (:key, CAST(:value AS JSONB), :desc)
-                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
-                """
-            ),
-            {
-                "key": "retention_policy",
-                "value": json.dumps(policy),
-                "desc": "Retention per table — см. DB_REDESIGN.md §4",
-            },
-        )
-    logger.info("system_config.retention_policy записан.")
-
-
-async def _schema_state(engine) -> tuple[bool, bool]:
-    """Возвращает (есть ли alembic_version, есть ли fb_ads) тем же DATABASE_URL, что alembic."""
-    async with engine.connect() as conn:
-        has_alembic = (
-            await conn.scalar(text("SELECT to_regclass('public.alembic_version')"))
-        ) is not None
-        has_fb_ads = (await conn.scalar(text("SELECT to_regclass('public.fb_ads')"))) is not None
-    return has_alembic, has_fb_ads
-
-
-async def init_if_empty() -> int:
-    """Idempotent-bootstrap для run.sh: развернуть схему ТОЛЬКО если БД пустая, без DROP.
-
-    Печатает в stdout маркер BOOTSTRAP_RESULT=<created|exists_no_alembic|exists_with_alembic>,
-    по которому run.sh решает: stamp head (схема создана create_all, alembic_version нет)
-    или upgrade head (развёрнутая БД с историей миграций). Базовые 37 таблиц создаёт
-    Base.metadata.create_all — миграции лишь инкрементальный DDL поверх, поэтому на свежей
-    БД схема сразу в head-состоянии и нужен stamp, а не upgrade.
-    """
-    db_url = _get_database_url()
-    logger.info("DATABASE_URL: %s", db_url.split("@")[-1])
-    engine = create_async_engine(db_url, echo=False)
-    try:
-        has_alembic, has_fb_ads = await _schema_state(engine)
-        if not has_fb_ads:
-            logger.info("БД пустая — разворачиваю схему (create_all + партиции, без DROP)...")
-            # pgcrypto — паритет с --confirm-drop путём; на чистом кластере его ещё нет.
-            async with engine.begin() as conn:
-                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
-            await _create_all_tables(engine)
-            await _create_first_partitions(engine)
-            await _seed_retention_policy(engine)
-            print("BOOTSTRAP_RESULT=created")
-        elif not has_alembic:
-            logger.info("Схема развёрнута, alembic_version отсутствует — потребуется stamp.")
-            print("BOOTSTRAP_RESULT=exists_no_alembic")
-        else:
-            logger.info("Схема и alembic_version на месте — штатный upgrade.")
-            print("BOOTSTRAP_RESULT=exists_with_alembic")
-    finally:
-        await engine.dispose()
-    return 0
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--confirm-drop",
+        action="store_true",
+        help="required explicit acknowledgement of DROP SCHEMA",
+    )
+    parser.add_argument(
+        "--confirm-database",
+        metavar="NAME",
+        help="type the exact disposable database name from the dedicated DSN",
+    )
+    return parser.parse_args(argv)
 
 
 async def main(argv: list[str]) -> int:
-    # Безопасный idempotent-режим для run.sh: без DROP, разворачивает только пустую БД.
-    if "--init-if-empty" in argv:
-        return await init_if_empty()
-
-    if "--confirm-drop" not in argv:
+    args = _parse_args(argv)
+    if not args.confirm_drop or not args.confirm_database:
         logger.error(
-            "Для безопасности требуется флаг --confirm-drop. "
-            "Запуск без него отменяет работу. ВНИМАНИЕ: DROP всей схемы public безвозвратный."
+            "Для безопасности требуются --confirm-drop и --confirm-database NAME. "
+            "DROP всей схемы public безвозвратный."
         )
         return 1
 
-    db_url = _get_database_url()
+    try:
+        db_url = _validate_disposable_target(
+            _get_disposable_database_url(),
+            confirmed_database=args.confirm_database,
+        )
+    except RuntimeError as exc:
+        logger.error("Destructive reset rejected: %s", exc)
+        return 1
     logger.info("DATABASE_URL: %s", db_url.split("@")[-1])
 
     engine = create_async_engine(db_url, echo=False)
 
     try:
         await _drop_and_recreate_schema(engine)
-        await _create_all_tables(engine)
-        await _create_first_partitions(engine)
-        await _seed_retention_policy(engine)
     finally:
         await engine.dispose()
 
+    migration_exit_code = await _upgrade_head(db_url)
+    if migration_exit_code != 0:
+        logger.error("alembic upgrade head failed with exit code %d", migration_exit_code)
+        return migration_exit_code
+
     logger.info("=" * 60)
     logger.info("Schema applied successfully.")
-    logger.info("Следующий шаг: python scripts/restore_secrets.py")
     logger.info("=" * 60)
     return 0
 

@@ -1,48 +1,37 @@
-/**
- * Страница «Создание кампаний» — оркестратор 7-шагового визарда.
- *
- * Две вкладки:
- *   - Создать (визард)
- *   - История запусков
- *
- * Визард: 7 шагов, состояние в Zustand (useWizardStore).
- * Переход: Back / Next / кнопки шагов (stepper).
- */
-
 import { useState } from "react";
+import { validateCampaignStep, type CampaignWizardStep } from "@fb/features/campaigns";
 import { createFileRoute } from "@tanstack/react-router";
-import { Plus, Clock, Save } from "lucide-react";
-import { cn } from "@/lib/utils/cn";
+import { AlertTriangle, Clock, Plus, Save } from "lucide-react";
+
+import { CampaignRunsHistory } from "@/components/domain/campaigns/CampaignRunsHistory";
+import { WizardStep1Start } from "@/components/domain/campaigns/WizardStep1Start";
+import { WizardStep2Identity } from "@/components/domain/campaigns/WizardStep2Identity";
+import { WizardStep3Goal } from "@/components/domain/campaigns/WizardStep3Goal";
+import { WizardStep4Structure } from "@/components/domain/campaigns/WizardStep4Structure";
+import { WizardStep5Creatives } from "@/components/domain/campaigns/WizardStep5Creatives";
+import { WizardStep6Preview } from "@/components/domain/campaigns/WizardStep6Preview";
+import { WizardStep7Launch } from "@/components/domain/campaigns/WizardStep7Launch";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { toast } from "@/components/ui/Toast";
-import { useWizardStore } from "@/stores/campaignWizard";
+import { useCampaignDraftSync } from "@/features/campaigns/useCampaignDraftSync";
 import { usePresets } from "@/lib/api/campaigns";
-
-import { WizardStep1Start } from "@/components/domain/campaigns/WizardStep1Start";
-import { WizardStep2Identity, validateIdentity } from "@/components/domain/campaigns/WizardStep2Identity";
-import { WizardStep3Goal, validateGoal } from "@/components/domain/campaigns/WizardStep3Goal";
-import { WizardStep4Structure, validateStructure } from "@/components/domain/campaigns/WizardStep4Structure";
-import { WizardStep5Creatives, validateCreatives } from "@/components/domain/campaigns/WizardStep5Creatives";
-import { WizardStep6Preview } from "@/components/domain/campaigns/WizardStep6Preview";
-import { WizardStep7Launch } from "@/components/domain/campaigns/WizardStep7Launch";
-import { CampaignRunsHistory } from "@/components/domain/campaigns/CampaignRunsHistory";
+import { cn } from "@/lib/utils/cn";
+import { getWizardFeatureState, useWizardStore } from "@/stores/campaignWizard";
 
 export const Route = createFileRoute("/campaigns/create/")({
   component: CampaignCreatePage,
 });
 
-// ─── Вкладки ─────────────────────────────────────────────────────────────────
-
 type PageTab = "wizard" | "history";
 
 const TAB_LABELS: Record<PageTab, { label: string; icon: typeof Plus }> = {
   wizard: { label: "Создать", icon: Plus },
-  history: { label: "История запусков", icon: Clock },
+  history: { label: "История", icon: Clock },
 };
-
-// ─── Шаги визарда ────────────────────────────────────────────────────────────
 
 const STEP_LABELS = [
   "Старт",
@@ -52,24 +41,34 @@ const STEP_LABELS = [
   "Концепты",
   "Превью",
   "Запуск",
-];
+] as const;
 
-// ─── Компонент ────────────────────────────────────────────────────────────────
-
-function CampaignCreatePage() {
+export function CampaignCreatePage() {
   const [activeTab, setActiveTab] = useState<PageTab>("wizard");
   const [resetOpen, setResetOpen] = useState(false);
-
-  // При «клон» из истории — переключаем на визард с clone_run_id
-  const handleCloneFromHistory = (runId: string) => {
-    store.reset();
-    store.setStart({ mode: "clone", clone_run_id: runId });
-    store.goTo(1);
-    setActiveTab("wizard");
-  };
-
   const store = useWizardStore();
-  const hasDraft = store.updatedAt !== null;
+  const draft = useCampaignDraftSync();
+  const hasDraft = store.draftRevision > 0 || store.draftVersion > 0;
+
+  if (draft.isHydrating) {
+    return (
+      <div aria-busy="true" aria-label="Восстановление черновика" className="space-y-4">
+        <Skeleton className="h-10 w-64" />
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-72 w-full" />
+      </div>
+    );
+  }
+
+  if (draft.isHydrationError) {
+    return (
+      <ErrorState
+        title="Черновик кампании недоступен"
+        error="Создание не начнётся без подтверждённого серверного черновика."
+        onRetry={() => void draft.reloadServerDraft()}
+      />
+    );
+  }
 
   return (
     <>
@@ -78,33 +77,40 @@ function CampaignCreatePage() {
         eyebrow="OPERATE · СОЗДАНИЕ КАМПАНИЙ"
         title="Создание кампаний"
         action={
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setResetOpen(true)}
-            disabled={!hasDraft}
-          >
-            Сбросить
-          </Button>
+          activeTab === "wizard" ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setResetOpen(true)}
+              disabled={!hasDraft || draft.deletePending}
+            >
+              Сбросить
+            </Button>
+          ) : null
         }
       />
 
-      {/* Вкладки */}
-      <div className="mb-4 flex items-center gap-0.5 border-b border-[var(--hairline)]">
+      <div
+        className="mb-4 flex border-b border-[var(--color-hairline)]"
+        role="tablist"
+        aria-label="Раздел кампаний"
+      >
         {(Object.entries(TAB_LABELS) as [PageTab, (typeof TAB_LABELS)[PageTab]][]).map(
           ([tab, { label, icon: Icon }]) => (
             <button
               key={tab}
               type="button"
+              role="tab"
+              aria-selected={activeTab === tab}
               onClick={() => setActiveTab(tab)}
               className={cn(
-                "flex items-center gap-2 px-4 py-2.5 font-display text-[12px] tracking-wider uppercase transition-colors border-b-2 -mb-px",
+                "-mb-px flex min-h-11 flex-1 items-center justify-center gap-2 border-b-2 px-3 font-display text-[12px] uppercase tracking-wider transition-colors sm:flex-none sm:px-4",
                 activeTab === tab
-                  ? "text-bg-11 border-accent"
-                  : "text-bg-8 border-transparent hover:text-bg-11 hover:border-[var(--hairline-strong)]",
+                  ? "border-accent text-bg-11"
+                  : "border-transparent text-bg-8 hover:border-[var(--color-hairline-strong)] hover:text-bg-11",
               )}
             >
-              <Icon size={13} />
+              <Icon size={14} aria-hidden="true" />
               {label}
             </button>
           ),
@@ -112,57 +118,105 @@ function CampaignCreatePage() {
       </div>
 
       {activeTab === "wizard" ? (
-        <div className="mb-6 flex items-center gap-2 font-display text-[11px] text-bg-9" role="status">
-          <Save size={13} aria-hidden="true" />
-          {store.updatedAt
-            ? `Черновик сохранён ${formatDraftTime(store.updatedAt)}`
-            : "Черновик сохраняется автоматически"}
-        </div>
-      ) : null}
-
-      {activeTab === "history" ? (
-        <CampaignRunsHistory onClone={handleCloneFromHistory} />
+        <>
+          <DraftStatus
+            state={store.draftSyncState}
+            updatedAt={store.draftUpdatedAt}
+            onReload={() => void draft.reloadServerDraft()}
+          />
+          <WizardLayout />
+        </>
       ) : (
-        <WizardLayout />
+        <CampaignRunsHistory />
       )}
 
       <ConfirmDialog
         open={resetOpen}
         onOpenChange={setResetOpen}
-        title="Сбросить черновик кампании?"
-        description="Все заполненные шаги и загруженные привязки будут удалены. Отменить действие нельзя."
+        title="Сбросить серверный черновик?"
+        description="Заполненные шаги и привязки файлов будут удалены. Уже поставленные в очередь запуски не изменятся."
         confirmLabel="Сбросить черновик"
         confirmVariant="danger"
         onConfirm={() => {
-          store.reset();
-          setActiveTab("wizard");
+          void draft
+            .deleteServerDraft()
+            .then(() => {
+              setActiveTab("wizard");
+              toast.success("Черновик сброшен");
+            })
+            .catch(() => toast.error("Не удалось сбросить черновик. Обновите данные и повторите."));
         }}
       />
     </>
   );
 }
 
+function DraftStatus({
+  state,
+  updatedAt,
+  onReload,
+}: {
+  state: ReturnType<typeof useWizardStore.getState>["draftSyncState"];
+  updatedAt: string | null;
+  onReload: () => void;
+}) {
+  if (state === "conflict") {
+    return (
+      <div
+        role="alert"
+        className="mb-5 flex flex-col gap-3 rounded-[var(--radius-2)] border border-warning/40 bg-warning/10 p-3 text-[13px] text-bg-10 sm:flex-row sm:items-center"
+      >
+        <span className="flex min-w-0 items-start gap-2">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+          Черновик изменён в другой вкладке. Загрузите серверную версию, чтобы не затереть
+          изменения.
+        </span>
+        <Button variant="secondary" size="sm" onClick={onReload} className="min-h-11 sm:ml-auto">
+          Загрузить серверный
+        </Button>
+      </div>
+    );
+  }
+
+  const label =
+    state === "saving"
+      ? "Сохраняем черновик…"
+      : state === "error"
+        ? "Черновик не сохранён — повторим после следующего изменения"
+        : updatedAt
+          ? `Сохранён на сервере ${formatDraftTime(updatedAt)}`
+          : "Черновик сохранится на сервере после первого изменения";
+
+  return (
+    <div
+      className={cn(
+        "mb-5 flex min-h-6 items-center gap-2 font-display text-[12px]",
+        state === "error" ? "text-warning" : "text-bg-9",
+      )}
+      role={state === "error" ? "alert" : "status"}
+    >
+      <Save size={14} aria-hidden="true" />
+      {label}
+    </div>
+  );
+}
+
 function formatDraftTime(value: string): string {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "автоматически";
+  if (Number.isNaN(date.getTime())) return "недавно";
   return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 }
 
-// ─── WizardLayout ─────────────────────────────────────────────────────────────
-
 function WizardLayout() {
   const store = useWizardStore();
-  const { data: presets } = usePresets();
+  const { data: presets, isError, refetch } = usePresets();
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const selectedPreset = presets?.find((preset) => preset.id === store.start.preset_id) ?? null;
 
-  const [errors, setErrors] = useState<Record<string, unknown>>({});
-
-  const currentStep = store.currentStep;
-
-  // Применить пресет при смене start.mode = preset + preset_id
-  const handleStartChange = (v: Parameters<typeof store.setStart>[0]) => {
-    store.setStart(v);
-    if (v.mode === "preset" && v.preset_id) {
-      const preset = presets?.find((p) => p.id === v.preset_id);
+  const handleStartChange = (value: Parameters<typeof store.setStart>[0]) => {
+    store.setStart(value);
+    if (value.mode === "preset" && value.preset_id) {
+      const preset = presets?.find((candidate) => candidate.id === value.preset_id);
       if (preset) {
         store.applyPreset(preset);
         toast.success(`Пресет «${preset.name}» применён`);
@@ -170,178 +224,164 @@ function WizardLayout() {
     }
   };
 
-  // Валидация перед переходом вперёд
   const validateAndNext = () => {
-    setErrors({});
-    let err: Record<string, string> | string | null = null;
-
-    if (currentStep === 2) {
-      const e = validateIdentity(store.identity);
-      if (Object.keys(e).length > 0) {
-        setErrors(e);
-        return;
-      }
+    const nextErrors = validateCampaignStep(getWizardFeatureState(), store.currentStep);
+    if (store.currentStep === 6 && !store.preview.plan) {
+      nextErrors.preview = "Дождитесь подтверждённого сервером плана";
     }
-
-    if (currentStep === 3) {
-      const e = validateGoal(store.goal);
-      if (Object.keys(e).length > 0) {
-        setErrors(e);
-        return;
-      }
-    }
-
-    if (currentStep === 4) {
-      err = validateStructure(store.structure.campaigns);
-      if (err) {
-        setErrors({ structure: err });
-        return;
-      }
-    }
-
-    if (currentStep === 5) {
-      err = validateCreatives(store.creatives);
-      if (err) {
-        setErrors({ creatives: err });
-        return;
-      }
-    }
-
-    store.goNext();
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length === 0) store.goNext();
   };
 
-  const config = currentStep >= 6 ? store.buildConfig() : null;
+  let config: ReturnType<typeof store.buildConfig> | null = null;
+  let configError: string | null = null;
+  if (store.currentStep >= 6) {
+    try {
+      config = store.buildConfig(selectedPreset);
+    } catch {
+      configError = "Конфигурация неполна. Вернитесь к отмеченному шагу и проверьте данные.";
+    }
+  }
+
+  if (isError) {
+    return (
+      <ErrorState
+        title="Пресеты кампаний недоступны"
+        error="Обновите данные и повторите. Если проблема сохранится, откройте диагностику API."
+        onRetry={() => void refetch()}
+      />
+    );
+  }
 
   return (
-    <div className="flex flex-col gap-6 lg:flex-row">
-      {/* Stepper — левая колонка */}
-      <aside className="w-full shrink-0 lg:w-40" aria-label="Шаги создания кампании">
-        <div className="flex gap-1 overflow-x-auto pb-2 lg:sticky lg:top-6 lg:block lg:space-y-0.5 lg:overflow-visible lg:pb-0">
-          {STEP_LABELS.map((label, i) => {
-            const step = (i + 1) as (typeof currentStep);
-            const done = currentStep > step;
-            const active = currentStep === step;
+    <div className="flex min-w-0 flex-col gap-6 lg:flex-row">
+      <aside className="w-full shrink-0 lg:w-44" aria-label="Шаги создания кампании">
+        <ol className="flex gap-1 overflow-x-auto pb-2 lg:sticky lg:top-6 lg:block lg:space-y-0.5 lg:overflow-visible lg:pb-0">
+          {STEP_LABELS.map((label, index) => {
+            const step = (index + 1) as CampaignWizardStep;
+            const done = store.currentStep > step;
+            const active = store.currentStep === step;
             return (
-              <button
-                key={step}
-                type="button"
-                onClick={() => {
-                  // Назад — всегда; вперёд — только если уже было пройдено
-                  if (step <= currentStep) store.goTo(step);
-                }}
-                disabled={step > currentStep}
-                className={cn(
-                  "flex min-w-max items-center gap-2.5 rounded-[var(--radius-2)] px-3 py-2 text-left transition-colors lg:w-full",
-                  "disabled:cursor-not-allowed disabled:opacity-40",
-                  active
-                    ? "bg-accent-bg text-accent"
-                    : done
-                      ? "text-bg-10 hover:bg-bg-2 hover:text-bg-11"
-                      : "text-bg-8",
-                )}
-              >
-                <span
+              <li key={step} className="shrink-0 lg:w-full">
+                <button
+                  type="button"
+                  onClick={() => step <= store.currentStep && store.goTo(step)}
+                  disabled={step > store.currentStep}
+                  aria-current={active ? "step" : undefined}
                   className={cn(
-                    "size-5 shrink-0 rounded-full flex items-center justify-center text-[11px] font-display font-medium border",
+                    "flex min-h-11 w-full min-w-max items-center gap-2.5 rounded-[var(--radius-2)] px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-40",
                     active
-                      ? "bg-accent border-accent text-bg-0"
+                      ? "bg-accent-bg text-accent"
                       : done
-                        ? "bg-success/20 border-success/40 text-success"
-                        : "bg-bg-2 border-[var(--hairline)] text-bg-8",
+                        ? "text-bg-10 hover:bg-bg-2 hover:text-bg-11"
+                        : "text-bg-8",
                   )}
                 >
-                  {done ? "✓" : step}
-                </span>
-                <span className="font-display text-[11px] tracking-wider">{label}</span>
-              </button>
+                  <span
+                    className={cn(
+                      "flex size-5 shrink-0 items-center justify-center rounded-full border text-[12px] font-medium",
+                      active
+                        ? "border-accent bg-accent text-bg-0"
+                        : done
+                          ? "border-success/40 bg-success/20 text-success"
+                          : "border-[var(--color-hairline)] bg-bg-2 text-bg-8",
+                    )}
+                    aria-hidden="true"
+                  >
+                    {done ? "✓" : step}
+                  </span>
+                  <span className="font-display text-[12px] tracking-wider">{label}</span>
+                </button>
+              </li>
             );
           })}
-        </div>
+        </ol>
       </aside>
 
-      {/* Основной контент */}
       <section className="min-w-0 flex-1" aria-label="Текущий шаг создания кампании">
-        <div className="max-w-2xl">
-          {/* Шаги */}
-          {currentStep === 1 && (
+        <div className="max-w-2xl pb-24 md:pb-0">
+          {store.currentStep === 1 ? (
             <WizardStep1Start
               mode={store.start.mode}
               presetId={store.start.preset_id}
-              cloneRunId={store.start.clone_run_id}
               onChange={handleStartChange}
             />
-          )}
-
-          {currentStep === 2 && (
+          ) : null}
+          {store.currentStep === 2 ? (
             <WizardStep2Identity
               values={store.identity}
               onChange={store.setIdentity}
               onGoalChange={store.setGoal}
-              errors={errors as Record<string, string>}
+              errors={errors}
             />
-          )}
-
-          {currentStep === 3 && (
+          ) : null}
+          {store.currentStep === 3 ? (
             <WizardStep3Goal
               values={store.goal}
               onChange={store.setGoal}
-              errors={errors as Record<string, string>}
+              currency={store.identity.currency || null}
+              currencyExponent={store.identity.currency_exponent}
+              errors={errors}
             />
-          )}
-
-          {currentStep === 4 && (
+          ) : null}
+          {store.currentStep === 4 ? (
             <WizardStep4Structure
               campaigns={store.structure.campaigns}
               onChange={(campaigns) => store.setStructure({ campaigns })}
-              errors={errors.structure as string | undefined}
+              errors={errors.structure}
             />
-          )}
-
-          {currentStep === 5 && (
+          ) : null}
+          {store.currentStep === 5 ? (
             <WizardStep5Creatives
               values={store.creatives}
               campaigns={store.structure.campaigns}
               onChange={store.setCreatives}
-              errors={errors.creatives as string | undefined}
+              errors={errors.creatives}
             />
-          )}
-
-          {currentStep === 6 && config && (
+          ) : null}
+          {store.currentStep === 6 && config ? (
             <WizardStep6Preview
               config={config}
               preview={store.preview}
               onChange={store.setPreview}
             />
-          )}
-
-          {currentStep === 7 && config && (
+          ) : null}
+          {store.currentStep === 7 && config ? (
             <WizardStep7Launch
               config={config}
               presetId={store.start.preset_id}
+              draftRevision={store.draftRevision || null}
+              draftSyncState={store.draftSyncState}
               runId={store.runId}
               onRunId={(id) => store.setRunId(id)}
-              onFinish={() => store.reset()}
+              onDraftCleared={store.markDraftCleared}
+              onFinish={store.reset}
             />
-          )}
+          ) : null}
 
-          {/* Навигация */}
-          <div className="flex items-center justify-between mt-8 pt-5 border-t border-[var(--hairline)]">
-            <Button
-              variant="secondary"
-              onClick={store.goPrev}
-              disabled={currentStep === 1}
+          {configError ? (
+            <div
+              role="alert"
+              className="rounded-[var(--radius-2)] border border-warning/40 bg-warning/10 p-4 text-[13px] text-bg-10"
             >
+              {configError}
+            </div>
+          ) : null}
+          {errors.preview ? (
+            <p role="alert" className="mt-4 text-[13px] text-warning">
+              {errors.preview}
+            </p>
+          ) : null}
+
+          <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-20 -mx-3 mt-8 flex items-center justify-between border-t border-[var(--color-hairline)] bg-bg-0/95 px-3 py-3 backdrop-blur md:static md:mx-0 md:bg-transparent md:px-0 md:py-5 md:backdrop-blur-none">
+            <Button variant="secondary" onClick={store.goPrev} disabled={store.currentStep === 1}>
               ← Назад
             </Button>
-
-            {currentStep < 7 && (
-              <Button
-                variant="primary"
-                onClick={validateAndNext}
-              >
-                Далее →
+            {store.currentStep < 7 ? (
+              <Button variant="primary" onClick={validateAndNext}>
+                {store.currentStep === 6 ? "Подтвердить план" : "Далее →"}
               </Button>
-            )}
+            ) : null}
           </div>
         </div>
       </section>

@@ -5,9 +5,9 @@
 // CDP и DOM живы — поэтому существующая лесенка восстановления (NOT_FOUND / «страница
 // недоступна») этот случай не ловит, и канал авто-стопа молча мёртв до ручного рестарта.
 //
-// Здесь — ЧИСТЫЙ детект и счётчик: классификация сетевой ошибки + учёт серии сбоев на
-// уровне сессии. Само лечение (reload → CDP-reconnect → рестарт профиля) — в
-// SessionManager.healSessionNetwork (у него есть примитивы Vision/CDP).
+// Здесь — чистый детект и счётчик. Автоматическая реакция ограничена reload
+// конкретной role/account страницы; reconnect/restart выполняются только через
+// внешний PostgreSQL-backed exclusive maintenance path.
 
 import type { BrowserSession } from './types.js';
 
@@ -40,11 +40,10 @@ export function isNetworkFetchError(detail: string | null | undefined): boolean 
   return NETWORK_FETCH_MARKERS.some((m) => s.includes(m));
 }
 
-/** Учесть исход fetch-операции: успех сбрасывает серию и уровень лечения, сбой — инкремент. */
+/** Учесть исход fetch-операции: успех сбрасывает серию, сбой — инкремент. */
 export function recordFetchOutcome(session: BrowserSession, ok: boolean): void {
   if (ok) {
     session.netFailureStreak = 0;
-    session.healLevel = 0;
     return;
   }
   session.netFailureStreak = (session.netFailureStreak ?? 0) + 1;

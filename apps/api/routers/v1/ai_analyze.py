@@ -22,6 +22,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from apps.api.deps import DepRedis, DepSettings
+from apps.api.middleware.api_problem import api_problem_payload, request_correlation_id
 from apps.api.routers.v1.schemas.ai import AIAnalyzeRequest, AIAnalyzeResponse
 from core.ai_assistant.chat import ChatMessage, ChatRateLimitedError, ChatSession
 from core.ai_assistant.client import AIUnavailableError, get_ai_client
@@ -39,6 +40,25 @@ _ANALYZE_RATE_LIMIT = 20
 
 # Namespace Redis-ключей: ai:ratelimit:analyze:{client_key}
 _RATE_LIMIT_NAMESPACE = "analyze"
+
+
+def _problem(
+    request: Request,
+    *,
+    status_code: int,
+    code: str,
+    message: str,
+) -> JSONResponse:
+    correlation_id = request_correlation_id(request.scope)
+    return JSONResponse(
+        status_code=status_code,
+        content=api_problem_payload(
+            code=code,
+            message=message,
+            correlation_id=correlation_id,
+        ),
+        headers={"X-Request-Id": correlation_id},
+    )
 
 
 def _extract_client_key(
@@ -131,19 +151,21 @@ async def ai_analyze(
             namespace=_RATE_LIMIT_NAMESPACE,
         )
     except RateLimitExceeded:
-        return JSONResponse(
+        return _problem(
+            request,
             status_code=429,
-            content={"detail": "Превышен лимит запросов: 20 в час для /ai/analyze"},
+            code="ai_rate_limited",
+            message="Превышен лимит запросов: 20 в час для /ai/analyze",
         )
 
     # Доступность AI — после лимита.
     ai = get_ai_client(settings)
     if not ai.is_available:
-        return JSONResponse(
+        return _problem(
+            request,
             status_code=503,
-            content={
-                "detail": "AI-провайдеры не настроены — задай ANTHROPIC_API_KEY или OPENAI_API_KEY"
-            },
+            code="ai_unavailable",
+            message="AI-провайдеры не настроены",
         )
 
     cache_key = f"ai:cache:analyze:{body.block_type}:{body.scope_key}"
@@ -174,15 +196,19 @@ async def ai_analyze(
             history=[ChatMessage(role="user", content=prompt)],
             client_key=f"analyze:{client_key}",
         )
-    except ChatRateLimitedError as exc:
-        return JSONResponse(
+    except ChatRateLimitedError:
+        return _problem(
+            request,
             status_code=429,
-            content={"detail": str(exc)},
+            code="ai_rate_limited",
+            message="AI временно ограничил частоту запросов",
         )
-    except AIUnavailableError as exc:
-        return JSONResponse(
+    except AIUnavailableError:
+        return _problem(
+            request,
             status_code=503,
-            content={"detail": str(exc)},
+            code="ai_unavailable",
+            message="AI-провайдер временно недоступен",
         )
 
     generated_at = datetime.now(UTC).isoformat()

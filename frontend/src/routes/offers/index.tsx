@@ -3,8 +3,8 @@
  *
  * Компоновка:
  *   PageHeader eyebrow "02" / "CATALOG · ОФФЕРЫ"
- *   Toolbar: period selector (days) + toggle include_inactive + [+ Создать]
- *   Сетка 3 col OfferCard (offer summary + метрики из /offers/compare)
+ *   Toolbar: active-state filter + [+ Создать]
+ *   Сетка OfferCard с подтверждённой catalog-конфигурацией
  *   RulesDrawer (6 порогов)
  *   OfferFormModal (создание/редактирование)
  *   ConfirmDialog (delete)
@@ -16,10 +16,9 @@ import { Tag, Plus } from "lucide-react";
 
 import {
   useOffers,
-  useOffersCompare,
   useCreateOffer,
   useUpdateOffer,
-  useDeleteOffer,
+  useDeactivateOffer,
   type Offer,
 } from "@/lib/api/offers";
 import { OfferCard } from "@/components/offers/OfferCard";
@@ -41,8 +40,6 @@ export const Route = createFileRoute("/offers/")({
 // ─── Tab фильтр ───────────────────────────────────────────────────────────────
 
 type OfferTab = "all" | "active" | "inactive";
-type OfferSort = "spend" | "alerts" | "name";
-
 const TAB_LABELS: Record<OfferTab, string> = {
   all: "Все",
   active: "Активные",
@@ -53,19 +50,16 @@ const TAB_LABELS: Record<OfferTab, string> = {
 
 function OffersPage() {
   const [tab, setTab] = useState<OfferTab>("all");
-  const [sort, setSort] = useState<OfferSort>("spend");
-  const days = 7; // метрики всегда за 7 дней
 
   // CRUD state
   const [createOpen, setCreateOpen] = useState(false);
   const [editOffer, setEditOffer] = useState<Offer | null>(null);
   const [rulesOffer, setRulesOffer] = useState<Offer | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
-  const [deleteOffer, setDeleteOffer] = useState<Offer | null>(null);
+  const [offerToDeactivate, setOfferToDeactivate] = useState<Offer | null>(null);
 
   // API — всегда includeInactive=true, фильтруем локально по tab
   const { data: offers, isLoading, isError, error, refetch } = useOffers(true);
-  const { data: compareRows } = useOffersCompare(days);
 
   // Мутации — один экземпляр на страницу
   const createMutation = useCreateOffer();
@@ -79,8 +73,8 @@ function OffersPage() {
     setEditOffer(offer);
   }
 
-  function handleOpenDelete(offer: Offer) {
-    setDeleteOffer(offer);
+  function handleOpenDeactivate(offer: Offer) {
+    setOfferToDeactivate(offer);
   }
 
   // ── Skeleton ──
@@ -109,23 +103,13 @@ function OffersPage() {
 
   const allOffers = offers ?? [];
 
-  // Фильтрация по tab
-  // Строим карту metrics по offer_id для быстрого доступа и честной сортировки.
-  const metricsMap = new Map(compareRows?.map((r) => [r.offer_id, r]) ?? []);
-
-  const filteredOffers = allOffers.filter((o) => {
-    if (tab === "active") return o.is_active;
-    if (tab === "inactive") return !o.is_active;
-    return true;
-  }).sort((a, b) => {
-    if (sort === "name") return a.code.localeCompare(b.code, "ru");
-    const left = metricsMap.get(a.id);
-    const right = metricsMap.get(b.id);
-    if (sort === "alerts") {
-      return Number(right?.stop_alerts_count ?? 0) - Number(left?.stop_alerts_count ?? 0);
-    }
-    return Number(right?.spend ?? 0) - Number(left?.spend ?? 0);
-  });
+  const filteredOffers = allOffers
+    .filter((o) => {
+      if (tab === "active") return o.is_active;
+      if (tab === "inactive") return !o.is_active;
+      return true;
+    })
+    .sort((a, b) => a.code.localeCompare(b.code, "ru"));
 
   return (
     <>
@@ -144,8 +128,8 @@ function OffersPage() {
         }
       />
 
-      {/* ── Toolbar: tab pills + sort ── */}
-      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      {/* ── Toolbar: tab pills ── */}
+      <div className="mb-5 flex flex-wrap items-center gap-2">
         <div className="flex flex-wrap items-center gap-2">
           {(Object.keys(TAB_LABELS) as OfferTab[]).map((t) => (
             <FilterPill key={t} active={tab === t} onClick={() => setTab(t)}>
@@ -153,19 +137,6 @@ function OffersPage() {
             </FilterPill>
           ))}
         </div>
-        <label className="flex items-center gap-2 font-display text-[11px] text-bg-9">
-          Сортировка
-          <select
-            value={sort}
-            onChange={(event) => setSort(event.target.value as OfferSort)}
-            className="h-8 rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 px-3 font-display text-[12px] text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-            aria-label="Сортировка офферов"
-          >
-            <option value="spend">по тратам</option>
-            <option value="alerts">по стопам</option>
-            <option value="name">по названию</option>
-          </select>
-        </label>
       </div>
 
       {/* ── Empty state ── */}
@@ -204,10 +175,9 @@ function OffersPage() {
             <div key={offer.id} role="listitem">
               <OfferCard
                 offer={offer}
-                metrics={metricsMap.get(offer.id)}
                 onEditOffer={handleOpenEdit}
                 onEditRules={handleOpenRules}
-                onDelete={handleOpenDelete}
+                onDeactivate={handleOpenDeactivate}
               />
             </div>
           ))}
@@ -220,45 +190,34 @@ function OffersPage() {
         onOpenChange={setCreateOpen}
         offer={null}
         onSave={async (values) => {
-          // Создаём оффер (identity). Стоп-правила (CPA + чувствительность) — отдельно
+          // Создаём конфигурацию оффера. Стоп-правила (CPA + чувствительность) — отдельно
           // через кнопку «Правила» (RulesDrawer), здесь их не трогаем.
           await createMutation.mutateAsync({
             code: values.code,
-            name: values.code, // бэк: name=code
+            vertical: values.vertical,
             is_active: values.is_active,
             pixel_id: values.pixel_id || null, // пусто → не задан
             ad_account_ids: values.ad_account_ids, // мульти-кабинет: min 1
             countries: values.countries, // гео оффера (ISO-2 upper)
           });
           setCreateOpen(false);
-          toast.success(
-            `Оффер ${values.code} создан. Стоп-правила задайте в «Правилах».`,
-          );
+          toast.success(`Оффер ${values.code} создан. Стоп-правила задайте в «Правилах».`);
         }}
       />
 
       {/* ── OfferFormModal: редактирование ── */}
-      {editOffer && (
-        <EditOfferModal
-          offer={editOffer}
-          onClose={() => setEditOffer(null)}
-        />
-      )}
+      {editOffer && <EditOfferModal offer={editOffer} onClose={() => setEditOffer(null)} />}
 
       {/* ── RulesDrawer ── */}
-      <RulesDrawer
-        offer={rulesOffer}
-        open={rulesOpen}
-        onOpenChange={setRulesOpen}
-      />
+      <RulesDrawer offer={rulesOffer} open={rulesOpen} onOpenChange={setRulesOpen} />
 
-      {/* ── ConfirmDialog: delete ── */}
-      {deleteOffer ? (
-        <OfferDeleteManager
-          offer={deleteOffer}
+      {/* ── ConfirmDialog: soft deactivation ── */}
+      {offerToDeactivate ? (
+        <OfferDeactivateManager
+          offer={offerToDeactivate}
           open
           onOpenChange={(open) => {
-            if (!open) setDeleteOffer(null);
+            if (!open) setOfferToDeactivate(null);
           }}
         />
       ) : null}
@@ -278,11 +237,14 @@ function EditOfferModal({ offer, onClose }: { offer: Offer; onClose: () => void 
   return (
     <OfferFormModal
       open
-      onOpenChange={(open) => { if (!open) onClose(); }}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
       offer={offer}
       onSave={async (values) => {
-        // Только identity. Стоп-правила редактируются отдельно в «Правилах».
+        // Стоп-правила редактируются отдельно в «Правилах».
         await updateMutation.mutateAsync({
+          vertical: values.vertical,
           is_active: values.is_active,
           pixel_id: values.pixel_id, // строка (в т.ч. "") — форма источник истины
           ad_account_ids: values.ad_account_ids, // мульти-кабинет: замена списка
@@ -294,7 +256,7 @@ function EditOfferModal({ offer, onClose }: { offer: Offer; onClose: () => void 
   );
 }
 
-export function OfferDeleteManager({
+export function OfferDeactivateManager({
   offer,
   open,
   onOpenChange,
@@ -303,19 +265,19 @@ export function OfferDeleteManager({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const deleteMutation = useDeleteOffer();
+  const deactivateMutation = useDeactivateOffer();
 
   return (
     <ConfirmDialog
       open={open}
       onOpenChange={onOpenChange}
-      title={`Удалить оффер ${offer.code}?`}
+      title={`Деактивировать оффер ${offer.code}?`}
       description="Оффер будет помечен как неактивный. Исторические данные сохранятся."
       confirmWord={offer.code}
-      confirmLabel="Удалить"
+      confirmLabel="Деактивировать"
       confirmVariant="danger"
       onConfirm={async () => {
-        await deleteMutation.mutateAsync(offer.id);
+        await deactivateMutation.mutateAsync(offer.id);
         toast.success(`Оффер ${offer.code} деактивирован`);
         onOpenChange(false);
       }}
@@ -325,13 +287,7 @@ export function OfferDeleteManager({
 
 // ─── PageHeader ────────────────────────────────────────────────────────────────
 
-function OffersHeader({
-  count,
-  action,
-}: {
-  count: number | null;
-  action?: React.ReactNode;
-}) {
+function OffersHeader({ count, action }: { count: number | null; action?: React.ReactNode }) {
   return (
     <PageHeader
       eyebrowNum="02"

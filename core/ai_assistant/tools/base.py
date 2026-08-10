@@ -2,7 +2,7 @@
 """Базовые типы пакета core.ai_assistant.tools.
 
 Содержит:
-- RiskLevel — категория tool'а (READ_ONLY / DRAFT_REQUIRED / CREATIVE).
+- RiskLevel — категория tool'а (READ_ONLY / CREATIVE).
 - ToolError — контролируемая ошибка tool'а, отдаётся LLM как tool_result error.
 - ToolContext — DI-контейнер с зависимостями, передаётся в `run()`.
 - ToolHandler — Protocol для конкретных tool-классов.
@@ -31,9 +31,6 @@ class RiskLevel(str, Enum):
     READ_ONLY = "read_only"
     """Чтение, исполняется немедленно (БД / Redis / Meta API READ)."""
 
-    DRAFT_REQUIRED = "draft_required"
-    """Mutation: создаёт task_queue draft, юзер подтверждает в TG/TMA."""
-
     CREATIVE = "creative"
     """Генерация контента через LLM, без mutations."""
 
@@ -57,19 +54,16 @@ class ToolContext:
     """Идентификатор клиента/инициатора (rate-limit ключ + audit)."""
 
     engine: AsyncEngine | None = None
-    """SQLAlchemy AsyncEngine для READ_ONLY БД-запросов и draft INSERT."""
+    """SQLAlchemy AsyncEngine для read-only БД-запросов."""
 
     redis_client: Any | None = None
-    """redis.asyncio.Redis или совместимый — для rate-limit и worker heartbeats."""
+    """redis.asyncio.Redis или совместимый — только для disposable AI rate limits/cache."""
 
     meta_api_client: MetaApiClient | None = None
     """Опциональный — нужен только meta/* tools."""
 
     requested_by: str = ""
-    """Кто инициировал — для записи в task_queue.requested_by. Если пусто — берётся client_key."""
-
-    created_by_chat_id: int | None = None
-    """TG chat_id инициатора (для owner ACL над DRAFT). None если вызвано через MCP/HTTP."""
+    """Optional caller label retained for read-tool audit context."""
 
     def require_engine(self) -> AsyncEngine:
         """Вернуть engine или поднять ToolError."""
@@ -111,9 +105,6 @@ class ToolHandler(Protocol):
 
     async def run(self, ctx: ToolContext, args: dict[str, Any]) -> str:
         """Исполнить tool. Возвращает текстовый результат для LLM.
-
-        Для DRAFT_REQUIRED tools возвращает task_id + preview; сам mutation
-        исполнит meta_api_worker после подтверждения юзером.
 
         Должен поднимать ToolError на ожидаемых ошибках (валидация args,
         недоступность зависимостей). Непредвиденные исключения — пусть падают,

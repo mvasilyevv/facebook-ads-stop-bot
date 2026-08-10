@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -14,52 +15,17 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from core.adset_pro.ingest import (
     AttributionResult,
-    canonical_event_type,
     resolve_attribution,
 )
 from core.adset_pro.schemas import PostbackEvent
+from core.tasks.queue import transition_correlated_incident_in_transaction
 
 _TASK_TYPE = "tracker_event_process"
 _RETRY_BASE_SECONDS = 30
 _RETRY_MAX_SECONDS = 300
-
-# N-1 (a3b7) stores provider values verbatim. Keep raw rows unchanged so a
-# repeated application rollback still sees its own event vocabulary; current
-# code canonicalizes only while reading/projecting them.
-LEGACY_POSITIVE_EVENT_TYPES = (
-    "registration",
-    "reg",
-    "signup",
-    "hold",
-    "cpa_hold",
-    "ftd",
-    "first_deposit",
-    "first-deposit",
-    "first deposit",
-    "accept",
-    "cpa_accept",
-    "redeposit",
-    "redep",
-    "cpa_redep",
-)
-
-
-def _canonical_event_type_sql(column: str = "event_type") -> str:
-    """Static SQL CASE matching ``canonical_event_type`` for transition rows."""
-    normalized = f"replace(lower(trim({column})), ' ', '_')"
-    return f"""CASE
-        WHEN {normalized} IN ('registration', 'reg', 'signup', 'hold', 'cpa_hold')
-            THEN 'registration'
-        WHEN {normalized} IN (
-            'ftd', 'first_deposit', 'first-deposit', 'accept', 'cpa_accept'
-        ) THEN 'ftd'
-        WHEN {normalized} IN ('redeposit', 'redep', 'cpa_redep')
-            THEN 'redeposit'
-        ELSE NULL
-    END"""
-
-
-_CANONICAL_EVENT_TYPE_SQL = _canonical_event_type_sql()
+_TRACKER_DEADLINE_SECONDS = 120
+_TRACKER_LEASE_SECONDS = 120
+_DEFAULT_TRACKER_WORKER_ID = uuid.uuid4()
 
 
 @dataclass(slots=True, frozen=True)
@@ -80,7 +46,29 @@ class ProcessResult:
     received_at: datetime | None = None
     cancelled_task_ids: tuple[int, ...] = ()
     needs_scan_refresh: bool = False
-    auto_cancel_shadow_candidate: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class TrackerTaskClaim:
+    """Opaque fencing capability returned by the tracker scheduler claim."""
+
+    task_id: int
+    lease_owner: uuid.UUID
+    lease_token: int
+    lease_expires_at: datetime
+    deadline_at: datetime
+
+
+class TrackerLeaseLostError(RuntimeError):
+    """The tracker task is no longer owned by this worker generation."""
+
+
+def _claim_params(claim: TrackerTaskClaim) -> dict[str, Any]:
+    return {
+        "task_id": int(claim.task_id),
+        "lease_owner": claim.lease_owner,
+        "lease_token": int(claim.lease_token),
+    }
 
 
 def confirmed_deposit_at(
@@ -104,88 +92,23 @@ def attribution_conflicts(
     return candidate_ad_id is not None and bool(existing) and str(candidate_ad_id) not in existing
 
 
-async def claim_event_tasks(engine: AsyncEngine, *, limit: int = 100) -> list[int]:
-    """Claim runnable tracker tasks using ``FOR UPDATE SKIP LOCKED``."""
+async def claim_event_tasks(
+    engine: AsyncEngine,
+    *,
+    limit: int = 100,
+    worker_id: uuid.UUID | None = None,
+    lease_seconds: int = _TRACKER_LEASE_SECONDS,
+) -> list[TrackerTaskClaim]:
+    """Claim a fenced batch from the background lane.
+
+    The returned owner/token pair is a capability: every later projection,
+    retry, or terminal transition must present the same pair. A worker from an
+    expired generation therefore cannot commit after another worker reclaims
+    the row.
+    """
+    effective_worker_id = worker_id or _DEFAULT_TRACKER_WORKER_ID
+    effective_lease_seconds = max(5, int(lease_seconds))
     async with engine.begin() as conn:
-        # N-1 rollback inserts directly into the inbox and does not create the
-        # event-driven outbox task. Recover those rows without rewriting their
-        # raw event_type (old code still needs redep/baddep on a repeated rollback).
-        await conn.execute(
-            text(
-                """
-                UPDATE adsetpro_postback_events
-                SET provider_event_id = COALESCE(
-                        provider_event_id,
-                        NULLIF(raw_json->>'provider_event_id', ''),
-                        NULLIF(raw_json->>'event_id', ''),
-                        NULLIF(raw_json->>'transaction_id', ''),
-                        NULLIF(raw_json->>'transactionId', ''),
-                        NULLIF(raw_json->>'txn_id', ''),
-                        NULLIF(raw_json->>'conversion_id', ''),
-                        NULLIF(raw_json->>'postback_id', '')
-                    )
-                WHERE processed_at IS NULL
-                  AND provider_event_id IS NULL
-                """
-            )
-        )
-        await conn.execute(
-            text(
-                f"""
-                UPDATE adsetpro_postback_events
-                SET processed_at = now(),
-                    attribution_status = 'ignored',
-                    next_retry_at = NULL,
-                    last_error = 'ignored_legacy_event_type:' || left(event_type, 128)
-                WHERE processed_at IS NULL
-                  AND is_duplicate = FALSE
-                  AND ({_CANONICAL_EVENT_TYPE_SQL}) IS NULL
-                """
-            )
-        )
-        await conn.execute(
-            text(
-                f"""
-                INSERT INTO task_queue
-                    (task_type, status, idempotency_key, payload, requested_by,
-                     attempt_count, max_attempts, created_at, updated_at)
-                SELECT
-                    'tracker_event_process',
-                    'pending',
-                    left(
-                        'tracker:recover:' || e.source || ':' || e.id::text || ':' ||
-                        extract(epoch FROM e.received_at)::numeric::text,
-                        128
-                    ),
-                    jsonb_build_object(
-                        'event_id', e.id,
-                        'received_at',
-                            to_char(
-                                e.received_at AT TIME ZONE 'UTC',
-                                'YYYY-MM-DD"T"HH24:MI:SS.US'
-                            ) || '+00:00',
-                        'source', e.source,
-                        'click_id', e.click_id
-                    ),
-                    'tracker_n1_recovery',
-                    0,
-                    10080,
-                    now(),
-                    now()
-                FROM adsetpro_postback_events e
-                WHERE e.processed_at IS NULL
-                  AND e.is_duplicate = FALSE
-                  AND ({_canonical_event_type_sql("e.event_type")}) IS NOT NULL
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM task_queue q
-                      WHERE q.task_type = 'tracker_event_process'
-                        AND q.payload->>'event_id' = e.id::text
-                  )
-                ON CONFLICT (idempotency_key) DO NOTHING
-                """
-            )
-        )
         # Older code left exhausted retrying rows permanently non-runnable. Move
         # them to the terminal dead-letter state before claiming fresh work.
         await conn.execute(
@@ -193,7 +116,6 @@ async def claim_event_tasks(engine: AsyncEngine, *, limit: int = 100) -> list[in
                 """
                 UPDATE task_queue
                 SET status = 'failed',
-                    next_retry_at = NULL,
                     completed_at = COALESCE(completed_at, now()),
                     last_error = COALESCE(last_error, 'tracker retry budget exhausted'),
                     updated_at = now()
@@ -212,65 +134,92 @@ async def claim_event_tasks(engine: AsyncEngine, *, limit: int = 100) -> list[in
                         FROM task_queue
                         WHERE task_type = 'tracker_event_process'
                           AND status IN ('pending', 'retrying')
-                          AND (next_retry_at IS NULL OR next_retry_at <= now())
+                          AND lane = 'background'
+                          AND available_at <= clock_timestamp()
+                          AND (
+                              deadline_at IS NULL
+                              OR deadline_at > clock_timestamp()
+                          )
+                          AND cancel_requested_at IS NULL
                           AND attempt_count < max_attempts
-                        ORDER BY created_at, id
+                        ORDER BY priority DESC, available_at, created_at, id
                         FOR UPDATE SKIP LOCKED
                         LIMIT :limit
                     )
                     UPDATE task_queue q
                     SET status = 'running',
                         attempt_count = q.attempt_count + 1,
+                        deadline_at = COALESCE(
+                            q.deadline_at,
+                            clock_timestamp() + make_interval(secs => :deadline_seconds)
+                        ),
+                        lease_owner = :worker_id,
+                        lease_token = q.lease_token + 1,
+                        lease_expires_at = clock_timestamp()
+                            + make_interval(secs => :lease_seconds),
                         updated_at = now()
                     FROM candidates c
                     WHERE q.id = c.id
-                    RETURNING q.id
+                    RETURNING q.id, q.lease_owner, q.lease_token,
+                              q.lease_expires_at, q.deadline_at
                     """
                 ),
-                {"limit": limit},
+                {
+                    "limit": max(1, int(limit)),
+                    "worker_id": effective_worker_id,
+                    "lease_seconds": effective_lease_seconds,
+                    "deadline_seconds": _TRACKER_DEADLINE_SECONDS,
+                },
             )
         ).all()
-    return [int(row[0]) for row in rows]
+    return [
+        TrackerTaskClaim(
+            task_id=int(row[0]),
+            lease_owner=row[1],
+            lease_token=int(row[2]),
+            lease_expires_at=row[3],
+            deadline_at=row[4],
+        )
+        for row in rows
+    ]
 
 
 async def process_event_task(
     engine: AsyncEngine,
     *,
-    task_id: int,
-    auto_cancel_enabled: bool = False,
+    claim: TrackerTaskClaim,
 ) -> ProcessResult:
-    """Project one claimed event and finish/retry its durable task atomically."""
+    """Project one claimed event and finish/retry it under the same fence."""
+    task_id = claim.task_id
     async with engine.begin() as conn:
         task = (
             (
                 await conn.execute(
                     text(
                         """
-                    SELECT id, status, payload, attempt_count, max_attempts
+                    SELECT id, status, payload, attempt_count, max_attempts,
+                           cancel_requested_at, cancel_reason
                     FROM task_queue
                     WHERE id = :task_id AND task_type = 'tracker_event_process'
+                      AND lease_owner = :lease_owner AND lease_token = :lease_token
+                      AND lease_expires_at > clock_timestamp()
                     FOR UPDATE
                     """
                     ),
-                    {"task_id": task_id},
+                    _claim_params(claim),
                 )
             )
             .mappings()
             .first()
         )
         if task is None:
-            return ProcessResult(
-                task_id=task_id,
-                event_id=None,
-                processed=False,
-                attribution_status="missing_task",
+            raise TrackerLeaseLostError(
+                f"tracker task {task_id} is no longer owned by "
+                f"{claim.lease_owner}/{claim.lease_token}"
             )
         if task["status"] != "running":
-            return ProcessResult(
-                task_id=task_id,
-                event_id=None,
-                processed=False,
-                attribution_status=f"task_{task['status']}",
+            raise TrackerLeaseLostError(
+                f"tracker task {task_id} has fenced status {task['status']}"
             )
 
         payload = (
@@ -278,6 +227,33 @@ async def process_event_task(
         )
         event_id = int(payload["event_id"])
         received_at = datetime.fromisoformat(str(payload["received_at"]).replace("Z", "+00:00"))
+        if task["cancel_requested_at"] is not None:
+            cancelled = await conn.execute(
+                text(
+                    """
+                    UPDATE task_queue
+                    SET status = 'cancelled',
+                        completed_at = now(),
+                        last_error = COALESCE(cancel_reason, 'cancelled'),
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = now()
+                    WHERE id = :task_id AND status = 'running'
+                      AND lease_owner = :lease_owner AND lease_token = :lease_token
+                      AND lease_expires_at > clock_timestamp()
+                    """
+                ),
+                _claim_params(claim),
+            )
+            if not cancelled.rowcount:
+                raise TrackerLeaseLostError(f"tracker task {task_id} lost fence during cancel")
+            return ProcessResult(
+                task_id=task_id,
+                event_id=event_id,
+                processed=False,
+                attribution_status="cancelled",
+                received_at=received_at,
+            )
         event = (
             (
                 await conn.execute(
@@ -298,7 +274,7 @@ async def process_event_task(
             .first()
         )
         if event is None:
-            await _finish_task_failed(conn, task_id, "tracker event is missing")
+            await _finish_task_failed(conn, claim, "tracker event is missing")
             return ProcessResult(
                 task_id=task_id,
                 event_id=event_id,
@@ -306,31 +282,7 @@ async def process_event_task(
                 attribution_status="missing_event",
             )
 
-        event_type = canonical_event_type(str(event["event_type"]))
-        if event_type is None:
-            await conn.execute(
-                text(
-                    """
-                    UPDATE adsetpro_postback_events
-                    SET processed_at = now(), attribution_status = 'ignored',
-                        next_retry_at = NULL,
-                        last_error = 'ignored_legacy_event_type:' || left(event_type, 128)
-                    WHERE id = :event_id AND received_at = :received_at
-                    """
-                ),
-                {"event_id": event_id, "received_at": received_at},
-            )
-            await _finish_task_ignored(conn, task_id, str(event["event_type"]))
-            return ProcessResult(
-                task_id=task_id,
-                event_id=event_id,
-                processed=False,
-                attribution_status="ignored",
-                occurred_at=event["occurred_at"],
-                received_at=event["received_at"],
-            )
         event = dict(event)
-        event["event_type"] = event_type
 
         source = str(event["source"])
         click_id = str(event["click_id"])
@@ -364,7 +316,7 @@ async def process_event_task(
         existing_attribution = (
             await conn.execute(
                 text(
-                    f"""
+                    """
                     SELECT DISTINCT ad_id, fb_ad_id
                     FROM (
                         SELECT fb_ad_fk AS ad_id, fb_ad_id
@@ -372,7 +324,6 @@ async def process_event_task(
                         WHERE source = :source
                           AND click_id = :click_id
                           AND is_duplicate = FALSE
-                          AND ({_canonical_event_type_sql("event_type")}) IS NOT NULL
                           AND (fb_ad_fk IS NOT NULL OR fb_ad_id IS NOT NULL)
                           AND attribution_status <> 'ambiguous'
                         UNION
@@ -408,7 +359,7 @@ async def process_event_task(
                 ),
                 {"error": error, "event_id": event_id, "received_at": received_at},
             )
-            await _finish_task_failed(conn, task_id, error)
+            await _finish_task_failed(conn, claim, error)
             return ProcessResult(
                 task_id=task_id,
                 event_id=event_id,
@@ -424,7 +375,7 @@ async def process_event_task(
             # click. This is safe because click_id is provider-scoped.
             await conn.execute(
                 text(
-                    f"""
+                    """
                     UPDATE adsetpro_postback_events
                     SET fb_ad_fk = :ad_id,
                         fb_ad_id = :fb_ad_id,
@@ -436,7 +387,6 @@ async def process_event_task(
                     WHERE source = :source AND click_id = :click_id
                       AND fb_ad_fk IS NULL
                       AND attribution_status <> 'ambiguous'
-                      AND ({_canonical_event_type_sql("event_type")}) IS NOT NULL
                     """
                 ),
                 {
@@ -454,19 +404,12 @@ async def process_event_task(
             conn, source=source, click_id=click_id, attribution=attribution
         )
         cancel = CancelResult()
-        shadow_candidate = False
         if attribution.fb_ad_id and event["event_type"] in {"registration", "ftd"}:
-            if auto_cancel_enabled:
-                cancel = await cancel_unstarted_auto_pause(
-                    conn,
-                    fb_ad_id=attribution.fb_ad_id,
-                    now=datetime.now(UTC),
-                )
-            else:
-                shadow_candidate = await has_unstarted_auto_pause(
-                    conn,
-                    fb_ad_id=attribution.fb_ad_id,
-                )
+            cancel = await cancel_unstarted_auto_pause(
+                conn,
+                fb_ad_id=attribution.fb_ad_id,
+                now=datetime.now(UTC),
+            )
 
         if attribution.ad_id is None:
             attempt_count = int(task["attempt_count"] or 1)
@@ -494,19 +437,36 @@ async def process_event_task(
                 },
             )
             if exhausted:
-                await _finish_task_failed(conn, task_id, error)
+                await _finish_task_failed(conn, claim, error)
             else:
-                await conn.execute(
+                retried = await conn.execute(
                     text(
                         """
                         UPDATE task_queue
-                        SET status = 'retrying', next_retry_at = :retry_at,
-                            last_error = :error, updated_at = now()
+                        SET status = 'retrying',
+                            available_at = CAST(:retry_at AS TIMESTAMPTZ),
+                            deadline_at = CAST(:retry_at AS TIMESTAMPTZ)
+                                + make_interval(secs => :deadline_seconds),
+                            last_error = :error,
+                            lease_owner = NULL,
+                            lease_expires_at = NULL,
+                            updated_at = now()
                         WHERE id = :task_id AND status = 'running'
+                          AND lease_owner = :lease_owner AND lease_token = :lease_token
+                          AND lease_expires_at > clock_timestamp()
                         """
                     ),
-                    {"retry_at": retry_at, "error": error, "task_id": task_id},
+                    {
+                        **_claim_params(claim),
+                        "retry_at": retry_at,
+                        "deadline_seconds": _TRACKER_DEADLINE_SECONDS,
+                        "error": error,
+                    },
                 )
+                if not retried.rowcount:
+                    raise TrackerLeaseLostError(
+                        f"tracker task {task_id} lost fence while scheduling attribution retry"
+                    )
             return ProcessResult(
                 task_id=task_id,
                 event_id=event_id,
@@ -516,7 +476,6 @@ async def process_event_task(
                 occurred_at=event["occurred_at"],
                 received_at=event["received_at"],
                 needs_scan_refresh=True,
-                auto_cancel_shadow_candidate=shadow_candidate,
             )
 
         await conn.execute(
@@ -537,18 +496,20 @@ async def process_event_task(
                 "received_at": received_at,
             },
         )
-        await conn.execute(
+        finished = await conn.execute(
             text(
                 """
                 UPDATE task_queue
                 SET status = 'succeeded', result = CAST(:result AS JSONB),
-                    next_retry_at = NULL, last_error = NULL,
+                    last_error = NULL,
                     completed_at = now(), updated_at = now()
                 WHERE id = :task_id AND status = 'running'
+                  AND lease_owner = :lease_owner AND lease_token = :lease_token
+                  AND lease_expires_at > clock_timestamp()
                 """
             ),
             {
-                "task_id": task_id,
+                **_claim_params(claim),
                 "result": json.dumps(
                     {
                         "event_id": event_id,
@@ -561,6 +522,8 @@ async def process_event_task(
                 ),
             },
         )
+        if not finished.rowcount:
+            raise TrackerLeaseLostError(f"tracker task {task_id} lost fence during finalize")
         return ProcessResult(
             task_id=task_id,
             event_id=event_id,
@@ -571,7 +534,6 @@ async def process_event_task(
             received_at=event["received_at"],
             cancelled_task_ids=cancel.cancelled_task_ids,
             needs_scan_refresh=cancel.needs_scan_refresh,
-            auto_cancel_shadow_candidate=shadow_candidate,
         )
 
 
@@ -589,8 +551,8 @@ async def _resolve_event_attribution(
         click_id=str(event["click_id"]),
         fb_ad_id=event["fb_ad_id"],
         event_type=str(event["event_type"]),
-        revenue=Decimal(event["revenue"] or 0),
-        currency=str(event["currency"] or "USD"),
+        revenue=None if event["revenue"] is None else Decimal(event["revenue"]),
+        currency=str(event["currency"]) if event["currency"] else None,
         received_at=event["received_at"],
         occurred_at=event["occurred_at"],
         source=str(event["source"]),
@@ -611,10 +573,9 @@ async def _rebuild_click_state(
         (
             await conn.execute(
                 text(
-                    f"""
-                WITH normalized AS (
-                    SELECT id, received_at, occurred_at, revenue, raw_json,
-                           {_canonical_event_type_sql("event_type")} AS canonical_type
+                    """
+                WITH events AS (
+                    SELECT id, received_at, occurred_at, raw_json, event_type
                     FROM adsetpro_postback_events
                     WHERE source = :source
                       AND click_id = :click_id
@@ -627,19 +588,10 @@ async def _rebuild_click_state(
                 )
                 SELECT
                     MIN(occurred_at) FILTER (
-                        WHERE canonical_type = 'registration'
+                        WHERE event_type = 'registration'
                     ) AS registration_at,
-                    MIN(occurred_at) FILTER (WHERE canonical_type = 'ftd') AS ftd_at,
-                    COALESCE(
-                        (ARRAY_AGG(revenue ORDER BY occurred_at, received_at, id)
-                            FILTER (WHERE canonical_type = 'ftd'))[1],
-                        0
-                    ) AS ftd_revenue,
-                    COUNT(*) FILTER (WHERE canonical_type = 'redeposit')::int AS redeposits,
-                    COALESCE(
-                        SUM(revenue) FILTER (WHERE canonical_type = 'redeposit'), 0
-                    )
-                        AS redeposit_revenue,
+                    MIN(occurred_at) FILTER (WHERE event_type = 'ftd') AS ftd_at,
+                    COUNT(*) FILTER (WHERE event_type = 'redeposit')::int AS redeposits,
                     MAX(received_at) AS last_event_at,
                     UPPER(COALESCE(
                         (ARRAY_AGG(raw_json->>'country' ORDER BY received_at DESC)
@@ -649,8 +601,7 @@ async def _rebuild_click_state(
                         (ARRAY_AGG(raw_json->>'geo' ORDER BY received_at DESC)
                             FILTER (WHERE raw_json->>'geo' IS NOT NULL))[1]
                     )) AS country
-                FROM normalized
-                WHERE canonical_type IS NOT NULL
+                FROM events
                 """
                 ),
                 {"source": source, "click_id": click_id, "ad_id": attribution.ad_id},
@@ -674,13 +625,13 @@ async def _rebuild_click_state(
                 INSERT INTO tracker_click_state
                     (id, source, click_id, ad_id, fb_ad_id, country, attribution_status,
                      registration, ftd, confirmed_deposit, registration_at, ftd_at,
-                     confirmed_deposit_at, ftd_revenue, redeposits, redeposit_revenue,
+                     confirmed_deposit_at, redeposits,
                      last_event_at, version, created_at, updated_at)
                 VALUES
                     (gen_random_uuid(), :source, :click_id, :ad_id, :fb_ad_id, :country,
                      :attribution_status, :registration, :ftd, :confirmed,
-                     :registration_at, :ftd_at, :confirmed_at, :ftd_revenue,
-                     :redeposits, :redeposit_revenue, :last_event_at, 1, now(), now())
+                     :registration_at, :ftd_at, :confirmed_at,
+                     :redeposits, :last_event_at, 1, now(), now())
                 ON CONFLICT ON CONSTRAINT uq_tracker_click_state_source_click DO UPDATE SET
                     ad_id = COALESCE(EXCLUDED.ad_id, tracker_click_state.ad_id),
                     fb_ad_id = COALESCE(EXCLUDED.fb_ad_id, tracker_click_state.fb_ad_id),
@@ -705,9 +656,7 @@ async def _rebuild_click_state(
                     confirmed_deposit_at = COALESCE(
                         tracker_click_state.confirmed_deposit_at, EXCLUDED.confirmed_deposit_at
                     ),
-                    ftd_revenue = EXCLUDED.ftd_revenue,
                     redeposits = EXCLUDED.redeposits,
-                    redeposit_revenue = EXCLUDED.redeposit_revenue,
                     last_event_at = GREATEST(tracker_click_state.last_event_at, EXCLUDED.last_event_at),
                     version = tracker_click_state.version + 1,
                     updated_at = now()
@@ -727,9 +676,7 @@ async def _rebuild_click_state(
                     "registration_at": registration_at,
                     "ftd_at": ftd_at,
                     "confirmed_at": confirmed_at,
-                    "ftd_revenue": aggregate["ftd_revenue"],
                     "redeposits": aggregate["redeposits"],
-                    "redeposit_revenue": aggregate["redeposit_revenue"],
                     "last_event_at": aggregate["last_event_at"],
                 },
             )
@@ -779,183 +726,180 @@ async def cancel_unstarted_auto_pause(
                 UPDATE task_queue
                 SET status = 'cancelled',
                     last_error = 'cancelled_by_positive_tracker_event',
-                    completed_at = now(), updated_at = now()
+                    result = COALESCE(result, '{}'::jsonb)
+                        || jsonb_build_object(
+                            'outcome', 'REJECTED',
+                            'reason', 'positive_tracker_event_before_external_call'
+                        ),
+                    completed_at = now(),
+                    lease_owner = NULL, lease_expires_at = NULL,
+                    updated_at = now()
                 WHERE task_type = 'meta_api_mutation'
                   AND payload->>'mutation_kind' = 'pause_ad'
                   AND payload->>'target_id' = :fb_ad_id
                   AND requested_by = 'bot_auto_stop'
                   AND status IN ('pending', 'retrying', 'running')
                   AND external_started_at IS NULL
-                RETURNING id
+                RETURNING id, correlation_id, payload
                 """
             ),
             {"fb_ad_id": fb_ad_id},
         )
     ).all()
+    # If the tracker event wins after the conservative external boundary, leave
+    # a durable cooperative cancellation marker. A proven pre-send rejection
+    # takes this same target lock and terminally cancels; an ambiguous request
+    # stays reconciliation-only.
+    await conn.execute(
+        text(
+            """
+            UPDATE task_queue
+            SET cancel_requested_at = COALESCE(cancel_requested_at, now()),
+                cancel_reason = COALESCE(
+                    cancel_reason,
+                    'positive_tracker_event_after_external_boundary'
+                ),
+                updated_at = now()
+            WHERE task_type = 'meta_api_mutation'
+              AND payload->>'mutation_kind' = 'pause_ad'
+              AND payload->>'target_id' = :fb_ad_id
+              AND requested_by = 'bot_auto_stop'
+              AND status IN ('running', 'retrying')
+              AND external_started_at IS NOT NULL
+              AND cancel_requested_at IS NULL
+            """
+        ),
+        {"fb_ad_id": fb_ad_id},
+    )
+    cancelled_task_ids: list[int] = []
+    for row in rows:
+        mapping = getattr(row, "_mapping", None)
+        task_id = int(mapping["id"] if mapping is not None else row[0])
+        cancelled_task_ids.append(task_id)
+        raw_correlation_id = (
+            mapping.get("correlation_id")
+            if mapping is not None
+            else (row[1] if len(row) > 1 else None)
+        )
+        correlation_id = (
+            uuid.UUID(str(raw_correlation_id)) if raw_correlation_id is not None else None
+        )
+        payload = (
+            mapping.get("payload") if mapping is not None else (row[2] if len(row) > 2 else None)
+        )
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if correlation_id is not None:
+            await transition_correlated_incident_in_transaction(
+                conn,
+                task_id=task_id,
+                correlation_id=correlation_id,
+                phase="recovered",
+                payload=dict(payload or {}),
+            )
     return CancelResult(
-        cancelled_task_ids=tuple(int(row[0]) for row in rows),
+        cancelled_task_ids=tuple(cancelled_task_ids),
         meta_snapshot_fresh=is_fresh,
         needs_scan_refresh=not is_fresh,
     )
 
 
-async def has_unstarted_auto_pause(
-    conn: AsyncConnection,
+async def mark_task_retry(
+    engine: AsyncEngine,
     *,
-    fb_ad_id: str,
+    claim: TrackerTaskClaim,
+    error: str,
 ) -> bool:
-    """Read-only shadow decision under the same per-ad race lock."""
-    await conn.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
-        {"lock_key": fb_ad_id},
-    )
-    return bool(
-        await conn.scalar(
-            text(
-                """
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM task_queue
-                    WHERE task_type = 'meta_api_mutation'
-                      AND payload->>'mutation_kind' = 'pause_ad'
-                      AND payload->>'target_id' = :fb_ad_id
-                      AND requested_by = 'bot_auto_stop'
-                      AND status IN ('pending', 'retrying', 'running')
-                      AND external_started_at IS NULL
-                )
-                """
-            ),
-            {"fb_ad_id": fb_ad_id},
-        )
-    )
-
-
-async def mark_task_retry(engine: AsyncEngine, *, task_id: int, error: str) -> None:
-    """Best-effort infra failure transition for a claimed tracker task."""
+    """Schedule an infra retry only while the caller still owns the lease."""
     async with engine.begin() as conn:
         row = (
             await conn.execute(
                 text(
                     """
-                    SELECT attempt_count, max_attempts, status
+                    SELECT attempt_count, max_attempts, status, cancel_requested_at
                     FROM task_queue
-                    WHERE id = :id AND task_type = 'tracker_event_process'
+                    WHERE id = :task_id AND task_type = 'tracker_event_process'
+                      AND lease_owner = :lease_owner AND lease_token = :lease_token
+                      AND lease_expires_at > clock_timestamp()
                     FOR UPDATE
                     """
                 ),
-                {"id": task_id},
+                _claim_params(claim),
             )
         ).first()
         if row is None or row[2] != "running":
-            return
-        attempt_count = int(row[0] or 1)
-        max_attempts = int(row[1] or 1)
-        if attempt_count >= max_attempts:
-            await _finish_task_failed(conn, task_id, error)
-            return
-        retry_at = _retry_at(attempt_count)
-        await conn.execute(
-            text(
-                """
-                UPDATE task_queue
-                SET status = 'retrying', next_retry_at = :retry_at,
-                    last_error = :error, updated_at = now()
-                WHERE id = :id AND status = 'running'
-                """
-            ),
-            {"retry_at": retry_at, "error": error[:500], "id": task_id},
-        )
-
-
-async def requeue_aggregation_repair(
-    engine: AsyncEngine,
-    *,
-    task_id: int,
-    error: str,
-) -> None:
-    """Durably retry a targeted aggregation that failed after projection commit."""
-    async with engine.begin() as conn:
-        row = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT attempt_count, max_attempts, status
-                    FROM task_queue
-                    WHERE id = :id AND task_type = 'tracker_event_process'
-                    FOR UPDATE
-                    """
-                ),
-                {"id": task_id},
-            )
-        ).first()
-        if row is None or row[2] != "succeeded":
-            return
-        attempt_count = int(row[0] or 1)
-        max_attempts = int(row[1] or 1)
-        if attempt_count >= max_attempts:
-            await conn.execute(
+            return False
+        if row[3] is not None:
+            cancelled = await conn.execute(
                 text(
                     """
                     UPDATE task_queue
-                    SET status = 'failed', next_retry_at = NULL,
-                        last_error = :error, completed_at = now(), updated_at = now()
-                    WHERE id = :id AND status = 'succeeded'
+                    SET status = 'cancelled', completed_at = now(),
+                        last_error = COALESCE(cancel_reason, 'cancelled'),
+                        lease_owner = NULL, lease_expires_at = NULL,
+                        updated_at = now()
+                    WHERE id = :task_id AND status = 'running'
+                      AND lease_owner = :lease_owner AND lease_token = :lease_token
+                      AND lease_expires_at > clock_timestamp()
                     """
                 ),
-                {"error": f"aggregation: {error}"[:500], "id": task_id},
+                _claim_params(claim),
             )
-            return
-        await conn.execute(
+            return bool(cancelled.rowcount)
+        attempt_count = int(row[0] or 1)
+        max_attempts = int(row[1] or 1)
+        if attempt_count >= max_attempts:
+            await _finish_task_failed(conn, claim, error)
+            return True
+        retry_at = _retry_at(attempt_count)
+        retried = await conn.execute(
             text(
                 """
                 UPDATE task_queue
-                SET status = 'retrying', next_retry_at = :retry_at,
-                    last_error = :error, completed_at = NULL, updated_at = now()
-                WHERE id = :id AND status = 'succeeded'
+                SET status = 'retrying',
+                    available_at = CAST(:retry_at AS TIMESTAMPTZ),
+                    deadline_at = CAST(:retry_at AS TIMESTAMPTZ)
+                        + make_interval(secs => :deadline_seconds),
+                    last_error = :error,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = now()
+                WHERE id = :task_id AND status = 'running'
+                  AND lease_owner = :lease_owner AND lease_token = :lease_token
+                  AND lease_expires_at > clock_timestamp()
                 """
             ),
             {
-                "retry_at": _retry_at(attempt_count),
-                "error": f"aggregation: {error}"[:500],
-                "id": task_id,
+                **_claim_params(claim),
+                "retry_at": retry_at,
+                "deadline_seconds": _TRACKER_DEADLINE_SECONDS,
+                "error": error[:500],
             },
         )
+        return bool(retried.rowcount)
 
 
-async def _finish_task_failed(conn: AsyncConnection, task_id: int, error: str) -> None:
-    await conn.execute(
-        text(
-            """
-            UPDATE task_queue
-            SET status = 'failed', next_retry_at = NULL, last_error = :error,
-                completed_at = now(), updated_at = now()
-            WHERE id = :id AND status = 'running'
-            """
-        ),
-        {"error": error[:500], "id": task_id},
-    )
-
-
-async def _finish_task_ignored(
+async def _finish_task_failed(
     conn: AsyncConnection,
-    task_id: int,
-    raw_event_type: str,
+    claim: TrackerTaskClaim,
+    error: str,
 ) -> None:
-    """Close a legacy negative/malformed event without retry or dead-letter noise."""
-    await conn.execute(
+    failed = await conn.execute(
         text(
             """
             UPDATE task_queue
-            SET status = 'succeeded', next_retry_at = NULL, last_error = NULL,
-                result = jsonb_build_object(
-                    'status', 'ignored', 'raw_event_type', :raw_event_type
-                ),
-                completed_at = now(), updated_at = now()
-            WHERE id = :id AND status = 'running'
+            SET status = 'failed', last_error = :error,
+                completed_at = now(), lease_owner = NULL, lease_expires_at = NULL,
+                updated_at = now()
+            WHERE id = :task_id AND status = 'running'
+              AND lease_owner = :lease_owner AND lease_token = :lease_token
+              AND lease_expires_at > clock_timestamp()
             """
         ),
-        {"raw_event_type": raw_event_type[:128], "id": task_id},
+        {**_claim_params(claim), "error": error[:500]},
     )
+    if not failed.rowcount:
+        raise TrackerLeaseLostError(f"tracker task {claim.task_id} lost fence during failure")
 
 
 def _retry_at(attempt_count: int) -> datetime:
@@ -966,12 +910,12 @@ def _retry_at(attempt_count: int) -> datetime:
 __all__ = [
     "CancelResult",
     "ProcessResult",
+    "TrackerLeaseLostError",
+    "TrackerTaskClaim",
     "attribution_conflicts",
     "cancel_unstarted_auto_pause",
     "claim_event_tasks",
     "confirmed_deposit_at",
-    "has_unstarted_auto_pause",
     "mark_task_retry",
     "process_event_task",
-    "requeue_aggregation_repair",
 ]

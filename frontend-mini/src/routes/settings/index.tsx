@@ -1,536 +1,313 @@
-/**
- * SettingsPage («Ещё») — конфигурация + навигация к вторичным экранам.
- * Канон: MiniHeader (eyebrowNum) → РАЗДЕЛЫ → OBSERVER → TELEGRAM → VISION.
- */
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
 import {
-  ChevronRight,
-  Heart,
-  FileCode,
-  FileText,
-  RefreshCw,
   BarChart3,
+  ChevronRight,
+  FileText,
+  Heart,
+  ListChecks,
   MonitorUp,
 } from "lucide-react";
+
+import { Badge, Sheet } from "@/components/ui";
+import { Eyebrow } from "@/components/data";
+import { MiniHeader } from "@/components/layout/MiniHeader";
+import { DisplaySettings } from "@/features/settings/DisplaySettings";
+import { ObserverSettings } from "@/features/settings/ObserverSettings";
+import { TelegramSettings } from "@/features/settings/TelegramSettings";
+import { VisionSettings } from "@/features/settings/VisionSettings";
 import {
   useObserverSettings,
-  useToggleScanning,
-  useTriggerScan,
+  useOperatorDisplayPreference,
+  useTelegramNotificationDiagnostics,
   useTelegramSettings,
   useVisionSettings,
-  useCabinetAutostart,
-  fetchJson,
-  QK,
 } from "@/lib/api";
-import { useQueryClient } from "@tanstack/react-query";
+import { getStoredRole } from "@/lib/auth";
 import { haptic } from "@/lib/tg";
-import { MiniHeader } from "@/components/layout/MiniHeader";
-import { Eyebrow } from "@/components/data";
-import { Badge, Button, Skeleton, ErrorState, Switch, Input } from "@/components/ui";
-import { cn } from "@/lib/cn";
+
+const SETTINGS_SECTIONS = [
+  "display",
+  "observer",
+  "telegram",
+  "vision",
+] as const;
+type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+interface SettingsSearch {
+  section?: SettingsSection;
+}
 
 export const Route = createFileRoute("/settings/")({
+  validateSearch: (search: Record<string, unknown>): SettingsSearch => ({
+    section: SETTINGS_SECTIONS.includes(search.section as SettingsSection)
+      ? (search.section as SettingsSection)
+      : undefined,
+  }),
   component: SettingsPage,
 });
 
-// ─── Toast ────────────────────────────────────────────────────────────────
-
-interface ToastState {
-  text: string;
-  ok: boolean;
-}
-
-function useToast() {
-  const [toast, setToast] = useState<ToastState | null>(null);
-  const show = (text: string, ok = true) => {
-    setToast({ text, ok });
-    setTimeout(() => setToast(null), 3000);
-  };
-  return { toast, show };
-}
-
-// ─── Field-строка: label + control, border-b ─────────────────────────────
-
-interface FieldRowProps {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-  noBorder?: boolean;
-}
-
-function FieldRow({ label, hint, children, noBorder = false }: FieldRowProps) {
-  return (
-    <div
-      className={cn(
-        "flex items-center justify-between gap-3 min-h-[44px] py-2.5",
-        !noBorder && "border-b border-[var(--hairline)]",
-      )}
-    >
-      <div className="min-w-0">
-        <p className="text-[13px] text-bg-11 leading-tight">{label}</p>
-        {hint && <p className="text-[11px] text-bg-8 mt-0.5 leading-tight">{hint}</p>}
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  );
-}
-
-// ─── Секция-обёртка: Eyebrow + контент ────────────────────────────────────
-
-interface SectionProps {
-  eyebrow: string;
-  num?: string;
-  children: React.ReactNode;
-}
-
-function Section({ eyebrow, num, children }: SectionProps) {
-  return (
-    <section>
-      <Eyebrow num={num} className="mb-2.5 flex">
-        {eyebrow}
-      </Eyebrow>
-      <div className="border border-[var(--hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)]">{children}</div>
-    </section>
-  );
-}
-
-// ─── Навигационная строка-ссылка ──────────────────────────────────────────
-
-interface NavRowProps {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  noBorder?: boolean;
-}
-
-function NavRow({ icon, label, onClick, noBorder = false }: NavRowProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "w-full flex items-center gap-3 min-h-[44px] py-2.5 text-left",
-        "active:bg-bg-2 transition-colors",
-        !noBorder && "border-b border-[var(--hairline)]",
-      )}
-    >
-      <span className="text-bg-9 shrink-0">{icon}</span>
-      <span className="flex-1 text-[14px] text-bg-11">{label}</span>
-      <ChevronRight size={16} strokeWidth={1.5} className="text-bg-7 shrink-0" />
-    </button>
-  );
-}
-
-// ─── Секция OBSERVER ──────────────────────────────────────────────────────
-
-function ObserverSection({ showToast }: { showToast: (t: string, ok?: boolean) => void }) {
-  const { data, isLoading, isError, refetch } = useObserverSettings();
-  const toggleScanning = useToggleScanning();
-  const triggerScan = useTriggerScan();
-  const qc = useQueryClient();
-
-  const [ownerTag, setOwnerTag] = useState<string>("");
-
-  useEffect(() => {
-    if (data) {
-      setOwnerTag(data.owner_campaign_tag ?? "");
-    }
-  }, [data]);
-
-  if (isLoading) {
-    return (
-      <Section eyebrow="OBSERVER" num="06">
-        <div className="py-2 space-y-3">
-          <Skeleton className="h-11 w-full" />
-          <Skeleton className="h-11 w-full" />
-        </div>
-      </Section>
-    );
-  }
-
-  if (isError || !data) {
-    return (
-      <Section eyebrow="OBSERVER" num="06">
-        <ErrorState message="Не удалось загрузить настройки" onRetry={() => void refetch()} />
-      </Section>
-    );
-  }
-
-  const cfg = data;
-
-  const handleToggle = async () => {
-    haptic.impact("medium");
-    try {
-      await toggleScanning.mutateAsync({ enabled: !cfg.is_scanning_enabled });
-      haptic.notify("success");
-      showToast(cfg.is_scanning_enabled ? "Сканирование отключено" : "Сканирование включено");
-    } catch (e: unknown) {
-      haptic.notify("error");
-      showToast((e as Error).message ?? "Ошибка", false);
-    }
-  };
-
-  const handleScanNow = async () => {
-    haptic.impact("medium");
-    try {
-      await triggerScan.mutateAsync();
-      haptic.notify("success");
-      showToast("Сканирование запущено");
-    } catch (e: unknown) {
-      haptic.notify("error");
-      showToast((e as Error).message ?? "Ошибка", false);
-    }
-  };
-
-  const handleSaveTag = async () => {
-    haptic.impact("light");
-    try {
-      // Точечный PATCH: full-PUT из кэша молча откатывал is_scanning_enabled (аудит C-1).
-      await fetchJson("/settings/observer/owner-tag", {
-        method: "PATCH",
-        body: JSON.stringify({
-          owner_campaign_tag: ownerTag.trim() || null,
-        }),
-      });
-      void qc.invalidateQueries({ queryKey: QK.observerSettings });
-      haptic.notify("success");
-      showToast("Тег сохранён");
-    } catch (e: unknown) {
-      haptic.notify("error");
-      showToast((e as Error).message ?? "Ошибка сохранения", false);
-    }
-  };
-
-  return (
-    <Section eyebrow="OBSERVER" num="06">
-      <FieldRow label="Сканирование" hint="Observer периодически сканирует объявления">
-        <Switch
-          checked={cfg.is_scanning_enabled}
-          onChange={() => void handleToggle()}
-          disabled={toggleScanning.isPending}
-        />
-      </FieldRow>
-
-      <FieldRow label="Owner Campaign Tag" hint="Пусто — все кампании; несколько через запятую" noBorder>
-        <div className="flex items-center gap-2">
-          <Input
-            aria-label="Owner Campaign Tag"
-            placeholder="MV,ABC"
-            value={ownerTag}
-            onChange={(e) => setOwnerTag(e.target.value)}
-            className="w-[120px] min-h-[36px] text-[13px]"
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => void handleSaveTag()}
-            className="shrink-0"
-          >
-            Сохр.
-          </Button>
-        </div>
-      </FieldRow>
-
-      <div className="py-3">
-        <Button
-          variant="secondary"
-          fullWidth
-          onClick={() => void handleScanNow()}
-          disabled={triggerScan.isPending}
-          loading={triggerScan.isPending}
-          aria-label="Сканировать сейчас"
-        >
-          <RefreshCw
-            size={15}
-            strokeWidth={1.6}
-            className={cn("shrink-0", triggerScan.isPending && "animate-spin")}
-          />
-          Сканировать сейчас
-        </Button>
-      </div>
-    </Section>
-  );
-}
-
-// ─── Секция TELEGRAM ──────────────────────────────────────────────────────
-
-function TelegramSection() {
-  const { data, isLoading, isError, refetch } = useTelegramSettings();
-
-  if (isLoading) {
-    return (
-      <Section eyebrow="TELEGRAM" num="07">
-        <div className="py-2 space-y-3">
-          <Skeleton className="h-11 w-full" />
-          <Skeleton className="h-11 w-full" />
-        </div>
-      </Section>
-    );
-  }
-
-  if (isError) {
-    return (
-      <Section eyebrow="TELEGRAM" num="07">
-        <ErrorState message="Не удалось загрузить" onRetry={() => void refetch()} />
-      </Section>
-    );
-  }
-
-  const authVariant = data?.is_authorized ? "done" : "neutral";
-  const pollerVariant = data?.poller_status === "ONLINE" ? "running" : "neutral";
-
-  return (
-    <Section eyebrow="TELEGRAM" num="07">
-      <FieldRow label="Авторизация">
-        <Badge variant={authVariant}>{data?.is_authorized ? "Активен" : "Не настроен"}</Badge>
-      </FieldRow>
-
-      {data?.bot_username ? (
-        <FieldRow label="Бот">
-          <span className="font-mono text-[12px] text-bg-10">@{data.bot_username}</span>
-        </FieldRow>
-      ) : null}
-
-      <FieldRow label="Poller" noBorder>
-        <Badge variant={data?.poller_status ? pollerVariant : "neutral"}>
-          {data?.poller_status ?? "—"}
-        </Badge>
-      </FieldRow>
-    </Section>
-  );
-}
-
-// ─── Секция VISION ────────────────────────────────────────────────────────
-
-function VisionSection() {
-  const { data, isLoading, isError, refetch } = useVisionSettings();
-
-  if (isLoading) {
-    return (
-      <Section eyebrow="VISION" num="08">
-        <div className="py-2 space-y-3">
-          <Skeleton className="h-11 w-full" />
-        </div>
-      </Section>
-    );
-  }
-
-  if (isError) {
-    return (
-      <Section eyebrow="VISION" num="08">
-        <ErrorState message="Не удалось загрузить" onRetry={() => void refetch()} />
-      </Section>
-    );
-  }
-
-  const statusVariant = data?.cdp_ready ? "running" : data?.has_token ? "warning" : "neutral";
-  const statusLabel = data?.cdp_ready
-    ? "CDP готов"
-    : data?.has_token
-      ? "Токен есть"
-      : "Не настроен";
-
-  return (
-    <Section eyebrow="VISION" num="08">
-      <FieldRow label="Статус CDP">
-        <Badge variant={statusVariant}>{statusLabel}</Badge>
-      </FieldRow>
-
-      {data?.profile_id ? (
-        <FieldRow label="Profile ID" noBorder>
-          <span className="font-mono text-[12px] text-bg-9 truncate max-w-[120px]">
-            {data.profile_id}
-          </span>
-        </FieldRow>
-      ) : (
-        <FieldRow label="Profile ID" noBorder>
-          <span className="text-[12px] text-bg-7">—</span>
-        </FieldRow>
-      )}
-    </Section>
-  );
-}
-
-// ─── Секция АВТОСТАРТ КАБИНЕТА ─────────────────────────────────────────────
-
-const pad2 = (n: number) => String(n).padStart(2, "0");
-
-function CabinetAutostartSection({
-  showToast,
-}: {
-  showToast: (t: string, ok?: boolean) => void;
-}) {
-  const { data, isLoading, isError, refetch } = useCabinetAutostart();
-  const qc = useQueryClient();
-  const [enabled, setEnabled] = useState(false);
-  const [time, setTime] = useState("06:00");
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (data) {
-      setEnabled(data.enabled);
-      setTime(`${pad2(data.hour_utc)}:${pad2(data.minute_utc)}`);
-    }
-  }, [data]);
-
-  if (isLoading) {
-    return (
-      <Section eyebrow="АВТОСТАРТ КАБИНЕТА" num="09">
-        <div className="py-2 space-y-3">
-          <Skeleton className="h-11 w-full" />
-          <Skeleton className="h-11 w-full" />
-        </div>
-      </Section>
-    );
-  }
-  if (isError || !data) {
-    return (
-      <Section eyebrow="АВТОСТАРТ КАБИНЕТА" num="09">
-        <ErrorState message="Не удалось загрузить" onRetry={() => void refetch()} />
-      </Section>
-    );
-  }
-
-  const handleSave = async () => {
-    const [hh, mm] = time.split(":");
-    const hour = Number(hh);
-    const minute = Number(mm);
-    if (
-      !Number.isInteger(hour) ||
-      hour < 0 ||
-      hour > 23 ||
-      !Number.isInteger(minute) ||
-      minute < 0 ||
-      minute > 59
-    ) {
-      showToast("Время: формат ЧЧ:ММ (UTC)", false);
-      return;
-    }
-    haptic.impact("light");
-    setSaving(true);
-    try {
-      await fetchJson("/tma/cabinet-autostart", {
-        method: "PUT",
-        body: JSON.stringify({ enabled, hour_utc: hour, minute_utc: minute }),
-      });
-      void qc.invalidateQueries({ queryKey: QK.cabinetAutostart });
-      haptic.notify("success");
-      showToast("Автостарт сохранён");
-    } catch (e: unknown) {
-      haptic.notify("error");
-      showToast((e as Error).message ?? "Ошибка сохранения", false);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Section eyebrow="АВТОСТАРТ КАБИНЕТА" num="09">
-      <FieldRow label="Включить" hint="В заданное время (UTC) включит отслеживаемые кампании">
-        <Switch checked={enabled} onChange={() => setEnabled((v) => !v)} />
-      </FieldRow>
-
-      <FieldRow label="Время (UTC)" hint="Час запуска расписания" noBorder>
-        <Input
-          type="time"
-          aria-label="Время автостарта (UTC)"
-          value={time}
-          onChange={(e) => setTime(e.target.value)}
-          className="w-[110px] min-h-[36px] text-[13px]"
-        />
-      </FieldRow>
-
-      <p className="text-[11px] text-bg-8 pt-1 pb-1">
-        Включаются кампании из «Отслеживаемые кампании» (настраиваются на десктопе).
-      </p>
-
-      <div className="py-3">
-        <Button variant="primary" fullWidth onClick={() => void handleSave()} loading={saving}>
-          Сохранить
-        </Button>
-      </div>
-    </Section>
-  );
-}
-
-// ─── SettingsPage ─────────────────────────────────────────────────────────
+const SECTION_TITLES: Record<SettingsSection, string> = {
+  display: "Отображение",
+  observer: "Observer",
+  telegram: "Telegram",
+  vision: "Vision и desktop",
+};
 
 function SettingsPage() {
   const navigate = useNavigate();
-  const { toast, show: showToast } = useToast();
+  const { section } = Route.useSearch();
+  const canEdit = getStoredRole() === "owner";
+  const displayPreferenceQuery = useOperatorDisplayPreference(canEdit);
+  const observerQuery = useObserverSettings();
+  const telegramQuery = useTelegramSettings();
+  const diagnosticsQuery = useTelegramNotificationDiagnostics();
+  const visionQuery = useVisionSettings();
 
-  const navTo = (to: string) => {
+  function openSection(next: SettingsSection) {
     haptic.selection();
-    void navigate({ to: to as "/" });
-  };
+    void navigate({ to: "/settings", search: { section: next } });
+  }
+
+  function closeSection() {
+    void navigate({ to: "/settings", search: {} });
+  }
+
+  function navTo(
+    to:
+      | "/desktop"
+      | "/analytics"
+      | "/system/sources"
+      | "/campaigns"
+      | "/offers",
+  ) {
+    haptic.selection();
+    void navigate({ to });
+  }
+
+  const observerStatus = observerQuery.isError
+    ? { label: "Недоступен", variant: "warning" as const }
+    : observerQuery.data?.is_scanning_enabled
+      ? { label: "Сканирует", variant: "neutral" as const }
+      : { label: "Остановлен", variant: "warning" as const };
+  const telegramStatus = telegramQuery.isError
+    ? { label: "Недоступен", variant: "warning" as const }
+    : telegramQuery.data?.is_authorized
+      ? diagnosticsQuery.data?.outbox_state === "degraded"
+        ? { label: "Деградация", variant: "failed" as const }
+        : { label: "Настроен", variant: "neutral" as const }
+      : { label: "Не настроен", variant: "warning" as const };
+  const visionStatus = visionQuery.isError
+    ? { label: "Недоступен", variant: "warning" as const }
+    : visionQuery.data?.channel_status === "READY"
+      ? { label: "Готов", variant: "neutral" as const }
+      : visionQuery.data?.channel_status === "DEGRADED"
+        ? { label: "Деградация", variant: "warning" as const }
+        : visionQuery.data?.channel_status === "UNAVAILABLE"
+          ? { label: "Недоступен", variant: "warning" as const }
+          : { label: "Не подтверждён", variant: "neutral" as const };
 
   return (
-    <div className="flex flex-col min-h-full pb-20">
+    <div className="flex min-h-full flex-col pb-[max(96px,var(--tg-content-safe-bottom,0px),env(safe-area-inset-bottom))]">
       <MiniHeader
         eyebrowNum="05"
-        eyebrow="SYSTEM · КОНФИГУРАЦИЯ"
-        title="Настройки"
+        eyebrow="СИСТЕМА · КОНФИГУРАЦИЯ"
+        title="Ещё"
       />
 
-      <div className="flex flex-col gap-5 p-4">
-        {/* ── РАЗДЕЛЫ ── */}
-        <section>
-          <Eyebrow num="05" className="mb-2.5 flex">
-            РАЗДЕЛЫ
-          </Eyebrow>
-          <div className="border border-[var(--hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)]">
+      <div className="flex flex-col gap-7 px-4 py-5">
+        {!canEdit ? (
+          <p
+            role="status"
+            className="m-0 border-y border-[var(--color-hairline)] py-3 text-[14px] leading-5 text-warning"
+          >
+            Этот запуск доступен только для чтения. Изменения настроек разрешены
+            владельцу.
+          </p>
+        ) : null}
+
+        <section aria-labelledby="settings-controls-heading">
+          <h2 id="settings-controls-heading" className="m-0 mb-2.5">
+            <Eyebrow num="05" className="flex">
+              НАСТРОЙКИ
+            </Eyebrow>
+          </h2>
+          <div className="border-y border-[var(--color-hairline)]">
+            <SectionButton
+              label="Отображение"
+              detail={
+                !canEdit
+                  ? "Только владелец"
+                  : displayPreferenceQuery.isPending
+                    ? "Загрузка…"
+                    : (displayPreferenceQuery.data?.timezone_name ??
+                      "Недоступно")
+              }
+              status={
+                <Badge
+                  variant={
+                    !canEdit || displayPreferenceQuery.isError
+                      ? "warning"
+                      : "neutral"
+                  }
+                >
+                  {!canEdit
+                    ? "Только owner"
+                    : displayPreferenceQuery.isError
+                      ? "Недоступно"
+                      : "Web + TMA"}
+                </Badge>
+              }
+              onClick={() => openSection("display")}
+            />
+            <SectionButton
+              label="Observer"
+              detail="Интервал, теги, allowlist и scan-now"
+              status={
+                <Badge variant={observerStatus.variant}>
+                  {observerStatus.label}
+                </Badge>
+              }
+              onClick={() => openSection("observer")}
+            />
+            <SectionButton
+              label="Telegram"
+              detail="Бот, получатели, preferences и диагностика"
+              status={
+                <Badge variant={telegramStatus.variant}>
+                  {telegramStatus.label}
+                </Badge>
+              }
+              onClick={() => openSection("telegram")}
+            />
+            <SectionButton
+              label="Vision и desktop"
+              detail="Профиль, секретный токен и переподключение"
+              status={
+                <Badge variant={visionStatus.variant}>
+                  {visionStatus.label}
+                </Badge>
+              }
+              onClick={() => openSection("vision")}
+              noBorder
+            />
+          </div>
+        </section>
+
+        <section aria-labelledby="settings-routes-heading">
+          <h2 id="settings-routes-heading" className="m-0 mb-2.5">
+            <Eyebrow className="flex">РАЗДЕЛЫ</Eyebrow>
+          </h2>
+          <div className="border-y border-[var(--color-hairline)]">
             <NavRow
-              icon={<MonitorUp size={16} strokeWidth={1.5} />}
+              icon={<MonitorUp size={17} />}
               label="Рабочий стол"
               onClick={() => navTo("/desktop")}
             />
             <NavRow
-              icon={<BarChart3 size={16} strokeWidth={1.5} />}
-              label="Статистика дня"
-              onClick={() => navTo("/stats")}
+              icon={<BarChart3 size={17} />}
+              label="Аналитика"
+              onClick={() => navTo("/analytics")}
             />
             <NavRow
-              icon={<Heart size={16} strokeWidth={1.5} />}
-              label="Здоровье воркеров"
-              onClick={() => navTo("/health")}
+              icon={<Heart size={17} />}
+              label="Источники и воркеры"
+              onClick={() => navTo("/system/sources")}
             />
             <NavRow
-              icon={<FileCode size={16} strokeWidth={1.5} />}
-              label="Скрипты кампаний"
-              onClick={() => navTo("/scripts")}
+              icon={<ListChecks size={17} />}
+              label="Запуски кампаний"
+              onClick={() => navTo("/campaigns")}
             />
             <NavRow
-              icon={<FileText size={16} strokeWidth={1.5} />}
+              icon={<FileText size={17} />}
               label="Офферы"
               onClick={() => navTo("/offers")}
               noBorder
             />
           </div>
         </section>
-
-        {/* ── Конфигурационные секции ── */}
-        <ObserverSection showToast={showToast} />
-        <TelegramSection />
-        <VisionSection />
-        <CabinetAutostartSection showToast={showToast} />
       </div>
 
-      {/* Toast */}
-      {toast && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={cn(
-            "fixed bottom-[80px] left-4 right-4 max-w-[440px] mx-auto z-50 px-4 py-3 text-[13px] border rounded-[var(--radius-2)]",
-            toast.ok
-              ? "bg-success-bg text-success border-success"
-              : "bg-danger-bg text-danger border-danger",
-          )}
-        >
-          {toast.text}
-        </div>
-      )}
+      <Sheet
+        open={section !== undefined}
+        onClose={closeSection}
+        eyebrow="СИСТЕМА · НАСТРОЙКИ"
+        title={section ? SECTION_TITLES[section] : "Настройки"}
+      >
+        {section === "display" ? <DisplaySettings canEdit={canEdit} /> : null}
+        {section === "observer" ? <ObserverSettings canEdit={canEdit} /> : null}
+        {section === "telegram" ? <TelegramSettings canEdit={canEdit} /> : null}
+        {section === "vision" ? <VisionSettings canEdit={canEdit} /> : null}
+      </Sheet>
     </div>
+  );
+}
+
+function SectionButton({
+  label,
+  detail,
+  status,
+  onClick,
+  noBorder = false,
+}: {
+  label: string;
+  detail: string;
+  status: React.ReactNode;
+  onClick: () => void;
+  noBorder?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex min-h-[64px] w-full items-center gap-3 py-3 text-left active:bg-bg-2 ${
+        noBorder ? "" : "border-b border-[var(--color-hairline)]"
+      }`}
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block text-[15px] font-medium text-bg-11">
+          {label}
+        </span>
+        <span className="mt-1 block break-words text-[13px] leading-5 text-bg-8">
+          {detail}
+        </span>
+      </span>
+      <span className="flex max-w-[45%] shrink-0 items-center gap-2">
+        {status}
+        <ChevronRight size={16} aria-hidden="true" className="text-bg-8" />
+      </span>
+    </button>
+  );
+}
+
+function NavRow({
+  icon,
+  label,
+  onClick,
+  noBorder = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  noBorder?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex min-h-11 w-full items-center gap-3 py-2.5 text-left active:bg-bg-2 ${
+        noBorder ? "" : "border-b border-[var(--color-hairline)]"
+      }`}
+    >
+      <span className="shrink-0 text-bg-9" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="flex-1 text-[14px] text-bg-11">{label}</span>
+      <ChevronRight
+        size={16}
+        aria-hidden="true"
+        className="shrink-0 text-bg-8"
+      />
+    </button>
   );
 }

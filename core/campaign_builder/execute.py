@@ -3,11 +3,11 @@
 
 Раздел 4 дизайна: порядок строго campaign → adsets → upload(MediaUploader) →
 creatives → ads через core/meta_api/client.execute_graph_call(ad_account_id=act).
-Канал — ExecuteGraphCall изнутри Vision-сессии (как fb_launch.py), медиа — MediaUploader.
+Канал — ExecuteGraphCall изнутри точной Vision-сессии, медиа — MediaUploader.
 
 Money-инварианты:
-- статусы объектов по launch_state (кампания всегда PAUSED; дети ACTIVE при
-  campaign_paused, PAUSED при all_paused) — кривой запуск не тратит;
+- campaign, ad set и ad создаются только PAUSED; спека с иным статусом
+  отклоняется до первого Graph POST;
 - каждый вызов адресует ЯВНО заданный кабинет (ad_account_id=cfg.account.act) —
   не «активную вкладку Vision», надёжно для мульти-кабинета;
 - последовательное создание (не Batch): при падении на середине знаем точно, какие
@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from core.campaign_builder.builder import (
+    ALL_PAUSED_CREATION_POLICY,
+    CREATED_OBJECT_STATUS,
     CampaignSpec,
     CampaignSpec_Block,
     image_creative_body,
@@ -39,7 +41,7 @@ from core.campaign_builder.uniquify import (
     build_uniquification_plan,
     uniquify_concepts,
 )
-from core.meta_api.errors import TemporaryError
+from core.meta_api.errors import BrowserReadinessRejectedError, TemporaryError
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +77,9 @@ class _Uploader(Protocol):
         self, ad_account_id: str, video_bytes: bytes, *, filename: str = "upload.mp4"
     ) -> str: ...
 
-    async def wait_video_ready(self, video_id: str) -> bool: ...
+    async def wait_video_ready(self, video_id: str, *, ad_account_id: str) -> bool: ...
 
-    async def get_video_thumbnail_url(self, video_id: str) -> str: ...
+    async def get_video_thumbnail_url(self, video_id: str, *, ad_account_id: str) -> str: ...
 
 
 # ====================== ошибки ======================
@@ -116,6 +118,34 @@ class PartialCreateError(CampaignExecutionError):
         self.failed_step = failed_step
         # PartialCreateError по определению означает «необратимый шаг достигнут».
         self.irreversible_attempted = True
+
+
+def _assert_all_paused_spec(spec: CampaignSpec) -> None:
+    """Reject a non-canonical creation plan before the first external write."""
+    if spec.creation_policy != ALL_PAUSED_CREATION_POLICY:
+        raise CampaignExecutionError("creation_policy must be all_paused")
+
+    for block in spec.campaigns:
+        statuses = [
+            (f"campaign[{block.key}]", block.status),
+            (f"campaign[{block.key}].body", block.body.get("status")),
+        ]
+        for adset_index, adset in enumerate(block.adsets):
+            statuses.extend(
+                (
+                    (f"campaign[{block.key}].adset[{adset_index}]", adset.status),
+                    (f"campaign[{block.key}].adset[{adset_index}].body", adset.body.get("status")),
+                )
+            )
+            statuses.extend(
+                (f"campaign[{block.key}].adset[{adset_index}].ad[{ad_index}]", ad.status)
+                for ad_index, ad in enumerate(adset.ads)
+            )
+        for object_path, status in statuses:
+            if status != CREATED_OBJECT_STATUS:
+                raise CampaignExecutionError(
+                    f"{object_path}: creation status must be {CREATED_OBJECT_STATUS}"
+                )
 
 
 # ====================== результат ======================
@@ -276,10 +306,12 @@ async def _execute_block(
     # С этого момента любой сбой = необратимый (см. classify_execution_error).
     state.stage = "creating"
     state.campaign_create_attempted = True
+    campaign_payload = dict(spec_block.body)
+    campaign_payload["status"] = CREATED_OBJECT_STATUS
     resp = await client.execute_graph_call(
         method="POST",
         endpoint=f"/{act}/campaigns",
-        body_json=spec_block.body,
+        body_json=campaign_payload,
         ad_account_id=act,
     )
     campaign_id = _extract_id(resp, what="campaign")
@@ -292,6 +324,7 @@ async def _execute_block(
     for adset_index, spec_adset in enumerate(spec_block.adsets):
         body = dict(spec_adset.body)
         body["campaign_id"] = campaign_id
+        body["status"] = CREATED_OBJECT_STATUS
         resp = await client.execute_graph_call(
             method="POST",
             endpoint=f"/{act}/adsets",
@@ -322,10 +355,10 @@ async def _execute_block(
                 # отклонит adcreative по «video is still being processed» и авто-кадр
                 # ещё недоступен → PartialCreateError → orphan-залив. Best-effort: по
                 # таймауту не валим залив, даём Meta шанс.
-                await uploader.wait_video_ready(video_id)
+                await uploader.wait_video_ready(video_id, ad_account_id=act)
                 # Meta ТРЕБУЕТ миниатюру в video_data (subcode 1443226). Берём авто-кадр
                 # Meta (GET /{video_id}/thumbnails) → image_url. Появляется после ready.
-                thumb_url = await uploader.get_video_thumbnail_url(video_id)
+                thumb_url = await uploader.get_video_thumbnail_url(video_id, ad_account_id=act)
                 state.uploads_done += 1
                 await _emit(on_progress, state)
                 creative_body = video_creative_body(
@@ -355,13 +388,11 @@ async def _execute_block(
             if on_creative_created is not None:
                 await on_creative_created(ad.code, ad.media_kind, creative_id)
 
-            # ad: статус по launch_state (берём из spec-adset, он уже посчитан).
-            ad_status = spec_block.adsets[adset_index].status
             ad_body_payload = {
                 "name": ad.code,
                 "adset_id": adset_id,
                 "creative": {"creative_id": creative_id},
-                "status": ad_status,
+                "status": CREATED_OBJECT_STATUS,
             }
             resp = await client.execute_graph_call(
                 method="POST",
@@ -392,13 +423,14 @@ async def execute_campaign_spec(
 
     concepts_by_campaign — концепты на каждый блок (ключ == CampaignBlock.key).
     Порядок объектов: campaign → adsets → upload → creatives → ads (через spec).
-    Статусы по launch_state уже зашиты в spec (кампания PAUSED, дети по состоянию).
+    Все создаваемые объекты обязаны быть PAUSED; иной spec отклоняется до I/O.
 
     Ошибки:
     - PartialCreateError — если хоть один объект уже создан до падения (нужна чистка).
     - CampaignExecutionError — падение ДО создания любого объекта (можно ретраить,
       если transient — воркер решает по classify_execution_error на оригинале причины).
     """
+    _assert_all_paused_spec(spec)
     created = _empty_ids()
     state = _ProgressState(stage="creating")
 
@@ -476,6 +508,12 @@ def _raise_for_failure(
             created_ids=created,
             failed_step=failed_step,
         ) from cause
+    if isinstance(cause, BrowserReadinessRejectedError):
+        err = CampaignExecutionError(
+            f"browser readiness rejected before Meta I/O on step {failed_step!r}"
+        )
+        err.__cause__ = cause
+        raise err from cause
     if campaign_create_attempted:
         # ack-lost: POST campaign ушёл, ответа нет → возможен осиротевший объект.
         raise PartialCreateError(

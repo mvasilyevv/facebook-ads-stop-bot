@@ -1,5 +1,5 @@
 // H-5 (BA-1): VisionClient оборачивает fetch в AbortController с таймаутом —
-// зависший (но живой) Vision-процесс не должен вешать StartBrowser/Reconnect/Stop
+// зависший (но живой) Vision-процесс не должен вешать attach/reconnect/maintenance
 // навсегда. Проверяем: зависший fetch → reject по таймауту; успешный → данные.
 
 import { describe, it } from 'node:test';

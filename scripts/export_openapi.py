@@ -35,7 +35,8 @@ def main() -> None:
     # Собираем схему (FastAPI кэширует её после первого вызова)
     schema = app.openapi()
 
-    # Ищем endpoints без response_model — те у кого нет 200-ответа с $ref или schema
+    # Ищем success-endpoints без типизированного тела. 202 с response_model и
+    # намеренные 204 No Content являются полными OpenAPI-контрактами.
     paths = schema.get("paths", {})
     no_response_model: list[str] = []
     for path, path_item in sorted(paths.items()):
@@ -43,13 +44,21 @@ def main() -> None:
             if method not in {"get", "post", "put", "patch", "delete"}:
                 continue
             responses = operation.get("responses", {})
-            ok = responses.get("200") or responses.get("201")
-            if not ok:
+            successes = {
+                str(code): response
+                for code, response in responses.items()
+                if str(code).isdigit() and 200 <= int(code) < 300
+            }
+            if not successes:
                 no_response_model.append(f"{method.upper()} {path}")
                 continue
-            content = ok.get("content", {})
-            has_schema = any("schema" in media for media in content.values())
-            if not has_schema:
+            has_schema = any(
+                "schema" in media
+                for response in successes.values()
+                for media in response.get("content", {}).values()
+            )
+            only_no_content = set(successes) == {"204"}
+            if not has_schema and not only_no_content:
                 no_response_model.append(f"{method.upper()} {path}")
 
     # Сохраняем
@@ -66,7 +75,7 @@ def main() -> None:
         for item in no_response_model:
             print(f"  • {item}")
     else:
-        print("\nВсе endpoints имеют response_model — типы будут полными.")
+        print("\nВсе success-контракты имеют типизированное тело или явный 204 No Content.")
 
 
 if __name__ == "__main__":

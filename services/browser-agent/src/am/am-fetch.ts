@@ -3,6 +3,7 @@
 // (правило Meta-доступа). Не скроллим, не парсим DOM. См. docs/am_tabular_scanner_plan.md §2.
 
 import type { Page } from 'playwright';
+import { randomUUID } from 'crypto';
 import {
   parseAmTabular,
   parseLightList,
@@ -23,6 +24,11 @@ import {
 } from './am-config.js';
 import { adsManagerColumnsQs } from './am-columns-preset.js';
 import type { ScannedAdRow } from '../types.js';
+import {
+  bindAbortSignalToPage,
+  clearInPageFetchOperation,
+  raceWithAbort,
+} from '../in-page-abort.js';
 
 export interface GraphContext {
   accessToken: string;
@@ -43,9 +49,25 @@ interface Filter {
 
 // Сниф access_token/act_id/версии из исходящих запросов страницы к adsmanager-graph.
 // Страница и так шлёт light_*/am_tabular при загрузке/refresh → токен берём оттуда (без httpx).
-export async function extractGraphContext(page: Page, timeoutMs = 15000): Promise<GraphContext> {
+export async function extractGraphContext(
+  page: Page,
+  timeoutMs = 15000,
+  signal?: AbortSignal,
+): Promise<GraphContext> {
   return await new Promise<GraphContext>((resolve, reject) => {
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      page.off('request', onReq as never);
+      signal?.removeEventListener('abort', onAbort);
+      if (timer) clearTimeout(timer);
+    };
+    const settleReject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
     const onReq = (req: { url(): string }) => {
       try {
         const u = req.url();
@@ -54,8 +76,9 @@ export async function extractGraphContext(page: Page, timeoutMs = 15000): Promis
         if (!m) return;
         const token = new URL(u).searchParams.get('access_token');
         if (!token) return;
+        if (settled) return;
         settled = true;
-        page.off('request', onReq as never);
+        cleanup();
         resolve({
           accessToken: token,
           apiVersion: m[1],
@@ -66,44 +89,43 @@ export async function extractGraphContext(page: Page, timeoutMs = 15000): Promis
         /* ignore */
       }
     };
+    const onAbort = () => settleReject(new Error('am: graph context acquisition cancelled'));
     page.on('request', onReq as never);
-    setTimeout(() => {
-      if (settled) return;
-      page.off('request', onReq as never);
-      reject(new Error('am: не удалось извлечь access_token из сессии (нет запросов к adsmanager-graph)'));
+    signal?.addEventListener('abort', onAbort, { once: true });
+    timer = setTimeout(() => {
+      settleReject(new Error('am: не удалось извлечь access_token из сессии (нет запросов к adsmanager-graph)'));
     }, timeoutMs);
+    if (signal?.aborted) onAbort();
   });
 }
 
-// Кэш GraphContext: токен валиден всю сессию → сниффим ОДИН раз (на кабинет).
+// Кэш GraphContext: токен валиден всю сессию → сниффим ОДИН раз на кабинет.
 // am_tabular — живой REST, данные всегда актуальны; reload нужен только чтобы спровоцировать
 // запрос для снятия токена. С кэшем стационарный скан = только наши fetch'и, без reload.
-// Мульти-кабинет: ключ = session_id (legacy, без кабинета) либо `${session_id}:act_<id>` —
-// иначе вкладки разных кабинетов перезатирали бы друг другу контекст (MULTI_CABINET_PLAN.md).
+// Ключ всегда `${session_id}:act_<id>`: session-only context запрещён.
 const _graphContextCache = new Map<string, GraphContext>();
 
-// Ключ кэша GraphContext: с actId — per-кабинет, без — legacy per-session.
-function graphContextKey(sessionId: string, actId?: string): string {
-  return actId ? `${sessionId}:act_${actId}` : sessionId;
+function normalizedActId(actId: string): string {
+  const normalized = String(actId).replace(/^act_/, '').trim();
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error('am: explicit numeric ad account id is required');
+  }
+  return normalized;
 }
 
-export function invalidateGraphContext(sessionId: string, actId?: string): void {
+function graphContextKey(sessionId: string, actId: string): string {
+  return `${sessionId}:act_${normalizedActId(actId)}`;
+}
+
+export function invalidateGraphContext(sessionId: string, actId: string): void {
   _graphContextCache.delete(graphContextKey(sessionId, actId));
 }
 
 // Реконструировать URL кабинета Ads Manager.
-// С actId — детерминированно (кабинет известен из конфига, кэш не нужен).
-// Без actId — legacy self-heal: из закэшированного GraphContext; null, если контекст
-// ещё не сниффился — тогда переоткрытие на этом уровне невозможно.
-export function reconstructAdsManagerUrl(sessionId: string, actId?: string): string | null {
-  if (actId) {
-    return cabinetCampaignsUrl(actId);
-  }
-  const ctx = _graphContextCache.get(graphContextKey(sessionId));
-  if (!ctx) return null;
-  const actNum = ctx.actId.replace(/^act_/, '');
-  if (!actNum) return null;
-  return cabinetCampaignsUrl(actNum);
+// Explicit actId makes it deterministic; no cached/session-global fallback exists.
+export function reconstructAdsManagerUrl(sessionId: string, actId: string): string {
+  void sessionId;
+  return cabinetCampaignsUrl(normalizedActId(actId));
 }
 
 // URL вкладки кабинета: уровень кампаний + колонки пользователя (единый формат со
@@ -122,23 +144,24 @@ function cabinetCampaignsUrl(actId: string): string {
 export async function acquireGraphContext(
   page: Page,
   sessionId: string,
-  opts: { forceRefresh?: boolean; expectedActId?: string } = {},
+  opts: { expectedActId: string; forceRefresh?: boolean; signal?: AbortSignal },
 ): Promise<{ ctx: GraphContext; sniffed: boolean }> {
-  const key = graphContextKey(sessionId, opts.expectedActId);
+  const expectedActId = normalizedActId(opts.expectedActId);
+  const key = graphContextKey(sessionId, expectedActId);
   if (!opts.forceRefresh) {
     const cached = _graphContextCache.get(key);
     if (cached) return { ctx: cached, sniffed: false };
   }
-  const ctxPromise = extractGraphContext(page, 20000);
+  const ctxPromise = extractGraphContext(page, 20000, opts.signal);
   try {
-    await page.reload({ waitUntil: 'domcontentloaded' });
+    await raceWithAbort(page.reload({ waitUntil: 'domcontentloaded' }), opts.signal);
   } catch {
     /* ignore — listener всё равно может поймать запрос */
   }
   const ctx = await ctxPromise;
-  if (opts.expectedActId && ctx.actId !== `act_${opts.expectedActId}`) {
+  if (ctx.actId !== `act_${expectedActId}`) {
     throw new Error(
-      `am: вкладка открыта не на том кабинете (ожидался act_${opts.expectedActId}, ` +
+      `am: вкладка открыта не на том кабинете (ожидался act_${expectedActId}, ` +
         `снифф дал ${ctx.actId}) — скан кабинета прерван`,
     );
   }
@@ -196,10 +219,39 @@ function edgeUrl(
 // Отдаём __amError с диагностикой redirect/HTML, чтобы отличить разлогин от сетевого блипа:
 //   redirected/finalUrl — fetch увёл на login.php/checkpoint (сессия протухла);
 //   contentType/body — HTML вместо JSON тоже признак login-редиректа/заглушки.
-async function fetchJson(page: Page, url: string): Promise<Record<string, unknown>> {
-  return (await page.evaluate(async (u: string) => {
+interface AmFetchExecution {
+  signal?: AbortSignal;
+  operationId?: string;
+}
+
+async function fetchJson(
+  page: Page,
+  url: string,
+  execution: AmFetchExecution = {},
+): Promise<Record<string, unknown>> {
+  if (execution.signal?.aborted) {
+    throw new Error('am: graph fetch cancelled');
+  }
+  const result = (await page.evaluate(async (args: { url: string; operationId?: string }) => {
+    const root = globalThis as typeof globalThis & {
+      __fbAgentFetchAbort?: {
+        controllers: Map<string, Set<AbortController>>;
+        cancelled: Set<string>;
+      };
+    };
+    const state = root.__fbAgentFetchAbort ??= {
+      controllers: new Map<string, Set<AbortController>>(),
+      cancelled: new Set<string>(),
+    };
+    const controller = new AbortController();
+    if (args.operationId) {
+      const controllers = state.controllers.get(args.operationId) ?? new Set<AbortController>();
+      controllers.add(controller);
+      state.controllers.set(args.operationId, controllers);
+      if (state.cancelled.has(args.operationId)) controller.abort('grpc_cancelled');
+    }
     try {
-      const r = await fetch(u, { credentials: 'include' });
+      const r = await fetch(args.url, { credentials: 'include', signal: controller.signal });
       const text = await r.text();
       try {
         return JSON.parse(text);
@@ -214,9 +266,23 @@ async function fetchJson(page: Page, url: string): Promise<Record<string, unknow
         };
       }
     } catch (e) {
-      return { __amError: true, message: String(e) };
+      return {
+        __amError: true,
+        __amCancelled: controller.signal.aborted,
+        message: String(e),
+      };
+    } finally {
+      if (args.operationId) {
+        const controllers = state.controllers.get(args.operationId);
+        controllers?.delete(controller);
+        if (controllers?.size === 0) state.controllers.delete(args.operationId);
+      }
     }
-  }, url)) as Record<string, unknown>;
+  }, { url, operationId: execution.operationId })) as Record<string, unknown>;
+  if (execution.signal?.aborted || result.__amCancelled) {
+    throw new Error('am: graph fetch cancelled');
+  }
+  return result;
 }
 
 // Facebook OAuth-subcodes, которые означают именно РАЗЛОГИН / чекпоинт (нужен ре-логин
@@ -297,12 +363,13 @@ async function fetchAllAmTabular(
   ctx: GraphContext,
   filtering: Filter[],
   datePreset: string,
+  execution: AmFetchExecution = {},
 ): Promise<{ rows: AmRow[]; error?: string; authExpired?: boolean; loginRequired?: boolean }> {
   const rows: AmRow[] = [];
   let after: string | undefined;
   for (let i = 0; i < 20; i++) {
     const body = await retryTransient(
-      () => fetchJson(page, amTabularUrl(ctx, filtering, datePreset, after)),
+      () => fetchJson(page, amTabularUrl(ctx, filtering, datePreset, after), execution),
       {
         delaysMs: AM_TABULAR_RETRY_DELAYS_MS,
         isTransient: (b) => Boolean((b as Record<string, unknown>)?.__amError),
@@ -347,11 +414,16 @@ async function fetchAllEdge(
   fields: string[],
   filtering: Filter[],
   extraParams?: Record<string, string>,
+  execution: AmFetchExecution = {},
 ): Promise<{ items: LightMeta[]; error?: string; loginRequired?: boolean }> {
   const out: LightMeta[] = [];
   let after: string | undefined;
   for (let i = 0; i < 20; i++) {
-    const body = await fetchJson(page, edgeUrl(ctx, origin, edge, fields, filtering, after, extraParams));
+    const body = await fetchJson(
+      page,
+      edgeUrl(ctx, origin, edge, fields, filtering, after, extraParams),
+      execution,
+    );
     // Разлогин/чекпоинт на edge-запросе (имена/иерархия) — тот же money-критичный сигнал.
     if (isLoginRequiredResponse(body)) {
       return {
@@ -393,6 +465,7 @@ async function fetchVideoPosters(
   page: Page,
   ctx: GraphContext,
   videoIds: string[],
+  execution: AmFetchExecution = {},
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const CHUNK = 50; // держим URL короче лимита
@@ -403,7 +476,7 @@ async function fetchVideoPosters(
     qs.set('ids', ids.join(','));
     qs.set('fields', 'thumbnails{uri,is_preferred,width,height}');
     const url = `${GRAPH_REST_ORIGIN}/${ctx.apiVersion}/?${qs.toString()}`;
-    const body = await fetchJson(page, url);
+    const body = await fetchJson(page, url, execution);
     if (body?.__amError || body?.error) continue; // best-effort: чанк пропускаем
     for (const [vid, node] of Object.entries(body as Record<string, any>)) {
       if (vid.startsWith('__')) continue; // служебные ключи (__fb_trace_id__ и т.п.)
@@ -416,13 +489,18 @@ async function fetchVideoPosters(
 
 // Для видео-ад без image_url дотягиваем полноразмерный кадр из video node (in-place).
 // Возвращает число обогащённых ад'ов. Никогда не бросает — превью не money-критично.
-async function enrichVideoPosters(page: Page, ctx: GraphContext, items: LightMeta[]): Promise<number> {
+async function enrichVideoPosters(
+  page: Page,
+  ctx: GraphContext,
+  items: LightMeta[],
+  execution: AmFetchExecution = {},
+): Promise<number> {
   const need = items.filter((a) => !a.creativeImageUrl && a.videoId);
   if (!need.length) return 0;
   const videoIds = [...new Set(need.map((a) => a.videoId as string))];
   let posters: Map<string, string>;
   try {
-    posters = await fetchVideoPosters(page, ctx, videoIds);
+    posters = await fetchVideoPosters(page, ctx, videoIds, execution);
   } catch (e) {
     console.warn(`[am] video poster fetch упал (best-effort, оставляю thumbnail): ${String(e)}`);
     return 0;
@@ -473,22 +551,49 @@ export async function listOwnerCampaigns(
   page: Page,
   ownerTag: string,
   sessionId: string,
+  adAccountId: string,
+  signal?: AbortSignal,
 ): Promise<Array<{ id: string; name: string }>> {
-  // acquireGraphContext: cache-hit по sessionId (токен из последнего скана observer'а),
-  // при miss — сам сделает reload для сниффа. Это надёжнее extractGraphContext, который
-  // на статичной странице падал «нет запросов к adsmanager-graph».
-  const { ctx } = await acquireGraphContext(page, sessionId);
-  const campRes = await fetchAllEdge(page, ctx, GRAPH_REST_ORIGIN, 'campaigns', ['id', 'name'], []);
-  const items = ownerTag
-    ? campRes.items.filter((c) => campaignMatchesOwner(c.name ?? '', ownerTag))
-    : campRes.items;
-  return items.map((c) => ({ id: c.id, name: c.name ?? '' }));
+  const operationId = `list-campaigns:${sessionId}:${adAccountId}:${randomUUID()}`;
+  const abortBinding = bindAbortSignalToPage(page, operationId, signal);
+  try {
+    const { ctx } = await acquireGraphContext(page, sessionId, {
+      expectedActId: adAccountId,
+      signal,
+    });
+    const campRes = await fetchAllEdge(
+      page,
+      ctx,
+      GRAPH_REST_ORIGIN,
+      'campaigns',
+      ['id', 'name'],
+      [],
+      undefined,
+      { signal, operationId },
+    );
+    const items = ownerTag
+      ? campRes.items.filter((c) => campaignMatchesOwner(c.name ?? '', ownerTag))
+      : campRes.items;
+    return items.map((c) => ({ id: c.id, name: c.name ?? '' }));
+  } finally {
+    abortBinding.dispose();
+    await clearInPageFetchOperation(page, operationId);
+  }
 }
 
 // Полный am-скан с самостоятельным извлечением токена (для standalone-вызовов/тестов).
-export async function runAmScan(page: Page, config: AmScanConfig): Promise<AmScanResult> {
-  const ctx = await extractGraphContext(page);
-  return runAmScanWithContext(page, ctx, config);
+export interface AmScanExecutionOptions {
+  signal?: AbortSignal;
+  operationId?: string;
+}
+
+export async function runAmScan(
+  page: Page,
+  config: AmScanConfig,
+  options: AmScanExecutionOptions = {},
+): Promise<AmScanResult> {
+  const ctx = await extractGraphContext(page, 15000, options.signal);
+  return runAmScanWithContext(page, ctx, config, options);
 }
 
 // am-скан с уже извлечённым GraphContext: метрики (am_tabular) + имена/статус (light_*) → ScannedAdRow[].
@@ -497,10 +602,37 @@ export async function runAmScanWithContext(
   page: Page,
   ctx: GraphContext,
   config: AmScanConfig,
+  options: AmScanExecutionOptions = {},
+): Promise<AmScanResult> {
+  const operationId = options.operationId ?? `am-scan:${randomUUID()}`;
+  const execution: AmFetchExecution = { signal: options.signal, operationId };
+  const abortBinding = bindAbortSignalToPage(page, operationId, options.signal);
+  try {
+    return await runAmScanWithContextInternal(page, ctx, config, execution);
+  } finally {
+    abortBinding.dispose();
+    await clearInPageFetchOperation(page, operationId);
+  }
+}
+
+async function runAmScanWithContextInternal(
+  page: Page,
+  ctx: GraphContext,
+  config: AmScanConfig,
+  execution: AmFetchExecution,
 ): Promise<AmScanResult> {
   // 0) Кампании (id+name) — ПЕРВЫМИ: нужны для резолва owner_tag → campaign.id (#3, вариант 3),
   //    чтобы am тянул сразу только свой скоуп, а не весь общий кабинет.
-  const campRes = await fetchAllEdge(page, ctx, GRAPH_REST_ORIGIN, 'campaigns', ['id', 'name'], []);
+  const campRes = await fetchAllEdge(
+    page,
+    ctx,
+    GRAPH_REST_ORIGIN,
+    'campaigns',
+    ['id', 'name'],
+    [],
+    undefined,
+    execution,
+  );
 
   // Эффективный скоуп: явный campaignIds, иначе резолв по owner_tag (имена кампаний → id своих).
   let campaignIds = config.campaignIds ?? [];
@@ -524,7 +656,13 @@ export async function runAmScanWithContext(
     error: amError,
     authExpired,
     loginRequired: amLoginRequired,
-  } = await fetchAllAmTabular(page, ctx, buildFiltering({ campaignIds }), config.datePreset);
+  } = await fetchAllAmTabular(
+    page,
+    ctx,
+    buildFiltering({ campaignIds }),
+    config.datePreset,
+    execution,
+  );
   const merged = mergeAmRows(amRows);
 
   // 2) Имена/статус ад'ов + adsets — тоже в скоупе (тянем только своё, не весь кабинет).
@@ -549,6 +687,7 @@ export async function runAmScanWithContext(
     // thumbnail_url по умолчанию ~64px → блюр в крупной карточке. 400px — чёткое
     // превью в drawer (для видео-крео, где image_url пуст). В таблице thumb мелкий.
     { thumbnail_width: '400', thumbnail_height: '400' },
+    execution,
   );
   const adsetRes = await fetchAllEdge(
     page,
@@ -557,12 +696,14 @@ export async function runAmScanWithContext(
     'adsets',
     ['id', 'name', 'promoted_object{pixel_id}', 'daily_budget', 'lifetime_budget', 'budget_remaining', 'learning_stage_info'],
     scopeFilter,
+    undefined,
+    execution,
   );
 
   // Видео-ад без image_url: дотянуть полноразмерный постер из video node (best-effort,
   // in-place правит adsRes.items[].creativeImageUrl). video_data.image_url у видео-крео
   // обычно пуст — единственный полноразмерный кадр живёт в thumbnails видео-объекта.
-  const postersResolved = await enrichVideoPosters(page, ctx, adsRes.items);
+  const postersResolved = await enrichVideoPosters(page, ctx, adsRes.items, execution);
 
   const campName = new Map(campRes.items.map((c) => [c.id, c.name ?? '']));
   // Полная карта адсетов с расширенными полями (пиксель/бюджеты/learning).
@@ -592,6 +733,7 @@ export async function runAmScanWithContext(
       adName: ad.name,
       effectiveStatus: ad.effectiveStatus,
       campaignId: ad.campaignId,
+      adsetId: ad.adsetId,
       campaignName: ad.campaignId ? campName.get(ad.campaignId) : undefined,
       adsetName: asMeta?.name,
       // Поля из ad (крео, превью):

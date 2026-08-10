@@ -13,7 +13,6 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import text
@@ -26,7 +25,7 @@ from core.adset_pro.ingest import (
     provider_event_id_from_raw,
 )
 from core.adset_pro.schemas import ConversionRow, PostbackEvent
-from core.config import get_settings
+from core.analytics import DEFAULT_ANALYTICS_WINDOW
 from core.metrics import (
     TRACKER_PROVIDER_RECONCILIATION_DRIFT,
     TRACKER_RECONCILIATION_RUNS,
@@ -34,7 +33,7 @@ from core.metrics import (
 
 logger = logging.getLogger(__name__)
 _AUDIT_KEY = "tracker_provider_reconciliation"
-DEFAULT_PROVIDER_LOOKBACK = timedelta(days=2)
+DEFAULT_PROVIDER_LOOKBACK = DEFAULT_ANALYTICS_WINDOW
 
 
 @dataclass(slots=True, frozen=True)
@@ -61,11 +60,6 @@ class ProviderReconciliationResult:
     drift_before: int = 0
     drift_after: int = 0
     error: str | None = None
-
-    @property
-    def ignored(self) -> int:
-        """Compatibility alias for the old audit/result vocabulary."""
-        return self.skipped
 
 
 def _fact_key(row: ConversionRow) -> tuple[str, str, str] | None:
@@ -105,11 +99,11 @@ async def _local_fact_keys(
         ).all()
     facts: set[tuple[str, str, str]] = set()
     for event_type, click_id, provider_id in rows:
-        canonical = canonical_event_type(str(event_type))
+        canonical = str(event_type)
         if canonical == "redeposit":
             if provider_id:
                 facts.add((canonical, str(click_id), str(provider_id)))
-        elif canonical:
+        elif canonical in {"registration", "ftd"}:
             facts.add((canonical, str(click_id), ""))
     return facts
 
@@ -180,11 +174,7 @@ async def reconcile_provider_events(
     owns_client = client is None
     try:
         if owns_client:
-            settings = get_settings()
-            api_key = await resolve_adsetpro_api_key(
-                engine,
-                fallback=settings.adsetpro_mcp_key.get_secret_value(),
-            )
+            api_key = await resolve_adsetpro_api_key(engine)
             if not api_key:
                 result = ProviderReconciliationResult(
                     status="unconfigured",
@@ -209,13 +199,17 @@ async def reconcile_provider_events(
             window_end=checked_at,
         )
         missing = len(provider_facts - local_before)
-        accepted = duplicates = skipped = row_errors = 0
+        accepted = duplicates = skipped = row_errors = incomplete_rows = 0
         first_row_error: str | None = None
+        first_incomplete_issue: str | None = None
         for row in rows:
             key = _fact_key(row)
             if key is None:
                 skipped += 1
                 continue
+            if row.issues:
+                incomplete_rows += 1
+                first_incomplete_issue = first_incomplete_issue or row.issues[0]
             event_type = key[0]
             provider_id = key[2] or provider_event_id_from_raw(row.raw)
             try:
@@ -225,7 +219,7 @@ async def reconcile_provider_events(
                         click_id=row.click_id.strip(),
                         fb_ad_id=row.fb_ad_id,
                         event_type=event_type,
-                        revenue=Decimal(row.revenue),
+                        revenue=row.revenue,
                         currency=row.currency,
                         received_at=checked_at,
                         occurred_at=row.occurred_at or checked_at,
@@ -248,8 +242,13 @@ async def reconcile_provider_events(
             window_start=window_start,
             window_end=checked_at,
         )
+        error_parts: list[str] = []
+        if row_errors:
+            error_parts.append(f"{row_errors} row(s): {first_row_error}")
+        if incomplete_rows:
+            error_parts.append(f"{incomplete_rows} incomplete row(s): {first_incomplete_issue}")
         result = ProviderReconciliationResult(
-            status="partial" if row_errors else "ok",
+            status="partial" if error_parts else "ok",
             checked_at=checked_at,
             window_start=window_start,
             window_end=checked_at,
@@ -262,7 +261,7 @@ async def reconcile_provider_events(
             local_facts=len(local_after),
             drift_before=len(provider_facts.symmetric_difference(local_before)),
             drift_after=len(provider_facts.symmetric_difference(local_after)),
-            error=(f"{row_errors} row(s): {first_row_error}" if row_errors else None),
+            error="; ".join(error_parts) if error_parts else None,
         )
         await _write_audit_best_effort(engine, result)
         TRACKER_PROVIDER_RECONCILIATION_DRIFT.set(result.drift_after)

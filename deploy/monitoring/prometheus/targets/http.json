@@ -1,0 +1,10 @@
+[
+  {
+    "targets": ["https://app.adpulse.su/healthz"],
+    "labels": {"__meta_probe": "healthz"}
+  },
+  {
+    "targets": ["https://app.adpulse.su/readyz"],
+    "labels": {"__meta_probe": "readyz"}
+  }
+]

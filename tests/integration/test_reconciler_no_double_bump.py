@@ -38,9 +38,9 @@ async def clean_task_queue(pg_engine):
 async def test_canonical_reconcile_single_bump(pg_engine, clean_task_queue) -> None:
     task_id = await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=f"bump-{uuid.uuid4().hex[:8]}",
-        payload={"fb_ad_id": "12345"},
+        payload={"source": "test"},
         requested_by="test",
         max_attempts=5,
     )
@@ -82,9 +82,9 @@ async def test_canonical_reconcile_single_bump(pg_engine, clean_task_queue) -> N
 async def test_reconciler_worker_delegates_no_double_bump(pg_engine, clean_task_queue) -> None:
     task_id = await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=f"deleg-{uuid.uuid4().hex[:8]}",
-        payload={"fb_ad_id": "67890"},
+        payload={"source": "test"},
         requested_by="test",
     )
     assert task_id is not None
@@ -126,9 +126,9 @@ async def test_reconciler_second_run_no_bump_on_retrying(
 ) -> None:
     task_id = await create_task(
         pg_engine,
-        task_type="disable",
+        task_type="observer_scan",
         idempotency_key=f"twice-{uuid.uuid4().hex[:8]}",
-        payload={"fb_ad_id": "999"},
+        payload={"source": "test"},
         requested_by="test",
     )
     assert task_id is not None

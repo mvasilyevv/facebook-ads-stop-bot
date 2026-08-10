@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -15,33 +16,50 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+import core.observer.pipeline as observer_pipeline
 from core.observer.pipeline import process_scan_rows
 from core.scanner.models import ScannedAdRow
+
+pytestmark = pytest.mark.usefixtures("known_test_cabinet_timezones")
+
+
+_OBSERVER_NOTIFICATION_TABLES = (
+    "telegram_action_tokens",
+    "telegram_navigation_tokens",
+    "telegram_message_slots",
+    "notification_deliveries",
+    "notification_events",
+    "incidents",
+)
+_OBSERVER_DOMAIN_TABLES = (
+    "task_queue",
+    "alert_events",
+    "ad_metrics",
+    "ad_alert_state",
+    "tracker_click_state",
+    "fb_ads",
+    "fb_adsets",
+    "fb_campaigns",
+    "offer_rules",
+    "offers",
+)
+
+
+async def _delete_observer_owned_rows(pg_engine) -> None:
+    """Delete observer projections in dependency order for fixture isolation."""
+    async with pg_engine.begin() as conn:
+        for table_name in (*_OBSERVER_NOTIFICATION_TABLES, *_OBSERVER_DOMAIN_TABLES):
+            await conn.execute(text(f"DELETE FROM {table_name}"))
 
 
 @pytest_asyncio.fixture
 async def clean_observer_tables(pg_engine):
-    """Чистит catalog + observer-таблицы + task_queue до и после теста."""
-
-    async def _truncate():
-        async with pg_engine.begin() as conn:
-            for t in (
-                "task_queue",
-                "alert_events",
-                "ad_metrics",
-                "ad_alert_state",
-                "tracker_click_state",
-                "fb_ads",
-                "fb_adsets",
-                "fb_campaigns",
-                "offer_rules",
-                "offers",
-            ):
-                await conn.execute(text(f"DELETE FROM {t}"))
-
-    await _truncate()
-    yield
-    await _truncate()
+    """Clean observer domain and notification-plane projections around a test."""
+    await _delete_observer_owned_rows(pg_engine)
+    try:
+        yield
+    finally:
+        await _delete_observer_owned_rows(pg_engine)
 
 
 @pytest_asyncio.fixture
@@ -64,8 +82,8 @@ async def offer_kr2(pg_engine, clean_observer_tables):
         await conn.execute(
             text(
                 """
-                INSERT INTO offer_rules (offer_id, cpa_threshold)
-                VALUES (:oid, :cpa)
+                INSERT INTO offer_rules (offer_id, cpa_threshold, currency)
+                VALUES (:oid, :cpa, 'USD')
                 """
             ),
             {"oid": offer_id, "cpa": Decimal("10.00")},
@@ -88,6 +106,8 @@ def _make_row(
     """Фабрика ScannedAdRow с разумными дефолтами."""
     return ScannedAdRow(
         fb_ad_id=fb_ad_id,
+        campaign_id=f"9{fb_ad_id}",
+        adset_id=f"8{fb_ad_id}",
         campaign_name=campaign_name,
         adset_name=adset_name,
         ad_name=ad_name,
@@ -108,9 +128,194 @@ def _make_row(
     )
 
 
+async def _set_account_currency_observed_at(pg_engine, observed_at: datetime) -> None:
+    """Align durable currency evidence with an explicit historical scan clock."""
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE meta_account_snapshot "
+                "SET currency_observed_at = :observed_at "
+                "WHERE account_id = '123'"
+            ),
+            {"observed_at": observed_at},
+        )
+
+
+@pytest.mark.asyncio
+async def test_observer_cleanup_removes_durable_projection_residue(
+    pg_engine,
+    offer_kr2,
+) -> None:
+    """The shared cleanup path must remove domain and notification projections."""
+    row = _make_row(
+        fb_ad_id=f"230098{uuid.uuid4().int % 1_000_000:06d}",
+        spend=Decimal("25.00"),
+        cpc=Decimal("0.10"),
+    )
+    await process_scan_rows(
+        pg_engine,
+        ad_account_id="123",
+        rows=[row],
+        scan_id=799,
+    )
+
+    async with pg_engine.connect() as conn:
+        incident_count = await conn.scalar(text("SELECT COUNT(*) FROM incidents"))
+        event_count = await conn.scalar(text("SELECT COUNT(*) FROM notification_events"))
+        task_count = await conn.scalar(text("SELECT COUNT(*) FROM task_queue"))
+    assert incident_count and incident_count > 0
+    assert event_count and event_count > 0
+    assert task_count and task_count > 0
+
+    await _delete_observer_owned_rows(pg_engine)
+
+    async with pg_engine.connect() as conn:
+        residue = {
+            table_name: int(await conn.scalar(text(f"SELECT COUNT(*) FROM {table_name}")) or 0)
+            for table_name in (*_OBSERVER_NOTIFICATION_TABLES, *_OBSERVER_DOMAIN_TABLES)
+        }
+    assert residue == dict.fromkeys(residue, 0)
+
+
+@pytest.mark.asyncio
+async def test_warning_card_refreshes_only_after_25_percent_risk_growth(
+    pg_engine,
+    offer_kr2,
+) -> None:
+    fb_ad_id = f"230099{uuid.uuid4().int % 1_000_000:06d}"
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE offer_rules
+                SET warning_percent_of_stop = 50
+                WHERE offer_id = :offer_id
+                """
+            ),
+            {"offer_id": offer_kr2["offer_id"]},
+        )
+
+    try:
+        initial = _make_row(
+            fb_ad_id=fb_ad_id,
+            spend=Decimal("0.05"),
+            cpc=Decimal("0.090"),
+        )
+        below_threshold = _make_row(
+            fb_ad_id=fb_ad_id,
+            spend=Decimal("0.05"),
+            cpc=Decimal("0.105"),
+        )
+        above_threshold = _make_row(
+            fb_ad_id=fb_ad_id,
+            spend=Decimal("0.05"),
+            cpc=Decimal("0.145"),
+        )
+
+        await process_scan_rows(pg_engine, ad_account_id="123", rows=[initial], scan_id=801)
+        await process_scan_rows(pg_engine, ad_account_id="123", rows=[below_threshold], scan_id=802)
+
+        async with pg_engine.connect() as conn:
+            before = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT i.id, i.facts, i.facts->>'risk_ratio' AS risk_ratio,
+                               COUNT(e.id) AS event_count
+                        FROM incidents i
+                        LEFT JOIN notification_events e ON e.incident_id = i.id
+                        WHERE i.resource_id = :fb_ad_id
+                        GROUP BY i.id
+                        """
+                    ),
+                    {"fb_ad_id": fb_ad_id},
+                )
+            ).one()
+        assert before.risk_ratio is not None, before.facts
+        assert Decimal(str(before.risk_ratio)) == Decimal("1.125")
+        assert before.event_count == 1
+
+        await process_scan_rows(pg_engine, ad_account_id="123", rows=[above_threshold], scan_id=803)
+
+        async with pg_engine.connect() as conn:
+            after = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT i.facts->>'risk_ratio' AS risk_ratio,
+                               ARRAY_AGG(e.event_type ORDER BY e.created_at, e.event_type)
+                                   AS event_types
+                        FROM incidents i
+                        JOIN notification_events e ON e.incident_id = i.id
+                        WHERE i.id = :incident_id
+                        GROUP BY i.id
+                        """
+                    ),
+                    {"incident_id": before.id},
+                )
+            ).one()
+        assert Decimal(str(after.risk_ratio)) == Decimal("1.8125")
+        assert list(after.event_types) == [
+            "incident_warning",
+            "incident_warning_growth",
+        ]
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM telegram_action_tokens
+                    WHERE incident_id IN (
+                        SELECT id FROM incidents WHERE resource_id = :fb_ad_id
+                    )
+                    """
+                ),
+                {"fb_ad_id": fb_ad_id},
+            )
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM telegram_message_slots
+                    WHERE incident_id IN (
+                        SELECT id FROM incidents WHERE resource_id = :fb_ad_id
+                    )
+                    """
+                ),
+                {"fb_ad_id": fb_ad_id},
+            )
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM notification_deliveries
+                    WHERE event_id IN (
+                        SELECT e.id FROM notification_events e
+                        JOIN incidents i ON i.id = e.incident_id
+                        WHERE i.resource_id = :fb_ad_id
+                    )
+                    """
+                ),
+                {"fb_ad_id": fb_ad_id},
+            )
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM notification_events
+                    WHERE incident_id IN (
+                        SELECT id FROM incidents WHERE resource_id = :fb_ad_id
+                    )
+                    """
+                ),
+                {"fb_ad_id": fb_ad_id},
+            )
+            await conn.execute(
+                text("DELETE FROM incidents WHERE resource_id = :fb_ad_id"),
+                {"fb_ad_id": fb_ad_id},
+            )
+
+
 # Сценарий: новое объявление с нормой → upsert в каталог + INSERT метрик + ad_alert_state='normal'
 @pytest.mark.asyncio
-async def test_new_ad_with_normal_metrics(pg_engine, offer_kr2) -> None:
+async def test_new_ad_with_normal_metrics(pg_engine, offer_kr2, monkeypatch) -> None:
     # Полная воронка; депозиты теперь только из проекции
     # AdSet.pro: каждый click должен иметь registration + FTD.
     row = _make_row(
@@ -127,21 +332,30 @@ async def test_new_ad_with_normal_metrics(pg_engine, offer_kr2) -> None:
                 INSERT INTO tracker_click_state
                     (id, source, click_id, ad_id, fb_ad_id, attribution_status,
                      registration, ftd, confirmed_deposit, registration_at, ftd_at,
-                     confirmed_deposit_at, ftd_revenue, redeposits, redeposit_revenue,
+                     confirmed_deposit_at, redeposits,
                      last_event_at, version, created_at, updated_at)
                 VALUES
                     (gen_random_uuid(), 'adsetpro', :c1, NULL, :fb, 'matched_direct',
-                     true, true, true, now(), now(), now(), 10, 0, 0,
+                     true, true, true, now(), now(), now(), 0,
                      now(), 1, now(), now()),
                     (gen_random_uuid(), 'adsetpro', :c2, NULL, :fb, 'matched_direct',
-                     true, true, true, now(), now(), now(), 10, 0, 0,
+                     true, true, true, now(), now(), now(), 0,
                      now(), 1, now(), now())
                 """
             ),
             {"fb": row.fb_ad_id, "c1": f"{row.fb_ad_id}-d1", "c2": f"{row.fb_ad_id}-d2"},
         )
 
-    result = await process_scan_rows(pg_engine, rows=[row], scan_id=1)
+    class HostClockFiveMinutesBehind(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - timedelta(minutes=5)
+
+    # Regression: tracker evidence is timestamped by PostgreSQL. A lagging app
+    # host must not move the exclusive tracker window_end behind a committed
+    # deposit and trigger a false auto-stop.
+    monkeypatch.setattr(observer_pipeline, "datetime", HostClockFiveMinutesBehind)
+    result = await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1)
 
     assert result.rows_total == 1
     assert result.rows_with_offer == 1
@@ -193,7 +407,7 @@ async def test_spend_no_deposit_triggers_stop_and_disable_task(pg_engine, offer_
         cpc=Decimal("0.10"),
     )
 
-    result = await process_scan_rows(pg_engine, rows=[row], scan_id=42)
+    result = await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=42)
 
     assert result.alerts_stop + result.alerts_warning >= 1
 
@@ -205,13 +419,20 @@ async def test_spend_no_deposit_triggers_stop_and_disable_task(pg_engine, offer_
             )
         ).first()
         assert st[0] in ("warning_sent", "stop_sent")
+        metric_currency, metric_spend = (
+            await conn.execute(
+                text("SELECT currency, spend FROM ad_metrics ORDER BY cycle_ts DESC LIMIT 1")
+            )
+        ).one()
+        assert metric_currency == "USD"
+        assert metric_spend == Decimal("20.000")
 
         # Если STOP — есть запись в alert_events с правильным stage и scan_id
         if st[0] == "stop_sent":
             evt = (
                 await conn.execute(
                     text(
-                        "SELECT stage, state, scan_id, matched_rule_codes "
+                        "SELECT stage, state, scan_id, matched_rule_codes, metrics_json "
                         "FROM alert_events ORDER BY created_at DESC LIMIT 1"
                     )
                 )
@@ -220,9 +441,36 @@ async def test_spend_no_deposit_triggers_stop_and_disable_task(pg_engine, offer_
             assert evt[1] == "stop_sent"
             assert evt[2] == 42
             assert isinstance(evt[3], list) and len(evt[3]) > 0
+            assert evt[4]["currency"] == "USD"
 
-            # И обязательно meta_api_mutation pause_ad task (авто-стоп теперь через
-            # Marketing API, DOM disable_worker удалён) с правильным target_id.
+            incident, notification = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT incident.facts, event.facts
+                        FROM incidents AS incident
+                        JOIN notification_events AS event
+                          ON event.incident_id = incident.id
+                        WHERE incident.resource_id = :fb_ad_id
+                        ORDER BY event.created_at DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"fb_ad_id": row.fb_ad_id},
+                )
+            ).one()
+            assert incident["currency"] == "USD"
+            assert incident["currency_state"] == "confirmed"
+            rendered_facts = " ".join(
+                [
+                    str(notification.get("summary") or ""),
+                    *(str(line) for line in notification.get("lines") or []),
+                ]
+            )
+            assert "USD" in rendered_facts
+            assert "$" not in rendered_facts
+
+            # И обязательно meta_api_mutation pause_ad task с правильным target_id.
             task = (
                 await conn.execute(
                     text(
@@ -239,6 +487,85 @@ async def test_spend_no_deposit_triggers_stop_and_disable_task(pg_engine, offer_
             assert task[3] == "bot_auto_stop"
 
 
+@pytest.mark.asyncio
+async def test_kwd_derived_money_metrics_round_trip_six_decimals(
+    pg_engine,
+    offer_kr2,
+) -> None:
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE meta_account_snapshot
+                SET currency = 'KWD',
+                    currency_observed_at = NOW()
+                WHERE account_id = '123'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE offer_rules
+                SET cpa_threshold = 10.125,
+                    currency = 'KWD'
+                WHERE offer_id = :offer_id
+                """
+            ),
+            {"offer_id": offer_kr2["offer_id"]},
+        )
+
+    row = replace(
+        _make_row(
+            fb_ad_id=f"230077{uuid.uuid4().int % 1_000_000:06d}",
+            spend=Decimal("0.001"),
+            leads=1,
+            registrations=1,
+            cpc=Decimal("0.000499"),
+        ),
+        cost_per_result=Decimal("0.000501"),
+        cpm=Decimal("0.000502"),
+        cost_per_lead=Decimal("0.000503"),
+        cost_per_registration=Decimal("0.000504"),
+        cost_per_landing_page_view=Decimal("0.000505"),
+    )
+
+    result = await process_scan_rows(
+        pg_engine,
+        ad_account_id="123",
+        rows=[row],
+        scan_id=420,
+    )
+
+    assert result.row_errors == []
+    async with pg_engine.connect() as conn:
+        stored = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT cpc,
+                           cost_per_result,
+                           cpm,
+                           cost_per_lead,
+                           cost_per_registration,
+                           cost_per_landing_page_view
+                    FROM ad_metrics
+                    ORDER BY cycle_ts DESC
+                    LIMIT 1
+                    """
+                )
+            )
+        ).one()
+    assert tuple(stored) == (
+        Decimal("0.000499"),
+        Decimal("0.000501"),
+        Decimal("0.000502"),
+        Decimal("0.000503"),
+        Decimal("0.000504"),
+        Decimal("0.000505"),
+    )
+
+
 # Сценарий: повторный scan того же объявления — НЕ создаёт дубли disable task'и (idempotency)
 @pytest.mark.asyncio
 async def test_repeated_stop_does_not_duplicate_disable_task(pg_engine, offer_kr2) -> None:
@@ -251,14 +578,14 @@ async def test_repeated_stop_does_not_duplicate_disable_task(pg_engine, offer_kr
     )
 
     # Первый цикл — должен попасть в STOP
-    await process_scan_rows(pg_engine, rows=[row], scan_id=1)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1)
     # Второй цикл с теми же данными — НЕ должен дублировать
-    await process_scan_rows(pg_engine, rows=[row], scan_id=2)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=2)
 
     async with pg_engine.connect() as conn:
         n_tasks = (await conn.execute(text("SELECT COUNT(*) FROM task_queue"))).scalar()
         n_alerts = (await conn.execute(text("SELECT COUNT(*) FROM alert_events"))).scalar()
-        # одна disable задача (idempotency_key включает open_state_token)
+        # одна pause-задача (idempotency_key включает open_state_token)
         assert n_tasks == 1
         # один alert event — повторный STOP не дублируется (FSM stop_sent → stop_sent без emit)
         assert n_alerts == 1
@@ -272,8 +599,9 @@ async def test_offline_ad_syncs_stop_sent_to_disabled(pg_engine, offer_kr2) -> N
     from core.observer.writers import mark_disabled_when_offline
 
     # 1) цикл со STOP → ад в stop_sent
-    row = _make_row(spend=Decimal("25.0"), cpc=Decimal("0.10"))
-    await process_scan_rows(pg_engine, rows=[row], scan_id=1)
+    fb_ad_id = f"230077{uuid.uuid4().int % 1_000_000:06d}"
+    row = _make_row(fb_ad_id=fb_ad_id, spend=Decimal("25.0"), cpc=Decimal("0.10"))
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1)
 
     async with pg_engine.connect() as conn:
         ad_id = (await conn.execute(text("SELECT id FROM fb_ads LIMIT 1"))).scalar()
@@ -298,10 +626,201 @@ async def test_offline_ad_syncs_stop_sent_to_disabled(pg_engine, offer_kr2) -> N
     assert await mark_disabled_when_offline(pg_engine, ad_id=ad_id) is True
     async with pg_engine.connect() as conn:
         st = (await conn.execute(text("SELECT alert_state FROM ad_alert_state LIMIT 1"))).scalar()
+        sync_events = await conn.scalar(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM notification_events
+                WHERE event_type = 'worker_sync_disabled'
+                  AND facts->>'summary' = :summary
+                """
+            ),
+            {"summary": f"{fb_ad_id} подтверждено OFF в Meta"},
+        )
     assert st == "disabled"
+    assert sync_events == 1
 
     # 4) идемпотентность: повторный вызов на disabled → no-op (False)
     assert await mark_disabled_when_offline(pg_engine, ad_id=ad_id) is False
+
+
+@pytest.mark.asyncio
+async def test_offline_sync_rolls_back_state_when_notification_projection_fails(
+    pg_engine,
+    offer_kr2,
+    monkeypatch,
+) -> None:
+    import core.observer.writers as writers
+
+    fb_ad_id = f"230076{uuid.uuid4().int % 1_000_000:06d}"
+    await process_scan_rows(
+        pg_engine,
+        ad_account_id="123",
+        rows=[_make_row(fb_ad_id=fb_ad_id, spend=Decimal("25.0"), cpc=Decimal("0.10"))],
+        scan_id=1,
+    )
+    async with pg_engine.begin() as conn:
+        ad_id = await conn.scalar(
+            text("SELECT id FROM fb_ads WHERE fb_ad_id = :fb_ad_id"),
+            {"fb_ad_id": fb_ad_id},
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE ad_alert_state
+                SET last_transition_at = NOW() - INTERVAL '20 minutes'
+                WHERE ad_id = :ad_id
+                """
+            ),
+            {"ad_id": ad_id},
+        )
+
+    async def fail_projection(*_args, **_kwargs) -> bool:
+        raise RuntimeError("notification projection failed")
+
+    monkeypatch.setattr(writers, "notify_owners_in_transaction", fail_projection)
+    with pytest.raises(RuntimeError, match="notification projection failed"):
+        await writers.mark_disabled_when_offline(pg_engine, ad_id=ad_id)
+
+    async with pg_engine.connect() as conn:
+        state = await conn.scalar(
+            text("SELECT alert_state FROM ad_alert_state WHERE ad_id = :ad_id"),
+            {"ad_id": ad_id},
+        )
+        event_count = await conn.scalar(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM notification_events
+                WHERE event_type = 'worker_sync_disabled'
+                  AND facts->>'summary' = :summary
+                """
+            ),
+            {"summary": f"{fb_ad_id} подтверждено OFF в Meta"},
+        )
+
+    assert state == "stop_sent"
+    assert event_count == 0
+
+
+@pytest.mark.asyncio
+async def test_offline_sync_atomically_resolves_per_ad_autostop_incident(
+    pg_engine,
+    offer_kr2,
+) -> None:
+    from core.meta_api.autostop_alert import UNDELIVERED_INCIDENT_KEY_PREFIX
+    from core.observer.writers import mark_disabled_when_offline
+    from core.telegram.worker_notify import notify_recurring_incident
+
+    fb_ad_id = f"230088{uuid.uuid4().int % 1_000_000:06d}"
+    row = _make_row(
+        fb_ad_id=fb_ad_id,
+        spend=Decimal("25.0"),
+        cpc=Decimal("0.10"),
+    )
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1)
+    incident_key = f"{UNDELIVERED_INCIDENT_KEY_PREFIX}{fb_ad_id}"
+    async with pg_engine.connect() as conn:
+        open_token = await conn.scalar(
+            text(
+                """
+                SELECT state.open_state_token
+                FROM ad_alert_state AS state
+                JOIN fb_ads AS ad ON ad.id = state.ad_id
+                WHERE ad.fb_ad_id = :fb_ad_id
+                """
+            ),
+            {"fb_ad_id": fb_ad_id},
+        )
+    canonical_incident_key = f"ad:{fb_ad_id}:{open_token}"
+    assert await notify_recurring_incident(
+        pg_engine,
+        incident_key=incident_key,
+        audience="owners",
+        event_type="autostop_undelivered_pause",
+        severity="critical",
+        title="Auto-stop pause undelivered",
+        resource_type="ad",
+        resource_id=fb_ad_id,
+    )
+
+    try:
+        async with pg_engine.begin() as conn:
+            ad_id = await conn.scalar(
+                text("SELECT id FROM fb_ads WHERE fb_ad_id = :fb_ad_id"),
+                {"fb_ad_id": fb_ad_id},
+            )
+            await conn.execute(
+                text(
+                    """
+                    UPDATE ad_alert_state
+                    SET last_transition_at = NOW() - INTERVAL '20 minutes'
+                    WHERE ad_id = :ad_id
+                    """
+                ),
+                {"ad_id": ad_id},
+            )
+
+        assert await mark_disabled_when_offline(pg_engine, ad_id=ad_id) is True
+        async with pg_engine.connect() as conn:
+            state = await conn.scalar(
+                text("SELECT alert_state FROM ad_alert_state WHERE ad_id = :ad_id"),
+                {"ad_id": ad_id},
+            )
+            incident_status = await conn.scalar(
+                text("SELECT status FROM incidents WHERE incident_key = :key"),
+                {"key": incident_key},
+            )
+            canonical_incident_status = await conn.scalar(
+                text("SELECT status FROM incidents WHERE incident_key = :key"),
+                {"key": canonical_incident_key},
+            )
+            recovery_events = await conn.scalar(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM notification_events event
+                    JOIN incidents incident ON incident.id = event.incident_id
+                    WHERE incident.incident_key = :key
+                      AND event.event_type = 'incident_recovered'
+                    """
+                ),
+                {"key": incident_key},
+            )
+
+        assert state == "disabled"
+        assert incident_status == "resolved"
+        assert canonical_incident_status == "resolved"
+        assert recovery_events == 1
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM notification_deliveries
+                    WHERE event_id IN (
+                        SELECT event.id
+                        FROM notification_events event
+                        JOIN incidents incident ON incident.id = event.incident_id
+                        WHERE incident.incident_key = :key
+                    )
+                    """
+                ),
+                {"key": incident_key},
+            )
+            await conn.execute(
+                text(
+                    """
+                    DELETE FROM notification_events
+                    WHERE incident_id IN (SELECT id FROM incidents WHERE incident_key = :key)
+                    """
+                ),
+                {"key": incident_key},
+            )
+            await conn.execute(
+                text("DELETE FROM incidents WHERE incident_key = :key"),
+                {"key": incident_key},
+            )
 
 
 # Сценарий: ад OFF старше cooldown проходит весь pipeline → синхронизируется в disabled,
@@ -310,7 +829,7 @@ async def test_offline_ad_syncs_stop_sent_to_disabled(pg_engine, offer_kr2) -> N
 async def test_pipeline_syncs_offline_incident_to_disabled(pg_engine, offer_kr2) -> None:
     # 1) STOP → stop_sent + одна disable-задача
     stop_row = _make_row(spend=Decimal("25.0"), cpc=Decimal("0.10"))
-    await process_scan_rows(pg_engine, rows=[stop_row], scan_id=1)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[stop_row], scan_id=1)
 
     # состарим инцидент старше cooldown
     async with pg_engine.begin() as conn:
@@ -321,7 +840,7 @@ async def test_pipeline_syncs_offline_incident_to_disabled(pg_engine, offer_kr2)
     # 2) тот же ад приходит OFF → pipeline синхронизирует в disabled
     off_row = _make_row(spend=Decimal("25.0"), cpc=Decimal("0.10"))
     object.__setattr__(off_row, "delivery_status", "OFF")
-    await process_scan_rows(pg_engine, rows=[off_row], scan_id=2)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[off_row], scan_id=2)
 
     async with pg_engine.connect() as conn:
         st = (await conn.execute(text("SELECT alert_state FROM ad_alert_state LIMIT 1"))).scalar()
@@ -339,7 +858,7 @@ async def test_ad_without_matching_offer(pg_engine, offer_kr2) -> None:
         spend=Decimal("50.0"),
         deposits=0,
     )
-    result = await process_scan_rows(pg_engine, rows=[row], scan_id=1)
+    result = await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1)
 
     assert result.rows_with_offer == 0
     assert result.rows_without_offer == 1
@@ -360,11 +879,62 @@ async def test_ad_without_matching_offer(pg_engine, offer_kr2) -> None:
         assert n_states == 0
 
 
+# Сматченный offer без подтверждённого CPA сохраняет наблюдение, но fail-closed
+# помечает scan partial и не создаёт FSM/alert/money-task на выдуманном пороге.
+@pytest.mark.asyncio
+async def test_matched_offer_without_cpa_never_evaluates_money_rules(
+    pg_engine,
+    clean_observer_tables,
+) -> None:
+    offer_id = uuid.uuid4()
+    fb_ad_id = f"230077{uuid.uuid4().int % 1_000_000:06d}"
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO offers (id, code, name, is_active) "
+                "VALUES (:id, 'CR2', 'No configured CPA', TRUE)"
+            ),
+            {"id": offer_id},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO offer_rules (offer_id, cpa_threshold, currency) "
+                "VALUES (:id, NULL, 'USD')"
+            ),
+            {"id": offer_id},
+        )
+
+    result = await process_scan_rows(
+        pg_engine,
+        ad_account_id="123",
+        rows=[_make_row(fb_ad_id=fb_ad_id, spend=Decimal("500.00"))],
+        scan_id=991,
+    )
+
+    assert result.rows_with_offer == 1
+    assert result.row_errors == [f"{fb_ad_id}:MissingOfferCpaError"]
+    async with pg_engine.connect() as conn:
+        persisted = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM ad_metrics),
+                        (SELECT COUNT(*) FROM ad_alert_state),
+                        (SELECT COUNT(*) FROM alert_events),
+                        (SELECT COUNT(*) FROM task_queue)
+                    """
+                )
+            )
+        ).one()
+    assert tuple(persisted) == (1, 0, 0, 0)
+
+
 # Сценарий: scan_id корректно записывается во все таблицы где есть это поле
 @pytest.mark.asyncio
 async def test_scan_id_propagates(pg_engine, offer_kr2) -> None:
     row = _make_row(spend=Decimal("3.0"), deposits=1)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=12345)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=12345)
 
     async with pg_engine.connect() as conn:
         scan_in_metrics = (
@@ -397,7 +967,7 @@ async def test_matching_prefers_longest_code(pg_engine, clean_observer_tables) -
         ad_name="Test001",
         spend=Decimal("3.0"),
     )
-    await process_scan_rows(pg_engine, rows=[row], scan_id=1)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1)
 
     async with pg_engine.connect() as conn:
         camp = (await conn.execute(text("SELECT offer_id FROM fb_campaigns LIMIT 1"))).first()
@@ -411,11 +981,14 @@ async def test_snooze_boundary_equality_does_not_suppress(pg_engine, offer_kr2) 
     """snoozed_until == cycle_ts: строгое > в pipeline не suppress'ит emit при равенстве."""
     # Создаём ad в состоянии warning_sent через первый скан
     row = _make_row(spend=Decimal("20.0"), deposits=0, leads=0, registrations=0)
-    ts1 = datetime(2026, 5, 28, 10, 0, 0, tzinfo=UTC)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=1, cycle_ts=ts1)
+    # Keep the synthetic cycle clock inside the 60-second confirmed-currency
+    # window.  The test owns snooze boundary semantics, not stale-data policy.
+    ts1 = datetime.now(UTC) - timedelta(seconds=5)
+    await _set_account_currency_observed_at(pg_engine, ts1)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1, cycle_ts=ts1)
 
     # Ставим snoozed_until = ts2 (ровно момент следующего скана)
-    ts2 = datetime(2026, 5, 28, 10, 30, 0, tzinfo=UTC)
+    ts2 = ts1 + timedelta(seconds=1)
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
@@ -430,7 +1003,9 @@ async def test_snooze_boundary_equality_does_not_suppress(pg_engine, offer_kr2) 
         await conn.execute(text("DELETE FROM alert_events"))
 
     # Второй скан с cycle_ts == snoozed_until: emit НЕ должен подавляться (строгое >)
-    result2 = await process_scan_rows(pg_engine, rows=[row], scan_id=2, cycle_ts=ts2)
+    result2 = await process_scan_rows(
+        pg_engine, ad_account_id="123", rows=[row], scan_id=2, cycle_ts=ts2
+    )
 
     # Pipeline мог не дать warning (повтор FSM → no new emit для stop_sent→stop_sent),
     # но главное — pipeline не suppress'ил из-за snooze. Проверяем напрямую через
@@ -452,11 +1027,13 @@ async def test_snooze_expired_between_scans_emits_on_third(pg_engine, offer_kr2)
     row = _make_row(spend=Decimal("20.0"), deposits=0, leads=0, registrations=0)
 
     # Scan #1: ставим ad в warning_sent/stop_sent
-    ts1 = datetime(2026, 5, 28, 10, 0, 0, tzinfo=UTC)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=1, cycle_ts=ts1)
+    # Exercise snooze transitions while the confirmed USD evidence remains fresh.
+    ts1 = datetime.now(UTC) - timedelta(seconds=5)
+    await _set_account_currency_observed_at(pg_engine, ts1)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1, cycle_ts=ts1)
 
-    # Ставим snoozed_until = ts1 + 2 минуты (истечёт после ts2 но до ts3)
-    snooze_exp = ts1 + timedelta(minutes=2)
+    # Snooze expires after scan #2 but before scan #3.
+    snooze_exp = ts1 + timedelta(seconds=2)
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
@@ -470,9 +1047,9 @@ async def test_snooze_expired_between_scans_emits_on_third(pg_engine, offer_kr2)
     async with pg_engine.begin() as conn:
         await conn.execute(text("DELETE FROM alert_events"))
 
-    # Scan #2: cycle_ts = ts1 + 1 мин < snoozed_until → snooze активен, emit suppress'ируется
-    ts2 = ts1 + timedelta(minutes=1)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=2, cycle_ts=ts2)
+    # Scan #2: cycle_ts < snoozed_until → snooze активен, emit suppress'ируется
+    ts2 = ts1 + timedelta(seconds=1)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=2, cycle_ts=ts2)
 
     async with pg_engine.connect() as conn:
         n_events_after_scan2 = (
@@ -483,9 +1060,9 @@ async def test_snooze_expired_between_scans_emits_on_third(pg_engine, offer_kr2)
         f"Scan #2 должен быть suppressed, но alert_events.scan_id=2: {n_events_after_scan2}"
     )
 
-    # Scan #3: cycle_ts = ts1 + 3 мин > snoozed_until → snooze истёк, emit разрешён
-    ts3 = ts1 + timedelta(minutes=3)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=3, cycle_ts=ts3)
+    # Scan #3: cycle_ts > snoozed_until → snooze истёк, emit разрешён
+    ts3 = ts1 + timedelta(seconds=3)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=3, cycle_ts=ts3)
 
     # Scan #3: FSM stop_sent → stop_sent (no new emit for same state) — но мы проверяем
     # что pipeline НЕ suppress'ил по snooze. В реальности stop_sent → stop_sent уже
@@ -501,8 +1078,8 @@ async def test_snooze_expired_between_scans_emits_on_third(pg_engine, offer_kr2)
         await conn.execute(text("DELETE FROM alert_events"))
 
     # Повторный scan #4 после сброса: snooze истёк, должен выдать emit
-    ts4 = ts1 + timedelta(minutes=4)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=4, cycle_ts=ts4)
+    ts4 = ts1 + timedelta(seconds=4)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=4, cycle_ts=ts4)
 
     async with pg_engine.connect() as conn:
         n_events_after_scan4 = (
@@ -525,11 +1102,13 @@ async def test_snooze_stop_recovery_creates_pause_task(pg_engine, offer_kr2) -> 
     row = _make_row(spend=Decimal("20.0"), deposits=0, leads=0, registrations=0)
 
     # Scan #1 → ад уходит в stop_sent (трата без событий).
-    ts1 = datetime(2026, 5, 28, 12, 0, 0, tzinfo=UTC)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=1, cycle_ts=ts1)
+    # Keep the scan sequence inside the independent 60-second USD freshness gate.
+    ts1 = datetime.now(UTC) - timedelta(seconds=5)
+    await _set_account_currency_observed_at(pg_engine, ts1)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=1, cycle_ts=ts1)
 
-    # Снуз активен до ts1+2мин + эмулируем «pause-задача не создавалась» (краш-сценарий):
-    snooze_exp = ts1 + timedelta(minutes=2)
+    # Снуз активен до ts1+2s + эмулируем «pause-задача не создавалась» (краш-сценарий):
+    snooze_exp = ts1 + timedelta(seconds=2)
     async with pg_engine.begin() as conn:
         await conn.execute(
             text("UPDATE ad_alert_state SET snoozed_until = :su WHERE alert_state = 'stop_sent'"),
@@ -539,8 +1118,8 @@ async def test_snooze_stop_recovery_creates_pause_task(pg_engine, offer_kr2) -> 
 
     # Scan #2 под активным снузом: pause-задача СОЗДАЁТСЯ (MID-2 — снуз не выключает
     # авто-стоп; подавляется только TG-алерт).
-    ts2 = ts1 + timedelta(minutes=1)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=2, cycle_ts=ts2)
+    ts2 = ts1 + timedelta(seconds=1)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=2, cycle_ts=ts2)
     async with pg_engine.connect() as conn:
         n_under_snooze = (
             await conn.execute(
@@ -551,8 +1130,8 @@ async def test_snooze_stop_recovery_creates_pause_task(pg_engine, offer_kr2) -> 
 
     # Scan #3 после истечения снуза: recovery НЕ плодит дубль — по-прежнему ровно одна
     # pause_ad на инцидент (idempotency_key по open_token).
-    ts3 = ts1 + timedelta(minutes=3)
-    await process_scan_rows(pg_engine, rows=[row], scan_id=3, cycle_ts=ts3)
+    ts3 = ts1 + timedelta(seconds=3)
+    await process_scan_rows(pg_engine, ad_account_id="123", rows=[row], scan_id=3, cycle_ts=ts3)
     async with pg_engine.connect() as conn:
         recovered = (
             await conn.execute(
@@ -597,7 +1176,9 @@ async def test_owner_scoping_filters_foreign_campaign(pg_engine, offer_kr2) -> N
         cpc=Decimal("0.10"),
     )
 
-    result = await process_scan_rows(pg_engine, rows=[mine, foreign], scan_id=1, owner_tag="MV")
+    result = await process_scan_rows(
+        pg_engine, ad_account_id="123", rows=[mine, foreign], scan_id=1, owner_tag="MV"
+    )
 
     assert result.rows_total == 2
     assert result.rows_foreign == 1, "чужая кампания должна быть отброшена owner-фильтром"
@@ -638,7 +1219,7 @@ async def test_owner_scoping_disabled_processes_all(pg_engine, offer_kr2) -> Non
     )
 
     # owner_tag не задан → фильтр выключен
-    result = await process_scan_rows(pg_engine, rows=[mine, other], scan_id=1)
+    result = await process_scan_rows(pg_engine, ad_account_id="123", rows=[mine, other], scan_id=1)
 
     assert result.rows_foreign == 0
     assert result.rows_with_offer == 2, "обе содержат код CR2 → обе сматчены без owner-фильтра"

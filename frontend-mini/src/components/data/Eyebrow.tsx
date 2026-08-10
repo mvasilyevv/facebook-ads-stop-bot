@@ -1,6 +1,6 @@
 /**
  * Eyebrow — маркер-надзаголовок канона (num="0X" + текст).
- * 10px, uppercase, tracking 0.12em. num — accent-muted, разделитель "/" — bg-7.
+ * 12px, uppercase, tracking 0.12em. num — accent-muted, разделитель "/" — AA bg-8.
  * Единый источник стиля с web (frontend/src/components/data/Eyebrow.tsx).
  */
 import type { CSSProperties, ReactNode } from "react";
@@ -18,7 +18,7 @@ export function Eyebrow({ num, children, className, style }: EyebrowProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 font-display text-[10px] font-semibold uppercase tracking-[0.12em] text-bg-9",
+        "inline-flex items-center gap-1.5 font-display text-[12px] font-semibold uppercase tracking-[0.12em] text-bg-9",
         className,
       )}
       style={style}
@@ -26,7 +26,7 @@ export function Eyebrow({ num, children, className, style }: EyebrowProps) {
       {num ? (
         <>
           <span className="text-accent-muted tabular-nums">{num}</span>
-          <span className="text-bg-7">/</span>
+          <span className="text-bg-8">/</span>
         </>
       ) : null}
       {children}

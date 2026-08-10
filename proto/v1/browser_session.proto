@@ -3,32 +3,23 @@ syntax = "proto3";
 package fb_agent.browser_session.v1;
 
 service BrowserSessionService {
-  // Запустить Vision профиль и подключиться через CDP.
-  // Возвращает session_id для всех последующих вызовов.
+  // Создать process-local browser-agent сессию, подключившись только к уже
+  // живому Vision CDP. Этот RPC никогда не запускает и не рестартует профиль.
   rpc StartBrowser(StartBrowserRequest) returns (StartBrowserResponse);
-
-  // Отключиться от браузера (закрыть CDP, не останавливая Vision профиль).
-  rpc DisconnectBrowser(DisconnectBrowserRequest) returns (DisconnectBrowserResponse);
-
-  // Полностью остановить Vision профиль (disconnect + stop profile).
-  rpc StopBrowser(StopBrowserRequest) returns (StopBrowserResponse);
 
   // Переподключиться после разрыва или ошибки.
   rpc ReconnectBrowser(ReconnectBrowserRequest) returns (StartBrowserResponse);
 
-  // Получить информацию о сессии (URL, контексты, страницы).
-  rpc GetSessionInfo(GetSessionInfoRequest) returns (GetSessionInfoResponse);
-
-  // Перейти на URL.
-  rpc Navigate(NavigateRequest) returns (NavigateResponse);
+  // Принудительно перезапустить canonical Vision-профиль и подключиться заново.
+  // Вызывается только API control plane после проверки PostgreSQL maintenance lease.
+  rpc RecoverBrowserProfileUnderMaintenance(RecoverBrowserProfileRequest)
+      returns (StartBrowserResponse);
 
   // Открыть вкладки Ads Manager для списка кабинетов (фаза "подготовка рабочего
   // места" перед сканом). Для каждого ad_account_id ищет/открывает вкладку кабинета
   // (manage/campaigns + колонки). Не сканирует. Идемпотентно: уже открытую переиспользует.
   rpc OpenCabinetTabs(OpenCabinetTabsRequest) returns (OpenCabinetTabsResponse);
 
-  // Стриминг статусов сессии (heartbeat, ошибки, смена страницы).
-  rpc StreamSessionStatus(StreamSessionStatusRequest) returns (stream SessionStatusEvent);
 }
 
 message OpenCabinetTabsRequest {
@@ -60,7 +51,6 @@ message StartBrowserResponse {
   string session_id = 1;
   VisionProfile profile = 2;
   string initial_page_url = 3;
-  repeated PageInfo pages = 4;
 }
 
 message VisionProfile {
@@ -69,62 +59,23 @@ message VisionProfile {
   int32 cdp_port = 3;
 }
 
-message PageInfo {
-  string page_id = 1;
-  string url = 2;
-  string title = 3;
-}
-
-message DisconnectBrowserRequest {
-  string session_id = 1;
-}
-
-message DisconnectBrowserResponse {}
-
-message StopBrowserRequest {
-  string session_id = 1;
-}
-
-message StopBrowserResponse {}
-
 message ReconnectBrowserRequest {
   string session_id = 1;
-  string vision_x_token = 2;
-  string vision_api_url = 3;
-  string vision_profile_id = 4;
+  // Reconnect is deliberately bound to the immutable credentials/profile
+  // registered by StartBrowser. Old callers may still send these field
+  // numbers, but proto3 treats them as unknown and the server cannot retarget
+  // stored credentials through this ordinary lifecycle RPC.
+  reserved 2, 3, 4;
+  reserved "vision_x_token", "vision_api_url", "vision_profile_id";
 }
 
-message GetSessionInfoRequest {
-  string session_id = 1;
-}
-
-message GetSessionInfoResponse {
-  string session_id = 1;
-  bool connected = 2;
-  string current_url = 3;
-  repeated PageInfo pages = 4;
-  int64 connected_since = 5;
-}
-
-message NavigateRequest {
-  string session_id = 1;
-  optional string page_id = 2;
-  string url = 3;
-  string wait_until = 4;  // "load", "domcontentloaded", "networkidle"
-}
-
-message NavigateResponse {
-  string url = 1;
-}
-
-message StreamSessionStatusRequest {
-  string session_id = 1;
-}
-
-message SessionStatusEvent {
-  string session_id = 1;
-  string status = 2;  // "connected", "disconnected", "error", "page_changed"
-  string detail = 3;
-  string current_url = 4;
-  int64 timestamp = 5;
+message RecoverBrowserProfileRequest {
+  string vision_x_token = 1;
+  string vision_api_url = 2;
+  string vision_profile_id = 3;
+  optional string vision_folder_id = 4;
+  string maintenance_owner = 5;
+  int64 capability_expires_at = 6;
+  string capability_nonce = 7;
+  string capability_signature = 8;
 }

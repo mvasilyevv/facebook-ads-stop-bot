@@ -25,6 +25,9 @@ function makeSession(): BrowserSession {
     playwright: null,
     browser: null,
     primaryPage: null,
+    scanPages: new Map(),
+    controlPages: new Map(),
+    interactivePages: new Map(),
     humanProfile: {} as any,
     connectedAt: new Date(0),
     status: 'connected',
@@ -50,14 +53,12 @@ describe('isNetworkFetchError', () => {
 });
 
 describe('recordFetchOutcome', () => {
-  // Успех сбрасывает серию И уровень эскалации (канал ожил — лечить нечего).
-  it('успех обнуляет серию и уровень', () => {
+  // Успех сбрасывает серию (канал ожил — reload не нужен).
+  it('успех обнуляет серию', () => {
     const s = makeSession();
     s.netFailureStreak = 3;
-    s.healLevel = 2;
     recordFetchOutcome(s, true);
     assert.equal(s.netFailureStreak, 0);
-    assert.equal(s.healLevel, 0);
   });
 
   // Сбой инкрементирует серию (с undefined-старта тоже корректно).
@@ -92,7 +93,7 @@ describe('shouldHealNow', () => {
     assert.equal(shouldHealNow(s, 1_000_000 + HEAL_COOLDOWN_MS - 1), false);
   });
 
-  // Cooldown вышел — снова можно лечить (эскалация на следующий уровень).
+  // Cooldown вышел — снова можно reload'ить изолированную страницу.
   it('cooldown вышел — true', () => {
     const s = makeSession();
     s.netFailureStreak = HEAL_NET_FAIL_THRESHOLD;

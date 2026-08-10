@@ -1,50 +1,78 @@
 # -*- coding: utf-8 -*-
 """Pydantic-конфиг создания FB-кампании (CampaignConfig).
 
-Единый контракт API↔воркер↔движок. Извлечён из `scripts/fb_launch.py` без форка
-логики: CLI импортирует эти модели. Дефолты — по SOP/памяти проекта
+Единый контракт API↔воркер↔движок. Дефолты — по SOP проекта
 (`docs/playbooks/campaign-launch.md`):
 - objective OUTCOME_SALES / optimization OFFSITE_CONVERSIONS / event PURCHASE;
-- бюджет CBO, COST_CAP (требует bid_amount_cents), hard-cap валидация;
+- бюджет CBO, COST_CAP (требует bid_amount), hard-cap в major units;
 - таргет 21–65, advantage_audience, авто +AQ (Антарктида);
 - атрибуция 1d click / 1d view;
 - start_date = следующий день (today+1), дата в имени кампании = тот же день.
 
-Money-инвариант (launch_state): по умолчанию `campaign_paused` — кампания PAUSED,
-дети ACTIVE (модерация идёт, спенда нет; байер снимает паузу одним тумблером).
+Money-инвариант: campaign, ad set и ad всегда создаются PAUSED. Активация
+разрешена только отдельным ручным действием после review.
 """
 
 from __future__ import annotations
 
-from datetime import date, timedelta
-from enum import Enum
+import re
+from datetime import datetime, time
+from decimal import Decimal
+from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-# Sane upper bounds — зеркало core/meta_api/mutations/set_adset_budget.py.
-# Защита от лишнего нуля / hallucinated значения. Расширяется только в коде, не через payload.
-MAX_DAILY_BUDGET_CENTS = 100_000_00  # $100 000 / день
-MAX_LIFETIME_BUDGET_CENTS = 1_000_000_00  # $1 000 000 за весь период
-MIN_DAILY_BUDGET_CENTS = 100  # $1.00 — ниже считаем опечаткой
+from core.campaign_builder.money import (
+    campaign_currency_exponent,
+    major_amount_to_minor_units,
+    normalize_major_amount,
+)
+from core.meta_api.account_tz import canonical_account_id, validated_timezone_name
+from core.money import validated_currency_code
 
-# Стратегии ставок, которым обязателен bid_amount_cents.
+# Currency-neutral major-unit caps.  Conversion to Meta minor units happens
+# only after the cabinet currency and its explicit exponent are confirmed.
+MAX_DAILY_BUDGET = Decimal("100000")
+MAX_LIFETIME_BUDGET = Decimal("1000000")
+
+# Стратегии ставок, которым обязателен bid_amount.
 _CAPPED_BID_STRATEGIES = frozenset({"COST_CAP", "LOWEST_COST_WITH_BID_CAP", "TARGET_COST"})
 
 
-class LaunchState(str, Enum):
-    """Money-инвариант запуска: что именно создаётся на паузе."""
-
-    CAMPAIGN_PAUSED = "campaign_paused"  # кампания PAUSED, adset'ы+ads ACTIVE
-    ALL_PAUSED = "all_paused"  # всё PAUSED
-
-
 class Account(BaseModel):
-    """Идентичность кабинета (preset)."""
+    """Immutable cabinet identity and server-confirmed account evidence."""
+
+    model_config = ConfigDict(extra="forbid")
 
     act_id: str  # с префиксом act_ или без — нормализуем
     page_id: str
     pixel_id: str
-    tz_offset: str = "-07:00"  # TZ кабинета для start_time (America/Hermosillo = -07:00)
+    timezone_name: str
+    currency: str
+    currency_exponent: int | None = None
+    account_context_observed_at: datetime
+
+    @model_validator(mode="after")
+    def _validate_context(self) -> Account:
+        account_id = canonical_account_id(self.act_id)
+        if re.fullmatch(r"[0-9]{1,32}", account_id) is None:
+            raise ValueError("account.act_id must contain 1..32 digits")
+        timezone_name = validated_timezone_name(self.timezone_name)
+        if timezone_name is None:
+            raise ValueError("account.timezone_name must be a validated IANA timezone")
+        currency = validated_currency_code(self.currency)
+        if currency is None:
+            raise ValueError("account.currency must be a validated ISO 4217 code")
+        exponent = campaign_currency_exponent(currency)
+        if self.currency_exponent is not None and self.currency_exponent != exponent:
+            raise ValueError("account.currency_exponent does not match account.currency")
+        if self.account_context_observed_at.tzinfo is None:
+            raise ValueError("account_context_observed_at must be timezone-aware")
+        self.act_id = account_id
+        self.timezone_name = timezone_name
+        self.currency = currency
+        self.currency_exponent = exponent
+        return self
 
     @property
     def act(self) -> str:
@@ -58,40 +86,66 @@ class Account(BaseModel):
 
 
 class Budget(BaseModel):
-    """Бюджет и стратегия ставок с hard-cap валидацией (money-safe)."""
+    """Currency-bound major-unit amounts with exact Meta conversion."""
+
+    model_config = ConfigDict(extra="forbid")
 
     level: str = "campaign"  # campaign (CBO) | adset (ABO)
-    daily_cents: int = 300
-    lifetime_cents: int | None = None
+    currency: str
+    daily_amount: str
+    lifetime_amount: str | None = None
     bid_strategy: str = "COST_CAP"  # SOP: реальные кампании кабинета всегда COST_CAP
-    bid_amount_cents: int | None = None  # для COST_CAP / BID_CAP / TARGET_COST (обязателен)
+    bid_amount: str | None = None
 
     @model_validator(mode="after")
     def _check(self) -> Budget:
         if self.level not in ("campaign", "adset"):
             raise ValueError("budget.level: campaign | adset")
-        if self.bid_strategy in _CAPPED_BID_STRATEGIES and not self.bid_amount_cents:
-            raise ValueError(f"bid_strategy={self.bid_strategy} требует bid_amount_cents")
-        if self.daily_cents < MIN_DAILY_BUDGET_CENTS:
-            raise ValueError(
-                f"daily_cents < {MIN_DAILY_BUDGET_CENTS} (${MIN_DAILY_BUDGET_CENTS / 100:.2f}) — "
-                "проверь бюджет"
+        currency = validated_currency_code(self.currency)
+        if currency is None:
+            raise ValueError("budget.currency must be a validated ISO 4217 code")
+        campaign_currency_exponent(currency)
+        self.currency = currency
+        self.daily_amount = normalize_major_amount(self.daily_amount, currency=currency)
+        daily = Decimal(self.daily_amount)
+        if daily > MAX_DAILY_BUDGET:
+            raise ValueError(f"daily_amount exceeds the {MAX_DAILY_BUDGET} {currency} hard cap")
+        if self.lifetime_amount is not None:
+            self.lifetime_amount = normalize_major_amount(
+                self.lifetime_amount,
+                currency=currency,
             )
-        if self.daily_cents > MAX_DAILY_BUDGET_CENTS:
-            raise ValueError(
-                f"daily_cents > hard-cap {MAX_DAILY_BUDGET_CENTS} "
-                f"(${MAX_DAILY_BUDGET_CENTS / 100:,.0f}/день) — отклонено"
-            )
-        if self.lifetime_cents is not None and self.lifetime_cents > MAX_LIFETIME_BUDGET_CENTS:
-            raise ValueError(
-                f"lifetime_cents > hard-cap {MAX_LIFETIME_BUDGET_CENTS} "
-                f"(${MAX_LIFETIME_BUDGET_CENTS / 100:,.0f}) — отклонено"
-            )
+            if Decimal(self.lifetime_amount) > MAX_LIFETIME_BUDGET:
+                raise ValueError(
+                    f"lifetime_amount exceeds the {MAX_LIFETIME_BUDGET} {currency} hard cap"
+                )
+        if self.bid_strategy in _CAPPED_BID_STRATEGIES and not self.bid_amount:
+            raise ValueError(f"bid_strategy={self.bid_strategy} requires bid_amount")
+        if self.bid_amount is not None:
+            self.bid_amount = normalize_major_amount(self.bid_amount, currency=currency)
         return self
+
+    @property
+    def daily_minor_units(self) -> int:
+        return major_amount_to_minor_units(self.daily_amount, currency=self.currency)
+
+    @property
+    def lifetime_minor_units(self) -> int | None:
+        if self.lifetime_amount is None:
+            return None
+        return major_amount_to_minor_units(self.lifetime_amount, currency=self.currency)
+
+    @property
+    def bid_minor_units(self) -> int | None:
+        if self.bid_amount is None:
+            return None
+        return major_amount_to_minor_units(self.bid_amount, currency=self.currency)
 
 
 class Targeting(BaseModel):
     """Таргет с авто-добавлением Антарктиды (+AQ) по SOP."""
+
+    model_config = ConfigDict(extra="forbid")
 
     countries: list[str]
     add_antarctica: bool = True  # SOP: AQ всегда
@@ -111,6 +165,8 @@ class Targeting(BaseModel):
 class Attribution(BaseModel):
     """Окно атрибуции конверсий (preset)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     click_through_days: int = 1
     view_through_days: int = 1
 
@@ -127,6 +183,8 @@ class Attribution(BaseModel):
 class AdText(BaseModel):
     """Текст объявления (run). mode=none — объявления без текста."""
 
+    model_config = ConfigDict(extra="forbid")
+
     mode: str = "none"  # none | full
     message: str = ""
     headline: str = ""
@@ -141,6 +199,8 @@ class AdText(BaseModel):
 
 class AdsetConfig(BaseModel):
     """Один adset в структуре кампании."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str  # шаблон имени с плейсхолдерами
     dir: str  # подпапка концептов относительно creo_root
@@ -172,6 +232,8 @@ class CampaignBlock(BaseModel):
     не по кампании. concept_refs — единый источник концептов блока.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     key: str
     name: str  # шаблон имени с плейсхолдерами
     adsets: list[AdsetConfig]
@@ -191,13 +253,10 @@ class CampaignBlock(BaseModel):
         return self
 
 
-def _default_start_date() -> str:
-    """Дефолт start_date = today+1 (UTC), по SOP."""
-    return (date.today() + timedelta(days=1)).isoformat()
-
-
 class CampaignConfig(BaseModel):
     """Полный конфиг создания кампании (preset + run в одной модели)."""
+
+    model_config = ConfigDict(extra="forbid")
 
     account: Account
     offer_code: str
@@ -213,9 +272,9 @@ class CampaignConfig(BaseModel):
     url_tags_template: str | None = Field(default=None, max_length=1024)
     cta: str = "PLAY_GAME"
     text_optimizations: str = "OPT_OUT"
-    start_date: str | None = Field(default_factory=_default_start_date)  # YYYY-MM-DD = today+1
+    start_date: str
     creo_root: str = ""
-    # budget обязателен: дефолт-стратегия COST_CAP требует bid_amount_cents, поэтому
+    # budget обязателен: дефолт-стратегия COST_CAP требует bid_amount, поэтому
     # «пустого» дефолтного бюджета у money-конфига быть не может — задаётся явно.
     budget: Budget
     targeting: Targeting
@@ -227,25 +286,30 @@ class CampaignConfig(BaseModel):
     # База сквозной нумерации кодов креативов. =1 по умолчанию; на launch
     # аллокатор per-offer проставляет реальное смещение (см. campaigns_create.launch).
     code_start: int = 1
-    launch_state: LaunchState = LaunchState.CAMPAIGN_PAUSED
 
     @model_validator(mode="after")
     def _check(self) -> CampaignConfig:
-        # start_date может прийти None из API (опциональное поле) — подставим дефолт.
-        if not self.start_date:
-            self.start_date = _default_start_date()
-        # Грубая проверка формата YYYY-MM-DD.
-        parts = self.start_date.split("-")
-        if len(parts) != 3 or not all(parts):
-            raise ValueError(f"start_date должен быть YYYY-MM-DD, получено {self.start_date!r}")
+        try:
+            datetime.strptime(self.start_date, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("start_date must be a real YYYY-MM-DD date") from exc
+        if self.account.currency != self.budget.currency:
+            raise ValueError("budget currency does not match confirmed cabinet currency")
         if self.copies_per_concept is not None and self.copies_per_concept < 1:
             raise ValueError("copies_per_concept должен быть >= 1")
         return self
 
     @property
     def start_time(self) -> str:
-        """ISO8601 start_time с tz-offset кабинета."""
-        return f"{self.start_date}T00:00:00{self.account.tz_offset}"
+        """Cabinet-local midnight using IANA rules for the selected date."""
+
+        local_date = datetime.strptime(self.start_date, "%Y-%m-%d").date()
+        local_midnight = datetime.combine(
+            local_date,
+            time.min,
+            tzinfo=ZoneInfo(self.account.timezone_name),
+        )
+        return local_midnight.isoformat()
 
     @property
     def date_label(self) -> str:

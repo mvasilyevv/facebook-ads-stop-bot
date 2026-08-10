@@ -4,13 +4,11 @@
 Создаёт ровно одну копию ресурсов, которые шарят все tool-вызовы и
 read_resource хендлеры:
 
-- SQLAlchemy AsyncEngine для READ_ONLY запросов и draft INSERT (через
-  core/ai_assistant/tools/drafts/*)
-- Redis client — rate-limit (`ai:ratelimit:tools:mcp:claude-desktop`) +
-  worker heartbeats для `fb-stop-bot://workers-health`
+- SQLAlchemy AsyncEngine для read-only запросов.
+- Redis client — disposable rate-limit (`ai:ratelimit:tools:mcp:claude-desktop`).
 - MetaApiClient (опционально, lazy) — если browser-agent gRPC доступен,
   meta-tools читают Marketing API. При недоступности meta-tools отдают
-  ToolError и LLM формирует ответ без них (паттерн как в telegram_poller).
+  ToolError и LLM формирует ответ без них.
 
 `build_tool_context()` возвращает `ToolContext` со стабильным
 `client_key="mcp:claude-desktop"` — так все вызовы из Claude Desktop
@@ -70,7 +68,7 @@ def _resolve_redis_url() -> str:
 
 
 async def _build_meta_api_client() -> "MetaApiClient | None":
-    """Lazy MetaApiClient — повторяет паттерн apps/telegram_poller/main.py.
+    """Build the optional Meta API client without coupling MCP startup to it.
 
     При недоступности browser-agent (gRPC) возвращаем None и пишем warning.
     meta-tools при `meta_api_client is None` поднимут ToolError с понятным
@@ -129,7 +127,7 @@ class MCPContextManager:
             self.redis_client = Redis.from_url(redis_url, decode_responses=True)
             logger.info("MCP context: Redis client инициализирован (%s)", _safe_dsn(redis_url))
         except Exception:
-            logger.exception("Redis инициализация упала — продолжаем без rate-limit/health")
+            logger.exception("Redis инициализация упала — продолжаем без rate-limit")
             self.redis_client = None
 
         if self.enable_meta_api:

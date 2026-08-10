@@ -12,6 +12,7 @@
  */
 
 import { type FC } from "react";
+import { validateCampaignCreatives } from "@fb/features/campaigns";
 import type { WizardCreatives, UploadedConcept } from "@/stores/campaignWizard";
 import type { CampaignStructure } from "@/lib/api/campaigns";
 import { CreativeUploadZone } from "./CreativeUploadZone";
@@ -61,7 +62,7 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
     <div className="space-y-6">
       {/* Заголовок */}
       <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-1">
+        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           ШАГ 5 · КОНЦЕПТЫ
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
@@ -89,13 +90,13 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
 
       {/* upload_id badge */}
       {values.upload_id && (
-        <div className="text-[11px] text-bg-8">
+        <div className="text-[12px] text-bg-8">
           upload_id: <span className="font-mono text-bg-9">{values.upload_id}</span>
         </div>
       )}
 
       {errors && (
-        <span role="alert" className="text-[11px] text-danger font-display">
+        <span role="alert" className="text-[12px] text-danger font-display">
           {errors}
         </span>
       )}
@@ -106,7 +107,5 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
 // ─── Валидация ────────────────────────────────────────────────────────────────
 
 export function validateCreatives(values: WizardCreatives): string | null {
-  if (values.concepts.length === 0) return "Загрузите хотя бы один концепт";
-  if (!values.upload_id) return "Концепты не загружены на сервер";
-  return null;
+  return validateCampaignCreatives(values);
 }

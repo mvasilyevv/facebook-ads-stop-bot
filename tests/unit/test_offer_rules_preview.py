@@ -26,15 +26,18 @@ def test_partial_sensitivity_only():
     }
 
 
-# Форма оффера шлёт ТОЛЬКО CPA — частота и чувствительность не затираются.
+# Форма оффера шлёт CPA вместе с явной валютой — чужие поля не затираются.
 def test_partial_cpa_only():
-    body = OfferRuleUpsertIn(cpa_threshold=Decimal("3"))
-    assert set(body.model_dump(exclude_unset=True)) == {"cpa_threshold"}
+    body = OfferRuleUpsertIn(cpa_threshold=Decimal("3"), currency="usd")
+    assert set(body.model_dump(exclude_unset=True)) == {"cpa_threshold", "currency"}
+    assert body.currency == "USD"
 
 
 # Preview-расчёт идентичен RuleContext (тому, по которому реально стопит observer).
 def test_preview_matches_autostop_calc():
     ctx = RuleContext(
+        currency="USD",
+        currency_exponent=2,
         cpa_amount=Decimal("3"),
         warning_percent_of_stop=Decimal("80"),
         stop_percent_of_base=Decimal("80"),
@@ -48,6 +51,8 @@ def test_preview_matches_autostop_calc():
 # Per-offer чувствительность в preview меняет стоп/ворнинг (база фиксирована).
 def test_preview_sensitivity_changes_thresholds():
     ctx = RuleContext(
+        currency="USD",
+        currency_exponent=2,
         cpa_amount=Decimal("3"),
         warning_percent_of_stop=Decimal("50"),
         stop_percent_of_base=Decimal("50"),

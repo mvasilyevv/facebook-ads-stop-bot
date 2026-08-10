@@ -52,7 +52,9 @@ def _dotenv_value(raw_value: str) -> str:
     return value
 
 
-def sync_caddy_env(source: Path, target: Path) -> None:
+def sync_caddy_env(source: Path, target: Path, *, scope: str = "all") -> None:
+    if scope not in {"all", "api", "desktop"}:
+        raise ValueError(f"unsupported Caddy sync scope: {scope}")
     source = source.resolve(strict=True)
     target = target.resolve(strict=True)
     target_stat = target.stat()
@@ -60,23 +62,25 @@ def sync_caddy_env(source: Path, target: Path) -> None:
         raise PermissionError(f"{target} must have mode 600")
 
     source_lines = _read_lines(source)
-    _, api_key_raw = _require_value(source_lines, "API_KEY", path=source)
-    _, kasm_user_raw = _require_value(source_lines, "DESKTOP_KASM_SERVICE_USER", path=source)
-    _, kasm_password_raw = _require_value(
-        source_lines, "DESKTOP_KASM_SERVICE_PASSWORD", path=source
-    )
-    kasm_user = _dotenv_value(kasm_user_raw)
-    kasm_password = _dotenv_value(kasm_password_raw)
-    if not kasm_user or ":" in kasm_user:
-        raise ValueError("DESKTOP_KASM_SERVICE_USER must be non-empty and contain no colon")
-    kasm_auth_b64 = base64.b64encode(f"{kasm_user}:{kasm_password}".encode()).decode("ascii")
     target_lines = _read_lines(target)
     for key in REQUIRED_CADDY_KEYS:
         _require_value(target_lines, key, path=target)
-    synchronized = {
-        "API_KEY": api_key_raw,
-        "DESKTOP_KASM_SERVICE_AUTH_B64": kasm_auth_b64,
-    }
+    synchronized: dict[str, str] = {}
+    if scope in {"all", "api"}:
+        _, api_key_raw = _require_value(source_lines, "API_KEY", path=source)
+        synchronized["API_KEY"] = api_key_raw
+    if scope in {"all", "desktop"}:
+        _, kasm_user_raw = _require_value(source_lines, "DESKTOP_KASM_SERVICE_USER", path=source)
+        _, kasm_password_raw = _require_value(
+            source_lines, "DESKTOP_KASM_SERVICE_PASSWORD", path=source
+        )
+        kasm_user = _dotenv_value(kasm_user_raw)
+        kasm_password = _dotenv_value(kasm_password_raw)
+        if not kasm_user or ":" in kasm_user:
+            raise ValueError("DESKTOP_KASM_SERVICE_USER must be non-empty and contain no colon")
+        synchronized["DESKTOP_KASM_SERVICE_AUTH_B64"] = base64.b64encode(
+            f"{kasm_user}:{kasm_password}".encode()
+        ).decode("ascii")
     for key, value in synchronized.items():
         index, _ = _unique_assignment(target_lines, key, path=target)
         assignment = f"{key}={value}"
@@ -123,8 +127,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--target", required=True, type=Path)
+    parser.add_argument("--scope", choices=("all", "api", "desktop"), default="all")
     args = parser.parse_args()
-    sync_caddy_env(args.source, args.target)
+    sync_caddy_env(args.source, args.target, scope=args.scope)
     print(f"Caddy environment synchronized atomically: {args.target}")
     return 0
 

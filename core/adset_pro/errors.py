@@ -7,8 +7,6 @@
 - RateLimitedError — 429 либо message содержит throttle/rate limit (temporary).
 - NotFoundError — 404 (permanent для конкретного объекта).
 - TemporaryError — 5xx и сетевые сбои (retry).
-
-См. META_INTEGRATION_PLAN.md §4.4 / Этап 6.
 """
 
 from __future__ import annotations

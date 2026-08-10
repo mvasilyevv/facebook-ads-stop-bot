@@ -1,9 +1,8 @@
 /**
  * Select — стилизованный нативный <select>.
- * Спека: ads.html .select — bg-2, border-6, height 32px, font-display 12px.
- * Кастомный Popover-combobox — отдельный компонент.
+ * Для сложного поиска используется отдельный Popover-combobox.
  */
-import { forwardRef, type SelectHTMLAttributes } from "react";
+import { forwardRef, type SelectHTMLAttributes, useId } from "react";
 import { cn } from "@/lib/utils/cn";
 import { ChevronDown } from "lucide-react";
 
@@ -22,21 +21,36 @@ interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, "siz
 }
 
 const SIZE_CLASS: Record<NonNullable<SelectProps["size"]>, string> = {
-  sm: "h-7 px-2.5 pr-8 text-[12px]",
-  md: "h-8 px-3 pr-8 text-[12.5px]",
-  lg: "h-10 px-4 pr-10 text-[14px]",
+  sm: "h-11 px-2.5 pr-8 text-[12px]",
+  md: "h-11 px-3 pr-8 text-[12.5px]",
+  lg: "h-12 px-4 pr-10 text-[14px]",
 };
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
-  { options, size = "md", label, errorMessage, placeholder, className, id, ...rest },
+  {
+    options,
+    size = "md",
+    label,
+    errorMessage,
+    placeholder,
+    className,
+    id,
+    "aria-describedby": describedBy,
+    ...rest
+  },
   ref,
 ) {
+  const generatedId = useId();
+  const controlId = id ?? (label ? `${generatedId}-select` : undefined);
+  const errorId = errorMessage ? `${controlId ?? generatedId}-error` : undefined;
+  const descriptionIds = [describedBy, errorId].filter(Boolean).join(" ") || undefined;
+
   return (
     <div className="flex flex-col gap-1.5">
       {label ? (
         <label
-          htmlFor={id}
-          className="text-[11px] font-display tracking-wider uppercase text-bg-9"
+          htmlFor={controlId}
+          className="text-[12px] font-display tracking-wider uppercase text-bg-9"
         >
           {label}
         </label>
@@ -44,10 +58,11 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
       <div className="relative">
         <select
           ref={ref}
-          id={id}
+          id={controlId}
+          aria-describedby={descriptionIds}
           aria-invalid={!!errorMessage}
           className={cn(
-            "w-full appearance-none bg-bg-2 border border-[var(--hairline-strong)] text-bg-11 rounded-[var(--radius-2)]",
+            "w-full appearance-none bg-bg-2 border border-[var(--color-hairline-strong)] text-bg-11 rounded-[var(--radius-2)]",
             "font-display tracking-[0.02em]",
             "transition-colors duration-[120ms]",
             "focus:bg-bg-3 focus:border-accent focus:outline-none",
@@ -78,7 +93,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
         />
       </div>
       {errorMessage ? (
-        <span role="alert" className="text-[11px] text-danger font-display">
+        <span id={errorId} role="alert" className="text-[12px] text-danger font-display">
           {errorMessage}
         </span>
       ) : null}

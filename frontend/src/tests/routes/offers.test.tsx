@@ -2,11 +2,11 @@
  * Тесты страницы Offers (routes/offers/index.tsx) + компонентов offers/.
  *
  * Что проверяем:
- *   - OfferCard: рендер кода, статуса, метрик
+ *   - OfferCard: рендер кода, статуса и catalog-конфигурации
  *   - Offers grid: список карточек, EmptyState, кнопка создания
  *   - OfferFormModal: создание (code/кабинеты/CPA + ползунки чувствительности)
  *   - OfferRulesFields: CPA + stop%/warning% передаются в onSave
- *   - Delete: ConfirmDialog с confirmWord
+ *   - Deactivation: ConfirmDialog с confirmWord
  */
 
 import { render, screen } from "@testing-library/react";
@@ -17,8 +17,6 @@ import type { Offer } from "@fb/shared";
 // ─── OfferCard тесты ──────────────────────────────────────────────────────────
 
 import { OfferCard } from "@/components/offers/OfferCard";
-import type { components } from "@fb/shared/api/generated";
-type OfferCompareRow = components["schemas"]["OfferCompareRow"];
 
 function makeOffer(overrides: Partial<Offer> = {}): Offer {
   return {
@@ -29,28 +27,6 @@ function makeOffer(overrides: Partial<Offer> = {}): Offer {
     is_active: true,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    country_code: null,
-    use_vision_creator: null,
-    notes: null,
-    ...overrides,
-  };
-}
-
-function makeMetrics(overrides: Partial<OfferCompareRow> = {}): OfferCompareRow {
-  return {
-    offer_id: "offer-uuid-1",
-    offer_code: "CR2",
-    offer_name: "CR2",
-    days: 7,
-    spend: "1234.56",
-    leads: 42,
-    registrations: 20,
-    deposits: 10,
-    active_ads_count: 5,
-    stop_alerts_count: 2,
-    cost_per_lead: "29.39",
-    cost_per_registration: null,
-    cost_per_deposit: null,
     ...overrides,
   };
 }
@@ -61,12 +37,7 @@ describe("OfferCard", () => {
   // Рендер кода оффера
   it("отображает код оффера", () => {
     render(
-      <OfferCard
-        offer={makeOffer()}
-        onEditOffer={noop}
-        onEditRules={noop}
-        onDelete={noop}
-      />,
+      <OfferCard offer={makeOffer()} onEditOffer={noop} onEditRules={noop} onDeactivate={noop} />,
     );
     expect(screen.getByText("CR2")).toBeInTheDocument();
   });
@@ -78,7 +49,7 @@ describe("OfferCard", () => {
         offer={makeOffer({ is_active: true })}
         onEditOffer={noop}
         onEditRules={noop}
-        onDelete={noop}
+        onDeactivate={noop}
       />,
     );
     expect(screen.getByText("активен")).toBeInTheDocument();
@@ -91,40 +62,44 @@ describe("OfferCard", () => {
         offer={makeOffer({ is_active: false })}
         onEditOffer={noop}
         onEditRules={noop}
-        onDelete={noop}
+        onDeactivate={noop}
       />,
     );
     expect(screen.getByText("неактивен")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /деактивировать оффер/i })).not.toBeInTheDocument();
   });
 
-  // Метрики отображаются
-  it("отображает spend из metrics", () => {
+  it("отображает подтверждённую конфигурацию вместо legacy KPI", () => {
     render(
       <OfferCard
-        offer={makeOffer()}
-        metrics={makeMetrics({ spend: "1234.56" })}
+        offer={makeOffer({
+          cpa_threshold: "3.50",
+          currency: "USD",
+          countries: ["GH", "KE"],
+          ad_account_ids: ["123", "456"],
+        })}
         onEditOffer={noop}
         onEditRules={noop}
-        onDelete={noop}
+        onDeactivate={noop}
       />,
     );
-    expect(screen.getByText("$1,234.56")).toBeInTheDocument();
+    expect(screen.getByText(/\$3\.50/)).toBeInTheDocument();
+    expect(screen.getByText("GH, KE")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.queryByText("Траты")).not.toBeInTheDocument();
   });
 
-  // Metrics отсутствуют — прочерки
-  it("показывает «—» при отсутствии metrics", () => {
+  it("не превращает незаданный CPA в ноль", () => {
     render(
       <OfferCard
-        offer={makeOffer()}
-        metrics={undefined}
+        offer={makeOffer({ cpa_threshold: null })}
         onEditOffer={noop}
         onEditRules={noop}
-        onDelete={noop}
+        onDeactivate={noop}
       />,
     );
-    // Несколько прочерков для разных метрик
-    const dashes = screen.getAllByText("—");
-    expect(dashes.length).toBeGreaterThan(0);
+    expect(screen.getByText("Не задан")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
   // Кнопка "Правила" вызывает onEditRules
@@ -135,7 +110,7 @@ describe("OfferCard", () => {
         offer={makeOffer()}
         onEditOffer={() => {}}
         onEditRules={onEditRules}
-        onDelete={() => {}}
+        onDeactivate={() => {}}
       />,
     );
     await userEvent.click(screen.getByRole("button", { name: /правила/i }));
@@ -151,41 +126,25 @@ describe("OfferCard", () => {
         offer={makeOffer()}
         onEditOffer={onEditOffer}
         onEditRules={() => {}}
-        onDelete={() => {}}
+        onDeactivate={() => {}}
       />,
     );
     await userEvent.click(screen.getByRole("button", { name: /редактировать оффер/i }));
     expect(onEditOffer).toHaveBeenCalledTimes(1);
   });
 
-  // Кнопка "Удалить" вызывает onDelete
-  it("клик на Удалить вызывает onDelete", async () => {
-    const onDelete = vi.fn();
+  it("клик на Деактивировать вызывает onDeactivate", async () => {
+    const onDeactivate = vi.fn();
     render(
       <OfferCard
         offer={makeOffer()}
         onEditOffer={() => {}}
         onEditRules={() => {}}
-        onDelete={onDelete}
+        onDeactivate={onDeactivate}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: /удалить/i }));
-    expect(onDelete).toHaveBeenCalledTimes(1);
-  });
-
-  // stop_alerts_count > 0 → danger
-  it("показывает danger-цвет для stop_alerts_count > 0", () => {
-    render(
-      <OfferCard
-        offer={makeOffer()}
-        metrics={makeMetrics({ stop_alerts_count: 3 })}
-        onEditOffer={() => {}}
-        onEditRules={() => {}}
-        onDelete={() => {}}
-      />,
-    );
-    // Значение "3" должно быть в DOM
-    expect(screen.getByText("3")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /деактивировать оффер/i }));
+    expect(onDeactivate).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -195,25 +154,13 @@ import { OfferFormModal } from "@/components/offers/OfferFormModal";
 
 describe("OfferFormModal — создание", () => {
   it("отображает поле code при создании (offer=null)", () => {
-    render(
-      <OfferFormModal
-        open
-        onOpenChange={() => {}}
-        offer={null}
-        onSave={async () => {}}
-      />,
-    );
+    render(<OfferFormModal open onOpenChange={() => {}} offer={null} onSave={async () => {}} />);
     expect(screen.getByLabelText(/код оффера/i)).toBeInTheDocument();
   });
 
   it("НЕ отображает поле code при редактировании", () => {
     render(
-      <OfferFormModal
-        open
-        onOpenChange={() => {}}
-        offer={makeOffer()}
-        onSave={async () => {}}
-      />,
+      <OfferFormModal open onOpenChange={() => {}} offer={makeOffer()} onSave={async () => {}} />,
     );
     // В режиме редактирования нет input для code
     expect(screen.queryByLabelText(/код оффера/i)).not.toBeInTheDocument();
@@ -223,14 +170,7 @@ describe("OfferFormModal — создание", () => {
 
   it("onSave вызывается с правильными данными при создании", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
-    render(
-      <OfferFormModal
-        open
-        onOpenChange={() => {}}
-        offer={null}
-        onSave={onSave}
-      />,
-    );
+    render(<OfferFormModal open onOpenChange={() => {}} offer={null} onSave={onSave} />);
 
     // Вводим код
     await userEvent.clear(screen.getByLabelText(/код оффера/i));
@@ -245,6 +185,8 @@ describe("OfferFormModal — создание", () => {
     // Пиксель оффера
     await userEvent.type(screen.getByLabelText(/fb pixel id/i), "9988776655");
 
+    await userEvent.selectOptions(screen.getByLabelText(/вертикаль/i), "gambling");
+
     // Гео (страны): ввод кода/имени → Enter выбирает совпавшую опцию, хранится ISO-2.
     await userEvent.type(screen.getByLabelText(/страны/i), "de{Enter}br{Enter}de{Enter}");
 
@@ -254,6 +196,7 @@ describe("OfferFormModal — создание", () => {
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({
         code: "GH_AVI", // toUpperCase
+        vertical: "gambling",
         is_active: true,
         pixel_id: "9988776655",
         ad_account_ids: ["111", "222"],
@@ -291,20 +234,11 @@ describe("OfferFormModal — создание", () => {
     await userEvent.type(screen.getByLabelText(/страны/i), "zzzzz{Enter}");
 
     await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
-    expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({ code: "CR2", countries: [] }),
-    );
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ code: "CR2", countries: [] }));
   });
 
   it("показывает ошибку при пустом коде", async () => {
-    render(
-      <OfferFormModal
-        open
-        onOpenChange={() => {}}
-        offer={null}
-        onSave={async () => {}}
-      />,
-    );
+    render(<OfferFormModal open onOpenChange={() => {}} offer={null} onSave={async () => {}} />);
 
     // Не вводим ничего, сразу жмём создать
     await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
@@ -316,14 +250,7 @@ describe("OfferFormModal — создание", () => {
   // Мульти-кабинет: без ID кабинета сабмит блокируется с ошибкой (min 1 обязателен).
   it("показывает ошибку, если кабинеты не указаны", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
-    render(
-      <OfferFormModal
-        open
-        onOpenChange={() => {}}
-        offer={null}
-        onSave={onSave}
-      />,
-    );
+    render(<OfferFormModal open onOpenChange={() => {}} offer={null} onSave={onSave} />);
 
     await userEvent.type(screen.getByLabelText(/код оффера/i), "CR2");
     await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
@@ -335,14 +262,7 @@ describe("OfferFormModal — создание", () => {
   // Мульти-кабинет: мусорный ввод (не числа) — ошибка с перечислением плохих токенов.
   it("показывает ошибку при нечисловом ID кабинета", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
-    render(
-      <OfferFormModal
-        open
-        onOpenChange={() => {}}
-        offer={null}
-        onSave={onSave}
-      />,
-    );
+    render(<OfferFormModal open onOpenChange={() => {}} offer={null} onSave={onSave} />);
 
     await userEvent.type(screen.getByLabelText(/код оффера/i), "CR2");
     // Нечисловой токен отклоняется прямо при добавлении (Enter) — chip не создаётся.
@@ -360,9 +280,9 @@ describe("OfferFormModal — создание", () => {
   // (RulesDrawer). Форма передаёт только identity (покрыто тестами выше).
 });
 
-// ─── OfferDeleteManager тест ──────────────────────────────────────────────────
+// ─── OfferDeactivateManager тест ──────────────────────────────────────────────
 
-import { OfferDeleteManager } from "@/routes/offers/index";
+import { OfferDeactivateManager } from "@/routes/offers/index";
 
 const mockDeleteMutateAsync = vi.fn().mockResolvedValue(null);
 
@@ -371,7 +291,10 @@ vi.mock("@/lib/api/offers", () => ({
   useOffersCompare: vi.fn(() => ({ data: [] })),
   useCreateOffer: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
   useUpdateOffer: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
-  useDeleteOffer: vi.fn(() => ({ mutateAsync: mockDeleteMutateAsync, isPending: false })),
+  useDeactivateOffer: vi.fn(() => ({
+    mutateAsync: mockDeleteMutateAsync,
+    isPending: false,
+  })),
   useOfferRules: vi.fn(() => ({ data: null, isLoading: true, isError: false })),
   useUpdateOfferRules: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
   useSaveOfferRules: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
@@ -379,40 +302,34 @@ vi.mock("@/lib/api/offers", () => ({
   useRulesPreview: vi.fn(() => ({ data: undefined, isLoading: false, isFetching: false })),
 }));
 
-describe("OfferDeleteManager", () => {
+describe("OfferDeactivateManager", () => {
   // ConfirmDialog с confirmWord показывается
-  it("требует ввести код оффера для подтверждения удаления", () => {
+  it("требует ввести код оффера для подтверждения деактивации", () => {
     render(
-      <OfferDeleteManager
-        offer={makeOffer({ code: "CR2" })}
-        open
-        onOpenChange={() => {}}
-      />,
+      <OfferDeactivateManager offer={makeOffer({ code: "CR2" })} open onOpenChange={() => {}} />,
     );
     // Поле ввода confirmWord
     expect(screen.getByPlaceholderText("CR2")).toBeInTheDocument();
   });
 
-  it("кнопка Удалить активна после ввода правильного кода", async () => {
+  it("кнопка Деактивировать активна после ввода правильного кода", async () => {
     render(
-      <OfferDeleteManager
-        offer={makeOffer({ code: "CR2" })}
-        open
-        onOpenChange={() => {}}
-      />,
+      <OfferDeactivateManager offer={makeOffer({ code: "CR2" })} open onOpenChange={() => {}} />,
     );
 
     // Вводим код
     await userEvent.type(screen.getByPlaceholderText("CR2"), "CR2");
 
-    const deleteBtn = screen.getByRole("button", { name: /^удалить$/i });
-    expect(deleteBtn).not.toBeDisabled();
+    const deactivateButton = screen.getByRole("button", {
+      name: /^деактивировать$/i,
+    });
+    expect(deactivateButton).not.toBeDisabled();
   });
 
   it("onConfirm вызывает deleteMutation с id оффера", async () => {
     const onOpenChange = vi.fn();
     render(
-      <OfferDeleteManager
+      <OfferDeactivateManager
         offer={makeOffer({ id: "offer-uuid-1", code: "CR2" })}
         open
         onOpenChange={onOpenChange}
@@ -420,7 +337,7 @@ describe("OfferDeleteManager", () => {
     );
 
     await userEvent.type(screen.getByPlaceholderText("CR2"), "CR2");
-    await userEvent.click(screen.getByRole("button", { name: /^удалить$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^деактивировать$/i }));
 
     expect(mockDeleteMutateAsync).toHaveBeenCalledWith("offer-uuid-1");
   });

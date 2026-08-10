@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -12,7 +15,9 @@ from pydantic import ValidationError
 
 from apps.api.routers.v1.schemas.adset_duplicates import (
     AdsetDuplicateLaunchIn,
+    AdsetDuplicateLaunchOut,
     AdsetDuplicatePreviewIn,
+    AdsetDuplicateStatusOut,
 )
 from core.adset_duplicates.service import (
     AccountMetadata,
@@ -20,6 +25,9 @@ from core.adset_duplicates.service import (
     DuplicateSource,
     DuplicateTask,
     SourceAd,
+    _new_preview_token,
+    _preview_token_digest,
+    _ready_task_payload,
     build_duplicate_preview,
     build_schedule,
     calculate_budget,
@@ -29,6 +37,7 @@ from core.adset_duplicates.service import (
     serialize_duplicate_task,
     validate_structure_caps,
 )
+from core.models.tasks import AdsetDuplicatePreview
 
 
 def _source() -> DuplicateSource:
@@ -46,7 +55,7 @@ def _source() -> DuplicateSource:
             SourceAd("403", "Not selected", "ACTIVE", None),
         ),
         selected_ad_ids=("401", "402"),
-        source_daily_budget_cents=1000,
+        source_daily_budget_minor_units=1000,
     )
 
 
@@ -59,22 +68,79 @@ def test_structure_caps_and_total_objects() -> None:
 
 
 def test_budget_math_differs_for_abo_and_cbo() -> None:
-    abo = calculate_budget(
+    abo, abo_minor_units = calculate_budget(
         budget_level="ABO",
-        daily_budget_cents=1500,
+        daily_budget="15.00",
         campaign_count=3,
         total_adsets=6,
         currency="EUR",
+        currency_exponent=2,
     )
-    cbo = calculate_budget(
+    cbo, cbo_minor_units = calculate_budget(
         budget_level="CBO",
-        daily_budget_cents=1500,
+        daily_budget="15.00",
         campaign_count=3,
         total_adsets=6,
         currency="EUR",
+        currency_exponent=2,
     )
-    assert abo["total_daily_budget_cents"] == 9000
-    assert cbo["total_daily_budget_cents"] == 4500
+    assert abo["total_daily_budget"] == "90.00"
+    assert cbo["total_daily_budget"] == "45.00"
+    assert abo_minor_units == cbo_minor_units == 1500
+
+
+@pytest.mark.parametrize(
+    ("currency", "currency_exponent", "daily_budget", "expected_display", "expected_minor"),
+    [
+        ("JPY", 0, "1500", "1500", 1500),
+        ("USD", 2, "15.00", "15.00", 1500),
+        ("KWD", 3, "1.500", "1.500", 1500),
+    ],
+)
+def test_budget_uses_reviewed_currency_exponent(
+    currency: str,
+    currency_exponent: int,
+    daily_budget: str,
+    expected_display: str,
+    expected_minor: int,
+) -> None:
+    budget, minor_units = calculate_budget(
+        budget_level="ABO",
+        daily_budget=daily_budget,
+        campaign_count=1,
+        total_adsets=1,
+        currency=currency,
+        currency_exponent=currency_exponent,
+    )
+
+    assert budget["unit_daily_budget"] == expected_display
+    assert budget["currency"] == currency
+    assert budget["currency_exponent"] == currency_exponent
+    assert minor_units == expected_minor
+
+
+@pytest.mark.parametrize(
+    ("currency", "currency_exponent", "daily_budget"),
+    [
+        ("JPY", 0, "1.50"),
+        ("KWD", 2, "1.500"),
+        ("XAU", 2, "1.00"),
+    ],
+)
+def test_budget_rejects_unreviewed_or_mismatched_money_identity(
+    currency: str,
+    currency_exponent: int,
+    daily_budget: str,
+) -> None:
+    with pytest.raises(AdsetDuplicateError):
+        calculate_budget(
+            budget_level="ABO",
+            daily_budget=daily_budget,
+            campaign_count=1,
+            total_adsets=1,
+            currency=currency,
+            currency_exponent=currency_exponent,
+        )
 
 
 def test_schedule_defaults_to_tomorrow_in_app_timezone() -> None:
@@ -106,17 +172,30 @@ def test_schedule_uses_zoneinfo_offset_at_future_dst_date() -> None:
     assert schedule["start_time_utc"] == "2026-03-09T04:00:00Z"
 
 
-def test_schedule_fallback_supports_half_hour_offset() -> None:
+def test_schedule_uses_iana_zone_for_half_hour_offset() -> None:
     schedule = build_schedule(
         requested_start_date=date(2026, 7, 17),
-        timezone_name="",
+        timezone_name="Asia/Kolkata",
         timezone_offset_hours=5.5,
         now=datetime(2026, 7, 15, 12, tzinfo=UTC),
     )
-    assert schedule["timezone_name"] == "UTC+05:30"
+    assert schedule["timezone_name"] == "Asia/Kolkata"
     assert schedule["offset"] == "+05:30"
     assert schedule["start_time_local"] == "2026-07-17T00:00:00+05:30"
     assert schedule["start_time_utc"] == "2026-07-16T18:30:00Z"
+
+
+@pytest.mark.parametrize("timezone_name", ["", "Mars/Olympus"])
+def test_schedule_rejects_missing_or_invalid_iana_timezone(timezone_name: str) -> None:
+    with pytest.raises(AdsetDuplicateError, match="валидный IANA") as error:
+        build_schedule(
+            requested_start_date=date(2026, 7, 17),
+            timezone_name=timezone_name,
+            timezone_offset_hours=5.5,
+            now=datetime(2026, 7, 15, 12, tzinfo=UTC),
+        )
+
+    assert error.value.status_code == 503
 
 
 def test_schedule_rejects_today_midnight_that_already_passed() -> None:
@@ -144,6 +223,7 @@ async def test_account_metadata_requires_exact_graph_fields_and_keeps_float_offs
         id="act_123",
         name="India account",
         currency="INR",
+        currency_exponent=2,
         timezone_name="Asia/Kolkata",
         timezone_offset_hours=5.5,
     )
@@ -153,6 +233,26 @@ async def test_account_metadata_requires_exact_graph_fields_and_keeps_float_offs
         query_params={"fields": "id,name,currency,timezone_name,timezone_offset_hours_utc"},
         ad_account_id="act_123",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timezone_name", [None, "", "Mars/Olympus"])
+async def test_account_metadata_rejects_missing_or_invalid_iana_timezone(
+    timezone_name: str | None,
+) -> None:
+    client = AsyncMock()
+    client.execute_graph_call.return_value = {
+        "id": "123",
+        "name": "Untrusted timezone account",
+        "currency": "EUR",
+        "timezone_name": timezone_name,
+        "timezone_offset_hours_utc": 5.5,
+    }
+
+    with pytest.raises(AdsetDuplicateError, match="валидный IANA") as error:
+        await fetch_account_metadata(client, "act_123")
+
+    assert error.value.status_code == 503
 
 
 @pytest.mark.asyncio
@@ -178,7 +278,7 @@ async def test_missing_local_adset_id_is_hydrated_from_read_only_source_ad() -> 
 
 
 @pytest.mark.asyncio
-async def test_hierarchy_hydration_can_recover_all_missing_local_ids() -> None:
+async def test_hierarchy_hydration_rejects_missing_local_account_before_graph() -> None:
     source = replace(_source(), account_id="", campaign_id="", adset_id="")
     client = AsyncMock()
     client.execute_graph_call.return_value = {
@@ -188,10 +288,11 @@ async def test_hierarchy_hydration_can_recover_all_missing_local_ids() -> None:
         "adset_id": "300",
     }
 
-    resolved = await resolve_duplicate_source_hierarchy(client, source)
+    with pytest.raises(AdsetDuplicateError, match="explicit ad_account_id") as exc_info:
+        await resolve_duplicate_source_hierarchy(client, source)
 
-    assert resolved == _source()
-    assert client.execute_graph_call.await_args.kwargs["ad_account_id"] is None
+    assert exc_info.value.status_code == 409
+    client.execute_graph_call.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -245,13 +346,14 @@ def test_preview_uses_all_source_ads_but_worker_payload_only_selection() -> None
             id="act_100",
             name="Account",
             currency="EUR",
+            currency_exponent=2,
             timezone_name="Europe/Kaliningrad",
             timezone_offset_hours=2,
         ),
         campaign_count=2,
         adsets_per_campaign=2,
         budget_level="ABO",
-        daily_budget_cents=1500,
+        daily_budget="15.00",
         requested_start_date=date(2026, 7, 17),
         campaign_name_base=None,
         adset_name_base=None,
@@ -273,13 +375,14 @@ def test_preview_appends_first_owner_tag_to_generated_campaign_names() -> None:
             id="act_100",
             name="Account",
             currency="EUR",
+            currency_exponent=2,
             timezone_name="Europe/Kaliningrad",
             timezone_offset_hours=2,
         ),
         campaign_count=2,
         adsets_per_campaign=1,
         budget_level="ABO",
-        daily_budget_cents=1500,
+        daily_budget="15.00",
         requested_start_date=date(2026, 7, 17),
         campaign_name_base="Editable campaign",
         adset_name_base=None,
@@ -298,13 +401,14 @@ def test_preview_keeps_existing_owner_tag_without_append_warning() -> None:
             id="act_100",
             name="Account",
             currency="EUR",
+            currency_exponent=2,
             timezone_name="Europe/Kaliningrad",
             timezone_offset_hours=2,
         ),
         campaign_count=1,
         adsets_per_campaign=1,
         budget_level="ABO",
-        daily_budget_cents=1500,
+        daily_budget="15.00",
         requested_start_date=date(2026, 7, 17),
         campaign_name_base="MV | Editable campaign",
         adset_name_base=None,
@@ -323,7 +427,7 @@ def test_request_schema_caps_and_draft_body_are_strict() -> None:
         "campaign_count": 1,
         "adsets_per_campaign": 1,
         "budget_level": "ABO",
-        "daily_budget_cents": 100,
+        "daily_budget": "1.00",
         "idempotency_token": "token-1",
     }
     with pytest.raises(ValidationError):
@@ -332,6 +436,109 @@ def test_request_schema_caps_and_draft_body_are_strict() -> None:
         AdsetDuplicateLaunchIn.model_validate(
             {"preview_token": "x" * 32, "requested_by": "spoofed"}
         )
+
+
+def test_preview_token_is_canonical_32_byte_base64url_and_only_digest_is_stable() -> None:
+    token, generated_digest = _new_preview_token()
+    decoded = base64.urlsafe_b64decode(token + "=")
+
+    assert len(token) == 43
+    assert len(decoded) == 32
+    assert generated_digest == hashlib.sha256(decoded).digest()
+    assert _preview_token_digest(token) == generated_digest
+    with pytest.raises(AdsetDuplicateError) as error:
+        _preview_token_digest("x" * 43)
+    assert error.value.status_code == 410
+
+
+def test_plan_digest_covers_full_canonical_execution_payload() -> None:
+    preview = {"source": {"account": {"id": "act_100"}}}
+    params = {
+        "source_adset_id": "300",
+        "selected_ad_ids": ["401"],
+        "daily_budget": "15.00",
+    }
+    payload, digest = _ready_task_payload(preview=preview, task_params=params)
+    other_payload, other_digest = _ready_task_payload(
+        preview={"source": {"account": {"id": "act_101"}}},
+        task_params=params,
+    )
+
+    assert payload["ad_account_id"] == "100"
+    assert payload["params"]["plan_digest"] == digest.hex()
+    assert other_payload["ad_account_id"] == "101"
+    assert digest != other_digest
+
+
+def test_duplicate_preview_postgres_contract_has_no_redis_or_dead_expiry_fields() -> None:
+    root = Path(__file__).resolve().parents[2]
+    service_source = (root / "core/adset_duplicates/service.py").read_text(encoding="utf-8")
+    router_source = (root / "apps/api/routers/v1/adset_duplicates.py").read_text(encoding="utf-8")
+    combined = service_source + router_source
+
+    assert "DepRedis" not in combined
+    assert "adset_duplicate:preview:" not in combined
+    assert "mark_preview_consumed" not in combined
+    assert "best_effort" not in combined
+    assert "connection=conn" in service_source
+    assert "FOR UPDATE" in service_source
+    assert '"expired"' not in router_source
+    assert "expires_at" not in AdsetDuplicateLaunchOut.model_fields
+    assert "expires_at" not in AdsetDuplicateStatusOut.model_fields
+
+
+def test_duplicate_preview_model_has_explicit_integrity_and_cleanup_indexes() -> None:
+    table = AdsetDuplicatePreview.__table__
+    assert set(table.columns.keys()) == {
+        "token_digest",
+        "principal",
+        "preview",
+        "task_payload",
+        "plan_digest",
+        "idempotency_key",
+        "task_id",
+        "created_at",
+        "expires_at",
+        "consumed_at",
+    }
+    assert table.primary_key.columns.keys() == ["token_digest"]
+    assert {constraint.name for constraint in table.constraints if constraint.name is not None} >= {
+        "ck_adset_duplicate_previews_token_digest_sha256",
+        "ck_adset_duplicate_previews_plan_digest_sha256",
+        "ck_adset_duplicate_previews_consumption_coherent",
+        "fk_adset_duplicate_previews_task_id_task_queue",
+    }
+    indexes = {index.name: index for index in table.indexes}
+    assert set(indexes) == {
+        "ix_adset_duplicate_previews_expires_at",
+        "ix_adset_duplicate_previews_task_id",
+    }
+    assert (
+        indexes["ix_adset_duplicate_previews_expires_at"].dialect_options["postgresql"]["where"]
+        is not None
+    )
+
+
+def test_fresh_baseline_contains_only_postgres_duplicate_preview_authority() -> None:
+    baseline = (
+        Path(__file__).resolve().parents[2] / "migrations/versions/0001_safety_first_baseline.sql"
+    ).read_text(encoding="utf-8")
+    table = baseline.split(
+        "CREATE TABLE public.adset_duplicate_previews",
+        1,
+    )[1].split(");", 1)[0]
+
+    assert "token_digest bytea NOT NULL" in table
+    assert "task_payload jsonb NOT NULL" in table
+    assert "task_params jsonb" not in table
+    assert "octet_length(token_digest) = 32" in table
+    assert "octet_length(plan_digest) = 32" in table
+    assert (
+        "CREATE INDEX ix_adset_duplicate_previews_expires_at "
+        "ON public.adset_duplicate_previews USING btree (expires_at) "
+        "WHERE (task_id IS NULL);"
+    ) in baseline
+    assert ("FOREIGN KEY (task_id) REFERENCES public.task_queue(id) ON DELETE CASCADE") in baseline
 
 
 def test_status_serialization_keeps_lowercase_and_created_ids() -> None:

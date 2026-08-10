@@ -30,20 +30,11 @@ pruning по `ad_metrics` (партиционирована по cycle_ts) и н
 Decimal: spend/cpc/cost_per_lead — NUMERIC, не трогаем тип в SQL, на Python
 стороне оборачиваем в Decimal (как в digest_builder).
 
-MID-14 (аудит 02.07): `latest_per_ad_per_day_cte` группирует по
-`date_trunc('day', m.cycle_ts)` — это UTC-сутки (Postgres `date_trunc` без явной
-timezone работает в TZ сессии/сервера, здесь эффективно UTC). Реальный сброс
-spend кабинета (`cabinet day reset`) происходит по TZ рекламного кабинета, а не
-по UTC-полночи. Для кабинетов не в UTC это даёт систематический сдвиг границы
-дня в многодневной аналитике: часть вечерних (по UTC) метрик одних кабинетных
-суток может попасть в "следующий" UTC-день CTE и наоборот — сумма за конкретный
-календарный день кабинета может недосчитать/пересчитать несколько часов на
-границе. Money/стоп-решения НЕ задеты — FSM и evaluator работают на
-latest-cycle snapshot, а не на этой posuточной агрегации. Затронуты только
-многодневные ANALYTICS-отчёты (history/performance/chart-data). Точный фикс —
-`date_trunc('day', m.cycle_ts AT TIME ZONE <cabinet_tz>)` per-account, не
-сделан: требует протаскивания TZ кабинета через все CTE-вызовы; фиксируется
-здесь как известная погрешность до отдельного решения.
+Cabinet-day bucket определяется по валидированному IANA timezone из
+`meta_account_snapshot`. Runtime refresh сохраняет его из Meta Graph; неизвестное
+или невалидное значение явно помечается `timezone_known = false`. UTC используется
+только как совместимая оценка для SQL-бакета и никогда не должен представляться
+потребителем как точный итог.
 """
 
 from __future__ import annotations
@@ -125,23 +116,39 @@ def latest_per_ad_per_day_cte(
 ) -> str:
     """CTE: последний snapshot на (объявление × сутки) — для МНОГОДНЕВНЫХ окон.
 
-    `DISTINCT ON (m.ad_id, date_trunc('day', m.cycle_ts))
-     ORDER BY m.ad_id, date_trunc('day', m.cycle_ts), m.cycle_ts DESC`.
+    `DISTINCT ON (m.ad_id, cabinet_day_bucket)` с per-account IANA timezone.
 
     Каждая строка результата — дневной итог одного объявления за конкретные
     сутки. Дальнейший `SUM(...) GROUP BY ad_id` (или по офферу/кампании)
     корректно складывает дневные итоги ЧЕРЕЗ посуточные сбросы spend.
 
-    `extra_select` — доп. выражения для SELECT-списка (например
-    `, date_trunc('day', m.cycle_ts) AS day_bucket`).
+    Результат всегда содержит `day_bucket` (локальная календарная дата кабинета
+    как timestamp без timezone), canonical `ad_account_id`, `cabinet_timezone` и
+    `timezone_known`. `extra_select` добавляет остальные поля.
     """
     cols = _columns_select(columns, table_alias="m")
-    day_expr = "date_trunc('day', m.cycle_ts)"
+    day_expr = "date_trunc('day', timezone(COALESCE(_metric_timezone.name, 'UTC'), m.cycle_ts))"
     return f"""{cte_alias} AS (
         SELECT DISTINCT ON (m.ad_id, {day_expr})
             m.ad_id,
-            {cols}{extra_select}
+            {cols},
+            {day_expr} AS day_bucket,
+            _metric_campaign.ad_account_id AS ad_account_id,
+            COALESCE(_metric_timezone.name, 'UTC') AS cabinet_timezone,
+            (_metric_timezone.name IS NOT NULL) AS timezone_known{extra_select}
         FROM ad_metrics m
+        JOIN fb_ads _metric_ad ON _metric_ad.id = m.ad_id
+        JOIN fb_adsets _metric_adset ON _metric_adset.id = _metric_ad.adset_id
+        JOIN fb_campaigns _metric_campaign
+          ON _metric_campaign.id = _metric_adset.campaign_id
+        LEFT JOIN meta_account_snapshot _metric_account
+          ON _metric_account.account_id = _metric_campaign.ad_account_id
+        LEFT JOIN LATERAL (
+            SELECT timezone_name.name
+            FROM pg_catalog.pg_timezone_names timezone_name
+            WHERE timezone_name.name = NULLIF(_metric_account.timezone_name, '')
+            LIMIT 1
+        ) _metric_timezone ON TRUE
         WHERE m.cycle_ts BETWEEN :{from_param} AND :{to_param}
         ORDER BY m.ad_id, {day_expr}, m.cycle_ts DESC
     )"""

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,9 +24,7 @@ def _fake_client_and_ctor() -> tuple[AsyncMock, MagicMock]:
     return fake_client, fake_ctor
 
 
-_FAKE_SETTINGS = MagicMock(
-    vision_x_token="tok", vision_api_url="http://vision", vision_profile_id="pid"
-)
+_FAKE_SETTINGS = MagicMock(vision_api_url="http://vision")
 
 
 # observer: _default_gate_factory собирает клиента с config, зовёт start(), отдаёт обёртку
@@ -33,17 +32,33 @@ async def test_observer_default_gate_factory_uses_config_and_start() -> None:
     from apps.observer_worker.main import _default_gate_factory
 
     fake_client, fake_ctor = _fake_client_and_ctor()
+    engine = object()
+    runtime_loader = AsyncMock(
+        return_value=SimpleNamespace(
+            x_token="tok",
+            profile_id="pid",
+            configuration_revision="revision-1",
+        )
+    )
     with (
         patch("clients.python_grpc.client.BrowserAgentClient", fake_ctor),
-        patch("clients.python_grpc.client.BrowserAgentConfig", MagicMock()),
         patch("core.config.get_settings", return_value=_FAKE_SETTINGS),
+        patch("core.vision_runtime.load_vision_runtime_config", runtime_loader),
     ):
-        gate = await _default_gate_factory()
+        gate = await _default_gate_factory(engine)  # type: ignore[arg-type]
 
     fake_ctor.assert_called_once()
+    runtime_loader.assert_awaited_once_with(engine)
+    config = fake_ctor.call_args.args[0]
+    assert config.vision_x_token == "tok"
+    assert config.vision_profile_id == "pid"
+    assert config.vision_api_url == "http://vision"
     fake_client.start.assert_awaited_once()
     # Фабрика возвращает ScannerGate-обёртку с методом run_one_scan
     assert hasattr(gate, "run_one_scan")
+    assert gate.configuration_revision == "revision-1"
+    await gate.close()
+    fake_client.close.assert_awaited_once()
 
 
 # Прямой контроль: у BrowserAgentClient есть start(), но НЕТ connect() — источник бывшего бага

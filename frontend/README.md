@@ -1,8 +1,10 @@
-# FB Stop Bot — Frontend (web)
+# FB Agent — Frontend (web)
 
-Production-grade web-интерфейс FB Stop Bot.
+Production-grade web-интерфейс FB Agent.
 
-Editorial-monochrome design, dark-only, desktop 1280+ minimum. Source of truth — `docs/frontend_design.md`.
+Calm-industrial operator console с responsive web и mobile action flows.
+Токены и обязательные data states задаются общими packages; документ
+`docs/frontend_design.md` остаётся design reference, а не API contract.
 
 Часть монорепо на **pnpm workspaces**. Установка зависимостей — `pnpm install` из корня репозитория.
 
@@ -14,12 +16,12 @@ Editorial-monochrome design, dark-only, desktop 1280+ minimum. Source of truth �
 - **TanStack Router** — file-based routing (`src/routes/`)
 - **TanStack Query 5** — server state
 - **TanStack Table v8 + Virtual** — таблицы с виртуализацией
-- **Zustand 5** — cross-page UI state (sidebar / density)
+- **Zustand 5** — cross-page UI state (sidebar / display timezone)
 - **Radix UI** primitives (Dialog, Tooltip, Tabs, Toast)
 - **Lucide Icons** — иконки
-- **Framer Motion** — анимации (используется минимально)
-- **Storybook 8** — изоляция компонентов
-- **Vitest** + Testing Library — тесты
+- **Recharts 3** — доступные desktop/mobile-web графики
+- **Storybook 10** + a11y/Vitest — изоляция и browser component tests
+- **Vitest** + Testing Library + self-hosted Playwright — unit/component/responsive tests
 
 ## Команды
 
@@ -43,6 +45,8 @@ pnpm gen:api
 # Storybook на порту 6006
 pnpm --filter fb-stop-bot-frontend storybook
 pnpm --filter fb-stop-bot-frontend build-storybook
+pnpm --filter fb-stop-bot-frontend test:storybook  # Chromium + a11y
+pnpm --filter fb-stop-bot-frontend test:e2e        # viewports 360…1920
 
 # Тесты
 pnpm --filter fb-stop-bot-frontend test        # один прогон
@@ -63,15 +67,10 @@ frontend/
 ├── public/                       # статика (favicon)
 ├── src/
 │   ├── main.tsx                  # точка входа React
-│   ├── styles/
-│   │   ├── globals.css           # точка входа CSS
-│   │   ├── tokens.css            # design tokens + @theme
-│   │   ├── fonts.css             # JetBrains Mono + Inter Tight
-│   │   └── reset.css             # минимальный reset
+│   ├── styles/                    # globals, fonts, reset
 │   ├── lib/
-│   │   ├── api/                  # TanStack Query клиенты per-domain
-│   │   ├── types/                # TypeScript типы responses
-│   │   ├── websocket/            # WS hook + reconnect/polling
+│   │   ├── api/                  # domain adapters поверх typed client
+│   │   ├── websocket/            # WS lifecycle и snapshot reconciliation
 │   │   ├── utils/                # cn, formatters
 │   │   ├── constants/            # FSM states, task statuses
 │   │   └── hooks/                # custom hooks
@@ -79,16 +78,20 @@ frontend/
 │   ├── components/
 │   │   ├── ui/                   # base (Button, Input, Card, Badge, ...)
 │   │   ├── layout/               # Shell, Sidebar, TopBar, PageHeader
-│   │   ├── data/                 # Table, KPICard, ChartWrapper
-│   │   └── domain/               # AlertEventRow, DraftCard, TaskQueueRow
+│   │   ├── data/                 # Table, AccessibleChartFrame, timeline
+│   │   └── domain/               # operator-facing domain components
+│   ├── features/                 # typed operator vertical slices
 │   ├── routes/                   # TanStack Router file-based
 │   │   ├── __root.tsx
-│   │   ├── index.tsx             # Dashboard (placeholder)
+│   │   ├── index.tsx             # Operator snapshot: «Сейчас»
+│   │   ├── actions/              # Lifecycle действий
 │   │   ├── ads/
+│   │   ├── analytics/
+│   │   ├── campaigns/
+│   │   ├── incidents/
 │   │   ├── offers/
-│   │   ├── history/
 │   │   ├── settings/
-│   │   └── drafts/
+│   │   └── system/
 │   ├── routeTree.gen.ts          # автогенерируется TanStack Router plugin
 │   └── tests/                    # vitest setup + базовые тесты
 ├── stories/                      # Storybook stories
@@ -109,12 +112,18 @@ frontend/
 - **Default `border-radius: 0`.** Если ставишь radius, обоснуй.
 - **Никаких файлов >500 строк** в новом коде.
 - **Server data → TanStack Query.** Form state → react-hook-form. Cross-page UI → Zustand. URL state → TanStack Router search params.
-- **Density toggle** (`comfortable` 32px / `compact` 24px) — Zustand + CSS variable `--table-row-height`.
-- **Dark-only.** Light mode — отдельная итерация.
+- Статус всегда выражается icon + label + color; цвет не является единственным
+  носителем смысла.
+- Основной текст не меньше 16 px, вторичный — 14 px, служебный — 12 px;
+  interactive target не меньше 44×44 px.
+- `partial`, `stale`, `unavailable` и `unknown` никогда не выглядят зелёными.
 
 ## Контрактные типы (OpenAPI codegen)
 
-TypeScript-типы генерируются из OpenAPI-схемы FastAPI — это **источник истины**, а не ручной `api.ts`.
+TypeScript-типы генерируются из OpenAPI-схемы FastAPI. Typed transport и query
+layer находятся в `packages/operator-api`; общие states, formatters и
+view-models — в `packages/shared`. Строковые URL и ручные response interfaces в
+feature-код не добавляются.
 
 ### Почему ручные типы — риск
 
@@ -134,39 +143,30 @@ pnpm gen:api                # → packages/shared/src/api/generated.ts
 ### Файлы
 
 - `frontend/openapi.json` — экспортированная схема (в git, фронт работает офлайн).
-- `frontend/src/lib/types/api-generated.ts` — автогенерированные типы (в git).
-- `frontend/src/lib/types/api.ts` — ручные alias-типы для удобства; при расхождении `api-generated.ts` — победитель.
+- `packages/shared/src/api/generated.ts` — generated schema types.
+- `packages/operator-api/` — `openapi-fetch`/query client и hooks.
+- `packages/shared/src/operator/` — общие view-models для web и TMA.
 
-### Endpoints без response_model (типов нет в generated)
-
-| Endpoint | Причина |
-|---|---|
-| `DELETE /api/dashboard/auto-enable-disabled/{fb_ad_id}` | 204 No Content |
-| `DELETE /api/dashboard/disable-tasks/{task_id}` | 204 No Content |
-| `DELETE /api/fake-deposits/{fb_ad_id}` | 204 No Content |
-| `DELETE /api/offers/{offer_id}` | 204 No Content |
-| `POST /api/v1/postback/adsetpro` | JSONResponse без response_model |
-
-### Plan миграции на generated типы
-
-1. В новых компонентах: `components["schemas"]["XxxOut"]` из `api-generated.ts` напрямую.
-2. Постепенно заменить ручные типы в `api.ts` на `export type X = components["schemas"]["XOut"]` алиасы.
-3. Удалить поля с `@deprecated` после обновления всех компонентов.
-4. CI: `make gen-api-types && git diff --exit-code frontend/openapi.json frontend/src/lib/types/api-generated.ts` — провалит PR если backend изменился, а codegen не перегнали.
+CI должен проваливаться, если backend contract изменился, а OpenAPI/codegen не
+обновлены.
 
 ## Backend
 
-Этот фронт интегрируется с 61 endpoint бэка (см. `apps/api/routers/v1/`). Префикс
-`/api`. В production browser использует same-origin Telegram session; Caddy
+Префикс API — `/api`. В production browser использует same-origin Telegram session; Caddy
 добавляет server-only `X-API-Key` только в upstream-запрос. Ключ не компилируется
 во frontend и не хранится в browser storage.
 
 Vite proxy уже настроен: запросы к `/api` идут на `http://localhost:8100`.
 
-WebSocket-хук `useDashboardSocket` подключается к `/ws/dashboard`, при 3 неудачных reconnect'ах автоматически отдаёт стейт `pollingFallback=true` — TanStack Query берёт на себя refetch. То есть бэкенду НЕ обязательно реализовывать WS на этом этапе.
+Operator pages читают типизированные `/api/operator/*`. `/ws/operator` несёт
+sequence и snapshot revision; gap вызывает одно snapshot reconciliation и не
+запускает broad invalidation sweep.
 
 ## Реализованные страницы
 
-6 полных страниц: Dashboard, Ads (+ drawer деталей), Drafts, Offers, History, Settings (табы Observer/Telegram/Vision/Workers/AI/Health).
+Реализованы responsive «Сейчас», lifecycle «Действия», «Реклама», analytics,
+campaign runs, incidents, offers, settings, sources и remote desktop.
+Mobile использует cards из тех же row view-models, а не сжатые desktop tables.
+Campaign creation полностью доступен в responsive web и TMA через platform-native layouts.
 
-~331 vitest-тест. Storybook 8. Виртуализованная таблица (@tanstack/react-virtual). WS live-invalidation с backoff + polling fallback.
+Storybook 10 запускает stories и a11y в headless Chromium. Playwright проверяет 360, 390, 430, 768, 1280, 1440 и 1920 px без horizontal page scroll.

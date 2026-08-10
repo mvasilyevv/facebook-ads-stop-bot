@@ -1,6 +1,6 @@
-# FB Stop Bot — Mini App (Telegram)
+# FB Agent — Mini App (Telegram)
 
-Telegram Mini App для FB Stop Bot. Мобильная адаптация основного интерфейса.
+Telegram Mini App для FB Agent. Мобильная операторская оболочка.
 
 Часть монорепо на **pnpm workspaces**. Установка зависимостей — `pnpm install` из корня репозитория.
 
@@ -13,15 +13,20 @@ Telegram Mini App для FB Stop Bot. Мобильная адаптация ос
 - **TanStack Query 5** — server state
 - **`@fb/shared`** — общие типы, форматтеры, FSM-константы, дизайн-токены
 - **TMA auth** — Telegram initData → Bearer token
+- **Lightweight SVG chart renderer** — без Recharts в TMA bundle
 - **Vitest** + Testing Library — тесты
 
 ## Дизайн
 
 Тот же editorial-monochrome dark канон, что и web-фронт. Мобильная адаптация: нижний tab-bar, safe-area, touch-targets ≥44px. Порт dev **5175**, base `/tma/`.
 
-## Экраны (9)
+## Action-first shell
 
-Dashboard, Ads, Ad Detail, Drafts, Health, History, Offers, Scripts, Settings.
+Нижняя навигация: `Сейчас | Действия | Реклама | Ещё`. Monitoring, attention
+feed, economy, funnel и action lifecycle используют тот же typed
+snapshot/view-model, что и web. Из «Ещё» доступны analytics, sources, settings,
+desktop и история campaign runs. Campaign wizard, scripts и отдельный
+history route в TMA отсутствуют намеренно.
 
 ## Команды
 
@@ -39,7 +44,7 @@ pnpm --filter fb-agent-mini build
 # Превью production build
 pnpm --filter fb-agent-mini preview
 
-# Тесты (~89 тестов)
+# Тесты
 pnpm --filter fb-agent-mini test        # один прогон
 pnpm --filter fb-agent-mini test:watch  # watch mode
 
@@ -54,11 +59,11 @@ pnpm --filter fb-agent-mini typecheck
 frontend-mini/
 ├── src/
 │   ├── main.tsx            # точка входа
-│   ├── routes/             # TanStack Router file-based (9 экранов)
+│   ├── routes/             # TanStack Router file-based, action-first screens
 │   ├── components/         # UI-компоненты (переиспользуют дизайн-токены из @fb/shared)
 │   ├── lib/
-│   │   ├── api/            # TanStack Query клиенты per-domain
-│   │   └── tma.ts          # TMA auth helpers
+│   │   ├── operatorApi.ts  # общий typed operator query layer
+│   │   └── tg.ts           # TMA auth, viewport and safe-area helpers
 │   └── styles/             # globals.css + import tokens из @fb/shared
 ├── index.html
 ├── package.json

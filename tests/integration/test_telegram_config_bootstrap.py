@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Integration: env bootstrap telegram_config в реальном Postgres."""
+"""Integration: explicit Telegram env adoption and DB-only runtime."""
 
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -12,7 +13,18 @@ from sqlalchemy import text
 
 from core.config import get_settings
 from core.crypto import decrypt, encrypt
-from core.telegram.service import load_telegram_config
+from core.telegram.service import (
+    bootstrap_telegram_config_from_env,
+    load_telegram_config,
+)
+
+
+def _bootstrap_settings(token: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        telegram_bot_token=SecretStr(token),
+        frontend_origin="https://app.example.test",
+        telegram_webhook_secret=SecretStr("integration-webhook-secret"),
+    )
 
 
 @pytest_asyncio.fixture
@@ -25,15 +37,21 @@ async def clean_telegram_config(pg_engine):
 
 
 @pytest.mark.asyncio
-async def test_env_bootstrap_is_encrypted_idempotent_and_concurrency_safe(
-    pg_engine, clean_telegram_config, monkeypatch
+async def test_explicit_bootstrap_is_encrypted_idempotent_and_concurrency_safe(
+    pg_engine, clean_telegram_config
 ) -> None:
     env_token = "123456789:INTEGRATION_BOOTSTRAP_TOKEN"
-    monkeypatch.setattr(get_settings(), "telegram_bot_token", SecretStr(env_token))
+    settings = _bootstrap_settings(env_token)
 
-    configs = await asyncio.gather(*(load_telegram_config(pg_engine) for _ in range(4)))
+    inserted = await asyncio.gather(
+        *(bootstrap_telegram_config_from_env(pg_engine, settings=settings) for _ in range(4))
+    )
 
-    assert all(config is not None and config.bot_token == env_token for config in configs)
+    assert inserted.count(True) == 1
+    assert inserted.count(False) == 3
+    config = await load_telegram_config(pg_engine)
+    assert config is not None
+    assert config.bot_token == env_token
     async with pg_engine.connect() as conn:
         rows = (
             await conn.execute(
@@ -52,26 +70,58 @@ async def test_env_bootstrap_is_encrypted_idempotent_and_concurrency_safe(
 
 
 @pytest.mark.asyncio
-async def test_database_and_explicit_ui_disable_remain_authoritative(
+async def test_runtime_missing_row_does_not_adopt_environment(
     pg_engine, clean_telegram_config, monkeypatch
 ) -> None:
-    monkeypatch.setattr(get_settings(), "telegram_bot_token", SecretStr("env-token"))
+    monkeypatch.setattr(
+        get_settings(),
+        "telegram_bot_token",
+        SecretStr("123456789:RUNTIME_MUST_NOT_IMPORT"),
+    )
+
+    assert await load_telegram_config(pg_engine) is None
+
+    async with pg_engine.connect() as conn:
+        exists = await conn.scalar(
+            text(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM telegram_config
+                    WHERE singleton_key = 'default'
+                )
+                """
+            )
+        )
+    assert exists is False
+
+
+@pytest.mark.asyncio
+async def test_database_and_explicit_ui_disable_remain_authoritative(
+    pg_engine, clean_telegram_config
+) -> None:
     ui_encrypted = encrypt("ui-token")
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
                 """
-                INSERT INTO telegram_config (singleton_key, bot_token_encrypted, poller_offset)
-                VALUES ('default', :token, 23)
+                INSERT INTO telegram_config (singleton_key, bot_token_encrypted)
+                VALUES ('default', :token)
                 """
             ),
             {"token": ui_encrypted},
         )
 
+    assert (
+        await bootstrap_telegram_config_from_env(
+            pg_engine,
+            settings=_bootstrap_settings("env-token"),
+        )
+        is False
+    )
     configured = await load_telegram_config(pg_engine)
     assert configured is not None
     assert configured.bot_token == "ui-token"
-    assert configured.poller_offset == 23
 
     async with pg_engine.begin() as conn:
         await conn.execute(
@@ -84,6 +134,13 @@ async def test_database_and_explicit_ui_disable_remain_authoritative(
             )
         )
 
+    assert (
+        await bootstrap_telegram_config_from_env(
+            pg_engine,
+            settings=_bootstrap_settings("env-token-after-disable"),
+        )
+        is False
+    )
     assert await load_telegram_config(pg_engine) is None
     async with pg_engine.connect() as conn:
         encrypted = await conn.scalar(

@@ -14,6 +14,7 @@ from apps.cleanup_worker.retention import (
     is_special,
     parse_duration,
 )
+from apps.cleanup_worker.worker import _PARTITIONED
 
 
 # Базовый кейс: правильно парсит "14 days"
@@ -64,35 +65,41 @@ def test_cutoff_datetime() -> None:
     assert cutoff == datetime(2026, 5, 12, 12, 0, 0, tzinfo=timezone.utc)
 
 
-# Дефолтная политика содержит все 18 ключей из спецификации DB_REDESIGN.md
-# (+ adsetpro_postback_events на Волне 3 — META_INTEGRATION_PLAN.md §5).
+# Дефолтная политика перечисляет все текущие durable-хранилища с retention.
 def test_default_policy_keys() -> None:
     policy = get_default_policy()
     expected_keys = {
-        "ad_library_scan",
-        "ad_library_ad_orphan",
-        "ad_library_snapshot",
-        "ad_library_media_orphan",
         "ad_metrics",
         "alert_events",
         "scan_runs",
         "meta_api_audit_log",
-        "meta_api_webhook_event",
-        "tracker_postback",
         "adsetpro_postback_events",
         "task_queue_completed",
         "task_queue_failed",
-        "enable_recommendations",
+        "adset_duplicate_previews_expired",
+        "browser_operation_capabilities_expired",
         "telegram_invites_expired",
-        "cabinet_day_archives",
-        "ad_library_winner_archive",
+        "operator_revision_events",
+        "incidents_terminal",
+        "notification_events_terminal",
+        "telegram_action_tokens_terminal",
+        "telegram_navigation_tokens_terminal",
+        "telegram_updates_terminal",
+        "telegram_command_replies_terminal",
         "ai_cache",
     }
     assert set(policy.keys()) == expected_keys
 
 
-# Дефолтная политика для winner_archive — "forever"
-def test_default_policy_winner_forever() -> None:
-    policy = get_default_policy()
-    assert policy["ad_library_winner_archive"] == "forever"
-    assert is_special(policy["ad_library_winner_archive"])
+def test_partition_map_contains_only_current_durable_event_tables() -> None:
+    assert _PARTITIONED == [
+        ("ad_metrics", "cycle_ts", "ad_metrics"),
+        ("alert_events", "created_at", "alert_events"),
+        ("scan_runs", "started_at", "scan_runs"),
+        ("meta_api_audit_log", "created_at", "meta_api_audit_log"),
+        (
+            "adsetpro_postback_events",
+            "received_at",
+            "adsetpro_postback_events",
+        ),
+    ]

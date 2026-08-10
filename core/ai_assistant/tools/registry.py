@@ -7,7 +7,7 @@
 - list_by_risk(level) — для UI/тестов.
 - schemas() — список JSON Schema для передачи в LLM.
 
-GLOBAL_REGISTRY заполняется side-effect импортами модулей ops/meta/drafts/creative.
+GLOBAL_REGISTRY заполняется side-effect импортами модулей ops/meta/creative.
 """
 
 from __future__ import annotations
@@ -55,6 +55,31 @@ class ToolRegistry:
         if tool is None:
             raise ToolError(f"Неизвестный tool: '{name}'")
         try:
+            if tool.__class__.__module__.startswith("core.ai_assistant.tools.meta."):
+                from core.tasks.browser_fence import (
+                    BrowserFenceLeaseLost,
+                    BrowserOperationBlocked,
+                    BrowserOperationFence,
+                )
+
+                target = str(args.get("ad_account_id") or name).strip()[:128]
+                try:
+                    async with BrowserOperationFence(
+                        ctx.require_engine(),
+                        operation_kind="ai_meta_read",
+                        target=target,
+                    ) as fence:
+                        result = await tool.run(ctx, args)
+                        await fence.assert_held()
+                        return result
+                except BrowserOperationBlocked as exc:
+                    raise ToolError(
+                        "Vision maintenance is active; Marketing API read was not started"
+                    ) from exc
+                except BrowserFenceLeaseLost as exc:
+                    raise ToolError(
+                        "Marketing API read fence was lost; retry after reconciliation"
+                    ) from exc
             return await tool.run(ctx, args)
         except ToolError:
             raise
@@ -64,4 +89,4 @@ class ToolRegistry:
 
 
 GLOBAL_REGISTRY = ToolRegistry()
-"""Заполняется при импорте subpackage'ей tools.ops / tools.meta / tools.drafts / tools.creative."""
+"""Заполняется при импорте subpackage'ей tools.ops / tools.meta / tools.creative."""

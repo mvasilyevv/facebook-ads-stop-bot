@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -10,7 +11,7 @@ def test_caddy_skips_postback_access_log() -> None:
     )[0]
 
     assert "log_skip" in route
-    assert "reverse_proxy 127.0.0.1:8100" in route
+    assert re.search(r"reverse_proxy 127\.0\.0\.1:(?:18100|28100)", route)
     assert "header_up -X-API-Key" in route
     websocket_route = config.split("handle /ws/*", maxsplit=1)[1].split("handle /tma*", maxsplit=1)[
         0
@@ -53,5 +54,4 @@ def test_caddy_keeps_master_key_server_side_and_preserves_tma_auth() -> None:
 
 def test_uvicorn_access_log_is_disabled_for_all_entrypoints() -> None:
     assert "access_log=False" in (ROOT / "run_api.py").read_text(encoding="utf-8")
-    for path in (ROOT / "Makefile", ROOT / "run.sh", ROOT / "docker/Dockerfile.api"):
-        assert "--no-access-log" in path.read_text(encoding="utf-8")
+    assert "--no-access-log" in (ROOT / "docker/Dockerfile.api").read_text(encoding="utf-8")

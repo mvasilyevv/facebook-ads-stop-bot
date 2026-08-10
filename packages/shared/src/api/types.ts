@@ -1,119 +1,96 @@
-/**
- * Ergonomic-алиасы поверх generated.ts.
- * Импортируй из этого файла, а не из generated напрямую —
- * generated меняется автоматически, здесь — стабильный публичный контракт.
- */
+/** Stable ergonomic aliases over the generated OpenAPI contract. */
 
 import type { components } from "./generated";
 
-// ─── Объявления ─────────────────────────────────────────────────────────────
-
-/** Снимок одного объявления для /dashboard/ads, /dashboard/incidents */
-export type AdSnapshot = components["schemas"]["AdSnapshotOut"];
-
-/** Блок метрик внутри AdSnapshot */
-export type MetricsBlock = components["schemas"]["MetricsBlock"];
-
-/** Инцидент = AdSnapshot + incident-поля */
-export type Incident = components["schemas"]["IncidentOut"];
-
-/** Полный timeline объявления (метрики + алерты + задачи) */
-export type AdTimeline = components["schemas"]["AdTimelineResponse"];
-
-// ─── Алерты ──────────────────────────────────────────────────────────────────
-
-/** Одна запись alert_events c JOIN по fb_ads/offers */
-export type AlertEvent = components["schemas"]["AlertEventOut"];
-
-// ─── Задачи ──────────────────────────────────────────────────────────────────
-
-/** Строка task_queue в формате для фронта (uppercase status) */
-export type TaskQueueRow = components["schemas"]["TaskQueueRowOut"];
-
-/** Enable-recommendation строка */
-export type EnableRecommendationRow = components["schemas"]["EnableRecommendationRowOut"];
-
-// ─── Офферы ──────────────────────────────────────────────────────────────────
-
-/** Оффер с правилами */
 export type Offer = components["schemas"]["OfferOut"];
-
-/** Правила оффера */
 export type OfferRules = components["schemas"]["OfferRuleOut"];
-
-// ─── Dashboard ────────────────────────────────────────────────────────────────
-
-/** 14 scalar-полей для /dashboard/stats */
-export type DashboardStats = components["schemas"]["DashboardStatsOut"];
-
-/** Батч-ответ: stats + incidents + alerts + disable + enable_recommendations */
-export type DashboardBatch = components["schemas"]["DashboardBatchOut"];
-
-/** Топ-кампании, offer-leaderboard, топ-нарушения правил */
-export type DashboardPerformance = components["schemas"]["DashboardPerformanceOut"];
-
-/** Точка метрик для /dashboard/spend-history (не бакетированная) */
-export type SpendPoint = components["schemas"]["SpendPointOut"];
-
-/** Бакетированная точка для /dashboard/chart-data (hour|day) */
-export type ChartBucket = components["schemas"]["ChartBucketOut"];
-
-// ─── История ─────────────────────────────────────────────────────────────────
-
-/** Сводка за период: spend/impressions/alerts/tasks */
-export type HistorySummary = components["schemas"]["HistorySummaryOut"];
-
-/** Одна строка объединённого timeline (alert + task) */
-export type HistoryTimelineItem = components["schemas"]["HistoryTimelineItem"];
-
-/** История по кампаниям */
-export type HistoryCampaign = components["schemas"]["HistoryCampaignOut"];
-
-/** История по офферам */
-export type HistoryOffer = components["schemas"]["HistoryOfferOut"];
-
-/** История по объявлениям */
-export type HistoryAd = components["schemas"]["HistoryAdOut"];
-
-/** Одно событие алерта в истории (drill-down) */
-export type HistoryEvent = components["schemas"]["HistoryEventOut"];
-
-// ─── Observer / Health ────────────────────────────────────────────────────────
-
-/** Статус observer-воркера из Redis observer:runtime */
-export type ObserverStatus = components["schemas"]["ObserverStatusResponse"];
-
-/** Детальный health (workers online/offline) */
-export type HealthDetails = components["schemas"]["HealthDetailsResponse"];
-
-// ─── Settings ─────────────────────────────────────────────────────────────────
 
 export type ObserverConfig = components["schemas"]["ObserverSettingsResponse"];
 export type TelegramSettings = components["schemas"]["TelegramSettingsResponse"];
+export type TelegramNotificationDiagnostics =
+  components["schemas"]["TelegramNotificationDiagnosticsResponse"];
 
-// ─── TMA-специфичные ─────────────────────────────────────────────────────────
+type GeneratedAnalyticsMetrics = components["schemas"]["AnalyticsMetricsOut"];
+type AnalyticsMetricKey =
+  | "spend"
+  | "impressions"
+  | "clicks"
+  | "leads"
+  | "registrations"
+  | "ftds"
+  | "confirmed_deposits"
+  | "redeposits"
+  | "revenue";
 
-/** Детальная страница объявления в TMA */
-export type TmaAdDetail = components["schemas"]["TmaAdDetailResponse"];
+export type AnalyticsMetrics = Omit<GeneratedAnalyticsMetrics, AnalyticsMetricKey> & {
+  spend: string | null;
+  impressions: number | null;
+  clicks: number | null;
+  leads: number | null;
+  registrations: number | null;
+  ftds: number | null;
+  confirmed_deposits: number | null;
+  redeposits: number | null;
+  revenue: string | null;
+};
 
-// ─── Статистика залива ───────────────────────────────────────────────────────
+type AnalyticsSectionState = {
+  state: components["schemas"]["DataState"];
+  as_of: string | null;
+  freshness_seconds: number | null;
+  issues: string[];
+};
 
-/** Воронка текущих суток кабинета: тоталы + производные + почасовые дельты + трекер */
-export type StatsToday = components["schemas"]["StatsTodayOut"];
+type GeneratedAnalyticsPerformanceRow =
+  components["schemas"]["AnalyticsPerformanceRowOut"];
+export type AnalyticsPerformanceRow = Omit<
+  GeneratedAnalyticsPerformanceRow,
+  AnalyticsMetricKey
+> &
+  AnalyticsMetrics & {
+    state: components["schemas"]["DataState"];
+    issues: string[];
+  };
 
-/** Воронка за период: тоталы + производные + подневные серии Meta и трекера */
-export type StatsPeriod = components["schemas"]["StatsPeriodOut"];
-
-/** Тоталы воронки Meta (money-поля — Decimal-строки) */
-export type FunnelTotals = components["schemas"]["FunnelTotalsOut"];
-
-/** Производные метрики воронки (None = деление на ноль → «—») */
-export type FunnelDerived = components["schemas"]["FunnelDerivedOut"];
-
-// ─── Единая аналитика ──────────────────────────────────────────────────────
-
-export type AnalyticsPerformance = components["schemas"]["AnalyticsPerformanceOut"];
-export type AnalyticsPerformanceRow = components["schemas"]["AnalyticsPerformanceRowOut"];
+type GeneratedAnalyticsPerformance =
+  components["schemas"]["AnalyticsPerformanceOut"];
+export type AnalyticsPerformance = Omit<
+  GeneratedAnalyticsPerformance,
+  "totals" | "rows"
+> &
+  AnalyticsSectionState & {
+    totals: AnalyticsMetrics;
+    rows: AnalyticsPerformanceRow[];
+  };
 export type AnalyticsLiveBudget = components["schemas"]["AnalyticsLiveBudgetOut"];
-export type AnalyticsLiveBudgetSeries = components["schemas"]["AnalyticsLiveBudgetSeriesOut"];
-export type AnalyticsDaypart = components["schemas"]["AnalyticsDaypartOut"];
+type GeneratedBudgetPoint = components["schemas"]["AnalyticsBudgetPointOut"];
+export type AnalyticsLiveBudgetSeries = Omit<
+  components["schemas"]["AnalyticsLiveBudgetSeriesOut"],
+  "points"
+> &
+  AnalyticsSectionState & {
+    sources: components["schemas"]["AnalyticsSourcesOut"];
+    points: Array<
+      Omit<GeneratedBudgetPoint, "actual" | "base" | "stop"> & {
+        actual: string | null;
+        base: string | null;
+        stop: string | null;
+      }
+    >;
+  };
+
+type GeneratedDaypartCell = components["schemas"]["AnalyticsDaypartCellOut"];
+export type AnalyticsDaypart = Omit<
+  components["schemas"]["AnalyticsDaypartOut"],
+  "cells"
+> &
+  AnalyticsSectionState & {
+    sources: components["schemas"]["AnalyticsSourcesOut"];
+    cells: Array<
+      Omit<GeneratedDaypartCell, "clicks" | "registrations" | "ftds"> & {
+        clicks: number | null;
+        registrations: number | null;
+        ftds: number | null;
+      }
+    >;
+  };

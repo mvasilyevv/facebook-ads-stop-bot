@@ -7,7 +7,6 @@ import json
 import logging
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -16,6 +15,7 @@ import core.adset_pro.reconciliation as reconciliation
 from core.adset_pro.ingest import IngestResult
 from core.adset_pro.reconciliation import ProviderReconciliationResult
 from core.adset_pro.schemas import ConversionRow
+from core.analytics import DEFAULT_ANALYTICS_WINDOW
 
 
 class _FakeClient:
@@ -103,11 +103,11 @@ async def test_reconcile_normalizes_aliases_and_repairs_only_missing(monkeypatch
     assert result.accepted == 1
     assert result.duplicates == 1
     assert result.skipped == 2
-    assert result.ignored == result.skipped
     assert result.drift_before == 1
     assert result.drift_after == 0
     assert [event.event_type for event in ingested_events] == ["registration", "ftd"]
-    assert client.requested == (date(2026, 7, 12), date(2026, 7, 14))
+    assert reconciliation.DEFAULT_PROVIDER_LOOKBACK == DEFAULT_ANALYTICS_WINDOW
+    assert client.requested == (date(2026, 7, 7), date(2026, 7, 14))
     audit.assert_awaited_once()
 
 
@@ -130,10 +130,6 @@ async def test_reconcile_uses_db_first_factory_and_closes_owned_client(monkeypat
     create_client = AsyncMock(return_value=client)
     local_facts = AsyncMock(side_effect=[set(), set()])
     audit = AsyncMock()
-    settings = SimpleNamespace(
-        adsetpro_mcp_key=SimpleNamespace(get_secret_value=lambda: "mcp_env_key")
-    )
-    monkeypatch.setattr(reconciliation, "get_settings", lambda: settings)
     monkeypatch.setattr(reconciliation, "resolve_adsetpro_api_key", resolve_key)
     monkeypatch.setattr(reconciliation, "create_adsetpro_client", create_client)
     monkeypatch.setattr(reconciliation, "_local_fact_keys", local_facts)
@@ -146,7 +142,6 @@ async def test_reconcile_uses_db_first_factory_and_closes_owned_client(monkeypat
 
     assert result.status == "ok"
     resolve_key.assert_awaited_once()
-    assert resolve_key.await_args.kwargs["fallback"] == "mcp_env_key"
     create_client.assert_awaited_once()
     assert create_client.await_args.kwargs == {"api_key": "mcp_db_key"}
     assert client.started is True
@@ -217,6 +212,61 @@ async def test_one_bad_row_yields_partial_result_and_continues(monkeypatch) -> N
     assert result.accepted == 1
     assert result.drift_after == 1
     assert result.error == "1 row(s): ValueError"
+
+
+@pytest.mark.parametrize(
+    ("raw_revenue", "issue"),
+    [
+        (None, "revenue_missing"),
+        ("not-a-number", "revenue_invalid"),
+        ("NaN", "revenue_invalid"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_provider_unknown_revenue_is_ingested_as_null_and_marks_partial(
+    monkeypatch,
+    raw_revenue,
+    issue,
+) -> None:
+    raw = {
+        "click_id": "quality-row",
+        "event_type": "ftd",
+        "ext_sub8": "120000000001",
+        "currency": "USD",
+    }
+    if raw_revenue is not None:
+        raw["revenue"] = raw_revenue
+    row = ConversionRow.from_api_row(raw)
+    local_facts = AsyncMock(side_effect=[set(), {("ftd", "quality-row", "")}])
+    audit = AsyncMock()
+    ingested_events = []
+
+    async def _ingest(_engine, event, *, record_duplicate):
+        assert record_duplicate is False
+        ingested_events.append(event)
+        return IngestResult(
+            inserted=True,
+            is_duplicate=False,
+            event_id=3,
+            fb_ad_fk=None,
+        )
+
+    monkeypatch.setattr(reconciliation, "_local_fact_keys", local_facts)
+    monkeypatch.setattr(reconciliation, "_write_audit", audit)
+    monkeypatch.setattr(reconciliation, "ingest_postback", _ingest)
+
+    result = await reconciliation.reconcile_provider_events(
+        object(),
+        now=datetime(2026, 7, 14, 12, 0, tzinfo=UTC),
+        client=_FakeClient([row]),
+    )
+
+    assert row.issues == (issue,)
+    assert [event.revenue for event in ingested_events] == [None]
+    assert result.accepted == 1
+    assert result.status == "partial"
+    assert result.error == f"1 incomplete row(s): {issue}"
+    audit.assert_awaited_once()
 
 
 class _CapturingConnection:

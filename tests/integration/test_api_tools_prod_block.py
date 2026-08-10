@@ -45,7 +45,7 @@ async def test_creative_uniquify_blocked_in_prod() -> None:
             files={"files": ("test.png", io.BytesIO(b"\x89PNG\r\n"), "image/png")},
         )
     assert resp.status_code == 403
-    assert "DEV_TOOLS_ENABLED" in resp.json()["detail"]
+    assert "DEV_TOOLS_ENABLED" in resp.json()["message"]
 
 
 # POST /tools/creative-uniquify/open-folder без флага → 403
@@ -59,7 +59,7 @@ async def test_open_folder_blocked_in_prod() -> None:
             json={"path": "/Users/user/Documents/FB_Agent_Creo/offer"},
         )
     assert resp.status_code == 403
-    assert "DEV_TOOLS_ENABLED" in resp.json()["detail"]
+    assert "DEV_TOOLS_ENABLED" in resp.json()["message"]
 
 
 # campaign-create/folders и /plan вынесены из dev-guard (prod-safe) — см. ручку 6.
