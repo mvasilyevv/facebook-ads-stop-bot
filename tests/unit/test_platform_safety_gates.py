@@ -656,6 +656,12 @@ def test_pgbackrest_uses_configured_database_owner() -> None:
     assert "pg1-user=postgres" not in config
 
 
+def test_server_release_never_writes_python_bytecode_into_immutable_tree() -> None:
+    release = _source("scripts/server-platform-release.sh")
+
+    assert "export PYTHONDONTWRITEBYTECODE=1" in release
+
+
 def test_deploy_and_every_reconciler_share_one_flock() -> None:
     parent = _source("scripts/server-platform-release.sh")
     deploy = _source("scripts/bluegreen-deploy.sh")

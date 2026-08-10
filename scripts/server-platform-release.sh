@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
+# Root can create bytecode even inside an otherwise read-only release tree.
+# Keep reconciliation and every Python helper from mutating the immutable tree.
+export PYTHONDONTWRITEBYTECODE=1
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
