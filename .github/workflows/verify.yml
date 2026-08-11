@@ -73,19 +73,7 @@ jobs:
 
       - name: Regenerate committed gRPC stubs
         run: |
-          python -m grpc_tools.protoc \
-            -Iproto \
-            --python_out=clients/python_grpc \
-            --grpc_python_out=clients/python_grpc \
-            --pyi_out=clients/python_grpc \
-            proto/v1/browser_session.proto \
-            proto/v1/scanner.proto \
-            proto/v1/meta_api.proto
-          python -c "
-          from pathlib import Path
-          for path in Path('clients/python_grpc/v1').glob('*_pb2_grpc.py'):
-              path.write_text(path.read_text().replace('from v1 import ', 'from . import '))
-          "
+          python -B scripts/generate_grpc_stubs.py
           git diff --exit-code -- clients/python_grpc
 
       - name: Ruff

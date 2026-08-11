@@ -132,23 +132,7 @@ logs: check-local-profile ## Показать логи локального runt
 	FB_AGENT_PROFILE=local ./scripts/run-local.sh --logs
 
 proto-compile: ## Скомпилировать proto файлы в Python stubs
-	@mkdir -p $(GRPC_PY_OUT)
-	# Python stubs
-	$(PY) -m grpc_tools.protoc \
-		-Iproto \
-		--python_out=$(GRPC_PY_OUT) \
-		--grpc_python_out=$(GRPC_PY_OUT) \
-		--pyi_out=$(GRPC_PY_OUT) \
-		$(PROTO_DIR)/browser_session.proto \
-		$(PROTO_DIR)/scanner.proto \
-		$(PROTO_DIR)/meta_api.proto
-	# grpc_tools генерирует absolute import `from v1 import ...`, который ломает пакет clients.python_grpc.
-	$(PY) -c "from pathlib import Path; [path.write_text(path.read_text().replace('from v1 import ', 'from . import ')) for path in Path('$(GRPC_PY_OUT)/v1').glob('*_pb2_grpc.py')]"
-	@if [ -x "$(RUFF)" ]; then \
-		$(RUFF) check $(GRPC_PY_OUT)/v1 --fix && \
-		$(RUFF) format $(GRPC_PY_OUT)/v1; \
-	fi
-	@echo "Python stubs сгенерированы в $(GRPC_PY_OUT)"
+	$(PY) scripts/generate_grpc_stubs.py
 
 proto-watch: ## Следить за proto/ и перекомпилировать
 	nodemon --watch proto/ -e proto --exec "make proto-compile"

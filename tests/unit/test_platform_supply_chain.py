@@ -182,6 +182,36 @@ def test_workflow_syntax_openapi_and_control_bundle_are_release_gates() -> None:
     assert "scripts/fbctl publish" in _job_block(release, "deploy")
 
 
+def test_grpc_stub_generation_uses_one_locked_project_toolchain() -> None:
+    workflow = _job_block(VERIFY_WORKFLOW.read_text(encoding="utf-8"), "backend")
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    generator = (ROOT / "scripts/generate_grpc_stubs.py").read_text(encoding="utf-8")
+
+    assert "python -B scripts/generate_grpc_stubs.py" in workflow
+    assert "grpc_tools.protoc" not in workflow
+    proto_compile = makefile.split("proto-compile:", maxsplit=1)[1].split(
+        "proto-watch:", maxsplit=1
+    )[0]
+    assert (
+        proto_compile.strip()
+        == "## Скомпилировать proto файлы в Python stubs\n\t$(PY) scripts/generate_grpc_stubs.py"
+    )
+    assert "$(RUFF)" not in proto_compile
+    assert "grpc_tools.protoc" not in proto_compile
+    assert (
+        'sys.executable,\n                "-m",\n                "grpc_tools.protoc"' in generator
+    )
+    assert "tempfile.TemporaryDirectory" in generator
+    assert '"from v1 import ", "from . import "' in generator
+
+
+def test_pre_commit_respects_ruff_excludes_for_generated_grpc_stubs() -> None:
+    hooks = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+
+    assert "entry: .venv/bin/ruff check --force-exclude --fix" in hooks
+    assert "entry: .venv/bin/ruff format --force-exclude" in hooks
+
+
 def test_production_source_secret_is_only_consumed_by_manual_bootstrap() -> None:
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     deploy = _job_block(release, "deploy")

@@ -4,52 +4,55 @@
 # source: v1/meta_api.proto
 # Protobuf Python Version: 6.31.1
 """Generated protocol buffer code."""
-
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import descriptor_pool as _descriptor_pool
 from google.protobuf import runtime_version as _runtime_version
 from google.protobuf import symbol_database as _symbol_database
 from google.protobuf.internal import builder as _builder
-
 _runtime_version.ValidateProtobufRuntimeVersion(
-    _runtime_version.Domain.PUBLIC, 6, 31, 1, "", "v1/meta_api.proto"
+    _runtime_version.Domain.PUBLIC,
+    6,
+    31,
+    1,
+    '',
+    'v1/meta_api.proto'
 )
 # @@protoc_insertion_point(imports)
 
 _sym_db = _symbol_database.Default()
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\x11v1/meta_api.proto\x12\x14\x66\x62_agent.meta_api.v1"\x8a\x04\n\x17\x45xecuteGraphCallRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06method\x18\x02 \x01(\t\x12\x10\n\x08\x65ndpoint\x18\x03 \x01(\t\x12T\n\x0cquery_params\x18\x04 \x03(\x0b\x32>.fb_agent.meta_api.v1.ExecuteGraphCallRequest.QueryParamsEntry\x12\x11\n\tbody_json\x18\x05 \x01(\t\x12\x17\n\ntimeout_ms\x18\x06 \x01(\x05H\x00\x88\x01\x01\x12\x1a\n\rad_account_id\x18\x07 \x01(\tH\x01\x88\x01\x01\x12\x19\n\x11vision_profile_id\x18\x08 \x01(\t\x12\x19\n\x11\x61uthorized_caller\x18\t \x01(\t\x12\x0f\n\x07task_id\x18\n \x01(\x03\x12\x13\n\x0blease_owner\x18\x0b \x01(\t\x12\x13\n\x0blease_token\x18\x0c \x01(\x03\x12\x1d\n\x15\x63\x61pability_expires_at\x18\r \x01(\x03\x12\x18\n\x10\x63\x61pability_nonce\x18\x0e \x01(\t\x12\x1c\n\x14\x63\x61pability_signature\x18\x0f \x01(\t\x1a\x32\n\x10QueryParamsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x42\r\n\x0b_timeout_msB\x10\n\x0e_ad_account_id"\x9e\x01\n\x18\x45xecuteGraphCallResponse\x12\x13\n\x0bstatus_code\x18\x01 \x01(\x05\x12\x15\n\rresponse_json\x18\x02 \x01(\t\x12\x13\n\x0b\x64uration_ms\x18\x03 \x01(\x05\x12\x37\n\x05\x65rror\x18\x04 \x01(\x0b\x32#.fb_agent.meta_api.v1.GraphApiErrorH\x00\x88\x01\x01\x42\x08\n\x06_error"a\n\rGraphApiError\x12\x0c\n\x04\x63ode\x18\x01 \x01(\x05\x12\x0f\n\x07subcode\x18\x02 \x01(\x05\x12\x0c\n\x04type\x18\x03 \x01(\t\x12\x0f\n\x07message\x18\x04 \x01(\t\x12\x12\n\nfbtrace_id\x18\x05 \x01(\t"g\n\x19\x43heckMetaApiHealthRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x12\n\nfull_probe\x18\x02 \x01(\x08\x12"\n\x1a\x65xpected_vision_profile_id\x18\x03 \x01(\t"\xc7\x02\n\x1a\x43heckMetaApiHealthResponse\x12\x0f\n\x07healthy\x18\x01 \x01(\x08\x12\x13\n\x0b\x63urrent_url\x18\x02 \x01(\t\x12\x15\n\rtoken_present\x18\x03 \x01(\x08\x12\x14\n\x0ctoken_length\x18\x04 \x01(\x05\x12\x0e\n\x06\x64\x65tail\x18\x05 \x01(\t\x12\x17\n\x0fprobe_performed\x18\x06 \x01(\x08\x12\x10\n\x08probe_ok\x18\x07 \x01(\x08\x12\x19\n\x11probe_status_code\x18\x08 \x01(\x05\x12\x19\n\x11probe_duration_ms\x18\t \x01(\x05\x12\x14\n\x0cprobe_detail\x18\n \x01(\t\x12 \n\x18\x62rowser_contract_version\x18\x0b \x01(\r\x12\x12\n\nsession_id\x18\x0c \x01(\t\x12\x19\n\x11vision_profile_id\x18\r \x01(\t"\xe0\x02\n\x12UploadImageRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x15\n\rad_account_id\x18\x02 \x01(\t\x12\x10\n\x08\x66ilename\x18\x03 \x01(\t\x12\x14\n\x0c\x63ontent_type\x18\x04 \x01(\t\x12\x12\n\nfile_bytes\x18\x05 \x01(\x0c\x12\x19\n\x11vision_profile_id\x18\x08 \x01(\t\x12\x19\n\x11\x61uthorized_caller\x18\t \x01(\t\x12\x0f\n\x07task_id\x18\n \x01(\x03\x12\x13\n\x0blease_owner\x18\x0b \x01(\t\x12\x13\n\x0blease_token\x18\x0c \x01(\x03\x12\x1d\n\x15\x63\x61pability_expires_at\x18\r \x01(\x03\x12\x18\n\x10\x63\x61pability_nonce\x18\x0e \x01(\t\x12\x1c\n\x14\x63\x61pability_signature\x18\x0f \x01(\tJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08R\timage_urlR\x04name"f\n\x13UploadImageResponse\x12\x12\n\nimage_hash\x18\x01 \x01(\t\x12\n\n\x02ok\x18\x02 \x01(\x08\x12\r\n\x05\x65rror\x18\x03 \x01(\t\x12\x0b\n\x03url\x18\x04 \x01(\t\x12\x13\n\x0b\x64uration_ms\x18\x05 \x01(\x05"\xfc\x02\n\x10UploadVideoChunk\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x15\n\rad_account_id\x18\x02 \x01(\t\x12\x10\n\x08\x66ilename\x18\x03 \x01(\t\x12\x11\n\tfile_size\x18\x04 \x01(\x03\x12\x13\n\x0b\x63hunk_bytes\x18\x05 \x01(\x0c\x12\x13\n\x0b\x63hunk_index\x18\x06 \x01(\x05\x12\x15\n\ris_last_chunk\x18\x07 \x01(\x08\x12\x0f\n\x07is_init\x18\x08 \x01(\x08\x12\x19\n\x11vision_profile_id\x18\t \x01(\t\x12\x19\n\x11\x61uthorized_caller\x18\n \x01(\t\x12\x0f\n\x07task_id\x18\x0b \x01(\x03\x12\x13\n\x0blease_owner\x18\x0c \x01(\t\x12\x13\n\x0blease_token\x18\r \x01(\x03\x12\x1d\n\x15\x63\x61pability_expires_at\x18\x0e \x01(\x03\x12\x18\n\x10\x63\x61pability_nonce\x18\x0f \x01(\t\x12\x1c\n\x14\x63\x61pability_signature\x18\x10 \x01(\t"q\n\x13UploadVideoResponse\x12\x10\n\x08video_id\x18\x01 \x01(\t\x12\n\n\x02ok\x18\x02 \x01(\x08\x12\r\n\x05\x65rror\x18\x03 \x01(\t\x12\x13\n\x0b\x64uration_ms\x18\x04 \x01(\x05\x12\x18\n\x10\x63hunks_processed\x18\x05 \x01(\x05\x32\xc6\x03\n\x0eMetaApiService\x12s\n\x12\x45xecuteGraphCallV5\x12-.fb_agent.meta_api.v1.ExecuteGraphCallRequest\x1a..fb_agent.meta_api.v1.ExecuteGraphCallResponse\x12w\n\x12\x43heckMetaApiHealth\x12/.fb_agent.meta_api.v1.CheckMetaApiHealthRequest\x1a\x30.fb_agent.meta_api.v1.CheckMetaApiHealthResponse\x12\x62\n\x0bUploadImage\x12(.fb_agent.meta_api.v1.UploadImageRequest\x1a).fb_agent.meta_api.v1.UploadImageResponse\x12\x62\n\x0bUploadVideo\x12&.fb_agent.meta_api.v1.UploadVideoChunk\x1a).fb_agent.meta_api.v1.UploadVideoResponse(\x01\x62\x06proto3'
-)
+
+
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11v1/meta_api.proto\x12\x14\x66\x62_agent.meta_api.v1\"\x8a\x04\n\x17\x45xecuteGraphCallRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06method\x18\x02 \x01(\t\x12\x10\n\x08\x65ndpoint\x18\x03 \x01(\t\x12T\n\x0cquery_params\x18\x04 \x03(\x0b\x32>.fb_agent.meta_api.v1.ExecuteGraphCallRequest.QueryParamsEntry\x12\x11\n\tbody_json\x18\x05 \x01(\t\x12\x17\n\ntimeout_ms\x18\x06 \x01(\x05H\x00\x88\x01\x01\x12\x1a\n\rad_account_id\x18\x07 \x01(\tH\x01\x88\x01\x01\x12\x19\n\x11vision_profile_id\x18\x08 \x01(\t\x12\x19\n\x11\x61uthorized_caller\x18\t \x01(\t\x12\x0f\n\x07task_id\x18\n \x01(\x03\x12\x13\n\x0blease_owner\x18\x0b \x01(\t\x12\x13\n\x0blease_token\x18\x0c \x01(\x03\x12\x1d\n\x15\x63\x61pability_expires_at\x18\r \x01(\x03\x12\x18\n\x10\x63\x61pability_nonce\x18\x0e \x01(\t\x12\x1c\n\x14\x63\x61pability_signature\x18\x0f \x01(\t\x1a\x32\n\x10QueryParamsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x42\r\n\x0b_timeout_msB\x10\n\x0e_ad_account_id\"\x9e\x01\n\x18\x45xecuteGraphCallResponse\x12\x13\n\x0bstatus_code\x18\x01 \x01(\x05\x12\x15\n\rresponse_json\x18\x02 \x01(\t\x12\x13\n\x0b\x64uration_ms\x18\x03 \x01(\x05\x12\x37\n\x05\x65rror\x18\x04 \x01(\x0b\x32#.fb_agent.meta_api.v1.GraphApiErrorH\x00\x88\x01\x01\x42\x08\n\x06_error\"a\n\rGraphApiError\x12\x0c\n\x04\x63ode\x18\x01 \x01(\x05\x12\x0f\n\x07subcode\x18\x02 \x01(\x05\x12\x0c\n\x04type\x18\x03 \x01(\t\x12\x0f\n\x07message\x18\x04 \x01(\t\x12\x12\n\nfbtrace_id\x18\x05 \x01(\t\"g\n\x19\x43heckMetaApiHealthRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x12\n\nfull_probe\x18\x02 \x01(\x08\x12\"\n\x1a\x65xpected_vision_profile_id\x18\x03 \x01(\t\"\xc7\x02\n\x1a\x43heckMetaApiHealthResponse\x12\x0f\n\x07healthy\x18\x01 \x01(\x08\x12\x13\n\x0b\x63urrent_url\x18\x02 \x01(\t\x12\x15\n\rtoken_present\x18\x03 \x01(\x08\x12\x14\n\x0ctoken_length\x18\x04 \x01(\x05\x12\x0e\n\x06\x64\x65tail\x18\x05 \x01(\t\x12\x17\n\x0fprobe_performed\x18\x06 \x01(\x08\x12\x10\n\x08probe_ok\x18\x07 \x01(\x08\x12\x19\n\x11probe_status_code\x18\x08 \x01(\x05\x12\x19\n\x11probe_duration_ms\x18\t \x01(\x05\x12\x14\n\x0cprobe_detail\x18\n \x01(\t\x12 \n\x18\x62rowser_contract_version\x18\x0b \x01(\r\x12\x12\n\nsession_id\x18\x0c \x01(\t\x12\x19\n\x11vision_profile_id\x18\r \x01(\t\"\xe0\x02\n\x12UploadImageRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x15\n\rad_account_id\x18\x02 \x01(\t\x12\x10\n\x08\x66ilename\x18\x03 \x01(\t\x12\x14\n\x0c\x63ontent_type\x18\x04 \x01(\t\x12\x12\n\nfile_bytes\x18\x05 \x01(\x0c\x12\x19\n\x11vision_profile_id\x18\x08 \x01(\t\x12\x19\n\x11\x61uthorized_caller\x18\t \x01(\t\x12\x0f\n\x07task_id\x18\n \x01(\x03\x12\x13\n\x0blease_owner\x18\x0b \x01(\t\x12\x13\n\x0blease_token\x18\x0c \x01(\x03\x12\x1d\n\x15\x63\x61pability_expires_at\x18\r \x01(\x03\x12\x18\n\x10\x63\x61pability_nonce\x18\x0e \x01(\t\x12\x1c\n\x14\x63\x61pability_signature\x18\x0f \x01(\tJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08R\timage_urlR\x04name\"f\n\x13UploadImageResponse\x12\x12\n\nimage_hash\x18\x01 \x01(\t\x12\n\n\x02ok\x18\x02 \x01(\x08\x12\r\n\x05\x65rror\x18\x03 \x01(\t\x12\x0b\n\x03url\x18\x04 \x01(\t\x12\x13\n\x0b\x64uration_ms\x18\x05 \x01(\x05\"\xfc\x02\n\x10UploadVideoChunk\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x15\n\rad_account_id\x18\x02 \x01(\t\x12\x10\n\x08\x66ilename\x18\x03 \x01(\t\x12\x11\n\tfile_size\x18\x04 \x01(\x03\x12\x13\n\x0b\x63hunk_bytes\x18\x05 \x01(\x0c\x12\x13\n\x0b\x63hunk_index\x18\x06 \x01(\x05\x12\x15\n\ris_last_chunk\x18\x07 \x01(\x08\x12\x0f\n\x07is_init\x18\x08 \x01(\x08\x12\x19\n\x11vision_profile_id\x18\t \x01(\t\x12\x19\n\x11\x61uthorized_caller\x18\n \x01(\t\x12\x0f\n\x07task_id\x18\x0b \x01(\x03\x12\x13\n\x0blease_owner\x18\x0c \x01(\t\x12\x13\n\x0blease_token\x18\r \x01(\x03\x12\x1d\n\x15\x63\x61pability_expires_at\x18\x0e \x01(\x03\x12\x18\n\x10\x63\x61pability_nonce\x18\x0f \x01(\t\x12\x1c\n\x14\x63\x61pability_signature\x18\x10 \x01(\t\"q\n\x13UploadVideoResponse\x12\x10\n\x08video_id\x18\x01 \x01(\t\x12\n\n\x02ok\x18\x02 \x01(\x08\x12\r\n\x05\x65rror\x18\x03 \x01(\t\x12\x13\n\x0b\x64uration_ms\x18\x04 \x01(\x05\x12\x18\n\x10\x63hunks_processed\x18\x05 \x01(\x05\x32\xc6\x03\n\x0eMetaApiService\x12s\n\x12\x45xecuteGraphCallV5\x12-.fb_agent.meta_api.v1.ExecuteGraphCallRequest\x1a..fb_agent.meta_api.v1.ExecuteGraphCallResponse\x12w\n\x12\x43heckMetaApiHealth\x12/.fb_agent.meta_api.v1.CheckMetaApiHealthRequest\x1a\x30.fb_agent.meta_api.v1.CheckMetaApiHealthResponse\x12\x62\n\x0bUploadImage\x12(.fb_agent.meta_api.v1.UploadImageRequest\x1a).fb_agent.meta_api.v1.UploadImageResponse\x12\x62\n\x0bUploadVideo\x12&.fb_agent.meta_api.v1.UploadVideoChunk\x1a).fb_agent.meta_api.v1.UploadVideoResponse(\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
-_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "v1.meta_api_pb2", _globals)
+_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'v1.meta_api_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-    DESCRIPTOR._loaded_options = None
-    _globals["_EXECUTEGRAPHCALLREQUEST_QUERYPARAMSENTRY"]._loaded_options = None
-    _globals["_EXECUTEGRAPHCALLREQUEST_QUERYPARAMSENTRY"]._serialized_options = b"8\001"
-    _globals["_EXECUTEGRAPHCALLREQUEST"]._serialized_start = 44
-    _globals["_EXECUTEGRAPHCALLREQUEST"]._serialized_end = 566
-    _globals["_EXECUTEGRAPHCALLREQUEST_QUERYPARAMSENTRY"]._serialized_start = 483
-    _globals["_EXECUTEGRAPHCALLREQUEST_QUERYPARAMSENTRY"]._serialized_end = 533
-    _globals["_EXECUTEGRAPHCALLRESPONSE"]._serialized_start = 569
-    _globals["_EXECUTEGRAPHCALLRESPONSE"]._serialized_end = 727
-    _globals["_GRAPHAPIERROR"]._serialized_start = 729
-    _globals["_GRAPHAPIERROR"]._serialized_end = 826
-    _globals["_CHECKMETAAPIHEALTHREQUEST"]._serialized_start = 828
-    _globals["_CHECKMETAAPIHEALTHREQUEST"]._serialized_end = 931
-    _globals["_CHECKMETAAPIHEALTHRESPONSE"]._serialized_start = 934
-    _globals["_CHECKMETAAPIHEALTHRESPONSE"]._serialized_end = 1261
-    _globals["_UPLOADIMAGEREQUEST"]._serialized_start = 1264
-    _globals["_UPLOADIMAGEREQUEST"]._serialized_end = 1616
-    _globals["_UPLOADIMAGERESPONSE"]._serialized_start = 1618
-    _globals["_UPLOADIMAGERESPONSE"]._serialized_end = 1720
-    _globals["_UPLOADVIDEOCHUNK"]._serialized_start = 1723
-    _globals["_UPLOADVIDEOCHUNK"]._serialized_end = 2103
-    _globals["_UPLOADVIDEORESPONSE"]._serialized_start = 2105
-    _globals["_UPLOADVIDEORESPONSE"]._serialized_end = 2218
-    _globals["_METAAPISERVICE"]._serialized_start = 2221
-    _globals["_METAAPISERVICE"]._serialized_end = 2675
+  DESCRIPTOR._loaded_options = None
+  _globals['_EXECUTEGRAPHCALLREQUEST_QUERYPARAMSENTRY']._loaded_options = None
+  _globals['_EXECUTEGRAPHCALLREQUEST_QUERYPARAMSENTRY']._serialized_options = b'8\001'
+  _globals['_EXECUTEGRAPHCALLREQUEST']._serialized_start=44
+  _globals['_EXECUTEGRAPHCALLREQUEST']._serialized_end=566
+  _globals['_EXECUTEGRAPHCALLREQUEST_QUERYPARAMSENTRY']._serialized_start=483
+  _globals['_EXECUTEGRAPHCALLREQUEST_QUERYPARAMSENTRY']._serialized_end=533
+  _globals['_EXECUTEGRAPHCALLRESPONSE']._serialized_start=569
+  _globals['_EXECUTEGRAPHCALLRESPONSE']._serialized_end=727
+  _globals['_GRAPHAPIERROR']._serialized_start=729
+  _globals['_GRAPHAPIERROR']._serialized_end=826
+  _globals['_CHECKMETAAPIHEALTHREQUEST']._serialized_start=828
+  _globals['_CHECKMETAAPIHEALTHREQUEST']._serialized_end=931
+  _globals['_CHECKMETAAPIHEALTHRESPONSE']._serialized_start=934
+  _globals['_CHECKMETAAPIHEALTHRESPONSE']._serialized_end=1261
+  _globals['_UPLOADIMAGEREQUEST']._serialized_start=1264
+  _globals['_UPLOADIMAGEREQUEST']._serialized_end=1616
+  _globals['_UPLOADIMAGERESPONSE']._serialized_start=1618
+  _globals['_UPLOADIMAGERESPONSE']._serialized_end=1720
+  _globals['_UPLOADVIDEOCHUNK']._serialized_start=1723
+  _globals['_UPLOADVIDEOCHUNK']._serialized_end=2103
+  _globals['_UPLOADVIDEORESPONSE']._serialized_start=2105
+  _globals['_UPLOADVIDEORESPONSE']._serialized_end=2218
+  _globals['_METAAPISERVICE']._serialized_start=2221
+  _globals['_METAAPISERVICE']._serialized_end=2675
 # @@protoc_insertion_point(module_scope)
