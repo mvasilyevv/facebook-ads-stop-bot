@@ -12,6 +12,7 @@ from core.config import get_settings
 from core.db import get_engine
 from core.telegram.service import load_telegram_config
 from core.telegram.webhook_configuration import (
+    bind_webhook_generation,
     ensure_webhook_configuration_desired,
     process_one_webhook_configuration,
     resolve_webhook_target,
@@ -51,12 +52,15 @@ async def configure() -> None:
                 )
             )
         ).first()
+    generation = int(row.webhook_generation or 0) if row is not None else 0
+    expected_url = bind_webhook_generation(target.url, generation) if generation > 0 else None
     if (
         row is None
+        or generation <= 0
         or row.webhook_state != "configured"
         or row.webhook_applied_generation != row.webhook_generation
-        or row.webhook_desired_url != target.url
-        or row.webhook_remote_url != target.url
+        or row.webhook_desired_url != expected_url
+        or row.webhook_remote_url != expected_url
     ):
         code = row.webhook_last_error_code if row is not None else "missing_config"
         raise RuntimeError(f"Telegram webhook generation is not remotely confirmed ({code})")
