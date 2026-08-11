@@ -1179,17 +1179,21 @@ def test_bootstrap_imports_only_verified_candidate_bundle_snapshot(
     assert runner.commands == []
 
 
-def test_deploy_promotes_only_one_runtime_after_all_evidence(tmp_path: Path) -> None:
+def test_deploy_orders_webhook_before_workers_and_promotes_after_all_evidence(
+    tmp_path: Path,
+) -> None:
     root = _root(tmp_path)
     canonical_source = (root / "shared" / "source.env").read_bytes()
     now = time.time()
     runner = FakeRunner(now=now)
+    log: list[str] = []
     controller = ProductionController(
         runner=runner,
         probes=FakeProbes(),
         materialize=_materialize,
         now=lambda: now,
         sleep=lambda _seconds: None,
+        log=log.append,
     )
 
     result = controller.deploy(DeployOptions(root=root, rehearsal=True, enable_scanning=True))
@@ -1218,8 +1222,18 @@ def test_deploy_promotes_only_one_runtime_after_all_evidence(tmp_path: Path) -> 
     rendered = [" ".join(command) for _step, command in runner.commands]
     assert not any("adoption_importer" in command for command in rendered)
     assert not any("runtime_config_bootstrap" in command for command in rendered)
-    steps = [step for step, _command in runner.commands]
-    assert steps.index("start_workers") < steps.index("configure_telegram_webhook")
+    completed = [
+        message.removeprefix("[fbctl] step=").removesuffix(" completed")
+        for message in log
+        if message.startswith("[fbctl] step=") and message.endswith(" completed")
+    ]
+    assert completed == list(REHEARSAL_FAILPOINTS)
+    assert completed.index("configure_telegram_webhook") < completed.index("start_workers")
+    assert completed.index("verify_telegram_webhook") < completed.index("start_workers")
+    assert completed.index("start_workers") < completed.index("verify_worker_heartbeats")
+    assert completed.index("verify_worker_heartbeats") < completed.index("verify_system_ready")
+    deploy_state = json.loads((root / "runtime" / "deploy-state.json").read_text(encoding="utf-8"))
+    assert deploy_state["completed_steps"] == [*REHEARSAL_FAILPOINTS, "promote"]
 
 
 def test_post_migration_failpoint_keeps_incumbent_runtime_and_fences_workers(

@@ -87,11 +87,11 @@ REHEARSAL_FAILPOINTS = (
     "start_application",
     "verify_application",
     "enable_scanning",
+    "configure_telegram_webhook",
+    "verify_telegram_webhook",
     "start_workers",
     "verify_worker_heartbeats",
     "verify_system_ready",
-    "configure_telegram_webhook",
-    "verify_telegram_webhook",
     # This is intentionally the final failure-class point.  The next action
     # commits an already-complete payload by switching the runtime pointer.
     "before_promote",
@@ -201,6 +201,16 @@ class ProductionController:
                             config.api_key,
                         ),
                     )
+                self._step(
+                    "configure_telegram_webhook",
+                    options,
+                    lambda: self._configure_webhook(config),
+                )
+                self._step(
+                    "verify_telegram_webhook",
+                    options,
+                    lambda: self._verify_telegram(config),
+                )
                 self._step("start_workers", options, lambda: self._start_workers(config))
                 self._step(
                     "verify_worker_heartbeats",
@@ -211,16 +221,6 @@ class ProductionController:
                     "verify_system_ready",
                     options,
                     lambda: self._verify_system_ready(config),
-                )
-                self._step(
-                    "configure_telegram_webhook",
-                    options,
-                    lambda: self._configure_webhook(config),
-                )
-                self._step(
-                    "verify_telegram_webhook",
-                    options,
-                    lambda: self._verify_telegram(config),
                 )
                 if not options.rehearsal:
                     self._step("public_smoke", options, lambda: self._public_smoke(config))
