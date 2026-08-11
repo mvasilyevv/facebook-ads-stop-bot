@@ -130,18 +130,29 @@ jobs:
       packages: write
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix: ${{ fromJSON(needs.plan.outputs.app_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: GHCR login
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: GHCR login with bounded retry
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for attempt in 1 2 3; do
+            if printf '%s' "$GHCR_TOKEN" | docker login "$REGISTRY" \
+              --username "$GHCR_USER" --password-stdin; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "GHCR login failed after 3 attempts" >&2
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
       - name: Probe immutable tag
         id: probe
         env:
