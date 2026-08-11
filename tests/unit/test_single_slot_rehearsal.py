@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +16,22 @@ from tests.rehearsal.single_slot import (
     _write_profile_seed,
     build_adoption_bundle,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_telegram_rehearsal_stub_executes_deployed_gateway_contract() -> None:
+    contract = ROOT / "tests/rehearsal/browser-stub/telegram-server.test.mjs"
+    result = subprocess.run(  # noqa: S603 - fixed repository-owned contract
+        ["node", "--test", os.fspath(contract)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_rehearsal_adoption_fixture_uses_one_monitored_usd_cabinet() -> None:

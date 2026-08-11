@@ -32,7 +32,17 @@ const server = http.createServer((request, response) => {
     }
     const method = String(request.url || "").split("/").pop();
     let result;
-    if (method === "setWebhook") {
+    if (method === "getMe") {
+      result = {
+        id: 900000001,
+        is_bot: true,
+        first_name: "FB Agent Rehearsal",
+        username: "fb_agent_rehearsal_bot",
+        can_join_groups: true,
+        can_read_all_group_messages: false,
+        supports_inline_queries: false,
+      };
+    } else if (method === "setWebhook") {
       webhookUrl = String(payload.url || "");
       result = true;
     } else if (method === "getWebhookInfo") {
@@ -79,4 +89,4 @@ const server = http.createServer((request, response) => {
   });
 });
 
-server.listen(18080, "0.0.0.0");
+server.listen(Number(process.env.TELEGRAM_STUB_PORT || "18080"), "0.0.0.0");
