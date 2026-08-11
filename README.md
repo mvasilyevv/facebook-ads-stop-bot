@@ -18,8 +18,8 @@ Safety-first операторская платформа для монитори
 - Telegram принимает updates только через HTTPS webhook. Уведомления проходят
   через PostgreSQL outbox и один HTML gateway; incident обновляет одну карточку
   на получателя.
-- Production выпускается immutable blue/green релизами. Desktop/browser-agent,
-  durable infra, monitoring и backup имеют независимые lifecycle.
+- Production использует один downtime-tolerant slot, digest-only образы и
+  candidate configuration, которая становится active только после smoke.
 
 ## Компоненты
 
@@ -29,7 +29,7 @@ Safety-first операторская платформа для монитори
 | Safety | `task_queue`, `CommandService`, leases, fencing, deadlines, actors |
 | Notifications | incidents, events/deliveries, Telegram webhook and delivery workers |
 | Browser | отдельный Kasm/Vision desktop и Node.js browser-agent |
-| Platform | PostgreSQL, pgBackRest, Caddy blue/green, Alloy, Prometheus, Loki, Tempo |
+| Platform | PostgreSQL, Redis, fixed-port Caddy, Alloy, Prometheus, Loki, Tempo |
 
 Список production-сервисов и порядок переключения описаны в
 [DEPLOYMENT.md](DEPLOYMENT.md). Актуальные операционные сценарии находятся в
@@ -57,10 +57,11 @@ make start
 make migrate
 ```
 
-`make migrate` вызывает `python -m scripts.run-migrations-locked`: advisory lock
-удерживается на протяжении `alembic upgrade head` и `alembic check`. Команда
-ничего не удаляет, требует локальный профиль и принимает только пустую БД или
-уже установленный точный fresh baseline.
+`make migrate` вызывает locked Alembic runner: advisory lock удерживается на
+протяжении `upgrade head`, `current --check-heads`, `alembic check` и проверки
+PostgreSQL objects. Команда ничего не удаляет, принимает пустую БД или известного
+предка единственного линейного head и отклоняет неизвестную/разветвлённую
+историю до DDL.
 Если disposable dev/test-базу действительно нужно пересоздать, это отдельная
 трёхфакторная команда. Она игнорирует `.env` и обычный `DATABASE_URL`, принимает
 только loopback/local Compose DSN и имя с суффиксом `_dev`/`_test`:
@@ -71,11 +72,11 @@ export FB_AGENT_ALLOW_DESTRUCTIVE_RESET='I_UNDERSTAND_THIS_DELETES_DATA'
 make reset-disposable-db CONFIRM_DATABASE=fb_stop_bot_dev
 ```
 
-Текущая Alembic-история состоит из одного irreversible fresh-install
-baseline. Migrator принимает только пустую PostgreSQL-базу или базу,
-уже находящуюся на этом baseline. In-place upgrade с исторических
-revision намеренно запрещён; production cutover требует отдельно
-согласованного export → recreate → import runbook.
+`0001` — irreversible fresh-install baseline. После первого production он
+заморожен; дальнейшие изменения добавляются только линейными forward revisions.
+Историческая pre-safety схема не поддерживается: первый cutover использует
+проверяемый export → recreate → import, а новый runtime затем обновляется
+обычными Alembic revisions.
 
 Frontend:
 
@@ -105,7 +106,7 @@ pnpm -r typecheck
 pnpm -r lint
 pnpm -r test
 pnpm -r build
-./scripts/validate-platform-configs.sh --containers
+./scripts/fbctl doctor
 ```
 
 Тесты интеграции должны использовать отдельную disposable PostgreSQL-базу.
@@ -115,24 +116,28 @@ pnpm -r build
 
 Production images собираются один раз в CI и передаются по digest. VPS не
 собирает приложения из исходников. Production topology существует только в
-`deploy/compose/`, а lifecycle выполняют platform scripts. Единственный
-удалённый entrypoint:
+`deploy/compose/`. CI доставляет самодостаточный control bundle; на сервере
+единственный интерфейс — `fbctl`:
 
 ```bash
-sudo /opt/fb-agent/current/scripts/server-platform-release.sh
+sudo /opt/fb-agent/runtime/fbctl bootstrap --manifest release.json  # один раз
+sudo /opt/fb-agent/runtime/fbctl deploy --manifest release.json
 ```
 
-Первичное принятие существующих durable volumes выполняется только в
-maintenance window после полного pgBackRest backup и изолированного restore
-drill. Подробный порядок и rollback contract:
-[deploy/bluegreen/README.md](deploy/bluegreen/README.md).
+Во время выпуска допустим 502. Preflight и pull выполняются до остановки,
+после чего routine deploy последовательно запускает forward migration,
+desktop/app/workers, Telegram webhook и доказательные smoke checks. Adoption и
+desktop seed принадлежат только одноразовому bootstrap. Ошибка не запускает
+money workers; повторный запуск идемпотентен. Backup automation и runtime
+rollback намеренно отсутствуют по решению owner. Подробнее:
+[DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Источники правды
 
 - ORM и Alembic migrations — фактический контракт БД.
 - OpenAPI — контракт API; клиенты генерируются, ручные response interfaces не
   добавляются.
-- `deploy/compose/` и release scripts — production topology.
+- `fbctl/`, `deploy/compose/` и immutable release manifest — production topology.
 - `packages/shared/` и `packages/operator-api/` — общая семантика web/TMA.
 - `docs/playbooks/` — только актуальные операционные сценарии.
 

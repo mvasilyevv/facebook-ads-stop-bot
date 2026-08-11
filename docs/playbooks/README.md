@@ -55,7 +55,7 @@ AdSet.pro». Знание живёт в ОДНОМ месте, накаплив�
 
 ## Где что ещё (не дублируем)
 - `CLAUDE.md` — архитектура кодовой базы.
-- `DEPLOYMENT.md` и `deploy/bluegreen/README.md` — production topology и release contract.
+- `DEPLOYMENT.md` — single-slot production topology и release contract.
 - `core/models/` + `migrations/` — фактический контракт схемы БД.
 - OpenAPI + generated clients — фактический контракт backend/frontend.
 - `docs/creatives/SOP.md` — полный цикл креативов (фазы 0-4, методология). Playbooks =

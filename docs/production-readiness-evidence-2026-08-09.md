@@ -1,5 +1,9 @@
 # Production-readiness evidence — 2026-08-09
 
+> Historical evidence for the pre-single-slot candidate. Release/backup items
+> in this document are superseded by `DEPLOYMENT.md`; product and safety test
+> evidence remains useful.
+
 This is local release-candidate evidence, not authorization to switch
 production.
 

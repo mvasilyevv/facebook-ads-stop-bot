@@ -1,143 +1,108 @@
 # Production deployment
 
-The supported production path is the safety-first platform described in
-[`deploy/bluegreen/README.md`](deploy/bluegreen/README.md). The former
-monolithic Compose, host Vision/Xvfb, local `pg_dump`, long-polling Telegram
-and Helm/K3s release paths are not supported launchers.
+FB Agent использует один production slot. Краткая недоступность во время
+выпуска допустима; blue/green, rollback journal, worker handoff и backup gates
+не входят в runtime.
 
-## Release entrypoint
+## Runtime
 
-CI builds every image once, resolves it to an immutable digest and calls:
+Стабильные Compose-проекты:
 
-```bash
-./scripts/deploy-platform-server.sh \
-  --host deploy@app-host.example \
-  --release-env release-images.env
-```
+- `fb_agent_infra` — PostgreSQL и Redis;
+- `fb_agent_app` — API, web, TMA и workers;
+- `fb_agent_desktop` — Vision/KasmVNC и browser-agent;
+- `fb_agent_monitoring` — Prometheus, Loki, Tempo, Grafana и Alloy.
 
-The remote entrypoint is `scripts/server-platform-release.sh`. It serializes
-deployment and reconciliation with the shared deploy lock, releases the
-desktop independently, proves the pre-migration backup/PITR gate, prepares the
-inactive application colour and changes traffic only after health and contract
-checks pass.
+Caddy всегда направляет трафик на `18100` (API), `18080` (web), `18081`
+(TMA) и `8444` (desktop). Docker `restart: unless-stopped` отвечает за запуск
+после reboot; отдельных application systemd units нет.
 
-Do not build images on the server and do not invoke Compose files directly for
-a production release. A release is uploaded into a private staging directory,
-verified against `.fb-agent-source-manifest.json`, and published with one
-same-filesystem rename. Reusing a `RELEASE_ID` is read-only and succeeds only
-when both the source manifest and image manifest are byte-identical.
+## Управление production
 
-## First platform adoption
-
-First adoption is an explicit maintenance operation. The squashed Alembic
-baseline is fresh-install-only: it never upgrades a database stamped with a
-historical revision. Follow the checklist in `deploy/bluegreen/README.md`;
-keep the incumbent database and its backups untouched while a separate empty
-target database is created, baselined and validated. Switching the runtime DSN
-is a distinct, human-approved cutover step. No release script drops, stamps or
-converts the incumbent database.
-
-The target infra defaults to the dedicated
-`fb_agent_safety_first_pgdata` volume. There is no legacy volume fallback. An
-explicit `POSTGRES_VOLUME` override is accepted only after bootstrap proves
-that the database is empty or claims the complete
-`0001_safety_first_baseline`; the release migrator then runs `alembic check`
-and rejects any extra legacy schema or ORM drift before activation.
-
-Before the first release, provision these root-only prerequisites:
-
-- `/opt/fb-agent/shared/alloy-agent.env` (mode `0600`) with reachable private
-  HTTPS Prometheus, Loki and Tempo ingest URLs;
-- `/opt/fb-agent/shared/desktop-profile-seed` (mode `0700`) containing the
-  independently prepared Vision browser profile. The directory and every
-  entry must be owned by `root:root`; symlinks, special files and
-  group/world-writable entries are rejected. It must include a root-owned
-  mode-`0600`
-  `.fb-agent-vision-profile-v1` file whose exact content is
-  `fb-agent-vision-profile-v1`.
-
-The release never snapshots an incumbent desktop to invent this seed. It
-validates and hashes the seed before database/application activation, copies
-it through an atomic staging directory only into an absent fresh profile, and
-refuses an unmanaged pre-existing config. A root-owned bootstrap marker inside
-the staged profile makes a power-loss retry resumable without treating an
-unknown profile as managed or deleting a profile that may have changed.
-
-Every later Vision mutation persists its pre-change runtime contract and then,
-while the old containers are only stopped, an exact profile snapshot. The
-`snapshot_ready` journal is fsynced before the destructive Compose `down`, so a
-power loss resumes in either the candidate or previous direction without
-inventing profile state.
-
-## Normal operations
+Единственная поддерживаемая командная поверхность — `fbctl`. Это
+самодостаточный Python control bundle: серверу не нужен checkout репозитория и
+на нём не выполняется сборка images.
 
 ```bash
-# Validate Compose, telemetry and release contracts.
-./scripts/validate-platform-configs.sh --containers
-
-# Inspect the committed active colour.
-python3 scripts/release-state.py get \
-  --state-root /opt/fb-agent/shared/release-state \
-  --source active --field color
-
-# Operate the committed application and desktop lifecycles independently.
-sudo /opt/fb-agent/current/scripts/platform-compose.sh status
-sudo /opt/fb-agent/shared/active-desktop-state/release/scripts/platform-desktop-compose.sh status
-
-# Run a reviewed full backup and isolated restore drill.
-sudo /opt/fb-agent/current/scripts/pgbackrest-admin.sh \
-  --release-env /opt/fb-agent/shared/active-release-images.env \
-  --app-env /opt/fb-agent/shared/active-app.env \
-  --backup-env /opt/fb-agent/shared/pgbackrest.env full
-sudo /opt/fb-agent/current/scripts/pgbackrest-restore-drill.sh \
-  --release-env /opt/fb-agent/shared/active-release-images.env \
-  --app-env /opt/fb-agent/shared/active-app.env \
-  --backup-env /opt/fb-agent/shared/pgbackrest.env
+sudo /opt/fb-agent/runtime/fbctl doctor
+sudo /opt/fb-agent/runtime/fbctl status
+sudo /opt/fb-agent/runtime/fbctl deploy
 ```
 
-Rollback switches Caddy and singleton worker leases to the previous colour.
-It never downgrades PostgreSQL. Backup replicas are not counted as backups.
+`fbctl bootstrap` используется один раз на новом host или новой чистой БД. Он
+создаёт host directories, fixed Caddy configuration, Compose network/volumes,
+применяет baseline, импортирует adoption bundle и активирует desktop profile.
+Обычный `deploy` не принимает adoption bundle или desktop seed и не изменяет
+host provisioning.
 
-Desktop/Vision stop and restart paths acquire one renewable PostgreSQL
-maintenance lease. Browser-backed claims take the matching transaction-level
-advisory lock before reading the gate, closing the pre-INSERT snapshot race;
-maintenance then requires scanning disabled and zero running browser tasks.
+На новом host bootstrap вызывается с явными локальными путями к подготовленным
+секретам и конфигурации; manifest уже вложен в control bundle и не передаётся
+в `deploy` отдельным аргументом:
 
-## Production gates
+```bash
+sudo /opt/fb-agent/runtime/fbctl bootstrap \
+  --source-env /opt/fb-agent/shared/source.env \
+  --adoption-bundle /opt/fb-agent/shared/adoption-bundle-v1.json \
+  --desktop-profile-seed /opt/fb-agent/shared/vision-profile-seed
+sudo /opt/fb-agent/runtime/fbctl deploy --enable-scanning
+```
 
-- Candidate API health, readiness and OpenAPI contracts pass before traffic.
-- Candidate Alloy, node-exporter and cAdvisor are running, Alloy reports ready,
-  and all private ingest HTTPS transports respond before application cutover.
-- Desktop cutover requires the exact PostgreSQL Vision profile, a concrete live
-  browser session, a successful full Graph probe, a compatible versioned
-  browser-agent contract and
-  `/desktop-readyz` proving configured credentials, an anonymous `401`
-  challenge and an authenticated `200`.
-- Panel and new desktop connections authorize against the active PostgreSQL
-  owner roster on every forward-auth. Public panel WebSockets and Kasm streams
-  are forcibly bounded to one minute; acceptance must prove that reconnects
-  transparently preserve panel state and Kasm input, clipboard and the active
-  Ads Manager tab, and that a revoked owner cannot reconnect after the current
-  stream closes.
-- Desktop state, readiness credentials, Caddy credentials and systemd units
-  are reconciled from `desktop-transaction.env`. The atomic active-state
-  pointer is the durable commit point; the healer completes either direction
-  after semantic readiness, including after reboot.
-- Root-owned systemd launchers verify the immutable source manifest and sealed
-  release tree before executing app or desktop scripts. The desktop boot gate
-  additionally requires the exact committed healthy Vision container identity;
-  a merely running same-name container is rejected.
-- Full backup, archived post-backup WAL marker and isolated PITR pass before a
-  migration-capable release.
-- The first accepted backup/restore evidence automatically enables and verifies
-  weekly full, daily differential and monthly restore-drill timers. Every later
-  release fails closed if a required timer is disabled or inactive.
-- Images are digest-pinned; the VPS never performs a production build.
-- Caddy switch produces zero deployment 5xx and rollback completes in at most
-  three minutes.
-- Off-host monitoring and backup remain independent of the application host.
-- The migrator sees either an empty database or exactly
-  `0001_safety_first_baseline`; every historical/unversioned non-empty target
-  fails before DDL.
-- Automatic database failover is not enabled until the SLO, restore and chaos
-  prerequisites in the implementation plan are met.
+`--enable-scanning` — осознанный первый запуск observer после готовности
+desktop/browser-agent; без флага `deploy` сохраняет текущее DB-состояние
+scanning. Receipt import проверяется из PostgreSQL, поэтому сброс БД не может
+быть ошибочно признан уже импортированным из-за файлов на host.
+
+CI вычисляет hashes реальных build inputs, переиспользует опубликованные
+образы и формирует маленький control bundle только с `fbctl`, Compose/Caddy
+конфигурацией и manifest из `image@sha256` ссылок.
+
+Routine deploy:
+
+1. проверяет candidate config, manifest, secrets и Compose до остановки;
+2. загружает все immutable images;
+3. останавливает app и desktop;
+4. поднимает infra и применяет forward-only Alembic migrations;
+5. проверяет desktop, точный Vision profile, Graph и browser-agent;
+6. поднимает API/web/TMA и проверяет typed operator snapshot;
+7. поднимает workers и ждёт heartbeats плюс `/system-readyz`;
+8. применяет и проверяет Telegram webhook;
+9. выполняет public smoke и только затем продвигает candidate configuration.
+
+При ошибке `fbctl` возвращает ненулевой код и имя шага. Money workers не
+запускаются до подтверждённой готовности safety-контура. Повтор той же команды
+идемпотентен; автоматического rollback или запуска старого stack нет.
+
+## Проверка конфигурации
+
+```bash
+./scripts/fbctl doctor
+```
+
+`doctor` проверяет строгую конфигурацию без повторяющихся/неизвестных ключей,
+manifest, executable modes, четыре Compose-файла, Caddy, digest-only images,
+browser capability isolation, порты и свободное место. Проверка не меняет
+active configuration и не останавливает runtime.
+
+## First release
+
+До однократного `bootstrap` в `/opt/fb-agent/shared` должны существовать:
+
+- `source.env` с production-конфигурацией;
+- browser capability env-файлы mode `0600`;
+- `adoption-bundle-v1.json` mode `0600`;
+- `desktop-profile-seed` с проверенным Vision profile.
+
+Adoption import переносит allowlisted конфигурацию один раз и записывает receipt
+в той же транзакции PostgreSQL. После успешного bootstrap bundle и seed с host
+удаляются. История, runtime state и secrets не импортируются.
+
+## Operations
+
+```bash
+sudo /opt/fb-agent/runtime/fbctl status
+sudo /opt/fb-agent/runtime/fbctl logs autopause_worker --lines 200
+```
+
+PostgreSQL backup/restore automation намеренно отсутствует по решению owner.
+Удаление production volumes выполняется только по явной команде и только после
+проверки нового runtime.

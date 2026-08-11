@@ -72,57 +72,24 @@ a public interface.
 
 ```bash
 install -m 600 .env.agent.example /opt/fb-agent/shared/alloy-agent.env
-# Set MONITORING_TRANSPORT and the matching fixed private endpoints before release.
+# Set MONITORING_TRANSPORT and the matching fixed private endpoints.
+docker compose --env-file /opt/fb-agent/shared/alloy-agent.env \
+  -f docker-compose.agent.yml up -d --wait
 ```
-
-`server-platform-release.sh` owns installation and activation. It starts the
-isolated candidate Alloy Compose project and requires Alloy, node-exporter,
-cAdvisor and exact HTTP 2xx responses from Prometheus `/-/ready`, Loki `/ready`
-and Tempo `/ready` before application cutover. A reachable error page is not
-readiness. Only after application commit does it replace the canonical telemetry
-project; a failed replacement restores the incumbent and removes the candidate.
-A manual post-release installer step is not supported.
 
 The agent also runs node-exporter and cAdvisor on each application host; their
 remote-written series carry the required `node` and `role="application"`
 labels. Central exporters use `role="monitoring"`, so monitoring-node health
-cannot satisfy application-host operation or backup alerts. Alloy discovers
+cannot satisfy application-host alerts. Alloy discovers
 app containers through the read-only Docker socket and persists Docker log
 offsets in its volume. Python services use the OpenTelemetry SDK for FastAPI,
 HTTPX, SQLAlchemy and async gRPC, exporting OTLP/gRPC to `alloy-agent:4317`.
 Alloy batches and forwards spans to the private HTTPS `TEMPO_OTLP_HTTP_URL`;
 off-host credentials never enter application containers. HTTP trace URLs drop
 userinfo/query strings and redact Telegram bot-token path segments.
-The installer rejects non-HTTPS ingest URLs and mutable Alloy tags. Private DNS,
-TLS certificates and firewall reachability remain an explicit provisioning gate
-on the application and monitoring hosts.
-
-### Host systemd operation metrics
-
-Backups, restore drills, desktop healing and release reconciliation run outside
-application containers. `install-host-metrics.sh` installs one root-only writer
-at `/usr/local/libexec/fb-agent-host-metrics/host_metrics.py`. It keeps
-root:root mode-600 state in `/var/lib/fb-agent/host-metrics` and atomically
-replaces the mode-644 Prometheus exposition file in
-`/var/lib/node_exporter/textfile_collector`.
-
-The application-host node-exporter contract is exactly:
-
-```yaml
-command:
-  - --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
-volumes:
-  - /var/lib/node_exporter/textfile_collector:/var/lib/node_exporter/textfile_collector:ro
-```
-
-Do not make the directory writable by node-exporter or any application
-container. The writer rejects non-root execution, symlinked paths, foreign
-ownership and group/world-writable state. Each operation exposes current
-status (`-1` running, `0` failed, `1` successful), last start/completion,
-success/failure/recovery timestamps, the boot epoch of each completion,
-duration and a durable recovery counter.
-The systemd services also use an `OnFailure` template, so a timeout or failure
-before a script's exit trap still persists a failed state.
+Private DNS, TLS certificates and firewall reachability are provisioning tasks,
+not application release gates. In the current single-host deployment the local
+overlay supplies the canonical `alloy-agent` network alias directly.
 
 ### Expected application hosts
 
@@ -146,19 +113,9 @@ recording rules, but alerts never do. Missing worker instrumentation produces
 `FBWorkerMetricsTargetDown`; neither state can look green.
 
 Coverage includes public health/readiness, worker heartbeat, money queue age,
-snapshot freshness, critical notification delay, notification dead letters,
-failed/stale pgBackRest backups, failed/overdue restore drills, desktop healer
-failures and release rollback/reconciliation failures. A successful
-reconciliation following a rollback failure records an explicit recovery; the
-forensic `rollback-failed.json` marker remains evidence and is not an active
-alert source. Rules join on `node,instance`, compare boot reconciliation
-against the current node-exporter boot epoch, allow the normal 48-hour
-Saturday-to-Monday differential-backup gap, and retain a recent recovered
-failure long enough for Prometheus to observe it. A healthy node-exporter with
-no FB_Agent textfile series is alerted per host rather than being hidden by
-another host's metrics. The checked-in expected-host inventory means a missing
-application node cannot silently age out of the alert after a fixed lookback
-window.
+snapshot freshness, critical notification delay, notification dead letters and
+missing application hosts. The checked-in expected-host inventory means a
+missing application node cannot silently age out after a fixed lookback window.
 Alertmanager groups/inhibits alerts and sends them with a scoped Bearer token to
 `/api/v1/integrations/alertmanager/webhook`. The API updates `incidents` and
 creates `notification_events`/`notification_deliveries` in one PostgreSQL
@@ -169,13 +126,13 @@ file must match; this is an explicit fail-closed provisioning gate.
 ## Validation
 
 ```bash
-./scripts/validate-platform-configs.sh --containers
+./scripts/fbctl doctor
 ```
 
-This renders every Compose model, rejects mutable app images/fixed app
-container names, parses all release scripts, checks Prometheus rules,
-executes the mixed-role and long-lived missing-host promtool scenarios, checks
-Alertmanager UTF-8 configuration and both Alloy pipelines.
+This validates every production Compose model from one strict synthetic
+configuration, rejects mutable images/fixed container names, checks the
+supported `fbctl` control bundle and validates immutable Docker bases. The
+release CI additionally validates central Prometheus and Alloy configurations.
 
 Prometheus keeps 15 days/2 GB; Loki and Tempo keep seven days. Backup data is
 not stored in this stack. Monitoring volumes should themselves be snapshotted,

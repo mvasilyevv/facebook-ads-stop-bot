@@ -1,141 +1,91 @@
 # FB Agent — чек-лист пересборки
 
-Актуально на 2026-08-09. `[x]` означает: реализовано и локально проверено в integration-worktree. Это не означает production-release. Некритичные улучшения и внешние acceptance-gates вынесены в `BACKLOG.md`.
+Актуально на 2026-08-11. `[x]` означает только то, что реализовано и
+подтверждено локальными проверками; это не означает GitHub CI или production.
+Обязательные release-gates не переносятся в `BACKLOG.md`.
 
-## PR-01 — продукт и дизайн
+- [x] В repository `AGENTS.md` закреплён risk-based workflow:
+  анализ → план → тест → реализация → проверки → review.
 
-- [x] Зафиксировать PRODUCT.md и safety-инварианты.
-- [x] Выбрать направление «Точный журнал / Шкала ведёт».
-- [x] Зафиксировать DESIGN.md и UI-токены.
+## Продукт, UI и safety
 
-## PR-02 — запрещённая автоматизация
+- [x] Зафиксированы `PRODUCT.md`, направление «Точный журнал / Шкала ведёт»,
+  `DESIGN.md` и UI-токены.
+- [x] Удалены автоматические activate-пути; автоматическая команда допускается
+  только для deterministic `pause` при свежих полных USD-данных.
+- [x] AI не имеет mutation capability; activate остаётся owner-confirmed.
+- [x] Portfolio/cabinet UI, Ads, Actions, Incidents, Analytics, Campaigns,
+  Offers и Settings реализованы для web и TMA с общими контрактами.
+- [x] `partial`, `stale`, `unavailable` и unknown не отображаются как
+  confirmed/green; non-USD данные fail-closed для auto-pause.
+- [x] Durable Telegram inbox/outbox, webhook, callback tokens, editable
+  incident cards и suppression rules покрыты локальными тестами.
+- [x] Legacy direct send, Rich/polling и Redis alert queue удалены из runtime
+  contracts.
+- [ ] Пройти physical-device matrix и live usability Telegram/UI/TMA/desktop.
 
-- [x] Удалить auto-activate workers, flags, API и UI.
-- [x] Оставить activate только после owner-confirm.
-- [x] Закрыть AI-доступ к mutations.
-- [x] Проверить safety-critical lane/capability routing после удаления auto-activate.
-- [x] Выполнить финальную общую проверку после сборки всех веток.
+## Чистая БД и control plane
 
-## PR-03 — чистая БД и перенос конфигурации
+- [x] Baseline `0001_safety_first_baseline`, queue lanes/deadlines/leases,
+  fencing и `UNKNOWN` reconciliation проверены локально.
+- [x] Adoption bundle ограничен allowlist; import валидируется, dry-run
+  поддержан и выполняется атомарно.
+- [x] Receipt adoption хранится в PostgreSQL в той же SERIALIZABLE-транзакции,
+  что import; host marker не является источником истины.
+- [x] Миграции forward-only: `0001` замораживается, `0002+` линейны;
+  unknown/multiple/foreign revision отклоняются до DDL под advisory lock.
+- [x] Локальные PostgreSQL integration-тесты подтверждают rollback оборванной
+  миграции, сохранение данных при `0001 → 0002` и владение миграцией одним
+  lock holder: `789 passed, 2 skipped, 3 deselected`.
+- [x] Observer разделяет scan/control страницы, умеет находить/открывать
+  нужный кабинет и сохраняет фактический `next_scan_at`.
 
-- [x] Оставить одну baseline-миграцию без legacy auto-enable.
-- [x] Выделить кабинеты в отдельную сущность и нормализовать связь offer↔cabinet.
-- [x] Реализовать adoption-bundle export/validate/dry-run/import.
-- [x] Подготовить runbook и checklist повторного ввода секретов.
-- [x] Проверить fail-closed validation и атомарный rollback импорта.
-- [x] Прогнать adoption integration на отдельной чистой PostgreSQL.
+## Single-slot release и `fbctl`
 
-## PR-04 — safety/control plane
+- [x] Blue/green, release journal, rollback/handoff, pgBackRest gates и
+  candidate-Alloy удалены из целевого runtime.
+- [x] Compose разделён на стабильные `infra`, `jobs`, `app`, `desktop` и
+  `monitoring` проекты; routine deploy допускает downtime.
+- [x] Реализован тестируемый Python `fbctl`: `doctor`, `bootstrap`, `deploy`,
+  `status`, `logs`, `restart`, `cleanup` и `db`.
+- [x] `bootstrap` отдельно создаёт host/runtime, применяет baseline, импортирует
+  adoption и seed Vision; обычный `deploy` требует DB receipt и не повторяет
+  import/provisioning.
+- [x] Routine deploy выполняет preflight/pull до остановки, forward migration,
+  desktop → app → workers, worker DB-poll+heartbeat readiness, system-ready и
+  Telegram webhook checks; ошибка оставляет money workers выключенными.
+- [x] Canonical `runtime.env` генерируется из строгого единственного
+  конфигурационного контракта; обычный deploy не передаёт source secrets.
+- [x] Локально проверены parser/Compose contracts, migration/adoption path и
+  full Python suite: `2417 passed`.
+- [ ] GitHub CI построил и проверил immutable content-addressed image digests и
+  release manifest.
+- [ ] Production-like Docker rehearsal прошёл на опубликованных images:
+  clean DB → bootstrap → deploy, failpoints и повторный deploy.
+- [ ] Реальный `fbctl bootstrap`, затем `fbctl deploy` выполнены на production.
+- [ ] Live smoke подтверждает Vision/browser-agent, кабинеты, web, TMA,
+  Telegram webhook/card edit и system readiness.
+- [ ] После live smoke удалены только явно одобренные legacy volumes/dumps/
+  Compose resources.
 
-- [x] Queue lanes, deadlines, leases, fencing и UNKNOWN reconciliation.
-- [x] Разделить scan/control/interactive browser pages.
-- [x] Находить кабинет во всех вкладках или безопасно открывать его автоматически.
-- [x] Записывать реальный `cabinet_runtime.next_scan_at`.
-- [x] Прогнать crash/concurrency/DB-restart и lost-NOTIFY acceptance.
+## Локальные проверки
 
-## PR-05 — incidents и Telegram
+- [x] Локальные frontend gates: typecheck `6/6`, TMA `151`, browser-agent
+  `224`, Storybook a11y `58`, Playwright `140`; web/TMA builds укладываются в
+  установленные budgets.
 
-- [x] Durable inbox/outbox, webhook и callback tokens.
-- [x] Editable incident cards и suppression rules.
-- [x] Удалить direct send, Rich, polling и Redis alert queue.
-- [x] Прогнать полный Telegram failure/burst suite.
+## Обязательные release-gates
 
-## PR-06 — Operator API и frontend foundation
+- [ ] GitHub verify, image publish и Docker rehearsal зелёные.
+- [ ] Выполнены `fbctl doctor`, `fbctl db check`, clean bootstrap и повторный
+  idempotent deploy на production-like окружении.
+- [ ] Runtime OpenAPI и generated TypeScript совпадают; frontend/TMA/
+  browser-agent build, lint, a11y и responsive smoke зелёные в CI.
+- [ ] Выполнены live production smoke UI/TMA/Telegram/desktop/cabinets.
 
-- [x] Typed OpenAPI client и общие operator contracts.
-- [x] Global/cabinet snapshots и realtime reconciliation barrier.
-- [x] USD-only fail-closed money semantics.
-- [x] Регенерировать OpenAPI/TS после текущих backend-контрактов.
-- [x] Синхронизировать integration `uv.lock` с `pyproject.toml`; исходный dirty worktree не затронут.
+## Принятые эксплуатационные решения
 
-## PR-07 — «Сейчас» и кабинеты
-
-- [x] Пересобрать portfolio overview.
-- [x] Добавить cabinet drill-down.
-- [x] Убрать false-green для partial/stale/unavailable.
-- [x] Сделать web/TMA responsive parity.
-
-## PR-08 — Ads, Actions и Incidents
-
-- [x] Ads list/detail и pause/activate preview + confirm.
-- [x] Actions list/detail, filters, recovery links и cancelled state.
-- [x] URL-state, cabinet filters и mobile sheets.
-- [x] Добавить полный incidents list/API для web и TMA.
-- [x] Выполнить общий PR-08 review после объединения.
-
-## PR-09 — аналитика
-
-- [x] Завершить Spend, Funnel и Daypart по chart model.
-- [x] Завершить AccessibleChartFrame и таблицы данных.
-- [x] Проверить mobile/TMA SVG renderer и USD fail-closed.
-- [x] Проверить семь колонок и analytics presets.
-
-## PR-10 — Campaigns, Offers, Settings и AI
-
-- [x] Дать mobile web и TMA полный campaign creation flow.
-- [x] Сохранять campaign draft на сервере с CAS и atomic clear.
-- [x] Дать web/TMA одинаковые offers и settings capabilities.
-- [x] Оставить AI без mutation capability.
-- [x] Завершить финальный PR-10 lint/build/a11y review.
-
-## PR-11 — KasmVNC 1.5
-
-- [x] Закрепить KasmVNC 1.5.0 source commit, deb checksum и notices.
-- [x] Собрать first-party web client из pinned source локально.
-- [ ] Получить immutable image digest из CI и прогнать runtime regression.
-
-## PR-12 — единый remote desktop runtime
-
-- [x] Пересобрать единый `vision-desktop` на `DISPLAY=:1`.
-- [x] Удалить kasmxproxy, Selkies, sidecar и IPC/X-socket coupling.
-- [x] Зафиксировать 1366×768, `/config`, Vision API и clipboard 256 KiB.
-- [ ] Проверить новый runtime в disposable container fixture.
-
-## PR-13 — remote desktop UX
-
-- [x] Собрать pinned first-party Kasm web client.
-- [x] Добавить server-bound desktop/mobile presentation profiles.
-- [x] Реализовать Fit/100%, cursor/navigation, pinch, keyboard, clipboard и reconnect.
-- [ ] Пройти physical-device matrix.
-
-## PR-14 — platform evidence
-
-- [x] Реализовать immutable CI images и digest-only deploy без mutable `:latest`.
-- [x] Подготовить off-host monitoring, traces и blackbox-конфигурацию.
-- [x] Настроить локальный pgBackRest continuous WAL, full/differential backup и drill machinery; удалённый repository исключён решением owner.
-- [x] Добавить обязательные Storybook/a11y и Playwright CI jobs.
-- [x] Получить живые source CI, a11y и локальные load/chaos artifacts.
-- [x] Получить release-image CI и immutable manifest для release candidate.
-- [ ] Получить локальный restore/PITR и field Web Vitals artifacts.
-
-## PR-15 — legacy eradication и release packet
-
-- [x] Запустить архитектурные legacy guards по всему репозиторию.
-- [x] Провести независимые backend/Telegram/UI/platform reviews.
-- [x] Исправить все P0/P1 и решить подтверждённые P2.
-- [x] Подготовить rollback и двухчасовой cutover runbook.
-- [ ] Сформировать финальные production manifests и adoption bundle.
-
-## Текущие integration gates
-
-- [x] Вернуть TMA initial JS в бюджет ≤160 KB (`149 665 B gzip`, запас `10 335 B`).
-- [x] Завершить server-backed display timezone preference и подключить analytics.
-- [x] Прогнать локальные unit/type/lint/build gates: backend `2463 passed`, web `418`, TMA `151`, browser-agent `224`.
-- [x] Прогнать DB integration tests на изолированной PostgreSQL (`781 passed`).
-- [ ] Выполнить browser/device QA для settings, campaigns и desktop.
-
-## До локально рабочего release candidate
-
-- [x] Закрыть safety-critical lane/capability fix.
-- [x] Завершить display-timezone slice и повторно сгенерировать typed contracts.
-- [x] Прогнать общий backend/frontend/browser-agent/static regression.
-- [x] Проверить точное совпадение runtime OpenAPI и generated client.
-- [x] Провести финальный P0/P1 review: открытых P0/P1 нет; остаток зафиксирован в `BACKLOG.md`.
-
-## Production gate
-
-- [ ] Все CI, локальный restore, load, chaos, accessibility и device gates зелёные.
-- [x] Подготовлен двухчасовой cutover packet; запуск всё ещё заблокирован gates ниже.
-- [x] Получена отдельная команда owner на production-запуск.
-- [ ] Production-switch выполнен.
-- [ ] Старые production data удалены только после отдельного подтверждения.
+- [x] Owner принял downtime, single slot, отсутствие automatic rollback и
+  backup/restore automation.
+- [x] Старые production data удаляются только после отдельной live проверки и
+  в рамках уже данного owner-разрешения.

@@ -1,50 +1,34 @@
-# Production cutover packet
+# Production launch runbook
 
-This packet is prepared for the first safety-first release. It does not
-authorize the switch. Execution starts only after the owner gives the exact
-command `запускай` and all evidence cells below are green.
+Downtime разрешён. Старый runtime не используется как fallback, архив и
+backup/restore gate не создаются.
 
-## Required evidence
+## До запуска
 
-- immutable release manifest from CI; every runtime image is an `@sha256`;
-- clean `0001_safety_first_baseline` target and accepted adoption bundle;
-- newly provisioned secrets and successful connectivity checks;
-- monitoring/Alertmanager/blackbox readiness;
-- accepted local full backup plus post-backup WAL and isolated PITR restore evidence;
-- load, chaos, accessibility, browser and physical-device results;
-- named release operator and rollback owner with access to the host, registry,
-  DNS/Caddy, backup repository and Meta verification UI.
+- [ ] CI verification и content-addressed image manifest зелёные.
+- [ ] `adoption-bundle-v1.json` и текущие shared secrets находятся на host.
+- [ ] `desktop-profile-seed` проверен.
+- [ ] `fbctl doctor` проходит.
+- [ ] Preflight нового deploy проходит до остановки runtime.
 
-Any missing, expired or ambiguous item is a stop, not a waiver.
+## Запуск
 
-## Two-hour maintenance window
+1. Один раз выполнить `fbctl bootstrap --manifest release.json`.
+2. Выполнить `fbctl deploy --manifest release.json`.
+3. Дождаться шагов pull → stop → infra → migrate → desktop → app → workers →
+   system-ready → webhook → smoke → promote.
+4. Проверить UI, TMA, Telegram webhook, desktop и нужные cabinet tabs.
+5. Проверить отсутствие `failed/unknown` money actions и false-green данных.
 
-| Window    | Action                                                                                                                                                                             | Required proof                                                                        |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| T-30…T-15 | Freeze config changes and money commands. Record current Meta state, active color, release pointer and N-1 manifest.                                                               | Signed preflight record; N-1 images pull by digest.                                   |
-| T-15…T-5  | Export, validate and dry-run `adoption-bundle/v1` using `docs/adoption-bundle-runbook.md`. Provision new secrets.                                                                  | Counts and semantic hashes match; connectivity is green; scanning remains disabled.   |
-| T-5…T0    | Verify monitoring ingest, Alertmanager, blackbox, local backup/WAL and restore artifacts.                                                                                       | All required evidence current.                                                        |
-| T0…T20    | Merge the reviewed release commit to `main`. CI builds once, publishes immutable images and creates `release-images-<git-sha>`.                                                    | All source and artifact jobs green; manifest contains no tag-only references.         |
-| T20…T40   | Let the deployment workflow stage the immutable release and run the advisory-locked migrator against the clean target. Import the approved bundle once.                            | Only baseline revision exists; import transaction and semantic re-projection succeed. |
-| T40…T55   | Candidate starts without public traffic. Run health, readiness, OpenAPI, Alloy and desktop preflight checks.                                                                       | Candidate identity and every digest match the manifest.                               |
-| T55…T58   | Automated blue/green activation acquires the browser maintenance fence, switches Caddy and hands over singleton leases.                                                            | Zero switch 5xx; the single durable cutover deadline remains within 180 seconds.      |
-| T58…T70   | Verify owner login, global/cabinet snapshots, one scan, action lifecycle, Telegram webhook/card edit and unified desktop. Enable Observer only after cabinet mapping is confirmed. | No false-green state; no duplicate task/message; exact cabinet tabs confirmed.        |
-| T70…T100  | Observe errors, queue age, snapshot age, browser/Meta latency, Telegram delivery and host resources.                                                                               | SLO dashboards remain green and no critical incident is open.                         |
-| T100…T120 | Close maintenance, archive artifacts and record the release/backup fingerprints.                                                                                                   | Release packet complete; old stack and all old data remain retained and fenced.       |
+## Ошибка
 
-## Abort and rollback
+Deploy печатает точный `step`; money workers не запускаются до полной
+готовности контура. Исправить причину и повторить тот же manifest. Не запускать
+старые scripts и не менять task state вручную.
 
-Before Caddy changes, abort by leaving the incumbent untouched and deleting
-only the failed candidate. After activation starts, do not improvise manual
-container changes: `server-platform-release.sh` and `bluegreen-deploy.sh`
-restore the previous app/desktop pointers, Caddy target and worker ownership
-under the same absolute 180-second deadline.
+## После подтверждения
 
-If the automated rollback cannot prove convergence, keep the maintenance fence
-in place, stop the new runtime, reconcile the actual Meta status read-only and
-escalate the critical release incident. Never downgrade the database. A full
-return to the old stack uses its preserved database and immutable N-1 manifest;
-it is an operational rollback, not a dual-read/runtime fallback.
-
-Old production databases, volumes and backups are never deleted by this
-runbook. Their destruction requires a separate explicit owner confirmation.
+- удалить candidate staging и старые control bundles;
+- убедиться, что удалённые backup/rollback assets не восстановились;
+- удалить только явно проверенные legacy DB volumes/dumps;
+- сохранить новые `pgdata`, Redis, campaign uploads, desktop config и monitoring.
