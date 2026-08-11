@@ -529,14 +529,6 @@ def project_bootstrap_source(
                 result.pop(key)
                 dropped.append(key)
         if "TELEGRAM_CHAT_ID" in result:
-            chat_id = result["TELEGRAM_CHAT_ID"]
-            owner_id = result.get("DESKTOP_OWNER_TELEGRAM_USER_ID", "")
-            if (
-                not re.fullmatch(r"[1-9][0-9]*", chat_id)
-                or not re.fullmatch(r"[1-9][0-9]*", owner_id)
-                or chat_id != owner_id
-            ):
-                raise FbctlError("TELEGRAM_CHAT_ID requires migration to match the desktop owner")
             result.pop("TELEGRAM_CHAT_ID")
             dropped.append("TELEGRAM_CHAT_ID")
     unknown = sorted(set(result) - SOURCE_ALLOWED_KEYS)

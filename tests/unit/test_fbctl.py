@@ -9,12 +9,20 @@ import os
 import subprocess
 import time
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from core.adoption.bundle import (
+    AdoptionRecipientV1,
+    AdoptionSectionsV1,
+    build_adoption_bundle,
+    canonical_bundle_json,
+)
 from fbctl import __main__ as fbctl_main
 from fbctl import controller as fbctl_controller
+from fbctl.adoption import MAX_ADOPTION_BUNDLE_BYTES, verify_adoption_bundle_owner
 from fbctl.bundle import BUNDLE_SCHEMA, IMAGE_KEYS, RESOURCE_FILES, build_bundle, inspect_bundle
 from fbctl.config import (
     canonicalize_source,
@@ -358,6 +366,32 @@ def _legacy_source_values() -> dict[str, str]:
     }
 
 
+def _adoption_bundle_payload(recipients: list[dict[str, object]]) -> dict[str, object]:
+    recipient_bytes = json.dumps(
+        recipients,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return {
+        "schema_version": "adoption-bundle/v1",
+        "entity_counts": {"recipients": len(recipients)},
+        "section_sha256": {"recipients": hashlib.sha256(recipient_bytes).hexdigest()},
+        "sections": {"recipients": recipients},
+    }
+
+
+def _owner_recipient(telegram_user_id: int = 123456) -> dict[str, object]:
+    return {
+        "chat_id": telegram_user_id,
+        "telegram_user_id": telegram_user_id,
+        "username": "owner",
+        "display_name": "Owner",
+        "role": "owner",
+    }
+
+
 def test_bootstrap_projects_only_the_exact_known_legacy_source_shape() -> None:
     source = {
         **_legacy_source_values(),
@@ -391,17 +425,216 @@ def test_bootstrap_projection_reports_all_unknown_names_without_values() -> None
 
 
 @pytest.mark.parametrize("chat_id", ["0", "999999", "not-a-number"])
-def test_bootstrap_projection_rejects_unmigrated_telegram_chat_id(chat_id: str) -> None:
-    with pytest.raises(FbctlError, match="requires migration") as raised:
-        project_bootstrap_source(
+def test_bootstrap_projection_drops_obsolete_telegram_chat_id_without_parsing(chat_id: str) -> None:
+    projected, dropped = project_bootstrap_source(
+        {
+            "DESKTOP_OWNER_TELEGRAM_USER_ID": "123456",
+            "TELEGRAM_CHAT_ID": chat_id,
+        },
+        project_known_legacy_source=True,
+    )
+
+    assert projected == {"DESKTOP_OWNER_TELEGRAM_USER_ID": "123456"}
+    assert dropped == ("TELEGRAM_CHAT_ID",)
+
+
+def test_routine_canonicalization_keeps_telegram_chat_id_strict() -> None:
+    with pytest.raises(FbctlError, match="unsupported key TELEGRAM_CHAT_ID"):
+        canonicalize_source(
             {
                 "DESKTOP_OWNER_TELEGRAM_USER_ID": "123456",
-                "TELEGRAM_CHAT_ID": chat_id,
+                "TELEGRAM_CHAT_ID": "123456",
             },
-            project_known_legacy_source=True,
+            incumbent={},
         )
 
-    assert chat_id not in str(raised.value)
+
+def test_adoption_owner_preflight_returns_exact_matching_owner_bytes(tmp_path: Path) -> None:
+    payload = json.dumps(_adoption_bundle_payload([_owner_recipient()])).encode() + b"\n"
+    bundle = _write(
+        tmp_path / "adoption.json",
+        payload,
+    )
+
+    assert verify_adoption_bundle_owner(bundle, owner_telegram_user_id="123456") == payload
+
+
+def test_adoption_owner_preflight_accepts_authoritative_canonical_bundle(tmp_path: Path) -> None:
+    bundle = build_adoption_bundle(
+        AdoptionSectionsV1(
+            recipients=[
+                AdoptionRecipientV1(
+                    chat_id=456789,
+                    telegram_user_id=456789,
+                    username="recipient",
+                    display_name=None,
+                    role="recipient",
+                ),
+                AdoptionRecipientV1(
+                    chat_id=123456,
+                    telegram_user_id=123456,
+                    username="owner",
+                    display_name="Owner",
+                    role="owner",
+                ),
+            ]
+        ),
+        exported_at=datetime(2026, 8, 12, tzinfo=UTC),
+        source_fingerprint="a" * 64,
+    )
+    payload = canonical_bundle_json(bundle).encode("utf-8")
+    path = _write(tmp_path / "adoption.json", payload)
+
+    assert verify_adoption_bundle_owner(path, owner_telegram_user_id="123456") == payload
+
+
+@pytest.mark.parametrize("case", ["owner-mismatch", "missing-owner", "malformed", "hash", "count"])
+def test_adoption_owner_preflight_rejects_invalid_bundle_without_values(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    recipients = [_owner_recipient()]
+    payload: bytes
+    secret = "never-print-this-recipient-value"
+    recipients[0]["username"] = secret
+    if case == "owner-mismatch":
+        payload = json.dumps(_adoption_bundle_payload(recipients)).encode()
+    elif case == "missing-owner":
+        recipients[0]["role"] = "recipient"
+        payload = json.dumps(_adoption_bundle_payload(recipients)).encode()
+    elif case == "malformed":
+        payload = b'{"sections":'
+    elif case == "hash":
+        document = _adoption_bundle_payload(recipients)
+        document["section_sha256"] = {"recipients": "0" * 64}
+        payload = json.dumps(document).encode()
+    else:
+        document = _adoption_bundle_payload(recipients)
+        document["entity_counts"] = {"recipients": 2}
+        payload = json.dumps(document).encode()
+    bundle = _write(tmp_path / "adoption.json", payload)
+
+    with pytest.raises(FbctlError) as raised:
+        verify_adoption_bundle_owner(
+            bundle, owner_telegram_user_id="654321" if case == "owner-mismatch" else "123456"
+        )
+
+    assert str(raised.value) == "adoption bundle owner contract is invalid"
+    assert secret not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "bool-id",
+        "bool-user-id",
+        "nonpositive-id",
+        "unequal-dm",
+        "duplicate-id",
+        "two-owners",
+        "invalid-role",
+        "username-type",
+        "username-long",
+        "display-name-type",
+        "display-name-long",
+        "unsorted",
+        "missing-field",
+        "extra-field",
+    ],
+)
+def test_adoption_owner_preflight_requires_exact_recipient_domain_contract(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    recipient = _owner_recipient()
+    recipients = [recipient]
+    expected_owner = "123456"
+    if case == "bool-id":
+        recipient["chat_id"] = True
+    elif case == "bool-user-id":
+        recipient["telegram_user_id"] = True
+    elif case == "nonpositive-id":
+        recipient["chat_id"] = 0
+        recipient["telegram_user_id"] = 0
+    elif case == "unequal-dm":
+        recipient["chat_id"] = 123455
+    elif case == "duplicate-id":
+        duplicate = _owner_recipient()
+        duplicate["role"] = "recipient"
+        recipients.append(duplicate)
+    elif case == "two-owners":
+        recipients.append(_owner_recipient(456789))
+    elif case == "invalid-role":
+        recipient["role"] = "admin"
+    elif case == "username-type":
+        recipient["username"] = 123
+    elif case == "username-long":
+        recipient["username"] = "u" * 65
+    elif case == "display-name-type":
+        recipient["display_name"] = 123
+    elif case == "display-name-long":
+        recipient["display_name"] = "d" * 129
+    elif case == "unsorted":
+        recipient = _owner_recipient(456789)
+        lower_recipient = _owner_recipient(123456)
+        lower_recipient["role"] = "recipient"
+        recipients = [recipient, lower_recipient]
+        expected_owner = "456789"
+    elif case == "missing-field":
+        del recipient["username"]
+    else:
+        recipient["legacy"] = "not-allowed"
+    bundle = _write(
+        tmp_path / "adoption.json",
+        json.dumps(_adoption_bundle_payload(recipients)).encode(),
+    )
+
+    with pytest.raises(FbctlError, match="adoption bundle owner contract is invalid"):
+        verify_adoption_bundle_owner(bundle, owner_telegram_user_id=expected_owner)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["wrong-schema", "missing-schema", "symlink", "non-private", "non-regular", "oversize"],
+)
+def test_adoption_owner_preflight_rejects_unsafe_or_wrong_schema_with_constant_error(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    document = _adoption_bundle_payload([_owner_recipient()])
+    if case == "wrong-schema":
+        document["schema_version"] = "adoption-bundle/v2"
+    elif case == "missing-schema":
+        del document["schema_version"]
+    payload = json.dumps(document).encode()
+    path = tmp_path / "adoption.json"
+    if case == "symlink":
+        path.symlink_to(_write(tmp_path / "target.json", payload))
+    elif case == "non-private":
+        _write(path, payload, 0o644)
+    elif case == "non-regular":
+        path.mkdir()
+        path.chmod(0o600)
+    elif case == "oversize":
+        _write(path, b"x" * (MAX_ADOPTION_BUNDLE_BYTES + 1))
+    else:
+        _write(path, payload)
+
+    with pytest.raises(FbctlError) as raised:
+        verify_adoption_bundle_owner(path, owner_telegram_user_id="123456")
+
+    assert str(raised.value) == "adoption bundle owner contract is invalid"
+    assert "123456" not in str(raised.value)
+
+
+def test_adoption_owner_preflight_redacts_recursive_json_failure(tmp_path: Path) -> None:
+    payload = b"[" * 2_000 + b"0" + b"]" * 2_000
+    path = _write(tmp_path / "adoption.json", payload)
+
+    with pytest.raises(FbctlError) as raised:
+        verify_adoption_bundle_owner(path, owner_telegram_user_id="123456")
+
+    assert str(raised.value) == "adoption bundle owner contract is invalid"
 
 
 def test_vision_folder_id_propagates_only_to_canonical_app_environment(tmp_path: Path) -> None:
@@ -815,6 +1048,135 @@ def test_bootstrap_refuses_non_root_before_durable_writes(
         )
 
     assert not root.exists()
+
+
+def test_bootstrap_owner_mismatch_makes_no_durable_writes_or_runner_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(fbctl_controller.sys, "version_info", (3, 12))
+    root = tmp_path / "fb-agent"
+    bundle = _write(
+        tmp_path / "adoption.json",
+        json.dumps(_adoption_bundle_payload([_owner_recipient(654321)])).encode(),
+    )
+    runner = FakeRunner()
+
+    with pytest.raises(FbctlError, match="adoption bundle owner contract is invalid"):
+        bootstrap_host(
+            runner=runner,
+            root=root,
+            source_env=_source_env(tmp_path),
+            adoption_bundle=bundle,
+            desktop_profile_seed=None,
+            docker_config=None,
+            rehearsal=True,
+        )
+
+    assert not root.exists()
+    assert runner.commands == []
+
+
+@pytest.mark.parametrize("fail_import", [False, True])
+def test_bootstrap_imports_only_verified_candidate_bundle_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_import: bool,
+) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    root = tmp_path / "fb-agent"
+    vision_config = root / "shared" / "vision-config"
+    vision_config.mkdir(parents=True)
+    (root / "shared").chmod(0o700)
+    source = _source_env(tmp_path)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write("VISION_X_TOKEN=vision-secret\nVISION_PROFILE_ID=profile-1\n")
+    source.chmod(0o600)
+    verified_payload = json.dumps(_adoption_bundle_payload([_owner_recipient()])).encode()
+    original_bundle = _write(tmp_path / "adoption.json", verified_payload)
+    tampered_payload = b'{"tampered":true}'
+
+    def verify_then_mutate(path: Path, *, owner_telegram_user_id: str) -> bytes:
+        payload = verify_adoption_bundle_owner(
+            path,
+            owner_telegram_user_id=owner_telegram_user_id,
+        )
+        path.write_bytes(tampered_payload)
+        path.chmod(0o600)
+        return payload
+
+    monkeypatch.setattr(fbctl_controller, "verify_adoption_bundle_owner", verify_then_mutate)
+    monkeypatch.setattr(fbctl_controller, "materialize_candidate", _materialize)
+    monkeypatch.setattr(
+        fbctl_controller,
+        "_normalize_profile_tree",
+        lambda _path, *, uid, gid: None,
+    )
+    for method in (
+        "_preflight",
+        "_pull",
+        "_ensure_bootstrap_resources",
+        "_start_infra",
+        "_migrate",
+        "_bootstrap_runtime_config",
+        "_bootstrap_vision_config",
+    ):
+        monkeypatch.setattr(ProductionController, method, lambda *_args, **_kwargs: None)
+
+    captured: dict[str, object] = {}
+
+    def capture_adoption(
+        _controller: ProductionController,
+        config,
+        adoption_bundle: Path | None,
+    ) -> None:
+        assert adoption_bundle is not None
+        captured["argument"] = adoption_bundle
+        captured["runtime"] = Path(config.values["ADOPTION_BUNDLE_FILE"])
+        captured["payload"] = adoption_bundle.read_bytes()
+        captured["mode"] = adoption_bundle.stat().st_mode & 0o777
+        captured["parent_mode"] = adoption_bundle.parent.stat().st_mode & 0o777
+        if fail_import:
+            raise FbctlError("injected adoption failure")
+
+    monkeypatch.setattr(ProductionController, "_bootstrap_adoption", capture_adoption)
+    runner = FakeRunner()
+
+    kwargs = {
+        "runner": runner,
+        "root": root,
+        "source_env": source,
+        "adoption_bundle": original_bundle,
+        "desktop_profile_seed": None,
+        "docker_config": None,
+        "rehearsal": True,
+    }
+    if fail_import:
+        with pytest.raises(FbctlError, match="injected adoption failure"):
+            bootstrap_host(**kwargs)
+        result = None
+    else:
+        result = bootstrap_host(**kwargs)
+
+    snapshot = captured["argument"]
+    assert isinstance(snapshot, Path)
+    if result is not None:
+        assert result["status"] == "READY"
+    assert captured["runtime"] == snapshot
+    assert snapshot == root / "candidate" / "secrets" / "adoption-bundle-v1.json"
+    assert snapshot != original_bundle
+    assert captured["payload"] == verified_payload
+    assert captured["payload"] != tampered_payload
+    assert captured["mode"] == 0o600
+    assert captured["parent_mode"] == 0o700
+    if fail_import:
+        assert original_bundle.read_bytes() == tampered_payload
+    else:
+        assert not original_bundle.exists()
+    assert not snapshot.exists()
+    assert not (root / "candidate").exists()
+    assert runner.commands == []
 
 
 def test_deploy_promotes_only_one_runtime_after_all_evidence(tmp_path: Path) -> None:
