@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -76,10 +77,18 @@ def _run(
 
 
 def _require_ci_acknowledgement() -> None:
+    if os.geteuid() != 0:
+        raise RehearsalError("single-slot rehearsal requires root privileges")
     if os.environ.get("GITHUB_ACTIONS") != "true":
         raise RehearsalError("single-slot rehearsal is restricted to an ephemeral Actions host")
     if os.environ.get("FB_AGENT_REHEARSAL_ACK") != "single-slot":
         raise RehearsalError("set FB_AGENT_REHEARSAL_ACK=single-slot explicitly")
+    raw_docker_config = os.environ.get("DOCKER_CONFIG", "")
+    docker_config = Path(raw_docker_config)
+    if not raw_docker_config or not docker_config.is_absolute():
+        raise RehearsalError("DOCKER_CONFIG must be an absolute path")
+    if not docker_config.is_dir() or not (docker_config / "config.json").is_file():
+        raise RehearsalError("DOCKER_CONFIG must contain an existing config.json")
 
 
 def _load_release(path: Path) -> dict[str, Any]:
@@ -194,6 +203,33 @@ def build_adoption_bundle() -> dict[str, Any]:
 def _write_private(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
     path.chmod(0o600)
+
+
+def _write_profile_seed(profile: Path) -> None:
+    profile.mkdir(mode=0o700)
+    profile.chmod(0o700)
+    _write_private(profile / ".fb-agent-vision-profile-v1", "fb-agent-vision-profile-v1\n")
+    browser = profile / "browser"
+    browser.mkdir(mode=0o700)
+    browser.chmod(0o700)
+    default_profile = browser / "Default"
+    default_profile.mkdir(mode=0o700)
+    default_profile.chmod(0o700)
+    _write_private(default_profile / "Preferences", "{}\n")
+
+
+def _assert_tree_ownership(root: Path, *, uid: int, gid: int) -> None:
+    if not root.is_dir() or root.is_symlink():
+        raise RehearsalError(f"canonical Vision config is not a directory: {root}")
+    for path in (root, *sorted(root.rglob("*"))):
+        metadata = path.lstat()
+        if (metadata.st_uid, metadata.st_gid) != (uid, gid):
+            raise RehearsalError(
+                f"canonical Vision ownership mismatch: {path} "
+                f"is {metadata.st_uid}:{metadata.st_gid}, expected {uid}:{gid}"
+            )
+        if stat.S_ISLNK(metadata.st_mode):
+            raise RehearsalError(f"canonical Vision config contains a symlink: {path}")
 
 
 def _source_environment(cluster_id: str) -> str:
@@ -552,8 +588,7 @@ def rehearse(bundle: Path, release_manifest: Path, source_root: Path) -> None:
         adoption = root / "adoption.json"
         _write_private(adoption, _canonical_json(build_adoption_bundle()) + "\n")
         profile = root / "desktop-profile-seed"
-        profile.mkdir(mode=0o700)
-        _write_private(profile / ".fb-agent-vision-profile-v1", "fb-agent-vision-profile-v1\n")
+        _write_profile_seed(profile)
         _run(
             [
                 sys.executable,
@@ -571,6 +606,7 @@ def rehearse(bundle: Path, release_manifest: Path, source_root: Path) -> None:
                 "--rehearsal",
             ]
         )
+        _assert_tree_ownership(root / "shared" / "vision-config", uid=1000, gid=1000)
         _run(
             [
                 "docker",

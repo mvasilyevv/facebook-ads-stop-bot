@@ -85,6 +85,11 @@ jobs:
         with:
           name: ${{ needs.control-bundle.outputs.artifact }}
           path: release-inputs
+      - name: Prepare explicit Docker credentials directory
+        run: |
+          docker_config="$RUNNER_TEMP/fb-agent-docker-config"
+          install -d -m 700 "$docker_config"
+          printf 'DOCKER_CONFIG=%s\n' "$docker_config" >> "$GITHUB_ENV"
       - name: Authenticate immutable release pulls
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -94,11 +99,17 @@ jobs:
       - name: Execute production-like single-slot rehearsal
         env:
           FB_AGENT_REHEARSAL_ACK: single-slot
-        run: >-
-          python3 -B -m tests.rehearsal.single_slot
-          release-inputs/fbctl.pyz
-          release-inputs/release.json
-          --source-root .
+        run: |
+          sudo -n env -i \
+            DOCKER_CONFIG="$DOCKER_CONFIG" \
+            GITHUB_ACTIONS=true \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+            FB_AGENT_REHEARSAL_ACK="$FB_AGENT_REHEARSAL_ACK" \
+            PYTHONDONTWRITEBYTECODE=1 \
+            /usr/bin/python3 -B -m tests.rehearsal.single_slot \
+              release-inputs/fbctl.pyz \
+              release-inputs/release.json \
+              --source-root .
 
   deploy:
     name: Deploy fbctl bundle
