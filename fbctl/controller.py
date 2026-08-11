@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Iterator, Sequence
 
+from fbctl.adoption import verify_adoption_bundle_owner
 from fbctl.bundle import materialize_candidate
 from fbctl.config import (
     BOOTSTRAP_CADDY_KEYS,
@@ -907,8 +908,6 @@ def bootstrap_host(
     require_private_file(source_env)
     if adoption_bundle is not None:
         adoption_bundle = require_absolute_path(adoption_bundle, label="adoption bundle")
-        if adoption_bundle.exists():
-            require_private_file(adoption_bundle)
     if desktop_profile_seed is not None and desktop_profile_seed.exists():
         desktop_profile_seed = require_absolute_path(
             desktop_profile_seed,
@@ -918,6 +917,19 @@ def bootstrap_host(
         parse_dotenv(source_env),
         project_known_legacy_source=project_known_legacy_source,
     )
+    verified_adoption_bundle: bytes | None = None
+    verified_adoption_source: Path | None = None
+    if adoption_bundle is not None and os.path.lexists(adoption_bundle):
+        # This strict, in-memory projection supplies the canonical owner
+        # identity for the bundle preflight.  It deliberately happens before
+        # creating root, shared state, or any runner-backed infrastructure/DB
+        # operation.  The missing-bundle retry path remains unchanged.
+        canonical_source = canonicalize_source(raw_source, incumbent={})
+        verified_adoption_bundle = verify_adoption_bundle_owner(
+            adoption_bundle,
+            owner_telegram_user_id=canonical_source["DESKTOP_OWNER_TELEGRAM_USER_ID"],
+        )
+        verified_adoption_source = adoption_bundle
     provision_caddy = not rehearsal
     caddy_bootstrap = _resolve_caddy_bootstrap_credentials(
         raw_source,
@@ -978,16 +990,16 @@ def bootstrap_host(
                 _normalize_profile_tree(vision_config, uid=1000, gid=1000)
             release = materialize_candidate(candidate)
             release_id = str(release["release_id"])
+            adoption_snapshot: Path | None = None
+            if verified_adoption_bundle is not None:
+                adoption_snapshot = candidate / "secrets" / "adoption-bundle-v1.json"
+                atomic_write(adoption_snapshot, verified_adoption_bundle, mode=0o600)
             config = prepare_candidate(
                 root=root,
                 release=release,
                 source_env=bootstrap_transport,
                 docker_config=docker_config,
-                adoption_bundle=(
-                    adoption_bundle
-                    if adoption_bundle is not None and adoption_bundle.exists()
-                    else None
-                ),
+                adoption_bundle=adoption_snapshot,
                 bootstrap=True,
                 rehearsal=rehearsal,
             )
@@ -1005,7 +1017,7 @@ def bootstrap_host(
             controller._migrate(config)  # noqa: SLF001 - same deep module
             controller._bootstrap_adoption(  # noqa: SLF001 - same deep module
                 config,
-                adoption_bundle,
+                adoption_snapshot,
             )
             controller._bootstrap_runtime_config(config)  # noqa: SLF001
             controller._bootstrap_vision_config(config)  # noqa: SLF001
@@ -1017,7 +1029,7 @@ def bootstrap_host(
                     runner,
                 )
             _consume_bootstrap_inputs(
-                adoption_bundle=adoption_bundle,
+                adoption_bundle=verified_adoption_source,
                 desktop_profile_seed=desktop_profile_seed,
                 canonical_profile=vision_config,
             )
