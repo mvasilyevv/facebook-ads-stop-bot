@@ -180,6 +180,27 @@ CREATE TABLE public.ad_accounts (
 
 
 --
+-- Name: adoption_receipt; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.adoption_receipt (
+    id smallint DEFAULT 1 NOT NULL,
+    schema_version character varying(64) NOT NULL,
+    bundle_sha256 character varying(64) NOT NULL,
+    source_fingerprint character varying(64) NOT NULL,
+    entity_counts jsonb DEFAULT '{}'::jsonb NOT NULL,
+    section_sha256 jsonb DEFAULT '{}'::jsonb NOT NULL,
+    imported_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_adoption_receipt_bundle_sha256 CHECK (((bundle_sha256)::text ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_adoption_receipt_entity_counts_object CHECK ((jsonb_typeof(entity_counts) = 'object'::text)),
+    CONSTRAINT ck_adoption_receipt_schema_version CHECK (((schema_version)::text = 'adoption-bundle/v1'::text)),
+    CONSTRAINT ck_adoption_receipt_section_sha256_object CHECK ((jsonb_typeof(section_sha256) = 'object'::text)),
+    CONSTRAINT ck_adoption_receipt_singleton CHECK ((id = 1)),
+    CONSTRAINT ck_adoption_receipt_source_fingerprint CHECK (((source_fingerprint)::text ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
 -- Name: ad_alert_state; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1674,6 +1695,14 @@ ALTER TABLE ONLY public.meta_api_audit_log_default
 
 ALTER TABLE ONLY public.ad_accounts
     ADD CONSTRAINT pk_ad_accounts PRIMARY KEY (account_id);
+
+
+--
+-- Name: adoption_receipt pk_adoption_receipt; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.adoption_receipt
+    ADD CONSTRAINT pk_adoption_receipt PRIMARY KEY (id);
 
 
 --

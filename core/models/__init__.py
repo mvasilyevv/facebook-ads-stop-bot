@@ -48,6 +48,7 @@ from core.models.observer import (
 )
 from core.models.operator import OperatorDisplayPreference, OperatorRevisionEvent
 from core.models.settings import (
+    AdoptionReceipt,
     AdsetProCredentials,
     ObserverConfig,
     SystemConfig,
@@ -97,6 +98,7 @@ __all__ = [
     "CampaignRun",
     "OfferCreativeSeq",
     # settings
+    "AdoptionReceipt",
     "AdsetProCredentials",
     "ObserverConfig",
     "SystemConfig",

@@ -1,0 +1,81 @@
+# One-shot release jobs share the stable application project and platform
+# network, but never participate in the long-running application lifecycle.
+
+name: fb_agent_app
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-job-labels: &job-labels
+  com.fb-agent.managed: "true"
+  com.fb-agent.cluster-id: ${FB_AGENT_BOOTSTRAP_CLUSTER_ID:?set FB_AGENT_BOOTSTRAP_CLUSTER_ID}
+  com.fb-agent.purpose: job
+  com.fb-agent.release: ${RELEASE_ID:?set RELEASE_ID}
+
+x-job-environment: &job-environment
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  REDIS_URL: redis://redis:6379/0
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  FB_AGENT_RELEASE: ${RELEASE_ID:?set RELEASE_ID}
+
+x-job-common: &job-common
+  image: ${WORKERS_IMAGE:?set WORKERS_IMAGE to image@sha256}
+  restart: "no"
+  init: true
+  logging: *logging
+  env_file: ${APP_ENV_FILE:?set APP_ENV_FILE}
+  environment:
+    <<: *job-environment
+  networks: [platform]
+  labels: *job-labels
+
+services:
+  migrator:
+    <<: *job-common
+    environment:
+      <<: *job-environment
+      WORKER_TYPE: migrate
+      MIGRATION_LOCK_TIMEOUT_SECONDS: ${MIGRATION_LOCK_TIMEOUT_SECONDS:-180}
+    entrypoint: ["python", "-m", "scripts.run-migrations-locked"]
+
+  adoption_importer:
+    <<: *job-common
+    entrypoint: ["python", "/app/scripts/adopt-first-release.py"]
+    volumes:
+      - ${ADOPTION_BUNDLE_FILE:-/dev/null}:/run/fb-agent/adoption-bundle-v1.json:ro
+
+  adoption_status:
+    <<: *job-common
+    entrypoint: ["python", "/app/scripts/adoption-receipt-status.py"]
+
+  database_check:
+    <<: *job-common
+    environment:
+      <<: *job-environment
+      MIGRATION_LOCK_TIMEOUT_SECONDS: ${MIGRATION_LOCK_TIMEOUT_SECONDS:-180}
+    entrypoint: ["python", "/app/scripts/check-database-contract.py"]
+
+  runtime_config_bootstrap:
+    <<: *job-common
+    entrypoint: ["python", "/app/scripts/bootstrap-runtime-config.py"]
+
+  vision_config_bootstrap:
+    <<: *job-common
+    env_file:
+      - ${APP_ENV_FILE:?set APP_ENV_FILE}
+      - ${VISION_BOOTSTRAP_ENV_FILE:-/dev/null}
+    entrypoint: ["python", "/app/scripts/bootstrap-vision-config.py"]
+
+  telegram_webhook_configurator:
+    <<: *job-common
+    entrypoint: ["python", "/app/scripts/configure-telegram-webhook.py"]
+
+networks:
+  platform:
+    name: ${PLATFORM_NETWORK:?set PLATFORM_NETWORK}
+    external: true

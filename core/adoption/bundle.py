@@ -412,7 +412,7 @@ def build_adoption_bundle(
     exported_at: datetime,
     source_fingerprint: str,
 ) -> AdoptionBundleV1:
-    """Build a signed manifest from already allowlisted configuration."""
+    """Build an integrity manifest from already allowlisted configuration."""
     return AdoptionBundleV1(
         schema_version=SCHEMA_VERSION,
         exported_at=exported_at,
@@ -426,6 +426,12 @@ def build_adoption_bundle(
 def canonical_bundle_json(bundle: AdoptionBundleV1) -> str:
     """Serialize with one deterministic UTF-8 representation."""
     return _canonical_json(bundle.model_dump(mode="json")) + "\n"
+
+
+def canonical_bundle_sha256(bundle: AdoptionBundleV1) -> str:
+    """Hash the exact canonical UTF-8 bundle representation."""
+
+    return hashlib.sha256(canonical_bundle_json(bundle).encode("utf-8")).hexdigest()
 
 
 def parse_adoption_bundle_json(payload: str | bytes) -> AdoptionBundleV1:
@@ -458,5 +464,6 @@ __all__ = [
     "SECTION_NAMES",
     "build_adoption_bundle",
     "canonical_bundle_json",
+    "canonical_bundle_sha256",
     "parse_adoption_bundle_json",
 ]
