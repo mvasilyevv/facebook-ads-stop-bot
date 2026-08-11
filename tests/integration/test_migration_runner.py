@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 import os
 import shutil
 import sys
@@ -204,6 +205,51 @@ async def test_real_forward_revision_preserves_existing_data(
             )
     finally:
         await _restore_baseline(pg_engine, table=table, marker_keys=(preserved_key,))
+
+
+@pytest.mark.asyncio
+async def test_in_process_migration_preserves_preexisting_non_alembic_logger(
+    pg_engine: AsyncEngine,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    revision = "test_0002_logging"
+    table_name = "migration_logging_probe"
+    config, table = _temporary_forward_config(
+        tmp_path,
+        revision=revision,
+        table_name=table_name,
+    )
+    sentinel = logging.getLogger("fb_agent.tests.migration_logging_sentinel")
+    original_disabled = sentinel.disabled
+    sentinel.disabled = False
+    message = "application logger survived in-process Alembic configuration"
+
+    try:
+        assert (
+            await MIGRATOR.run_locked_migrations(
+                pg_engine,
+                config=config,
+                lock_wait_seconds=5,
+            )
+            == 0
+        )
+        assert sentinel.disabled is False
+
+        # fileConfig replaces root handlers. Pytest installs a fresh capture
+        # handler for the next test, so attach that same handler directly here
+        # to prove the preserved logger remains caplog-capturable.
+        with caplog.at_level(logging.WARNING, logger=sentinel.name):
+            sentinel.addHandler(caplog.handler)
+            try:
+                sentinel.warning(message)
+            finally:
+                sentinel.removeHandler(caplog.handler)
+
+        assert message in caplog.messages
+    finally:
+        sentinel.disabled = original_disabled
+        await _restore_baseline(pg_engine, table=table)
 
 
 async def _wait_for_sleeping_lock_owner(

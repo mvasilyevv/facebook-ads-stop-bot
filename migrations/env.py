@@ -36,7 +36,7 @@ from migrations.revision_guard import (
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # URL берём из настроек приложения (core.config), а не из захардкоженного
 # alembic.ini — иначе в Docker/на сервере alembic идёт на localhost:5433 вместо
