@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from core.telegram.webhook_configuration import TelegramWebhookTarget
+from core.telegram.webhook_configuration import TelegramWebhookTarget, bind_webhook_generation
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -66,13 +66,14 @@ async def test_configurator_uses_database_authoritative_bot_token(
         secret_token="webhook-secret-123",
         secret_digest=b"x" * 32,
     )
+    generation_url = bind_webhook_generation(target.url, 8)
     engine = _Engine(
         SimpleNamespace(
             webhook_state="configured",
             webhook_generation=8,
             webhook_applied_generation=8,
-            webhook_desired_url=target.url,
-            webhook_remote_url=target.url,
+            webhook_desired_url=generation_url,
+            webhook_remote_url=generation_url,
             webhook_last_error_code=None,
         )
     )
@@ -102,6 +103,56 @@ async def test_configurator_uses_database_authoritative_bot_token(
 
     ensure.assert_awaited_once_with(engine, target=target, force=True)
     process.assert_awaited_once_with(engine, worker_id="release-configurator")
+
+
+@pytest.mark.asyncio
+async def test_configurator_rejects_unbound_url_for_current_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_script()
+    target = TelegramWebhookTarget(
+        url="https://app.example/api/v1/integrations/telegram/webhook",
+        secret_token="webhook-secret-123",
+        secret_digest=b"x" * 32,
+    )
+    engine = _Engine(
+        SimpleNamespace(
+            webhook_state="configured",
+            webhook_generation=8,
+            webhook_applied_generation=8,
+            webhook_desired_url=target.url,
+            webhook_remote_url=target.url,
+            webhook_last_error_code="webhook_target_revision_mismatch",
+        )
+    )
+    monkeypatch.setattr(
+        module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            frontend_origin="https://app.example",
+            telegram_webhook_secret="webhook-secret-123",
+        ),
+    )
+    monkeypatch.setattr(module, "get_engine", lambda: engine)
+    monkeypatch.setattr(
+        module,
+        "load_telegram_config",
+        AsyncMock(return_value=SimpleNamespace(bot_token="database-bot-token")),
+    )
+    monkeypatch.setattr(module, "resolve_webhook_target", lambda **_kwargs: target)
+    monkeypatch.setattr(
+        module,
+        "ensure_webhook_configuration_desired",
+        AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        module,
+        "process_one_webhook_configuration",
+        AsyncMock(return_value=True),
+    )
+
+    with pytest.raises(RuntimeError, match="webhook_target_revision_mismatch"):
+        await module.configure()
 
 
 @pytest.mark.asyncio
@@ -145,12 +196,13 @@ async def test_configurator_fails_on_false_green_remote_snapshot(
 ) -> None:
     module = _load_script()
     target_url = "https://app.example/api/v1/integrations/telegram/webhook"
+    generation_url = bind_webhook_generation(target_url, 9)
     engine = _Engine(
         SimpleNamespace(
             webhook_state="configured",
             webhook_generation=9,
             webhook_applied_generation=9,
-            webhook_desired_url=target_url,
+            webhook_desired_url=generation_url,
             webhook_remote_url="https://stale.example/webhook",
             webhook_last_error_code=None,
         )
