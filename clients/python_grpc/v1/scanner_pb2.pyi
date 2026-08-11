@@ -1,12 +1,8 @@
-from collections.abc import Iterable as _Iterable
-from collections.abc import Mapping as _Mapping
-from typing import ClassVar as _ClassVar
-from typing import Optional as _Optional
-from typing import Union as _Union
-
+from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from google.protobuf.internal import containers as _containers
+from collections.abc import Iterable as _Iterable, Mapping as _Mapping
+from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
@@ -20,13 +16,7 @@ class ListCampaignsRequest(_message.Message):
     page_id: str
     owner_tag: str
     ad_account_id: str
-    def __init__(
-        self,
-        session_id: _Optional[str] = ...,
-        page_id: _Optional[str] = ...,
-        owner_tag: _Optional[str] = ...,
-        ad_account_id: _Optional[str] = ...,
-    ) -> None: ...
+    def __init__(self, session_id: _Optional[str] = ..., page_id: _Optional[str] = ..., owner_tag: _Optional[str] = ..., ad_account_id: _Optional[str] = ...) -> None: ...
 
 class CampaignInfo(_message.Message):
     __slots__ = ("id", "name")
@@ -40,22 +30,10 @@ class ListCampaignsResponse(_message.Message):
     __slots__ = ("campaigns",)
     CAMPAIGNS_FIELD_NUMBER: _ClassVar[int]
     campaigns: _containers.RepeatedCompositeFieldContainer[CampaignInfo]
-    def __init__(
-        self, campaigns: _Optional[_Iterable[_Union[CampaignInfo, _Mapping]]] = ...
-    ) -> None: ...
+    def __init__(self, campaigns: _Optional[_Iterable[_Union[CampaignInfo, _Mapping]]] = ...) -> None: ...
 
 class RunScanCycleRequest(_message.Message):
-    __slots__ = (
-        "session_id",
-        "page_id",
-        "max_scroll_passes",
-        "do_refresh",
-        "reset_scroll_first",
-        "settle_delay_seconds",
-        "campaign_ids",
-        "owner_tag",
-        "ad_account_id",
-    )
+    __slots__ = ("session_id", "page_id", "max_scroll_passes", "do_refresh", "reset_scroll_first", "settle_delay_seconds", "campaign_ids", "owner_tag", "ad_account_id")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     PAGE_ID_FIELD_NUMBER: _ClassVar[int]
     MAX_SCROLL_PASSES_FIELD_NUMBER: _ClassVar[int]
@@ -74,18 +52,7 @@ class RunScanCycleRequest(_message.Message):
     campaign_ids: _containers.RepeatedScalarFieldContainer[str]
     owner_tag: str
     ad_account_id: str
-    def __init__(
-        self,
-        session_id: _Optional[str] = ...,
-        page_id: _Optional[str] = ...,
-        max_scroll_passes: _Optional[int] = ...,
-        do_refresh: bool = ...,
-        reset_scroll_first: bool = ...,
-        settle_delay_seconds: _Optional[float] = ...,
-        campaign_ids: _Optional[_Iterable[str]] = ...,
-        owner_tag: _Optional[str] = ...,
-        ad_account_id: _Optional[str] = ...,
-    ) -> None: ...
+    def __init__(self, session_id: _Optional[str] = ..., page_id: _Optional[str] = ..., max_scroll_passes: _Optional[int] = ..., do_refresh: bool = ..., reset_scroll_first: bool = ..., settle_delay_seconds: _Optional[float] = ..., campaign_ids: _Optional[_Iterable[str]] = ..., owner_tag: _Optional[str] = ..., ad_account_id: _Optional[str] = ...) -> None: ...
 
 class ScanCycleEvent(_message.Message):
     __slots__ = ("session_id", "progress", "complete", "error")
@@ -97,13 +64,7 @@ class ScanCycleEvent(_message.Message):
     progress: ScanProgress
     complete: ScanComplete
     error: ScanError
-    def __init__(
-        self,
-        session_id: _Optional[str] = ...,
-        progress: _Optional[_Union[ScanProgress, _Mapping]] = ...,
-        complete: _Optional[_Union[ScanComplete, _Mapping]] = ...,
-        error: _Optional[_Union[ScanError, _Mapping]] = ...,
-    ) -> None: ...
+    def __init__(self, session_id: _Optional[str] = ..., progress: _Optional[_Union[ScanProgress, _Mapping]] = ..., complete: _Optional[_Union[ScanComplete, _Mapping]] = ..., error: _Optional[_Union[ScanError, _Mapping]] = ...) -> None: ...
 
 class ScanProgress(_message.Message):
     __slots__ = ("pass_number", "rows_so_far", "scroll_metrics", "new_rows")
@@ -115,28 +76,10 @@ class ScanProgress(_message.Message):
     rows_so_far: int
     scroll_metrics: ScrollMetrics
     new_rows: _containers.RepeatedCompositeFieldContainer[ScannedAdRow]
-    def __init__(
-        self,
-        pass_number: _Optional[int] = ...,
-        rows_so_far: _Optional[int] = ...,
-        scroll_metrics: _Optional[_Union[ScrollMetrics, _Mapping]] = ...,
-        new_rows: _Optional[_Iterable[_Union[ScannedAdRow, _Mapping]]] = ...,
-    ) -> None: ...
+    def __init__(self, pass_number: _Optional[int] = ..., rows_so_far: _Optional[int] = ..., scroll_metrics: _Optional[_Union[ScrollMetrics, _Mapping]] = ..., new_rows: _Optional[_Iterable[_Union[ScannedAdRow, _Mapping]]] = ...) -> None: ...
 
 class ScanComplete(_message.Message):
-    __slots__ = (
-        "all_rows",
-        "total_passes",
-        "duration_seconds",
-        "dismissed_modals",
-        "unknown_modal_artifacts",
-        "phase_timings",
-        "partial_row_ids",
-        "warnings",
-        "empty_reason",
-        "rows_with_all_metrics_empty",
-        "metrics_contract_revision",
-    )
+    __slots__ = ("all_rows", "total_passes", "duration_seconds", "dismissed_modals", "unknown_modal_artifacts", "phase_timings", "partial_row_ids", "warnings", "empty_reason", "rows_with_all_metrics_empty", "metrics_contract_revision")
     ALL_ROWS_FIELD_NUMBER: _ClassVar[int]
     TOTAL_PASSES_FIELD_NUMBER: _ClassVar[int]
     DURATION_SECONDS_FIELD_NUMBER: _ClassVar[int]
@@ -159,20 +102,7 @@ class ScanComplete(_message.Message):
     empty_reason: str
     rows_with_all_metrics_empty: int
     metrics_contract_revision: int
-    def __init__(
-        self,
-        all_rows: _Optional[_Iterable[_Union[ScannedAdRow, _Mapping]]] = ...,
-        total_passes: _Optional[int] = ...,
-        duration_seconds: _Optional[float] = ...,
-        dismissed_modals: _Optional[_Iterable[str]] = ...,
-        unknown_modal_artifacts: _Optional[_Iterable[str]] = ...,
-        phase_timings: _Optional[_Union[PhaseTimings, _Mapping]] = ...,
-        partial_row_ids: _Optional[_Iterable[str]] = ...,
-        warnings: _Optional[_Iterable[str]] = ...,
-        empty_reason: _Optional[str] = ...,
-        rows_with_all_metrics_empty: _Optional[int] = ...,
-        metrics_contract_revision: _Optional[int] = ...,
-    ) -> None: ...
+    def __init__(self, all_rows: _Optional[_Iterable[_Union[ScannedAdRow, _Mapping]]] = ..., total_passes: _Optional[int] = ..., duration_seconds: _Optional[float] = ..., dismissed_modals: _Optional[_Iterable[str]] = ..., unknown_modal_artifacts: _Optional[_Iterable[str]] = ..., phase_timings: _Optional[_Union[PhaseTimings, _Mapping]] = ..., partial_row_ids: _Optional[_Iterable[str]] = ..., warnings: _Optional[_Iterable[str]] = ..., empty_reason: _Optional[str] = ..., rows_with_all_metrics_empty: _Optional[int] = ..., metrics_contract_revision: _Optional[int] = ...) -> None: ...
 
 class PhaseTimings(_message.Message):
     __slots__ = ("refresh_ms", "first_row_ms", "scroll_ms", "parse_ms", "total_ms")
@@ -186,14 +116,7 @@ class PhaseTimings(_message.Message):
     scroll_ms: int
     parse_ms: int
     total_ms: int
-    def __init__(
-        self,
-        refresh_ms: _Optional[int] = ...,
-        first_row_ms: _Optional[int] = ...,
-        scroll_ms: _Optional[int] = ...,
-        parse_ms: _Optional[int] = ...,
-        total_ms: _Optional[int] = ...,
-    ) -> None: ...
+    def __init__(self, refresh_ms: _Optional[int] = ..., first_row_ms: _Optional[int] = ..., scroll_ms: _Optional[int] = ..., parse_ms: _Optional[int] = ..., total_ms: _Optional[int] = ...) -> None: ...
 
 class ScanError(_message.Message):
     __slots__ = ("message", "recoverable", "attempt")
@@ -203,9 +126,7 @@ class ScanError(_message.Message):
     message: str
     recoverable: bool
     attempt: int
-    def __init__(
-        self, message: _Optional[str] = ..., recoverable: bool = ..., attempt: _Optional[int] = ...
-    ) -> None: ...
+    def __init__(self, message: _Optional[str] = ..., recoverable: bool = ..., attempt: _Optional[int] = ...) -> None: ...
 
 class ScrollMetrics(_message.Message):
     __slots__ = ("found", "scroll_top", "max_scroll_top", "at_bottom")
@@ -217,51 +138,10 @@ class ScrollMetrics(_message.Message):
     scroll_top: float
     max_scroll_top: float
     at_bottom: bool
-    def __init__(
-        self,
-        found: bool = ...,
-        scroll_top: _Optional[float] = ...,
-        max_scroll_top: _Optional[float] = ...,
-        at_bottom: bool = ...,
-    ) -> None: ...
+    def __init__(self, found: bool = ..., scroll_top: _Optional[float] = ..., max_scroll_top: _Optional[float] = ..., at_bottom: bool = ...) -> None: ...
 
 class ScannedAdRow(_message.Message):
-    __slots__ = (
-        "fb_ad_id",
-        "campaign_name",
-        "adset_name",
-        "ad_name",
-        "delivery_status",
-        "spend",
-        "budget",
-        "reach",
-        "impressions",
-        "clicks",
-        "cpc",
-        "ctr",
-        "outbound_clicks",
-        "outbound_ctr",
-        "landing_page_views",
-        "cost_per_landing_page_view",
-        "cost_per_result",
-        "cpm",
-        "frequency",
-        "leads",
-        "cost_per_lead",
-        "registrations",
-        "cost_per_registration",
-        "deposits",
-        "resolved_offer_code",
-        "campaign_id",
-        "creative_thumb_url",
-        "creative_image_url",
-        "adset_pixel_id",
-        "adset_daily_budget",
-        "adset_lifetime_budget",
-        "adset_budget_remaining",
-        "adset_learning_stage",
-        "adset_id",
-    )
+    __slots__ = ("fb_ad_id", "campaign_name", "adset_name", "ad_name", "delivery_status", "spend", "budget", "reach", "impressions", "clicks", "cpc", "ctr", "outbound_clicks", "outbound_ctr", "landing_page_views", "cost_per_landing_page_view", "cost_per_result", "cpm", "frequency", "leads", "cost_per_lead", "registrations", "cost_per_registration", "deposits", "resolved_offer_code", "campaign_id", "creative_thumb_url", "creative_image_url", "adset_pixel_id", "adset_daily_budget", "adset_lifetime_budget", "adset_budget_remaining", "adset_learning_stage", "adset_id")
     FB_AD_ID_FIELD_NUMBER: _ClassVar[int]
     CAMPAIGN_NAME_FIELD_NUMBER: _ClassVar[int]
     ADSET_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -330,40 +210,4 @@ class ScannedAdRow(_message.Message):
     adset_budget_remaining: str
     adset_learning_stage: str
     adset_id: str
-    def __init__(
-        self,
-        fb_ad_id: _Optional[str] = ...,
-        campaign_name: _Optional[str] = ...,
-        adset_name: _Optional[str] = ...,
-        ad_name: _Optional[str] = ...,
-        delivery_status: _Optional[str] = ...,
-        spend: _Optional[str] = ...,
-        budget: _Optional[str] = ...,
-        reach: _Optional[int] = ...,
-        impressions: _Optional[int] = ...,
-        clicks: _Optional[int] = ...,
-        cpc: _Optional[str] = ...,
-        ctr: _Optional[str] = ...,
-        outbound_clicks: _Optional[int] = ...,
-        outbound_ctr: _Optional[str] = ...,
-        landing_page_views: _Optional[int] = ...,
-        cost_per_landing_page_view: _Optional[str] = ...,
-        cost_per_result: _Optional[str] = ...,
-        cpm: _Optional[str] = ...,
-        frequency: _Optional[str] = ...,
-        leads: _Optional[int] = ...,
-        cost_per_lead: _Optional[str] = ...,
-        registrations: _Optional[int] = ...,
-        cost_per_registration: _Optional[str] = ...,
-        deposits: _Optional[int] = ...,
-        resolved_offer_code: _Optional[str] = ...,
-        campaign_id: _Optional[str] = ...,
-        creative_thumb_url: _Optional[str] = ...,
-        creative_image_url: _Optional[str] = ...,
-        adset_pixel_id: _Optional[str] = ...,
-        adset_daily_budget: _Optional[str] = ...,
-        adset_lifetime_budget: _Optional[str] = ...,
-        adset_budget_remaining: _Optional[str] = ...,
-        adset_learning_stage: _Optional[str] = ...,
-        adset_id: _Optional[str] = ...,
-    ) -> None: ...
+    def __init__(self, fb_ad_id: _Optional[str] = ..., campaign_name: _Optional[str] = ..., adset_name: _Optional[str] = ..., ad_name: _Optional[str] = ..., delivery_status: _Optional[str] = ..., spend: _Optional[str] = ..., budget: _Optional[str] = ..., reach: _Optional[int] = ..., impressions: _Optional[int] = ..., clicks: _Optional[int] = ..., cpc: _Optional[str] = ..., ctr: _Optional[str] = ..., outbound_clicks: _Optional[int] = ..., outbound_ctr: _Optional[str] = ..., landing_page_views: _Optional[int] = ..., cost_per_landing_page_view: _Optional[str] = ..., cost_per_result: _Optional[str] = ..., cpm: _Optional[str] = ..., frequency: _Optional[str] = ..., leads: _Optional[int] = ..., cost_per_lead: _Optional[str] = ..., registrations: _Optional[int] = ..., cost_per_registration: _Optional[str] = ..., deposits: _Optional[int] = ..., resolved_offer_code: _Optional[str] = ..., campaign_id: _Optional[str] = ..., creative_thumb_url: _Optional[str] = ..., creative_image_url: _Optional[str] = ..., adset_pixel_id: _Optional[str] = ..., adset_daily_budget: _Optional[str] = ..., adset_lifetime_budget: _Optional[str] = ..., adset_budget_remaining: _Optional[str] = ..., adset_learning_stage: _Optional[str] = ..., adset_id: _Optional[str] = ...) -> None: ...

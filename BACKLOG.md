@@ -1,28 +1,26 @@
-# FB Agent — backlog после локального release candidate
+# FB Agent — backlog после production
 
-Краткий список работ, которые не должны размывать текущую сборку. Production-switch сюда не входит и выполняется только после отдельной команды owner.
+Только необязательные улучшения. Они не входят в gate первого запуска.
 
-## До production-release
+## UX и устройства
 
-- [x] Прогнать PostgreSQL integration suite на чистой изолированной БД.
-- [x] Прогнать crash/concurrency/DB-restart и lost-NOTIFY acceptance.
-- [x] Прогнать полный Telegram failure/burst suite.
-- [x] Собрать immutable images в CI и проверить digest-only manifest.
-- [ ] Проверить unified desktop runtime в disposable container.
-- [ ] Пройти browser/device matrix для web, TMA и remote desktop.
-- [ ] Провести локальный restore/PITR drill; удалённые backups исключены решением owner.
-- [ ] Получить release CI для load/chaos/a11y и реальные field Web Vitals; локальные load/chaos/a11y зелёные.
-- [x] Подготовить rollback и двухчасовой cutover packet.
+- [ ] Пройти physical-device matrix web/TMA/desktop на iOS, Android, Safari и Firefox.
+- [ ] Провести usability-pass Telegram-карточек на реальном потоке.
+- [ ] Собрать field Web Vitals и snapshot gzip telemetry.
+- [ ] Добавить в System UI release digest и доказательства readiness.
+- [ ] Скорректировать ranked attention по фактической работе owner.
 
-## Продуктовые улучшения после стабилизации
+## Продукт
 
-- [ ] Переименовать internal money-status classifier и удалить неиспользуемый `lane`-аргумент из terminal projection API.
-- [ ] Добавить read-only enable-рекомендации как projection текущих данных с owner-preview; без worker, таблицы событий и auto-activate.
-- [ ] Собрать полевые метрики UX и скорректировать ranked attention по фактической работе owner.
-- [ ] Провести отдельный usability-pass Telegram-карточек на реальном потоке уведомлений.
+- [ ] Добавить read-only enable-рекомендации с owner-preview, без auto-activate.
+- [ ] Упростить internal money-status classifier и удалить неиспользуемый `lane`-аргумент.
 
-## Следующая HA-фаза
+## Platform
 
-- [ ] Добавить второй application host после 30 дней выполнения SLO.
-- [ ] Провести два restore drill и полный host-failure drill.
-- [ ] Добавить PostgreSQL standby/failover только с fencing и quorum/witness.
+- [ ] Подключить Renovate с одним еженедельным grouped PR для Actions, Docker, uv и pnpm.
+- [ ] Включить `pg_stat_statements` и провести измеряемый index/query audit.
+- [ ] Добавлять Sentry только если Grafana/OTel не дадут достаточной диагностики.
+- [ ] Проектировать HA только при подтверждённой необходимости; первый runtime single-host.
+
+Backup/restore automation, release archives и runtime rollback намеренно не
+возвращаются.

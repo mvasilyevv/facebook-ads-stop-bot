@@ -60,7 +60,9 @@ class Settings(BaseSettings):
     postgres_password: SecretStr = SecretStr("fb_stop_bot")
 
     # --- Telegram ---
+    deployment_environment: str = "production"
     telegram_bot_token: SecretStr = SecretStr("")
+    telegram_bot_api_origin: str = "https://api.telegram.org"
     # Independent Bot API webhook secret passed in
     # X-Telegram-Bot-Api-Secret-Token. Never derive it from the bot token.
     telegram_webhook_secret: SecretStr = SecretStr("")
@@ -214,6 +216,29 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _warn_insecure_defaults(self) -> "Settings":
         """Предупреждаем о небезопасных настройках при старте."""
+        environment = self.deployment_environment.strip().lower()
+        bot_api_origin = self.telegram_bot_api_origin.strip()
+        if bot_api_origin != "https://api.telegram.org":
+            parsed = urlsplit(bot_api_origin)
+            rehearsal_origin = (
+                environment == "rehearsal"
+                and parsed.scheme == "http"
+                and parsed.hostname == "telegram-stub"
+                and parsed.port == 18080
+                and parsed.path in {"", "/"}
+                and not parsed.username
+                and not parsed.password
+                and not parsed.query
+                and not parsed.fragment
+            )
+            if not rehearsal_origin:
+                raise ValueError(
+                    "TELEGRAM_BOT_API_ORIGIN must be the official Telegram HTTPS origin; "
+                    "only DEPLOYMENT_ENVIRONMENT=rehearsal may use "
+                    "http://telegram-stub:18080"
+                )
+        self.deployment_environment = environment
+        self.telegram_bot_api_origin = bot_api_origin.rstrip("/")
         if self.postgres_password.get_secret_value() == self.postgres_db:
             logger.warning(
                 "Пароль Postgres совпадает с именем БД — "
@@ -227,7 +252,7 @@ class Settings(BaseSettings):
             )
         if not self.telegram_bot_token.get_secret_value():
             logger.warning(
-                "TELEGRAM_BOT_TOKEN не задан — locked migrator не импортирует "
+                "TELEGRAM_BOT_TOKEN не задан — runtime config bootstrap не запишет "
                 "начальный токен; runtime использует только telegram_config"
             )
         elif not self.telegram_webhook_secret.get_secret_value():

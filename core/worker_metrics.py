@@ -19,6 +19,11 @@ WORKER_HEARTBEAT = Gauge(
     "Unix timestamp of the latest in-process worker heartbeat",
     ("worker",),
 )
+WORKER_DB_POLL_SUCCESS = Gauge(
+    "fb_agent_worker_db_poll_success_timestamp_seconds",
+    "Unix timestamp of the latest successful canonical PostgreSQL work poll",
+    ("worker",),
+)
 TASK_CLAIM_LATENCY = Histogram(
     "fb_agent_task_claim_latency_seconds",
     "PostgreSQL durable task claim latency",
@@ -133,6 +138,10 @@ def mark_worker_heartbeat(worker_name: str) -> None:
     WORKER_HEARTBEAT.labels(worker=worker_name).set(time.time())
 
 
+def mark_worker_db_poll_success(worker_name: str) -> None:
+    WORKER_DB_POLL_SUCCESS.labels(worker=worker_name).set(time.time())
+
+
 def record_irreversible_task_outcome(
     worker_name: str,
     task_type: str,
@@ -207,7 +216,9 @@ __all__ = [
     "TASK_LEASE_STEALS",
     "TASK_OLDEST_PENDING_AGE",
     "TASK_QUEUE_DEPTH",
+    "WORKER_DB_POLL_SUCCESS",
     "WORKER_HEARTBEAT",
+    "mark_worker_db_poll_success",
     "mark_worker_heartbeat",
     "record_irreversible_safety_event",
     "record_irreversible_task_outcome",

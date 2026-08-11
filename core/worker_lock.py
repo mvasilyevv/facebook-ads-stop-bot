@@ -9,7 +9,7 @@ fcntl-lock на файле в /tmp гарантирует один
 
 The file lock prevents accidental duplicate processes inside one container or
 single-host development runtime. It is deliberately *not* the distributed ownership guarantee:
-blue/green containers use :func:`run_postgres_singleton`, which holds a
+production workers use :func:`run_postgres_singleton`, which holds a
 session-level PostgreSQL advisory lock and cancels the worker immediately if
 that ownership connection is lost.
 """
@@ -171,7 +171,7 @@ async def run_postgres_singleton(
 ) -> _T:
     """Run a scheduled worker only while this session owns its PG advisory lock.
 
-    A blue/green target waits without executing the worker until the incumbent
+    A second process waits without executing the worker until the incumbent
     session exits.  The marker is written only after authoritative ownership
     is obtained, so cutover validation is based on PostgreSQL ownership.
     """

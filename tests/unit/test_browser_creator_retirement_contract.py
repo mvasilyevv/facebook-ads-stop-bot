@@ -60,7 +60,8 @@ def test_proto_and_build_commands_cannot_recreate_retired_creator_artifacts() ->
 
     generation_sources = (
         PROJECT_ROOT / "Makefile",
-        PROJECT_ROOT / ".github/workflows/deploy.yml",
+        PROJECT_ROOT / ".github/workflows/verify.yml",
+        PROJECT_ROOT / ".github/workflows/publish-images.yml",
     )
     for source_path in generation_sources:
         source = source_path.read_text(encoding="utf-8")

@@ -116,9 +116,9 @@ Web UI показывает:
 ## Диагностика worker
 
 ```bash
-sudo /opt/fb-agent/current/scripts/platform-compose.sh status
-sudo /opt/fb-agent/current/scripts/platform-compose.sh logs campaign_creator
-sudo /opt/fb-agent/current/scripts/platform-desktop-compose.sh status
+sudo /opt/fb-agent/runtime/fbctl status
+sudo /opt/fb-agent/runtime/fbctl logs campaign_creator --lines 200
+sudo /opt/fb-agent/runtime/fbctl logs browser-agent --lines 200
 ```
 
 Если browser channel недоступен, следовать

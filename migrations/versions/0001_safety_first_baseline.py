@@ -39,7 +39,7 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
-BASELINE_ASSET_SHA256 = "5a905eaacfc865ca0a9b83d11ab9017117fd78823eaa13a01e2dc1182cb523e3"
+BASELINE_ASSET_SHA256 = "535830715e0e2e7269d68a4839eacef098a449d5ccb6e193dd0c1d5af4b79ce1"
 BASELINE_RETENTION_POLICY: dict[str, str] = {
     "ad_metrics": "90 days",
     "alert_events": "365 days",

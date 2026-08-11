@@ -1,8 +1,0 @@
-[Unit]
-Description=Persist failure metric for FB Agent host operation %i
-
-[Service]
-Type=oneshot
-Environment=FB_AGENT_TEXTFILE_DIR=/var/lib/node_exporter/textfile_collector
-Environment=FB_AGENT_HOST_METRICS_STATE_DIR=/var/lib/fb-agent/host-metrics
-ExecStart=/usr/bin/python3 /usr/local/libexec/fb-agent-host-metrics/host_metrics.py record --operation %i --outcome failure

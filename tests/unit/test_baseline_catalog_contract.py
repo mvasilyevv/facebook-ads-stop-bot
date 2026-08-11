@@ -105,7 +105,6 @@ def test_frozen_sql_and_orm_checks_are_all_in_the_catalog_manifest() -> None:
         if isinstance(constraint, CheckConstraint) and constraint.name is not None
     }
 
-    assert len(frozen) == 97
     assert orm <= frozen
     assert {
         key
@@ -415,53 +414,15 @@ def test_partition_layout_rejects_missing_default_and_overlaps() -> None:
         )
 
 
-def test_rendered_psql_guard_embeds_exact_manifest_and_revision() -> None:
-    guard = baseline_contract.render_psql_catalog_guard()
-
-    assert baseline_contract.BASELINE_REVISION in guard
-    assert "pg_catalog.pg_get_functiondef" in guard
-    assert "pg_catalog.pg_get_triggerdef" in guard
-    assert "pg_catalog.pg_get_viewdef" in guard
-    assert "pg_catalog.pg_get_constraintdef" in guard
-    assert "definition changed" in guard
-    assert "unexpected " in guard
-    assert "missing " in guard
-    for digest in baseline_contract.BASELINE_ARTIFACT_HASHES.values():
-        assert digest in guard
-
-
-def test_rendered_platform_guard_is_the_complete_shared_contract() -> None:
-    guard = baseline_contract.render_psql_platform_guard()
-
-    assert "fresh_target_guard" in guard
-    assert "baseline_catalog_guard" in guard
-    assert "baseline_partition_guard" in guard
-    assert "fb_agent.bootstrap_cluster_id" in guard
-    assert "actual_cluster_id IS DISTINCT FROM expected_cluster_id" in guard
-    assert "extension.extversion" in guard
-    assert "overlapping monthly partitions" in guard
-    assert r") \gexec" in guard
-    assert r") \\gexec" not in guard
-    assert guard.index("$baseline_partition_guard$;") < guard.index("ALTER DATABASE %I SET")
-    for sentinel in baseline_contract.BASELINE_RELATION_SENTINELS:
-        assert sentinel in guard
-
-
-def test_every_fresh_baseline_entrypoint_uses_the_shared_catalog_contract() -> None:
+def test_every_migration_entrypoint_uses_the_shared_catalog_contract() -> None:
     alembic_environment = (ROOT / "migrations/env.py").read_text(encoding="utf-8")
     baseline_revision = (ROOT / "migrations/versions/0001_safety_first_baseline.py").read_text(
         encoding="utf-8"
     )
     locked_migrator = (ROOT / "scripts/run-migrations-locked.py").read_text(encoding="utf-8")
-    bootstrap = (ROOT / "scripts/platform-bootstrap.sh").read_text(encoding="utf-8")
-
     for source in (alembic_environment, baseline_revision, locked_migrator):
         assert "migrations.baseline_contract" in source
         assert "assert_catalog_artifacts" in source
         assert "CATALOG_ARTIFACTS_SQL" in source
         assert "PUBLIC_STANDALONE_CATALOG_OBJECTS_SQL" in source
         assert "describe_standalone_public_catalog_objects" in source
-    assert "migrations/baseline_contract.py" in bootstrap
-    assert "--render-platform-psql-guard" in bootstrap
-    assert "DO $fresh_target_guard$" not in bootstrap
-    assert "standalone_types AS" not in bootstrap

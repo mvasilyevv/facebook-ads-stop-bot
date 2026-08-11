@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: One-time host bootstrap using reviewed remote adoption/profile paths
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release source
+    uses: ./.github/workflows/verify.yml
+
+  images:
+    name: Resolve or publish images
+    needs: verify
+    uses: ./.github/workflows/publish-images.yml
+    with:
+      release_id: ${{ github.sha }}
+    permissions:
+      contents: read
+      packages: write
+
+  control-bundle:
+    name: Package fbctl control bundle
+    needs: images
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    outputs:
+      artifact: fbctl-control-${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Download immutable image manifest
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.images.outputs.manifest_artifact }}
+          path: release-inputs
+      - name: Build deterministic control bundle
+        run: |
+          scripts/fbctl bundle \
+            --output fbctl.pyz \
+            --release-id "${{ github.sha }}" \
+            --release-manifest release-inputs/release.json \
+            --source-root .
+          cp release-inputs/release.json release.json
+      - name: Upload control bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fbctl-control-${{ github.sha }}
+          path: |
+            fbctl.pyz
+            release.json
+          if-no-files-found: error
+          retention-days: 7
+
+  docker-rehearsal:
+    name: Clean DB, failpoint and idempotent Docker rehearsal
+    needs: [images, control-bundle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Download control bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.control-bundle.outputs.artifact }}
+          path: release-inputs
+      - name: Authenticate immutable release pulls
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Execute production-like single-slot rehearsal
+        env:
+          FB_AGENT_REHEARSAL_ACK: single-slot
+        run: >-
+          python3 -B -m tests.rehearsal.single_slot
+          release-inputs/fbctl.pyz
+          release-inputs/release.json
+          --source-root .
+
+  deploy:
+    name: Deploy fbctl bundle
+    needs: [images, control-bundle, docker-rehearsal]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && vars.CI_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Download control bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.control-bundle.outputs.artifact }}
+          path: release-inputs
+      - name: Configure pinned SSH host identity
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' \
+            'Host *' \
+            '  StrictHostKeyChecking yes' \
+            '  UserKnownHostsFile ~/.ssh/known_hosts' \
+            '  IdentitiesOnly yes' > ~/.ssh/config
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts ~/.ssh/config
+          ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts >/dev/null
+      - name: Install temporary GHCR credentials on production
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
+        run: |
+          # Validated CI values intentionally form the remote command.
+          # shellcheck disable=SC2029
+          ssh "$DEPLOY_TARGET" "install -d -m 700 '$DEPLOY_DOCKER_CONFIG'"
+          # shellcheck disable=SC2029
+          printf '%s' "$GHCR_TOKEN" | ssh "$DEPLOY_TARGET" \
+            "DOCKER_CONFIG='$DEPLOY_DOCKER_CONFIG' docker login ghcr.io --username '$GHCR_USER' --password-stdin >/dev/null"
+      - name: Publish routine release
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.bootstrap) }}
+        timeout-minutes: 25
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEPLOY_ROOT: /opt/fb-agent
+          DEPLOY_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
+        run: >-
+          scripts/fbctl publish
+          --host "$DEPLOY_TARGET"
+          --bundle release-inputs/fbctl.pyz
+          --root "$DEPLOY_ROOT"
+          --docker-config "$DEPLOY_DOCKER_CONFIG"
+      - name: Bootstrap host and deploy first release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        timeout-minutes: 25
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEPLOY_ROOT: /opt/fb-agent
+          DEPLOY_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
+          PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
+          BOOTSTRAP_ADOPTION_BUNDLE: /opt/fb-agent/shared/adoption-bundle-v1.json
+          BOOTSTRAP_DESKTOP_PROFILE_SEED: /opt/fb-agent/shared/vision-profile-seed
+        run: |
+          test -n "$PROD_ENV_B64"
+          test -n "$BOOTSTRAP_ADOPTION_BUNDLE"
+          test -n "$BOOTSTRAP_DESKTOP_PROFILE_SEED"
+          printf '%s' "$PROD_ENV_B64" | base64 --decode | scripts/fbctl publish \
+            --host "$DEPLOY_TARGET" \
+            --bundle release-inputs/fbctl.pyz \
+            --root "$DEPLOY_ROOT" \
+            --source-env-stdin \
+            --docker-config "$DEPLOY_DOCKER_CONFIG" \
+            --bootstrap \
+            --adoption-bundle-remote "$BOOTSTRAP_ADOPTION_BUNDLE" \
+            --desktop-profile-seed-remote "$BOOTSTRAP_DESKTOP_PROFILE_SEED" \
+            --enable-scanning
+      - name: Remove temporary GHCR credentials
+        if: always()
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEPLOY_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
+        run: |
+          # The validated CI path is deliberately removed remotely.
+          # shellcheck disable=SC2029
+          ssh "$DEPLOY_TARGET" \
+            "test ! -d '$DEPLOY_DOCKER_CONFIG' || { find '$DEPLOY_DOCKER_CONFIG' -type f -delete; rmdir '$DEPLOY_DOCKER_CONFIG'; }"

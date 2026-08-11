@@ -37,12 +37,12 @@ from core.models import Base
 from core.models.catalog.offer import Offer
 from core.models.catalog.offer_rule import OfferRule
 from core.models.operator.display_preference import OperatorDisplayPreference
+from core.models.settings.adoption_receipt import AdoptionReceipt
 from core.models.settings.observer_config import ObserverConfig
 from core.models.settings.system_config import SystemConfig
 from core.models.telegram.notification import TelegramRecipientPreference
 from core.models.telegram.recipient import TelegramRecipient
 from migrations.baseline_contract import (
-    BASELINE_REVISION,
     CATALOG_ARTIFACTS_SQL,
     DATABASE_EXTENSION_LAYOUT_SQL,
     PUBLIC_PARTITION_LAYOUT_SQL,
@@ -52,10 +52,15 @@ from migrations.baseline_contract import (
     validate_database_extension_layout,
     validate_public_partition_layout,
 )
+from migrations.revision_guard import (
+    RevisionContractError,
+    load_project_revision_chain,
+    validate_database_revisions,
+)
 
 
 class AdoptionTargetPreflightError(RuntimeError):
-    """The target is not the exact empty safety-first baseline."""
+    """The target is not the exact fresh safety-first schema."""
 
 
 class AdoptionSemanticMismatchError(RuntimeError):
@@ -343,38 +348,6 @@ def _fresh_data_sql() -> Any:
 _TARGET_FRESH_DATA_SQL = _fresh_data_sql()
 
 
-_ADOPTED_CONFIGURATION_TABLES = frozenset(
-    {
-        "ad_accounts",
-        "adsetpro_credentials",
-        "offer_ad_accounts",
-        "offer_rules",
-        "offers",
-        "observer_config",
-        "operator_revision_events",
-        "operator_display_preferences",
-        "system_config",
-        "telegram_recipient_preferences",
-        "telegram_recipients",
-        "telegram_config",
-    }
-)
-
-
-def _unexpected_adopted_data_sql() -> Any:
-    table_names = sorted(
-        name for name in Base.metadata.tables if name not in _ADOPTED_CONFIGURATION_TABLES
-    )
-    statements = [
-        f"SELECT '{name}' AS table_name WHERE EXISTS (SELECT 1 FROM public.\"{name}\" LIMIT 1)"
-        for name in table_names
-    ]
-    return text("/* adoption:target-unexpected-data */\n" + "\nUNION ALL\n".join(statements))
-
-
-_TARGET_UNEXPECTED_ADOPTED_DATA_SQL = _unexpected_adopted_data_sql()
-
-
 class NormalizedTargetRepository:
     """Importer and semantic projector for the exact normalized baseline."""
 
@@ -382,11 +355,13 @@ class NormalizedTargetRepository:
         self._conn = conn
 
     async def preflight_baseline(self) -> None:
-        """Require the exact normalized baseline schema."""
+        """Require the exact current migration head and normalized schema."""
         try:
             revisions = list((await self._conn.scalars(_TARGET_REVISION_SQL)).all())
-            if revisions != [BASELINE_REVISION]:
-                raise AdoptionTargetPreflightError("target baseline revision mismatch")
+            chain = load_project_revision_chain()
+            current_revision = validate_database_revisions(chain, revisions)
+            if current_revision != chain.head:
+                raise AdoptionTargetPreflightError("target migration head mismatch")
 
             assert_catalog_artifacts(
                 (await self._conn.execute(text(CATALOG_ARTIFACTS_SQL))).mappings()
@@ -424,11 +399,13 @@ class NormalizedTargetRepository:
 
         except AdoptionTargetPreflightError:
             raise
+        except RevisionContractError as exc:
+            raise AdoptionTargetPreflightError("target migration revision mismatch") from exc
         except Exception as exc:
             raise AdoptionTargetPreflightError("target preflight failed") from exc
 
     async def preflight_fresh(self) -> None:
-        """Require exact baseline schema and no adopted/runtime data."""
+        """Require the exact current schema and no adopted/runtime data."""
 
         await self.preflight_baseline()
         try:
@@ -461,66 +438,6 @@ class NormalizedTargetRepository:
                 or _json_value(rows_by_key["retention_policy"]) != get_default_policy()
             ):
                 raise AdoptionTargetPreflightError("target baseline seed is not pristine")
-        except AdoptionTargetPreflightError:
-            raise
-        except Exception as exc:
-            raise AdoptionTargetPreflightError("target preflight failed") from exc
-
-    async def preflight_adopted(self) -> None:
-        """Require a target that contains configuration only, never runtime state."""
-
-        await self.preflight_baseline()
-        try:
-            dirty_tables = list(
-                (await self._conn.scalars(_TARGET_UNEXPECTED_ADOPTED_DATA_SQL)).all()
-            )
-            if dirty_tables:
-                raise AdoptionTargetPreflightError(
-                    "target contains runtime data: " + ", ".join(dirty_tables)
-                )
-            system_keys = list(
-                (
-                    await self._conn.scalars(
-                        text(
-                            """
-                            /* adoption:target-system-keys */
-                            SELECT key
-                            FROM public.system_config
-                            ORDER BY key
-                            """
-                        )
-                    )
-                ).all()
-            )
-            if not system_keys or not set(system_keys).issubset(
-                {"retention_policy", "web_app_url"}
-            ):
-                raise AdoptionTargetPreflightError(
-                    "target contains unreviewed system configuration"
-                )
-            revision_rows = (
-                (
-                    await self._conn.execute(
-                        text(
-                            """
-                            /* adoption:target-revision-events */
-                            SELECT scope, event_id
-                            FROM public.operator_revision_events
-                            ORDER BY revision
-                            """
-                        )
-                    )
-                )
-                .mappings()
-                .all()
-            )
-            if len(revision_rows) > 1 or any(
-                row["scope"] != "observer_config" or row["event_id"] is not None
-                for row in revision_rows
-            ):
-                raise AdoptionTargetPreflightError(
-                    "target contains unreviewed operator revision events"
-                )
         except AdoptionTargetPreflightError:
             raise
         except Exception as exc:
@@ -656,6 +573,52 @@ class NormalizedTargetRepository:
             "web_app_url",
             {"url": settings.web_app_url},
             "Web App URL adopted from reviewed bundle",
+        )
+
+    async def read_adoption_receipt(self) -> dict[str, Any] | None:
+        """Return the sole database receipt without consulting runtime tables."""
+
+        rows = (
+            (
+                await self._conn.execute(
+                    select(
+                        AdoptionReceipt.id,
+                        AdoptionReceipt.schema_version,
+                        AdoptionReceipt.bundle_sha256,
+                        AdoptionReceipt.source_fingerprint,
+                        AdoptionReceipt.entity_counts,
+                        AdoptionReceipt.section_sha256,
+                        AdoptionReceipt.imported_at,
+                    ).order_by(AdoptionReceipt.id)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        if len(rows) > 1:
+            raise AdoptionTargetPreflightError("target contains multiple adoption receipts")
+        return dict(rows[0]) if rows else None
+
+    async def write_adoption_receipt(
+        self,
+        *,
+        schema_version: str,
+        bundle_sha256: str,
+        source_fingerprint: str,
+        entity_counts: dict[str, int],
+        section_sha256: dict[str, str],
+    ) -> None:
+        """Insert the immutable receipt inside the caller's import transaction."""
+
+        await self._conn.execute(
+            AdoptionReceipt.__table__.insert().values(
+                id=1,
+                schema_version=schema_version,
+                bundle_sha256=bundle_sha256,
+                source_fingerprint=source_fingerprint,
+                entity_counts=entity_counts,
+                section_sha256=section_sha256,
+            )
         )
 
     async def _upsert_system_config(self, key: str, value: Any, description: str) -> None:

@@ -5,16 +5,15 @@
 Любой manual pause/activate выполняется через operator UI или `CommandService`,
 а не прямым SQL или вызовом Meta.
 
-Пути предполагают установку в `/opt/fb-agent/current` и state directory
-`/opt/fb-agent/shared`.
+Пути предполагают control bundle `/opt/fb-agent/runtime/fbctl` и state directory
+`/opt/fb-agent/shared`. Прямой `docker compose` используется только при
+диагностике самого `fbctl`.
 
 ## Первичная диагностика
 
 ```bash
-sudo /opt/fb-agent/current/scripts/platform-compose.sh status
-sudo /opt/fb-agent/current/scripts/platform-compose.sh ready
-sudo /opt/fb-agent/current/scripts/platform-desktop-compose.sh status
-sudo /opt/fb-agent/current/scripts/platform-compose.sh logs api
+sudo /opt/fb-agent/runtime/fbctl doctor
+sudo /opt/fb-agent/runtime/fbctl status
 ```
 
 В operator UI сначала проверить:
@@ -34,12 +33,9 @@ sudo /opt/fb-agent/current/scripts/platform-compose.sh logs api
 deadline/connection error, Meta action завершилась `UNKNOWN`.
 
 ```bash
-sudo /opt/fb-agent/current/scripts/platform-desktop-compose.sh status
-sudo /opt/fb-agent/current/scripts/platform-desktop-compose.sh logs browser-agent
-sudo systemctl status fb-agent-desktop-heal.timer
-sudo journalctl -u fb-agent-desktop-heal.service -n 100 --no-pager
-sudo grep 'operation="desktop_healer"' \
-  /var/lib/node_exporter/textfile_collector/fb-agent-host-operations.prom
+sudo /opt/fb-agent/runtime/fbctl status
+sudo /opt/fb-agent/runtime/fbctl logs vision-webtop --lines 200
+sudo /opt/fb-agent/runtime/fbctl logs browser-agent --lines 200
 ```
 
 Порядок действий:
@@ -52,19 +48,18 @@ sudo grep 'operation="desktop_healer"' \
 4. Если desktop исправен, перезапустить только browser-agent:
 
    ```bash
-   sudo /opt/fb-agent/current/scripts/platform-desktop-compose.sh restart
+   sudo /opt/fb-agent/runtime/fbctl restart browser-agent
    ```
 
-5. Не перезапускать весь application color: scan и control pages независимы.
+5. Не перезапускать весь application runtime: scan и control pages независимы.
 6. Для action со статусом `UNKNOWN` дождаться reconciliation. Не создавать
    вторую задачу с другим idempotency key.
 
 ## Worker offline или stale
 
 ```bash
-sudo /opt/fb-agent/current/scripts/platform-compose.sh status
-sudo /opt/fb-agent/current/scripts/platform-compose.sh logs <service>
-curl -fsS https://app.adpulse.su/system-readyz
+sudo /opt/fb-agent/runtime/fbctl status
+sudo /opt/fb-agent/runtime/fbctl logs <service> --lines 200
 ```
 
 Проверить Prometheus alerts `FBWorkerMetricsAbsent` и
@@ -72,12 +67,12 @@ curl -fsS https://app.adpulse.su/system-readyz
 разные причины. Для локального endpoint каждый worker слушает собственный
 metrics port; карта портов — в [../worker_metrics.md](../worker_metrics.md).
 
-Перезапускать весь color не нужно. Если требуется рестарт одного container,
-использовать active-color Compose через поддерживаемый wrapper:
+Перезапускать весь runtime не нужно. Если требуется рестарт одного container,
+использовать поддерживаемую команду:
 
 ```bash
-sudo /opt/fb-agent/current/scripts/platform-compose.sh compose restart <service>
-sudo /opt/fb-agent/current/scripts/platform-compose.sh ready
+sudo /opt/fb-agent/runtime/fbctl restart <service>
+sudo /opt/fb-agent/runtime/fbctl status
 ```
 
 Для `autopause_worker` после рестарта обязательно подтвердить, что существует
@@ -95,8 +90,8 @@ Telegram принимает updates только webhook-путём. Не вкл
 2. Проверить оба worker:
 
    ```bash
-   sudo /opt/fb-agent/current/scripts/platform-compose.sh logs telegram_update_worker
-   sudo /opt/fb-agent/current/scripts/platform-compose.sh logs telegram_delivery_worker
+   sudo /opt/fb-agent/runtime/fbctl logs telegram_update_worker --lines 200
+   sudo /opt/fb-agent/runtime/fbctl logs telegram_delivery_worker --lines 200
    ```
 
 3. Проверить ingress через Caddy и API logs. `204` допустим только после commit
@@ -113,16 +108,9 @@ Telegram принимает updates только webhook-путём. Не вкл
 8. Если пользователь удалил редактируемую карточку, ожидается событие
    `incident_snapshot_reissued`, а не молчаливое новое сообщение.
 
-Для read-only проверки очередей:
-
-```bash
-sudo /opt/fb-agent/current/scripts/platform-compose.sh infra exec -T postgres \
-  psql -U fb_stop_bot -d fb_stop_bot -c "
-    SELECT status, count(*)
-    FROM notification_deliveries
-    GROUP BY status ORDER BY status;
-  "
-```
+Для read-only проверки очередей использовать Settings → Telegram → Diagnostics
+и машинный снимок `sudo /opt/fb-agent/runtime/fbctl status --json`. Прямой SQL
+не является штатным production interface.
 
 Не помещать bot token в URL, shell history, ticket, exception или лог.
 
@@ -130,21 +118,9 @@ sudo /opt/fb-agent/current/scripts/platform-compose.sh infra exec -T postgres \
 
 Сначала найти action в UI по correlation ID. `202` означает только `queued`.
 
-Read-only снимок очереди:
-
-```bash
-sudo /opt/fb-agent/current/scripts/platform-compose.sh infra exec -T postgres \
-  psql -U fb_stop_bot -d fb_stop_bot -c "
-    SELECT id, task_type, lane, status, priority, available_at,
-           deadline_at, lease_owner, lease_token, lease_expires_at,
-           correlation_id
-    FROM task_queue
-    WHERE lane = 'money'
-      AND status IN ('pending', 'retrying', 'running')
-    ORDER BY priority DESC, available_at, created_at, id
-    LIMIT 50;
-  "
-```
+Read-only снимок очереди доступен в Actions и через
+`sudo /opt/fb-agent/runtime/fbctl status --json`. Прямой SQL не используется как
+операционный обход `CommandService`.
 
 Дальше:
 
@@ -178,73 +154,30 @@ notification commits должны fail closed. Redis может быть нед�
 продолжает DB polling в degraded режиме.
 
 ```bash
-sudo /opt/fb-agent/current/scripts/platform-compose.sh infra ps
-sudo /opt/fb-agent/current/scripts/platform-compose.sh infra logs --tail=200 postgres
-sudo /opt/fb-agent/current/scripts/platform-compose.sh infra logs --tail=200 redis
+sudo /opt/fb-agent/runtime/fbctl status
+sudo /opt/fb-agent/runtime/fbctl logs postgres --lines 200
+sudo /opt/fb-agent/runtime/fbctl logs redis --lines 200
 ```
 
 После рестарта PostgreSQL consumers перечитывают БД; потеря `LISTEN/NOTIFY` не
 теряет committed work. Проверить queue age, expired leases и reconciliation,
-затем `platform-compose.sh ready`.
+затем проверить `/readyz` и operator snapshot.
 
-## Backup и восстановление
+## Failed deployment
 
-Production backup — только pgBackRest с continuous WAL и off-host repository.
-Реплика не является backup.
-
-```bash
-sudo /opt/fb-agent/current/scripts/pgbackrest-admin.sh \
-  --release-env /opt/fb-agent/shared/active-release-images.env \
-  --app-env /opt/fb-agent/shared/active-app.env \
-  --backup-env /opt/fb-agent/shared/pgbackrest.env full
-
-sudo /opt/fb-agent/current/scripts/pgbackrest-restore-drill.sh \
-  --release-env /opt/fb-agent/shared/active-release-images.env \
-  --app-env /opt/fb-agent/shared/active-app.env \
-  --backup-env /opt/fb-agent/shared/pgbackrest.env
-```
-
-Restore drill использует отдельные временные container/network/volume и не
-монтирует production volume. Полное удаление схемы не является способом
-восстановления. Любой реальный restore или PITR требует maintenance window,
-зафиксированного target time и подтверждения владельца.
-
-Состояние systemd-задач хранится независимо от journal:
+`fbctl deploy` печатает точный `step`, на котором остановился. До полной
+готовности safety-контура money workers остаются выключенными. Infra и уже
+завершённая forward migration сохраняются. Исправить причину и повторить тот же
+manifest.
 
 ```bash
-sudo grep -E 'operation="(pgbackrest_full|pgbackrest_diff|restore_drill)"' \
-  /var/lib/node_exporter/textfile_collector/fb-agent-host-operations.prom
-sudo systemctl status fb-agent-pgbackrest-full.timer \
-  fb-agent-pgbackrest-diff.timer fb-agent-restore-drill.timer
+sudo /opt/fb-agent/runtime/fbctl doctor
+sudo /opt/fb-agent/runtime/fbctl deploy --manifest release.json
 ```
 
-`status=-1` означает незавершённый запуск, `0` — последний запуск завершился
-ошибкой, `1` — подтверждённый успех. Нельзя гасить `FBPgBackRestBackupStale`
-или `FBRestoreDrillOverdue` ручной правкой `.prom`: требуется новый успешный
-backup/isolated restore.
-
-## Failed deployment или rollback
-
-Release state и reconciliation являются источником истины; не переключать
-Caddy вручную поверх незавершённого journal.
-
-```bash
-sudo systemctl status fb-agent-release-reconcile.service
-sudo journalctl -u fb-agent-release-reconcile.service -n 200 --no-pager
-sudo /opt/fb-agent/current/scripts/platform-compose.sh status
-sudo grep -E 'operation="release_(boot_reconcile|reconcile|rollback)"' \
-  /var/lib/node_exporter/textfile_collector/fb-agent-host-operations.prom
-```
-
-Release script сам возвращает traffic и singleton leases к последнему
-зафиксированному color в пределах общего 180-секундного deadline. PostgreSQL
-никогда не downgrade-ится. Если reconciliation помечен critical, остановить
-повторные release-запуски и сохранить journal/evidence для расследования.
-`FBReleaseRollbackFailed` снимается только успешной reconciliation, которая
-запишет recovery; `/opt/fb-agent/shared/rollback-failed.json` остаётся
-forensic-маркером и не удаляется ради «зелёного» статуса.
-
-Полный release contract: [../../deploy/bluegreen/README.md](../../deploy/bluegreen/README.md).
+Не запускайте удалённые old release scripts и не переключайте старый runtime.
+Автоматического rollback нет. PostgreSQL backup/restore automation также
+намеренно отсутствует по решению owner.
 
 ## Запрещённые операции
 
@@ -254,5 +187,5 @@ forensic-маркером и не удаляется ради «зелёного
 - прямой Telegram send из worker/business code;
 - включение второго money consumer;
 - production build на VPS или запуск image по mutable tag;
-- ручной Caddy switch в обход release journal;
+- запуск удалённых blue/green, rollback или backup scripts;
 - вывод секретов в URL или диагностику.

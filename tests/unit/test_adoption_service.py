@@ -17,11 +17,13 @@ from core.adoption.bundle import (
     AdoptionSectionsV1,
     AdoptionSystemSettingsV1,
     build_adoption_bundle,
+    canonical_bundle_sha256,
 )
 from core.adoption.profiles import get_source_profile
 from core.adoption.service import (
     AdoptionImportConfirmationError,
     AdoptionImportResult,
+    AdoptionReceiptConflictError,
     adopt_first_release_bundle,
     apply_adoption_bundle,
     export_legacy_bundle,
@@ -166,6 +168,7 @@ class _TargetRepository:
     projection = _sections()
     fail_import = False
     events: list[str] = []
+    receipt: dict[str, Any] | None = None
 
     def __init__(self, conn) -> None:
         pass
@@ -173,8 +176,15 @@ class _TargetRepository:
     async def preflight_fresh(self) -> None:
         self.events.append("preflight")
 
-    async def preflight_adopted(self) -> None:
-        self.events.append("preflight_adopted")
+    async def preflight_baseline(self) -> None:
+        self.events.append("preflight_baseline")
+
+    async def read_adoption_receipt(self) -> dict[str, Any] | None:
+        self.events.append("read_receipt")
+        return self.receipt
+
+    async def write_adoption_receipt(self, **values: Any) -> None:
+        self.events.append("write_receipt")
 
     async def import_sections(self, sections: AdoptionSectionsV1) -> None:
         self.events.append("import")
@@ -184,6 +194,19 @@ class _TargetRepository:
     async def project(self) -> AdoptionSectionsV1:
         self.events.append("project")
         return self.projection
+
+
+def _receipt() -> dict[str, Any]:
+    bundle = _bundle()
+    return {
+        "id": 1,
+        "schema_version": bundle.schema_version,
+        "bundle_sha256": canonical_bundle_sha256(bundle),
+        "source_fingerprint": bundle.source_fingerprint,
+        "entity_counts": dict(bundle.entity_counts),
+        "section_sha256": dict(bundle.section_sha256),
+        "imported_at": datetime(2026, 8, 9, 12, 1, tzinfo=UTC),
+    }
 
 
 @pytest.mark.asyncio
@@ -254,6 +277,7 @@ async def test_dry_run_executes_exact_path_and_always_rolls_back() -> None:
     _TargetRepository.events = []
     _TargetRepository.fail_import = False
     _TargetRepository.projection = _sections()
+    _TargetRepository.receipt = None
 
     result = await apply_adoption_bundle(
         engine,  # type: ignore[arg-type]
@@ -263,7 +287,13 @@ async def test_dry_run_executes_exact_path_and_always_rolls_back() -> None:
     )
 
     assert result.dry_run is True
-    assert _TargetRepository.events == ["preflight", "import", "project"]
+    assert _TargetRepository.events == [
+        "read_receipt",
+        "preflight",
+        "import",
+        "project",
+        "write_receipt",
+    ]
     assert engine.conn.transaction.rolled_back is True
     assert engine.conn.transaction.committed is False
     assert "SERIALIZABLE" in engine.conn.statements[0]
@@ -276,6 +306,7 @@ async def test_real_import_commits_only_with_exact_source_fingerprint() -> None:
     _TargetRepository.events = []
     _TargetRepository.fail_import = False
     _TargetRepository.projection = _sections()
+    _TargetRepository.receipt = None
 
     with pytest.raises(AdoptionImportConfirmationError):
         await apply_adoption_bundle(
@@ -303,6 +334,7 @@ async def test_mid_import_failure_rolls_back_everything() -> None:
     engine = _Engine(export=False)
     _TargetRepository.events = []
     _TargetRepository.fail_import = True
+    _TargetRepository.receipt = None
 
     with pytest.raises(RuntimeError, match="synthetic mid-import"):
         await apply_adoption_bundle(
@@ -322,6 +354,7 @@ async def test_semantic_verification_mismatch_rolls_back() -> None:
     _TargetRepository.events = []
     _TargetRepository.fail_import = False
     _TargetRepository.projection = _sections(offer_name="tampered")
+    _TargetRepository.receipt = None
 
     with pytest.raises(RuntimeError, match="semantic verification"):
         await apply_adoption_bundle(
@@ -339,6 +372,7 @@ async def test_already_imported_target_is_verified_read_only() -> None:
     engine = _Engine(export=True)
     _TargetRepository.events = []
     _TargetRepository.projection = _sections()
+    _TargetRepository.receipt = _receipt()
 
     result = await verify_adoption_bundle(
         engine,  # type: ignore[arg-type]
@@ -347,13 +381,52 @@ async def test_already_imported_target_is_verified_read_only() -> None:
     )
 
     assert result.dry_run is False
-    assert _TargetRepository.events == ["preflight_adopted", "project"]
+    assert _TargetRepository.events == ["read_receipt", "preflight_baseline"]
     assert engine.conn.transaction.committed is True
     assert "REPEATABLE READ, READ ONLY" in engine.conn.statements[0]
 
 
 @pytest.mark.asyncio
-async def test_first_release_dry_runs_before_import_and_retries_as_verify(
+async def test_exact_receipt_makes_import_idempotent_without_replaying_projection() -> None:
+    engine = _Engine(export=False)
+    _TargetRepository.events = []
+    _TargetRepository.receipt = _receipt()
+    _TargetRepository.projection = _sections(offer_name="legitimate later operator change")
+
+    result = await apply_adoption_bundle(
+        engine,  # type: ignore[arg-type]
+        bundle=_bundle(),
+        dry_run=False,
+        confirmed_source_fingerprint="a" * 64,
+        repository_factory=_TargetRepository,  # type: ignore[arg-type]
+    )
+
+    assert result.receipt_created is False
+    assert _TargetRepository.events == ["read_receipt", "preflight_baseline"]
+    assert engine.conn.transaction.committed is True
+
+
+@pytest.mark.asyncio
+async def test_conflicting_receipt_is_rejected_before_any_import_write() -> None:
+    engine = _Engine(export=False)
+    _TargetRepository.events = []
+    _TargetRepository.receipt = {**_receipt(), "bundle_sha256": "b" * 64}
+
+    with pytest.raises(AdoptionReceiptConflictError, match="different bundle"):
+        await apply_adoption_bundle(
+            engine,  # type: ignore[arg-type]
+            bundle=_bundle(),
+            dry_run=False,
+            confirmed_source_fingerprint="a" * 64,
+            repository_factory=_TargetRepository,  # type: ignore[arg-type]
+        )
+
+    assert _TargetRepository.events == ["read_receipt", "preflight_baseline"]
+    assert engine.conn.transaction.rolled_back is True
+
+
+@pytest.mark.asyncio
+async def test_first_release_dry_runs_before_import_and_uses_receipt_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -364,17 +437,16 @@ async def test_first_release_dry_runs_before_import_and_retries_as_verify(
         section_sha256=dict(_bundle().section_sha256),
     )
 
-    async def fake_verify(*_args, **_kwargs):
-        calls.append("verify")
-        if calls.count("verify") == 1:
-            raise adoption_service.AdoptionSemanticMismatchError("fresh baseline")
-        return expected
-
     async def fake_apply(*_args, dry_run: bool, **_kwargs):
         calls.append("dry-run" if dry_run else "import")
-        return expected
+        return adoption_service.AdoptionImportResult(
+            dry_run=dry_run,
+            source_fingerprint=expected.source_fingerprint,
+            entity_counts=expected.entity_counts,
+            section_sha256=expected.section_sha256,
+            receipt_created=not dry_run,
+        )
 
-    monkeypatch.setattr(adoption_service, "verify_adoption_bundle", fake_verify)
     monkeypatch.setattr(adoption_service, "apply_adoption_bundle", fake_apply)
 
     imported = await adopt_first_release_bundle(  # type: ignore[arg-type]
@@ -382,22 +454,24 @@ async def test_first_release_dry_runs_before_import_and_retries_as_verify(
         bundle=_bundle(),
     )
     assert imported.imported is True
-    assert calls == ["verify", "dry-run", "import"]
+    assert calls == ["dry-run", "import"]
 
     calls.clear()
 
-    async def fake_verify_success(*_args, **_kwargs):
-        calls.append("verify")
-        return expected
+    async def fake_apply_existing(*_args, dry_run: bool, **_kwargs):
+        calls.append("dry-run" if dry_run else "import")
+        return adoption_service.AdoptionImportResult(
+            dry_run=dry_run,
+            source_fingerprint=expected.source_fingerprint,
+            entity_counts=expected.entity_counts,
+            section_sha256=expected.section_sha256,
+            receipt_created=False,
+        )
 
-    monkeypatch.setattr(
-        adoption_service,
-        "verify_adoption_bundle",
-        fake_verify_success,
-    )
+    monkeypatch.setattr(adoption_service, "apply_adoption_bundle", fake_apply_existing)
     verified = await adopt_first_release_bundle(  # type: ignore[arg-type]
         object(),
         bundle=_bundle(),
     )
     assert verified.imported is False
-    assert calls == ["verify"]
+    assert calls == ["dry-run", "import"]

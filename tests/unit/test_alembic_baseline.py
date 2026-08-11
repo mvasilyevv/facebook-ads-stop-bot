@@ -14,6 +14,7 @@ from alembic.script import ScriptDirectory
 
 from apps.cleanup_worker.retention import get_default_policy
 from core.models import Base
+from migrations.revision_guard import load_linear_revision_chain
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VERSIONS_DIR = PROJECT_ROOT / "migrations" / "versions"
@@ -40,15 +41,15 @@ def _asset() -> str:
     return ASSET_PATH.read_text(encoding="utf-8")
 
 
-def test_revision_chain_is_exactly_one_baseline() -> None:
+def test_revision_chain_keeps_one_linear_head_on_the_immutable_baseline() -> None:
     config = Config(str(PROJECT_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
     script = ScriptDirectory.from_config(config)
-    revision_files = sorted(VERSIONS_DIR.glob("*.py"))
+    chain = load_linear_revision_chain(script)
 
-    assert [path.name for path in revision_files] == ["0001_safety_first_baseline.py"]
     assert script.get_bases() == ["0001_safety_first_baseline"]
-    assert script.get_heads() == ["0001_safety_first_baseline"]
+    assert script.get_heads() == [chain.head]
+    assert chain.revisions[0] == "0001_safety_first_baseline"
     assert script.get_revision("0001_safety_first_baseline").down_revision is None
 
 
@@ -77,8 +78,8 @@ def test_asset_is_exact_current_orm_schema_plus_default_partitions() -> None:
     tables = set(re.findall(r"^CREATE TABLE public\.([a-z0-9_]+) \(", _asset(), re.MULTILINE))
 
     assert tables == set(Base.metadata.tables) | DEFAULT_PARTITIONS
-    assert len(Base.metadata.tables) == 49
-    assert len(tables) == 54
+    assert len(Base.metadata.tables) == 50
+    assert len(tables) == 55
 
 
 def test_fresh_baseline_normalizes_offer_account_membership() -> None:
@@ -388,7 +389,9 @@ def test_release_migrators_never_create_all_or_stamp() -> None:
     assert "apply_schema.py" not in worker_entrypoint
     assert "exec python -m scripts.run-migrations-locked" in worker_entrypoint
     assert "worker-entrypoint.sh" not in locked_migrator
-    assert '("upgrade", "head")' in locked_migrator
-    assert '("check",)' in locked_migrator
+    assert 'command.upgrade(config, "head")' in locked_migrator
+    assert "command.current(config, check_heads=True)" in locked_migrator
+    assert "command.check(config)" in locked_migrator
+    assert "create_subprocess_exec" not in locked_migrator
     assert "apply_schema.py" not in locked_migrator
     assert "alembic stamp" not in locked_migrator

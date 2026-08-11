@@ -70,6 +70,39 @@ def test_get_secret_value_roundtrip() -> None:
     assert settings.telegram_bot_token.get_secret_value() == "tok_abc123XYZ"
 
 
+def test_production_rejects_non_official_telegram_bot_api_origin() -> None:
+    with pytest.raises(ValueError, match="official Telegram HTTPS origin"):
+        Settings(
+            _env_file=None,
+            deployment_environment="production",
+            telegram_bot_api_origin="http://telegram-stub:18080",
+        )
+
+
+def test_rehearsal_accepts_only_fixed_private_telegram_stub_origin() -> None:
+    settings = Settings(
+        _env_file=None,
+        deployment_environment="rehearsal",
+        telegram_bot_api_origin="http://telegram-stub:18080",
+    )
+
+    assert settings.telegram_bot_api_origin == "http://telegram-stub:18080"
+
+    for invalid_origin in (
+        "http://telegram-stub:18081",
+        "https://telegram-stub:18080",
+        "http://telegram-stub:18080/path",
+        "http://user:secret@telegram-stub:18080",
+        "http://127.0.0.1:18080",
+    ):
+        with pytest.raises(ValueError, match="official Telegram HTTPS origin"):
+            Settings(
+                _env_file=None,
+                deployment_environment="rehearsal",
+                telegram_bot_api_origin=invalid_origin,
+            )
+
+
 # (б) Money-критичный потребитель: Fernet(ENCRYPTION_KEY) шифрует/расшифровывает
 # round-trip. Если бы код забыл .get_secret_value() и передал str(SecretStr(...))
 # в Fernet(), тот получил бы "**********" — либо упал бы (неверная длина ключа),

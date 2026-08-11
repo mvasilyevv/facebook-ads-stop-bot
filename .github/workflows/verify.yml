@@ -1,0 +1,214 @@
+name: Verify
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend, schema and OpenAPI
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      DATABASE_URL: postgresql+asyncpg://fb_agent:ci_password@localhost:5432/fb_agent_test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: fb_agent
+      POSTGRES_PASSWORD: ci_password
+      POSTGRES_DB: fb_agent_test
+      REDIS_URL: redis://localhost:6379/0
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+      ENCRYPTION_KEY: UOGaDCkFFfSv7XMSdwQq_rqmossFFl8wSG7z69_5nO0=
+      ENCRYPTION_KEY_VERIFY: gAAAAABqZwkRi9J37pVDxsdD0LHKWe_L6EkbhQVu1yKi_N43MdYL_I1IV_-5gsOOBXzCRMY9phj3dpLhDtQCsDcJPQKhEQjiRNeb6RuubyvM6vuxf6dgr30=
+      TMA_SESSION_SECRET: ci_tma_session_secret_0123456789abcdef
+      TELEGRAM_BOT_TOKEN: ci:test_token
+      API_KEY: ci_api_key
+      ANTHROPIC_API_KEY: ci_anthropic_key
+      OPENAI_API_KEY: ci_openai_key
+    services:
+      postgres:
+        image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+        env:
+          POSTGRES_USER: fb_agent
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: fb_agent_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fb_agent"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install frozen dependencies
+        run: |
+          python -m pip install "uv==0.9.18"
+          uv sync --frozen --extra dev
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Regenerate committed gRPC stubs
+        run: |
+          python -B scripts/generate_grpc_stubs.py
+          git diff --exit-code -- clients/python_grpc
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Fresh baseline and ORM drift
+        run: python -m scripts.run-migrations-locked
+
+      - name: Pytest
+        run: pytest tests/ --timeout=30 -q
+
+  frontend:
+    name: Frontend, generated API and browser-agent
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: pnpm 11.6.0
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.6.0
+
+      - name: Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Python 3.12 for generated OpenAPI contract
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install frozen workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Exact canonical API contract drift gate
+        run: |
+          python -m pip install "uv==0.9.18"
+          uv sync --frozen --extra dev
+          PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" pnpm run sync:api
+          git diff --exit-code -- frontend/openapi.json packages/shared/src/api/generated.ts
+
+      - name: Lint, typecheck and tests
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+
+      - name: Docker workspace build gate
+        run: |
+          docker build --target builder --file docker/Dockerfile.frontend .
+          docker build --target builder --file docker/Dockerfile.mini-app .
+
+      - name: Browser-agent checks
+        run: |
+          npm ci --prefix services/browser-agent
+          npm run lint --prefix services/browser-agent
+          npm test --prefix services/browser-agent
+
+  ui-evidence:
+    name: Storybook a11y and Playwright
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: pnpm 11.6.0
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.6.0
+
+      - name: Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install browser runtimes
+        run: pnpm --filter fb-stop-bot-frontend exec playwright install --with-deps chromium firefox webkit
+
+      - name: Storybook and accessibility
+        run: |
+          pnpm --filter fb-stop-bot-frontend build-storybook
+          pnpm --filter fb-stop-bot-frontend test:storybook
+
+      - name: Responsive functional acceptance
+        run: pnpm --filter fb-stop-bot-frontend test:e2e
+
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-diagnostics-${{ github.sha }}
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 14
+
+  platform:
+    name: Workflow, entrypoint and shell contracts
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install platform validators
+        run: sudo apt-get update && sudo apt-get install -y ripgrep shellcheck
+
+      - name: GitHub Actions syntax and expression gate
+        run: >-
+          docker run --rm
+          --volume "$PWD:/repo:ro"
+          --workdir /repo
+          rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9
+          -color
+
+      - name: Executable entrypoint modes
+        run: >-
+          python3 scripts/validate_executable_modes.py
+          scripts/fbctl
+          scripts/validate-platform-configs.sh
+
+      - name: Embedded fbctl and Compose preflight
+        run: ./scripts/validate-platform-configs.sh
+
+      - name: ShellCheck supported shell automation
+        run: find scripts -maxdepth 1 -type f -name '*.sh' -print0 | sort -z | xargs -0 shellcheck

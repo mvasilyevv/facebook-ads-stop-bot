@@ -85,7 +85,7 @@ def test_money_workers_exist_only_in_production_compose() -> None:
         "services"
     ]
     assert "browser-agent" not in local_services
-    assert set(desktop_services) == {"browser-agent"}
+    assert set(desktop_services) == {"vision-webtop", "browser-agent"}
     assert (
         production_services["autopause_worker"]["environment"]["META_API_WORKER_LANES"] == "money"
     )
@@ -121,10 +121,9 @@ def test_forbidden_auto_activate_runtime_is_physically_absent() -> None:
 
     runtime_sources = (
         "deploy/compose/docker-compose.app.yml",
-        "scripts/bluegreen-worker-handoff.sh",
-        "scripts/platform-compose.sh",
-        "scripts/reconcile-platform-release.sh",
-        "scripts/platform-network-inventory.py",
+        "deploy/compose/docker-compose.jobs.yml",
+        "deploy/compose/docker-compose.desktop-agent.yml",
+        "fbctl/controller.py",
         "docker/worker-entrypoint.sh",
         "docker/Dockerfile.workers",
         "apps/api/routers/v1/settings_observer.py",

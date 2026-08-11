@@ -58,7 +58,7 @@ export interface paths {
      *     В отличие от ``/readyz`` проверяет persisted scan/actor/task lifecycle.
      *     Redis и process-local heartbeats сюда намеренно не входят: process liveness
      *     проверяют Prometheus/blackbox, а этот endpoint не должен расходиться с
-     *     PostgreSQL control plane после restart или blue/green handoff.
+     *     PostgreSQL control plane после restart или single-slot redeploy.
      */
     get: operations["system_readyz_system_readyz_get"];
     put?: never;
@@ -1592,11 +1592,7 @@ export interface components {
        * Block Type
        * @enum {string}
        */
-      block_type:
-        | "dashboard_overview"
-        | "ad_detail"
-        | "campaign_summary"
-        | "history_summary";
+      block_type: "dashboard_overview" | "ad_detail" | "campaign_summary" | "history_summary";
       /**
        * Scope Key
        * @description 'global' или конкретный ID
@@ -2121,9 +2117,7 @@ export interface components {
       window: components["schemas"]["AnalyticsWindowOut"];
       sources: components["schemas"]["AnalyticsSourcesOut"];
       totals: components["schemas"]["AnalyticsMetricsOut"];
-      total_live_budget?:
-        | components["schemas"]["AnalyticsLiveBudgetOut"]
-        | null;
+      total_live_budget?: components["schemas"]["AnalyticsLiveBudgetOut"] | null;
       /** Total Budget Unavailable Reason */
       total_budget_unavailable_reason?: string | null;
       pagination: components["schemas"]["AnalyticsPaginationOut"];
@@ -3309,13 +3303,7 @@ export interface components {
      * OperatorActionState
      * @enum {string}
      */
-    OperatorActionState:
-      | "queued"
-      | "running"
-      | "confirmed"
-      | "failed"
-      | "cancelled"
-      | "unknown";
+    OperatorActionState: "queued" | "running" | "confirmed" | "failed" | "cancelled" | "unknown";
     /** OperatorActionsData */
     OperatorActionsData: {
       /** Items */
@@ -4118,13 +4106,7 @@ export interface components {
        * State
        * @enum {string}
        */
-      state:
-        | "queued"
-        | "running"
-        | "confirmed"
-        | "failed"
-        | "cancelled"
-        | "unknown";
+      state: "queued" | "running" | "confirmed" | "failed" | "cancelled" | "unknown";
       /**
        * Run Status
        * @enum {string}
@@ -4189,13 +4171,7 @@ export interface components {
       };
       /** Failure Class */
       failure_class:
-        | (
-            | "manual_review"
-            | "safe_retry"
-            | "invalid_config"
-            | "invalid_media"
-            | "unavailable"
-          )
+        | ("manual_review" | "safe_retry" | "invalid_config" | "invalid_media" | "unavailable")
         | null;
       /** Idempotency Key */
       idempotency_key: string | null;
@@ -4269,24 +4245,12 @@ export interface components {
        * State
        * @enum {string}
        */
-      state:
-        | "queued"
-        | "running"
-        | "confirmed"
-        | "failed"
-        | "cancelled"
-        | "unknown";
+      state: "queued" | "running" | "confirmed" | "failed" | "cancelled" | "unknown";
       /**
        * Queue Status
        * @enum {string}
        */
-      queue_status:
-        | "pending"
-        | "retrying"
-        | "running"
-        | "succeeded"
-        | "failed"
-        | "cancelled";
+      queue_status: "pending" | "retrying" | "running" | "succeeded" | "failed" | "cancelled";
       /** Outcome */
       outcome: ("CONFIRMED" | "REJECTED" | "UNKNOWN") | null;
       /** Attempt Count */
@@ -4450,13 +4414,7 @@ export interface components {
        * Webhook State
        * @enum {string}
        */
-      webhook_state:
-        | "unconfigured"
-        | "pending"
-        | "applying"
-        | "retry"
-        | "configured"
-        | "failed";
+      webhook_state: "unconfigured" | "pending" | "applying" | "retry" | "configured" | "failed";
       /** Webhook Generation */
       webhook_generation: number;
       /** Webhook Applied Generation */
@@ -4539,13 +4497,7 @@ export interface components {
       digest_local_time?: string | null;
       /** Categories */
       categories?: {
-        [key: string]:
-          | "off"
-          | "inherit"
-          | "ok"
-          | "warning"
-          | "critical"
-          | "unknown";
+        [key: string]: "off" | "inherit" | "ok" | "warning" | "critical" | "unknown";
       };
       /**
        * Is Enabled
@@ -4574,13 +4526,7 @@ export interface components {
       digest_local_time?: string | null;
       /** Categories */
       categories?: {
-        [key: string]:
-          | "off"
-          | "inherit"
-          | "ok"
-          | "warning"
-          | "critical"
-          | "unknown";
+        [key: string]: "off" | "inherit" | "ok" | "warning" | "critical" | "unknown";
       };
       /**
        * Is Enabled
@@ -7145,13 +7091,7 @@ export interface operations {
         search?: string | null;
         delivery_status?: string | null;
         severity?: ("ok" | "warning" | "critical" | "unknown") | null;
-        sort?:
-          | "name"
-          | "spend"
-          | "clicks"
-          | "registrations"
-          | "ftd"
-          | "updated";
+        sort?: "name" | "spend" | "clicks" | "registrations" | "ftd" | "updated";
         direction?: "asc" | "desc";
         page?: number;
         page_size?: number;
@@ -7470,13 +7410,7 @@ export interface operations {
       query?: {
         account_id?: string | null;
         severity?: ("ok" | "warning" | "critical" | "unknown")[];
-        status?: (
-          | "open"
-          | "acknowledged"
-          | "executing"
-          | "resolved"
-          | "failed"
-        )[];
+        status?: ("open" | "acknowledged" | "executing" | "resolved" | "failed")[];
         page?: number;
         page_size?: number;
       };

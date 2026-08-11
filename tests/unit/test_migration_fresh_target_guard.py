@@ -5,8 +5,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from alembic.config import Config
 
-from migrations.baseline_contract import BASELINE_DEFAULT_PARTITIONS
+from migrations.baseline_contract import BASELINE_DEFAULT_PARTITIONS, BASELINE_REVISION
+from migrations.revision_guard import LinearRevisionChain
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/run-migrations-locked.py"
@@ -39,7 +41,7 @@ class _Connection:
             ("pg_catalog", "plpgsql", "1.0", False),
             *(
                 [("public", "pgcrypto", "1.3", True)]
-                if self.revisions == [MODULE.BASELINE_REVISION]
+                if self.revisions == [BASELINE_REVISION]
                 else []
             ),
         ]
@@ -62,54 +64,77 @@ class _Connection:
                     BASELINE_DEFAULT_PARTITIONS.items(), start=1
                 )
             ]
-            if self.revisions == [MODULE.BASELINE_REVISION]
+            if self.revisions == [BASELINE_REVISION]
             else []
         )
         self.sentinel_checks: list[str] = []
         self.artifact_checks = 0
 
-    async def fetchval(self, query: str, *args: object):
+    async def scalar(self, statement: object, params: dict[str, object] | None = None):
+        query = str(statement)
         if "to_regclass('public.alembic_version')" in query:
             return "alembic_version" if self.version_table else None
-        if query == "SELECT to_regclass($1)":
-            relation = str(args[0])
+        if "SELECT to_regclass(:relation)" in query:
+            relation = str((params or {})["relation"])
             self.sentinel_checks.append(relation)
             return None if relation in self.missing_sentinels else relation
-        raise AssertionError((query, args))
+        raise AssertionError((query, params))
 
-    async def fetch(self, query: str):
+    async def scalars(self, statement: object):
+        query = str(statement)
         if "SELECT version_num" in query:
-            return [{"version_num": revision} for revision in self.revisions]
+            return list(self.revisions)
+        raise AssertionError(query)
+
+    async def execute(self, statement: object):
+        query = str(statement)
         if "normalized_definition" in query:
             self.artifact_checks += 1
-            return self.artifact_rows
+            return _Rows(self.artifact_rows)
         if "pg_catalog.pg_extension" in query:
-            return [
-                {
-                    "extension_schema": schema,
-                    "extension_name": name,
-                    "extension_version": version,
-                    "extension_relocatable": relocatable,
-                }
-                for schema, name, version, relocatable in self.extensions
-            ]
+            return _Rows(
+                [
+                    {
+                        "extension_schema": schema,
+                        "extension_name": name,
+                        "extension_version": version,
+                        "extension_relocatable": relocatable,
+                    }
+                    for schema, name, version, relocatable in self.extensions
+                ]
+            )
         if "standalone_types" in query and "standalone_collations" in query:
-            return [
-                {
-                    "object_kind": object_kind,
-                    "object_name": object_name,
-                    "object_detail": object_detail,
-                }
-                for object_kind, object_name, object_detail in self.catalog_objects
-            ]
+            return _Rows(
+                [
+                    {
+                        "object_kind": object_kind,
+                        "object_name": object_name,
+                        "object_detail": object_detail,
+                    }
+                    for object_kind, object_name, object_detail in self.catalog_objects
+                ]
+            )
         if "pg_catalog.pg_inherits" in query:
-            return self.partitions
+            return _Rows(self.partitions)
         if "pg_catalog.pg_class" in query:
-            return [
-                {"relname": relation_name, "relkind": relation_kind}
-                for relation_name, relation_kind in self.relations
-            ]
+            return _Rows(
+                [
+                    {"relname": relation_name, "relkind": relation_kind}
+                    for relation_name, relation_kind in self.relations
+                ]
+            )
         raise AssertionError(query)
+
+
+class _Rows:
+    def __init__(self, rows: list[object]) -> None:
+        self._rows = rows
+
+    def mappings(self) -> "_Rows":
+        return self
+
+    def __iter__(self):
+        return iter(self._rows)
 
 
 @pytest.mark.asyncio
@@ -117,7 +142,7 @@ class _Connection:
 async def test_fresh_target_guard_accepts_empty_database(version_table: bool) -> None:
     connection = _Connection(version_table=version_table)
 
-    await MODULE.validate_fresh_install_target(connection)
+    await MODULE.validate_migration_target(connection)
 
     assert connection.sentinel_checks == []
 
@@ -128,7 +153,7 @@ async def test_fresh_target_guard_accepts_exact_installed_baseline(
 ) -> None:
     connection = _Connection(
         version_table=True,
-        revisions=[MODULE.BASELINE_REVISION],
+        revisions=[BASELINE_REVISION],
     )
     checked_rows: list[object] = []
     monkeypatch.setattr(
@@ -137,11 +162,28 @@ async def test_fresh_target_guard_accepts_exact_installed_baseline(
         lambda rows: checked_rows.extend(rows),
     )
 
-    await MODULE.validate_fresh_install_target(connection)
+    await MODULE.validate_migration_target(connection)
 
     assert connection.sentinel_checks == list(MODULE.BASELINE_RELATION_SENTINELS)
     assert connection.artifact_checks == 1
     assert checked_rows == []
+
+
+@pytest.mark.asyncio
+async def test_migration_target_accepts_baseline_as_known_ancestor_of_test_0002() -> None:
+    connection = _Connection(
+        version_table=True,
+        revisions=[BASELINE_REVISION],
+    )
+
+    current = await MODULE.validate_migration_target(
+        connection,
+        chain=LinearRevisionChain((BASELINE_REVISION, "test_0002")),
+    )
+
+    assert current == BASELINE_REVISION
+    assert connection.sentinel_checks == list(MODULE.BASELINE_RELATION_SENTINELS)
+    assert connection.artifact_checks == 0
 
 
 @pytest.mark.asyncio
@@ -154,18 +196,18 @@ async def test_fresh_target_guard_rejects_extra_extension_outside_public() -> No
     )
 
     with pytest.raises(RuntimeError, match="unexpected extension audit.hstore"):
-        await MODULE.validate_fresh_install_target(connection)
+        await MODULE.validate_migration_target(connection)
 
 
 @pytest.mark.asyncio
-async def test_fresh_target_guard_rejects_historical_revision() -> None:
+async def test_migration_target_guard_rejects_unknown_revision() -> None:
     connection = _Connection(
         version_table=True,
         revisions=["legacy_revision"],
     )
 
-    with pytest.raises(ValueError, match="fresh-install-only.*historical target"):
-        await MODULE.validate_fresh_install_target(connection)
+    with pytest.raises(RuntimeError, match="unknown or not an ancestor"):
+        await MODULE.validate_migration_target(connection)
 
 
 @pytest.mark.asyncio
@@ -173,7 +215,7 @@ async def test_fresh_target_guard_rejects_unversioned_nonempty_schema() -> None:
     connection = _Connection(relations=[("offers", "r"), ("task_queue_id_seq", "S")])
 
     with pytest.raises(ValueError, match="unversioned non-empty.*offers"):
-        await MODULE.validate_fresh_install_target(connection)
+        await MODULE.validate_migration_target(connection)
 
 
 @pytest.mark.asyncio
@@ -198,7 +240,7 @@ async def test_fresh_target_guard_rejects_standalone_public_catalog_objects(
         ValueError,
         match=rf"standalone public catalog objects.*{name}",
     ):
-        await MODULE.validate_fresh_install_target(connection)
+        await MODULE.validate_migration_target(connection)
 
 
 @pytest.mark.asyncio
@@ -207,13 +249,13 @@ async def test_installed_baseline_rejects_late_standalone_public_type(
 ) -> None:
     connection = _Connection(
         version_table=True,
-        revisions=[MODULE.BASELINE_REVISION],
+        revisions=[BASELINE_REVISION],
         catalog_objects=[("type", "legacy_state", "enum")],
     )
     monkeypatch.setattr(MODULE, "assert_catalog_artifacts", lambda _rows: None)
 
     with pytest.raises(ValueError, match="standalone.*legacy_state"):
-        await MODULE.validate_fresh_install_target(connection)
+        await MODULE.validate_migration_target(connection)
 
 
 @pytest.mark.asyncio
@@ -221,12 +263,12 @@ async def test_fresh_target_guard_rejects_stamped_partial_baseline() -> None:
     missing = {"public.notification_events"}
     connection = _Connection(
         version_table=True,
-        revisions=[MODULE.BASELINE_REVISION],
+        revisions=[BASELINE_REVISION],
         missing_sentinels=missing,
     )
 
-    with pytest.raises(ValueError, match="claims the safety-first baseline.*notification_events"):
-        await MODULE.validate_fresh_install_target(connection)
+    with pytest.raises(ValueError, match="missing required baseline objects.*notification_events"):
+        await MODULE.validate_migration_target(connection)
 
     assert connection.artifact_checks == 0
 
@@ -237,7 +279,7 @@ async def test_fresh_target_guard_rejects_catalog_artifact_drift(
 ) -> None:
     connection = _Connection(
         version_table=True,
-        revisions=[MODULE.BASELINE_REVISION],
+        revisions=[BASELINE_REVISION],
     )
 
     def _reject(_rows: object) -> None:
@@ -252,50 +294,71 @@ async def test_fresh_target_guard_rejects_catalog_artifact_drift(
         RuntimeError,
         match="catalog artifact drift.*operator_revision_state",
     ):
-        await MODULE.validate_fresh_install_target(connection)
+        await MODULE.validate_migration_target(connection)
 
 
-@pytest.mark.asyncio
-async def test_migration_lock_monitor_fails_when_owning_session_closes() -> None:
-    class _ClosedConnection:
-        def is_closed(self) -> bool:
-            return True
+def test_alembic_commands_use_the_advisory_lock_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = Config()
+    connection = object()
+    observed: list[tuple[str, object]] = []
 
-        async def fetchval(self, _query: str) -> int:
-            raise AssertionError("closed connection must not be queried")
+    monkeypatch.setattr(
+        MODULE.command,
+        "upgrade",
+        lambda selected, _revision: observed.append(("upgrade", selected.attributes["connection"])),
+    )
+    monkeypatch.setattr(
+        MODULE.command,
+        "current",
+        lambda selected, **_kwargs: observed.append(("current", selected.attributes["connection"])),
+    )
+    monkeypatch.setattr(
+        MODULE.command,
+        "check",
+        lambda selected: observed.append(("check", selected.attributes["connection"])),
+    )
 
-    with pytest.raises(ConnectionError, match="advisory-lock connection closed"):
-        await MODULE.monitor_lock_connection(  # type: ignore[arg-type]
-            _ClosedConnection(), interval_seconds=0
-        )
+    MODULE._run_alembic_commands(connection, config)
+
+    assert observed == [
+        ("upgrade", connection),
+        ("current", connection),
+        ("check", connection),
+    ]
+    assert "connection" not in config.attributes
 
 
-def test_migrator_contains_no_historical_schema_audit_or_conversion_path() -> None:
+def test_migrator_uses_the_shared_forward_only_revision_contract() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
 
     assert "migrations.versions." not in source
-    assert "ScriptDirectory" not in source
+    assert "load_linear_revision_chain" in source
     assert "alembic stamp" not in source
     assert "DROP SCHEMA" not in source
-    assert "validate_fresh_install_target" in source
+    assert "validate_migration_target" in source
 
 
 def test_migrator_runs_upgrade_and_check_directly_under_one_lock() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
     entrypoint = (ROOT / "docker/worker-entrypoint.sh").read_text(encoding="utf-8")
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
-    release_compose = (ROOT / "deploy/compose/docker-compose.app.yml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/verify.yml").read_text(encoding="utf-8")
+    release_compose = (ROOT / "deploy/compose/docker-compose.jobs.yml").read_text(encoding="utf-8")
     base_image = (ROOT / "docker/Dockerfile.python-base").read_text(encoding="utf-8")
 
     assert "worker-entrypoint.sh" not in source
-    assert 'for alembic_args in (("upgrade", "head"), ("check",))' in source
-    assert "monitor_lock_connection(connection)" in source
-    assert 'environment["FB_AGENT_MIGRATION_DATABASE_URL"] = database_url' in source
+    assert 'command.upgrade(config, "head")' in source
+    assert "command.current(config, check_heads=True)" in source
+    assert "command.check(config)" in source
+    assert 'config.attributes["connection"] = connection' in source
+    assert "create_subprocess_exec" not in source
     assert "exec python -m scripts.run-migrations-locked" in entrypoint
     assert "$(PY) -m scripts.run-migrations-locked" in makefile
     assert "run: python -m scripts.run-migrations-locked" in workflow
     assert "run: alembic upgrade head" not in workflow
     assert 'entrypoint: ["python", "-m", "scripts.run-migrations-locked"]' in release_compose
     assert "WORKDIR /app" in base_image
-    assert "COPY . ." in base_image
+    assert "COPY . ." not in base_image
+    assert "COPY migrations ./migrations" in base_image

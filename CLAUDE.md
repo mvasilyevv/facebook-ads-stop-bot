@@ -33,11 +33,11 @@
 ```bash
 # Backend
 ruff check .
-pytest tests/unit -q
-pytest tests/integration -q
+PYTHONDONTWRITEBYTECODE=1 pytest tests/unit -q
+PYTHONDONTWRITEBYTECODE=1 pytest tests/integration -q
 
 # API contract and frontend workspace
-python scripts/export_openapi.py
+PYTHONDONTWRITEBYTECODE=1 python scripts/export_openapi.py
 pnpm gen:api
 pnpm -r typecheck
 pnpm -r lint
@@ -52,7 +52,7 @@ npm run build
 npm test
 
 # Production model validation
-./scripts/validate-platform-configs.sh --containers
+./scripts/fbctl doctor
 ```
 
 `make start|stop|logs|bootstrap` делегируют единственному local launcher
@@ -61,13 +61,13 @@ Compose содержит только PostgreSQL, Redis, locked migrator, API и
 inbox/outbox workers; money-capable сервисы в нём запрещены.
 
 Обычные локальные и container migrations идут только через
-`python -m scripts.run-migrations-locked`. `scripts/apply_schema.py --confirm-drop`
+`PYTHONDONTWRITEBYTECODE=1 python -m scripts.run-migrations-locked`.
+`scripts/apply_schema.py --confirm-drop`
 остаётся отдельной явной командой только для disposable development database.
 
-Production topology задаётся только `deploy/compose/`, а lifecycle — platform
-scripts. Удалённый release запускается через
-`scripts/server-platform-release.sh`; детали в `DEPLOYMENT.md` и
-`deploy/bluegreen/README.md`.
+Production topology задаётся только `fbctl/` и `deploy/compose/`. CI доставляет
+маленький control bundle, а host исполняет только `scripts/fbctl`; детали в
+`DEPLOYMENT.md`.
 
 ## Архитектура
 
@@ -150,15 +150,15 @@ shell и chart renderer.
 
 ### Production platform
 
-- Durable `infra`, цветные `app_blue/app_green` и отдельный `desktop`.
+- Стабильные single-slot `infra`, `app`, `desktop` и `monitoring` projects.
 - Images выпускаются по immutable digest; на VPS нет production build.
 - Migrator работает отдельно под advisory lock.
-- Caddy переключается только после health, readiness и contract checks.
-- Rollback возвращает traffic и singleton leases, не понижая БД.
-- pgBackRest: weekly full, daily differential, continuous WAL и off-host
-  encrypted/versioned repository.
+- Все Compose-вызовы выполняет `fbctl` через строгий candidate/active env.
+- Caddy всегда направляет трафик на фиксированные порты; downtime допустим.
+- Ошибка оставляет app/desktop остановленными; повторный deploy идемпотентен.
+- Runtime rollback и PostgreSQL backup automation отсутствуют по решению owner.
 - Alloy собирает logs/traces; Prometheus, Loki, Tempo, Alertmanager, Grafana и
-  blackbox probes размещаются независимо от application host.
+  blackbox probes работают отдельным monitoring project.
 
 ## Инварианты данных
 
@@ -175,10 +175,9 @@ shell и chart renderer.
 ## Production gates
 
 - Нулевая потеря committed events и duplicate money tasks.
-- Full backup, post-backup WAL marker и isolated PITR до migration-capable
-  cutover.
-- Кандидат поднимается без money workers; leases передаются после traffic gate.
+- Preflight и image pull завершаются до остановки production runtime.
+- Migration, adoption, desktop, app, webhook и workers проходят по одному
+  наблюдаемому deploy sequence.
 - Нельзя считать physical mobile/TMA acceptance выполненным без реальных
   iOS/Android проверок.
-- HA и автоматический DB failover включаются только после доказанных SLO,
-  restore drills и fencing/quorum.
+- HA и автоматический DB failover не входят в текущий runtime.

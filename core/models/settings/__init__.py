@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from core.models.settings.adoption_receipt import AdoptionReceipt
 from core.models.settings.adsetpro_credentials import AdsetProCredentials
 from core.models.settings.observer_config import ObserverConfig
 from core.models.settings.system_config import SystemConfig
@@ -10,6 +11,7 @@ from core.models.settings.telegram_config import TelegramConfig
 from core.models.settings.vision_config import VisionConfig
 
 __all__ = [
+    "AdoptionReceipt",
     "AdsetProCredentials",
     "ObserverConfig",
     "SystemConfig",

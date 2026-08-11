@@ -1,5 +1,6 @@
-# Durable data plane.  Start exactly one project (`fb_agent_infra`) and keep it
-# alive while blue/green application projects are replaced.
+# Durable single-slot data plane.
+
+name: fb_agent_infra
 
 x-logging: &logging
   driver: json-file
@@ -20,35 +21,11 @@ services:
     logging: *logging
     mem_limit: 1g
     oom_score_adj: -700
-    env_file:
-      - ${APP_ENV_FILE:?set APP_ENV_FILE}
-      - ${BACKUP_ENV_FILE:?set BACKUP_ENV_FILE}
-    environment:
-      # pgBackRest must connect with the actual database owner.  The container
-      # OS account remains `postgres`; hard-coding that name as the database
-      # role breaks clusters initialized with a custom POSTGRES_USER.
-      PGBACKREST_PG1_USER: ${POSTGRES_USER:?set POSTGRES_USER}
-    command:
-      - postgres
-      - -c
-      - archive_mode=on
-      - -c
-      - archive_command=pgbackrest --stanza=fb-agent archive-push %p
-      - -c
-      - archive_timeout=300
-      - -c
-      - wal_level=replica
-      - -c
-      - max_wal_senders=10
+    env_file: ${APP_ENV_FILE:?set APP_ENV_FILE}
     ports:
-      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:?set POSTGRES_HOST_PORT}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - pgbackrest_spool:/var/spool/pgbackrest
-      - pgbackrest_repo:/var/lib/pgbackrest/repo
-      # This bind source lives in durable shared state, never in a release
-      # directory that retention may prune while PostgreSQL is still running.
-      - ${PGBACKREST_CONFIG_FILE:?set PGBACKREST_CONFIG_FILE}:/etc/pgbackrest/pgbackrest.conf:ro
     networks:
       platform:
         aliases: [postgres]
@@ -69,7 +46,7 @@ services:
     oom_score_adj: -500
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "127.0.0.1:${REDIS_HOST_PORT:-6380}:6379"
+      - "127.0.0.1:${REDIS_HOST_PORT:?set REDIS_HOST_PORT}:6379"
     volumes:
       - redisdata:/data
     networks:
@@ -84,7 +61,7 @@ services:
 
 networks:
   platform:
-    name: fb_agent_safety_first_platform
+    name: ${PLATFORM_NETWORK:?set PLATFORM_NETWORK}
     external: true
 
 volumes:
@@ -93,10 +70,4 @@ volumes:
     external: true
   redisdata:
     name: fb_agent_safety_first_redisdata
-    external: true
-  pgbackrest_spool:
-    name: fb_agent_safety_first_pgbackrest_spool
-    external: true
-  pgbackrest_repo:
-    name: fb_agent_safety_first_pgbackrest_repo
     external: true

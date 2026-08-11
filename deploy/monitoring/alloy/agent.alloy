@@ -35,11 +35,6 @@ discovery.relabel "metrics" {
   }
 
   rule {
-    source_labels = ["__meta_docker_container_label_com_fb_agent_color"]
-    target_label  = "deployment_color"
-  }
-
-  rule {
     source_labels = ["__meta_docker_container_label_com_fb_agent_release"]
     target_label  = "release"
   }
@@ -62,7 +57,6 @@ prometheus.scrape "fb_agent" {
 prometheus.scrape "browser_agent" {
   targets = [{
     "__address__"      = "vision-webtop:9464",
-    "deployment_color" = "independent",
     "job"              = "fb-agent-runtime",
     "node"             = sys.env("NODE_NAME"),
     "service"          = "browser-agent",

@@ -8,10 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from migrations.baseline_contract import (
     BASELINE_ARTIFACT_HASHES,
-    BASELINE_REVISION,
     CATALOG_ARTIFACTS_SQL,
     assert_catalog_artifacts,
 )
+from migrations.revision_guard import load_project_revision_chain
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,7 +28,7 @@ async def test_fresh_postgresql_baseline_has_exact_catalog_contract(
         revision = await connection.scalar(text("SELECT version_num FROM public.alembic_version"))
         rows = list((await connection.execute(text(CATALOG_ARTIFACTS_SQL))).mappings())
 
-    assert revision == BASELINE_REVISION
+    assert revision == load_project_revision_chain().head
     assert len(rows) == len(BASELINE_ARTIFACT_HASHES)
     assert_catalog_artifacts(rows)
 

@@ -8,6 +8,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 APP_COMPOSE = ROOT / "deploy/compose/docker-compose.app.yml"
+JOBS_COMPOSE = ROOT / "deploy/compose/docker-compose.jobs.yml"
 
 ACTIVE_BUSINESS_PACKAGES = (
     "apps/observer_worker",
@@ -45,7 +46,7 @@ def _imports(tree: ast.AST) -> set[str]:
     return imported
 
 
-def test_bluegreen_runtime_uses_only_webhook_telegram_workers() -> None:
+def test_single_slot_runtime_uses_only_webhook_telegram_workers() -> None:
     document = yaml.safe_load(APP_COMPOSE.read_text(encoding="utf-8"))
     services = document["services"]
     telegram_services = {name for name in services if "telegram" in name}
@@ -53,7 +54,6 @@ def test_bluegreen_runtime_uses_only_webhook_telegram_workers() -> None:
     assert telegram_services == {
         "telegram_delivery_worker",
         "telegram_update_worker",
-        "telegram_webhook_configurator",
     }
     assert services["telegram_delivery_worker"]["entrypoint"] == [
         "python",
@@ -65,20 +65,19 @@ def test_bluegreen_runtime_uses_only_webhook_telegram_workers() -> None:
         "-m",
         "apps.telegram_update_worker.main",
     ]
-    assert services["telegram_webhook_configurator"]["profiles"] == ["release"]
-    assert services["telegram_webhook_configurator"]["restart"] == "no"
-
+    jobs = yaml.safe_load(JOBS_COMPOSE.read_text(encoding="utf-8"))["services"]
+    assert jobs["telegram_webhook_configurator"]["restart"] == "no"
     compose_source = APP_COMPOSE.read_text(encoding="utf-8")
-    handoff_source = (ROOT / "scripts/bluegreen-worker-handoff.sh").read_text(encoding="utf-8")
-    deploy_source = (ROOT / "scripts/bluegreen-deploy.sh").read_text(encoding="utf-8")
-    target_sources = "\n".join((compose_source, handoff_source, deploy_source))
+    jobs_source = JOBS_COMPOSE.read_text(encoding="utf-8")
+    deploy_source = (ROOT / "fbctl/controller.py").read_text(encoding="utf-8")
+    target_sources = "\n".join((compose_source, jobs_source, deploy_source))
 
     assert "telegram_poller" not in target_sources
     assert "run_telegram_poller.py" not in target_sources
-    assert "telegram_delivery_worker" in handoff_source
-    assert "telegram_update_worker" in handoff_source
-    assert "deploy/compose/docker-compose.app.yml" in deploy_source
-    assert "server-release.sh" not in deploy_source
+    assert "telegram_delivery_worker" in deploy_source
+    assert "telegram_update_worker" in deploy_source
+    assert '"app"' in deploy_source
+    assert "server-platform-release.sh" not in deploy_source
 
 
 def test_all_supported_launchers_disable_legacy_long_polling() -> None:

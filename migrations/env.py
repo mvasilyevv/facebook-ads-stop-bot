@@ -8,6 +8,7 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+from alembic.script import ScriptDirectory
 from sqlalchemy import pool, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -17,7 +18,6 @@ from core.config import get_settings
 from core.models import Base  # noqa: F401
 from migrations.baseline_contract import (
     BASELINE_RELATION_SENTINELS,
-    BASELINE_REVISION,
     CATALOG_ARTIFACTS_SQL,
     DATABASE_EXTENSION_LAYOUT_SQL,
     PUBLIC_APPLICATION_RELATIONS_SQL,
@@ -29,10 +29,14 @@ from migrations.baseline_contract import (
     validate_database_extension_layout,
     validate_public_partition_layout,
 )
+from migrations.revision_guard import (
+    load_linear_revision_chain,
+    validate_database_revisions,
+)
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # URL берём из настроек приложения (core.config), а не из захардкоженного
 # alembic.ini — иначе в Docker/на сервере alembic идёт на localhost:5433 вместо
@@ -40,8 +44,13 @@ if config.config_file_name is not None:
 
 
 def _migration_database_url() -> str:
+    supplied_connection = config.attributes.get("connection")
     forced = os.environ.get("FB_AGENT_MIGRATION_DATABASE_URL")
-    value = forced or get_settings().database_url
+    value = (
+        supplied_connection.engine.url.render_as_string(hide_password=False)
+        if supplied_connection is not None
+        else forced or get_settings().database_url
+    )
     try:
         url = make_url(value)
     except Exception as exc:
@@ -63,6 +72,7 @@ def _migration_database_url() -> str:
 config.set_main_option("sqlalchemy.url", _migration_database_url().replace("%", "%%"))
 
 target_metadata = Base.metadata
+revision_chain = load_linear_revision_chain(ScriptDirectory.from_config(config))
 
 
 def run_migrations_offline() -> None:
@@ -72,8 +82,8 @@ def run_migrations_offline() -> None:
     )
 
 
-def _validate_fresh_install_target(connection) -> frozenset[str]:
-    """Reject legacy, unversioned non-empty and falsely stamped databases."""
+def _validate_migration_target(connection) -> frozenset[str]:
+    """Accept only an empty target or a known ancestor on the linear chain."""
 
     def reject_standalone_catalog_objects(*, baseline_installed: bool) -> None:
         found = describe_standalone_public_catalog_objects(
@@ -99,14 +109,8 @@ def _validate_fresh_install_target(connection) -> frozenset[str]:
             ).scalars()
         )
 
-    if revisions:
-        if revisions != [BASELINE_REVISION]:
-            raise RuntimeError(
-                "fresh-install-only migration refused historical target; "
-                f"expected revision {BASELINE_REVISION!r}, found {revisions!r}. "
-                "Create a separate empty PostgreSQL database; no stamp, upgrade, "
-                "drop or legacy conversion path exists."
-            )
+    current_revision = validate_database_revisions(revision_chain, revisions)
+    if current_revision is not None:
         missing = [
             relation
             for relation in BASELINE_RELATION_SENTINELS
@@ -117,18 +121,27 @@ def _validate_fresh_install_target(connection) -> frozenset[str]:
         ]
         if missing:
             raise RuntimeError(
-                "database claims the safety-first baseline but required objects are "
+                "versioned database is missing required baseline objects: "
                 f"missing: {missing!r}; refusing a stamped or partial schema"
             )
-        assert_catalog_artifacts(connection.execute(text(CATALOG_ARTIFACTS_SQL)).mappings())
-        validate_database_extension_layout(
-            connection.execute(text(DATABASE_EXTENSION_LAYOUT_SQL)).mappings(),
-            baseline_installed=True,
-        )
-        reject_standalone_catalog_objects(baseline_installed=True)
-        return validate_public_partition_layout(
-            connection.execute(text(PUBLIC_PARTITION_LAYOUT_SQL)).mappings(),
-            require_baseline_defaults=True,
+        partition_rows = list(connection.execute(text(PUBLIC_PARTITION_LAYOUT_SQL)).mappings())
+        if current_revision == revision_chain.head:
+            assert_catalog_artifacts(connection.execute(text(CATALOG_ARTIFACTS_SQL)).mappings())
+            validate_database_extension_layout(
+                connection.execute(text(DATABASE_EXTENSION_LAYOUT_SQL)).mappings(),
+                baseline_installed=True,
+            )
+            reject_standalone_catalog_objects(baseline_installed=True)
+            return validate_public_partition_layout(
+                partition_rows,
+                require_baseline_defaults=True,
+            )
+
+        # A legitimate ancestor may differ from the current object manifest.
+        # Its revision script must be allowed to advance it first; the locked
+        # runner proves the full current contract immediately after upgrade.
+        return frozenset(
+            str(row["child_name"]) for row in partition_rows if str(row["child_schema"]) == "public"
         )
 
     validate_database_extension_layout(
@@ -155,7 +168,7 @@ def do_run_migrations(connection):
     # PostgreSQL exposes every child partition as a reflected table.  Only
     # names returned by the strict public layout validator may be hidden from
     # Alembic autogenerate; arbitrary inheritance can never bypass drift.
-    partition_names = _validate_fresh_install_target(connection)
+    partition_names = _validate_migration_target(connection)
     # The catalog SELECT starts SQLAlchemy autobegin. End that read-only
     # transaction before Alembic opens its DDL transaction; otherwise the
     # surrounding connection context treats it as external and rolls the whole
@@ -189,6 +202,10 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
+    supplied_connection = config.attributes.get("connection")
+    if supplied_connection is not None:
+        do_run_migrations(supplied_connection)
+        return
     asyncio.run(run_async_migrations())
 
 

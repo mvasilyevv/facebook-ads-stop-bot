@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """Конфигурация тестов."""
 
+import sys
+
 import pytest
 
 from core.config import get_settings
+
+sys.dont_write_bytecode = True
 
 
 @pytest.fixture(autouse=True)

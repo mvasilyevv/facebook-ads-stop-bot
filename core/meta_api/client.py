@@ -57,7 +57,7 @@ _HEALTH_CHECK_TIMEOUT_SECONDS = 10.0
 _HEALTH_PROBE_TIMEOUT_SECONDS = 15.0
 _OPERATION_AUTHORITY_DB_TIMEOUT_SECONDS = 2.0
 # v5 removes URL-backed image upload and accepts only capability-bound bytes.
-# Older agents must fail blue/green health rather than retain the broader path.
+# Older agents must fail contract health rather than retain the broader path.
 BROWSER_CONTRACT_VERSION = 5
 _AUTHORIZED_OPERATION_CALLERS = frozenset({"autopause", "meta_api", "campaign_creator"})
 _OPERATION_RPC_TTL_SECONDS = {
