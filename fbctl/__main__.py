@@ -9,6 +9,12 @@ import sys
 from pathlib import Path
 
 from fbctl.bundle import build_bundle
+from fbctl.config import (
+    canonicalize_source,
+    parse_bootstrap_source_stdin,
+    project_bootstrap_source,
+    validate_bootstrap_source_check,
+)
 from fbctl.controller import (
     REHEARSAL_FAILPOINTS,
     DeployOptions,
@@ -60,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     publish_parser.add_argument("--docker-config", type=_path, default=_docker_config_default())
     publish_parser.add_argument("--bootstrap", action="store_true")
     publish_parser.add_argument("--reuse-existing-caddy-credentials", action="store_true")
+    publish_parser.add_argument("--project-known-legacy-source", action="store_true")
     publish_parser.add_argument("--adoption-bundle-remote", type=_path)
     publish_parser.add_argument("--desktop-profile-seed-remote", type=_path)
     publish_parser.add_argument("--enable-scanning", action="store_true")
@@ -71,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--desktop-profile-seed", type=_path)
     bootstrap.add_argument("--rehearsal", action="store_true")
     bootstrap.add_argument("--reuse-existing-caddy-credentials", action="store_true")
+    bootstrap.add_argument("--project-known-legacy-source", action="store_true")
     bootstrap.add_argument("--docker-config", type=_path, default=_docker_config_default())
 
     deploy = subparsers.add_parser("deploy", help="apply one single-slot release")
@@ -85,6 +93,12 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--root", type=_path, default=DEFAULT_ROOT)
     doctor_parser.add_argument("--docker-config", type=_path, default=_docker_config_default())
     doctor_parser.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+
+    source_check = subparsers.add_parser(
+        "bootstrap-source-check", help="validate one bootstrap source without host changes"
+    )
+    source_check.add_argument("--stdin", action="store_true", required=True)
+    source_check.add_argument("--project-known-legacy-source", action="store_true", required=True)
 
     status_parser = subparsers.add_parser("status", help="show active runtime evidence")
     status_parser.add_argument("--root", type=_path, default=DEFAULT_ROOT)
@@ -162,6 +176,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, object] | None:
             desktop_profile_seed_remote=args.desktop_profile_seed_remote,
             enable_scanning=args.enable_scanning,
             reuse_existing_caddy_credentials=args.reuse_existing_caddy_credentials,
+            project_known_legacy_source=args.project_known_legacy_source,
             runner=runner,
         )
     if args.command == "bootstrap":
@@ -174,7 +189,17 @@ def _dispatch(args: argparse.Namespace) -> dict[str, object] | None:
             docker_config=args.docker_config,
             rehearsal=args.rehearsal,
             reuse_existing_caddy_credentials=args.reuse_existing_caddy_credentials,
+            project_known_legacy_source=args.project_known_legacy_source,
         )
+    if args.command == "bootstrap-source-check":
+        raw_source = parse_bootstrap_source_stdin(sys.stdin.buffer.read(2_000_001))
+        projected, dropped = project_bootstrap_source(
+            raw_source,
+            project_known_legacy_source=args.project_known_legacy_source,
+        )
+        validate_bootstrap_source_check(projected)
+        canonicalize_source(projected, incumbent={})
+        return {"status": "READY", "dropped_keys": list(dropped)}
     if args.command == "deploy":
         if args.list_failpoints:
             return {

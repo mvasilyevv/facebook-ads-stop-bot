@@ -52,6 +52,22 @@ DURABLE_KEYS = frozenset(
 )
 BOOTSTRAP_VISION_KEYS = ("VISION_X_TOKEN", "VISION_PROFILE_ID")
 BOOTSTRAP_CADDY_KEYS = ("PANEL_BASIC_AUTH_USER", "PANEL_BASIC_AUTH_HASH")
+BOOTSTRAP_LEGACY_DROP_KEYS = frozenset(
+    {
+        "API_HOST",
+        "API_PORT",
+        "GRPC_PORT",
+        "POSTGRES_HOST",
+        "POSTGRES_PORT",
+        "REDIS_URL",
+        "REQUIRE_API_KEY",
+        "VISION_API_URL",
+        "VISION_AUTO_RESTART_ON_MISSING_CDP",
+        "VISION_PASSWORD",
+        "VISION_TEAM_ID",
+        "VISION_USERNAME",
+    }
+)
 PRIVATE_BROWSER_KEYS = frozenset(
     {
         "BROWSER_MAINTENANCE_CAPABILITY_SECRET",
@@ -105,6 +121,7 @@ SOURCE_ALLOWED_KEYS = frozenset(
     DESKTOP_ACCESS_SESSION_TTL_SECONDS DESKTOP_ACCESS_TICKET_TTL_SECONDS
     PANEL_AUTH_SESSION_TTL_SECONDS PANEL_AUTH_STATE_TTL_SECONDS
     PANEL_AUTH_TICKET_TTL_SECONDS VISION_X_TOKEN VISION_PROFILE_ID
+    VISION_FOLDER_ID
     PANEL_BASIC_AUTH_USER PANEL_BASIC_AUTH_HASH
     """.split()
 )
@@ -492,6 +509,99 @@ def canonicalize_source(values: dict[str, str], *, incumbent: dict[str, str]) ->
     return result
 
 
+def project_bootstrap_source(
+    values: dict[str, str],
+    *,
+    project_known_legacy_source: bool,
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Project one reviewed legacy source shape before *bootstrap* only.
+
+    This is intentionally not part of :func:`canonicalize_source`: routine
+    deploys and callers that canonicalize configuration directly remain strict.
+    Unknown names are reported together, never with their values.
+    """
+
+    result = dict(values)
+    dropped: list[str] = []
+    if project_known_legacy_source:
+        for key in BOOTSTRAP_LEGACY_DROP_KEYS:
+            if key in result:
+                result.pop(key)
+                dropped.append(key)
+        if "TELEGRAM_CHAT_ID" in result:
+            chat_id = result["TELEGRAM_CHAT_ID"]
+            owner_id = result.get("DESKTOP_OWNER_TELEGRAM_USER_ID", "")
+            if (
+                not re.fullmatch(r"[1-9][0-9]*", chat_id)
+                or not re.fullmatch(r"[1-9][0-9]*", owner_id)
+                or chat_id != owner_id
+            ):
+                raise FbctlError("TELEGRAM_CHAT_ID requires migration to match the desktop owner")
+            result.pop("TELEGRAM_CHAT_ID")
+            dropped.append("TELEGRAM_CHAT_ID")
+    unknown = sorted(set(result) - SOURCE_ALLOWED_KEYS)
+    if unknown:
+        raise FbctlError("source environment contains unsupported keys: " + ", ".join(unknown))
+    return result, tuple(sorted(dropped))
+
+
+def parse_bootstrap_source_stdin(payload: bytes) -> dict[str, str]:
+    """Parse the same strict dotenv grammar as ``parse_dotenv`` without I/O."""
+
+    if not payload or len(payload) > 2_000_000 or b"\x00" in payload:
+        raise FbctlError("source environment stdin is empty or exceeds 2 MB")
+    try:
+        lines = payload.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise FbctlError("source environment stdin is not valid UTF-8") from exc
+    values: dict[str, str] = {}
+    for line_number, raw_line in enumerate(lines, 1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise FbctlError(f"invalid dotenv line {line_number} in stdin")
+        key, value = line.split("=", 1)
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise FbctlError(f"invalid dotenv key on line {line_number} in stdin")
+        if key in values:
+            raise FbctlError(f"duplicate {key} in stdin")
+        if "\r" in value or "\n" in value:
+            raise FbctlError(f"invalid newline in {key}")
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def validate_bootstrap_source_check(values: dict[str, str]) -> None:
+    """Validate bootstrap-only material without reading host state or writing files."""
+
+    missing = [key for key in BOOTSTRAP_VISION_KEYS if not values.get(key)]
+    if missing:
+        raise FbctlError(f"bootstrap source environment is missing required {missing[0]}")
+    token = values["VISION_X_TOKEN"].strip()
+    profile_id = values["VISION_PROFILE_ID"].strip()
+    if (
+        not token
+        or len(token) > 16_384
+        or "\r" in token
+        or "\n" in token
+        or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", profile_id)
+    ):
+        raise FbctlError("bootstrap Vision credentials are invalid")
+    present = [key for key in BOOTSTRAP_CADDY_KEYS if key in values]
+    if len(present) == 1:
+        raise FbctlError("Caddy bootstrap credentials must provide both panel keys or neither")
+    if len(present) == 2:
+        user = values["PANEL_BASIC_AUTH_USER"]
+        password_hash = values["PANEL_BASIC_AUTH_HASH"]
+        if not re.fullmatch(r"[A-Za-z0-9._@-]{1,64}", user) or not re.fullmatch(
+            r"\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}", password_hash
+        ):
+            raise FbctlError("Caddy panel credentials are invalid")
+
+
 def validate_source_values(values: dict[str, str]) -> None:
     if not re.fullmatch(r"[0-9a-f]{32}", values.get("FB_AGENT_BOOTSTRAP_CLUSTER_ID", "")):
         raise FbctlError("source environment has an invalid cluster id")
@@ -522,6 +632,9 @@ def validate_source_values(values: dict[str, str]) -> None:
         owner_id = 0
     if owner_id <= 0:
         raise FbctlError("desktop owner Telegram id must be positive")
+    vision_folder_id = values.get("VISION_FOLDER_ID", "")
+    if vision_folder_id and not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", vision_folder_id):
+        raise FbctlError("source environment has an invalid Vision folder id")
     for key, minimum in GENERATED_SECRETS.items():
         if len(values.get(key, "")) < minimum:
             raise FbctlError(f"source environment has an invalid {key}")

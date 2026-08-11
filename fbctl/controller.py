@@ -28,6 +28,7 @@ from fbctl.config import (
     RuntimeConfig,
     canonicalize_source,
     prepare_candidate,
+    project_bootstrap_source,
     render_dotenv,
 )
 from fbctl.errors import FbctlError
@@ -895,6 +896,7 @@ def bootstrap_host(
     docker_config: Path | None,
     rehearsal: bool = False,
     reuse_existing_caddy_credentials: bool = False,
+    project_known_legacy_source: bool = False,
 ) -> dict[str, object]:
     if os.geteuid() != 0:
         raise FbctlError("bootstrap requires root privileges")
@@ -912,7 +914,10 @@ def bootstrap_host(
             desktop_profile_seed,
             label="desktop profile seed",
         )
-    raw_source = parse_dotenv(source_env)
+    raw_source, _ = project_bootstrap_source(
+        parse_dotenv(source_env),
+        project_known_legacy_source=project_known_legacy_source,
+    )
     provision_caddy = not rehearsal
     caddy_bootstrap = _resolve_caddy_bootstrap_credentials(
         raw_source,

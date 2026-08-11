@@ -23,9 +23,30 @@ jobs:
     name: Verify release source
     uses: ./.github/workflows/verify.yml
 
+  bootstrap-source-preflight:
+    name: Validate bootstrap source environment
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout
+        if: github.event_name == 'workflow_dispatch' && inputs.bootstrap
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Validate bootstrap source environment
+        if: github.event_name == 'workflow_dispatch' && inputs.bootstrap
+        env:
+          PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$PROD_ENV_B64"
+          printf '%s' "$PROD_ENV_B64" | base64 --decode | scripts/fbctl bootstrap-source-check \
+            --stdin \
+            --project-known-legacy-source
+
   images:
     name: Resolve or publish images
-    needs: verify
+    needs: [verify, bootstrap-source-preflight]
     uses: ./.github/workflows/publish-images.yml
     with:
       release_id: ${{ github.sha }}
@@ -224,6 +245,7 @@ jobs:
             --docker-config "$DEPLOY_DOCKER_CONFIG" \
             --bootstrap \
             --reuse-existing-caddy-credentials \
+            --project-known-legacy-source \
             --adoption-bundle-remote "$BOOTSTRAP_ADOPTION_BUNDLE" \
             --desktop-profile-seed-remote "$BOOTSTRAP_DESKTOP_PROFILE_SEED" \
             --enable-scanning

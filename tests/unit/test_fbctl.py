@@ -16,7 +16,12 @@ import pytest
 from fbctl import __main__ as fbctl_main
 from fbctl import controller as fbctl_controller
 from fbctl.bundle import BUNDLE_SCHEMA, IMAGE_KEYS, RESOURCE_FILES, build_bundle, inspect_bundle
-from fbctl.config import canonicalize_source, load_active, prepare_candidate
+from fbctl.config import (
+    canonicalize_source,
+    load_active,
+    prepare_candidate,
+    project_bootstrap_source,
+)
 from fbctl.controller import (
     REHEARSAL_FAILPOINTS,
     WORKERS,
@@ -332,6 +337,136 @@ def test_bundle_rejects_unknown_release_manifest_keys(tmp_path: Path) -> None:
 def test_source_contract_rejects_unknown_keys() -> None:
     with pytest.raises(FbctlError, match="unsupported key LEGACY_EXPORT"):
         canonicalize_source({"LEGACY_EXPORT": "1"}, incumbent={})
+
+
+def _legacy_source_values() -> dict[str, str]:
+    return {
+        "API_HOST": "0.0.0.0",
+        "API_PORT": "8100",
+        "GRPC_PORT": "50051",
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_PORT": "5433",
+        "REDIS_URL": "redis://super-secret@localhost:6380/0",
+        "REQUIRE_API_KEY": "true",
+        "VISION_API_URL": "http://127.0.0.1:3030",
+        "VISION_AUTO_RESTART_ON_MISSING_CDP": "true",
+        "VISION_PASSWORD": "vision-secret",
+        "VISION_TEAM_ID": "team-secret",
+        "VISION_USERNAME": "vision-owner",
+        "TELEGRAM_CHAT_ID": "123456",
+        "VISION_FOLDER_ID": "folder-current",
+    }
+
+
+def test_bootstrap_projects_only_the_exact_known_legacy_source_shape() -> None:
+    source = {
+        **_legacy_source_values(),
+        "DESKTOP_OWNER_TELEGRAM_USER_ID": "123456",
+    }
+
+    projected, dropped = project_bootstrap_source(source, project_known_legacy_source=True)
+
+    assert dropped == tuple(sorted(set(_legacy_source_values()) - {"VISION_FOLDER_ID"}))
+    assert projected == {
+        "DESKTOP_OWNER_TELEGRAM_USER_ID": "123456",
+        "VISION_FOLDER_ID": "folder-current",
+    }
+
+
+def test_bootstrap_projection_reports_all_unknown_names_without_values() -> None:
+    secret = "never-print-this-secret"
+    with pytest.raises(FbctlError) as raised:
+        project_bootstrap_source(
+            {
+                **_legacy_source_values(),
+                "DESKTOP_OWNER_TELEGRAM_USER_ID": "123456",
+                "UNSAFE_A": secret,
+                "UNSAFE_B": secret,
+            },
+            project_known_legacy_source=True,
+        )
+
+    assert str(raised.value) == "source environment contains unsupported keys: UNSAFE_A, UNSAFE_B"
+    assert secret not in str(raised.value)
+
+
+@pytest.mark.parametrize("chat_id", ["0", "999999", "not-a-number"])
+def test_bootstrap_projection_rejects_unmigrated_telegram_chat_id(chat_id: str) -> None:
+    with pytest.raises(FbctlError, match="requires migration") as raised:
+        project_bootstrap_source(
+            {
+                "DESKTOP_OWNER_TELEGRAM_USER_ID": "123456",
+                "TELEGRAM_CHAT_ID": chat_id,
+            },
+            project_known_legacy_source=True,
+        )
+
+    assert chat_id not in str(raised.value)
+
+
+def test_vision_folder_id_propagates_only_to_canonical_app_environment(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    source = _source_env(tmp_path)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write("VISION_FOLDER_ID=folder-current\n")
+    source.chmod(0o600)
+    release = _materialize(root / "candidate")
+
+    config = prepare_candidate(
+        root=root,
+        release=release,
+        source_env=source,
+        docker_config=None,
+        adoption_bundle=None,
+    )
+
+    assert "VISION_FOLDER_ID=folder-current" in config.layout.app_env.read_text(encoding="utf-8")
+    assert "VISION_FOLDER_ID=folder-current" in config.layout.source_env.read_text(encoding="utf-8")
+
+
+def test_bootstrap_source_check_is_in_memory_and_redacts_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = {
+        **{
+            line.split("=", 1)[0]: line.split("=", 1)[1]
+            for line in _source_env(tmp_path).read_text(encoding="utf-8").splitlines()
+        },
+        **_legacy_source_values(),
+        "VISION_X_TOKEN": "vision-super-secret",
+        "VISION_PROFILE_ID": "profile-1",
+    }
+    payload = "".join(f"{key}={value}\n" for key, value in source.items()).encode()
+    stdin = io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8")
+    monkeypatch.setattr("sys.stdin", stdin)
+    before = list(tmp_path.rglob("*"))
+
+    assert (
+        fbctl_main.main(["bootstrap-source-check", "--stdin", "--project-known-legacy-source"]) == 0
+    )
+
+    output = capsys.readouterr().out
+    assert '"status": "READY"' in output
+    assert "API_HOST" in output
+    assert "vision-super-secret" not in output
+    assert "super-secret@" not in output
+    assert list(tmp_path.rglob("*")) == before
+
+
+def test_bootstrap_source_check_rejects_duplicate_dotenv_in_memory(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stdin = io.TextIOWrapper(io.BytesIO(b"API_KEY=one\nAPI_KEY=two\n"), encoding="utf-8")
+    monkeypatch.setattr("sys.stdin", stdin)
+
+    assert (
+        fbctl_main.main(["bootstrap-source-check", "--stdin", "--project-known-legacy-source"]) == 1
+    )
+
+    assert "duplicate API_KEY" in capsys.readouterr().err
 
 
 def test_bootstrap_vision_secrets_never_enter_canonical_runtime_env(tmp_path: Path) -> None:
@@ -1054,6 +1189,7 @@ def test_publish_never_places_source_secret_in_ssh_arguments(tmp_path: Path) -> 
         desktop_profile_seed_remote=Path("/opt/fb-agent/shared/vision-profile-seed"),
         enable_scanning=False,
         reuse_existing_caddy_credentials=True,
+        project_known_legacy_source=True,
         runner=runner,
         source_stream=io.BytesIO(secret),
     )
@@ -1062,6 +1198,7 @@ def test_publish_never_places_source_secret_in_ssh_arguments(tmp_path: Path) -> 
     rendered_commands = "\n".join(" ".join(command) for _step, command in runner.commands)
     assert "top-secret-value" not in rendered_commands
     assert "--reuse-existing-caddy-credentials" in rendered_commands
+    assert "--project-known-legacy-source" in rendered_commands
     assert "PANEL_BASIC_AUTH" not in rendered_commands
     assert "--source-env" in rendered_commands
     assert "sudo -n python3 -B" in rendered_commands

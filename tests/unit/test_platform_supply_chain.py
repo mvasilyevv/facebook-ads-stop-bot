@@ -108,7 +108,10 @@ def test_developer_and_ci_python_commands_do_not_write_repo_bytecode() -> None:
     for workflow, jobs in (
         (VERIFY_WORKFLOW, ("backend", "platform")),
         (IMAGE_WORKFLOW, ("plan", "base", "manifest")),
-        (RELEASE_WORKFLOW, ("control-bundle", "docker-rehearsal", "deploy")),
+        (
+            RELEASE_WORKFLOW,
+            ("bootstrap-source-preflight", "control-bundle", "docker-rehearsal", "deploy"),
+        ),
     ):
         source = workflow.read_text(encoding="utf-8")
         for job in jobs:
@@ -150,7 +153,7 @@ def test_ui_evidence_is_a_release_gate() -> None:
     assert "test:storybook" in evidence
     assert "test:e2e" in evidence
     assert "uses: ./.github/workflows/verify.yml" in _job_block(release, "verify")
-    assert "needs: verify" in _job_block(release, "images")
+    assert "needs: [verify, bootstrap-source-preflight]" in _job_block(release, "images")
 
 
 def test_pull_requests_run_verification_without_publishing() -> None:
@@ -237,14 +240,36 @@ def test_production_source_secret_is_only_consumed_by_manual_bootstrap() -> None
         "- name: Remove temporary GHCR credentials", 1
     )[0]
 
+    assert "PROD_ENV_B64" not in release.split("  bootstrap-source-preflight:\n", 1)[0]
     assert "PROD_ENV_B64" not in routine
     assert "--source-env-stdin" not in routine
     assert "PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}" in bootstrap
     assert "--source-env-stdin" in bootstrap
+    assert "--project-known-legacy-source" not in routine
+    assert "--project-known-legacy-source" in bootstrap
     assert "github.event_name == 'workflow_dispatch' && inputs.bootstrap" in bootstrap
     assert "/opt/fb-agent/shared/adoption-bundle-v1.json" in bootstrap
     assert "/opt/fb-agent/shared/vision-profile-seed" in bootstrap
     assert "--provision-caddy" not in bootstrap
+
+
+def test_bootstrap_source_is_validated_before_expensive_release_jobs() -> None:
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    preflight = _job_block(release, "bootstrap-source-preflight")
+    images = _job_block(release, "images")
+
+    assert "needs: verify" in preflight
+    assert "github.event_name == 'workflow_dispatch' && inputs.bootstrap" in preflight
+    assert "PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}" in preflight
+    assert 'test -n "$PROD_ENV_B64"' in preflight
+    assert "base64 --decode | scripts/fbctl bootstrap-source-check" in preflight
+    assert "--stdin" in preflight
+    assert "--project-known-legacy-source" in preflight
+    assert "set -x" not in preflight
+    assert "GITHUB_OUTPUT" not in preflight
+    assert "upload-artifact" not in preflight
+    assert "cache" not in preflight
+    assert "needs: [verify, bootstrap-source-preflight]" in images
 
 
 def test_release_requires_real_single_slot_rehearsal_before_production() -> None:

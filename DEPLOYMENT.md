@@ -47,6 +47,24 @@ sudo /opt/fb-agent/runtime/fbctl bootstrap \
 sudo /opt/fb-agent/runtime/fbctl deploy --enable-scanning
 ```
 
+Для единственного проверенного перехода со старого `source.env` сначала
+выполняется сухая проверка без записи файлов или изменения host, затем тот же
+явный флаг передаётся в bootstrap. Разрешены только заранее перечисленные
+устаревшие runtime-ключи; остальные имена блокируют запуск.
+
+```bash
+sudo /opt/fb-agent/runtime/fbctl bootstrap-source-check --stdin \
+  --project-known-legacy-source < /opt/fb-agent/shared/source.env
+sudo /opt/fb-agent/runtime/fbctl bootstrap \
+  --project-known-legacy-source --reuse-existing-caddy-credentials \
+  --source-env /opt/fb-agent/shared/source.env \
+  --adoption-bundle /opt/fb-agent/shared/adoption-bundle-v1.json \
+  --desktop-profile-seed /opt/fb-agent/shared/vision-profile-seed
+```
+
+Caddy credentials не копируются из source в canonical runtime: при их
+отсутствии bootstrap использует только уже проверенную root-owned пару host.
+
 `--enable-scanning` — осознанный первый запуск observer после готовности
 desktop/browser-agent; без флага `deploy` сохраняет текущее DB-состояние
 scanning. Receipt import проверяется из PostgreSQL, поэтому сброс БД не может
