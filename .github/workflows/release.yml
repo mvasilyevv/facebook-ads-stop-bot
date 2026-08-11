@@ -68,10 +68,35 @@ jobs:
           retention-days: 7
 
   docker-rehearsal:
-    name: Clean DB, failpoint and idempotent Docker rehearsal
+    name: Docker rehearsal (${{ matrix.case }})
     needs: [images, control-bundle]
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - case: fp0
+            scenario: failpoints
+            shard_index: 0
+            shard_count: 4
+          - case: fp1
+            scenario: failpoints
+            shard_index: 1
+            shard_count: 4
+          - case: fp2
+            scenario: failpoints
+            shard_index: 2
+            shard_count: 4
+          - case: fp3
+            scenario: failpoints
+            shard_index: 3
+            shard_count: 4
+          - case: acceptance
+            scenario: acceptance
+            shard_index: 0
+            shard_count: 1
     permissions:
       contents: read
       packages: read
@@ -87,7 +112,7 @@ jobs:
           path: release-inputs
       - name: Prepare explicit Docker credentials directory
         run: |
-          docker_config="$RUNNER_TEMP/fb-agent-docker-config"
+          docker_config="$RUNNER_TEMP/fb-agent-docker-config-${{ matrix.case }}"
           install -d -m 700 "$docker_config"
           printf 'DOCKER_CONFIG=%s\n' "$docker_config" >> "$GITHUB_ENV"
       - name: Authenticate immutable release pulls
@@ -103,13 +128,16 @@ jobs:
           sudo -n env -i \
             DOCKER_CONFIG="$DOCKER_CONFIG" \
             GITHUB_ACTIONS=true \
-            GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID}-${{ matrix.case }}" \
             FB_AGENT_REHEARSAL_ACK="$FB_AGENT_REHEARSAL_ACK" \
             PYTHONDONTWRITEBYTECODE=1 \
             /usr/bin/python3 -B -m tests.rehearsal.single_slot \
               release-inputs/fbctl.pyz \
               release-inputs/release.json \
-              --source-root .
+              --source-root . \
+              --scenario "${{ matrix.scenario }}" \
+              --shard-index "${{ matrix.shard_index }}" \
+              --shard-count "${{ matrix.shard_count }}"
 
   deploy:
     name: Deploy fbctl bundle

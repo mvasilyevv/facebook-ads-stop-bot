@@ -257,8 +257,28 @@ def test_release_requires_real_single_slot_rehearsal_before_production() -> None
     assert "tests.rehearsal.single_slot" in rehearsal
     assert "release-inputs/release.json" in rehearsal
     assert "FB_AGENT_REHEARSAL_ACK: single-slot" in rehearsal
+    assert "timeout-minutes: 30" in rehearsal
+    assert "fail-fast: false\n      max-parallel: 2" in rehearsal
+    assert rehearsal.count("- case: ") == 5
+    assert rehearsal.count("scenario: failpoints") == 4
+    for index in range(4):
+        assert (
+            f"- case: fp{index}\n"
+            "            scenario: failpoints\n"
+            f"            shard_index: {index}\n"
+            "            shard_count: 4"
+        ) in rehearsal
+    assert (
+        "- case: acceptance\n"
+        "            scenario: acceptance\n"
+        "            shard_index: 0\n"
+        "            shard_count: 1"
+    ) in rehearsal
+    assert '--scenario "${{ matrix.scenario }}"' in rehearsal
+    assert '--shard-index "${{ matrix.shard_index }}"' in rehearsal
+    assert '--shard-count "${{ matrix.shard_count }}"' in rehearsal
     assert "${{ runner.temp }}" not in rehearsal
-    assert 'docker_config="$RUNNER_TEMP/fb-agent-docker-config"' in rehearsal
+    assert 'docker_config="$RUNNER_TEMP/fb-agent-docker-config-${{ matrix.case }}"' in rehearsal
     assert 'install -d -m 700 "$docker_config"' in rehearsal
     assert 'printf \'DOCKER_CONFIG=%s\\n\' "$docker_config" >> "$GITHUB_ENV"' in rehearsal
     assert rehearsal.index("Prepare explicit Docker credentials directory") < rehearsal.index(
@@ -275,7 +295,8 @@ def test_release_requires_real_single_slot_rehearsal_before_production() -> None
         "FB_AGENT_REHEARSAL_ACK",
         "PYTHONDONTWRITEBYTECODE",
     }
-    assert "docker-rehearsal" in deploy.splitlines()[1]
+    assert 'GITHUB_RUN_ID="${GITHUB_RUN_ID}-${{ matrix.case }}"' in elevated
+    assert "needs: [images, control-bundle, docker-rehearsal]" in deploy
 
 
 def test_platform_validator_uses_only_the_zipapp_control_plane() -> None:
