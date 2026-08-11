@@ -53,6 +53,7 @@ WORKER_SERVICES = frozenset(
 TELEGRAM_WEBHOOK_SECRET = "rehearsal_webhook_secret_0123456789abcdef"
 ALERTMANAGER_WEBHOOK_SECRET = "rehearsal_alertmanager_secret_0123456789abcdef"
 API_KEY = "rehearsal_api_key_0123456789abcdef"
+SCENARIOS = ("full", "failpoints", "acceptance")
 
 
 class RehearsalError(RuntimeError):
@@ -311,15 +312,51 @@ def _rehearsal_failpoints(bundle: Path) -> list[str]:
         [sys.executable, "-B", os.fspath(bundle), "deploy", "--list-failpoints"],
         capture=True,
     )
-    payload = json.loads(result.stdout)
-    failpoints = payload.get("failpoints") if isinstance(payload, dict) else None
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RehearsalError("fbctl returned unreadable rehearsal failpoints") from exc
+    if not isinstance(payload, dict):
+        raise RehearsalError("fbctl did not export its ordered rehearsal failpoints")
+    failpoints = payload.get("failpoints")
     if payload.get("schema") != "fb-agent-rehearsal-failpoints/v1" or not isinstance(
         failpoints, list
     ):
         raise RehearsalError("fbctl did not export its ordered rehearsal failpoints")
     if not failpoints or any(not isinstance(step, str) or not step for step in failpoints):
         raise RehearsalError("fbctl exported invalid rehearsal failpoints")
+    if len(set(failpoints)) != len(failpoints):
+        raise RehearsalError("fbctl exported duplicate rehearsal failpoints")
     return failpoints
+
+
+def _validate_rehearsal_request(
+    scenario: str,
+    *,
+    shard_index: int,
+    shard_count: int,
+) -> None:
+    if scenario not in SCENARIOS:
+        raise RehearsalError(f"unsupported rehearsal scenario: {scenario}")
+    if shard_count < 1:
+        raise RehearsalError("shard count must be at least 1")
+    if shard_index < 0 or shard_index >= shard_count:
+        raise RehearsalError("shard index must be between 0 and shard count - 1")
+    if scenario != "failpoints" and (shard_index != 0 or shard_count != 1):
+        raise RehearsalError("shard options are available only for the failpoints scenario")
+
+
+def _partition_failpoints(
+    failpoints: list[str],
+    *,
+    shard_index: int,
+    shard_count: int,
+) -> list[str]:
+    if shard_count < 1:
+        raise RehearsalError("shard count must be at least 1")
+    if shard_index < 0 or shard_index >= shard_count:
+        raise RehearsalError("shard index must be between 0 and shard count - 1")
+    return failpoints[shard_index::shard_count]
 
 
 def _assert_workers_off(cluster_id: str) -> None:
@@ -353,13 +390,29 @@ def _deploy_arguments(bundle: Path, root: Path, *extra: str) -> list[str]:
     ]
 
 
-def _exercise_all_failpoints(bundle: Path, root: Path, cluster_id: str) -> None:
+def _exercise_failpoints(
+    bundle: Path,
+    root: Path,
+    cluster_id: str,
+    *,
+    shard_index: int,
+    shard_count: int,
+) -> None:
     failpoints = _rehearsal_failpoints(bundle)
     try:
         stopped_index = failpoints.index("stop_runtime")
     except ValueError as exc:
         raise RehearsalError("fbctl failpoints omit stop_runtime") from exc
-    for index, step in enumerate(failpoints):
+    selected = _partition_failpoints(
+        failpoints,
+        shard_index=shard_index,
+        shard_count=shard_count,
+    )
+    if not selected:
+        raise RehearsalError("failpoint shard is empty")
+    print(f"single-slot failpoint shard: {shard_index + 1}/{shard_count} [{','.join(selected)}]")
+    positions = {step: index for index, step in enumerate(failpoints)}
+    for step in selected:
         failed = _run(
             _deploy_arguments(
                 bundle,
@@ -373,9 +426,54 @@ def _exercise_all_failpoints(bundle: Path, root: Path, cluster_id: str) -> None:
         )
         if failed.returncode == 0 or f'"step": "{step}"' not in failed.stderr:
             raise RehearsalError(f"deploy failpoint did not stop after {step}")
-        if index >= stopped_index:
+        if positions[step] >= stopped_index:
             _assert_workers_off(cluster_id)
         _run(_deploy_arguments(bundle, root, "--enable-scanning"))
+
+
+def _exercise_scenario(
+    *,
+    scenario: str,
+    bundle: Path,
+    root: Path,
+    cluster_id: str,
+    telegram: str,
+    fingerprint: str,
+    shard_index: int,
+    shard_count: int,
+) -> None:
+    if scenario == "failpoints":
+        _exercise_failpoints(
+            bundle,
+            root,
+            cluster_id,
+            shard_index=shard_index,
+            shard_count=shard_count,
+        )
+        _final_smoke()
+        return
+
+    if scenario == "acceptance":
+        _run(_deploy_arguments(bundle, root, "--enable-scanning"))
+        _final_smoke()
+        _exercise_notification_lifecycle(telegram, fingerprint)
+        _run(_deploy_arguments(bundle, root))
+        _final_smoke()
+        return
+
+    if scenario != "full":  # pragma: no cover - validated at the public boundary
+        raise RehearsalError(f"unsupported rehearsal scenario: {scenario}")
+    _exercise_failpoints(
+        bundle,
+        root,
+        cluster_id,
+        shard_index=0,
+        shard_count=1,
+    )
+    _final_smoke()
+    _exercise_notification_lifecycle(telegram, fingerprint)
+    _run(_deploy_arguments(bundle, root))
+    _final_smoke()
 
 
 def _api_json(path: str, *, api_key: bool = False) -> tuple[int, Any]:
@@ -529,7 +627,20 @@ def _cleanup(root: Path, registry: str, telegram: str, cluster_id: str) -> None:
         shutil.rmtree(root)
 
 
-def rehearse(bundle: Path, release_manifest: Path, source_root: Path) -> None:
+def rehearse(
+    bundle: Path,
+    release_manifest: Path,
+    source_root: Path,
+    *,
+    scenario: str = "full",
+    shard_index: int = 0,
+    shard_count: int = 1,
+) -> None:
+    _validate_rehearsal_request(
+        scenario,
+        shard_index=shard_index,
+        shard_count=shard_count,
+    )
     _require_ci_acknowledgement()
     release = _load_release(release_manifest)
     _run([sys.executable, "-B", os.fspath(bundle), "--help"])
@@ -624,14 +735,16 @@ def rehearse(bundle: Path, release_manifest: Path, source_root: Path) -> None:
             ]
         )
         _wait_for_telegram_stub(telegram)
-        _exercise_all_failpoints(rehearsal_bundle, root, cluster_id)
-        _final_smoke()
-        _exercise_notification_lifecycle(
-            telegram,
-            hashlib.sha256(f"notification:{run_id}".encode()).hexdigest()[:32],
+        _exercise_scenario(
+            scenario=scenario,
+            bundle=rehearsal_bundle,
+            root=root,
+            cluster_id=cluster_id,
+            telegram=telegram,
+            fingerprint=hashlib.sha256(f"notification:{run_id}".encode()).hexdigest()[:32],
+            shard_index=shard_index,
+            shard_count=shard_count,
         )
-        _run(_deploy_arguments(rehearsal_bundle, root))
-        _final_smoke()
     finally:
         _cleanup(root, registry, telegram, cluster_id)
 
@@ -641,12 +754,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("bundle", type=Path)
     parser.add_argument("release_manifest", type=Path)
     parser.add_argument("--source-root", type=Path, default=Path.cwd())
+    parser.add_argument("--scenario", choices=SCENARIOS, default="full")
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--shard-count", type=int, default=1)
     args = parser.parse_args(argv)
     try:
         rehearse(
             args.bundle.resolve(strict=True),
             args.release_manifest.resolve(strict=True),
             args.source_root.resolve(strict=True),
+            scenario=args.scenario,
+            shard_index=args.shard_index,
+            shard_count=args.shard_count,
         )
     except (OSError, RehearsalError, subprocess.CalledProcessError) as exc:
         print(f"single-slot rehearsal failed: {type(exc).__name__}", file=sys.stderr)
