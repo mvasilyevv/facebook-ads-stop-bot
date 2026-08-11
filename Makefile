@@ -4,9 +4,9 @@ PYTHON ?= python3
 NPM ?= npm
 VENV_DIR ?= .venv
 VENV_BIN := $(VENV_DIR)/bin
-PY := $(VENV_BIN)/python
+PY := PYTHONDONTWRITEBYTECODE=1 $(VENV_BIN)/python
 PIP := $(PY) -m pip
-PYTEST := $(VENV_BIN)/pytest
+PYTEST := PYTHONDONTWRITEBYTECODE=1 $(VENV_BIN)/pytest
 RUFF := $(VENV_BIN)/ruff
 FRONTEND_DIR := frontend
 
@@ -21,7 +21,7 @@ GRPC_NODE_DIR := services/browser-agent
 	frontend frontend-build lint format test test-unit test-telegram test-integration verify \
 	start stop logs proto-compile proto-watch \
 	browser-agent-build tma-dev tma-build \
-	export-openapi gen-api-types docker-build
+	sync-api-contract export-openapi gen-api-types docker-build
 
 help: ## Показать доступные команды
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -115,11 +115,12 @@ test-integration: install-backend ## Прогнать интеграционны
 
 verify: lint test-unit test-integration ## Выполнить основной проверочный прогон
 
-export-openapi: install-backend ## Экспортировать OpenAPI-схему из FastAPI в frontend/openapi.json
-	$(PY) scripts/export_openapi.py
+sync-api-contract: install-backend ## Синхронизировать форматированную OpenAPI-схему и TypeScript-типы
+	PYTHON="$(abspath $(VENV_BIN)/python)" pnpm run sync:api
 
-gen-api-types: export-openapi ## Сгенерировать shared TypeScript-типы из OpenAPI
-	pnpm run gen:api
+export-openapi: sync-api-contract ## Синхронизировать OpenAPI-схему (и её generated TypeScript-контракт)
+
+gen-api-types: sync-api-contract ## Синхронизировать OpenAPI-схему и shared TypeScript-типы
 
 start: check-local-profile ## Поднять единственный fail-closed локальный runtime
 	FB_AGENT_PROFILE=local ./scripts/run-local.sh

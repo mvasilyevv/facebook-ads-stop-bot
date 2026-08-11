@@ -30,7 +30,7 @@ async def configure() -> None:
     )
     # Every release performs a fresh remote setWebhook + getWebhookInfo proof.
     # A lost response remains a durable retry row; this one-shot exits non-zero
-    # so blue/green cutover cannot call it success prematurely.
+    # so production deployment cannot call it success prematurely.
     await ensure_webhook_configuration_desired(engine, target=target, force=True)
     if not await process_one_webhook_configuration(
         engine,

@@ -56,7 +56,7 @@
       "get": {
         "tags": ["health"],
         "summary": "System Readyz",
-        "description": "Готовность бизнес-контура auto-stop.\n\nВ отличие от ``/readyz`` проверяет persisted scan/actor/task lifecycle.\nRedis и process-local heartbeats сюда намеренно не входят: process liveness\nпроверяют Prometheus/blackbox, а этот endpoint не должен расходиться с\nPostgreSQL control plane после restart или blue/green handoff.",
+        "description": "Готовность бизнес-контура auto-stop.\n\nВ отличие от ``/readyz`` проверяет persisted scan/actor/task lifecycle.\nRedis и process-local heartbeats сюда намеренно не входят: process liveness\nпроверяют Prometheus/blackbox, а этот endpoint не должен расходиться с\nPostgreSQL control plane после restart или single-slot redeploy.",
         "operationId": "system_readyz_system_readyz_get",
         "responses": {
           "200": {

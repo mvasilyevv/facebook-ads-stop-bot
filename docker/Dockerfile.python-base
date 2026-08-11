@@ -17,6 +17,12 @@ WORKDIR /app
 # Копируем файлы зависимостей для кэширования слоёв
 COPY pyproject.toml uv.lock ./
 
+# Creative registry is runtime data, but reports and source media under the
+# same tree are not. Filter in the disposable builder so those assets never
+# become layers of the production image.
+COPY docs/creatives /tmp/runtime-creatives
+RUN find /tmp/runtime-creatives -type f ! -name '*.yaml' -delete
+
 # Устанавливаем зависимости в /opt/venv
 RUN uv sync --frozen --no-dev --no-install-project \
     --python python3.12
@@ -45,5 +51,21 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# Копируем весь исходный код
-COPY . .
+# Copy only application runtime inputs. Deployment automation, CI, docs,
+# tests, local caches and repository metadata must not affect this image.
+COPY apps ./apps
+COPY clients ./clients
+COPY core ./core
+COPY migrations ./migrations
+COPY proto ./proto
+COPY alembic.ini sitecustomize.py ./
+COPY run_*.py ./
+COPY scripts/run-migrations-locked.py \
+     scripts/adopt-first-release.py \
+     scripts/adoption-receipt-status.py \
+     scripts/bootstrap-runtime-config.py \
+     scripts/bootstrap-vision-config.py \
+     scripts/check-database-contract.py \
+     scripts/configure-telegram-webhook.py \
+     ./scripts/
+COPY --from=builder /tmp/runtime-creatives ./docs/creatives

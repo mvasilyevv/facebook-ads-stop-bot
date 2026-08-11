@@ -1,0 +1,313 @@
+name: Publish content-addressed images
+
+on:
+  workflow_call:
+    inputs:
+      release_id:
+        description: Release identifier written to the immutable manifest
+        required: true
+        type: string
+    outputs:
+      manifest_artifact:
+        description: Artifact containing the canonical release.json
+        value: ${{ jobs.manifest.outputs.artifact }}
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+  OCI_SOURCE: ${{ github.server_url }}/${{ github.repository }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    outputs:
+      base_matrix: ${{ steps.plan.outputs.base_matrix }}
+      app_matrix: ${{ steps.plan.outputs.app_matrix }}
+      desktop_matrix: ${{ steps.plan.outputs.desktop_matrix }}
+      python_base_tag: ${{ steps.plan.outputs.python_base_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Calculate image inputs
+        id: plan
+        run: |
+          {
+            printf 'base_matrix=%s\n' "$(python3 scripts/ci_image_plan.py matrix --group base)"
+            printf 'app_matrix=%s\n' "$(python3 scripts/ci_image_plan.py matrix --group app)"
+            printf 'desktop_matrix=%s\n' "$(python3 scripts/ci_image_plan.py matrix --group desktop)"
+            printf 'python_base_tag=%s\n' "$(python3 scripts/ci_image_plan.py hash --image python-base)"
+          } >> "$GITHUB_OUTPUT"
+
+  base:
+    name: Base ${{ matrix.name }}
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    strategy:
+      matrix: ${{ fromJSON(needs.plan.outputs.base_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: GHCR login
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Probe immutable tag
+        id: probe
+        env:
+          IMAGE_TAG: ${{ matrix.tag }}
+        run: |
+          candidate="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          log="$(mktemp)"
+          trap 'rm -f -- "$log"' EXIT
+          if docker buildx imagetools inspect "$candidate" >"$log" 2>&1; then
+            printf 'exists=true\n' >> "$GITHUB_OUTPUT"
+          elif grep -Eqi 'manifest unknown|no such manifest|not found' "$log"; then
+            printf 'exists=false\n' >> "$GITHUB_OUTPUT"
+          else
+            cat "$log" >&2
+            exit 1
+          fi
+          printf 'candidate=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
+      - name: Install generator only for a missing base
+        if: steps.probe.outputs.exists != 'true'
+        run: |
+          python -m pip install "uv==0.9.18"
+          uv sync --frozen --extra dev
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+      - name: Regenerate gRPC stubs only for a missing base
+        if: steps.probe.outputs.exists != 'true'
+        run: |
+          python -m grpc_tools.protoc -Iproto \
+            --python_out=clients/python_grpc \
+            --grpc_python_out=clients/python_grpc \
+            --pyi_out=clients/python_grpc \
+            proto/v1/browser_session.proto proto/v1/scanner.proto proto/v1/meta_api.proto
+          python -c "
+          from pathlib import Path
+          for path in Path('clients/python_grpc/v1').glob('*_pb2_grpc.py'):
+              path.write_text(path.read_text().replace('from v1 import ', 'from . import '))
+          "
+      - name: Push missing base
+        if: steps.probe.outputs.exists != 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          cache-from: type=gha,scope=${{ matrix.image_suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image_suffix }}
+          provenance: mode=max
+          sbom: true
+          labels: org.opencontainers.image.source=${{ env.OCI_SOURCE }}
+          tags: ${{ steps.probe.outputs.candidate }}
+      - name: Verify base digest
+        env:
+          CANDIDATE: ${{ steps.probe.outputs.candidate }}
+        run: |
+          digest="$(docker buildx imagetools inspect "$CANDIDATE" | awk '$1 == "Digest:" {print $2; exit}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+  app:
+    name: App ${{ matrix.name }}
+    needs: [plan, base]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.app_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: GHCR login
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Probe immutable tag
+        id: probe
+        env:
+          IMAGE_TAG: ${{ matrix.tag }}
+        run: |
+          candidate="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          log="$(mktemp)"
+          trap 'rm -f -- "$log"' EXIT
+          if docker buildx imagetools inspect "$candidate" >"$log" 2>&1; then
+            printf 'exists=true\n' >> "$GITHUB_OUTPUT"
+          elif grep -Eqi 'manifest unknown|no such manifest|not found' "$log"; then
+            printf 'exists=false\n' >> "$GITHUB_OUTPUT"
+          else
+            cat "$log" >&2
+            exit 1
+          fi
+          printf 'candidate=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
+      - name: Resolve immutable Python base
+        id: python-base
+        if: matrix.is_python
+        env:
+          BASE_TAG: ${{ needs.plan.outputs.python_base_tag }}
+        run: |
+          candidate="${IMAGE_REPOSITORY}:${BASE_TAG}"
+          digest="$(docker buildx imagetools inspect "$candidate" | awk '$1 == "Digest:" {print $2; exit}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'reference=%s@%s\n' "$IMAGE_REPOSITORY" "$digest" >> "$GITHUB_OUTPUT"
+      - name: Push missing Python component
+        if: matrix.is_python && steps.probe.outputs.exists != 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          build-args: BASE_IMAGE=${{ steps.python-base.outputs.reference }}
+          cache-from: type=gha,scope=${{ matrix.image_suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image_suffix }}
+          provenance: mode=max
+          sbom: true
+          labels: org.opencontainers.image.source=${{ env.OCI_SOURCE }}
+          tags: ${{ steps.probe.outputs.candidate }}
+      - name: Push missing standalone component
+        if: ${{ !matrix.is_python && steps.probe.outputs.exists != 'true' }}
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          cache-from: type=gha,scope=${{ matrix.image_suffix }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image_suffix }}
+          provenance: mode=max
+          sbom: true
+          labels: org.opencontainers.image.source=${{ env.OCI_SOURCE }}
+          tags: ${{ steps.probe.outputs.candidate }}
+      - name: Resolve immutable reference
+        env:
+          CANDIDATE: ${{ steps.probe.outputs.candidate }}
+          IMAGE_NAME: ${{ matrix.name }}
+        run: |
+          digest="$(docker buildx imagetools inspect "$CANDIDATE" | awk '$1 == "Digest:" {print $2; exit}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p image-refs
+          printf '%s@%s\n' "${CANDIDATE%:*}" "$digest" > "image-refs/${IMAGE_NAME}.ref"
+      - name: Upload immutable reference
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-ref-${{ matrix.name }}-${{ inputs.release_id }}
+          path: image-refs/${{ matrix.name }}.ref
+          if-no-files-found: error
+          retention-days: 7
+
+  desktop:
+    name: Desktop ${{ matrix.name }}
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix: ${{ fromJSON(needs.plan.outputs.desktop_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: GHCR login
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Probe immutable tag
+        id: probe
+        env:
+          IMAGE_TAG: ${{ matrix.tag }}
+        run: |
+          candidate="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          log="$(mktemp)"
+          trap 'rm -f -- "$log"' EXIT
+          if docker buildx imagetools inspect "$candidate" >"$log" 2>&1; then
+            printf 'exists=true\n' >> "$GITHUB_OUTPUT"
+          elif grep -Eqi 'manifest unknown|no such manifest|not found' "$log"; then
+            printf 'exists=false\n' >> "$GITHUB_OUTPUT"
+          else
+            cat "$log" >&2
+            exit 1
+          fi
+          printf 'candidate=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
+      - name: Push missing Vision desktop
+        if: steps.probe.outputs.exists != 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          cache-from: type=gha,scope=vision-webtop
+          cache-to: type=gha,mode=max,scope=vision-webtop
+          provenance: mode=max
+          sbom: true
+          labels: org.opencontainers.image.source=${{ env.OCI_SOURCE }}
+          tags: ${{ steps.probe.outputs.candidate }}
+      - name: Resolve immutable reference
+        env:
+          CANDIDATE: ${{ steps.probe.outputs.candidate }}
+          IMAGE_NAME: ${{ matrix.name }}
+        run: |
+          digest="$(docker buildx imagetools inspect "$CANDIDATE" | awk '$1 == "Digest:" {print $2; exit}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p image-refs
+          printf '%s@%s\n' "${CANDIDATE%:*}" "$digest" > "image-refs/${IMAGE_NAME}.ref"
+      - name: Upload immutable reference
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-ref-${{ matrix.name }}-${{ inputs.release_id }}
+          path: image-refs/${{ matrix.name }}.ref
+          if-no-files-found: error
+          retention-days: 7
+
+  manifest:
+    needs: [app, desktop]
+    runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    outputs:
+      artifact: release-manifest-${{ inputs.release_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Download immutable references
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: image-ref-*-${{ inputs.release_id }}
+          path: image-refs
+          merge-multiple: true
+      - name: Build release manifest
+        run: |
+          python3 scripts/ci_image_plan.py manifest \
+            --refs-dir image-refs \
+            --release-id "${{ inputs.release_id }}" \
+            --redis-image "redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99" \
+            --output release.json
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["schema"] == "fb-agent-release/v1" and d["release_id"] == sys.argv[2] and "POSTGRES_IMAGE" not in d["images"]' release.json "${{ inputs.release_id }}"
+      - name: Upload release manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-manifest-${{ inputs.release_id }}
+          path: release.json
+          if-no-files-found: error
+          retention-days: 7

@@ -14,7 +14,11 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint",
-    "gen:api": "openapi-typescript ./frontend/openapi.json -o ./packages/shared/src/api/generated.ts"
+    "format:openapi": "pnpm --dir frontend exec prettier --write --config .prettierrc.json openapi.json",
+    "format:api": "pnpm --dir frontend exec prettier --write --config .prettierrc.json ../packages/shared/src/api/generated.ts",
+    "export:openapi": "${PYTHON:-python3} -B scripts/export_openapi.py && pnpm run format:openapi",
+    "gen:api": "openapi-typescript ./frontend/openapi.json -o ./packages/shared/src/api/generated.ts && pnpm run format:api",
+    "sync:api": "pnpm run export:openapi && pnpm run gen:api"
   },
   "devDependencies": {
     "openapi-typescript": "^7.13.0",

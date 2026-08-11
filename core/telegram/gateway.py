@@ -18,7 +18,8 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
-_BOT_API_ORIGIN = "https://api.telegram.org"
+from core.config import get_settings
+
 _MESSAGE_LIMIT = 4096
 _SECRET_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 _ACTION_CAPABILITY_RE = re.compile(r"(?<![A-Za-z0-9_-])a:[A-Za-z0-9_-]{22}(?![A-Za-z0-9_-])")
@@ -129,6 +130,7 @@ class TelegramHTMLGateway:
             raise ValueError("Telegram bot token is not configured")
         self._bot_token = SecretStr(raw)
         self._credential_fingerprint = telegram_credential_fingerprint(raw)
+        self._bot_api_origin = get_settings().telegram_bot_api_origin
         self._http = http_client or httpx.AsyncClient(timeout=timeout_seconds)
         self._owns_http_client = http_client is None
         self._timeout_seconds = timeout_seconds
@@ -143,7 +145,7 @@ class TelegramHTMLGateway:
 
     def _method_url(self, method: str) -> str:
         token = self._bot_token.get_secret_value()
-        return f"{_BOT_API_ORIGIN}/bot{token}/{method}"
+        return f"{self._bot_api_origin}/bot{token}/{method}"
 
     def _sanitize_description(
         self,
