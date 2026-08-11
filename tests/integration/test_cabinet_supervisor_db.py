@@ -105,6 +105,72 @@ async def test_session_lock_prevents_overlapping_cabinet_actors(
 
 
 @pytest.mark.asyncio
+async def test_confirmed_empty_clears_actor_error_and_records_snapshot(
+    pg_engine,
+    clean_cabinet_runtime,
+) -> None:
+    account = clean_cabinet_runtime
+    supervisor = CabinetSupervisor(
+        pg_engine,
+        owner_instance=uuid.uuid4(),
+        scan_deadline_seconds=10,
+        lease_ttl_seconds=20,
+    )
+
+    async def failed_actor(
+        account_id: str,
+        _index: int,
+        _lease: CabinetLease,
+    ) -> dict[str, object]:
+        return {
+            "ad_account_id": account_id,
+            "outcome": "error",
+            "error": "scanner_unavailable",
+        }
+
+    failed = await supervisor.run_cycle([account], failed_actor)
+    assert failed[0]["outcome"] == "error"
+    async with pg_engine.connect() as conn:
+        failed_state = (
+            await conn.execute(
+                text(
+                    "SELECT last_snapshot_at, last_error_code "
+                    "FROM cabinet_runtime WHERE ad_account_id = :account"
+                ),
+                {"account": account},
+            )
+        ).one()
+    assert failed_state.last_snapshot_at is None
+    assert failed_state.last_error_code == "scanner_unavailable"
+
+    async def known_empty_actor(
+        account_id: str,
+        _index: int,
+        _lease: CabinetLease,
+    ) -> dict[str, object]:
+        return {
+            "ad_account_id": account_id,
+            "outcome": "empty",
+            "error": "no_active_ads",
+        }
+
+    empty = await supervisor.run_cycle([account], known_empty_actor)
+    assert empty[0]["outcome"] == "empty"
+    async with pg_engine.connect() as conn:
+        recovered_state = (
+            await conn.execute(
+                text(
+                    "SELECT last_snapshot_at, last_error_code "
+                    "FROM cabinet_runtime WHERE ad_account_id = :account"
+                ),
+                {"account": account},
+            )
+        ).one()
+    assert recovered_state.last_snapshot_at is not None
+    assert recovered_state.last_error_code is None
+
+
+@pytest.mark.asyncio
 async def test_observer_write_fence_rejects_stale_actor_in_write_transaction(
     pg_engine,
     clean_cabinet_runtime,
