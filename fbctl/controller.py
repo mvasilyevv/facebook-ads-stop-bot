@@ -894,6 +894,8 @@ def bootstrap_host(
     docker_config: Path | None,
     rehearsal: bool = False,
 ) -> dict[str, object]:
+    if os.geteuid() != 0:
+        raise FbctlError("bootstrap requires root privileges")
     if sys.version_info < (3, 12):
         raise FbctlError("Python 3.12 or newer is required")
     root = require_absolute_path(root, label="root")

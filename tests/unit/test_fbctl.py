@@ -430,6 +430,7 @@ def test_bootstrap_cleans_temporary_secret_and_partial_candidate_on_prepare_fail
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
     root = tmp_path / "fb-agent"
     vision_config = root / "shared" / "vision-config"
     vision_config.mkdir(parents=True)
@@ -467,7 +468,11 @@ def test_bootstrap_cleans_temporary_secret_and_partial_candidate_on_prepare_fail
     assert not (root / "candidate").exists()
 
 
-def test_invalid_bootstrap_only_transport_never_persists_canonical_source(tmp_path: Path) -> None:
+def test_invalid_bootstrap_only_transport_never_persists_canonical_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
     root = tmp_path / "fb-agent"
     source = _source_env(tmp_path)
     with source.open("a", encoding="utf-8") as handle:
@@ -491,6 +496,28 @@ def test_invalid_bootstrap_only_transport_never_persists_canonical_source(tmp_pa
 
     assert not (root / "shared" / "source.env").exists()
     assert not (root / "candidate").exists()
+
+
+def test_bootstrap_refuses_non_root_before_durable_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "fb-agent"
+    source = _source_env(tmp_path)
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+
+    with pytest.raises(FbctlError, match="root privileges"):
+        bootstrap_host(
+            runner=FakeRunner(),
+            root=root,
+            source_env=source,
+            adoption_bundle=None,
+            desktop_profile_seed=None,
+            docker_config=None,
+            rehearsal=True,
+        )
+
+    assert not root.exists()
 
 
 def test_deploy_promotes_only_one_runtime_after_all_evidence(tmp_path: Path) -> None:
@@ -690,6 +717,7 @@ def test_bootstrap_retry_reuses_durable_identity_after_mutation_failure(
     monkeypatch: pytest.MonkeyPatch,
     failure_stage: str,
 ) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
     root = tmp_path / "fb-agent"
     vision_config = root / "shared" / "vision-config"
     vision_config.mkdir(parents=True)

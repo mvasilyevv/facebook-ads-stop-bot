@@ -257,6 +257,24 @@ def test_release_requires_real_single_slot_rehearsal_before_production() -> None
     assert "tests.rehearsal.single_slot" in rehearsal
     assert "release-inputs/release.json" in rehearsal
     assert "FB_AGENT_REHEARSAL_ACK: single-slot" in rehearsal
+    assert "${{ runner.temp }}" not in rehearsal
+    assert 'docker_config="$RUNNER_TEMP/fb-agent-docker-config"' in rehearsal
+    assert 'install -d -m 700 "$docker_config"' in rehearsal
+    assert 'printf \'DOCKER_CONFIG=%s\\n\' "$docker_config" >> "$GITHUB_ENV"' in rehearsal
+    assert rehearsal.index("Prepare explicit Docker credentials directory") < rehearsal.index(
+        "Authenticate immutable release pulls"
+    )
+    elevated = rehearsal.split("sudo -n env -i", maxsplit=1)[1].split(
+        "/usr/bin/python3", maxsplit=1
+    )[0]
+    assert "sudo -E" not in rehearsal
+    assert set(re.findall(r"(?m)^\s+([A-Z][A-Z0-9_]*)=", elevated)) == {
+        "DOCKER_CONFIG",
+        "GITHUB_ACTIONS",
+        "GITHUB_RUN_ID",
+        "FB_AGENT_REHEARSAL_ACK",
+        "PYTHONDONTWRITEBYTECODE",
+    }
     assert "docker-rehearsal" in deploy.splitlines()[1]
 
 

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 
 import pytest
 
 from core.adoption.bundle import parse_adoption_bundle_json
 from tests.rehearsal.single_slot import (
     RehearsalError,
+    _assert_tree_ownership,
     _require_ci_acknowledgement,
+    _write_profile_seed,
     build_adoption_bundle,
 )
 
@@ -25,8 +29,14 @@ def test_rehearsal_adoption_fixture_uses_one_monitored_usd_cabinet() -> None:
 
 
 def test_rehearsal_refuses_non_ephemeral_or_unacknowledged_host(
+    tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("tests.rehearsal.single_slot.os.geteuid", lambda: 0)
+    docker_config = tmp_path / "docker"
+    docker_config.mkdir()
+    (docker_config / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("DOCKER_CONFIG", str(docker_config))
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.delenv("FB_AGENT_REHEARSAL_ACK", raising=False)
     with pytest.raises(RehearsalError, match="ephemeral Actions host"):
@@ -38,3 +48,39 @@ def test_rehearsal_refuses_non_ephemeral_or_unacknowledged_host(
 
     monkeypatch.setenv("FB_AGENT_REHEARSAL_ACK", "single-slot")
     _require_ci_acknowledgement()
+
+
+def test_rehearsal_requires_root_and_absolute_existing_docker_config(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("FB_AGENT_REHEARSAL_ACK", "single-slot")
+    monkeypatch.setattr("tests.rehearsal.single_slot.os.geteuid", lambda: 501)
+    with pytest.raises(RehearsalError, match="root privileges"):
+        _require_ci_acknowledgement()
+
+    monkeypatch.setattr("tests.rehearsal.single_slot.os.geteuid", lambda: 0)
+    monkeypatch.setenv("DOCKER_CONFIG", "relative/docker")
+    with pytest.raises(RehearsalError, match="absolute path"):
+        _require_ci_acknowledgement()
+
+    docker_config = tmp_path / "missing-docker-config"
+    monkeypatch.setenv("DOCKER_CONFIG", str(docker_config))
+    with pytest.raises(RehearsalError, match="existing config.json"):
+        _require_ci_acknowledgement()
+
+
+def test_rehearsal_profile_seed_is_nested_private_and_ownership_is_recursive(tmp_path) -> None:
+    profile = tmp_path / "desktop-profile-seed"
+    _write_profile_seed(profile)
+
+    assert stat.S_IMODE(profile.stat().st_mode) == 0o700
+    assert stat.S_IMODE((profile / ".fb-agent-vision-profile-v1").stat().st_mode) == 0o600
+    assert stat.S_IMODE((profile / "browser").stat().st_mode) == 0o700
+    assert stat.S_IMODE((profile / "browser" / "Default").stat().st_mode) == 0o700
+    assert stat.S_IMODE((profile / "browser" / "Default" / "Preferences").stat().st_mode) == 0o600
+    _assert_tree_ownership(profile, uid=os.getuid(), gid=os.getgid())
+
+    with pytest.raises(RehearsalError, match="ownership mismatch"):
+        _assert_tree_ownership(profile, uid=os.getuid() + 1, gid=os.getgid())
