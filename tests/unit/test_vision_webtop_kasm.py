@@ -6,19 +6,18 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WEBTOP = ROOT / "deploy" / "vision-webtop"
-COMPOSE = WEBTOP / "compose.yaml"
-INSTALLER = ROOT / "scripts" / "install-vision-webtop.sh"
+COMPOSE = ROOT / "deploy/compose/docker-compose.desktop-agent.yml"
 
 
-def test_desktop_is_one_digest_pinned_service() -> None:
+def test_desktop_is_one_digest_pinned_runtime_plane() -> None:
     source = COMPOSE.read_text(encoding="utf-8")
     document = yaml.safe_load(source)
 
-    assert tuple(document["services"]) == ("webtop",)
+    assert tuple(document["services"]) == ("vision-webtop", "browser-agent")
     assert "DESKTOP_WEBTOP_IMAGE:?" in source
-    assert '"127.0.0.1:8444:8444"' in source
-    assert "./config:/config" in source
-    assert "network_mode:" not in source
+    assert "DESKTOP_HTTPS_PORT:?" in source
+    assert "VISION_CONFIG_DIR:?" in source
+    assert 'network_mode: "service:vision-webtop"' in source
     assert "ipc:" not in source
     assert "/tmp/.X11-unix" not in source
     assert "guacamole" not in source.lower()
@@ -110,27 +109,6 @@ def test_first_party_client_keeps_local_scaling_clipboard_and_reconnect_contract
     assert patch_index < build_index
 
 
-def test_installer_preserves_crash_safe_cutover_contract() -> None:
-    source = INSTALLER.read_text(encoding="utf-8")
-
-    assert "--validate-profile-seed-only" in source
-    assert "--defer-commit" in source
-    assert "--reconcile-pending-update" in source
-    assert ".fb-agent-vision-profile-v1" in source
-    assert ".fb-agent-seed-bootstrap-v1" in source
-    assert ".vision-update.env" in source
-    assert "pre-desktop-config-" in source
-    assert "pre-desktop-baseline." in source
-    assert "browser_maintenance_checkpoint" in source
-    assert "vision_identity_is_exact" in source
-    assert "ensure_images_available" in source
-    assert "FB_AGENT_VISION_RELEASE_ID" in source
-    assert "printf 'display=:1\\n'" in source
-    assert "/api/settings/vision" in source
-    assert "compose down --remove-orphans --timeout 90" in source
-    assert "compose build" not in source
-
-
 def test_legacy_split_desktop_runtime_cannot_reenter_release_contract() -> None:
     assert not (ROOT / "deploy" / "kasmvnc-sidecar").exists()
     for retired_file in (
@@ -143,16 +121,12 @@ def test_legacy_split_desktop_runtime_cannot_reenter_release_contract() -> None:
 
     guarded = (
         ROOT / ".env.example",
-        ROOT / "deploy/bluegreen/release-images.env.example",
-        ROOT / ".github/workflows/deploy.yml",
-        ROOT / "deploy/vision-webtop/compose.yaml",
-        ROOT / "scripts/create-release-manifest.sh",
-        ROOT / "scripts/deploy-platform-server.sh",
-        ROOT / "scripts/install-vision-webtop.sh",
-        ROOT / "scripts/platform-desktop-release.sh",
-        ROOT / "scripts/release-state.py",
-        ROOT / "scripts/server-platform-release.sh",
-        ROOT / "scripts/wait-for-vision-container.sh",
+        ROOT / ".github/workflows/publish-images.yml",
+        ROOT / ".github/workflows/release.yml",
+        ROOT / "deploy/compose/docker-compose.desktop-agent.yml",
+        ROOT / "scripts/fbctl",
+        ROOT / "fbctl/controller.py",
+        ROOT / "fbctl/config.py",
     )
     retired_tokens = (
         "DESKTOP_KASMVNC_IMAGE",

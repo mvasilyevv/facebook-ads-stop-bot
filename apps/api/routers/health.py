@@ -128,7 +128,7 @@ async def system_readyz(
     В отличие от ``/readyz`` проверяет persisted scan/actor/task lifecycle.
     Redis и process-local heartbeats сюда намеренно не входят: process liveness
     проверяют Prometheus/blackbox, а этот endpoint не должен расходиться с
-    PostgreSQL control plane после restart или blue/green handoff.
+    PostgreSQL control plane после restart или single-slot redeploy.
     """
     pg_ok = await _check_postgres(engine)
     blockers: list[str] = []

@@ -35,10 +35,7 @@ def test_runtime_and_generation_commands_cannot_restore_ad_library() -> None:
         "apps/cleanup_worker/retention.py",
         "apps/cleanup_worker/worker.py",
     )
-    generation_sources = (
-        "Makefile",
-        ".github/workflows/deploy.yml",
-    )
+    generation_sources = ("Makefile", ".github/workflows/verify.yml")
 
     for relative in (*runtime_sources, *generation_sources):
         source = (PROJECT_ROOT / relative).read_text(encoding="utf-8")

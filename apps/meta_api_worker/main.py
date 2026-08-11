@@ -112,7 +112,11 @@ from core.tasks.queue import (
     touch_task_running,
 )
 from core.tasks.wakeup import TaskQueueWakeup
-from core.worker_metrics import mark_worker_heartbeat, start_worker_metrics_server
+from core.worker_metrics import (
+    mark_worker_db_poll_success,
+    mark_worker_heartbeat,
+    start_worker_metrics_server,
+)
 
 logger = logging.getLogger("meta_api_worker")
 
@@ -2015,6 +2019,7 @@ async def task_loop(
                     pass
             continue
 
+        mark_worker_db_poll_success(WORKER_NAME)
         if claim.queue_empty or claim.task is None:
             # Refresh durable IANA names outside the money path. The schedule is
             # process-local only; PostgreSQL remains the sole timezone authority.

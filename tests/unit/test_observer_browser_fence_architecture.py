@@ -117,9 +117,6 @@ def test_force_profile_recovery_is_maintenance_only_and_reprobed() -> None:
     assert "maintenance_owner=request.headers.get(" in api
     assert "BrowserMaintenanceGuard(engine, maintenance_owner)" in api
 
-    healer = (ROOT / "scripts/platform-desktop-heal.sh").read_text(encoding="utf-8")
-    assert "X-FB-Agent-Browser-Maintenance-Owner: $BROWSER_MAINTENANCE_OWNER" in healer
-
     client = (ROOT / "clients/python_grpc/client.py").read_text(encoding="utf-8")
     assert "RecoverBrowserProfileUnderMaintenance" in client
     assert "maintenance_owner" in client

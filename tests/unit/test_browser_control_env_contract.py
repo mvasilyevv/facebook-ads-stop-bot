@@ -308,51 +308,27 @@ def test_browser_agent_compose_environment_matches_runtime_consumers() -> None:
     assert consumed == provided
 
 
-def test_desktop_wrappers_export_only_the_canonical_https_authority_url() -> None:
+def test_single_slot_runtime_uses_only_canonical_https_authority_urls() -> None:
     assert "?" not in CANONICAL_AUTHORITY_URL
     assert AUTHORITY_TOKEN not in CANONICAL_AUTHORITY_URL
     assert "?" not in CANONICAL_MAINTENANCE_AUTHORITY_URL
     assert AUTHORITY_TOKEN not in CANONICAL_MAINTENANCE_AUTHORITY_URL
-    for name in ("platform-desktop-compose.sh", "platform-desktop-release.sh"):
-        source = (ROOT / "scripts" / name).read_text(encoding="utf-8")
-        assert CANONICAL_AUTHORITY_URL in source
-        assert CANONICAL_MAINTENANCE_AUTHORITY_URL in source
-        assert "export BROWSER_AGENT_AM_COLUMNS_QS BROWSER_AUTHORITY_CONSUME_URL" in source
-        assert "export BROWSER_MAINTENANCE_CONSUME_URL" in source
-        assert "BROWSER_AUTHORITY_CONSUMER_TOKEN" not in source
+    renderer = (ROOT / "fbctl/config.py").read_text(encoding="utf-8")
+    desktop = DESKTOP_COMPOSE.read_text(encoding="utf-8")
+    assert CANONICAL_AUTHORITY_URL in renderer
+    assert CANONICAL_MAINTENANCE_AUTHORITY_URL in renderer
+    assert "BROWSER_AUTHORITY_CONSUME_URL" in desktop
+    assert "BROWSER_MAINTENANCE_CONSUME_URL" in desktop
+    assert "for key in PRIVATE_BROWSER_KEYS" in renderer
+    assert "app_values.pop(key, None)" in renderer
 
 
 def test_every_production_caller_uses_the_shared_private_file_validator() -> None:
-    compose_names = (
-        "docker-compose.app.yml",
-        "docker-compose.desktop-agent.yml",
-    )
-    callers = {
-        path
-        for path in (ROOT / "scripts").glob("*.sh")
-        if any(
-            marker in path.read_text(encoding="utf-8")
-            for marker in (*compose_names, "BROWSER_CONTROL_ENV_FILE")
-        )
-    }
-    assert callers
-    for path in callers:
-        source = path.read_text(encoding="utf-8")
-        assert "browser-control-env.sh" in source, path.relative_to(ROOT)
-        assert "browser_control_env_require" in source, path.relative_to(ROOT)
-        if "BROWSER_MAINTENANCE_ENV_FILE" in source:
-            assert "browser_maintenance_env_require" in source, path.relative_to(ROOT)
-        if any(
-            marker in source
-            for marker in (
-                "BROWSER_AUTOPAUSE_ENV_FILE",
-                "BROWSER_META_API_ENV_FILE",
-                "BROWSER_CAMPAIGN_CREATOR_ENV_FILE",
-            )
-        ):
-            assert "browser_operation_env_require" in source, path.relative_to(ROOT)
-        if "BROWSER_AUTHORITY_ENV_FILE" in source:
-            assert "browser_authority_env_require" in source, path.relative_to(ROOT)
+    path = ROOT / "fbctl/config.py"
+    source = path.read_text(encoding="utf-8")
 
-    installer = (ROOT / "scripts/install-release-reconciler.sh").read_text(encoding="utf-8")
-    assert "browser-control-env.sh" in installer
+    assert "write_scoped_browser_environments" in source
+    assert "BROWSER_CONTROL_ENV_FILE" in source
+    assert "BROWSER_MAINTENANCE_ENV_FILE" in source
+    assert "BROWSER_OPERATION_CAPABILITY_SECRET" in source
+    assert "BROWSER_AUTHORITY_ENV_FILE" in source

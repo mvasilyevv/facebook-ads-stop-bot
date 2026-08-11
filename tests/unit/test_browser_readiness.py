@@ -123,13 +123,15 @@ def test_database_trigger_is_the_single_maintenance_invalidation_path() -> None:
     baseline = (root / "migrations/versions/0001_safety_first_baseline.sql").read_text(
         encoding="utf-8"
     )
-    shell = (root / "scripts/browser-maintenance-lease.sh").read_text(encoding="utf-8")
+    retired_shell = root / "scripts/browser-maintenance-lease.sh"
+    deployment = (root / "fbctl/controller.py").read_text(encoding="utf-8")
     python_source = (root / "core/tasks/browser_fence.py").read_text(encoding="utf-8")
     assert "invalidate_browser_readiness_on_maintenance" in baseline
     assert "trg_system_config_browser_maintenance_readiness" in baseline
     assert "UPDATE public.browser_channel_readiness" in baseline
     assert "readiness_expires_at = NULL" in baseline
-    assert "UPDATE browser_channel_readiness" not in shell
+    assert not retired_shell.exists()
+    assert "UPDATE browser_channel_readiness" not in deployment
     assert "UPDATE browser_channel_readiness" not in python_source
 
 

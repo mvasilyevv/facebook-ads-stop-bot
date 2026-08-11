@@ -8,7 +8,6 @@ logging {
 prometheus.scrape "browser_agent" {
   targets = [{
     "__address__"       = "vision-webtop:9464",
-    "deployment_color" = "independent",
     "job"               = "fb-agent-runtime",
     "node"              = "local-app-host",
     "service"           = "browser-agent",

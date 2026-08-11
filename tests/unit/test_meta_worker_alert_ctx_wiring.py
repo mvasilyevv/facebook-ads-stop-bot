@@ -10,7 +10,7 @@ import asyncio
 import uuid
 from contextlib import nullcontext
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -73,6 +73,8 @@ async def test_task_loop_uses_durable_gate_without_blocking_housekeeping(
     monkeypatch,
 ) -> None:
     stop = asyncio.Event()
+    mark_db_poll_success = Mock()
+    monkeypatch.setattr(meta, "mark_worker_db_poll_success", mark_db_poll_success)
 
     async def _blocked_claim(*_args, **_kwargs):
         stop.set()
@@ -104,7 +106,29 @@ async def test_task_loop_uses_durable_gate_without_blocking_housekeeping(
     await meta.task_loop(object(), stop, client=client, alert_ctx=None)
 
     claim.assert_awaited_once()
+    mark_db_poll_success.assert_called_once_with(meta.WORKER_NAME)
     process.assert_not_awaited()
     client.operation_authority.assert_not_called()
     timezone_refresh.assert_awaited_once()
     escalation.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_task_loop_does_not_mark_db_poll_when_claim_fails(monkeypatch) -> None:
+    stop = asyncio.Event()
+    mark_db_poll_success = Mock()
+    monkeypatch.setattr(meta, "mark_worker_db_poll_success", mark_db_poll_success)
+
+    async def _failed_claim(*_args, **_kwargs):
+        stop.set()
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(
+        meta,
+        "claim_browser_ready_mutation_task",
+        AsyncMock(side_effect=_failed_claim),
+    )
+
+    await meta.task_loop(object(), stop, client=MagicMock(), alert_ctx=None)
+
+    mark_db_poll_success.assert_not_called()

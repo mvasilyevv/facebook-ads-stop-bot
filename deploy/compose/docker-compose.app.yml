@@ -1,5 +1,7 @@
-# Digest-only application plane.  Run as project fb_agent_blue or
-# fb_agent_green.  Durable data belongs to docker-compose.infra.yml.
+# Digest-only single-slot application plane. Durable data belongs to
+# docker-compose.infra.yml; one-shot release jobs live in docker-compose.jobs.yml.
+
+name: fb_agent_app
 
 x-logging: &logging
   driver: json-file
@@ -11,7 +13,6 @@ x-runtime-labels: &runtime-labels
   com.fb-agent.managed: "true"
   com.fb-agent.cluster-id: ${FB_AGENT_BOOTSTRAP_CLUSTER_ID:?set FB_AGENT_BOOTSTRAP_CLUSTER_ID}
   com.fb-agent.purpose: app
-  com.fb-agent.color: ${APP_COLOR:?set APP_COLOR}
   com.fb-agent.release: ${RELEASE_ID:?set RELEASE_ID}
 
 x-runtime-environment: &runtime-environment
@@ -26,7 +27,6 @@ x-runtime-environment: &runtime-environment
   OTEL_EXPORTER_OTLP_ENDPOINT: http://alloy-agent:4317
   OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.10}
   FB_AGENT_RELEASE: ${RELEASE_ID:?set RELEASE_ID}
-  FB_AGENT_DEPLOYMENT_COLOR: ${APP_COLOR:?set APP_COLOR}
 
 x-worker-common: &worker-common
   image: ${WORKERS_IMAGE:?set WORKERS_IMAGE to image@sha256}
@@ -45,49 +45,6 @@ x-worker-common: &worker-common
     com.fb-agent.metrics.port: "9464"
 
 services:
-  # Migration is explicitly invoked before either color starts.  The wrapper
-  # owns a PostgreSQL advisory lock for the full bootstrap/Alembic process.
-  migrator:
-    image: ${WORKERS_IMAGE:?set WORKERS_IMAGE to image@sha256}
-    restart: "no"
-    init: true
-    logging: *logging
-    env_file: ${APP_ENV_FILE:?set APP_ENV_FILE}
-    environment:
-      <<: *runtime-environment
-      WORKER_TYPE: migrate
-      MIGRATION_LOCK_TIMEOUT_SECONDS: ${MIGRATION_LOCK_TIMEOUT_SECONDS:-180}
-    entrypoint: ["python", "-m", "scripts.run-migrations-locked"]
-    networks: [platform]
-    profiles: [migration]
-    labels: *runtime-labels
-
-  adoption_importer:
-    image: ${WORKERS_IMAGE:?set WORKERS_IMAGE to image@sha256}
-    restart: "no"
-    init: true
-    logging: *logging
-    env_file: ${APP_ENV_FILE:?set APP_ENV_FILE}
-    environment:
-      <<: *runtime-environment
-    entrypoint: ["python", "/app/scripts/adopt-first-release.py"]
-    volumes:
-      - ${ADOPTION_BUNDLE_FILE:?set ADOPTION_BUNDLE_FILE}:/run/fb-agent/adoption-bundle-v1.json:ro
-    networks: [platform]
-    profiles: [adoption]
-    labels: *runtime-labels
-
-  telegram_webhook_configurator:
-    image: ${WORKERS_IMAGE:?set WORKERS_IMAGE to image@sha256}
-    restart: "no"
-    init: true
-    logging: *logging
-    env_file: ${APP_ENV_FILE:?set APP_ENV_FILE}
-    entrypoint: ["python", "/app/scripts/configure-telegram-webhook.py"]
-    networks: [platform]
-    profiles: [release]
-    labels: *runtime-labels
-
   api:
     image: ${API_IMAGE:?set API_IMAGE to image@sha256}
     restart: unless-stopped
@@ -110,7 +67,7 @@ services:
     expose: ["8100"]
     volumes:
       - campaign_uploads:/var/lib/fb_agent/campaign_uploads
-      - ${DESKTOP_READINESS_DIR:-/opt/fb-agent/shared/desktop-readiness}:/run/fb-agent-desktop-readiness:ro
+      - ${DESKTOP_READINESS_DIR:?set DESKTOP_READINESS_DIR}:/run/fb-agent-desktop-readiness:ro
     networks: [platform]
     labels:
       <<: *runtime-labels
@@ -284,7 +241,7 @@ services:
 
 networks:
   platform:
-    name: fb_agent_safety_first_platform
+    name: ${PLATFORM_NETWORK:?set PLATFORM_NETWORK}
     external: true
 
 volumes:

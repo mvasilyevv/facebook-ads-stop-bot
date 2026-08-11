@@ -1,8 +1,53 @@
-# Browser-agent release lifecycle is independent from the application colors.
+# Browser-agent lifecycle is independent from the application plane.
 # It intentionally shares Vision's network namespace so Vision API and dynamic
 # CDP ports remain loopback-only.
 
+name: fb_agent_desktop
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-desktop-labels: &desktop-labels
+  com.fb-agent.managed: "true"
+  com.fb-agent.cluster-id: ${FB_AGENT_BOOTSTRAP_CLUSTER_ID:?set FB_AGENT_BOOTSTRAP_CLUSTER_ID}
+  com.fb-agent.purpose: vision
+  com.fb-agent.release: ${RELEASE_ID:?set RELEASE_ID}
+
 services:
+  vision-webtop:
+    image: ${DESKTOP_WEBTOP_IMAGE:?set DESKTOP_WEBTOP_IMAGE to image@sha256}
+    restart: unless-stopped
+    init: true
+    shm_size: 2gb
+    env_file: ${DESKTOP_ENV_FILE:?set DESKTOP_ENV_FILE}
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Europe/Kaliningrad}
+    ports:
+      - "127.0.0.1:${BROWSER_GRPC_HOST_PORT:?set BROWSER_GRPC_HOST_PORT}:50051"
+      - "127.0.0.1:${DESKTOP_HTTPS_PORT:?set DESKTOP_HTTPS_PORT}:8444"
+    volumes:
+      - ${VISION_CONFIG_DIR:?set VISION_CONFIG_DIR}:/config
+    networks:
+      platform:
+        aliases: [vision-webtop]
+    logging: *logging
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      <<: *desktop-labels
+      com.fb-agent.service: vision-webtop
+
   browser-agent:
     image: ${BROWSER_AGENT_IMAGE:?set BROWSER_AGENT_IMAGE to image@sha256}
     restart: unless-stopped
@@ -15,12 +60,11 @@ services:
       BROWSER_AUTHORITY_CONSUME_URL: ${BROWSER_AUTHORITY_CONSUME_URL:?set BROWSER_AUTHORITY_CONSUME_URL}
       BROWSER_MAINTENANCE_CONSUME_URL: ${BROWSER_MAINTENANCE_CONSUME_URL:?set BROWSER_MAINTENANCE_CONSUME_URL}
       BROWSER_AGENT_AM_COLUMNS_QS: ${BROWSER_AGENT_AM_COLUMNS_QS:-}
-    network_mode: "container:vision-webtop"
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
+    network_mode: "service:vision-webtop"
+    depends_on:
+      vision-webtop:
+        condition: service_healthy
+    logging: *logging
     healthcheck:
       test:
         - CMD
@@ -32,14 +76,16 @@ services:
       retries: 12
       start_period: 20s
     labels:
-      com.fb-agent.managed: "true"
-      com.fb-agent.cluster-id: ${FB_AGENT_BOOTSTRAP_CLUSTER_ID:?set FB_AGENT_BOOTSTRAP_CLUSTER_ID}
-      com.fb-agent.purpose: vision
+      <<: *desktop-labels
       com.fb-agent.service: browser-agent
-      com.fb-agent.release: ${RELEASE_ID:?set RELEASE_ID}
       # The process shares Vision's network namespace, so Docker discovery has
       # no container IP for this label. Alloy uses the explicit
       # vision-webtop:9464 target declared in its host-agent configuration.
       com.fb-agent.metrics: "true"
       com.fb-agent.metrics.address: vision-webtop
       com.fb-agent.metrics.port: "9464"
+
+networks:
+  platform:
+    name: ${PLATFORM_NETWORK:?set PLATFORM_NETWORK}
+    external: true
