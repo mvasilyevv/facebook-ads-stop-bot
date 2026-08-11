@@ -59,6 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     publish_parser.add_argument("--source-env-stdin", action="store_true")
     publish_parser.add_argument("--docker-config", type=_path, default=_docker_config_default())
     publish_parser.add_argument("--bootstrap", action="store_true")
+    publish_parser.add_argument("--reuse-existing-caddy-credentials", action="store_true")
     publish_parser.add_argument("--adoption-bundle-remote", type=_path)
     publish_parser.add_argument("--desktop-profile-seed-remote", type=_path)
     publish_parser.add_argument("--enable-scanning", action="store_true")
@@ -69,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--adoption-bundle", type=_path)
     bootstrap.add_argument("--desktop-profile-seed", type=_path)
     bootstrap.add_argument("--rehearsal", action="store_true")
+    bootstrap.add_argument("--reuse-existing-caddy-credentials", action="store_true")
     bootstrap.add_argument("--docker-config", type=_path, default=_docker_config_default())
 
     deploy = subparsers.add_parser("deploy", help="apply one single-slot release")
@@ -159,6 +161,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, object] | None:
             adoption_bundle_remote=args.adoption_bundle_remote,
             desktop_profile_seed_remote=args.desktop_profile_seed_remote,
             enable_scanning=args.enable_scanning,
+            reuse_existing_caddy_credentials=args.reuse_existing_caddy_credentials,
             runner=runner,
         )
     if args.command == "bootstrap":
@@ -170,6 +173,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, object] | None:
             desktop_profile_seed=args.desktop_profile_seed,
             docker_config=args.docker_config,
             rehearsal=args.rehearsal,
+            reuse_existing_caddy_credentials=args.reuse_existing_caddy_credentials,
         )
     if args.command == "deploy":
         if args.list_failpoints:

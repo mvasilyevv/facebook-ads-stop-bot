@@ -7,6 +7,10 @@ backup/restore gate не создаются.
 
 - [ ] CI verification и content-addressed image manifest зелёные.
 - [ ] `adoption-bundle-v1.json` и текущие shared secrets находятся на host.
+- [ ] `PROD_ENV_B64` содержит обе `PANEL_BASIC_AUTH_*` либо ни одной. Явная
+      пара всегда приоритетна; при пустой паре bootstrap использует fallback из
+      root-owned `/etc/fb-agent/caddy.env` (0600). API/desktop credentials
+      оттуда не читаются.
 - [ ] `desktop-profile-seed` проверен.
 - [ ] `fbctl doctor` проходит.
 - [ ] Preflight нового deploy проходит до остановки runtime.

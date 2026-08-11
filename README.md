@@ -132,6 +132,13 @@ money workers; повторный запуск идемпотентен. Backup 
 rollback намеренно отсутствуют по решению owner. Подробнее:
 [DEPLOYMENT.md](DEPLOYMENT.md).
 
+Первый запуск из Release workflow принимает `PROD_ENV_B64` только как source
+environment. В нём должны быть обе `PANEL_BASIC_AUTH_*` либо ни одной: явная
+пара из source всегда приоритетна. При пустой паре workflow передаёт fallback
+flag, а `fbctl` читает две panel учётные записи из root-owned
+`/etc/fb-agent/caddy.env` (0600). Остальные Caddy значения из этого файла не
+импортируются.
+
 ## Источники правды
 
 - ORM и Alembic migrations — фактический контракт БД.
