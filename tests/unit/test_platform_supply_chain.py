@@ -150,7 +150,9 @@ def test_pull_requests_run_verification_without_publishing() -> None:
     assert "workflow_call:" in images.split("\njobs:\n", maxsplit=1)[0]
     assert "pull_request:" not in RELEASE_WORKFLOW.read_text().split("\njobs:\n", 1)[0]
     deploy = _job_block(release, "deploy")
+    assert "github.event_name == 'workflow_dispatch'" in deploy
     assert "github.ref == 'refs/heads/main'" in deploy
+    assert "vars.CI_DEPLOY_ENABLED == 'true'" in deploy
 
 
 def test_workflow_syntax_openapi_and_control_bundle_are_release_gates() -> None:

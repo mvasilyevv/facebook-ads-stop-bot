@@ -103,7 +103,7 @@ jobs:
   deploy:
     name: Deploy fbctl bundle
     needs: [images, control-bundle, docker-rehearsal]
-    if: github.ref == 'refs/heads/main' && vars.CI_DEPLOY_ENABLED == 'true'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && vars.CI_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: production
     permissions:
