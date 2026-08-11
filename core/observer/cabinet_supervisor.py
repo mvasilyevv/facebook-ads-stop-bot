@@ -282,13 +282,21 @@ class CabinetSupervisor:
                         with bind_absolute_deadline(deadline_at):
                             async with asyncio.timeout(self._scan_deadline_seconds):
                                 results[index] = await run_cabinet(account_id, index, lease)
+                        confirmed_snapshot = results[index].get("outcome") in {
+                            "success",
+                            "empty",
+                        }
                         progress_applied = await update_cabinet_progress(
                             self._engine,
                             lease,
                             stage="idle",
                             ttl_seconds=self._lease_ttl_seconds,
-                            has_snapshot=results[index].get("outcome") in {"success", "empty"},
-                            error_code=results[index].get("error"),
+                            has_snapshot=confirmed_snapshot,
+                            # A known-empty reason describes a confirmed snapshot;
+                            # it must not poison durable actor health as an error.
+                            error_code=(
+                                None if confirmed_snapshot else results[index].get("error")
+                            ),
                         )
                         if not progress_applied:
                             results[index] = {
