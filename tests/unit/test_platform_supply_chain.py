@@ -35,6 +35,21 @@ def test_registry_permissions_are_job_scoped() -> None:
         assert "packages:" not in _job_block(verify, job)
 
 
+def test_app_image_publishing_bounds_ghcr_auth_pressure_and_retries() -> None:
+    app = _job_block(IMAGE_WORKFLOW.read_text(encoding="utf-8"), "app")
+
+    assert "fail-fast: false\n      max-parallel: 2" in app
+    login = app.split("- name: GHCR login with bounded retry", maxsplit=1)[1].split(
+        "- name: Probe immutable tag", maxsplit=1
+    )[0]
+    assert "for attempt in 1 2 3" in login
+    assert 'docker login "$REGISTRY"' in login
+    assert "--password-stdin" in login
+    assert 'if [ "$attempt" -eq 3 ]' in login
+    assert "exit 1" in login
+    assert "continue-on-error" not in login
+
+
 def test_shellcheck_covers_every_supported_shell_entrypoint() -> None:
     platform_job = _job_block(VERIFY_WORKFLOW.read_text(encoding="utf-8"), "platform")
     shellcheck_step = platform_job.split(
