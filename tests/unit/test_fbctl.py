@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from fbctl import __main__ as fbctl_main
+from fbctl import controller as fbctl_controller
 from fbctl.bundle import BUNDLE_SCHEMA, IMAGE_KEYS, RESOURCE_FILES, build_bundle, inspect_bundle
 from fbctl.config import canonicalize_source, load_active, prepare_candidate
 from fbctl.controller import (
@@ -498,6 +499,167 @@ def test_invalid_bootstrap_only_transport_never_persists_canonical_source(
     assert not (root / "candidate").exists()
 
 
+def _root_owned_stat(path: Path, monkeypatch: pytest.MonkeyPatch, owner: int = 0) -> None:
+    original = Path.stat
+
+    def stat_as_owner(candidate: Path, *args, **kwargs):
+        result = original(candidate, *args, **kwargs)
+        if candidate == path:
+            fields = list(result)
+            fields[4] = owner
+            return os.stat_result(fields)
+        return result
+
+    monkeypatch.setattr(Path, "stat", stat_as_owner)
+
+
+def test_bootstrap_reuses_only_valid_existing_caddy_panel_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caddy_env = _write(
+        tmp_path / "caddy.env",
+        "PANEL_BASIC_AUTH_USER=owner\n"
+        "PANEL_BASIC_AUTH_HASH=$2b$12$" + "a" * 53 + "\n"
+        "API_KEY=must-not-be-imported\n"
+        "DESKTOP_KASM_SERVICE_AUTH_B64=must-not-be-imported\n",
+    )
+    monkeypatch.setattr(fbctl_controller, "CADDY_ENV_PATH", caddy_env)
+    _root_owned_stat(caddy_env, monkeypatch)
+
+    values = fbctl_controller._resolve_caddy_bootstrap_credentials(
+        {}, provision_caddy=True, reuse_existing=True
+    )
+    assert values == {
+        "PANEL_BASIC_AUTH_USER": "owner",
+        "PANEL_BASIC_AUTH_HASH": "$2b$12$" + "a" * 53,
+    }
+    assert "API_KEY" not in values
+    assert "DESKTOP_KASM_SERVICE_AUTH_B64" not in values
+
+
+@pytest.mark.parametrize(
+    "case,caddy_contents,mode,owner,error",
+    [
+        ("missing", None, 0o600, 0, "required private file is missing"),
+        ("symlink", None, 0o600, 0, "required private file is unsafe"),
+        (
+            "invalid",
+            "PANEL_BASIC_AUTH_USER=owner\nPANEL_BASIC_AUTH_HASH=bad\n",
+            0o600,
+            0,
+            "Caddy panel credentials are invalid",
+        ),
+        ("partial", "PANEL_BASIC_AUTH_USER=owner\n", 0o600, 0, "missing panel keys"),
+        (
+            "duplicate",
+            "PANEL_BASIC_AUTH_USER=owner\nPANEL_BASIC_AUTH_USER=again\n",
+            0o600,
+            0,
+            "duplicate",
+        ),
+        (
+            "mode",
+            "PANEL_BASIC_AUTH_USER=owner\nPANEL_BASIC_AUTH_HASH=$2b$12$" + "a" * 53 + "\n",
+            0o644,
+            0,
+            "mode 600",
+        ),
+        (
+            "owner",
+            "PANEL_BASIC_AUTH_USER=owner\nPANEL_BASIC_AUTH_HASH=$2b$12$" + "a" * 53 + "\n",
+            0o600,
+            501,
+            "owned by root",
+        ),
+    ],
+)
+def test_bootstrap_reuse_rejects_invalid_existing_caddy_env_before_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    caddy_contents: str | None,
+    mode: int,
+    owner: int,
+    error: str,
+) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    source = _source_env(tmp_path)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write("VISION_X_TOKEN=vision-secret\nVISION_PROFILE_ID=profile-1\n")
+    caddy_env = tmp_path / "caddy.env"
+    if case == "symlink":
+        caddy_env.symlink_to(_write(tmp_path / "caddy-target.env", "irrelevant\n"))
+    elif caddy_contents is not None:
+        _write(caddy_env, caddy_contents, mode)
+    monkeypatch.setattr(fbctl_controller, "CADDY_ENV_PATH", caddy_env)
+    if case not in {"missing", "symlink"}:
+        _root_owned_stat(caddy_env, monkeypatch, owner)
+    root = tmp_path / "fb-agent"
+    with pytest.raises(FbctlError, match=error):
+        bootstrap_host(
+            runner=FakeRunner(),
+            root=root,
+            source_env=source,
+            adoption_bundle=None,
+            desktop_profile_seed=None,
+            docker_config=None,
+            reuse_existing_caddy_credentials=True,
+        )
+    assert not (root / "shared" / "source.env").exists()
+    assert not (root / "candidate").exists()
+
+
+def test_bootstrap_rejects_partial_or_ambiguous_caddy_source_before_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    source = _source_env(tmp_path)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "VISION_X_TOKEN=vision-secret\nVISION_PROFILE_ID=profile-1\n"
+            "PANEL_BASIC_AUTH_USER=owner\n"
+        )
+    source.chmod(0o600)
+    root = tmp_path / "fb-agent"
+
+    with pytest.raises(FbctlError, match="both panel keys or neither"):
+        bootstrap_host(
+            runner=FakeRunner(),
+            root=root,
+            source_env=source,
+            adoption_bundle=None,
+            desktop_profile_seed=None,
+            docker_config=None,
+            reuse_existing_caddy_credentials=True,
+        )
+    assert not (root / "shared" / "source.env").exists()
+    assert not (root / "candidate").exists()
+
+
+def test_explicit_caddy_pair_wins_when_reuse_fallback_is_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    source = _source_env(tmp_path)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "VISION_X_TOKEN=vision-secret\nVISION_PROFILE_ID=profile-1\n"
+            "PANEL_BASIC_AUTH_USER=owner\n"
+            "PANEL_BASIC_AUTH_HASH=$2b$12$" + "a" * 53 + "\n"
+        )
+    source.chmod(0o600)
+    values = fbctl_controller._resolve_caddy_bootstrap_credentials(
+        parse_dotenv(source), provision_caddy=True, reuse_existing=True
+    )
+    assert values == {
+        "PANEL_BASIC_AUTH_USER": "owner",
+        "PANEL_BASIC_AUTH_HASH": "$2b$12$" + "a" * 53,
+    }
+
+
 def test_bootstrap_refuses_non_root_before_durable_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -891,6 +1053,7 @@ def test_publish_never_places_source_secret_in_ssh_arguments(tmp_path: Path) -> 
         adoption_bundle_remote=Path("/opt/fb-agent/shared/adoption-bundle-v1.json"),
         desktop_profile_seed_remote=Path("/opt/fb-agent/shared/vision-profile-seed"),
         enable_scanning=False,
+        reuse_existing_caddy_credentials=True,
         runner=runner,
         source_stream=io.BytesIO(secret),
     )
@@ -898,6 +1061,8 @@ def test_publish_never_places_source_secret_in_ssh_arguments(tmp_path: Path) -> 
     assert result["release_id"] == "release-1"
     rendered_commands = "\n".join(" ".join(command) for _step, command in runner.commands)
     assert "top-secret-value" not in rendered_commands
+    assert "--reuse-existing-caddy-credentials" in rendered_commands
+    assert "PANEL_BASIC_AUTH" not in rendered_commands
     assert "--source-env" in rendered_commands
     assert "sudo -n python3 -B" in rendered_commands
     assert "/opt/fb-agent/incoming" not in rendered_commands

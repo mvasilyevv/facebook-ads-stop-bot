@@ -223,6 +223,7 @@ jobs:
             --source-env-stdin \
             --docker-config "$DEPLOY_DOCKER_CONFIG" \
             --bootstrap \
+            --reuse-existing-caddy-credentials \
             --adoption-bundle-remote "$BOOTSTRAP_ADOPTION_BUNDLE" \
             --desktop-profile-seed-remote "$BOOTSTRAP_DESKTOP_PROFILE_SEED" \
             --enable-scanning

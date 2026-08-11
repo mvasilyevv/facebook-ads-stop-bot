@@ -26,6 +26,7 @@ def publish(
     adoption_bundle_remote: Path | None,
     desktop_profile_seed_remote: Path | None,
     enable_scanning: bool,
+    reuse_existing_caddy_credentials: bool = False,
     runner: CommandRunner | None = None,
     source_stream: BinaryIO | None = None,
 ) -> dict[str, object]:
@@ -41,6 +42,8 @@ def publish(
         or enable_scanning
     ):
         raise FbctlError("bootstrap-only publish options require --bootstrap")
+    if reuse_existing_caddy_credentials and not bootstrap:
+        raise FbctlError("Caddy credential reuse requires --bootstrap")
     source_payload: bytes | None = None
     if bootstrap:
         source_payload = (source_stream or sys.stdin.buffer).read(2_000_001)
@@ -126,6 +129,8 @@ def publish(
                 command.extend(("--desktop-profile-seed", desktop_profile_seed_remote))
             if docker_config is not None:
                 command.extend(("--docker-config", docker_config))
+            if reuse_existing_caddy_credentials:
+                command.append("--reuse-existing-caddy-credentials")
             runner.run(command, step="publish")
         deploy: list[str | Path] = [
             "ssh",

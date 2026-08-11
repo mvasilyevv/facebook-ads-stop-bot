@@ -70,6 +70,7 @@ WORKERS: dict[str, str] = {
     "tracker_reconciliation_worker": "tracker_reconciliation_worker",
     "campaign_creator": "campaign_creator",
 }
+CADDY_ENV_PATH = Path("/etc/fb-agent/caddy.env")
 APP_SERVICES = frozenset({"api", "frontend", "mini-app", *WORKERS})
 DESKTOP_SERVICES = frozenset({"vision-webtop", "browser-agent"})
 RESTART_SERVICES = APP_SERVICES | DESKTOP_SERVICES
@@ -893,6 +894,7 @@ def bootstrap_host(
     desktop_profile_seed: Path | None,
     docker_config: Path | None,
     rehearsal: bool = False,
+    reuse_existing_caddy_credentials: bool = False,
 ) -> dict[str, object]:
     if os.geteuid() != 0:
         raise FbctlError("bootstrap requires root privileges")
@@ -910,6 +912,18 @@ def bootstrap_host(
             desktop_profile_seed,
             label="desktop profile seed",
         )
+    raw_source = parse_dotenv(source_env)
+    provision_caddy = not rehearsal
+    caddy_bootstrap = _resolve_caddy_bootstrap_credentials(
+        raw_source,
+        provision_caddy=provision_caddy,
+        reuse_existing=reuse_existing_caddy_credentials,
+    )
+    _validate_bootstrap_transport(
+        raw_source,
+        caddy_bootstrap=caddy_bootstrap,
+        provision_caddy=provision_caddy,
+    )
     for directory, mode in (
         (root, 0o755),
         (root / "shared", 0o700),
@@ -924,10 +938,6 @@ def bootstrap_host(
         shared = root / "shared"
         incumbent_path = shared / "source.env"
         incumbent = parse_dotenv(incumbent_path) if incumbent_path.is_file() else {}
-        raw_source = parse_dotenv(source_env)
-        caddy_bootstrap = {key: raw_source.get(key, "") for key in BOOTSTRAP_CADDY_KEYS}
-        provision_caddy = not rehearsal
-        _validate_bootstrap_transport(raw_source, provision_caddy=provision_caddy)
         source_values = canonicalize_source(raw_source, incumbent=incumbent)
         # Persist durable identity before the first Docker/DB mutation.  A
         # retry must reuse exactly these values even when the supplied source
@@ -1060,6 +1070,7 @@ def _copy_profile_seed(
 def _validate_bootstrap_transport(
     raw_source: dict[str, str],
     *,
+    caddy_bootstrap: dict[str, str],
     provision_caddy: bool,
 ) -> None:
     """Perform all bootstrap-only validation before durable state is written."""
@@ -1078,8 +1089,8 @@ def _validate_bootstrap_transport(
         raise FbctlError("bootstrap Vision credentials are invalid")
     if not provision_caddy:
         return
-    user = raw_source.get("PANEL_BASIC_AUTH_USER", "")
-    password_hash = raw_source.get("PANEL_BASIC_AUTH_HASH", "")
+    user = caddy_bootstrap["PANEL_BASIC_AUTH_USER"]
+    password_hash = caddy_bootstrap["PANEL_BASIC_AUTH_HASH"]
     if not user or not password_hash:
         raise FbctlError("Caddy bootstrap credentials are missing from source environment")
     if not re.fullmatch(r"[A-Za-z0-9._@-]{1,64}", user) or not re.fullmatch(
@@ -1087,6 +1098,37 @@ def _validate_bootstrap_transport(
         password_hash,
     ):
         raise FbctlError("Caddy panel credentials are invalid")
+
+
+def _resolve_caddy_bootstrap_credentials(
+    raw_source: dict[str, str],
+    *,
+    provision_caddy: bool,
+    reuse_existing: bool,
+) -> dict[str, str]:
+    """Return only the panel pair; source input is never merged with Caddy env."""
+    present = [key for key in BOOTSTRAP_CADDY_KEYS if key in raw_source]
+    if len(present) == 1:
+        raise FbctlError("Caddy bootstrap credentials must provide both panel keys or neither")
+    if not provision_caddy:
+        if reuse_existing:
+            raise FbctlError("Caddy credential reuse is not available during rehearsal")
+        return {key: raw_source.get(key, "") for key in BOOTSTRAP_CADDY_KEYS}
+    if len(present) == 2:
+        # The source environment is the explicit bootstrap authority.  The
+        # reuse flag is only a fallback for an intentionally absent pair, so a
+        # workflow can safely pass it for both supported source contracts.
+        return {key: raw_source[key] for key in BOOTSTRAP_CADDY_KEYS}
+    if not reuse_existing:
+        raise FbctlError("Caddy bootstrap credentials are missing from source environment")
+    caddy_env = require_private_file(CADDY_ENV_PATH)
+    if caddy_env.stat().st_uid != 0:
+        raise FbctlError("existing Caddy credentials must be owned by root")
+    values = parse_dotenv(caddy_env)
+    credentials = {key: values.get(key, "") for key in BOOTSTRAP_CADDY_KEYS}
+    if not all(credentials.values()):
+        raise FbctlError("existing Caddy credentials are missing panel keys")
+    return credentials
 
 
 def _normalize_profile_tree(root: Path, *, uid: int, gid: int) -> None:
