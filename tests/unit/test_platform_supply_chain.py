@@ -19,6 +19,15 @@ def _job_block(text: str, job: str) -> str:
     return match.group("body")
 
 
+def _job_if_expression(text: str, job: str) -> str:
+    match = re.search(
+        r"(?ms)^    if:\s*(?P<expression>.*?)(?=^    [a-zA-Z0-9_-]+:|\Z)",
+        _job_block(text, job),
+    )
+    assert match is not None, f"missing job-level if for workflow job {job}"
+    return " ".join(match.group("expression").split())
+
+
 def test_registry_permissions_are_job_scoped() -> None:
     images = IMAGE_WORKFLOW.read_text()
     release = RELEASE_WORKFLOW.read_text()
@@ -303,6 +312,30 @@ def test_existing_bootstrap_identity_is_validated_remotely_before_expensive_jobs
         "needs.bootstrap-source-preflight.result == 'skipped' &&\n"
         "            !(github.event_name == 'workflow_dispatch' && inputs.bootstrap)"
     ) in images
+
+
+def test_skipped_bootstrap_ancestor_does_not_skip_release_gates() -> None:
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert _job_if_expression(release, "images") == (
+        ">- ${{ !cancelled() && needs.verify.result == 'success' && ( "
+        "needs.bootstrap-source-preflight.result == 'success' || ( "
+        "needs.bootstrap-source-preflight.result == 'skipped' && "
+        "!(github.event_name == 'workflow_dispatch' && inputs.bootstrap) ) ) }}"
+    )
+    assert _job_if_expression(release, "control-bundle") == (
+        ">- ${{ !cancelled() && needs.images.result == 'success' }}"
+    )
+    assert _job_if_expression(release, "docker-rehearsal") == (
+        ">- ${{ !cancelled() && needs.images.result == 'success' && "
+        "needs.control-bundle.result == 'success' }}"
+    )
+    assert _job_if_expression(release, "deploy") == (
+        ">- ${{ !cancelled() && github.event_name == 'workflow_dispatch' && "
+        "github.ref == 'refs/heads/main' && vars.CI_DEPLOY_ENABLED == 'true' && "
+        "needs.images.result == 'success' && needs.control-bundle.result == 'success' "
+        "&& needs.docker-rehearsal.result == 'success' }}"
+    )
 
 
 def test_bootstrap_identity_migration_is_absent_from_routine_release_paths() -> None:
