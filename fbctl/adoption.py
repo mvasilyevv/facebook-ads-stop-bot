@@ -7,15 +7,56 @@ import hmac
 import json
 import os
 import re
-import stat
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from fbctl.errors import FbctlError
+from fbctl.files import PrivateFileSnapshot, snapshot_private_file
 
 MAX_ADOPTION_BUNDLE_BYTES = 8 * 1024 * 1024
 _OWNER_CONTRACT_ERROR = "adoption bundle owner contract is invalid"
 _RECIPIENT_FIELDS = frozenset({"chat_id", "telegram_user_id", "username", "display_name", "role"})
+
+
+@dataclass(frozen=True)
+class VerifiedAdoptionBundle:
+    payload: bytes
+    owner_telegram_user_id: str
+    snapshot: PrivateFileSnapshot
+
+
+def verify_adoption_bundle(
+    path: Path,
+    *,
+    required_uid: int | None = None,
+    directory_fd: int | None = None,
+) -> VerifiedAdoptionBundle:
+    """Return the exact private bundle bytes and its manifest-hashed owner."""
+
+    try:
+        snapshot = snapshot_private_file(
+            path,
+            label="adoption bundle",
+            maximum=MAX_ADOPTION_BUNDLE_BYTES,
+            required_uid=required_uid,
+            directory_fd=directory_fd,
+        )
+        assert snapshot is not None
+        document = json.loads(snapshot.payload.decode("utf-8"))
+        owner = _verified_owner(document)
+    except (
+        OSError,
+        RecursionError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise FbctlError(_OWNER_CONTRACT_ERROR) from exc
+    except FbctlError as exc:
+        raise FbctlError(_OWNER_CONTRACT_ERROR) from exc
+    return VerifiedAdoptionBundle(snapshot.payload, str(owner), snapshot)
 
 
 def verify_adoption_bundle_owner(
@@ -31,7 +72,10 @@ def verify_adoption_bundle_owner(
     """
 
     try:
-        payload = _read_private_bundle(path)
+        verified = verify_adoption_bundle(
+            path, required_uid=0 if os.geteuid() == 0 else os.getuid()
+        )
+        payload = verified.payload
         document = json.loads(payload.decode("utf-8"))
         _verify_document(document, owner_telegram_user_id=owner_telegram_user_id)
     except (
@@ -44,38 +88,6 @@ def verify_adoption_bundle_owner(
     ) as exc:
         raise FbctlError(_OWNER_CONTRACT_ERROR) from exc
     return payload
-
-
-def _read_private_bundle(path: Path) -> bytes:
-    descriptor = os.open(
-        path,
-        os.O_RDONLY
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0),
-    )
-    try:
-        metadata = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or stat.S_IMODE(metadata.st_mode) != 0o600
-            or metadata.st_size > MAX_ADOPTION_BUNDLE_BYTES
-        ):
-            raise ValueError
-        chunks: list[bytes] = []
-        remaining = MAX_ADOPTION_BUNDLE_BYTES + 1
-        while remaining:
-            chunk = os.read(descriptor, min(1024 * 1024, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        payload = b"".join(chunks)
-        if len(payload) > MAX_ADOPTION_BUNDLE_BYTES:
-            raise ValueError
-        return payload
-    finally:
-        os.close(descriptor)
 
 
 def _verify_document(document: Any, *, owner_telegram_user_id: str) -> None:
@@ -150,6 +162,30 @@ def _verify_document(document: Any, *, owner_telegram_user_id: str) -> None:
             owners.append(telegram_user_id)
     if len(owners) != 1 or owners[0] != expected_owner_id:
         raise ValueError
+
+
+def _verified_owner(document: Any) -> int:
+    """Validate the recipients contract and return its single owner."""
+
+    if not isinstance(document, dict) or document.get("schema_version") != "adoption-bundle/v1":
+        raise ValueError
+    sections = document.get("sections")
+    if not isinstance(sections, dict) or not isinstance(sections.get("recipients"), list):
+        raise ValueError
+    candidates = [
+        recipient.get("telegram_user_id")
+        for recipient in sections["recipients"]
+        if isinstance(recipient, dict) and recipient.get("role") == "owner"
+    ]
+    if (
+        len(candidates) != 1
+        or isinstance(candidates[0], bool)
+        or not isinstance(candidates[0], int)
+    ):
+        raise ValueError
+    owner = candidates[0]
+    _verify_document(document, owner_telegram_user_id=str(owner))
+    return owner
 
 
 def _canonical_json(value: Any) -> str:

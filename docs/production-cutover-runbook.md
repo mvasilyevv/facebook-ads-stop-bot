@@ -11,16 +11,24 @@ backup/restore gate не создаются.
       пара всегда приоритетна; при пустой паре bootstrap использует fallback из
       root-owned `/etc/fb-agent/caddy.env` (0600). API/desktop credentials
       оттуда не читаются.
+- [ ] Для bootstrap identity migration старый файл находится только по пути
+      `/opt/fb-agent/shared/.env`, принадлежит root и имеет mode `0600`;
+      `TELEGRAM_CHAT_ID` не используется как identity.
+- [ ] Remote identity preflight Release workflow прошёл до image build; тот же
+      bootstrap запускается с `--migrate-existing-bootstrap-identity`.
 - [ ] `desktop-profile-seed` проверен.
 - [ ] `fbctl doctor` проходит.
 - [ ] Preflight нового deploy проходит до остановки runtime.
 
 ## Запуск
 
-1. Один раз выполнить `fbctl bootstrap --manifest release.json`.
-2. Выполнить `fbctl deploy --manifest release.json`.
-3. Дождаться шагов pull → stop → infra → migrate → desktop → app → workers →
-   system-ready → webhook → smoke → promote.
+1. Один раз выполнить `sudo python3 -B /path/to/reviewed/fbctl.pyz bootstrap`
+   с `--source-env-stdin`, проверенными adoption/profile путями и согласованными
+   bootstrap-флагами из Release workflow. Manifest уже вложен в zipapp.
+2. Выполнить `sudo python3 -B /path/to/reviewed/fbctl.pyz deploy
+   --enable-scanning`.
+3. Дождаться шагов pull → stop → infra → migrate → desktop → app → webhook →
+   workers → system-ready → smoke → promote.
 4. Проверить UI, TMA, Telegram webhook, desktop и нужные cabinet tabs.
 5. Проверить отсутствие `failed/unknown` money actions и false-green данных.
 

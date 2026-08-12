@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from fbctl.bundle import build_bundle
+from fbctl.bundle import build_bundle, build_preflight_bundle
 from fbctl.config import (
     canonicalize_source,
     parse_bootstrap_source_stdin,
@@ -33,6 +33,7 @@ from fbctl.operations import (
     restart,
     status,
 )
+from fbctl.preflight import bootstrap_remote_preflight
 from fbctl.publish import publish
 from fbctl.runner import SubprocessRunner
 
@@ -58,6 +59,22 @@ def build_parser() -> argparse.ArgumentParser:
     bundle.add_argument("--release-manifest", required=True, type=_path)
     bundle.add_argument("--source-root", type=_path, default=Path.cwd())
 
+    preflight_bundle = subparsers.add_parser(
+        "preflight-bundle", help="build a deterministic host-preflight zipapp"
+    )
+    preflight_bundle.add_argument("--output", required=True, type=_path)
+    preflight_bundle.add_argument("--release-id", required=True)
+    preflight_bundle.add_argument("--source-root", type=_path, default=Path.cwd())
+
+    remote_preflight = subparsers.add_parser(
+        "bootstrap-remote-preflight", help="validate bootstrap identity on its target host"
+    )
+    remote_preflight.add_argument("--host", required=True)
+    remote_preflight.add_argument("--bundle", required=True, type=_path)
+    remote_preflight.add_argument("--source-env-stdin", action="store_true")
+    remote_preflight.add_argument("--project-known-legacy-source", action="store_true")
+    remote_preflight.add_argument("--migrate-existing-bootstrap-identity", action="store_true")
+
     publish_parser = subparsers.add_parser("publish", help="publish and deploy over SSH")
     publish_parser.add_argument("--host", required=True)
     publish_parser.add_argument("--bundle", required=True, type=_path)
@@ -67,18 +84,22 @@ def build_parser() -> argparse.ArgumentParser:
     publish_parser.add_argument("--bootstrap", action="store_true")
     publish_parser.add_argument("--reuse-existing-caddy-credentials", action="store_true")
     publish_parser.add_argument("--project-known-legacy-source", action="store_true")
+    publish_parser.add_argument("--migrate-existing-bootstrap-identity", action="store_true")
     publish_parser.add_argument("--adoption-bundle-remote", type=_path)
     publish_parser.add_argument("--desktop-profile-seed-remote", type=_path)
     publish_parser.add_argument("--enable-scanning", action="store_true")
 
     bootstrap = subparsers.add_parser("bootstrap", help="one-time host provisioning")
     bootstrap.add_argument("--root", type=_path, default=DEFAULT_ROOT)
-    bootstrap.add_argument("--source-env", required=True, type=_path)
+    source_input = bootstrap.add_mutually_exclusive_group(required=True)
+    source_input.add_argument("--source-env", type=_path)
+    source_input.add_argument("--source-env-stdin", action="store_true")
     bootstrap.add_argument("--adoption-bundle", type=_path)
     bootstrap.add_argument("--desktop-profile-seed", type=_path)
     bootstrap.add_argument("--rehearsal", action="store_true")
     bootstrap.add_argument("--reuse-existing-caddy-credentials", action="store_true")
     bootstrap.add_argument("--project-known-legacy-source", action="store_true")
+    bootstrap.add_argument("--migrate-existing-bootstrap-identity", action="store_true")
     bootstrap.add_argument("--docker-config", type=_path, default=_docker_config_default())
 
     deploy = subparsers.add_parser("deploy", help="apply one single-slot release")
@@ -164,6 +185,21 @@ def _dispatch(args: argparse.Namespace) -> dict[str, object] | None:
             release_id=args.release_id,
             release_manifest=args.release_manifest,
         )
+    if args.command == "preflight-bundle":
+        return build_preflight_bundle(
+            source_root=args.source_root,
+            output=args.output,
+            release_id=args.release_id,
+        )
+    if args.command == "bootstrap-remote-preflight":
+        return bootstrap_remote_preflight(
+            host=args.host,
+            bundle=args.bundle,
+            source_env_stdin=args.source_env_stdin,
+            project_known_legacy_source=args.project_known_legacy_source,
+            migrate_existing_bootstrap_identity=args.migrate_existing_bootstrap_identity,
+            runner=runner,
+        )
     if args.command == "publish":
         return publish(
             host=args.host,
@@ -177,19 +213,23 @@ def _dispatch(args: argparse.Namespace) -> dict[str, object] | None:
             enable_scanning=args.enable_scanning,
             reuse_existing_caddy_credentials=args.reuse_existing_caddy_credentials,
             project_known_legacy_source=args.project_known_legacy_source,
+            migrate_existing_bootstrap_identity=args.migrate_existing_bootstrap_identity,
             runner=runner,
         )
     if args.command == "bootstrap":
+        source_payload = sys.stdin.buffer.read(2_000_001) if args.source_env_stdin else None
         return bootstrap_host(
             runner=runner,
             root=args.root,
             source_env=args.source_env,
+            source_env_payload=source_payload,
             adoption_bundle=args.adoption_bundle,
             desktop_profile_seed=args.desktop_profile_seed,
             docker_config=args.docker_config,
             rehearsal=args.rehearsal,
             reuse_existing_caddy_credentials=args.reuse_existing_caddy_credentials,
             project_known_legacy_source=args.project_known_legacy_source,
+            migrate_existing_bootstrap_identity=args.migrate_existing_bootstrap_identity,
         )
     if args.command == "bootstrap-source-check":
         raw_source = parse_bootstrap_source_stdin(sys.stdin.buffer.read(2_000_001))

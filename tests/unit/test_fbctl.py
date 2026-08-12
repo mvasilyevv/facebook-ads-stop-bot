@@ -11,6 +11,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,8 +23,16 @@ from core.adoption.bundle import (
 )
 from fbctl import __main__ as fbctl_main
 from fbctl import controller as fbctl_controller
+from fbctl import operations as fbctl_operations
 from fbctl.adoption import MAX_ADOPTION_BUNDLE_BYTES, verify_adoption_bundle_owner
-from fbctl.bundle import BUNDLE_SCHEMA, IMAGE_KEYS, RESOURCE_FILES, build_bundle, inspect_bundle
+from fbctl.bundle import (
+    BUNDLE_SCHEMA,
+    IMAGE_KEYS,
+    PREFLIGHT_BUNDLE_SCHEMA,
+    RESOURCE_FILES,
+    build_bundle,
+    inspect_bundle,
+)
 from fbctl.config import (
     canonicalize_source,
     load_active,
@@ -147,10 +156,12 @@ class FakeRunner:
         fail_remote_deploy: bool = False,
     ) -> None:
         self.commands: list[tuple[str, tuple[str, ...]]] = []
+        self.stdin_payloads: list[tuple[str, tuple[str, ...], str | None]] = []
         self.adoption_status = adoption_status
         self.now = now or time.time()
         self.cluster_id = ""
         self.fail_remote_deploy = fail_remote_deploy
+        self.uploaded_bundle: Path | None = None
 
     def run(
         self,
@@ -163,9 +174,12 @@ class FakeRunner:
         input_text=None,
         timeout=None,
     ) -> CommandResult:
-        del env, capture, input_text, timeout
+        del env, capture, timeout
         argv = tuple(os.fspath(part) for part in command)
         self.commands.append((step, argv))
+        self.stdin_payloads.append((step, argv, input_text))
+        if argv and argv[0] == "scp":
+            self.uploaded_bundle = Path(argv[1])
         if "--env-file" in argv:
             runtime_env = Path(argv[argv.index("--env-file") + 1])
             if runtime_env.is_file():
@@ -181,8 +195,12 @@ class FakeRunner:
             result = CommandResult(1)
         elif "adoption_status" in argv:
             result = CommandResult(self.adoption_status)
-        elif argv[:3] == ("ssh", argv[1], "mktemp"):
-            result = CommandResult(0, "/tmp/fbctl-release-1-AbCd1234\n")
+        elif "mktemp" in argv:
+            result = CommandResult(0, f"{argv[-1].replace('XXXXXXXX', 'AbCd1234')}\n")
+        elif "sha256sum" in argv:
+            assert self.uploaded_bundle is not None
+            digest = hashlib.sha256(self.uploaded_bundle.read_bytes()).hexdigest()
+            result = CommandResult(0, f"{digest}  {argv[-1]}\n")
         elif "exec" in argv and "http://127.0.0.1:9464/metrics" in " ".join(argv):
             service = argv[argv.index("-T") + 1]
             worker = WORKERS[service]
@@ -332,6 +350,35 @@ def test_doctor_cannot_report_ready_without_an_active_runtime(tmp_path: Path) ->
 
     assert result["status"] == "FAILED"
     assert any(str(error).startswith("active_runtime_unavailable:") for error in result["errors"])
+
+
+def test_doctor_rejects_preflight_bundle_as_active_control_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _root(tmp_path)
+    release = _materialize(root / "candidate")
+    config = prepare_candidate(
+        root=root,
+        release=release,
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+    )
+    monkeypatch.setattr(fbctl_operations, "load_active", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        fbctl_operations,
+        "inspect_bundle",
+        lambda _path: SimpleNamespace(
+            schema=PREFLIGHT_BUNDLE_SCHEMA,
+            release_id=config.layout.release_id,
+        ),
+    )
+
+    result = doctor(root=root, runner=FakeRunner())
+
+    assert result["status"] == "FAILED"
+    assert "active control bundle is not a full release bundle" in result["errors"]
 
 
 def test_fbctl_source_tree_remains_bytecode_free() -> None:
@@ -1163,11 +1210,15 @@ def test_bootstrap_owner_mismatch_makes_no_durable_writes_or_runner_calls(
     assert runner.commands == []
 
 
-@pytest.mark.parametrize("fail_import", [False, True])
+@pytest.mark.parametrize(
+    ("fail_import", "replace_source"),
+    [(False, False), (False, True), (True, False), (True, True)],
+)
 def test_bootstrap_imports_only_verified_candidate_bundle_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fail_import: bool,
+    replace_source: bool,
 ) -> None:
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     root = tmp_path / "fb-agent"
@@ -1179,19 +1230,12 @@ def test_bootstrap_imports_only_verified_candidate_bundle_snapshot(
         handle.write("VISION_X_TOKEN=vision-secret\nVISION_PROFILE_ID=profile-1\n")
     source.chmod(0o600)
     verified_payload = json.dumps(_adoption_bundle_payload([_owner_recipient()])).encode()
-    original_bundle = _write(tmp_path / "adoption.json", verified_payload)
+    original_bundle = _write(
+        root / "shared" / "adoption-bundle-v1.json",
+        verified_payload,
+    )
     tampered_payload = b'{"tampered":true}'
 
-    def verify_then_mutate(path: Path, *, owner_telegram_user_id: str) -> bytes:
-        payload = verify_adoption_bundle_owner(
-            path,
-            owner_telegram_user_id=owner_telegram_user_id,
-        )
-        path.write_bytes(tampered_payload)
-        path.chmod(0o600)
-        return payload
-
-    monkeypatch.setattr(fbctl_controller, "verify_adoption_bundle_owner", verify_then_mutate)
     monkeypatch.setattr(fbctl_controller, "materialize_candidate", _materialize)
     monkeypatch.setattr(
         fbctl_controller,
@@ -1217,6 +1261,9 @@ def test_bootstrap_imports_only_verified_candidate_bundle_snapshot(
         adoption_bundle: Path | None,
     ) -> None:
         assert adoption_bundle is not None
+        if replace_source:
+            replacement = _write(root / "shared" / ".adoption.next.json", tampered_payload)
+            os.replace(replacement, original_bundle)
         captured["argument"] = adoption_bundle
         captured["runtime"] = Path(config.values["ADOPTION_BUNDLE_FILE"])
         captured["payload"] = adoption_bundle.read_bytes()
@@ -1255,8 +1302,10 @@ def test_bootstrap_imports_only_verified_candidate_bundle_snapshot(
     assert captured["payload"] != tampered_payload
     assert captured["mode"] == 0o600
     assert captured["parent_mode"] == 0o700
-    if fail_import:
+    if replace_source:
         assert original_bundle.read_bytes() == tampered_payload
+    elif fail_import:
+        assert original_bundle.read_bytes() == verified_payload
     else:
         assert not original_bundle.exists()
     assert not snapshot.exists()
@@ -1651,6 +1700,7 @@ def test_publish_never_places_source_secret_in_ssh_arguments(tmp_path: Path) -> 
         enable_scanning=False,
         reuse_existing_caddy_credentials=True,
         project_known_legacy_source=True,
+        migrate_existing_bootstrap_identity=True,
         runner=runner,
         source_stream=io.BytesIO(secret),
     )
@@ -1660,8 +1710,24 @@ def test_publish_never_places_source_secret_in_ssh_arguments(tmp_path: Path) -> 
     assert "top-secret-value" not in rendered_commands
     assert "--reuse-existing-caddy-credentials" in rendered_commands
     assert "--project-known-legacy-source" in rendered_commands
+    assert "--migrate-existing-bootstrap-identity" in rendered_commands
     assert "PANEL_BASIC_AUTH" not in rendered_commands
-    assert "--source-env" in rendered_commands
+    assert "--source-env-stdin" in rendered_commands
+    assert not any("source.env" in " ".join(command) for _step, command in runner.commands)
+    bootstrap_call = next(
+        command for step, command in runner.commands if step == "publish" and "bootstrap" in command
+    )
+    assert bootstrap_call[-1] == "--migrate-existing-bootstrap-identity"
+    assert next(
+        payload
+        for step, command, payload in runner.stdin_payloads
+        if step == "publish" and "bootstrap" in command
+    ) == secret.decode("utf-8")
+    assert all(
+        payload is None
+        for step, command, payload in runner.stdin_payloads
+        if not (step == "publish" and "bootstrap" in command)
+    )
     assert "sudo -n python3 -B" in rendered_commands
     assert "/opt/fb-agent/incoming" not in rendered_commands
     assert any(step == "publish_cleanup" for step, _command in runner.commands)
@@ -1724,6 +1790,42 @@ def test_non_root_publish_cleans_remote_stage_after_deploy_failure(tmp_path: Pat
     cleanup_commands = [command for step, command in runner.commands if step == "publish_cleanup"]
     assert any("rm" in command for command in cleanup_commands)
     assert any("rmdir" in command for command in cleanup_commands)
+
+
+def test_publish_rejects_root_copy_digest_mismatch_before_execution(tmp_path: Path) -> None:
+    class BadDigestRunner(FakeRunner):
+        def run(self, command, **kwargs):
+            result = super().run(command, **kwargs)
+            argv = tuple(os.fspath(part) for part in command)
+            if "sha256sum" in argv:
+                return CommandResult(0, f"{'0' * 64}  {argv[-1]}\n")
+            return result
+
+    bundle = tmp_path / "release.pyz"
+    build_bundle(
+        source_root=ROOT,
+        output=bundle,
+        release_id="release-1",
+        release_manifest=_manifest(tmp_path),
+    )
+    runner = BadDigestRunner()
+
+    with pytest.raises(FbctlError, match="integrity check failed"):
+        publish(
+            host="deploy@example.test",
+            bundle=bundle,
+            root=Path("/opt/fb-agent"),
+            source_env_stdin=False,
+            docker_config=None,
+            bootstrap=False,
+            adoption_bundle_remote=None,
+            desktop_profile_seed_remote=None,
+            enable_scanning=False,
+            runner=runner,
+        )
+
+    assert not any("python3" in command for _step, command in runner.commands)
+    assert [step for step, _command in runner.commands].count("publish_cleanup") == 4
 
 
 @pytest.mark.parametrize(

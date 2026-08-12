@@ -5,11 +5,10 @@ from __future__ import annotations
 import os
 import re
 import sys
-import tempfile
 from pathlib import Path
 from typing import BinaryIO
 
-from fbctl.bundle import inspect_bundle
+from fbctl.bundle import BUNDLE_SCHEMA, inspect_bundle
 from fbctl.errors import FbctlError
 from fbctl.files import require_remote
 from fbctl.runner import CommandRunner, SubprocessRunner
@@ -28,6 +27,7 @@ def publish(
     enable_scanning: bool,
     reuse_existing_caddy_credentials: bool = False,
     project_known_legacy_source: bool = False,
+    migrate_existing_bootstrap_identity: bool = False,
     runner: CommandRunner | None = None,
     source_stream: BinaryIO | None = None,
 ) -> dict[str, object]:
@@ -35,6 +35,8 @@ def publish(
     host = require_remote(host)
     root = _validate_remote_path(root, label="root", scope="root")
     metadata = inspect_bundle(bundle)
+    if metadata.schema != BUNDLE_SCHEMA:
+        raise FbctlError("publish requires a full release bundle")
     if bootstrap != source_env_stdin:
         raise FbctlError("source environment stdin is accepted only for explicit bootstrap")
     if not bootstrap and (
@@ -47,11 +49,18 @@ def publish(
         raise FbctlError("Caddy credential reuse requires --bootstrap")
     if project_known_legacy_source and not bootstrap:
         raise FbctlError("legacy source projection requires --bootstrap")
+    if migrate_existing_bootstrap_identity and not bootstrap:
+        raise FbctlError("bootstrap identity migration requires --bootstrap")
     source_payload: bytes | None = None
+    source_text: str | None = None
     if bootstrap:
         source_payload = (source_stream or sys.stdin.buffer).read(2_000_001)
         if not source_payload or len(source_payload) > 2_000_000 or b"\x00" in source_payload:
             raise FbctlError("source environment stdin is empty or exceeds 2 MB")
+        try:
+            source_text = source_payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise FbctlError("source environment stdin is not valid UTF-8") from exc
     if docker_config is not None:
         docker_config = _validate_remote_path(
             docker_config,
@@ -70,20 +79,12 @@ def publish(
             label="desktop profile seed",
             scope="shared_input",
         )
-    remote_stage: Path | None = None
-    remote_bundle: Path | None = None
-    remote_source: Path | None = None
-    local_source: Path | None = None
+    upload_stage: Path | None = None
+    upload_bundle: Path | None = None
+    root_stage: Path | None = None
+    root_bundle: Path | None = None
     try:
         runner.run(("ssh", host, "sudo", "-n", "true"), step="publish")
-        if source_payload is not None:
-            descriptor, local_source_name = tempfile.mkstemp(prefix=".fbctl-source-")
-            local_source = Path(local_source_name)
-            os.fchmod(descriptor, 0o600)
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(source_payload)
-                handle.flush()
-                os.fsync(handle.fileno())
         staged = runner.run(
             (
                 "ssh",
@@ -95,23 +96,56 @@ def publish(
             step="publish",
             capture=True,
         )
-        remote_stage = _validated_remote_stage(staged.stdout, metadata.release_id)
-        remote_bundle = remote_stage / "release.pyz"
-        remote_source = remote_stage / "source.env" if bootstrap else None
-        runner.run(("scp", bundle, f"{host}:{remote_bundle}"), step="publish")
-        if local_source is not None and remote_source is not None:
-            runner.run(("scp", local_source, f"{host}:{remote_source}"), step="publish")
+        upload_stage = _validated_remote_stage(staged.stdout, metadata.release_id)
+        upload_bundle = upload_stage / "release.pyz"
+        runner.run(("scp", bundle, f"{host}:{upload_bundle}"), step="publish")
+        root_staged = runner.run(
+            (
+                "ssh",
+                host,
+                "sudo",
+                "-n",
+                "mktemp",
+                "-d",
+                f"/tmp/fbctl-root-{metadata.release_id}-XXXXXXXX",
+            ),
+            step="publish",
+            capture=True,
+        )
+        root_stage = _validated_remote_stage(
+            root_staged.stdout,
+            metadata.release_id,
+            root_owned=True,
+        )
+        root_bundle = root_stage / "release.pyz"
         runner.run(
-            ("ssh", host, "chmod", "0500", remote_bundle),
+            (
+                "ssh",
+                host,
+                "sudo",
+                "-n",
+                "install",
+                "-o",
+                "root",
+                "-g",
+                "root",
+                "-m",
+                "0500",
+                "--",
+                upload_bundle,
+                root_bundle,
+            ),
             step="publish",
         )
-        if remote_source is not None:
-            runner.run(
-                ("ssh", host, "chmod", "0600", remote_source),
-                step="publish",
-            )
+        digest = runner.run(
+            ("ssh", host, "sudo", "-n", "sha256sum", "--", root_bundle),
+            step="publish",
+            capture=True,
+        )
+        _verify_remote_bundle_digest(digest.stdout, root_bundle, metadata.sha256)
         if bootstrap:
-            assert remote_source is not None
+            assert source_payload is not None
+            assert source_text is not None
             command: list[str | Path] = [
                 "ssh",
                 host,
@@ -119,12 +153,11 @@ def publish(
                 "-n",
                 "python3",
                 "-B",
-                remote_bundle,
+                root_bundle,
                 "bootstrap",
                 "--root",
                 root,
-                "--source-env",
-                remote_source,
+                "--source-env-stdin",
             ]
             if adoption_bundle_remote is not None:
                 command.extend(("--adoption-bundle", adoption_bundle_remote))
@@ -136,7 +169,9 @@ def publish(
                 command.append("--reuse-existing-caddy-credentials")
             if project_known_legacy_source:
                 command.append("--project-known-legacy-source")
-            runner.run(command, step="publish")
+            if migrate_existing_bootstrap_identity:
+                command.append("--migrate-existing-bootstrap-identity")
+            runner.run(command, step="publish", input_text=source_text)
         deploy: list[str | Path] = [
             "ssh",
             host,
@@ -144,7 +179,7 @@ def publish(
             "-n",
             "python3",
             "-B",
-            remote_bundle,
+            root_bundle,
             "deploy",
             "--root",
             root,
@@ -155,19 +190,25 @@ def publish(
             deploy.append("--enable-scanning")
         runner.run(deploy, step="publish")
     finally:
-        if local_source is not None:
-            local_source.unlink(missing_ok=True)
-        if remote_stage is not None and remote_bundle is not None:
-            staged_files = (
-                (remote_bundle,) if remote_source is None else (remote_source, remote_bundle)
-            )
+        if root_stage is not None and root_bundle is not None:
             runner.run(
-                ("ssh", host, "rm", "-f", "--", *staged_files),
+                ("ssh", host, "sudo", "-n", "rm", "-f", "--", root_bundle),
                 step="publish_cleanup",
                 check=False,
             )
             runner.run(
-                ("ssh", host, "rmdir", "--", remote_stage),
+                ("ssh", host, "sudo", "-n", "rmdir", "--", root_stage),
+                step="publish_cleanup",
+                check=False,
+            )
+        if upload_stage is not None and upload_bundle is not None:
+            runner.run(
+                ("ssh", host, "rm", "-f", "--", upload_bundle),
+                step="publish_cleanup",
+                check=False,
+            )
+            runner.run(
+                ("ssh", host, "rmdir", "--", upload_stage),
                 step="publish_cleanup",
                 check=False,
             )
@@ -178,18 +219,29 @@ def publish(
     }
 
 
-def _validated_remote_stage(raw: str, release_id: str) -> Path:
+def _validated_remote_stage(
+    raw: str,
+    release_id: str,
+    *,
+    root_owned: bool = False,
+) -> Path:
     rendered = raw.strip()
     if "\n" in rendered or "\r" in rendered:
         raise FbctlError("remote mktemp returned an invalid staging path")
     path = Path(rendered)
-    expected_prefix = f"fbctl-{release_id}-"
+    expected_prefix = f"fbctl-{'root-' if root_owned else ''}{release_id}-"
     if path.parent != Path("/tmp") or not path.name.startswith(expected_prefix):
         raise FbctlError("remote mktemp returned a path outside the fbctl staging scope")
     suffix = path.name.removeprefix(expected_prefix)
     if len(suffix) < 6 or not suffix.isalnum():
         raise FbctlError("remote mktemp returned an invalid staging suffix")
     return path
+
+
+def _verify_remote_bundle_digest(raw: str, path: Path, expected: str) -> None:
+    fields = raw.strip().split()
+    if len(fields) != 2 or fields[0] != expected or fields[1] != os.fspath(path):
+        raise FbctlError("remote control bundle integrity check failed")
 
 
 _REMOTE_PATH = re.compile(r"^/[A-Za-z0-9._/-]+$")

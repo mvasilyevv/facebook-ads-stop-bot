@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.fspath(ROOT))
 
-from fbctl.bundle import RESOURCE_FILES, inspect_bundle  # noqa: E402
+from fbctl.bundle import PREFLIGHT_MODULES, RESOURCE_FILES, inspect_bundle  # noqa: E402
 
 IMMUTABLE_FROM = re.compile(r"@sha256:[0-9a-f]{64}(?:\s|$)")
 DOCKERFILES = (
@@ -96,6 +96,7 @@ def _validate_zipapp_preflight() -> None:
         source = temporary / "source.env"
         manifest = temporary / "release.json"
         bundle = temporary / "fbctl.pyz"
+        preflight_bundle = temporary / "fbctl-preflight.pyz"
         _write(source, _source_environment())
         _write(manifest, _release_manifest())
         _run(
@@ -114,6 +115,28 @@ def _validate_zipapp_preflight() -> None:
         )
         _run([sys.executable, "-B", os.fspath(bundle), "--help"])
         inspect_bundle(bundle)
+        _run(
+            [
+                os.fspath(ROOT / "scripts/fbctl"),
+                "preflight-bundle",
+                "--output",
+                os.fspath(preflight_bundle),
+                "--release-id",
+                "validation",
+                "--source-root",
+                os.fspath(ROOT),
+            ]
+        )
+        _run([sys.executable, "-B", os.fspath(preflight_bundle), "--help"])
+        inspect_bundle(preflight_bundle)
+        with zipfile.ZipFile(preflight_bundle) as archive:
+            expected = {
+                "__main__.py",
+                "fbctl/resources/artifact-manifest.json",
+                *(f"fbctl/{name}" for name in PREFLIGHT_MODULES),
+            }
+            if set(archive.namelist()) != expected:
+                raise ValidationError("preflight zipapp contains files outside its allowlist")
         with zipfile.ZipFile(bundle) as archive:
             for archived, relative in RESOURCE_FILES.items():
                 if archive.read(f"fbctl/resources/{archived}") != (ROOT / relative).read_bytes():

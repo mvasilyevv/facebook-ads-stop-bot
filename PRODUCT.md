@@ -43,7 +43,14 @@ FB Agent — safety-first operator platform для iGaming-команд, где 
 - Web и Telegram Mini App имеют одинаковые capabilities, включая campaign creation и редкие настройки, но используют platform-native layouts и разные chart renderers.
 - Backend сохраняет явное currency evidence, однако единственное допустимое рабочее значение — `USD`. Non-USD, mixed или missing currency блокируют денежные итоги и safety-действия: конвертация, молчаливое суммирование и догадки запрещены.
 - Нативное мобильное приложение не создаётся. TMA всегда тёмная.
-- Новый runtime начинается с одной чистой baseline-схемы. Из старой системы импортируется только несекретная конфигурация; секреты вводятся заново.
+- Новый runtime начинается с одной чистой baseline-схемы. Из старой системы
+  импортируется только несекретная конфигурация; секреты вводятся заново.
+  Единственное исключение — явно включённая одноразовая bootstrap-миграция
+  Telegram identity: она может перенести только атомарную пару
+  `TELEGRAM_OIDC_CLIENT_ID` + `TELEGRAM_OIDC_CLIENT_SECRET` и
+  `DESKTOP_OWNER_TELEGRAM_USER_ID` из фиксированных root-owned host-файлов. Этот
+  путь недоступен routine deploy, не импортирует `TELEGRAM_CHAT_ID` или другие
+  legacy secrets и удаляет legacy-файл только после полного успеха.
 - Production-switch и удаление старых production-данных требуют отдельного явного подтверждения.
 - Runtime fallback, dual-read, dual-send и автоматические AI-решения запрещены. SSH-only break-glass остаётся отдельной аудитируемой аварийной процедурой.
 

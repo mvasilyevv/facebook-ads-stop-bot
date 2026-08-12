@@ -24,9 +24,9 @@ Caddy всегда направляет трафик на `18100` (API), `18080`
 на нём не выполняется сборка images.
 
 ```bash
-sudo /opt/fb-agent/runtime/fbctl doctor
-sudo /opt/fb-agent/runtime/fbctl status
-sudo /opt/fb-agent/runtime/fbctl deploy
+sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz doctor
+sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz status
+sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz deploy
 ```
 
 `fbctl bootstrap` используется один раз на новом host или новой чистой БД. Он
@@ -40,23 +40,36 @@ host provisioning.
 в `deploy` отдельным аргументом:
 
 ```bash
-sudo /opt/fb-agent/runtime/fbctl bootstrap \
+sudo python3 -B /path/to/reviewed/fbctl.pyz bootstrap \
   --source-env /opt/fb-agent/shared/source.env \
   --adoption-bundle /opt/fb-agent/shared/adoption-bundle-v1.json \
   --desktop-profile-seed /opt/fb-agent/shared/vision-profile-seed
-sudo /opt/fb-agent/runtime/fbctl deploy --enable-scanning
+sudo python3 -B /path/to/reviewed/fbctl.pyz deploy --enable-scanning
 ```
 
-Для единственного проверенного перехода со старого `source.env` сначала
-выполняется сухая проверка без записи файлов или изменения host, затем тот же
-явный флаг передаётся в bootstrap. Разрешены только заранее перечисленные
-устаревшие runtime-ключи; остальные имена блокируют запуск.
+Для единственного проверенного перехода со старого host identity Release
+workflow до сборки images отправляет маленький deterministic preflight bundle и
+source только через stdin. Проверка читает фиксированные root-owned файлы
+`/opt/fb-agent/shared/source.env` и `/opt/fb-agent/shared/.env`, ничего не пишет
+и не запускает Docker/БД. Реальный bootstrap повторяет ту же проверку с явным
+`--migrate-existing-bootstrap-identity`.
+
+Миграция наследует только атомарную пару `TELEGRAM_OIDC_CLIENT_ID` +
+`TELEGRAM_OIDC_CLIENT_SECRET` и отдельно
+`DESKTOP_OWNER_TELEGRAM_USER_ID`: explicit source → canonical retry → legacy
+`.env` → проверенный owner adoption bundle. Половина OIDC-пары, неверное
+значение или owner mismatch блокируют bootstrap; `TELEGRAM_CHAT_ID` и остальные
+legacy-поля никогда не импортируются. Canonical `source.env` сохраняется до
+Docker/DB, а исходный `.env` удаляется только после полного успеха и только если
+путь всё ещё указывает на проверенный inode. Флаг недоступен routine deploy и
+rehearsal.
 
 ```bash
-sudo /opt/fb-agent/runtime/fbctl bootstrap-source-check --stdin \
+sudo python3 -B /path/to/reviewed/fbctl.pyz bootstrap-source-check --stdin \
   --project-known-legacy-source < /opt/fb-agent/shared/source.env
-sudo /opt/fb-agent/runtime/fbctl bootstrap \
+sudo python3 -B /path/to/reviewed/fbctl.pyz bootstrap \
   --project-known-legacy-source --reuse-existing-caddy-credentials \
+  --migrate-existing-bootstrap-identity \
   --source-env /opt/fb-agent/shared/source.env \
   --adoption-bundle /opt/fb-agent/shared/adoption-bundle-v1.json \
   --desktop-profile-seed /opt/fb-agent/shared/vision-profile-seed
@@ -82,8 +95,8 @@ Routine deploy:
 4. поднимает infra и применяет forward-only Alembic migrations;
 5. проверяет desktop, точный Vision profile, Graph и browser-agent;
 6. поднимает API/web/TMA и проверяет typed operator snapshot;
-7. поднимает workers и ждёт heartbeats плюс `/system-readyz`;
-8. применяет и проверяет Telegram webhook;
+7. применяет и проверяет Telegram webhook до запуска delivery worker;
+8. поднимает workers и ждёт heartbeats плюс `/system-readyz`;
 9. выполняет public smoke и только затем продвигает candidate configuration.
 
 При ошибке `fbctl` возвращает ненулевой код и имя шага. Money workers не
@@ -93,7 +106,7 @@ Routine deploy:
 ## Проверка конфигурации
 
 ```bash
-./scripts/fbctl doctor
+sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz doctor
 ```
 
 `doctor` проверяет строгую конфигурацию без повторяющихся/неизвестных ключей,
@@ -110,6 +123,10 @@ active configuration и не останавливает runtime.
 - `adoption-bundle-v1.json` mode `0600`;
 - `desktop-profile-seed` с проверенным Vision profile.
 
+Только для описанной identity migration может дополнительно существовать
+`/opt/fb-agent/shared/.env` mode `0600`, принадлежащий root. Это не второй
+конфигурационный источник routine runtime.
+
 Adoption import переносит allowlisted конфигурацию один раз и записывает receipt
 в той же транзакции PostgreSQL. После успешного bootstrap bundle и seed с host
 удаляются. История, runtime state и secrets не импортируются.
@@ -117,8 +134,8 @@ Adoption import переносит allowlisted конфигурацию один
 ## Operations
 
 ```bash
-sudo /opt/fb-agent/runtime/fbctl status
-sudo /opt/fb-agent/runtime/fbctl logs autopause_worker --lines 200
+sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz status
+sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz logs autopause_worker --lines 200
 ```
 
 PostgreSQL backup/restore automation намеренно отсутствует по решению owner.
