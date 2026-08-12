@@ -25,11 +25,18 @@ from fbctl.identity import (
     snapshot_host_identity,
 )
 from fbctl.publish import publish
+from fbctl.vision_profile import VISION_PROFILE_MARKER, VISION_PROFILE_MARKER_CONTENT
 
 OIDC_CLIENT_ID = "111111"
 OIDC_CLIENT_SECRET = "oidc-secret-" + "o" * 32
 OWNER_TELEGRAM_USER_ID = "222222"
 OTHER_OWNER_TELEGRAM_USER_ID = "999999"
+
+
+@pytest.fixture(autouse=True)
+def _local_vision_runtime_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fbctl_controller, "VISION_RUNTIME_UID", os.getuid())
+    monkeypatch.setattr(fbctl_controller, "VISION_RUNTIME_GID", os.getgid())
 
 
 def _write(path: Path, payload: bytes | str, *, mode: int = 0o600) -> Path:
@@ -113,7 +120,9 @@ def _legacy_root(
     shared.mkdir(parents=True)
     shared.chmod(0o700)
     if with_vision_config:
-        (shared / "vision-config").mkdir()
+        vision_config = shared / "vision-config"
+        vision_config.mkdir(mode=0o700)
+        _write(vision_config / VISION_PROFILE_MARKER, VISION_PROFILE_MARKER_CONTENT)
     legacy = _write(
         shared / ".env",
         _dotenv(

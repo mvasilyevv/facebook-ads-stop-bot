@@ -26,6 +26,7 @@ from fbctl.files import (
 )
 from fbctl.identity import resolve_bootstrap_identity, snapshot_host_identity
 from fbctl.runner import CommandRunner, SubprocessRunner
+from fbctl.vision_profile import validate_production_vision_profile
 
 PRODUCTION_ROOT = Path("/opt/fb-agent")
 PRODUCTION_ADOPTION = PRODUCTION_ROOT / "shared" / "adoption-bundle-v1.json"
@@ -37,6 +38,9 @@ def run_host_preflight(source_payload: bytes) -> dict[str, object]:
         raise FbctlError("bootstrap identity preflight requires root privileges")
     if sys.version_info < (3, 12):
         raise FbctlError("Python 3.12 or newer is required")
+    # Reject an unavailable or unsafe Vision profile before source/caddy
+    # handling can allow expensive bootstrap jobs to start.
+    validate_production_vision_profile()
     explicit, dropped = project_bootstrap_source(
         parse_bootstrap_source_stdin(source_payload),
         project_known_legacy_source=True,

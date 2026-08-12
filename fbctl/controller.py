@@ -13,10 +13,9 @@ import secrets
 import shutil
 import stat
 import sys
-import tempfile
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Iterator, Sequence
@@ -69,6 +68,17 @@ from fbctl.probes import (
     wait_for,
 )
 from fbctl.runner import CommandResult, CommandRunner, SubprocessRunner, sealed_process_environment
+from fbctl.vision_profile import (
+    PRODUCTION_DESKTOP_PROFILE_SEED,
+    PRODUCTION_ROOT,
+    VISION_RUNTIME_GID,
+    VISION_RUNTIME_UID,
+    VisionProfileTreeReceipt,
+    bootstrap_profile_is_current,
+    copy_profile_from_receipt,
+    remove_profile_tree_receipt,
+    validate_bootstrap_vision_profile,
+)
 
 WORKERS: dict[str, str] = {
     "observer": "observer",
@@ -997,6 +1007,12 @@ def bootstrap_host(
             desktop_profile_seed,
             label="desktop profile seed",
         )
+    if (
+        root == PRODUCTION_ROOT
+        and desktop_profile_seed is not None
+        and desktop_profile_seed != PRODUCTION_DESKTOP_PROFILE_SEED
+    ):
+        raise FbctlError("bootstrap requires the approved production desktop profile seed")
     raw_source, _ = project_bootstrap_source(
         parse_bootstrap_source_stdin(raw_source_payload),
         project_known_legacy_source=project_known_legacy_source,
@@ -1041,6 +1057,17 @@ def bootstrap_host(
         caddy_bootstrap=caddy_bootstrap,
         provision_caddy=provision_caddy,
     )
+    # This snapshot is before trusted_shared_directory(create=True), the
+    # deployment lock, source.env, candidate/Docker/DB/Caddy mutation.
+    vision_config = root / "shared" / "vision-config"
+    profile_input = validate_bootstrap_vision_profile(
+        canonical_profile=vision_config,
+        desktop_profile_seed=desktop_profile_seed,
+        seed_required_uid=os.getuid(),
+        seed_required_gid=os.getgid(),
+        canonical_required_uid=VISION_RUNTIME_UID,
+        canonical_required_gid=VISION_RUNTIME_GID,
+    )
     with trusted_shared_directory(root, required_uid=os.getuid(), create=True) as shared_fd:
         assert shared_fd is not None
     controller = ProductionController(runner=runner)
@@ -1056,6 +1083,8 @@ def bootstrap_host(
             root=root,
         ):
             raise FbctlError("bootstrap identity sources changed after preflight")
+        if not bootstrap_profile_is_current(profile_input):
+            raise FbctlError("bootstrap Vision profile changed after preflight")
         # Persist durable identity before the first Docker/DB mutation.  A
         # retry must reuse exactly these values even when the supplied source
         # omits generated fields.  Bootstrap-only Vision/Caddy plaintext was
@@ -1074,21 +1103,26 @@ def bootstrap_host(
         secret: Path | None = None
         release_id: str | None = None
         legacy_cleanup = "not_applicable"
+        profile_seed_cleanup = "not_applicable"
         try:
             atomic_write(
                 bootstrap_transport,
                 render_dotenv(transport_values),
                 mode=0o600,
             )
-            if not vision_config.exists():
-                if desktop_profile_seed is None:
-                    raise FbctlError(
-                        "Vision config is absent; first bootstrap requires --desktop-profile-seed"
-                    )
-                _copy_profile_seed(desktop_profile_seed, vision_config, uid=1000, gid=1000)
-            else:
-                require_directory(vision_config)
-                _normalize_profile_tree(vision_config, uid=1000, gid=1000)
+            if profile_input.seed_to_copy is not None:
+                published_profile = copy_profile_from_receipt(
+                    profile_input.active_receipt,
+                    vision_config,
+                    uid=VISION_RUNTIME_UID,
+                    gid=VISION_RUNTIME_GID,
+                )
+                profile_input = replace(
+                    profile_input,
+                    canonical_receipt=published_profile,
+                    active_receipt=published_profile,
+                    seed_to_copy=None,
+                )
             release = materialize_candidate(candidate)
             release_id = str(release["release_id"])
             adoption_snapshot: Path | None = None
@@ -1129,9 +1163,9 @@ def bootstrap_host(
                     caddy_bootstrap,
                     runner,
                 )
-            _consume_bootstrap_inputs(
+            profile_seed_cleanup = _consume_bootstrap_inputs(
                 adoption_bundle=verified_adoption_source,
-                desktop_profile_seed=desktop_profile_seed,
+                desktop_profile_seed=profile_input.seed_cleanup_receipt,
                 canonical_profile=vision_config,
             )
             if identity.legacy_cleanup_eligible:
@@ -1156,38 +1190,8 @@ def bootstrap_host(
         "caddy_provisioned": provision_caddy,
         "rehearsal": rehearsal,
         "legacy_identity_cleanup": legacy_cleanup,
+        "profile_seed_cleanup": profile_seed_cleanup,
     }
-
-
-def _copy_profile_seed(
-    source: Path,
-    destination: Path,
-    *,
-    uid: int,
-    gid: int,
-) -> None:
-    require_directory(source, mode=0o700)
-    marker = require_private_file(source / ".fb-agent-vision-profile-v1")
-    if marker.read_bytes() != b"fb-agent-vision-profile-v1\n":
-        raise FbctlError("desktop profile seed marker is invalid")
-    for path in source.rglob("*"):
-        metadata = path.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not (
-            stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
-        ):
-            raise FbctlError("desktop profile seed contains an unsafe entry")
-        if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1:
-            raise FbctlError("desktop profile seed contains a hard-linked file")
-        if stat.S_IMODE(metadata.st_mode) & 0o022:
-            raise FbctlError("desktop profile seed contains a writable shared entry")
-    temporary = Path(tempfile.mkdtemp(prefix=".vision-config.", dir=destination.parent))
-    try:
-        shutil.copytree(source, temporary, dirs_exist_ok=True, symlinks=False)
-        os.replace(temporary, destination)
-        _normalize_profile_tree(destination, uid=uid, gid=gid)
-    finally:
-        if temporary.exists():
-            shutil.rmtree(temporary)
 
 
 def _validate_bootstrap_transport(
@@ -1371,25 +1375,16 @@ def _provision_caddy(
 def _consume_bootstrap_inputs(
     *,
     adoption_bundle: PrivateFileSnapshot | None,
-    desktop_profile_seed: Path | None,
+    desktop_profile_seed: VisionProfileTreeReceipt | None,
     canonical_profile: Path,
-) -> None:
-    seed: Path | None = None
-    if desktop_profile_seed is not None and desktop_profile_seed.exists():
-        seed = require_absolute_path(desktop_profile_seed, label="desktop profile seed")
-        if (
-            seed == canonical_profile
-            or seed in canonical_profile.parents
-            or canonical_profile in seed.parents
-        ):
-            raise FbctlError("desktop profile seed overlaps canonical Vision configuration")
-        require_directory(seed, mode=0o700)
-        marker = require_private_file(seed / ".fb-agent-vision-profile-v1")
-        if marker.read_bytes() != b"fb-agent-vision-profile-v1\n":
-            raise FbctlError("desktop profile seed marker is invalid")
-    if seed is not None:
-        shutil.rmtree(seed)
-        _fsync_parent(seed)
+) -> str:
+    cleanup = "not_applicable"
+    if desktop_profile_seed is not None:
+        cleanup = (
+            "removed"
+            if remove_profile_tree_receipt(desktop_profile_seed)
+            else "preserved_changed_or_quarantined"
+        )
     if adoption_bundle is not None:
         shared = canonical_profile.parent
         if adoption_bundle.path.parent == shared:
@@ -1401,6 +1396,7 @@ def _consume_bootstrap_inputs(
                 unlink_unchanged_snapshot(adoption_bundle, directory_fd=shared_fd)
         else:
             unlink_unchanged_snapshot(adoption_bundle)
+    return cleanup
 
 
 def _fsync_parent(path: Path) -> None:

@@ -249,7 +249,7 @@ _DOCKER_CONFIG = re.compile(r"^/tmp/fb-agent-ghcr-[A-Za-z0-9][A-Za-z0-9._-]{0,12
 _SHARED_BOOTSTRAP_INPUTS = frozenset(
     {
         "/opt/fb-agent/shared/adoption-bundle-v1.json",
-        "/opt/fb-agent/shared/vision-profile-seed",
+        "/opt/fb-agent/shared/desktop-profile-seed",
     }
 )
 

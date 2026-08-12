@@ -260,7 +260,8 @@ def test_production_source_secret_is_only_consumed_by_manual_bootstrap() -> None
     assert "--migrate-existing-bootstrap-identity" in bootstrap
     assert "github.event_name == 'workflow_dispatch' && inputs.bootstrap" in bootstrap
     assert "/opt/fb-agent/shared/adoption-bundle-v1.json" in bootstrap
-    assert "/opt/fb-agent/shared/vision-profile-seed" in bootstrap
+    assert "/opt/fb-agent/shared/desktop-profile-seed" in bootstrap
+    assert "/opt/fb-agent/shared/vision-profile-seed" not in bootstrap
     assert "--provision-caddy" not in bootstrap
 
 

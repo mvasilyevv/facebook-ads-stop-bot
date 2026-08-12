@@ -52,6 +52,7 @@ PREFLIGHT_MODULES = (
     "identity.py",
     "preflight.py",
     "runner.py",
+    "vision_profile.py",
 )
 
 
