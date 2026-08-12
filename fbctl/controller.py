@@ -21,19 +21,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Iterator, Sequence
 
-from fbctl.adoption import verify_adoption_bundle_owner
 from fbctl.bundle import materialize_candidate
 from fbctl.config import (
     BOOTSTRAP_CADDY_KEYS,
     BOOTSTRAP_VISION_KEYS,
     RuntimeConfig,
     canonicalize_source,
+    parse_bootstrap_source_stdin,
     prepare_candidate,
     project_bootstrap_source,
     render_dotenv,
 )
 from fbctl.errors import FbctlError
 from fbctl.files import (
+    MAX_DOTENV_BYTES,
+    PrivateFileSnapshot,
     atomic_json,
     atomic_symlink,
     atomic_write,
@@ -42,6 +44,15 @@ from fbctl.files import (
     require_directory,
     require_private_file,
     sha256_file,
+    snapshot_private_file,
+    trusted_shared_directory,
+    unlink_unchanged_snapshot,
+)
+from fbctl.identity import (
+    host_snapshot_is_current,
+    remove_legacy_identity,
+    resolve_bootstrap_identity,
+    snapshot_host_identity,
 )
 from fbctl.probes import (
     ProbeClient,
@@ -874,62 +885,151 @@ class ProductionController:
 
     @contextmanager
     def _deployment_lock(self, root: Path) -> Iterator[None]:
-        lock_path = root / "shared" / "deploy.lock"
-        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            os.fchmod(descriptor, 0o600)
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise FbctlError("another fbctl deployment is running") from exc
+        with self._deployment_lock_owned(root, required_uid=os.geteuid()):
             yield
-        finally:
-            os.close(descriptor)
+
+    @contextmanager
+    def _deployment_lock_owned(self, root: Path, *, required_uid: int) -> Iterator[None]:
+        with trusted_shared_directory(root, required_uid=required_uid) as shared_fd:
+            assert shared_fd is not None
+            flags = (
+                os.O_RDWR
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+            )
+            created = False
+            try:
+                descriptor = os.open("deploy.lock", flags, dir_fd=shared_fd)
+            except FileNotFoundError:
+                try:
+                    descriptor = os.open(
+                        "deploy.lock",
+                        flags | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=shared_fd,
+                    )
+                    created = True
+                except FileExistsError:
+                    try:
+                        descriptor = os.open("deploy.lock", flags, dir_fd=shared_fd)
+                    except OSError as exc:
+                        raise FbctlError("deployment lock path is unsafe") from exc
+                except OSError as exc:
+                    raise FbctlError("deployment lock path is unsafe") from exc
+            except OSError as exc:
+                raise FbctlError("deployment lock path is unsafe") from exc
+            try:
+                if created:
+                    try:
+                        os.fchmod(descriptor, 0o600)
+                    except OSError as exc:
+                        raise FbctlError("deployment lock file is unsafe") from exc
+                metadata = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_uid != required_uid
+                    or metadata.st_nlink != 1
+                    or stat.S_IMODE(metadata.st_mode) != 0o600
+                ):
+                    raise FbctlError("deployment lock file is unsafe")
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise FbctlError("another fbctl deployment is running") from exc
+                yield
+            finally:
+                os.close(descriptor)
 
 
 def bootstrap_host(
     *,
     runner: CommandRunner,
     root: Path,
-    source_env: Path,
+    source_env: Path | None,
+    source_env_payload: bytes | None = None,
     adoption_bundle: Path | None,
     desktop_profile_seed: Path | None,
     docker_config: Path | None,
     rehearsal: bool = False,
     reuse_existing_caddy_credentials: bool = False,
     project_known_legacy_source: bool = False,
+    migrate_existing_bootstrap_identity: bool = False,
 ) -> dict[str, object]:
     if os.geteuid() != 0:
         raise FbctlError("bootstrap requires root privileges")
     if sys.version_info < (3, 12):
         raise FbctlError("Python 3.12 or newer is required")
+    if migrate_existing_bootstrap_identity and rehearsal:
+        raise FbctlError("bootstrap identity migration is forbidden during rehearsal")
     root = require_absolute_path(root, label="root")
-    source_env = require_absolute_path(source_env, label="source environment")
-    require_private_file(source_env)
+    if (source_env is None) == (source_env_payload is None):
+        raise FbctlError("bootstrap requires exactly one source environment input")
+    if source_env_payload is not None:
+        raw_source_payload = source_env_payload
+    else:
+        assert source_env is not None
+        source_env = require_absolute_path(source_env, label="source environment")
+        shared = root / "shared"
+        if source_env.parent == shared:
+            with trusted_shared_directory(root, required_uid=os.getuid()) as shared_fd:
+                assert shared_fd is not None
+                source_snapshot = snapshot_private_file(
+                    source_env,
+                    label="bootstrap source environment",
+                    maximum=MAX_DOTENV_BYTES,
+                    required_uid=os.getuid(),
+                    directory_fd=shared_fd,
+                )
+        else:
+            source_snapshot = snapshot_private_file(
+                source_env,
+                label="bootstrap source environment",
+                maximum=MAX_DOTENV_BYTES,
+                required_uid=os.getuid(),
+            )
+        assert source_snapshot is not None
+        raw_source_payload = source_snapshot.payload
     if adoption_bundle is not None:
         adoption_bundle = require_absolute_path(adoption_bundle, label="adoption bundle")
-    if desktop_profile_seed is not None and desktop_profile_seed.exists():
+    if desktop_profile_seed is not None:
         desktop_profile_seed = require_absolute_path(
             desktop_profile_seed,
             label="desktop profile seed",
         )
     raw_source, _ = project_bootstrap_source(
-        parse_dotenv(source_env),
+        parse_bootstrap_source_stdin(raw_source_payload),
         project_known_legacy_source=project_known_legacy_source,
     )
+    host_identity = snapshot_host_identity(
+        root,
+        adoption_bundle,
+        # ``sudo`` starts the production process with a real/effective uid of 0.
+        # Using the real uid keeps the ownership invariant testable without
+        # weakening the fixed uid=0 contract on the host.
+        required_uid=os.getuid(),
+        include_legacy=migrate_existing_bootstrap_identity,
+    )
+    identity = resolve_bootstrap_identity(
+        explicit=raw_source,
+        canonical=host_identity.canonical_values,
+        legacy=host_identity.legacy_values,
+        adoption_owner=(
+            host_identity.adoption.owner_telegram_user_id if host_identity.adoption else None
+        ),
+        migration_enabled=migrate_existing_bootstrap_identity,
+    )
+    raw_source.update(identity.values)
+    source_values = canonicalize_source(
+        raw_source,
+        incumbent=host_identity.canonical_values,
+    )
     verified_adoption_bundle: bytes | None = None
-    verified_adoption_source: Path | None = None
-    if adoption_bundle is not None and os.path.lexists(adoption_bundle):
-        # This strict, in-memory projection supplies the canonical owner
-        # identity for the bundle preflight.  It deliberately happens before
-        # creating root, shared state, or any runner-backed infrastructure/DB
-        # operation.  The missing-bundle retry path remains unchanged.
-        canonical_source = canonicalize_source(raw_source, incumbent={})
-        verified_adoption_bundle = verify_adoption_bundle_owner(
-            adoption_bundle,
-            owner_telegram_user_id=canonical_source["DESKTOP_OWNER_TELEGRAM_USER_ID"],
-        )
-        verified_adoption_source = adoption_bundle
+    verified_adoption_source: PrivateFileSnapshot | None = None
+    if host_identity.adoption is not None:
+        assert adoption_bundle is not None
+        verified_adoption_bundle = host_identity.adoption.payload
+        verified_adoption_source = host_identity.adoption.snapshot
     provision_caddy = not rehearsal
     caddy_bootstrap = _resolve_caddy_bootstrap_credentials(
         raw_source,
@@ -941,21 +1041,21 @@ def bootstrap_host(
         caddy_bootstrap=caddy_bootstrap,
         provision_caddy=provision_caddy,
     )
-    for directory, mode in (
-        (root, 0o755),
-        (root / "shared", 0o700),
-    ):
-        directory.mkdir(parents=True, exist_ok=True, mode=mode)
-        if directory.is_symlink():
-            raise FbctlError(f"bootstrap directory must not be a symlink: {directory}")
-        os.chmod(directory, mode)
+    with trusted_shared_directory(root, required_uid=os.getuid(), create=True) as shared_fd:
+        assert shared_fd is not None
     controller = ProductionController(runner=runner)
     candidate = root / "candidate"
-    with controller._deployment_lock(root):  # noqa: SLF001 - same deep module
+    with controller._deployment_lock_owned(  # noqa: SLF001 - same deep module
+        root,
+        required_uid=os.getuid(),
+    ):
         shared = root / "shared"
         incumbent_path = shared / "source.env"
-        incumbent = parse_dotenv(incumbent_path) if incumbent_path.is_file() else {}
-        source_values = canonicalize_source(raw_source, incumbent=incumbent)
+        if not host_snapshot_is_current(
+            host_identity,
+            root=root,
+        ):
+            raise FbctlError("bootstrap identity sources changed after preflight")
         # Persist durable identity before the first Docker/DB mutation.  A
         # retry must reuse exactly these values even when the supplied source
         # omits generated fields.  Bootstrap-only Vision/Caddy plaintext was
@@ -973,6 +1073,7 @@ def bootstrap_host(
         vision_config = shared / "vision-config"
         secret: Path | None = None
         release_id: str | None = None
+        legacy_cleanup = "not_applicable"
         try:
             atomic_write(
                 bootstrap_transport,
@@ -1033,6 +1134,10 @@ def bootstrap_host(
                 desktop_profile_seed=desktop_profile_seed,
                 canonical_profile=vision_config,
             )
+            if identity.legacy_cleanup_eligible:
+                legacy_cleanup = (
+                    "removed" if remove_legacy_identity(host_identity) else "preserved_changed"
+                )
         finally:
             if secret is not None:
                 secret.unlink(missing_ok=True)
@@ -1050,6 +1155,7 @@ def bootstrap_host(
         "vision_config": os.fspath(vision_config),
         "caddy_provisioned": provision_caddy,
         "rehearsal": rehearsal,
+        "legacy_identity_cleanup": legacy_cleanup,
     }
 
 
@@ -1264,14 +1370,10 @@ def _provision_caddy(
 
 def _consume_bootstrap_inputs(
     *,
-    adoption_bundle: Path | None,
+    adoption_bundle: PrivateFileSnapshot | None,
     desktop_profile_seed: Path | None,
     canonical_profile: Path,
 ) -> None:
-    adoption: Path | None = None
-    if adoption_bundle is not None and adoption_bundle.exists():
-        adoption = require_absolute_path(adoption_bundle, label="adoption bundle")
-        require_private_file(adoption)
     seed: Path | None = None
     if desktop_profile_seed is not None and desktop_profile_seed.exists():
         seed = require_absolute_path(desktop_profile_seed, label="desktop profile seed")
@@ -1288,9 +1390,17 @@ def _consume_bootstrap_inputs(
     if seed is not None:
         shutil.rmtree(seed)
         _fsync_parent(seed)
-    if adoption is not None:
-        adoption.unlink()
-        _fsync_parent(adoption)
+    if adoption_bundle is not None:
+        shared = canonical_profile.parent
+        if adoption_bundle.path.parent == shared:
+            with trusted_shared_directory(
+                shared.parent,
+                required_uid=adoption_bundle.uid,
+            ) as shared_fd:
+                assert shared_fd is not None
+                unlink_unchanged_snapshot(adoption_bundle, directory_fd=shared_fd)
+        else:
+            unlink_unchanged_snapshot(adoption_bundle)
 
 
 def _fsync_parent(path: Path) -> None:

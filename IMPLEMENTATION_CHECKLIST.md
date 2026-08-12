@@ -56,6 +56,10 @@
   Telegram webhook checks; ошибка оставляет money workers выключенными.
 - [x] Canonical `runtime.env` генерируется из строгого единственного
   конфигурационного контракта; обычный deploy не передаёт source secrets.
+- [x] Однократная bootstrap identity migration проверяет host до image jobs,
+  наследует только atomic Telegram OIDC pair и desktop owner из fixed
+  root-owned sources, сохраняет canonical retry state и удаляет legacy `.env`
+  только после полного успеха с inode check; routine/rehearsal flag отклоняют.
 - [x] Локально проверены parser/Compose contracts, migration/adoption path и
   full Python suite: `2417 passed`.
 - [ ] GitHub CI построил и проверил immutable content-addressed image digests и

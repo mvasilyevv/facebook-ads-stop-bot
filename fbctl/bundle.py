@@ -18,6 +18,7 @@ from fbctl.errors import FbctlError
 from fbctl.files import IMAGE_DIGEST, require_release_id, sha256_file
 
 BUNDLE_SCHEMA = "fb-agent-zipapp/v1"
+PREFLIGHT_BUNDLE_SCHEMA = "fb-agent-preflight-zipapp/v1"
 RELEASE_SCHEMA = "fb-agent-release/v1"
 IMAGE_KEYS = (
     "API_IMAGE",
@@ -41,10 +42,22 @@ RESOURCE_FILES: dict[str, str] = {
     "deploy/systemd/caddy-fb-agent-env.conf": "deploy/systemd/caddy-fb-agent-env.conf",
 }
 FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
+PREFLIGHT_MODULES = (
+    "__init__.py",
+    "adoption.py",
+    "bundle.py",
+    "config.py",
+    "errors.py",
+    "files.py",
+    "identity.py",
+    "preflight.py",
+    "runner.py",
+)
 
 
 @dataclass(frozen=True)
 class BundleMetadata:
+    schema: str
     release_id: str
     sha256: str
     entries: tuple[dict[str, object], ...]
@@ -127,6 +140,70 @@ def build_bundle(
         0o400,
     )
 
+    _write_bundle(output, payloads)
+    return {
+        "schema": BUNDLE_SCHEMA,
+        "release_id": release_id,
+        "artifact": os.fspath(output),
+        "sha256": sha256_file(output),
+        "files": len(manifest_entries),
+    }
+
+
+def build_preflight_bundle(
+    *,
+    source_root: Path,
+    output: Path,
+    release_id: str,
+) -> dict[str, object]:
+    """Build the deterministic, secret-free host identity preflight zipapp."""
+
+    source_root = source_root.resolve(strict=True)
+    release_id = require_release_id(release_id)
+    payloads: dict[str, tuple[bytes, int]] = {
+        "__main__.py": (
+            b"from fbctl.preflight import main\nraise SystemExit(main())\n",
+            0o644,
+        )
+    }
+    for name in PREFLIGHT_MODULES:
+        source = source_root / "fbctl" / name
+        if source.is_symlink() or not source.is_file():
+            raise FbctlError(f"preflight zipapp module is missing or unsafe: {source}")
+        payloads[f"fbctl/{name}"] = (source.read_bytes(), 0o644)
+    entries = [
+        {
+            "path": name,
+            "mode": mode,
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        for name, (payload, mode) in sorted(payloads.items())
+    ]
+    payloads["fbctl/resources/artifact-manifest.json"] = (
+        json.dumps(
+            {
+                "schema": PREFLIGHT_BUNDLE_SCHEMA,
+                "release_id": release_id,
+                "entries": entries,
+            },
+            indent=2,
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n",
+        0o400,
+    )
+    _write_bundle(output, payloads)
+    return {
+        "schema": PREFLIGHT_BUNDLE_SCHEMA,
+        "release_id": release_id,
+        "artifact": os.fspath(output),
+        "sha256": sha256_file(output),
+        "files": len(entries),
+    }
+
+
+def _write_bundle(output: Path, payloads: dict[str, tuple[bytes, int]]) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{output.name}.", dir=output.parent)
     os.close(descriptor)
@@ -149,13 +226,6 @@ def build_bundle(
         os.replace(temporary, output)
     finally:
         temporary.unlink(missing_ok=True)
-    return {
-        "schema": BUNDLE_SCHEMA,
-        "release_id": release_id,
-        "artifact": os.fspath(output),
-        "sha256": sha256_file(output),
-        "files": len(manifest_entries),
-    }
 
 
 def inspect_bundle(path: Path) -> BundleMetadata:
@@ -175,7 +245,8 @@ def inspect_bundle(path: Path) -> BundleMetadata:
             manifest = json.loads(archive.read("fbctl/resources/artifact-manifest.json"))
         except (KeyError, json.JSONDecodeError, UnicodeError) as exc:
             raise FbctlError("release zipapp manifest is missing or invalid") from exc
-        if manifest.get("schema") != BUNDLE_SCHEMA:
+        schema = manifest.get("schema")
+        if schema not in {BUNDLE_SCHEMA, PREFLIGHT_BUNDLE_SCHEMA}:
             raise FbctlError("release zipapp uses an unsupported schema")
         release_id = require_release_id(str(manifest.get("release_id", "")))
         raw_entries = manifest.get("entries")
@@ -204,7 +275,7 @@ def inspect_bundle(path: Path) -> BundleMetadata:
             entries.append(dict(raw))
         if set(names) != expected_names:
             raise FbctlError("release zipapp contains files outside its manifest")
-        return BundleMetadata(release_id, sha256_file(path), tuple(entries))
+        return BundleMetadata(str(schema), release_id, sha256_file(path), tuple(entries))
 
 
 def embedded_release() -> dict[str, object]:

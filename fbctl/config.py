@@ -17,6 +17,7 @@ from fbctl.files import (
     IMAGE_DIGEST,
     atomic_write,
     parse_dotenv,
+    parse_dotenv_payload,
     require_absolute_path,
     require_directory,
     require_private_file,
@@ -549,28 +550,7 @@ def parse_bootstrap_source_stdin(payload: bytes) -> dict[str, str]:
 
     if not payload or len(payload) > 2_000_000 or b"\x00" in payload:
         raise FbctlError("source environment stdin is empty or exceeds 2 MB")
-    try:
-        lines = payload.decode("utf-8").splitlines()
-    except UnicodeDecodeError as exc:
-        raise FbctlError("source environment stdin is not valid UTF-8") from exc
-    values: dict[str, str] = {}
-    for line_number, raw_line in enumerate(lines, 1):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            raise FbctlError(f"invalid dotenv line {line_number} in stdin")
-        key, value = line.split("=", 1)
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-            raise FbctlError(f"invalid dotenv key on line {line_number} in stdin")
-        if key in values:
-            raise FbctlError(f"duplicate {key} in stdin")
-        if "\r" in value or "\n" in value:
-            raise FbctlError(f"invalid newline in {key}")
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        values[key] = value
-    return values
+    return parse_dotenv_payload(payload, label="stdin", maximum=2_000_000)
 
 
 def validate_bootstrap_source_check(values: dict[str, str]) -> None:

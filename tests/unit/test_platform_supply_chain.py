@@ -247,29 +247,80 @@ def test_production_source_secret_is_only_consumed_by_manual_bootstrap() -> None
     assert "--source-env-stdin" in bootstrap
     assert "--project-known-legacy-source" not in routine
     assert "--project-known-legacy-source" in bootstrap
+    assert "--migrate-existing-bootstrap-identity" not in routine
+    assert "--migrate-existing-bootstrap-identity" in bootstrap
     assert "github.event_name == 'workflow_dispatch' && inputs.bootstrap" in bootstrap
     assert "/opt/fb-agent/shared/adoption-bundle-v1.json" in bootstrap
     assert "/opt/fb-agent/shared/vision-profile-seed" in bootstrap
     assert "--provision-caddy" not in bootstrap
 
 
-def test_bootstrap_source_is_validated_before_expensive_release_jobs() -> None:
+def test_existing_bootstrap_identity_is_validated_remotely_before_expensive_jobs() -> None:
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     preflight = _job_block(release, "bootstrap-source-preflight")
     images = _job_block(release, "images")
 
     assert "needs: verify" in preflight
-    assert "github.event_name == 'workflow_dispatch' && inputs.bootstrap" in preflight
+    assert (
+        "if: github.event_name == 'workflow_dispatch' && inputs.bootstrap && "
+        "github.ref == 'refs/heads/main'"
+    ) in preflight
+    assert "environment: production" in preflight
     assert "PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}" in preflight
     assert 'test -n "$PROD_ENV_B64"' in preflight
-    assert "base64 --decode | scripts/fbctl bootstrap-source-check" in preflight
-    assert "--stdin" in preflight
+    assert "scripts/fbctl preflight-bundle" in preflight
+    assert "--output fbctl-preflight.pyz" in preflight
+    assert '--release-id "${{ github.sha }}"' in preflight
+    assert "base64 --decode | scripts/fbctl bootstrap-remote-preflight" in preflight
+    assert '--host "$DEPLOY_TARGET"' in preflight
+    assert "--bundle fbctl-preflight.pyz" in preflight
+    assert "--source-env-stdin" in preflight
     assert "--project-known-legacy-source" in preflight
+    assert "--migrate-existing-bootstrap-identity" in preflight
+    assert preflight.index("Build deterministic bootstrap preflight bundle") < preflight.index(
+        "Configure pinned SSH host identity"
+    )
+    assert preflight.index("Configure pinned SSH host identity") < preflight.index(
+        "Validate bootstrap source and existing host identity"
+    )
+    assert "StrictHostKeyChecking yes" in preflight
+    assert "UserKnownHostsFile ~/.ssh/known_hosts" in preflight
+    assert 'ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts' in preflight
     assert "set -x" not in preflight
     assert "GITHUB_OUTPUT" not in preflight
     assert "upload-artifact" not in preflight
     assert "cache" not in preflight
+    assert "GHCR" not in preflight
+    assert "docker login" not in preflight
+    assert "release.json" not in preflight
+    assert "source.env" not in preflight
+    assert "base64 --decode >" not in preflight
     assert "needs: [verify, bootstrap-source-preflight]" in images
+    assert "!cancelled()" in images
+    assert "needs.verify.result == 'success'" in images
+    assert "needs.bootstrap-source-preflight.result == 'success'" in images
+    assert (
+        "needs.bootstrap-source-preflight.result == 'skipped' &&\n"
+        "            !(github.event_name == 'workflow_dispatch' && inputs.bootstrap)"
+    ) in images
+
+
+def test_bootstrap_identity_migration_is_absent_from_routine_release_paths() -> None:
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    preflight = _job_block(release, "bootstrap-source-preflight")
+    deploy = _job_block(release, "deploy")
+    routine = deploy.split("- name: Publish routine release", 1)[1].split(
+        "- name: Bootstrap host and deploy first release", 1
+    )[0]
+    bootstrap = deploy.split("- name: Bootstrap host and deploy first release", 1)[1].split(
+        "- name: Remove temporary GHCR credentials", 1
+    )[0]
+
+    assert preflight.count("--migrate-existing-bootstrap-identity") == 1
+    assert bootstrap.count("--migrate-existing-bootstrap-identity") == 1
+    assert "--migrate-existing-bootstrap-identity" not in routine
+    assert "bootstrap-remote-preflight" not in routine
+    assert "PROD_ENV_B64" not in routine
 
 
 def test_release_requires_real_single_slot_rehearsal_before_production() -> None:

@@ -10,7 +10,12 @@ import sys
 import time
 from pathlib import Path
 
-from fbctl.bundle import inspect_bundle, read_release_manifest, verify_materialized_resources
+from fbctl.bundle import (
+    BUNDLE_SCHEMA,
+    inspect_bundle,
+    read_release_manifest,
+    verify_materialized_resources,
+)
 from fbctl.config import (
     SOURCE_ALLOWED_KEYS,
     RuntimeConfig,
@@ -24,7 +29,13 @@ from fbctl.controller import (
     ProductionController,
 )
 from fbctl.errors import FbctlError
-from fbctl.files import parse_dotenv, require_absolute_path, require_directory, require_private_file
+from fbctl.files import (
+    MAX_DOTENV_BYTES,
+    parse_dotenv_payload,
+    require_absolute_path,
+    snapshot_private_file,
+    trusted_shared_directory,
+)
 from fbctl.probes import (
     ProbeClient,
     UrllibProbeClient,
@@ -55,9 +66,20 @@ def doctor(
     else:
         checks["python"] = sys.version.split()[0]
     try:
-        require_directory(root / "shared", mode=0o700)
-        source_path = require_private_file(root / "shared" / "source.env")
-        source_values = parse_dotenv(source_path)
+        with trusted_shared_directory(root, required_uid=os.geteuid()) as shared_fd:
+            assert shared_fd is not None
+            source_snapshot = snapshot_private_file(
+                root / "shared" / "source.env",
+                label="canonical source environment",
+                maximum=MAX_DOTENV_BYTES,
+                required_uid=os.geteuid(),
+                directory_fd=shared_fd,
+            )
+            assert source_snapshot is not None
+        source_values = parse_dotenv_payload(
+            source_snapshot.payload,
+            label="canonical source environment",
+        )
         unknown = sorted(set(source_values) - SOURCE_ALLOWED_KEYS)
         if unknown:
             raise FbctlError(f"source environment contains unsupported key {unknown[0]}")
@@ -86,6 +108,8 @@ def doctor(
         try:
             verify_materialized_resources(config.layout.base)
             bundle = inspect_bundle(config.layout.base / "fbctl.pyz")
+            if bundle.schema != BUNDLE_SCHEMA:
+                raise FbctlError("active control bundle is not a full release bundle")
             if bundle.release_id != config.layout.release_id:
                 raise FbctlError("active control bundle belongs to another release")
             read_release_manifest(

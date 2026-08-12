@@ -24,29 +24,70 @@ jobs:
     uses: ./.github/workflows/verify.yml
 
   bootstrap-source-preflight:
-    name: Validate bootstrap source environment
+    name: Validate existing bootstrap identity
     needs: verify
+    if: github.event_name == 'workflow_dispatch' && inputs.bootstrap && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment: production
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - name: Checkout
-        if: github.event_name == 'workflow_dispatch' && inputs.bootstrap
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Validate bootstrap source environment
-        if: github.event_name == 'workflow_dispatch' && inputs.bootstrap
+      - name: Build deterministic bootstrap preflight bundle
+        run: |
+          scripts/fbctl preflight-bundle \
+            --output fbctl-preflight.pyz \
+            --release-id "${{ github.sha }}" \
+            --source-root .
+      - name: Configure pinned SSH host identity
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' \
+            'Host *' \
+            '  StrictHostKeyChecking yes' \
+            '  UserKnownHostsFile ~/.ssh/known_hosts' \
+            '  IdentitiesOnly yes' > ~/.ssh/config
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts ~/.ssh/config
+          ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts >/dev/null
+      - name: Validate bootstrap source and existing host identity
         env:
           PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
         run: |
           set -euo pipefail
           test -n "$PROD_ENV_B64"
-          printf '%s' "$PROD_ENV_B64" | base64 --decode | scripts/fbctl bootstrap-source-check \
-            --stdin \
-            --project-known-legacy-source
+          printf '%s' "$PROD_ENV_B64" | base64 --decode | scripts/fbctl bootstrap-remote-preflight \
+            --host "$DEPLOY_TARGET" \
+            --bundle fbctl-preflight.pyz \
+            --source-env-stdin \
+            --project-known-legacy-source \
+            --migrate-existing-bootstrap-identity
 
   images:
     name: Resolve or publish images
     needs: [verify, bootstrap-source-preflight]
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.verify.result == 'success' &&
+        (
+          needs.bootstrap-source-preflight.result == 'success' ||
+          (
+            needs.bootstrap-source-preflight.result == 'skipped' &&
+            !(github.event_name == 'workflow_dispatch' && inputs.bootstrap)
+          )
+        )
+      }}
     uses: ./.github/workflows/publish-images.yml
     with:
       release_id: ${{ github.sha }}
@@ -246,6 +287,7 @@ jobs:
             --bootstrap \
             --reuse-existing-caddy-credentials \
             --project-known-legacy-source \
+            --migrate-existing-bootstrap-identity \
             --adoption-bundle-remote "$BOOTSTRAP_ADOPTION_BUNDLE" \
             --desktop-profile-seed-remote "$BOOTSTRAP_DESKTOP_PROFILE_SEED" \
             --enable-scanning
