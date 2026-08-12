@@ -53,6 +53,7 @@ from fbctl.operations import doctor, restart
 from fbctl.probes import parse_worker_db_poll_success, parse_worker_heartbeat
 from fbctl.publish import publish
 from fbctl.runner import CommandResult
+from fbctl.vision_profile import VISION_PROFILE_MARKER, VISION_PROFILE_MARKER_CONTENT
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE = "registry.example/fb-agent@sha256:" + "a" * 64
@@ -65,6 +66,14 @@ RUNTIME_DERIVED_LEGACY_KEYS = (
     "TRUST_PROXY_HEADERS",
     "WEB_APP_URL",
 )
+
+
+@pytest.fixture(autouse=True)
+def _local_vision_runtime_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unit fixtures use the invoking uid/gid; production constants remain 1000:1000."""
+
+    monkeypatch.setattr(fbctl_controller, "VISION_RUNTIME_UID", os.getuid())
+    monkeypatch.setattr(fbctl_controller, "VISION_RUNTIME_GID", os.getgid())
 
 
 def _write(path: Path, content: str | bytes, mode: int = 0o600) -> Path:
@@ -112,10 +121,18 @@ def _source_env(tmp_path: Path) -> Path:
 
 def _root(tmp_path: Path) -> Path:
     root = tmp_path / "fb-agent"
-    (root / "shared" / "vision-config").mkdir(parents=True)
+    _write_managed_vision_profile(root)
     (root / "shared").chmod(0o700)
     _write(root / "shared" / "source.env", _source_env(tmp_path).read_bytes())
     return root
+
+
+def _write_managed_vision_profile(root: Path) -> Path:
+    profile = root / "shared" / "vision-config"
+    profile.mkdir(parents=True, mode=0o700)
+    profile.chmod(0o700)
+    _write(profile / VISION_PROFILE_MARKER, VISION_PROFILE_MARKER_CONTENT)
+    return profile
 
 
 def _materialize(destination: Path) -> dict[str, object]:
@@ -933,8 +950,7 @@ def test_bootstrap_cleans_temporary_secret_and_partial_candidate_on_prepare_fail
 ) -> None:
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     root = tmp_path / "fb-agent"
-    vision_config = root / "shared" / "vision-config"
-    vision_config.mkdir(parents=True)
+    _write_managed_vision_profile(root)
     (root / "shared").chmod(0o700)
     source = _source_env(tmp_path)
     with source.open("a", encoding="utf-8") as handle:
@@ -1222,8 +1238,7 @@ def test_bootstrap_imports_only_verified_candidate_bundle_snapshot(
 ) -> None:
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     root = tmp_path / "fb-agent"
-    vision_config = root / "shared" / "vision-config"
-    vision_config.mkdir(parents=True)
+    _write_managed_vision_profile(root)
     (root / "shared").chmod(0o700)
     source = _source_env(tmp_path)
     with source.open("a", encoding="utf-8") as handle:
@@ -1526,8 +1541,7 @@ def test_bootstrap_retry_reuses_durable_identity_after_mutation_failure(
 ) -> None:
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     root = tmp_path / "fb-agent"
-    vision_config = root / "shared" / "vision-config"
-    vision_config.mkdir(parents=True)
+    _write_managed_vision_profile(root)
     (root / "shared").chmod(0o700)
     source = _source_env(tmp_path)
     with source.open("a", encoding="utf-8") as handle:
@@ -1696,7 +1710,7 @@ def test_publish_never_places_source_secret_in_ssh_arguments(tmp_path: Path) -> 
         docker_config=Path("/tmp/fb-agent-ghcr-1"),
         bootstrap=True,
         adoption_bundle_remote=Path("/opt/fb-agent/shared/adoption-bundle-v1.json"),
-        desktop_profile_seed_remote=Path("/opt/fb-agent/shared/vision-profile-seed"),
+        desktop_profile_seed_remote=Path("/opt/fb-agent/shared/desktop-profile-seed"),
         enable_scanning=False,
         reuse_existing_caddy_credentials=True,
         project_known_legacy_source=True,

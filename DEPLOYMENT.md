@@ -43,7 +43,7 @@ host provisioning.
 sudo python3 -B /path/to/reviewed/fbctl.pyz bootstrap \
   --source-env /opt/fb-agent/shared/source.env \
   --adoption-bundle /opt/fb-agent/shared/adoption-bundle-v1.json \
-  --desktop-profile-seed /opt/fb-agent/shared/vision-profile-seed
+  --desktop-profile-seed /opt/fb-agent/shared/desktop-profile-seed
 sudo python3 -B /path/to/reviewed/fbctl.pyz deploy --enable-scanning
 ```
 
@@ -72,7 +72,7 @@ sudo python3 -B /path/to/reviewed/fbctl.pyz bootstrap \
   --migrate-existing-bootstrap-identity \
   --source-env /opt/fb-agent/shared/source.env \
   --adoption-bundle /opt/fb-agent/shared/adoption-bundle-v1.json \
-  --desktop-profile-seed /opt/fb-agent/shared/vision-profile-seed
+  --desktop-profile-seed /opt/fb-agent/shared/desktop-profile-seed
 ```
 
 Caddy credentials не копируются из source в canonical runtime: при их
@@ -122,6 +122,15 @@ active configuration и не останавливает runtime.
 - browser capability env-файлы mode `0600`;
 - `adoption-bundle-v1.json` mode `0600`;
 - `desktop-profile-seed` с проверенным Vision profile.
+
+После успешного bootstrap поле `profile_seed_cleanup` должно быть `removed` (или
+`not_applicable`, если seed уже был штатно удалён). Значение
+`preserved_changed_or_quarantined` означает, что receipt не совпал: каталог не
+удаляется вслепую, а возможный `.fbctl-profile-cleanup-*` остаётся в `shared/`
+для ручной проверки.
+Каталог `.fbctl-profile-cleanup-unbound-*` аналогично сохраняется, если
+bootstrap не смог безопасно открыть только что созданный staging-каталог; его
+нужно проверить вручную после устранения filesystem-ошибки.
 
 Только для описанной identity migration может дополнительно существовать
 `/opt/fb-agent/shared/.env` mode `0600`, принадлежащий root. Это не второй

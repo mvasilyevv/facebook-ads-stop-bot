@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_host_preflight_validates_existing_caddy_fallback_without_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(fbctl_preflight, "validate_production_vision_profile", lambda: None)
     source = (
         b"ENCRYPTION_KEY="
         + base64.urlsafe_b64encode(b"e" * 32)
@@ -72,6 +73,7 @@ def test_host_preflight_validates_existing_caddy_fallback_without_writes(
 def test_host_preflight_rejects_missing_caddy_fallback_without_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(fbctl_preflight, "validate_production_vision_profile", lambda: None)
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr(
         fbctl_preflight,
@@ -108,6 +110,30 @@ def test_host_preflight_rejects_old_python_before_reading_host_files(
     )
 
     with pytest.raises(FbctlError, match="Python 3.12"):
+        fbctl_preflight.run_host_preflight(b"API_KEY=secret\n")
+
+
+def test_host_preflight_rejects_profile_before_identity_or_caddy_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        fbctl_preflight,
+        "validate_production_vision_profile",
+        lambda: (_ for _ in ()).throw(FbctlError("desktop profile seed marker is invalid")),
+    )
+    monkeypatch.setattr(
+        fbctl_preflight,
+        "snapshot_host_identity",
+        lambda *_args, **_kwargs: pytest.fail("identity must not be read"),
+    )
+    monkeypatch.setattr(
+        fbctl_preflight,
+        "snapshot_private_file",
+        lambda *_args, **_kwargs: pytest.fail("Caddy credentials must not be read"),
+    )
+
+    with pytest.raises(FbctlError, match="desktop profile seed marker is invalid"):
         fbctl_preflight.run_host_preflight(b"API_KEY=secret\n")
 
 

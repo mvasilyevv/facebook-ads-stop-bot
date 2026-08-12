@@ -293,7 +293,7 @@ jobs:
           DEPLOY_DOCKER_CONFIG: /tmp/fb-agent-ghcr-${{ github.run_id }}
           PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
           BOOTSTRAP_ADOPTION_BUNDLE: /opt/fb-agent/shared/adoption-bundle-v1.json
-          BOOTSTRAP_DESKTOP_PROFILE_SEED: /opt/fb-agent/shared/vision-profile-seed
+          BOOTSTRAP_DESKTOP_PROFILE_SEED: /opt/fb-agent/shared/desktop-profile-seed
         run: |
           test -n "$PROD_ENV_B64"
           test -n "$BOOTSTRAP_ADOPTION_BUNDLE"
