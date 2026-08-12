@@ -47,6 +47,15 @@ from fbctl.runner import CommandResult
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE = "registry.example/fb-agent@sha256:" + "a" * 64
+RUNTIME_DERIVED_LEGACY_KEYS = (
+    "DEV_TOOLS_ENABLED",
+    "FRONTEND_ORIGIN",
+    "LOG_FORMAT",
+    "SENTRY_ENVIRONMENT",
+    "TRACKER_AUTO_CANCEL_ENABLED",
+    "TRUST_PROXY_HEADERS",
+    "WEB_APP_URL",
+)
 
 
 def _write(path: Path, content: str | bytes, mode: int = 0o600) -> Path:
@@ -351,11 +360,17 @@ def _legacy_source_values() -> dict[str, str]:
     return {
         "API_HOST": "0.0.0.0",
         "API_PORT": "8100",
+        "DEV_TOOLS_ENABLED": "legacy-enable-dev-tools",
+        "FRONTEND_ORIGIN": "http://legacy.example.invalid",
         "GRPC_PORT": "50051",
+        "LOG_FORMAT": "legacy-plain-text",
         "POSTGRES_HOST": "localhost",
         "POSTGRES_PORT": "5433",
         "REDIS_URL": "redis://super-secret@localhost:6380/0",
         "REQUIRE_API_KEY": "true",
+        "SENTRY_ENVIRONMENT": "legacy-staging",
+        "TRACKER_AUTO_CANCEL_ENABLED": "legacy-disable-money-cancel",
+        "TRUST_PROXY_HEADERS": "legacy-disable-proxy",
         "VISION_API_URL": "http://127.0.0.1:3030",
         "VISION_AUTO_RESTART_ON_MISSING_CDP": "true",
         "VISION_PASSWORD": "vision-secret",
@@ -363,6 +378,7 @@ def _legacy_source_values() -> dict[str, str]:
         "VISION_USERNAME": "vision-owner",
         "TELEGRAM_CHAT_ID": "123456",
         "VISION_FOLDER_ID": "folder-current",
+        "WEB_APP_URL": "http://legacy.example.invalid/tma/?token=never-persist",
     }
 
 
@@ -414,14 +430,25 @@ def test_bootstrap_projection_reports_all_unknown_names_without_values() -> None
             {
                 **_legacy_source_values(),
                 "DESKTOP_OWNER_TELEGRAM_USER_ID": "123456",
-                "UNSAFE_A": secret,
                 "UNSAFE_B": secret,
+                "UNSAFE_A": secret,
             },
             project_known_legacy_source=True,
         )
 
     assert str(raised.value) == "source environment contains unsupported keys: UNSAFE_A, UNSAFE_B"
     assert secret not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "legacy_key",
+    RUNTIME_DERIVED_LEGACY_KEYS,
+)
+def test_runtime_derived_legacy_keys_remain_strict_without_bootstrap_projection(
+    legacy_key: str,
+) -> None:
+    with pytest.raises(FbctlError, match=rf"unsupported key {legacy_key}"):
+        canonicalize_source({legacy_key: "legacy-value"}, incumbent={})
 
 
 @pytest.mark.parametrize("chat_id", ["0", "999999", "not-a-number"])
@@ -657,6 +684,62 @@ def test_vision_folder_id_propagates_only_to_canonical_app_environment(tmp_path:
     assert "VISION_FOLDER_ID=folder-current" in config.layout.source_env.read_text(encoding="utf-8")
 
 
+def test_bootstrap_projection_drops_legacy_runtime_values_before_candidate_persistence(
+    tmp_path: Path,
+) -> None:
+    root = _root(tmp_path)
+    release = _materialize(root / "candidate")
+    source_values = parse_dotenv(root / "shared" / "source.env")
+    legacy_values = {
+        key: value
+        for key, value in _legacy_source_values().items()
+        if key in RUNTIME_DERIVED_LEGACY_KEYS
+    }
+    projected, dropped = project_bootstrap_source(
+        source_values | legacy_values,
+        project_known_legacy_source=True,
+    )
+    projected_source = _write(
+        tmp_path / "projected.env",
+        "".join(f"{key}={value}\n" for key, value in projected.items()),
+    )
+
+    config = prepare_candidate(
+        root=root,
+        release=release,
+        source_env=projected_source,
+        docker_config=None,
+        adoption_bundle=None,
+    )
+
+    assert dropped == tuple(sorted(legacy_values))
+    assert not set(legacy_values) & set(projected)
+    assert {
+        key: config.app_values[key]
+        for key in (
+            "DEV_TOOLS_ENABLED",
+            "FRONTEND_ORIGIN",
+            "LOG_FORMAT",
+            "TRUST_PROXY_HEADERS",
+            "WEB_APP_URL",
+        )
+    } == {
+        "DEV_TOOLS_ENABLED": "false",
+        "FRONTEND_ORIGIN": "https://app.adpulse.su",
+        "LOG_FORMAT": "json",
+        "TRUST_PROXY_HEADERS": "true",
+        "WEB_APP_URL": "https://app.adpulse.su/tma/",
+    }
+    assert "SENTRY_ENVIRONMENT" not in config.app_values
+    assert "TRACKER_AUTO_CANCEL_ENABLED" not in config.app_values
+    assert not set(legacy_values) & set(parse_dotenv(config.layout.source_env))
+    persisted_env = "\n".join(
+        path.read_text(encoding="utf-8") for path in config.layout.base.rglob("*.env")
+    )
+    for legacy_value in legacy_values.values():
+        assert legacy_value not in persisted_env
+
+
 def test_bootstrap_source_check_is_in_memory_and_redacts_values(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -685,6 +768,8 @@ def test_bootstrap_source_check_is_in_memory_and_redacts_values(
     assert "API_HOST" in output
     assert "vision-super-secret" not in output
     assert "super-secret@" not in output
+    for legacy_key in RUNTIME_DERIVED_LEGACY_KEYS:
+        assert _legacy_source_values()[legacy_key] not in output
     assert list(tmp_path.rglob("*")) == before
 
 

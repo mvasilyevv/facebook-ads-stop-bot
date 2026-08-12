@@ -56,16 +56,23 @@ BOOTSTRAP_LEGACY_DROP_KEYS = frozenset(
     {
         "API_HOST",
         "API_PORT",
+        "DEV_TOOLS_ENABLED",
+        "FRONTEND_ORIGIN",
         "GRPC_PORT",
+        "LOG_FORMAT",
         "POSTGRES_HOST",
         "POSTGRES_PORT",
         "REDIS_URL",
         "REQUIRE_API_KEY",
+        "SENTRY_ENVIRONMENT",
+        "TRACKER_AUTO_CANCEL_ENABLED",
+        "TRUST_PROXY_HEADERS",
         "VISION_API_URL",
         "VISION_AUTO_RESTART_ON_MISSING_CDP",
         "VISION_PASSWORD",
         "VISION_TEAM_ID",
         "VISION_USERNAME",
+        "WEB_APP_URL",
     }
 )
 PRIVATE_BROWSER_KEYS = frozenset(
