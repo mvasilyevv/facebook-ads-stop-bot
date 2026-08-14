@@ -501,7 +501,14 @@ async def fetch_operator_scan_state(
                         WHERE CAST(:account_id AS TEXT) IS NULL
                            OR ad_account_id = CAST(:account_id AS TEXT)
                       ) AS next_scan_at,
-                      (SELECT BOOL_OR(is_scanning_enabled) FROM observer_config) AS enabled
+                      (SELECT BOOL_OR(is_scanning_enabled) FROM observer_config) AS enabled,
+                      -- Нужен дашборду, чтобы отличить «нечего отслеживать» от
+                      -- «не отслеживается ничего»: при одном кабинете пустой
+                      -- allowlist означает, что скан не покрывает ни одного
+                      -- объявления, хотя мониторинг включён.
+                      (
+                        SELECT campaign_ids FROM observer_config ORDER BY id LIMIT 1
+                      ) AS campaign_ids
                     """
                 ),
                 params,

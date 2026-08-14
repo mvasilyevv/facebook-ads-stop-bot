@@ -9,6 +9,8 @@ Scan set = объединение offer_ad_accounts всех АКТИВНЫХ о
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -48,6 +50,23 @@ async def resolve_scan_account_ids(engine: AsyncEngine) -> list[str]:
         return await ad_account_catalog.resolve_scan_set(conn)
 
 
+def nothing_monitored_reason_for(
+    account_ids: Sequence[str],
+    campaign_ids: Sequence[str],
+) -> str | None:
+    """Чистая проверка «скан включён, но не покрывает ни одного объявления».
+
+    Вынесена из async-обёртки, чтобы вызывающий с уже готовым набором кабинетов
+    (снимок оператора) не делал повторный запрос в БД, а тексты и условие
+    оставались в одном месте.
+    """
+    if not account_ids:
+        return "Нет активных офферов с кабинетами — сканировать нечего."
+    if allowlist_blocks_scan(len(account_ids) <= 1, list(campaign_ids or [])):
+        return "Список кампаний пуст — выберите кампании для мониторинга на странице «Кампании»."
+    return None
+
+
 async def scan_nothing_monitored_reason(engine: AsyncEngine, campaign_ids: list[str]) -> str | None:
     """Почему включённый скан фактически НИЧЕГО не отслеживает (или None если всё ок).
 
@@ -58,11 +77,7 @@ async def scan_nothing_monitored_reason(engine: AsyncEngine, campaign_ids: list[
     Та же логика, что в реальном цикле observer (allowlist_blocks_scan) — UI совпадает с поведением.
     """
     account_ids = await resolve_scan_account_ids(engine)
-    if not account_ids:
-        return "Нет активных офферов с кабинетами — сканировать нечего."
-    if allowlist_blocks_scan(len(account_ids) <= 1, list(campaign_ids or [])):
-        return "Список кампаний пуст — выберите кампании для мониторинга на странице «Кампании»."
-    return None
+    return nothing_monitored_reason_for(account_ids, campaign_ids)
 
 
 async def load_ad_account_id_for_fb_ad(engine: AsyncEngine, fb_ad_id: str) -> str | None:
