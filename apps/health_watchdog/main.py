@@ -64,6 +64,7 @@ from core.telegram.worker_notify import (
     resolve_recurring_incident,
     resolve_recurring_incident_in_transaction,
 )
+from core.vision.token_refresh import refresh_vision_token_if_needed
 from core.wording import ads_ru, commands_ru
 from core.worker_metrics import mark_worker_heartbeat
 
@@ -79,6 +80,11 @@ LOOP_RESTART_DELAY_SECONDS = float(os.environ.get("HEALTH_WATCHDOG_LOOP_RESTART_
 STARTUP_GRACE_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_STARTUP_GRACE_SEC", "90"))
 REPORTED_SNAPSHOT_MAX_AGE_SECONDS = int(
     os.environ.get("HEALTH_WATCHDOG_SNAPSHOT_MAX_AGE_SEC", "300")
+)
+# Облачное продление идёт в уже наблюдаемом watchdog, а не в отдельном
+# host-таймере. Суточная каденция повторяет проверенный production-режим.
+VISION_TOKEN_REFRESH_INTERVAL_SECONDS = int(
+    os.environ.get("HEALTH_WATCHDOG_VISION_TOKEN_REFRESH_SEC", "86400")
 )
 
 
@@ -1322,6 +1328,41 @@ async def shadow_spend_loop(
             pass
 
 
+async def vision_token_refresh_loop(
+    *,
+    stop: asyncio.Event,
+    engine: AsyncEngine,
+    vision_cloud_url: str,
+    interval: int = VISION_TOKEN_REFRESH_INTERVAL_SECONDS,
+) -> None:
+    """Check the canonical Vision token once per day inside the watchdog."""
+    if interval <= 0:
+        raise RuntimeError("Vision token refresh interval must be positive")
+    try:
+        await asyncio.wait_for(stop.wait(), timeout=STARTUP_GRACE_SECONDS)
+    except asyncio.TimeoutError:
+        pass
+
+    while not stop.is_set():
+        try:
+            await refresh_vision_token_if_needed(
+                engine,
+                vision_cloud_url=vision_cloud_url,
+            )
+        except Exception as exc:  # noqa: BLE001 - supervisor must retain the daily loop
+            # Не печатаем exception: внешние client errors могут удерживать
+            # request с X-Token. Ожидаемые cloud-ошибки сам модуль уже превращает
+            # в дедуплицируемый incident; здесь остаётся безопасный fallback.
+            logger.error(
+                "vision token refresh tick failed (error_type=%s)",
+                type(exc).__name__,
+            )
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+
+
 async def _supervised(
     name: str,
     factory: Any,
@@ -1358,10 +1399,17 @@ def _get_database_url() -> str:
     return get_settings().database_url
 
 
+def _get_vision_cloud_url() -> str:
+    from core.config import get_settings
+
+    return get_settings().vision_cloud_url
+
+
 async def main_loop(database_url: str | None = None) -> None:
     from core.meta_api.client import MetaApiClient
 
     db_url = database_url or _get_database_url()
+    vision_cloud_url = _get_vision_cloud_url()
     engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
 
     # MetaApiClient для сетевого probe канала auto-stop (eager-init: gRPC-канал ленивый,
@@ -1409,6 +1457,15 @@ async def main_loop(database_url: str | None = None) -> None:
                     meta_client,
                     stop=stop,
                     engine=engine,
+                ),
+                stop,
+            ),
+            _supervised(
+                "vision_token_refresh_loop",
+                lambda: vision_token_refresh_loop(
+                    stop=stop,
+                    engine=engine,
+                    vision_cloud_url=vision_cloud_url,
                 ),
                 stop,
             ),

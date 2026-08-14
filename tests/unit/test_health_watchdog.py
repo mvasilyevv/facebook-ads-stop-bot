@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -239,6 +241,51 @@ async def test_meta_probe_reads_canonical_profile_inside_shared_fence(monkeypatc
         "fence_assert",
         "fence_exit",
     ]
+
+
+async def test_vision_token_refresh_loop_runs_once_and_stops(monkeypatch) -> None:
+    stop = asyncio.Event()
+
+    async def refresh_once(engine, *, vision_cloud_url):
+        assert engine is sentinel_engine
+        assert vision_cloud_url == "https://vision.example/api/v1"
+        stop.set()
+
+    sentinel_engine = object()
+    monkeypatch.setattr(hw, "STARTUP_GRACE_SECONDS", 0)
+    monkeypatch.setattr(hw, "refresh_vision_token_if_needed", refresh_once)
+
+    await hw.vision_token_refresh_loop(
+        stop=stop,
+        engine=sentinel_engine,  # type: ignore[arg-type]
+        vision_cloud_url="https://vision.example/api/v1",
+        interval=86400,
+    )
+
+
+async def test_vision_token_refresh_loop_never_logs_exception_secret(
+    monkeypatch,
+    caplog,
+) -> None:
+    stop = asyncio.Event()
+
+    async def fail_once(*_args, **_kwargs):
+        stop.set()
+        raise RuntimeError("secret-x-token")
+
+    monkeypatch.setattr(hw, "STARTUP_GRACE_SECONDS", 0)
+    monkeypatch.setattr(hw, "refresh_vision_token_if_needed", fail_once)
+    caplog.set_level(logging.ERROR, logger="health_watchdog")
+
+    await hw.vision_token_refresh_loop(
+        stop=stop,
+        engine=object(),  # type: ignore[arg-type]
+        vision_cloud_url="https://vision.example/api/v1",
+        interval=86400,
+    )
+
+    assert "RuntimeError" in caplog.text
+    assert "secret-x-token" not in caplog.text
 
 
 class _Result:
