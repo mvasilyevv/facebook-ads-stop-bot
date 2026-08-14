@@ -69,13 +69,42 @@ async def test_outbox_failure_is_reported_without_direct_fallback(monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_recurring_incident_rejects_noncritical_severity() -> None:
-    with pytest.raises(ValueError, match="must be critical"):
+async def test_recurring_incident_rejects_non_operational_severity() -> None:
+    with pytest.raises(ValueError, match="must be warning or critical"):
         await worker_notify.notify_recurring_incident(
             object(),
             incident_key="worker:test",
             audience="owners",
-            event_type="test_warning",
-            severity="warning",
-            title="Not critical",
+            event_type="test_unknown",
+            severity="unknown",
+            title="Unknown",
         )
+
+
+@pytest.mark.asyncio
+async def test_recurring_incident_accepts_warning_severity(monkeypatch) -> None:
+    persist = AsyncMock(return_value=True)
+    monkeypatch.setattr(worker_notify, "notify_recurring_incident_in_transaction", persist)
+
+    class BeginContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Engine:
+        def begin(self):
+            return BeginContext()
+
+    accepted = await worker_notify.notify_recurring_incident(
+        Engine(),  # type: ignore[arg-type]
+        incident_key="worker:warning",
+        audience="owners",
+        event_type="test_warning",
+        severity="warning",
+        title="Needs attention",
+    )
+
+    assert accepted is True
+    assert persist.await_args.kwargs["severity"] == "warning"

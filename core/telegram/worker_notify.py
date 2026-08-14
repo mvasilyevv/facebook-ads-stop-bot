@@ -147,7 +147,7 @@ async def notify_owners_in_transaction(
 
     This hook deliberately has no best-effort exception handling and no rolling
     dedupe mode: a projection failure must abort the domain write. Callers that
-    need a recurring critical signal should use
+    need a recurring operational signal should use
     :func:`notify_recurring_incident_in_transaction`.
     """
     facts = NotificationCardFacts(
@@ -207,8 +207,8 @@ async def notify_recurring_incident_in_transaction(
     key = incident_key.strip()
     if not key or len(key) > 160:
         raise ValueError("incident_key must contain 1..160 characters")
-    if severity != "critical":
-        raise ValueError("recurring worker incidents must be critical")
+    if severity not in ("warning", "critical"):
+        raise ValueError("recurring worker incidents must be warning or critical")
     normalized_resource_type = resource_type.strip()
     normalized_resource_id = (resource_id or key).strip()
     if not normalized_resource_type or len(normalized_resource_type) > 32:
@@ -376,8 +376,8 @@ async def notify_recurring_incident(
     key = incident_key.strip()
     if not key or len(key) > 160:
         raise ValueError("incident_key must contain 1..160 characters")
-    if severity != "critical":
-        raise ValueError("recurring worker incidents must be critical")
+    if severity not in ("warning", "critical"):
+        raise ValueError("recurring worker incidents must be warning or critical")
     if not resource_type.strip() or len(resource_type.strip()) > 32:
         raise ValueError("resource_type must contain 1..32 characters")
     normalized_resource_id = (resource_id or key).strip()
