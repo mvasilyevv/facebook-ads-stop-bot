@@ -77,22 +77,25 @@ def test_observer_notification_money_facts_require_and_render_currency() -> None
         ],
     }
 
-    assert _incident_lines(metrics, currency="KES") == ["Spend 18.40 KES"]
-    assert (
-        _incident_summary(
-            metrics,
-            ("cpl_stop",),
-            currency="KES",
-        )
-        == "CPL_STOP: 9.56 KES при пороге 3.00 KES"
-    )
-    assert _incident_lines(metrics, currency=None) == ["Spend не показан: валюта не подтверждена"]
-    assert "денежные значения не подтверждены" in _incident_summary(
-        metrics,
-        ("cpl_stop",),
-        currency=None,
-    )
-    assert _incident_risk(("spend_no_dep_range",)) == ("расход без первого депозита")
+    line = _incident_lines(metrics, currency="KES")[0]
+    assert "18.40 KES" in line
+    assert line.startswith("Потрачено ")
+
+    summary = _incident_summary(metrics, ("cpl_stop",), currency="KES")
+    # Смысл: какая метрика, её значение и порог — всё с подтверждённой валютой.
+    assert summary.startswith("Цена лида ")
+    assert "9.56 KES" in summary
+    assert "3.00 KES" in summary
+    assert "CPL_STOP" not in summary
+
+    hidden_line = _incident_lines(metrics, currency=None)[0]
+    assert "18.40" not in hidden_line
+    assert "валюта кабинета не подтверждена" in hidden_line
+    hidden_summary = _incident_summary(metrics, ("cpl_stop",), currency=None)
+    assert "9.56" not in hidden_summary
+    assert "валюта кабинета не подтверждена" in hidden_summary
+
+    assert _incident_risk(("spend_no_dep_range",)) == "Деньги уходят, а депозитов всё ещё нет"
 
 
 def test_money_card_escapes_dynamic_values_and_stays_within_telegram_limit() -> None:
