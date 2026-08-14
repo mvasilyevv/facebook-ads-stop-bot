@@ -12,6 +12,10 @@ import type {
   OperatorSection,
 } from "@fb/shared/operator/contracts";
 import { OPERATOR_INCIDENT_STATUS_LABEL } from "@fb/shared/operator/incidentViewModel";
+import {
+  stopProximityBarWidth,
+  type OperatorStopProximity,
+} from "@fb/shared/operator/stopProximity";
 
 export interface DataStateBadgeProps {
   state: DataState;
@@ -44,6 +48,71 @@ export function OperatorIncidentStatusBadge({
       <span className="operator-incident-status-mark" aria-hidden="true" />
       {OPERATOR_INCIDENT_STATUS_LABEL[status]}
     </span>
+  );
+}
+
+export interface StopProximityProps {
+  proximity: OperatorStopProximity;
+}
+
+/**
+ * Стадия правила одним тегом.
+ *
+ * `data-shape` и печатный символ дублируют цвет, поэтому «Подходит к стопу» и
+ * «Порог пройден» различимы в ч/б, в forced-colors и при дальтонизме.
+ */
+export function StopProximityBadge({ proximity }: StopProximityProps) {
+  return (
+    <span
+      className="operator-stop-proximity"
+      data-kind={proximity.kind}
+      data-stage={proximity.stage ?? "unknown"}
+      data-shape={proximity.shape}
+      data-tone={proximity.tone}
+      title={proximity.hint}
+    >
+      <span className="operator-stop-proximity-mark" aria-hidden="true">
+        {proximity.mark}
+      </span>
+      <span>{proximity.label}</span>
+      <span className="operator-stop-proximity-percent">
+        {proximity.percentText}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Полное чтение близости к стопу: стадия, правило, «значение из порога» и доля.
+ *
+ * Шкала рисуется только для подтверждённой доли: пустая полоса на строке без
+ * данных читалась бы как «до стопа далеко».
+ */
+export function StopProximityReadout({ proximity }: StopProximityProps) {
+  const width = stopProximityBarWidth(proximity);
+  return (
+    <div
+      className="operator-stop-proximity-readout"
+      data-kind={proximity.kind}
+      data-stage={proximity.stage ?? "unknown"}
+    >
+      <StopProximityBadge proximity={proximity} />
+      {proximity.ruleText || proximity.detail ? (
+        <span className="operator-stop-proximity-rule">
+          {[proximity.ruleText, proximity.detail].filter(Boolean).join(" · ")}
+        </span>
+      ) : null}
+      {width !== null ? (
+        <span
+          className="operator-stop-proximity-bar"
+          data-tone={proximity.tone}
+          aria-hidden="true"
+        >
+          <span style={{ width: `${width}%` }} />
+        </span>
+      ) : null}
+      <span className="sr-only">{proximity.hint}</span>
+    </div>
   );
 }
 

@@ -287,3 +287,101 @@
     justify-content: space-between;
   }
 }
+
+/* Близость к стопу: форма маркера дублирует цвет, поэтому стадия читается
+   в ч/б, в forced-colors и при дальтонизме. */
+.operator-stop-proximity {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: var(--radius-1);
+  padding: 3px 8px;
+  color: var(--color-bg-10);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.operator-stop-proximity-mark {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.operator-stop-proximity-percent {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.operator-stop-proximity[data-tone="critical"] {
+  border-color: var(--color-danger);
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.operator-stop-proximity[data-tone="warning"] {
+  border-color: var(--color-warning);
+  background: transparent;
+  color: var(--color-warning);
+  /* Штриховой контур — вторая, нецветовая разница со сплошным stop. */
+  border-style: dashed;
+}
+
+.operator-stop-proximity[data-tone="ok"] {
+  color: var(--color-bg-10);
+}
+
+.operator-stop-proximity[data-tone="neutral"] {
+  border-style: dotted;
+  color: var(--color-bg-9);
+}
+
+.operator-stop-proximity-readout {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.operator-stop-proximity-rule {
+  color: var(--color-bg-9);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.operator-stop-proximity-bar {
+  display: block;
+  width: 100%;
+  min-width: 96px;
+  height: 4px;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: 2px;
+  background: var(--color-bg-2);
+}
+
+.operator-stop-proximity-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--color-bg-8);
+}
+
+.operator-stop-proximity-bar[data-tone="critical"] > span {
+  background: var(--color-danger);
+}
+
+.operator-stop-proximity-bar[data-tone="warning"] > span {
+  background: var(--color-warning);
+}
+
+@media (forced-colors: active) {
+  .operator-stop-proximity {
+    border-color: CanvasText;
+  }
+
+  .operator-stop-proximity-bar > span {
+    background: CanvasText;
+  }
+}
