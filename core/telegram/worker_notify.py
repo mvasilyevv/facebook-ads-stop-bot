@@ -408,7 +408,7 @@ async def resolve_recurring_incident_in_transaction(
     *,
     incident_key: str,
     audience: Literal["owners", "all"],
-    summary: str = "Источник снова работает.",
+    summary: str = "Проблема больше не наблюдается.",
 ) -> bool:
     """Resolve one active generation inside the caller's transaction.
 
@@ -467,7 +467,7 @@ async def resolve_recurring_incident(
     *,
     incident_key: str,
     audience: Literal["owners", "all"],
-    summary: str = "Источник снова работает.",
+    summary: str = "Проблема больше не наблюдается.",
 ) -> bool:
     """Resolve the active generation and enqueue one edit for its card."""
     try:

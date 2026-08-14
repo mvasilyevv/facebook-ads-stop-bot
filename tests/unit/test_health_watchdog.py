@@ -463,10 +463,11 @@ async def test_shadow_spend_hides_money_and_opens_incident_without_currency(
     assert alerted is True
     assert client.called is False
     notify.assert_awaited_once()
-    assert "валюта" in notify.await_args.kwargs["summary"].lower()
-    assert notify.await_args.kwargs["lines"] == [
-        "Денежные значения скрыты; сравнение не выполняется"
-    ]
+    # Валюта не подтверждена → суммы скрыты, но сказано почему и что делать.
+    assert "валюту" in notify.await_args.kwargs["summary"].lower()
+    lines = notify.await_args.kwargs["lines"]
+    assert any("не показываю" in line for line in lines)
+    assert any("Ads Manager" in line for line in lines)
 
 
 async def test_shadow_spend_alerts_and_enqueues_one_durable_scan(monkeypatch) -> None:

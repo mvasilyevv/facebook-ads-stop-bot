@@ -7,9 +7,10 @@ from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
 from core.domain import AlertStage
 from core.money import require_exact_currency_amount
-from core.rules.labels import rule_label
+from core.rules.labels import rule_label, rule_metric_label
 from core.rules.types import RuleContext, RuleEvaluation, RuleHit
 from core.scanner.models import ScannedAdRow
+from core.wording import deposits_ru, registrations_ru
 
 _HUNDRED = Decimal("100")
 _PERCENT_STEP = Decimal("0.01")
@@ -87,8 +88,8 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
             warning_threshold=ctx.cpc_warning_threshold,
             code="cpc_stop",
             title=rule_label("cpc_stop"),
-            label="CPC",
             missing_event_label="кликов",
+            currency=ctx.currency,
             currency_exponent=ctx.currency_exponent,
         )
 
@@ -101,8 +102,7 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
             warning_threshold=ctx.cpc_warning_threshold,
             code="cpc_stop",
             title=rule_label("cpc_stop"),
-            label="CPC",
-            stage_name="клика",
+            currency=ctx.currency,
             currency_exponent=ctx.currency_exponent,
         ),
         _evaluate_guardrail_only(
@@ -113,8 +113,8 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
             warning_threshold=ctx.cpl_warning_threshold,
             code="cpl_stop",
             title=rule_label("cpl_stop"),
-            label="CPL",
             missing_event_label="лидов",
+            currency=ctx.currency,
             currency_exponent=ctx.currency_exponent,
         ),
     )
@@ -130,8 +130,7 @@ def _evaluate_lead_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
             warning_threshold=ctx.cpl_warning_threshold,
             code="cpl_stop",
             title=rule_label("cpl_stop"),
-            label="CPL",
-            stage_name="лида",
+            currency=ctx.currency,
             currency_exponent=ctx.currency_exponent,
         ),
         _evaluate_guardrail_only(
@@ -142,8 +141,8 @@ def _evaluate_lead_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
             warning_threshold=ctx.cpr_warning_threshold,
             code="cpr_stop",
             title=rule_label("cpr_stop"),
-            label="CPR",
             missing_event_label="регистраций",
+            currency=ctx.currency,
             currency_exponent=ctx.currency_exponent,
         ),
     )
@@ -158,8 +157,7 @@ def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit
         warning_threshold=ctx.cpr_warning_threshold,
         code="cpr_stop",
         title=rule_label("cpr_stop"),
-        label="CPR",
-        stage_name="регистрации",
+        currency=ctx.currency,
         currency_exponent=ctx.currency_exponent,
     )
 
@@ -176,8 +174,8 @@ def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit
             stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
             code="spend_no_dep_range",
             title=rule_label("spend_no_dep_range"),
-            summary_suffix="депозитов 0, цена реги в норме",
-            reason_suffix="Цена регистрации ещё укладывается в рабочую зону, но депозитов всё ещё нет.",
+            summary_suffix="депозитов нет, цена регистрации в норме",
+            reason_suffix="Цена регистрации ещё в рабочей зоне, но депозитов всё ещё нет.",
         )
 
     return _pick_highest_priority_hit(
@@ -203,10 +201,10 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
         stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
         code="spend_with_dep_range",
         title=rule_label("spend_with_dep_range"),
-        summary_suffix=f"депозиты есть ({total_deposits}), кап по расходу на ад",
+        summary_suffix=f"депозиты есть ({deposits_ru(total_deposits)}), кап по расходу",
         reason_suffix=(
-            f"Депозиты уже есть ({total_deposits}), но расход достиг дневного капа "
-            "относительно CPA — кап не зависит от числа депозитов."
+            f"Депозиты уже есть ({deposits_ru(total_deposits)}), но расход достиг дневного "
+            "капа относительно CPA — кап не зависит от числа депозитов."
         ),
     )
 
@@ -240,9 +238,10 @@ def _evaluate_frequency_anomaly(ctx: RuleContext) -> RuleHit | None:
             stage=AlertStage.STOP,
             value=current,
             threshold=stop_thr,
-            summary=f"Frequency {current:.2f} превысила стоп {stop_thr:.2f}",
+            summary=f"Частота показов {current:.2f} при стопе {stop_thr:.2f}",
             reason_text=(
-                f"Частота {current:.2f} превысила стоп-порог {stop_thr:.2f} — выгорание аудитории."
+                f"Частота показов {current:.2f} выше стоп-порога {stop_thr:.2f}: "
+                "аудитория выгорела, объявление крутится по одним и тем же людям."
             ),
         )
 
@@ -254,9 +253,10 @@ def _evaluate_frequency_anomaly(ctx: RuleContext) -> RuleHit | None:
             stage=AlertStage.WARNING,
             value=current,
             threshold=warn_thr,
-            summary=f"Frequency {current:.2f} превысила порог {warn_thr:.2f}",
+            summary=f"Частота показов {current:.2f} при пороге {warn_thr:.2f}",
             reason_text=(
-                f"Частота {current:.2f} выше порога {warn_thr:.2f} — возможное выгорание аудитории."
+                f"Частота показов {current:.2f} выше порога {warn_thr:.2f}: "
+                "аудитория начинает выгорать."
             ),
         )
 
@@ -520,14 +520,15 @@ def _stop_progress_hit(
     if not stop_threshold.is_finite() or stop_threshold <= 0:
         raise ValueError("stop threshold must be finite and positive")
     title = rule_label(code)
+    metric = rule_metric_label(code)
     return RuleHit(
         code=code,
         title=title,
         stage=stage,
         value=value,
         threshold=stop_threshold,
-        summary=f"{title}: {value} из {stop_threshold} до STOP",
-        reason_text=f"Текущее значение {value}; STOP-порог {stop_threshold}.",
+        summary=f"{metric} {value} из {stop_threshold} до стопа",
+        reason_text=f"{metric} сейчас {value}, стоп на {stop_threshold}.",
     )
 
 
@@ -540,17 +541,19 @@ def _evaluate_metric_only(
     warning_threshold: Decimal,
     code: str,
     title: str,
-    label: str,
-    stage_name: str,
+    currency: str,
     currency_exponent: int,
 ) -> RuleHit | None:
     if not enabled or metric_value is None:
         return None
 
     current = _exact_derived_money(metric_value)
+    metric = rule_metric_label(code)
+    current_text = _format_money_with_currency(current, currency, currency_exponent)
     threshold_text = _format_threshold_value(
         stop_threshold,
         base_stop_threshold,
+        currency,
         currency_exponent,
     )
 
@@ -561,11 +564,10 @@ def _evaluate_metric_only(
             stage=AlertStage.STOP,
             value=current,
             threshold=stop_threshold,
-            summary=f"{label} {_format_money_value(current, currency_exponent)} достиг или превысил стоп {threshold_text}",
+            summary=f"{metric} {current_text} при стопе {threshold_text}",
             reason_text=(
-                f"Цена {stage_name} достигла или вышла за допустимую границу: "
-                f"{label} сейчас {_format_money_value(current, currency_exponent)}. "
-                f"Стоп для этого правила {threshold_text}."
+                f"{metric} сейчас {current_text}, "
+                f"а стоп для этого правила {threshold_text} — граница пройдена."
             ),
         )
 
@@ -576,11 +578,10 @@ def _evaluate_metric_only(
             stage=AlertStage.WARNING,
             value=current,
             threshold=warning_threshold,
-            summary=f"{label} {_format_money_value(current, currency_exponent)} приближается к стопу {threshold_text}",
+            summary=f"{metric} {current_text} подходит к стопу {threshold_text}",
             reason_text=(
-                f"Цена {stage_name} уже подходит к критической зоне: "
-                f"{label} сейчас {_format_money_value(current, currency_exponent)}. "
-                f"Стоп для этого правила {threshold_text}, запас почти исчерпан."
+                f"{metric} сейчас {current_text}, "
+                f"а стоп для этого правила {threshold_text} — запас почти исчерпан."
             ),
         )
 
@@ -596,8 +597,8 @@ def _evaluate_guardrail_only(
     warning_threshold: Decimal,
     code: str,
     title: str,
-    label: str,
     missing_event_label: str,
+    currency: str,
     currency_exponent: int,
 ) -> RuleHit | None:
     # Жёсткий стоп без ожидания показов/охвата (решение байера): расход без
@@ -607,9 +608,12 @@ def _evaluate_guardrail_only(
         return None
 
     current_spend = Decimal(spend)
+    metric = rule_metric_label(code).lower()
+    spend_text = _format_money_with_currency(current_spend, currency, currency_exponent)
     threshold_text = _format_threshold_value(
         stop_threshold,
         base_stop_threshold,
+        currency,
         currency_exponent,
     )
 
@@ -620,11 +624,14 @@ def _evaluate_guardrail_only(
             stage=AlertStage.STOP,
             value=current_spend,
             threshold=stop_threshold,
-            summary=f"Расход {_format_money_value(current_spend, currency_exponent)} превысил стоп {label} {threshold_text} без {missing_event_label}",
+            summary=(
+                f"Потрачено {spend_text}, а {missing_event_label} нет — "
+                f"{metric} уже за стопом {threshold_text}"
+            ),
             reason_text=(
-                f"Расход уже вышел за границу следующей ступени, хотя {missing_event_label} ещё нет: "
-                f"потрачено {_format_money_value(current_spend, currency_exponent)}. "
-                f"Стоп для {label} {threshold_text}, поэтому следующий шаг воронки уже будет слишком дорогим."
+                f"Потрачено {spend_text}, но {missing_event_label} так и нет. "
+                f"Стоп по правилу «{metric}» — {threshold_text}, "
+                "следующий шаг воронки уже будет слишком дорогим."
             ),
         )
 
@@ -635,11 +642,13 @@ def _evaluate_guardrail_only(
             stage=AlertStage.WARNING,
             value=current_spend,
             threshold=warning_threshold,
-            summary=f"Расход {_format_money_value(current_spend, currency_exponent)} приближается к стопу {label} {threshold_text} без {missing_event_label}",
+            summary=(
+                f"Потрачено {spend_text}, а {missing_event_label} нет — "
+                f"{metric} подходит к стопу {threshold_text}"
+            ),
             reason_text=(
-                f"Расход подошёл слишком близко к следующей ступени воронки, хотя {missing_event_label} ещё нет: "
-                f"потрачено {_format_money_value(current_spend, currency_exponent)}. "
-                f"Стоп для {label} {threshold_text}, запас по экономике почти закончился."
+                f"Потрачено {spend_text}, но {missing_event_label} так и нет. "
+                f"Стоп по правилу «{metric}» — {threshold_text}, запас почти закончился."
             ),
         )
 
@@ -665,10 +674,14 @@ def _evaluate_regs_without_deposits(row: ScannedAdRow, ctx: RuleContext) -> Rule
             stage=AlertStage.STOP,
             value=current,
             threshold=stop_val,
-            summary=f"Регистраций {row.registrations}, депозитов 0 (стоп от {ctx.regs_no_dep_stop_count})",
+            summary=(
+                f"{registrations_ru(row.registrations)} без депозитов, "
+                f"стоп с {registrations_ru(ctx.regs_no_dep_stop_count)}"
+            ),
             reason_text=(
-                f"Объявление накопило {row.registrations} регистраций, но не дало ни одного депозита. "
-                f"Стоп по этому правилу начинается с {ctx.regs_no_dep_stop_count} регистраций без депа."
+                f"Объявление собрало {registrations_ru(row.registrations)}, "
+                "но не дало ни одного депозита. Стоп по этому правилу начинается "
+                f"с {registrations_ru(ctx.regs_no_dep_stop_count)} без депозита."
             ),
         )
 
@@ -679,10 +692,13 @@ def _evaluate_regs_without_deposits(row: ScannedAdRow, ctx: RuleContext) -> Rule
             stage=AlertStage.WARNING,
             value=current,
             threshold=warning_val,
-            summary=f"Регистраций {row.registrations}, депозитов 0 — до стопа мало",
+            summary=(
+                f"{registrations_ru(row.registrations)} без депозитов, до стопа осталось немного"
+            ),
             reason_text=(
-                f"Регистрации уже накапливаются без депозитов: сейчас {row.registrations} рег(ов) и 0 депов. "
-                f"Стоп начнётся с {ctx.regs_no_dep_stop_count} регистраций без депозита."
+                f"Регистрации копятся без депозитов: сейчас {registrations_ru(row.registrations)} "
+                f"и депозитов нет. Стоп начнётся "
+                f"с {registrations_ru(ctx.regs_no_dep_stop_count)} без депозита."
             ),
         )
 
@@ -718,9 +734,11 @@ def _evaluate_spend_range(
             stage=AlertStage.STOP,
             value=current,
             threshold=_round_percent(effective_from),
-            summary=f"Расход {current:.2f}% CPA достиг или превысил стоп-диапазон {range_text}, {summary_suffix}",
+            summary=(
+                f"Расход {current:.2f}% от CPA при стоп-диапазоне {range_text}, {summary_suffix}"
+            ),
             reason_text=(
-                f"Расход уже достиг или превысил стоп-диапазон {range_text}: сейчас {current:.2f}% от CPA. "
+                f"Расход дошёл до {current:.2f}% от CPA и вошёл в стоп-диапазон {range_text}. "
                 f"{reason_suffix}"
             ),
         )
@@ -732,9 +750,12 @@ def _evaluate_spend_range(
             stage=AlertStage.WARNING,
             value=current,
             threshold=_round_percent(warning_from),
-            summary=f"Расход {current:.2f}% CPA приближается к стоп-диапазону {range_text}, {summary_suffix}",
+            summary=(
+                f"Расход {current:.2f}% от CPA подходит к стоп-диапазону {range_text}, "
+                f"{summary_suffix}"
+            ),
             reason_text=(
-                f"Расход подходит к стоп-диапазону {range_text}: сейчас {current:.2f}% от CPA. "
+                f"Расход дошёл до {current:.2f}% от CPA и подходит к стоп-диапазону {range_text}. "
                 f"{reason_suffix}"
             ),
         )
@@ -815,16 +836,22 @@ def _format_percent_value(value: Decimal) -> str:
     return f"{_round_percent(value):.2f}%"
 
 
+def _format_money_with_currency(value: Decimal, currency: str, currency_exponent: int) -> str:
+    """Сумма всегда с валютой: голое число оператор не может сравнить с планом."""
+    return f"{_format_money_value(value, currency_exponent)} {currency}"
+
+
 def _format_threshold_value(
     effective_value: Decimal,
     base_value: Decimal,
+    currency: str,
     currency_exponent: int,
 ) -> str:
     if Decimal(effective_value) == Decimal(base_value):
-        return _format_money_value(effective_value, currency_exponent)
+        return _format_money_with_currency(effective_value, currency, currency_exponent)
     return (
-        f"{_format_money_value(effective_value, currency_exponent)} "
-        f"(базовый {_format_money_value(base_value, currency_exponent)})"
+        f"{_format_money_with_currency(effective_value, currency, currency_exponent)} "
+        f"(базовый {_format_money_with_currency(base_value, currency, currency_exponent)})"
     )
 
 

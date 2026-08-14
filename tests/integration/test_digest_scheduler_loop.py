@@ -139,8 +139,9 @@ async def test_run_one_tick_queues_in_window(pg_engine, clean_loop_tables) -> No
         ).all()
     assert event.event_type == "daily_digest"
     assert event.audience == "all"
-    assert "Spend не подтверждён" in event.facts["summary"]
-    assert any("Деньги:" in line for line in event.facts["lines"])
+    # Без подтверждённой валюты сумма не показывается, а причина названа отдельной строкой.
+    assert "Расход не показан" in event.facts["summary"]
+    assert any(line.startswith("Почему:") for line in event.facts["lines"])
     assert deliveries == [("pending", chat_id)]
 
 

@@ -64,6 +64,7 @@ from core.telegram.worker_notify import (
     resolve_recurring_incident,
     resolve_recurring_incident_in_transaction,
 )
+from core.wording import ads_ru, commands_ru
 from core.worker_metrics import mark_worker_heartbeat
 
 logger = logging.getLogger("health_watchdog")
@@ -472,7 +473,7 @@ async def check_autostop_channel(
         await _resolve_critical_notification(
             incident_key=AUTOSTOP_BACKLOG_INCIDENT_KEY,
             engine=engine,
-            summary="Очередь авто-стопа и фактические статусы снова согласованы.",
+            summary="Команды авто-стопа снова доходят, статусы сошлись.",
         )
         return False
 
@@ -483,12 +484,16 @@ async def check_autostop_channel(
         incident_key=AUTOSTOP_BACKLOG_INCIDENT_KEY,
         engine=engine,
         event_type="autostop_backlog_degraded",
-        title="Канал авто-стопа не доводит стоп до OFF",
-        summary=f"Застряло: {len(stuck)} · активно после stop: {len(desynced)}",
+        title="Авто-стоп не доводит объявления до выключения",
+        summary=(
+            f"Зависло {commands_ru(len(stuck))} · "
+            f"после стопа всё ещё работает {ads_ru(len(desynced))}"
+        ),
         risk="Объявления могут продолжать тратить бюджет",
         lines=[
-            *(f"Цель: {target}" for target in targets),
-            "Проверь Vision, meta_api_worker и отключи вручную",
+            # Имени объявления в этих выборках нет — показываем ID как есть.
+            *(f"Объявление {target}" for target in targets),
+            "Проверь Vision-профиль и отключи эти объявления вручную",
         ],
         resource_type="meta_channel",
         resource_id="auto_stop",
@@ -898,9 +903,9 @@ async def _record_shadow_observation(
                 incident_key=incident_key,
                 audience="all",
                 summary=(
-                    f"act_{account_id}: валюта изменилась с "
-                    f"{persisted_currency} на {normalized.currency}; "
-                    "наблюдение начато заново."
+                    f"Кабинет {account_id}: валюта изменилась "
+                    f"с {persisted_currency} на {normalized.currency}, "
+                    "начинаю наблюдение заново."
                 ),
             )
             baseline = None
@@ -920,13 +925,13 @@ async def _record_shadow_observation(
                 audience="all",
                 event_type="meta_reporting_shadow",
                 severity="critical",
-                title=f"Тень отчётности · act_{account_id}",
+                title=f"Кабинет тратит больше, чем видно в отчётах · {account_id}",
                 summary=(
-                    f"Биллинг +{billing_amount} {verdict.currency} · "
-                    f"отчётность +{reported_amount} {verdict.currency}"
+                    f"Списано +{billing_amount} {verdict.currency}, "
+                    f"а в отчётах видно только +{reported_amount} {verdict.currency}"
                 ),
-                lines=["Проверь Ads Manager вручную"],
-                risk="Реальный открут не виден скану",
+                lines=["Проверь расход в Ads Manager вручную"],
+                risk="Часть открута не видна скану, авто-стоп её не поймает",
                 resource_type="ad_account",
                 resource_id=account_id,
             )
@@ -935,7 +940,7 @@ async def _record_shadow_observation(
                 conn,
                 incident_key=incident_key,
                 audience="all",
-                summary=f"act_{account_id}: отчётность подтверждённо догнала биллинг.",
+                summary=f"Кабинет {account_id}: отчёты догнали фактическое списание.",
             )
             baseline = None
             candidate_at = None
@@ -1136,14 +1141,12 @@ async def check_shadow_spend(
         currency = currencies.currencies.get(canonical_account_id)
         currency_issue: str | None = None
         if currency is None:
-            currency_issue = "Валюта Meta отсутствует, устарела или невалидна"
+            currency_issue = "Facebook не подтвердил валюту кабинета"
         else:
             try:
                 campaign_currency_exponent(currency)
             except UnsupportedCampaignCurrencyError:
-                currency_issue = (
-                    f"Для {currency} не подтверждён exponent минимальной денежной единицы"
-                )
+                currency_issue = f"Для валюты {currency} мы не знаем точность округления"
         currency_incident_key = f"{SHADOW_CURRENCY_INCIDENT_KEY_PREFIX}{canonical_account_id}"
         if currency_issue is not None:
             currency_alerted = await notify_recurring_incident(
@@ -1152,10 +1155,13 @@ async def check_shadow_spend(
                 audience="all",
                 event_type="meta_reporting_shadow_currency_unknown",
                 severity="critical",
-                title=f"Тень отчётности недоступна · act_{canonical_account_id}",
+                title=f"Не могу сверить расход кабинета {canonical_account_id}",
                 summary=currency_issue,
-                lines=["Денежные значения скрыты; сравнение не выполняется"],
-                risk="Watchdog не может сравнить billing и reporting",
+                lines=[
+                    "Суммы не показываю: без валюты это просто числа",
+                    "Открой кабинет в Ads Manager, чтобы бот обновил его данные",
+                ],
+                risk="Расхождение между списанием и отчётами останется незамеченным",
                 resource_type="ad_account",
                 resource_id=canonical_account_id,
             )
@@ -1165,9 +1171,7 @@ async def check_shadow_spend(
             engine,
             incident_key=currency_incident_key,
             audience="all",
-            summary=(
-                f"act_{canonical_account_id}: валюта {currency} и exponent снова подтверждены."
-            ),
+            summary=(f"Кабинет {canonical_account_id}: валюта {currency} снова подтверждена."),
         )
         if canonical_account_id in cabinet_days.missing_account_ids:
             logger.warning(

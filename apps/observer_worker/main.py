@@ -83,6 +83,7 @@ from core.telegram.worker_notify import (
     notify_recurring_incident,
     resolve_recurring_incident,
 )
+from core.wording import times_ru
 from core.worker_metrics import SNAPSHOT_AGE, mark_worker_heartbeat, start_worker_metrics_server
 
 logger = logging.getLogger(__name__)
@@ -321,7 +322,7 @@ async def _run_account_scan(
                 engine,
                 incident_key=(f"{OBSERVER_LOGIN_REQUIRED_INCIDENT_PREFIX}{confirmed_account_id}"),
                 audience="all",
-                summary=(f"Кабинет {confirmed_account_id}: авторизованная сессия подтверждена."),
+                summary=(f"Кабинет {confirmed_account_id}: вход в Facebook подтверждён."),
             )
 
         scan_issues = list(scan_out.warnings or [])
@@ -395,7 +396,7 @@ async def _run_account_scan(
                 engine,
                 incident_key=(f"{OBSERVER_TIMEZONE_UNKNOWN_INCIDENT_PREFIX}{ad_account_id}"),
                 audience="all",
-                summary=f"Кабинет {ad_account_id}: IANA timezone подтверждена.",
+                summary=f"Кабинет {ad_account_id}: часовой пояс подтверждён.",
             )
             await resolve_recurring_incident(
                 engine,
@@ -411,10 +412,13 @@ async def _run_account_scan(
                     audience="all",
                     event_type="observer_offer_currency_mismatch",
                     severity="critical",
-                    title="Автостоп остановлен: валюта правила не совпадает",
-                    summary=f"Кабинет {ad_account_id} · {mismatches}",
-                    risk="CPA и spend имеют разные денежные единицы",
-                    lines=["Исправь валюту CPA-правила; FX-конвертация не выполняется"],
+                    title="Авто-стоп остановлен: валюта правила не совпадает",
+                    summary=f"Кабинет {ad_account_id} · офферы: {mismatches}",
+                    risk="Пороги считать не по чему: CPA и расход в разных валютах",
+                    lines=[
+                        "Поставь офферу валюту кабинета — пересчёт курсом мы не делаем",
+                        "Пока валюты разные, объявления не отключаются автоматически",
+                    ],
                     resource_type="ad_account",
                     resource_id=ad_account_id,
                 )
@@ -447,10 +451,13 @@ async def _run_account_scan(
             audience="all",
             event_type="observer_cabinet_timezone_unknown",
             severity="critical",
-            title="Автостоп остановлен: timezone неизвестна",
-            summary=f"Кабинет {ad_account_id} · нет валидной IANA timezone",
-            risk="Граница денежных суток не подтверждена",
-            lines=["Обнови Meta account snapshot перед возобновлением решений"],
+            title="Авто-стоп остановлен: неизвестен часовой пояс кабинета",
+            summary=f"Кабинет {ad_account_id} · Facebook не отдал часовой пояс",
+            risk="Не понять, где граница суток, а значит и дневные пороги",
+            lines=[
+                "Открой кабинет в Ads Manager, чтобы бот обновил его данные",
+                "Пока пояс неизвестен, объявления не отключаются автоматически",
+            ],
             resource_type="ad_account",
             resource_id=ad_account_id,
         )
@@ -464,10 +471,13 @@ async def _run_account_scan(
             audience="all",
             event_type="observer_cabinet_currency_unknown",
             severity="critical",
-            title="Автостоп остановлен: валюта неизвестна",
-            summary=f"Кабинет {ad_account_id} · Meta currency не подтверждена",
-            risk="Денежные пороги нельзя сравнивать без единицы",
-            lines=["Обнови Meta account snapshot перед возобновлением решений"],
+            title="Авто-стоп остановлен: неизвестна валюта кабинета",
+            summary=f"Кабинет {ad_account_id} · Facebook не подтвердил валюту",
+            risk="Сумму без валюты нельзя сравнить с порогом",
+            lines=[
+                "Открой кабинет в Ads Manager, чтобы бот обновил его данные",
+                "Пока валюта неизвестна, объявления не отключаются автоматически",
+            ],
             resource_type="ad_account",
             resource_id=ad_account_id,
         )
@@ -615,9 +625,9 @@ async def _sync_cabinet_tab_incident(
         event_type="observer_cabinet_tab_unavailable",
         severity="critical",
         title="Кабинет не открыт в Ads Manager",
-        summary=f"Кабинет: {account_id}",
-        risk="Скан и автоматическое отключение недоступны",
-        lines=["Бот не смог открыть и подтвердить вкладку автоматически"],
+        summary=f"Кабинет {account_id}: сам открыть вкладку не получилось.",
+        risk="Пока вкладки нет, скан и авто-стоп не работают",
+        lines=["Открой кабинет в Ads Manager в Vision-профиле"],
         resource_type="ad_account",
         resource_id=account_id,
     )
@@ -711,7 +721,7 @@ async def _maybe_alert_multi_cab_no_owner(
         event_type="observer_multi_cabinet_unsafe",
         severity="critical",
         title="Скан остановлен ради безопасности",
-        summary=f"Кабинетов: {account_count} · owner_campaign_tag не задан",
+        summary=f"Кабинетов {account_count}, а метка своих кампаний не задана.",
         risk="Авто-стоп мог бы затронуть чужую рекламу",
         lines=["Задай owner_campaign_tag в настройках Observer"],
         resource_type="observer",
@@ -845,10 +855,13 @@ async def _maybe_alert_login_required(
         audience="all",
         event_type="observer_login_required",
         severity="critical",
-        title="Vision-профиль разлогинен",
-        summary=f"Кабинет: {account_id}",
+        title="Vision-профиль требует повторного входа",
+        summary=f"Кабинет {account_id}: Facebook разлогинил профиль.",
         risk="Скан и авто-стоп не работают",
-        lines=["Войди в Facebook в Vision-профиле и проверь Ads Manager"],
+        lines=[
+            "Войди в Facebook в Vision-профиле и открой Ads Manager",
+            "При риске расхода отключи объявления вручную",
+        ],
         resource_type="ad_account",
         resource_id=account_id,
     )
@@ -876,10 +889,13 @@ async def _maybe_alert_degraded(
         audience="all",
         event_type="observer_degraded",
         severity="critical",
-        title="Observer не может отсканировать кабинет",
-        summary=f"Сбоев подряд: {consecutive_failures}",
-        risk="Данные и авто-стоп недостоверны",
-        lines=["Проверь Vision-профиль, browser-agent и вкладку Ads Manager"],
+        title="Бот не может отсканировать кабинет",
+        summary=f"Скан не удался {times_ru(consecutive_failures)} подряд.",
+        risk="Данные устарели, авто-стоп может не сработать",
+        lines=[
+            "Проверь Vision-профиль, browser-agent и вкладку Ads Manager",
+            "Пока скана нет, следи за расходом вручную",
+        ],
         resource_type="worker",
         resource_id="observer",
     )
@@ -914,7 +930,7 @@ async def _track_degraded_incident(
         engine,
         incident_key=OBSERVER_DEGRADED_INCIDENT_KEY,
         audience="all",
-        summary="Полный scan Observer снова подтверждён.",
+        summary="Кабинет снова сканируется полностью.",
     )
     state.consecutive_scan_failures = 0
 
