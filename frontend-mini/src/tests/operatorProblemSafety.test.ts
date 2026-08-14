@@ -16,14 +16,15 @@ import { operatorProblemMessage } from "@/lib/operatorApi";
 
 describe("mini operator problem copy", () => {
   it("replaces raw exceptions with recovery copy", () => {
-    expect(
-      operatorProblemMessage(
-        new Error("Traceback: postgres://user:pw@db-01 bot_token=123:AAE"),
-      ),
-    ).toBe("Операторский снимок недоступен");
-    expect(operatorProblemMessage({ detail: "internal worker crash" })).toBe(
-      "Операторский снимок недоступен",
+    const recovery = "Сервер не подтвердил данные. Повторите попытку.";
+    const leaky = operatorProblemMessage(
+      new Error("Traceback: postgres://user:pw@db-01 bot_token=123:AAE"),
     );
+    expect(leaky).toBe(recovery);
+    // Ни один фрагмент исходного исключения не должен просочиться наружу:
+    // этот текст уходит в Telegram.
+    expect(leaky).not.toMatch(/Traceback|postgres:\/\/|bot_token/);
+    expect(operatorProblemMessage({ detail: "internal worker crash" })).toBe(recovery);
   });
 
   it("keeps the correlation id out of the Telegram-visible message", () => {

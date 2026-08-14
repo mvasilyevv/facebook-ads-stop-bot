@@ -45,9 +45,14 @@ describe("operator-visible API problems", () => {
   it("keeps operatorProblemMessage free of raw exceptions and identifiers", () => {
     const correlationId = "00000000-0000-0000-0000-000000000077";
 
-    expect(
-      operatorProblemMessage(new Error("Traceback: postgres://user:pw@db-01 secret token")),
-    ).toBe("Операторский снимок недоступен");
+    const recovery =
+      "Сервер не подтвердил данные. Повторите попытку; " +
+      "если не помогает — откройте «Источники и воркеры».";
+    const leaky = operatorProblemMessage(
+      new Error("Traceback: postgres://user:pw@db-01 secret token"),
+    );
+    expect(leaky).toBe(recovery);
+    expect(leaky).not.toMatch(/Traceback|postgres:\/\/|secret/);
     expect(
       operatorProblemMessage(
         new GeneratedApiError(503, {
@@ -58,8 +63,6 @@ describe("operator-visible API problems", () => {
         }),
       ),
     ).toBe("Снимок временно недоступен");
-    expect(operatorProblemMessage({ detail: "internal worker crash" })).toBe(
-      "Операторский снимок недоступен",
-    );
+    expect(operatorProblemMessage({ detail: "internal worker crash" })).toBe(recovery);
   });
 });
