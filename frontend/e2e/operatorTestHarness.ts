@@ -30,6 +30,17 @@ export const operatorAd = {
     confirmed_deposits: 1,
     cpc: "0.4381",
     cost_per_registration: "3.68",
+    frequency: "1.84",
+    cost_per_ftd: "18.40",
+  },
+  rule_context: {
+    offer_code: "GH_CR2",
+    rule_code: "cpr_stop",
+    rule_title: "Дорогая рега",
+    value: "3.68",
+    threshold: "4.00",
+    percent_to_stop: "92.00",
+    stage: "warning",
   },
   active_action: null,
 } as const;

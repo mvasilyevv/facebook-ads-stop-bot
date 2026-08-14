@@ -27,8 +27,9 @@ import {
   operatorCommandTone,
 } from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
+import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import { ACTION_STATE_LABEL, severityForDataState } from "@fb/shared/operator/viewModel";
-import { DataStateBadge } from "@fb/operator-ui";
+import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import { Button } from "@/components/ui/Button";
@@ -76,11 +77,12 @@ export function OperatorAdsTable({
 }) {
   return (
     <div className="hidden overflow-x-auto md:block">
-      <table className="w-full min-w-[860px] border-collapse text-left text-[14px]">
+      <table className="w-full min-w-[1040px] border-collapse text-left text-[14px]">
         <thead className="text-[12px] uppercase tracking-[.06em] text-bg-8">
           <tr className="border-b border-[var(--color-hairline)]">
             <th className="px-3 py-3 font-medium">Объявление</th>
             <th className="px-3 py-3 font-medium">Состояние</th>
+            <th className="px-3 py-3 font-medium">До стопа</th>
             <th className="px-3 py-3 text-right font-medium">Расход</th>
             <th className="px-3 py-3 text-right font-medium">Клики</th>
             <th className="px-3 py-3 text-right font-medium">Рег.</th>
@@ -110,6 +112,11 @@ export function OperatorAdsTable({
                   />
                   <DataStateBadge state={ad.data_state} compact />
                 </div>
+              </td>
+              <td className="max-w-[240px] px-3 py-3 align-top">
+                <StopProximityReadout
+                  proximity={describeStopProximity(ad.rule_context, { currency })}
+                />
               </td>
               <MetricCell value={formatSpend(ad.metrics.spend, currency)} />
               <MetricCell value={formatOperatorCount(ad.metrics.clicks)} />
@@ -154,6 +161,14 @@ export function OperatorAdCards({
               </Link>
             </div>
             <OperatorSeverityBadge severity={severityForDataState(ad.severity, ad.data_state)} />
+          </div>
+          <div className="mt-4 border-t border-[var(--color-hairline)] pt-3">
+            <span className="text-[12px] text-bg-8">До стопа</span>
+            <div className="mt-1.5">
+              <StopProximityReadout
+                proximity={describeStopProximity(ad.rule_context, { currency })}
+              />
+            </div>
           </div>
           <dl className="mt-4 grid grid-cols-4 gap-2 text-right">
             <Metric label="Расход" value={formatSpend(ad.metrics.spend, currency)} />

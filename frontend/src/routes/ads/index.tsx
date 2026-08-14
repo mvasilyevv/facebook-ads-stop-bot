@@ -5,13 +5,17 @@ import { ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
 import type { OperatorSeverity } from "@fb/shared/operator/contracts";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import {
+  isClientRankedAdsSort,
+  operatorAdsQuerySort,
   operatorCabinetOptions,
   parseOperatorAdsRouteSearch,
+  OPERATOR_ADS_STOP_PROXIMITY_SORT,
   type OperatorAdsDirection,
   type OperatorAdsRouteSearch,
-  type OperatorAdsSort,
+  type OperatorAdsRouteSort,
   type OperatorCabinetOption,
 } from "@fb/shared/operator/routeFilters";
+import { rankAdsByStopProximity } from "@fb/shared/operator/stopProximity";
 import { adsForRealtimeState } from "@fb/shared/operator/viewModel";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
@@ -33,7 +37,8 @@ const SEVERITIES: Array<{ value: OperatorSeverity | ""; label: string }> = [
   { value: "unknown", label: "Неизвестно" },
 ];
 
-const SORTS: Array<{ value: OperatorAdsSort; label: string }> = [
+const SORTS: Array<{ value: OperatorAdsRouteSort; label: string }> = [
+  { value: OPERATOR_ADS_STOP_PROXIMITY_SORT, label: "Близость к стопу" },
   { value: "updated", label: "Обновление" },
   { value: "spend", label: "Расход" },
   { value: "clicks", label: "Клики" },
@@ -57,11 +62,12 @@ function AdsPage() {
   const snapshot = useOperatorSnapshot({ window: "today" });
   const cabinets = operatorCabinetOptions(snapshot.data);
   const page = search.page ?? 1;
+  const rankedByStopProximity = isClientRankedAdsSort(search.sort);
   const query = useOperatorAds({
     search: search.q,
     account_id: search.account_id,
     severity: search.severity,
-    sort: search.sort ?? "updated",
+    sort: operatorAdsQuerySort(search.sort),
     direction: search.direction ?? "desc",
     page,
     page_size: 50,
@@ -71,7 +77,9 @@ function AdsPage() {
     ? adsForRealtimeState(payload, realtimeStatus === "connected" && !query.isError)
     : null;
   const displayState = displayPayload?.state;
-  const displayRows = displayPayload?.rows;
+  const displayRows = rankedByStopProximity
+    ? displayPayload && rankAdsByStopProximity(displayPayload.rows)
+    : displayPayload?.rows;
   const currency = confirmedOperatorCurrency(displayPayload?.scope);
   const hasConfirmedCount = displayState === "ready" || displayState === "empty";
   const activeFilterCount =
@@ -179,6 +187,17 @@ function AdsPage() {
         <div className="mb-4">
           <DataStateNotice state={displayState} issues={displayPayload.issues} />
         </div>
+      ) : null}
+
+      {rankedByStopProximity ? (
+        <p
+          role="status"
+          className="mb-4 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 px-4 py-3 text-[13px] text-bg-9"
+        >
+          {displayPayload && displayPayload.pages > 1
+            ? "Порядок по близости к стопу считается по загруженной странице. Полный ранжированный список по кабинету — в блоке «Подходят к стопу» на дашборде."
+            : "Порядок по близости к стопу считается на клиенте. Строки без подтверждённой доли уходят вниз и помечены отдельно."}
+        </p>
       ) : null}
 
       <section className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-3 sm:p-4">
@@ -335,7 +354,7 @@ function AdsFilterFields({
       <Select
         label="Сортировка"
         value={search.sort ?? "updated"}
-        onChange={(value) => onChange({ sort: value as OperatorAdsSort, page: undefined })}
+        onChange={(value) => onChange({ sort: value as OperatorAdsRouteSort, page: undefined })}
       >
         {SORTS.map((item) => (
           <option key={item.value} value={item.value}>

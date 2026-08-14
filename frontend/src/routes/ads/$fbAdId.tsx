@@ -2,10 +2,11 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 
 import { formatZonedDateTime, timezoneEvidenceLabel } from "@fb/shared/format/time";
-import { formatSpend } from "@fb/shared/format/number";
+import { formatDecimalValue, formatSpend } from "@fb/shared/format/number";
 import { confirmedOperatorCurrency, formatOperatorCount } from "@fb/shared/operator/adsViewModel";
+import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import { adsForRealtimeState, severityForDataState } from "@fb/shared/operator/viewModel";
-import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
+import { DataStateBadge, DataStateNotice, StopProximityReadout } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -112,6 +113,18 @@ function AdDetailRoute() {
         ) : null}
       </header>
 
+      <section
+        className="mt-4 rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5"
+        aria-labelledby="ad-stop-proximity"
+      >
+        <h2 id="ad-stop-proximity" className="m-0 font-display text-[20px] text-bg-11">
+          До стопа
+        </h2>
+        <div className="mt-4 max-w-md">
+          <StopProximityReadout proximity={describeStopProximity(ad.rule_context, { currency })} />
+        </div>
+      </section>
+
       <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_.8fr]">
         <section
           className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5"
@@ -132,6 +145,8 @@ function AdDetailRoute() {
               label="Цена регистрации"
               value={formatSpend(ad.metrics.cost_per_registration, currency)}
             />
+            <Metric label="Цена депозита" value={formatSpend(ad.metrics.cost_per_ftd, currency)} />
+            <Metric label="Частота" value={formatDecimalValue(ad.metrics.frequency)} />
           </dl>
         </section>
 

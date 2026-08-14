@@ -13,6 +13,7 @@ import {
 import { Link } from "@tanstack/react-router";
 
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
+import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import { operatorActionStateReason } from "@fb/shared/operator/actionLabels";
 import { safeOperatorAttentionHref } from "@fb/shared/operator/attentionNavigation";
@@ -32,6 +33,7 @@ import {
   buildOperatorPortfolioScale,
   operatorPortfolioScalePosition,
 } from "@fb/shared/operator/portfolioModel";
+import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import type {
   DataState,
   OperatorActionItem,
@@ -206,6 +208,11 @@ function OperatorLedgerScreen({
           section={snapshot.attention}
           timezone={displayTimezone}
           usdScopeConfirmed={usdScopeConfirmed}
+        />
+        <ApproachingStopLedger
+          section={snapshot.approaching_stop}
+          currency={usdScopeConfirmed ? "USD" : null}
+          timezone={displayTimezone}
         />
         <FunnelLedger
           section={snapshot.funnel}
@@ -518,6 +525,78 @@ function AttentionLedgerItem({
       </time>
     </li>
   );
+}
+
+/**
+ * Ранний контур: объявления, которые движок уже посчитал приближающимися
+ * к стопу. `empty` здесь — подтверждённое «никто не подходит», поэтому блок
+ * выглядит спокойно, а не тревожно.
+ */
+function ApproachingStopLedger({
+  section,
+  currency,
+  timezone,
+}: {
+  section: OperatorSnapshot["approaching_stop"];
+  currency: string | null;
+  timezone: string | null;
+}) {
+  const items = section.data?.items.slice(0, 5) ?? [];
+  return (
+    <section
+      className="ledger-section ledger-section--approaching"
+      data-state={section.state}
+      aria-labelledby="approaching-stop-title"
+    >
+      <LedgerSectionHeader
+        id="approaching-stop-title"
+        title="Подходят к стопу"
+        detail={
+          section.state === "empty"
+            ? "никто не подходит"
+            : `${items.length} ${pluralAd(items.length)}`
+        }
+        section={section}
+        timezone={timezone}
+      />
+      <LedgerSectionIssue section={section} />
+      {!section.data ? (
+        <LedgerEmpty text={DATA_STATE_LABEL[section.state]} />
+      ) : items.length === 0 ? (
+        <LedgerEmpty text="Ни одно объявление не подходит к стопу." />
+      ) : (
+        <ol className="ledger-approaching-list">
+          {items.map((item) => (
+            <li className="ledger-approaching-item" key={item.id}>
+              <div className="ledger-approaching-item__head">
+                <Link
+                  to="/ads/$fbAdId"
+                  params={{ fbAdId: item.fb_ad_id }}
+                  aria-label={`Открыть объявление: ${item.name}`}
+                >
+                  {item.name}
+                </Link>
+                <DataStateBadge state={item.data_state} compact />
+              </div>
+              <span className="ledger-approaching-item__meta">{item.campaign_name}</span>
+              <StopProximityReadout
+                proximity={describeStopProximity(item.rule_context, { currency })}
+              />
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function pluralAd(value: number): string {
+  const remainder100 = value % 100;
+  const remainder10 = value % 10;
+  if (remainder100 >= 11 && remainder100 <= 14) return "объявлений";
+  if (remainder10 === 1) return "объявление";
+  if (remainder10 >= 2 && remainder10 <= 4) return "объявления";
+  return "объявлений";
 }
 
 function ActionJournal({ section }: { section: OperatorSnapshot["actions"] }) {
