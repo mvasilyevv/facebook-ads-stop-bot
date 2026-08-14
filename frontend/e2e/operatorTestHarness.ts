@@ -85,6 +85,7 @@ const campaignRunDetail = {
 
 export interface OperatorHarnessOptions {
   telegram?: boolean;
+  reloginRequired?: boolean;
 }
 
 /**
@@ -94,7 +95,7 @@ export interface OperatorHarnessOptions {
  */
 export async function installOperatorHarness(
   page: Page,
-  { telegram = false }: OperatorHarnessOptions = {},
+  { telegram = false, reloginRequired = false }: OperatorHarnessOptions = {},
 ) {
   if (telegram) {
     await page.route("https://telegram.org/js/**", (route) => route.abort());
@@ -249,7 +250,11 @@ export async function installOperatorHarness(
   );
 
   await page.route("**/api/operator/snapshot**", async (route) => {
-    await route.fulfill({ json: makeOperatorSnapshot() });
+    const snapshot = makeOperatorSnapshot();
+    if (reloginRequired && snapshot.attention.data?.items[0]) {
+      snapshot.attention.data.items[0].recovery_action = "retry_scan";
+    }
+    await route.fulfill({ json: snapshot });
   });
   await page.route("**/api/operator/preferences/display**", async (route) => {
     await route.fulfill({
@@ -278,8 +283,17 @@ export async function installOperatorHarness(
     }
     await route.fulfill({ json: snapshot });
   });
-  await page.route("**/api/settings/observer/scan-now", async (route) => {
-    await route.fulfill({ json: { ok: true } });
+  await page.route("**/api/operator/scan/retry", async (route) => {
+    await route.fulfill({
+      status: 202,
+      json: {
+        task_id: 1843,
+        public_id: "#1843",
+        state: "queued",
+        created: true,
+        correlation_id: "corr-1843",
+      },
+    });
   });
   await page.route("**/api/operator/actions**", async (route) => {
     await route.fulfill({

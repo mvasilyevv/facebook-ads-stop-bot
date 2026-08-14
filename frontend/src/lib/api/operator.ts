@@ -151,9 +151,9 @@ export async function fetchOperatorActionProjectionsForRealtime(
   await readModelReconciliation;
 }
 
-/** Canonical typed mutation for the operator scan control. */
-export function useOperatorScanNow() {
-  return operatorApi.useMutation("post", "/api/settings/observer/scan-now");
+/** Canonical typed mutation for the re-login recovery scan command. */
+export function useOperatorRetryScan() {
+  return operatorApi.useMutation("post", "/api/operator/scan/retry");
 }
 
 export function useOperatorActions(query: OperatorActionsQuery = {}) {

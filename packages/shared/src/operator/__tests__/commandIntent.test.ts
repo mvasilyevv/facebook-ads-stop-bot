@@ -64,6 +64,21 @@ describe("operator command intent", () => {
     ).not.toBe(abort);
   });
 
+  it("keeps a retry-scan key durable until the command receipt arrives", () => {
+    const first = getOrCreateOperatorCommandIntent(
+      "retry_scan",
+      "login-incident-1",
+    );
+    expect(
+      getOrCreateOperatorCommandIntent("retry_scan", "login-incident-1"),
+    ).toBe(first);
+
+    completeOperatorCommandIntent("retry_scan", "login-incident-1", first);
+    expect(
+      getOrCreateOperatorCommandIntent("retry_scan", "login-incident-1"),
+    ).not.toBe(first);
+  });
+
   it("reuses the durable key after the command-intent module reloads", async () => {
     const first = getOrCreateOperatorCommandIntent("pause_ad", "reload-ad");
 

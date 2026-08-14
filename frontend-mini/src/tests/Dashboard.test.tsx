@@ -38,7 +38,7 @@ vi.mock("@/lib/operatorApi", () => ({
   useOperatorSnapshot: (...args: unknown[]) => mockUseOperatorSnapshot(...args),
   useOperatorCabinetSnapshot: (...args: unknown[]) =>
     mockUseOperatorCabinetSnapshot(...args),
-  useOperatorScanNow: () => ({ mutateAsync: mockScan, isPending: false }),
+  useOperatorRetryScan: () => ({ mutateAsync: mockScan, isPending: false }),
   operatorProblemMessage: (error: unknown) =>
     error instanceof Error ? error.message : "Ошибка",
 }));
@@ -99,11 +99,45 @@ function approachingRow(
     },
     active_action: null,
   };
+function makeReloginSnapshot(scanState?: "queued" | "running" | "failed") {
+  const snapshot = makeOperatorSnapshot();
+  snapshot.attention.data!.items[0] = {
+    ...snapshot.attention.data!.items[0]!,
+    id: "login-incident-1",
+    severity: "critical",
+    title: "В Facebook нужно войти снова",
+    summary: "Кабинет: 123",
+    occurred_at: "2026-07-18T10:14:00Z",
+    recovery_action: "retry_scan",
+  };
+  if (scanState) {
+    snapshot.actions.data!.items.push({
+      id: "1843",
+      public_id: "#1843",
+      kind: "scan",
+      state: scanState,
+      title: "Сканирование",
+      target_id: null,
+      target_label: null,
+      requested_at: "2026-07-18T10:14:10Z",
+      updated_at: "2026-07-18T10:14:20Z",
+      requested_by: "operator:tma",
+      reason: null,
+      correlation_id: "corr-scan",
+      account_id: null,
+      currency: null,
+      cabinet_timezone: null,
+      account_context_observed_at: null,
+      account_context_issues: [],
+    });
+  }
+  return snapshot;
 }
 
 describe("TMA operator dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     window.sessionStorage.clear();
     mockUseOperatorRealtimeStatus.mockReturnValue("connected");
     mockUseOperatorSnapshot.mockReturnValue({
@@ -190,7 +224,7 @@ describe("TMA operator dashboard", () => {
     expect(screen.queryByText("Накопительный расход")).not.toBeInTheDocument();
   });
 
-  it("renders action-first sections and the corrected scan control", () => {
+  it("renders action-first sections without a permanent scan control", () => {
     render(<Dashboard />);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
       "Сейчас",
@@ -201,7 +235,9 @@ describe("TMA operator dashboard", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("CPL выше базы")).toBeInTheDocument();
     expect(screen.getAllByText("Требует внимания").length).toBeGreaterThan(1);
-    expect(screen.getByLabelText("Сканировать сейчас")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /скан/i }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("$47.80")).toBeInTheDocument();
     expect(screen.getByText("$39.00")).toBeInTheDocument();
     expect(screen.getByText("$45.00")).toBeInTheDocument();
@@ -371,14 +407,25 @@ describe("TMA operator dashboard", () => {
   });
 
   it("keeps the 202 scan receipt and links to the queued action lifecycle", async () => {
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: makeReloginSnapshot(),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
     mockScan.mockResolvedValue({
-      status: "queued",
+      state: "queued",
       task_id: 1842,
+      public_id: "#1842",
+      created: true,
       correlation_id: "8b8d0c93-15dc-46b4-8fe0-8da6bec3667f",
     });
     render(<Dashboard />);
 
-    await userEvent.click(screen.getByLabelText("Сканировать сейчас"));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Повторить скан" }),
+    );
 
     const queued = (
       await screen.findByText("Сканирование поставлено в очередь")
@@ -389,9 +436,50 @@ describe("TMA operator dashboard", () => {
     expect(
       screen.getByRole("link", { name: "Открыть выполнение" }),
     ).toHaveAttribute("href", "/actions/1842");
-    expect(mockScan).toHaveBeenCalledWith({});
+    expect(mockScan).toHaveBeenCalledWith({
+      params: {
+        header: {
+          "Idempotency-Key": expect.stringMatching(/^[0-9a-f-]{36}$/i),
+        },
+      },
+    });
     expect(mockHapticNotify).toHaveBeenCalledWith("warning");
     expect(mockHapticNotify).not.toHaveBeenCalledWith("success");
+  });
+
+  it("shows an active retry as executing", () => {
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: makeReloginSnapshot("running"),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<Dashboard />);
+
+    expect(screen.getByRole("button", { name: "Выполняется" })).toBeDisabled();
+  });
+
+  it("shows a retryable error after command delivery fails", async () => {
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: makeReloginSnapshot(),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    mockScan.mockRejectedValueOnce(new Error("Network down"));
+
+    render(<Dashboard />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Повторить скан" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Ошибка — повторить" }),
+    ).toBeEnabled();
+    expect(mockHapticNotify).toHaveBeenCalledWith("error");
   });
 
   it("labels stale data and does not present it as current", () => {

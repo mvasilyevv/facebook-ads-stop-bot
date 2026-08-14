@@ -38,7 +38,7 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("@/lib/api/operator", () => ({
   useOperatorSnapshot: (...args: unknown[]) => mockUseOperatorSnapshot(...args),
   useOperatorCabinetSnapshot: (...args: unknown[]) => mockUseOperatorCabinetSnapshot(...args),
-  useOperatorScanNow: () => ({ mutate: mockScan, isPending: false }),
+  useOperatorRetryScan: () => ({ mutateAsync: mockScan, isPending: false }),
   operatorProblemMessage: (error: unknown) => (error instanceof Error ? error.message : "Ошибка"),
 }));
 
@@ -108,9 +108,45 @@ function renderDashboard(status: OperatorRealtimeStatus = "connected") {
   );
 }
 
+function makeReloginSnapshot(scanState?: "queued" | "running" | "failed") {
+  const snapshot = makeOperatorSnapshot();
+  snapshot.attention.data!.items[0] = {
+    ...snapshot.attention.data!.items[0]!,
+    id: "login-incident-1",
+    severity: "critical",
+    title: "В Facebook нужно войти снова",
+    summary: "Кабинет: 123",
+    occurred_at: "2026-07-18T10:14:00Z",
+    recovery_action: "retry_scan",
+  };
+  if (scanState) {
+    snapshot.actions.data!.items.push({
+      id: "1843",
+      public_id: "#1843",
+      kind: "scan",
+      state: scanState,
+      title: "Сканирование",
+      target_id: null,
+      target_label: null,
+      requested_at: "2026-07-18T10:14:10Z",
+      updated_at: "2026-07-18T10:14:20Z",
+      requested_by: "operator:web",
+      reason: null,
+      correlation_id: "corr-scan",
+      account_id: null,
+      currency: null,
+      cabinet_timezone: null,
+      account_context_observed_at: null,
+      account_context_issues: [],
+    });
+  }
+  return snapshot;
+}
+
 describe("operator dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     mockUseOperatorSnapshot.mockReturnValue({
       data: makeOperatorSnapshot(),
       isLoading: false,
@@ -136,7 +172,7 @@ describe("operator dashboard", () => {
     expect(screen.getAllByText(/\$18\.40/).length).toBeGreaterThan(0);
     expect(screen.getAllByText("$0").length).toBeGreaterThan(0);
     expect(screen.getByText("$20")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Сканировать" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /скан/i })).not.toBeInTheDocument();
   });
 
   it("uses typed cabinet navigation without exposing correlation UUIDs", () => {
@@ -518,19 +554,71 @@ describe("operator dashboard", () => {
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
   });
 
-  it("reports a queued scan as queued, never as a green success", async () => {
-    mockScan.mockImplementation(
-      (_vars: unknown, options?: { onSuccess?: () => void }) => options?.onSuccess?.(),
-    );
+  it("shows recovery only for login-required and keeps queued distinct from success", async () => {
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: makeReloginSnapshot(),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    mockScan.mockResolvedValue({
+      task_id: 1843,
+      public_id: "#1843",
+      state: "queued",
+      created: true,
+      correlation_id: "corr-scan",
+    });
 
     renderDashboard();
-    await userEvent.click(screen.getByRole("button", { name: "Сканировать" }));
+    await userEvent.click(screen.getByRole("button", { name: "Повторить скан" }));
 
-    // HTTP 202 = queued. Зелёный toast.success означал бы выполненное сканирование.
+    expect(screen.getByRole("button", { name: "Отправлено" })).toBeDisabled();
     expect(mockToast.success).not.toHaveBeenCalled();
     expect(mockToast.info).toHaveBeenCalledWith(
       "Сканирование поставлено в очередь",
       expect.stringContaining("не подтверждено"),
+    );
+    expect(mockScan).toHaveBeenCalledWith({
+      params: {
+        header: {
+          "Idempotency-Key": expect.stringMatching(/^[0-9a-f-]{36}$/i),
+        },
+      },
+    });
+  });
+
+  it("shows an already-running recovery scan as executing", () => {
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: makeReloginSnapshot("running"),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderDashboard();
+
+    expect(screen.getByRole("button", { name: "Выполняется" })).toBeDisabled();
+  });
+
+  it("keeps the idempotency key after a request error and exposes retry", async () => {
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: makeReloginSnapshot(),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    mockScan.mockRejectedValueOnce(new Error("Network down"));
+
+    renderDashboard();
+    await userEvent.click(screen.getByRole("button", { name: "Повторить скан" }));
+
+    expect(screen.getByRole("button", { name: "Ошибка — повторить" })).toBeEnabled();
+    expect(mockToast.error).toHaveBeenCalledWith(
+      "Не удалось отправить повторный скан",
+      "Network down",
     );
   });
 });

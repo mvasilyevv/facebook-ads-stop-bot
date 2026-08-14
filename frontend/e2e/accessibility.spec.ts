@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { installOperatorHarness } from "./operatorTestHarness";
 
 test.beforeEach(async ({ page }) => {
-  await installOperatorHarness(page);
+  await installOperatorHarness(page, { reloginRequired: true });
 });
 
 test("360px reflows without horizontal page scroll", async ({ page }, testInfo) => {
@@ -39,7 +39,7 @@ test("200% layout scale keeps the critical operator surface usable", async ({
 
   await page.goto("/");
   expect(await page.evaluate(() => window.innerWidth)).toBe(640);
-  await expect(page.getByRole("button", { name: "Сканировать" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Повторить скан" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Открыть объявление" })).toBeVisible();
   await expectNoHorizontalPageScroll(page);
 });
@@ -66,7 +66,7 @@ test("reduced-motion removes non-essential animation and transitions", async ({
   expect(motion.animationIterations).toBe("1");
 
   const transitionDuration = await page
-    .getByRole("button", { name: "Сканировать" })
+    .getByRole("button", { name: "Повторить скан" })
     .evaluate((node) => getComputedStyle(node).transitionDuration);
   expect(toMilliseconds(transitionDuration)).toBeLessThanOrEqual(0.011);
 });
@@ -80,7 +80,7 @@ test("forced-colors retains text status and a visible keyboard focus indicator",
   await page.emulateMedia({ forcedColors: "active" });
   await page.goto("/");
 
-  const scan = page.getByRole("button", { name: "Сканировать" });
+  const scan = page.getByRole("button", { name: "Повторить скан" });
   await scan.focus();
   const focus = await scan.evaluate((node) => {
     const style = getComputedStyle(node);

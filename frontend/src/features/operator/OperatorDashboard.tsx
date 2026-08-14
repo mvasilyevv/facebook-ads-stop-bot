@@ -11,12 +11,17 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import { operatorActionStateReason } from "@fb/shared/operator/actionLabels";
 import { safeOperatorAttentionHref } from "@fb/shared/operator/attentionNavigation";
+import {
+  completeOperatorCommandIntent,
+  getOrCreateOperatorCommandIntent,
+} from "@fb/shared/operator/commandIntent";
 import {
   formatOperatorDateTime as formatDateTime,
   formatOperatorFreshness as freshnessLabel,
@@ -34,11 +39,17 @@ import {
   operatorPortfolioScalePosition,
 } from "@fb/shared/operator/portfolioModel";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
+import {
+  operatorReloginRecovery,
+  RELOGIN_RECOVERY_BUTTON_LABEL,
+  reloginRecoveryButtonState,
+} from "@fb/shared/operator/reloginRecovery";
 import type {
   DataState,
   OperatorActionItem,
   OperatorAttentionItem,
   OperatorCabinetLedgerRow,
+  OperatorCommandResponse,
   OperatorCurrencyGroup,
   OperatorFunnelData,
   OperatorSection,
@@ -61,7 +72,7 @@ import { toast } from "@/components/ui/toastStore";
 import {
   operatorProblemMessage,
   useOperatorCabinetSnapshot,
-  useOperatorScanNow,
+  useOperatorRetryScan,
   useOperatorSnapshot,
 } from "@/lib/api/operator";
 
@@ -110,8 +121,13 @@ function OperatorLedgerScreen({
   snapshotQuery: SnapshotQueryLike;
   cabinetId?: string;
 }) {
-  const triggerScan = useOperatorScanNow();
+  const retryScan = useOperatorRetryScan();
   const realtimeStatus = useOperatorRealtimeStatus();
+  const [scanReceipt, setScanReceipt] = useState<{
+    incidentId: string;
+    receipt: OperatorCommandResponse;
+  } | null>(null);
+  const [failedIncidentId, setFailedIncidentId] = useState<string | null>(null);
 
   if (snapshotQuery.isLoading && !snapshotQuery.data) {
     return <OperatorDashboardSkeleton />;
@@ -138,16 +154,44 @@ function OperatorLedgerScreen({
   const pageDescription = cabinetId
     ? `${cabinetCurrencyLabel} · ${cabinetTimezone ?? "часовой пояс не подтверждён"} · контроль кабинета`
     : "Деньги, расхождения и выполняемые команды — одна проверяемая картина.";
+  const recovery = cabinetId ? null : operatorReloginRecovery(snapshot);
+  const currentReceipt =
+    recovery && scanReceipt?.incidentId === recovery.incident.id ? scanReceipt.receipt : null;
+  const receiptAction = currentReceipt
+    ? snapshot.actions.data?.items.find((item) => item.id === String(currentReceipt.task_id))
+    : null;
+  const recoveryState = recovery
+    ? reloginRecoveryButtonState({
+        actionState: currentReceipt ? receiptAction?.state : recovery.scanAction?.state,
+        receiptState: currentReceipt?.state,
+        requestPending: retryScan.isPending,
+        requestFailed: failedIncidentId === recovery.incident.id,
+      })
+    : null;
 
-  const scanNow = () => {
-    triggerScan.mutate(undefined, {
-      // 202 = queued: результат сканирования ещё не подтверждён, зелёный тон запрещён.
-      onSuccess: () =>
+  const retryInterruptedScan = async () => {
+    if (!recovery) return;
+    setFailedIncidentId(null);
+    const incidentId = recovery.incident.id;
+    try {
+      const idempotencyKey = getOrCreateOperatorCommandIntent("retry_scan", incidentId);
+      const receipt = await retryScan.mutateAsync({
+        params: { header: { "Idempotency-Key": idempotencyKey } },
+      });
+      completeOperatorCommandIntent("retry_scan", incidentId, idempotencyKey);
+      setScanReceipt({ incidentId, receipt });
+      if (receipt.state === "queued") {
         toast.info(
           "Сканирование поставлено в очередь",
           "Завершение ещё не подтверждено. Дождитесь обновления снимка.",
-        ),
-    });
+        );
+      } else if (receipt.state === "running") {
+        toast.info("Сканирование уже выполняется", `Задача ${receipt.public_id}`);
+      }
+    } catch (error) {
+      setFailedIncidentId(incidentId);
+      toast.error("Не удалось отправить повторный скан", operatorProblemMessage(error));
+    }
   };
 
   return (
@@ -170,16 +214,21 @@ function OperatorLedgerScreen({
               {freshnessLabel(snapshot.portfolio.freshness_seconds)}
             </span>
           </Link>
-          <Button
-            variant="secondary"
-            size="lg"
-            leftIcon={<RefreshCw size={16} aria-hidden="true" />}
-            loading={triggerScan.isPending}
-            onClick={scanNow}
-            className="min-h-11"
-          >
-            Сканировать
-          </Button>
+          {recovery && recoveryState ? (
+            <Button
+              variant={recoveryState === "error" ? "warning" : "secondary"}
+              size="lg"
+              leftIcon={<RefreshCw size={16} aria-hidden="true" />}
+              loading={retryScan.isPending || recoveryState === "running"}
+              disabled={recoveryState === "sent"}
+              onClick={() => void retryInterruptedScan()}
+              className="min-h-11"
+              data-state={recoveryState}
+              aria-live="polite"
+            >
+              {RELOGIN_RECOVERY_BUTTON_LABEL[recoveryState]}
+            </Button>
+          ) : null}
         </div>
       </header>
 
@@ -602,9 +651,7 @@ function pluralAd(value: number): string {
 function ActionJournal({ section }: { section: OperatorSnapshot["actions"] }) {
   // Счётчик считается по полному списку, а не по первым пяти карточкам.
   // Без подтверждённых данных выводим «—»: ноль означал бы «команд нет».
-  const activeTotal = section.data
-    ? section.data.items.filter(isActiveAction).length
-    : null;
+  const activeTotal = section.data ? section.data.items.filter(isActiveAction).length : null;
   const items = section.data?.items.slice(0, 5) ?? [];
   return (
     <section

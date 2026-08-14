@@ -9,6 +9,7 @@
 export type OperatorCommandKind =
   | "pause_ad"
   | "activate_ad"
+  | "retry_scan"
   | "abort_campaign_run"
   | "resume_campaign_run";
 export type OperatorCommandIntentStorageOperation =

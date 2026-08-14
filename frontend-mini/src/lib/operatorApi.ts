@@ -143,9 +143,9 @@ export async function fetchOperatorActionProjectionsForRealtime(
   await readModelReconciliation;
 }
 
-/** Typed endpoint used by the action-first TMA shell. */
-export function useOperatorScanNow() {
-  return operatorApi.useMutation("post", "/api/settings/observer/scan-now");
+/** Typed endpoint used by the re-login recovery control. */
+export function useOperatorRetryScan() {
+  return operatorApi.useMutation("post", "/api/operator/scan/retry");
 }
 
 export function useOperatorActions(query: OperatorActionsQuery = {}) {
@@ -274,7 +274,10 @@ export function useResumeCampaignRun() {
 export function operatorProblemMessage(error: unknown): string {
   // Fallback — подсказка к действию, а не повтор заголовка: дублирование одной
   // и той же строки в карточке ошибки оператору ничего не даёт.
-  return safeApiProblemMessage(error, "Сервер не подтвердил данные. Повторите попытку.");
+  return safeApiProblemMessage(
+    error,
+    "Сервер не подтвердил данные. Повторите попытку.",
+  );
 }
 
 export function operatorIncidentProblemMessage(error: unknown): string {

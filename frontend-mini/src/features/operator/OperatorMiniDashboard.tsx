@@ -27,6 +27,10 @@ import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import { operatorActionStateReason } from "@fb/shared/operator/actionLabels";
 import {
+  completeOperatorCommandIntent,
+  getOrCreateOperatorCommandIntent,
+} from "@fb/shared/operator/commandIntent";
+import {
   formatOperatorDateTime as formatDateTime,
   formatOperatorFreshness as freshnessLabel,
   formatOperatorScaleTick as formatScaleTick,
@@ -42,10 +46,16 @@ import {
   buildOperatorPortfolioScale,
   operatorPortfolioScalePosition,
 } from "@fb/shared/operator/portfolioModel";
+import {
+  operatorReloginRecovery,
+  RELOGIN_RECOVERY_BUTTON_LABEL,
+  reloginRecoveryButtonState,
+} from "@fb/shared/operator/reloginRecovery";
 import type {
   OperatorActionItem,
   OperatorAttentionItem,
   OperatorCabinetLedgerRow,
+  OperatorCommandResponse,
   OperatorCurrencyGroup,
   OperatorFunnelData,
   OperatorSection,
@@ -62,7 +72,7 @@ import {
 import {
   operatorProblemMessage,
   useOperatorCabinetSnapshot,
-  useOperatorScanNow,
+  useOperatorRetryScan,
   useOperatorSnapshot,
 } from "@/lib/operatorApi";
 
@@ -124,10 +134,12 @@ function OperatorMiniLedgerScreen({
 }) {
   const navigate = useNavigate();
   const realtimeStatus = useOperatorRealtimeStatus();
-  const scan = useOperatorScanNow();
-  const [scanReceipt, setScanReceipt] = useState<
-    components["schemas"]["ScanNowResponse"] | null
-  >(null);
+  const scan = useOperatorRetryScan();
+  const [scanReceipt, setScanReceipt] = useState<{
+    incidentId: string;
+    receipt: OperatorCommandResponse;
+  } | null>(null);
+  const [failedIncidentId, setFailedIncidentId] = useState<string | null>(null);
 
   if (snapshotQuery.isLoading && !snapshotQuery.data) {
     return <MiniLoading />;
@@ -171,15 +183,46 @@ function OperatorMiniLedgerScreen({
   const pageDetail = cabinetId
     ? `${cabinetCurrencyLabel} · ${cabinetTimezone ?? "часовой пояс не подтверждён"}`
     : "Деньги, расхождения и команды";
+  const recovery = cabinetId ? null : operatorReloginRecovery(snapshot);
+  const currentReceipt =
+    recovery && scanReceipt?.incidentId === recovery.incident.id
+      ? scanReceipt.receipt
+      : null;
+  const receiptAction = currentReceipt
+    ? snapshot.actions.data?.items.find(
+        (item) => item.id === String(currentReceipt.task_id),
+      )
+    : null;
+  const recoveryState = recovery
+    ? reloginRecoveryButtonState({
+        actionState: currentReceipt
+          ? receiptAction?.state
+          : recovery.scanAction?.state,
+        receiptState: currentReceipt?.state,
+        requestPending: scan.isPending,
+        requestFailed: failedIncidentId === recovery.incident.id,
+      })
+    : null;
 
   const runScan = async () => {
+    if (!recovery) return;
     haptic.impact("medium");
+    setFailedIncidentId(null);
+    const incidentId = recovery.incident.id;
     try {
-      const receipt = await scan.mutateAsync({});
-      setScanReceipt(receipt);
+      const idempotencyKey = getOrCreateOperatorCommandIntent(
+        "retry_scan",
+        incidentId,
+      );
+      const receipt = await scan.mutateAsync({
+        params: { header: { "Idempotency-Key": idempotencyKey } },
+      });
+      completeOperatorCommandIntent("retry_scan", incidentId, idempotencyKey);
+      setScanReceipt({ incidentId, receipt });
       haptic.notify("warning");
       void snapshotQuery.refetch();
     } catch {
+      setFailedIncidentId(incidentId);
       haptic.notify("error");
     }
   };
@@ -221,32 +264,40 @@ function OperatorMiniLedgerScreen({
             <span>{miniStateLabel(overviewState)}</span>
             <span>{freshnessLabel(snapshot.portfolio.freshness_seconds)}</span>
           </Link>
-          <button
-            type="button"
-            className="mini-scan"
-            aria-label="Сканировать сейчас"
-            disabled={scan.isPending}
-            onClick={() => void runScan()}
-          >
-            <RefreshCw
-              size={18}
-              className={scan.isPending ? "animate-spin" : ""}
-              aria-hidden="true"
-            />
-            <span>Сканировать</span>
-          </button>
+          {recovery && recoveryState ? (
+            <Button
+              type="button"
+              variant={recoveryState === "error" ? "warning" : "primary"}
+              size="md"
+              className="mini-scan"
+              aria-live="polite"
+              disabled={recoveryState === "sent"}
+              loading={scan.isPending || recoveryState === "running"}
+              data-state={recoveryState}
+              onClick={() => void runScan()}
+            >
+              {!scan.isPending && recoveryState !== "running" ? (
+                <RefreshCw size={18} aria-hidden="true" />
+              ) : null}
+              <span>{RELOGIN_RECOVERY_BUTTON_LABEL[recoveryState]}</span>
+            </Button>
+          ) : null}
         </div>
       </header>
 
-      {scanReceipt ? (
+      {currentReceipt ? (
         <div role="status" aria-live="polite" className="mini-ledger__receipt">
           <div>
-            <strong>Сканирование поставлено в очередь</strong>
-            <span>Задача #{scanReceipt.task_id}</span>
+            <strong>
+              {currentReceipt.state === "running"
+                ? "Сканирование выполняется"
+                : "Сканирование поставлено в очередь"}
+            </strong>
+            <span>Задача {currentReceipt.public_id}</span>
           </div>
           <Link
             to="/actions/$actionId"
-            params={{ actionId: String(scanReceipt.task_id) }}
+            params={{ actionId: String(currentReceipt.task_id) }}
             className="mini-ledger__inline-action"
           >
             Открыть выполнение
