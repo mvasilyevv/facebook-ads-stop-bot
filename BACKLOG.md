@@ -14,6 +14,12 @@
 
 - [ ] Добавить read-only enable-рекомендации с owner-preview, без auto-activate.
 - [ ] Упростить internal money-status classifier и удалить неиспользуемый `lane`-аргумент.
+- [ ] Вернуть grace-период после enable со spend cap: после включения объявления
+      авто-стоп подавляется на ограниченное время И до потолка спенда (grace — не
+      снуз: истекает по деньгам, а не только по таймеру). Реализация была в ветке
+      `codex/fix-curator-spend-cap` (17.07, `core/observer/enable_grace.py` +
+      интеграционный `test_enable_grace_suppresses_autostop`), устарела против
+      текущего main — писать заново. Снимок: `archive/curator-spend-cap-20260814`.
 
 ## Platform
 
