@@ -749,6 +749,23 @@ def rehearse(
         _cleanup(root, registry, telegram, cluster_id)
 
 
+def _failure_reason(exc: BaseException) -> str:
+    """Назвать причину провала, не вынося в лог секреты команды.
+
+    Раньше печатался только класс исключения, и упавший CI не говорил, какой
+    именно инвариант деплоя нарушен. Сообщения ``RehearsalError`` пишутся
+    здесь же и безопасны; аргументы внешней команды могут нести секреты,
+    поэтому от неё остаются только имя программы и код возврата.
+    """
+    if isinstance(exc, RehearsalError):
+        return f"RehearsalError: {exc}"
+    if isinstance(exc, subprocess.CalledProcessError):
+        command = exc.cmd
+        program = command[0] if isinstance(command, (list, tuple)) and command else "command"
+        return f"CalledProcessError: {program} exited with {exc.returncode}"
+    return f"{type(exc).__name__}: {exc.strerror or 'unknown error'}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("bundle", type=Path)
@@ -768,7 +785,7 @@ def main(argv: list[str] | None = None) -> int:
             shard_count=args.shard_count,
         )
     except (OSError, RehearsalError, subprocess.CalledProcessError) as exc:
-        print(f"single-slot rehearsal failed: {type(exc).__name__}", file=sys.stderr)
+        print(f"single-slot rehearsal failed: {_failure_reason(exc)}", file=sys.stderr)
         return 1
     print("single-slot production rehearsal: READY")
     return 0

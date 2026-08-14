@@ -379,3 +379,28 @@ def test_rehearsal_cli_defaults_to_full_and_forwards_explicit_shards(
         "source_root": tmp_path.resolve(),
         **expected,
     }
+
+
+def test_failure_reason_names_the_invariant_without_leaking_command_secrets() -> None:
+    """Упавший CI обязан сказать, какой инвариант нарушен.
+
+    Раньше печатался только класс исключения, и причина терялась. При этом
+    аргументы внешней команды могут нести секреты, поэтому от неё остаются
+    только имя программы и код возврата.
+    """
+    reason = single_slot._failure_reason(
+        single_slot.RehearsalError("release.json contains a mutable image")
+    )
+    assert reason == "RehearsalError: release.json contains a mutable image"
+
+    secret = "POSTGRES_PASSWORD=never-print-this"
+    reason = single_slot._failure_reason(
+        subprocess.CalledProcessError(2, ["docker", "run", "--env", secret])
+    )
+    assert reason == "CalledProcessError: docker exited with 2"
+    assert secret not in reason
+
+    reason = single_slot._failure_reason(
+        FileNotFoundError(2, "No such file or directory", "/tmp/missing-bundle")
+    )
+    assert reason == "FileNotFoundError: No such file or directory"
