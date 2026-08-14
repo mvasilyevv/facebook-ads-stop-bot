@@ -204,6 +204,19 @@ describe("operator view model", () => {
         confirmed_deposits: 0,
         cpc: "0",
         cost_per_registration: "0",
+        frequency: "0",
+        cost_per_ftd: "0",
+      },
+      // Строка без подтверждённых данных: правило неизвестно целиком, поэтому
+      // offer_code=null означает «не подтверждено», а не «оффер не сматчился».
+      rule_context: {
+        offer_code: null,
+        rule_code: null,
+        rule_title: null,
+        value: null,
+        threshold: null,
+        percent_to_stop: null,
+        stage: null,
       },
       active_action: null,
     };
@@ -233,6 +246,19 @@ describe("operator view model", () => {
       confirmed_deposits: null,
       cpc: null,
       cost_per_registration: null,
+      frequency: null,
+      cost_per_ftd: null,
+    });
+    // Близость к стопу производна от метрик: кэшированный порог на строке без
+    // данных выглядел бы как актуальная оценка риска.
+    expect(effective.rows[0]?.rule_context).toEqual({
+      offer_code: null,
+      rule_code: null,
+      rule_title: null,
+      value: null,
+      threshold: null,
+      percent_to_stop: null,
+      stage: null,
     });
     expect(row.metrics.registrations).toBe(0);
   });

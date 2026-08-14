@@ -10219,6 +10219,28 @@
               }
             ],
             "title": "Cost Per Registration"
+          },
+          "frequency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency"
+          },
+          "cost_per_ftd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Per Ftd"
           }
         },
         "type": "object",
@@ -10230,7 +10252,9 @@
           "ftd",
           "confirmed_deposits",
           "cpc",
-          "cost_per_registration"
+          "cost_per_registration",
+          "frequency",
+          "cost_per_ftd"
         ],
         "title": "OperatorAdMetrics"
       },
@@ -10307,6 +10331,9 @@
           "metrics": {
             "$ref": "#/components/schemas/OperatorAdMetrics"
           },
+          "rule_context": {
+            "$ref": "#/components/schemas/OperatorRuleContext"
+          },
           "active_action": {
             "anyOf": [
               {
@@ -10333,6 +10360,7 @@
           "severity",
           "as_of",
           "metrics",
+          "rule_context",
           "active_action"
         ],
         "title": "OperatorAdRow"
@@ -10422,6 +10450,20 @@
           "pages"
         ],
         "title": "OperatorAdsResponse"
+      },
+      "OperatorApproachingStopData": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorAdRow"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": ["items"],
+        "title": "OperatorApproachingStopData"
       },
       "OperatorAttentionAction": {
         "properties": {
@@ -11346,6 +11388,99 @@
         "required": ["currency_groups"],
         "title": "OperatorPortfolioData"
       },
+      "OperatorRuleContext": {
+        "properties": {
+          "offer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          },
+          "rule_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Code"
+          },
+          "rule_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Title"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          },
+          "percent_to_stop": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent To Stop"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["none", "warning", "stop"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "offer_code",
+          "rule_code",
+          "rule_title",
+          "value",
+          "threshold",
+          "percent_to_stop",
+          "stage"
+        ],
+        "title": "OperatorRuleContext"
+      },
       "OperatorScopeEvidence": {
         "properties": {
           "account_ids": {
@@ -11490,6 +11625,64 @@
         "type": "object",
         "required": ["state", "as_of", "freshness_seconds", "sources", "issues", "data"],
         "title": "OperatorSection[OperatorActionsData]"
+      },
+      "OperatorSection_OperatorApproachingStopData_": {
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/DataState"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "freshness_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freshness Seconds"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorIssue"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperatorApproachingStopData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": ["state", "as_of", "freshness_seconds", "sources", "issues", "data"],
+        "title": "OperatorSection[OperatorApproachingStopData]"
       },
       "OperatorSection_OperatorAttentionData_": {
         "properties": {
@@ -11794,6 +11987,9 @@
           "attention": {
             "$ref": "#/components/schemas/OperatorSection_OperatorAttentionData_"
           },
+          "approaching_stop": {
+            "$ref": "#/components/schemas/OperatorSection_OperatorApproachingStopData_"
+          },
           "portfolio": {
             "$ref": "#/components/schemas/OperatorSection_OperatorPortfolioData_"
           },
@@ -11811,7 +12007,16 @@
           }
         },
         "type": "object",
-        "required": ["meta", "attention", "portfolio", "economy", "funnel", "actions", "system"],
+        "required": [
+          "meta",
+          "attention",
+          "approaching_stop",
+          "portfolio",
+          "economy",
+          "funnel",
+          "actions",
+          "system"
+        ],
         "title": "OperatorSnapshot"
       },
       "OperatorSnapshotMeta": {

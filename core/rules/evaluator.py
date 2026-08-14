@@ -39,6 +39,7 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
 
     funnel_hit = _evaluate_funnel_ladder(row, ctx)
     freq_hit = _evaluate_frequency_anomaly(ctx)
+    nearest_stop = _nearest_stop_hit(row, ctx)
 
     # Выбираем наивысший приоритет из двух источников
     final_hit = _pick_highest_priority_hit(funnel_hit, freq_hit)
@@ -48,6 +49,7 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
             stage=None,
             warning_hits=(),
             stop_hits=(),
+            nearest_stop=nearest_stop,
         )
 
     if final_hit.stage == AlertStage.STOP:
@@ -55,11 +57,13 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
             stage=AlertStage.STOP,
             warning_hits=(),
             stop_hits=(final_hit,),
+            nearest_stop=nearest_stop,
         )
     return RuleEvaluation(
         stage=AlertStage.WARNING,
         warning_hits=(final_hit,),
         stop_hits=(),
+        nearest_stop=nearest_stop,
     )
 
 
@@ -221,29 +225,12 @@ def _evaluate_frequency_anomaly(ctx: RuleContext) -> RuleHit | None:
     prev были недостижимы в проде; фактическое поведение (WARNING по абсолютному порогу
     без учёта роста) не меняется этим упрощением.
     """
-    if not ctx.frequency_anomaly_enabled:
+    current = _confirmed_frequency(ctx)
+    if current is None:
         return None
-    if ctx.frequency_current is None:
-        return None
-
-    current = ctx.frequency_current
 
     stop_thr = ctx.frequency_stop_threshold
     warn_thr = ctx.frequency_warning_threshold
-
-    # Потолок-выброс: FB на старте может временно показывать frequency 50-100 из-за
-    # крошечного reach (300 показов / 7 человек) — это переходный шум, не burnout.
-    # Отсекаем ТОЛЬКО абсурдные выбросы выше cap. Ожидания показов/охвата убраны
-    # (решение байера: стопать жёстко по порогу частоты, не ждать накопления данных).
-    #
-    # M-10 (аудит 2026-07-12): cap масштабируется с порогом. Раньше фикс 10.0 создавал
-    # два бага: (а) при stop_threshold >= 10 STOP был физически недостижим (freq>10 → cap
-    # → None до проверки STOP); (б) реальный burnout на узком GEO (freq 11-30) молча
-    # игнорировался. Эффективный cap = max(фикс, stop × 3): «абсурдный выброс» — это
-    # то, что кратно выше любого burnout'а, на который байер настроил стоп.
-    effective_cap = max(ctx.frequency_outlier_cap, stop_thr * _FREQUENCY_CAP_MULTIPLIER)
-    if current > effective_cap:
-        return None
 
     # STOP: абсолютный порог
     if current > stop_thr:
@@ -287,6 +274,261 @@ def _pick_highest_priority_hit(*hits: RuleHit | None) -> RuleHit | None:
                 return hit
 
     return None
+
+
+def _nearest_stop_hit(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
+    """Выбирает максимальный подтверждённый progress к STOP среди применимых правил.
+
+    Кандидаты повторяют текущую funnel-ступень evaluator. Метрика ``None`` не
+    участвует в выборе: unknown не становится нулём и не выглядит безопасной.
+    Порог в возвращаемом ``RuleHit`` всегда STOP-порог, включая WARNING/none.
+    """
+    candidates = [*_funnel_stop_candidates(row, ctx), _frequency_stop_candidate(ctx)]
+    confirmed = [candidate for candidate in candidates if candidate is not None]
+    if not confirmed:
+        return None
+    return max(confirmed, key=lambda hit: hit.value / hit.threshold)
+
+
+def _funnel_stop_candidates(row: ScannedAdRow, ctx: RuleContext) -> tuple[RuleHit | None, ...]:
+    if _has_confirmed_deposit_signal(row, ctx):
+        return (_spend_with_deposit_stop_candidate(row, ctx),)
+    if row.registrations >= 1:
+        spend_candidate = (
+            _spend_without_deposit_stop_candidate(row, ctx)
+            if _should_apply_registration_spend_guardrail(row, ctx)
+            else None
+        )
+        return (
+            _money_stop_candidate(
+                value=row.cost_per_registration,
+                enabled=ctx.cpr_enabled,
+                stop_threshold=ctx.cpr_stop_threshold,
+                warning_threshold=ctx.cpr_warning_threshold,
+                code="cpr_stop",
+            ),
+            _registrations_without_deposit_stop_candidate(row, ctx),
+            spend_candidate,
+        )
+    if row.leads >= 1:
+        return (
+            _money_stop_candidate(
+                value=row.cost_per_lead,
+                enabled=ctx.cpl_enabled,
+                stop_threshold=ctx.cpl_stop_threshold,
+                warning_threshold=ctx.cpl_warning_threshold,
+                code="cpl_stop",
+            ),
+            _decimal_stop_candidate(
+                value=row.spend,
+                enabled=ctx.cpr_enabled,
+                stop_threshold=ctx.cpr_stop_threshold,
+                warning_threshold=ctx.cpr_warning_threshold,
+                code="cpr_stop",
+            ),
+        )
+    if row.clicks >= 1:
+        return (
+            _money_stop_candidate(
+                value=row.cpc,
+                enabled=ctx.cpc_enabled,
+                stop_threshold=ctx.cpc_stop_threshold,
+                warning_threshold=ctx.cpc_warning_threshold,
+                code="cpc_stop",
+            ),
+            _decimal_stop_candidate(
+                value=row.spend,
+                enabled=ctx.cpl_enabled,
+                stop_threshold=ctx.cpl_stop_threshold,
+                warning_threshold=ctx.cpl_warning_threshold,
+                code="cpl_stop",
+            ),
+        )
+    return (
+        _decimal_stop_candidate(
+            value=row.spend,
+            enabled=ctx.cpc_enabled,
+            stop_threshold=ctx.cpc_stop_threshold,
+            warning_threshold=ctx.cpc_warning_threshold,
+            code="cpc_stop",
+        ),
+    )
+
+
+def _money_stop_candidate(
+    *,
+    value: Decimal | None,
+    enabled: bool,
+    stop_threshold: Decimal,
+    warning_threshold: Decimal,
+    code: str,
+) -> RuleHit | None:
+    if value is None:
+        return None
+    return _decimal_stop_candidate(
+        value=_exact_derived_money(value),
+        enabled=enabled,
+        stop_threshold=stop_threshold,
+        warning_threshold=warning_threshold,
+        code=code,
+    )
+
+
+def _decimal_stop_candidate(
+    *,
+    value: Decimal,
+    enabled: bool,
+    stop_threshold: Decimal,
+    warning_threshold: Decimal,
+    code: str,
+) -> RuleHit | None:
+    if not enabled:
+        return None
+    current = Decimal(value)
+    stage = (
+        AlertStage.STOP
+        if current >= stop_threshold
+        else AlertStage.WARNING
+        if current >= warning_threshold
+        else None
+    )
+    return _stop_progress_hit(
+        code=code,
+        value=current,
+        stop_threshold=Decimal(stop_threshold),
+        stage=stage,
+    )
+
+
+def _registrations_without_deposit_stop_candidate(
+    row: ScannedAdRow,
+    ctx: RuleContext,
+) -> RuleHit | None:
+    if not ctx.regs_no_dep_enabled or ctx.external_deposits != 0:
+        return None
+    current = Decimal(row.registrations)
+    stop_threshold = Decimal(ctx.regs_no_dep_stop_count)
+    warning_threshold = _warning_count(
+        ctx.regs_no_dep_stop_count,
+        ctx.effective_cpr_warning_percent_of_stop,
+    )
+    return _decimal_stop_candidate(
+        value=current,
+        enabled=True,
+        stop_threshold=stop_threshold,
+        warning_threshold=warning_threshold,
+        code="regs_no_dep_stop",
+    )
+
+
+def _spend_without_deposit_stop_candidate(
+    row: ScannedAdRow,
+    ctx: RuleContext,
+) -> RuleHit | None:
+    return _spend_range_stop_candidate(
+        enabled=ctx.spend_no_dep_enabled,
+        current_value=_ratio_percent(row.spend, ctx.cpa_amount),
+        stop_from=ctx.spend_no_dep_from_percent,
+        warning_pct=ctx.effective_cpr_warning_percent_of_stop,
+        stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
+        code="spend_no_dep_range",
+    )
+
+
+def _spend_with_deposit_stop_candidate(
+    row: ScannedAdRow,
+    ctx: RuleContext,
+) -> RuleHit | None:
+    return _spend_range_stop_candidate(
+        enabled=ctx.spend_with_dep_enabled,
+        current_value=_ratio_percent(row.spend, ctx.cpa_amount),
+        stop_from=ctx.spend_with_dep_from_percent,
+        warning_pct=ctx.effective_cpr_warning_percent_of_stop,
+        stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
+        code="spend_with_dep_range",
+    )
+
+
+def _spend_range_stop_candidate(
+    *,
+    enabled: bool,
+    current_value: Decimal,
+    stop_from: Decimal,
+    warning_pct: Decimal,
+    stop_percent_of_base: Decimal,
+    code: str,
+) -> RuleHit | None:
+    if not enabled:
+        return None
+    current = _round_percent(current_value)
+    stop_threshold = _apply_downward_stop(stop_from, stop_percent_of_base)
+    warning_threshold = _warning_threshold(stop_threshold, warning_pct)
+    stage = (
+        AlertStage.STOP
+        if current >= stop_threshold
+        else AlertStage.WARNING
+        if current >= warning_threshold
+        else None
+    )
+    return _stop_progress_hit(
+        code=code,
+        value=current,
+        stop_threshold=_round_percent(stop_threshold),
+        stage=stage,
+    )
+
+
+def _frequency_stop_candidate(ctx: RuleContext) -> RuleHit | None:
+    current = _confirmed_frequency(ctx)
+    if current is None:
+        return None
+    stage = (
+        AlertStage.STOP
+        if current > ctx.frequency_stop_threshold
+        else AlertStage.WARNING
+        if current > ctx.frequency_warning_threshold
+        else None
+    )
+    return _stop_progress_hit(
+        code="frequency_anomaly",
+        value=current,
+        stop_threshold=ctx.frequency_stop_threshold,
+        stage=stage,
+    )
+
+
+def _confirmed_frequency(ctx: RuleContext) -> Decimal | None:
+    if not ctx.frequency_anomaly_enabled or ctx.frequency_current is None:
+        return None
+    current = Decimal(ctx.frequency_current)
+    effective_cap = max(
+        ctx.frequency_outlier_cap,
+        ctx.frequency_stop_threshold * _FREQUENCY_CAP_MULTIPLIER,
+    )
+    return None if current > effective_cap else current
+
+
+def _stop_progress_hit(
+    *,
+    code: str,
+    value: Decimal,
+    stop_threshold: Decimal,
+    stage: AlertStage | None,
+) -> RuleHit:
+    if not value.is_finite() or value < 0:
+        raise ValueError("rule progress value must be finite and non-negative")
+    if not stop_threshold.is_finite() or stop_threshold <= 0:
+        raise ValueError("stop threshold must be finite and positive")
+    title = rule_label(code)
+    return RuleHit(
+        code=code,
+        title=title,
+        stage=stage,
+        value=value,
+        threshold=stop_threshold,
+        summary=f"{title}: {value} из {stop_threshold} до STOP",
+        reason_text=f"Текущее значение {value}; STOP-порог {stop_threshold}.",
+    )
 
 
 def _evaluate_metric_only(

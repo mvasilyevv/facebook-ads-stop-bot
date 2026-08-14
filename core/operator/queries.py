@@ -11,12 +11,13 @@ import json
 import math
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.rules.labels import rule_label
 from core.tasks.channel import disable_channel_sql, enable_channel_sql, target_id_sql
 
 
@@ -568,7 +569,80 @@ _AD_SORT: dict[str, str] = {
     "registrations": "{alias}.registrations",
     "ftd": "{alias}.ftds",
     "updated": "{alias}.cycle_ts",
+    "percent_to_stop": "{alias}.percent_to_stop",
 }
+
+
+def _decimal_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    rendered = format(Decimal(value), "f")
+    if "." not in rendered:
+        return f"{rendered}.00"
+    whole, fraction = rendered.split(".", 1)
+    fraction = fraction.rstrip("0")
+    return f"{whole}.{fraction.ljust(2, '0')}"
+
+
+def _operator_rule_context(
+    *,
+    stored_offer_code: Any,
+    rule_code: Any,
+    value: Any,
+    threshold: Any,
+    stage: Any,
+) -> dict[str, str | None]:
+    """Serialize only the evaluator projection persisted by the observer scan."""
+    normalized_stage = str(stage).lower() if stage is not None else None
+    normalized_code = str(rule_code) if rule_code else None
+    try:
+        current = Decimal(value) if value is not None else None
+        stop_threshold = Decimal(threshold) if threshold is not None else None
+    except (InvalidOperation, TypeError, ValueError):
+        current = None
+        stop_threshold = None
+    if not stored_offer_code:
+        return {
+            "offer_code": None,
+            "rule_code": None,
+            "rule_title": None,
+            "value": None,
+            "threshold": None,
+            "percent_to_stop": None,
+            "stage": "none",
+        }
+    if (
+        normalized_stage not in {"none", "warning", "stop"}
+        or normalized_code is None
+        or current is None
+        or not current.is_finite()
+        or current < 0
+        or stop_threshold is None
+        or not stop_threshold.is_finite()
+        or stop_threshold <= 0
+    ):
+        return {
+            "offer_code": str(stored_offer_code),
+            "rule_code": None,
+            "rule_title": None,
+            "value": None,
+            "threshold": None,
+            "percent_to_stop": None,
+            "stage": "none",
+        }
+    percent = (current * Decimal("100") / stop_threshold).quantize(
+        Decimal("0.01"),
+        rounding=ROUND_HALF_UP,
+    )
+    return {
+        "offer_code": str(stored_offer_code) if stored_offer_code else None,
+        "rule_code": normalized_code,
+        "rule_title": rule_label(normalized_code),
+        "value": _decimal_string(current),
+        "threshold": _decimal_string(stop_threshold),
+        "percent_to_stop": format(percent, ".2f"),
+        "stage": normalized_stage,
+    }
 
 
 async def fetch_operator_ads(
@@ -585,6 +659,7 @@ async def fetch_operator_ads(
     page: int,
     page_size: int,
     tracker_available: bool,
+    approaching_only: bool = False,
 ) -> dict[str, Any]:
     """Server-side ad search/filter/sort/page with stable UUID tie-breaking."""
     observed_at = datetime.now(UTC)
@@ -612,6 +687,14 @@ async def fetch_operator_ads(
     if delivery_status:
         clauses.append("a.delivery_status = :delivery_status")
         params["delivery_status"] = delivery_status
+    if approaching_only:
+        clauses.extend(
+            (
+                "a.nearest_rule_stage IN ('none','warning')",
+                "UPPER(COALESCE(a.delivery_status, '')) = 'ACTIVE'",
+                "COALESCE(alert.alert_state, 'normal') NOT IN ('stop_sent','claimed','disabled')",
+            )
+        )
     severity_expr = (
         "CASE WHEN alert.alert_state IN ('stop_sent','disabled') THEN 'critical' "
         "WHEN alert.alert_state = 'warning_sent' THEN 'warning' "
@@ -630,7 +713,7 @@ async def fetch_operator_ads(
         f"""
         WITH meta_latest AS (
           SELECT DISTINCT ON (m.ad_id)
-                 m.ad_id, m.cycle_ts, m.spend, m.impressions, m.clicks
+                 m.ad_id, m.cycle_ts, m.spend, m.impressions, m.clicks, m.frequency
           FROM ad_metrics m
           WHERE m.cycle_ts BETWEEN :from_dt AND :to_dt
           ORDER BY m.ad_id, m.cycle_ts DESC
@@ -653,7 +736,16 @@ async def fetch_operator_ads(
         SELECT a.id, a.fb_ad_id, a.ad_name, a.delivery_status,
                s.id AS adset_id, s.adset_name,
                c.id AS campaign_id, c.campaign_name, c.ad_account_id,
-               m.cycle_ts, m.spend, m.impressions, m.clicks,
+               a.matched_offer_code AS offer_code,
+               a.nearest_rule_code, a.nearest_rule_value,
+               a.nearest_rule_threshold, a.nearest_rule_stage,
+               CASE
+                 WHEN a.nearest_rule_value IS NOT NULL
+                  AND a.nearest_rule_threshold > 0
+                 THEN a.nearest_rule_value * 100 / a.nearest_rule_threshold
+                 ELSE NULL
+               END AS percent_to_stop,
+               m.cycle_ts, m.spend, m.impressions, m.clicks, m.frequency,
                tracker.registrations, tracker.ftds, tracker.confirmed_deposits,
                alert.alert_state,
                {severity_expr} AS derived_severity,
@@ -804,6 +896,9 @@ async def fetch_operator_ads(
             if spend is not None and registrations
             else None
         )
+        cost_per_ftd = (
+            str((spend / ftds).quantize(Decimal("0.01"))) if spend is not None and ftds else None
+        )
         active_action = None
         if row.active_task_id is not None:
             active_row = type(
@@ -847,7 +942,16 @@ async def fetch_operator_ads(
                     "confirmed_deposits": confirmed,
                     "cpc": cpc,
                     "cost_per_registration": cpr,
+                    "frequency": _decimal_string(row.frequency),
+                    "cost_per_ftd": cost_per_ftd,
                 },
+                "rule_context": _operator_rule_context(
+                    stored_offer_code=row.offer_code,
+                    rule_code=row.nearest_rule_code,
+                    value=row.nearest_rule_value,
+                    threshold=row.nearest_rule_threshold,
+                    stage=row.nearest_rule_stage,
+                ),
                 "active_action": active_action,
             }
         )

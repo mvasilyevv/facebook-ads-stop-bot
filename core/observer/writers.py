@@ -128,6 +128,11 @@ async def upsert_catalog_hierarchy(
     adset_lifetime_budget: str | None = None,
     adset_budget_remaining: str | None = None,
     adset_learning_stage: str | None = None,
+    nearest_rule_code: str | None = None,
+    nearest_rule_value: Decimal | None = None,
+    nearest_rule_threshold: Decimal | None = None,
+    nearest_rule_stage: str | None = None,
+    matched_offer_code: str | None = None,
     cabinet_lease: CabinetLease | None = None,
 ) -> uuid.UUID:
     """UPSERT offer → campaign → adset → ad, возвращает fb_ads.id (UUID).
@@ -169,6 +174,23 @@ async def upsert_catalog_hierarchy(
     adset_lifetime_budget = _nz(adset_lifetime_budget)
     adset_budget_remaining = _nz(adset_budget_remaining)
     adset_learning_stage = _nz(adset_learning_stage)
+    if nearest_rule_stage not in {None, "none", "warning", "stop"}:
+        raise ValueError("nearest_rule_stage must be none, warning, stop or null")
+    if nearest_rule_stage is None:
+        nearest_rule_code = None
+        nearest_rule_value = None
+        nearest_rule_threshold = None
+    elif (
+        not matched_offer_code
+        or not nearest_rule_code
+        or nearest_rule_value is None
+        or nearest_rule_threshold is None
+        or not nearest_rule_value.is_finite()
+        or nearest_rule_value < 0
+        or not nearest_rule_threshold.is_finite()
+        or nearest_rule_threshold <= 0
+    ):
+        raise ValueError("nearest rule context must contain finite value and positive threshold")
     now = datetime.now(timezone.utc)
 
     async with engine.begin() as conn:
@@ -255,13 +277,22 @@ async def upsert_catalog_hierarchy(
                     """
                     INSERT INTO fb_ads
                         (adset_id, fb_ad_id, ad_name, delivery_status, last_seen_at,
-                         creative_thumb_url, creative_image_url)
-                    VALUES (:adsid, :fbid, :aname, :dstatus, :now, :cthumb, :cimage)
+                         creative_thumb_url, creative_image_url,
+                         nearest_rule_code, nearest_rule_value,
+                         nearest_rule_threshold, nearest_rule_stage,
+                         matched_offer_code)
+                    VALUES (:adsid, :fbid, :aname, :dstatus, :now, :cthumb, :cimage,
+                            :nr_code, :nr_value, :nr_threshold, :nr_stage, :offer_code)
                     ON CONFLICT (fb_ad_id) DO UPDATE
                     SET last_seen_at = :now,
                         adset_id = EXCLUDED.adset_id,
                         ad_name = EXCLUDED.ad_name,
                         delivery_status = EXCLUDED.delivery_status,
+                        nearest_rule_code = EXCLUDED.nearest_rule_code,
+                        nearest_rule_value = EXCLUDED.nearest_rule_value,
+                        nearest_rule_threshold = EXCLUDED.nearest_rule_threshold,
+                        nearest_rule_stage = EXCLUDED.nearest_rule_stage,
+                        matched_offer_code = EXCLUDED.matched_offer_code,
                         creative_thumb_url =
                             COALESCE(EXCLUDED.creative_thumb_url, fb_ads.creative_thumb_url),
                         creative_image_url =
@@ -278,6 +309,11 @@ async def upsert_catalog_hierarchy(
                     "now": now,
                     "cthumb": creative_thumb_url,
                     "cimage": creative_image_url,
+                    "nr_code": nearest_rule_code,
+                    "nr_value": nearest_rule_value,
+                    "nr_threshold": nearest_rule_threshold,
+                    "nr_stage": nearest_rule_stage,
+                    "offer_code": matched_offer_code,
                 },
             )
         ).first()

@@ -3357,6 +3357,10 @@ export interface components {
       cpc: string | null;
       /** Cost Per Registration */
       cost_per_registration: string | null;
+      /** Frequency */
+      frequency: string | null;
+      /** Cost Per Ftd */
+      cost_per_ftd: string | null;
     };
     /** OperatorAdRow */
     OperatorAdRow: {
@@ -3383,6 +3387,7 @@ export interface components {
       /** As Of */
       as_of: string | null;
       metrics: components["schemas"]["OperatorAdMetrics"];
+      rule_context: components["schemas"]["OperatorRuleContext"];
       active_action: components["schemas"]["OperatorActionItem"] | null;
     };
     /** OperatorAdsResponse */
@@ -3407,6 +3412,11 @@ export interface components {
       total: number;
       /** Pages */
       pages: number;
+    };
+    /** OperatorApproachingStopData */
+    OperatorApproachingStopData: {
+      /** Items */
+      items: components["schemas"]["OperatorAdRow"][];
     };
     /** OperatorAttentionAction */
     OperatorAttentionAction: {
@@ -3720,6 +3730,23 @@ export interface components {
       /** Currency Groups */
       currency_groups: components["schemas"]["OperatorCurrencyGroup"][];
     };
+    /** OperatorRuleContext */
+    OperatorRuleContext: {
+      /** Offer Code */
+      offer_code: string | null;
+      /** Rule Code */
+      rule_code: string | null;
+      /** Rule Title */
+      rule_title: string | null;
+      /** Value */
+      value: string | null;
+      /** Threshold */
+      threshold: string | null;
+      /** Percent To Stop */
+      percent_to_stop: string | null;
+      /** Stage */
+      stage: ("none" | "warning" | "stop") | null;
+    };
     /**
      * OperatorScopeEvidence
      * @description Validated account context shared by operator and analytics responses.
@@ -3762,6 +3789,19 @@ export interface components {
       /** Issues */
       issues: components["schemas"]["OperatorIssue"][];
       data: components["schemas"]["OperatorActionsData"] | null;
+    };
+    /** OperatorSection[OperatorApproachingStopData] */
+    OperatorSection_OperatorApproachingStopData_: {
+      state: components["schemas"]["DataState"];
+      /** As Of */
+      as_of: string | null;
+      /** Freshness Seconds */
+      freshness_seconds: number | null;
+      /** Sources */
+      sources: string[];
+      /** Issues */
+      issues: components["schemas"]["OperatorIssue"][];
+      data: components["schemas"]["OperatorApproachingStopData"] | null;
     };
     /** OperatorSection[OperatorAttentionData] */
     OperatorSection_OperatorAttentionData_: {
@@ -3837,6 +3877,7 @@ export interface components {
     OperatorSnapshot: {
       meta: components["schemas"]["OperatorSnapshotMeta"];
       attention: components["schemas"]["OperatorSection_OperatorAttentionData_"];
+      approaching_stop: components["schemas"]["OperatorSection_OperatorApproachingStopData_"];
       portfolio: components["schemas"]["OperatorSection_OperatorPortfolioData_"];
       economy: components["schemas"]["OperatorSection_OperatorEconomyData_"];
       funnel: components["schemas"]["OperatorSection_OperatorFunnelData_"];

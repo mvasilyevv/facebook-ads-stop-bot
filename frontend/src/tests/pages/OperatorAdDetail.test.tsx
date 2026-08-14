@@ -64,6 +64,16 @@ function makeAd(overrides: Partial<OperatorAdRow> = {}): OperatorAdRow {
       confirmed_deposits: 0,
       cpc: "42.10",
       cost_per_registration: null,
+      frequency: null,
+      cost_per_ftd: null,
+    },    rule_context: {
+      offer_code: "GH_CR2",
+      rule_code: "cpr_stop",
+      rule_title: "Цена регистрации",
+      value: "0.41",
+      threshold: "0.48",
+      percent_to_stop: "0.854",
+      stage: "warning",
     },
     active_action: null,
     ...overrides,
@@ -197,6 +207,8 @@ describe("typed operator ad detail", () => {
         spend: null,
         cpc: null,
         cost_per_registration: null,
+        frequency: null,
+        cost_per_ftd: null,
       },
     });
     const data = {

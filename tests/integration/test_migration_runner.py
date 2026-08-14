@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import sqlalchemy as sa
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import Column, Integer, String, Table, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -21,6 +22,22 @@ from migrations.baseline_contract import BASELINE_REVISION
 from migrations.revision_guard import RevisionContractError
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _head_revision(script_location: Path | None = None) -> str:
+    """Актуальный head миграций.
+
+    Тестовая БД поднимается фикстурой до head, а не до baseline, поэтому и
+    ожидания, и восстановление состояния должны опираться на него: иначе каждая
+    новая реальная миграция ломает эти тесты.
+    """
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(script_location or ROOT / "migrations"))
+    head = ScriptDirectory.from_config(config).get_current_head()
+    assert head is not None, "миграции обязаны иметь ровно один head"
+    return head
+
+
 SCRIPT = ROOT / "scripts/run-migrations-locked.py"
 SPEC = importlib.util.spec_from_file_location("run_migrations_locked_integration", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
@@ -78,6 +95,13 @@ def _temporary_forward_config(
 ) -> tuple[Config, Table]:
     migration_root = tmp_path / f"migrations-{revision}"
     shutil.copytree(ROOT / "migrations", migration_root)
+    # Тестовая ревизия цепляется к ТЕКУЩЕМУ head скопированных миграций, а не к
+    # baseline: иначе каждая новая реальная миграция создаёт второй head, и
+    # revision_guard справедливо валит контракт «ровно один head».
+    head_config = Config(str(ROOT / "alembic.ini"))
+    head_config.set_main_option("script_location", str(migration_root))
+    parent_revision = ScriptDirectory.from_config(head_config).get_current_head()
+    assert parent_revision is not None, "скопированные миграции обязаны иметь head"
     sleep_statement = ""
     if sleep_marker_key is not None:
         sleep_statement = f"""
@@ -95,7 +119,7 @@ def _temporary_forward_config(
 import sqlalchemy as sa
 
 revision = "{revision}"
-down_revision = "{BASELINE_REVISION}"
+down_revision = "{parent_revision}"
 branch_labels = None
 depends_on = None
 
@@ -156,7 +180,7 @@ async def _restore_baseline(
         await connection.execute(text("DELETE FROM public.alembic_version"))
         await connection.execute(
             text("INSERT INTO public.alembic_version (version_num) VALUES (:revision)"),
-            {"revision": BASELINE_REVISION},
+            {"revision": _head_revision()},
         )
     Base.metadata.remove(table)
 
@@ -342,7 +366,7 @@ async def test_lock_connection_loss_rolls_back_ddl_before_second_migrator(
         async with pg_engine.connect() as connection:
             assert (
                 await connection.scalar(text("SELECT version_num FROM public.alembic_version"))
-                == BASELINE_REVISION
+                == _head_revision()
             )
             assert (
                 await connection.scalar(

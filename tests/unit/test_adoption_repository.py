@@ -31,7 +31,7 @@ from core.adoption.repository import (
     LegacyArraySourceRepository,
     NormalizedTargetRepository,
 )
-from migrations.baseline_contract import BASELINE_REVISION
+from migrations.revision_guard import load_project_revision_chain
 
 
 def _sections() -> AdoptionSectionsV1:
@@ -342,7 +342,7 @@ class _FreshGuardScalars:
 class _DirtyFreshTargetConnection:
     async def scalars(self, statement) -> _FreshGuardScalars:
         if "adoption:target-revision" in str(statement):
-            return _FreshGuardScalars([BASELINE_REVISION])
+            return _FreshGuardScalars([load_project_revision_chain().head])
         if "adoption:target-fresh-data" in str(statement):
             return _FreshGuardScalars(["offers"])
         raise AssertionError(f"unexpected scalar query: {statement}")

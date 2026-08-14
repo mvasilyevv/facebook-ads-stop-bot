@@ -836,6 +836,8 @@ async def test_cabinet_snapshot_isolates_actions_and_attention_to_one_cabinet(
         "fetch_operator_incidents",
         AsyncMock(side_effect=scoped_incidents),
     )
+    approaching_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(operator_router, "_fetch_approaching_stop_rows", approaching_mock)
     monkeypatch.setattr(
         operator_router,
         "fetch_operator_revision",
@@ -869,8 +871,10 @@ async def test_cabinet_snapshot_isolates_actions_and_attention_to_one_cabinet(
         "task:1",
     }
     assert snapshot.attention.state == DataState.READY
+    assert snapshot.approaching_stop.state == DataState.EMPTY
     assert actions_mock.await_args.kwargs["account_id"] == "111"
     assert system_mock.await_args.kwargs["account_id"] == "111"
+    assert approaching_mock.await_args.kwargs["account_id"] == "111"
 
 
 @pytest.mark.asyncio
