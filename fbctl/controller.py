@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import base64
+import errno
 import fcntl
 import grp
+import ipaddress
 import json
 import os
 import pwd
 import re
 import secrets
 import shutil
+import socket
 import stat
 import sys
 import time
@@ -149,6 +152,39 @@ REHEARSAL_FAILPOINTS = (
 )
 
 
+def _tcp_port_is_occupied(host: str, port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind((host, port))
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            return True
+        raise
+    return False
+
+
+def _docker_binding_intersects_host(binding_host: object, target_host: str) -> bool:
+    if binding_host == "":
+        return True
+    if not isinstance(binding_host, str):
+        return False
+    try:
+        binding_address = ipaddress.ip_address(binding_host)
+        target_address = ipaddress.ip_address(target_host)
+    except ValueError:
+        return False
+    if binding_address.version == target_address.version:
+        return binding_address.is_unspecified or binding_address == target_address
+    if isinstance(binding_address, ipaddress.IPv6Address) and isinstance(
+        target_address, ipaddress.IPv4Address
+    ):
+        mapped_address = binding_address.ipv4_mapped
+        return mapped_address is not None and (
+            mapped_address.is_unspecified or mapped_address == target_address
+        )
+    return False
+
+
 @dataclass(frozen=True)
 class DeployOptions:
     root: Path
@@ -187,6 +223,7 @@ class ProductionController:
         materialize: Callable[[Path], dict[str, object]] = materialize_candidate,
         prepare: Callable[..., RuntimeConfig] = prepare_candidate,
         promotion_hook: Callable[[str], None] = lambda _stage: None,
+        port_probe: Callable[[str, int], bool] | None = None,
     ) -> None:
         self.runner = runner or SubprocessRunner()
         self.probes = probes or UrllibProbeClient()
@@ -197,6 +234,7 @@ class ProductionController:
         self.materialize = materialize
         self.prepare = prepare
         self._promotion_hook = promotion_hook
+        self.port_probe = port_probe or _tcp_port_is_occupied
         self._runtime_stopped = False
         self._promoted = False
         self._completed_steps: list[str] = []
@@ -477,53 +515,68 @@ class ProductionController:
         values: Mapping[str, str],
         docker_config: Path | None,
     ) -> None:
-        environment = sealed_process_environment(docker_config=docker_config)
-        listed = self.runner.run(
-            ("docker", "container", "ls", "--quiet", "--no-trunc"),
-            step="preflight",
-            env=environment,
-            capture=True,
-        )
-        container_ids = tuple(line.strip() for line in listed.stdout.splitlines() if line.strip())
-        if not container_ids:
-            return
-        if any(
-            re.fullmatch(r"[0-9a-f]{64}", container_id) is None for container_id in container_ids
-        ):
-            raise FbctlError("Docker returned an invalid running-container id")
-        # Контейнер мог завершиться между `ls` и `inspect`: docker вернёт код 1,
-        # напечатав корректный JSON по остальным.  Исчезнувший контейнер порт не
-        # держит, поэтому это не повод валить preflight.
-        inspected = self.runner.run(
-            ("docker", "container", "inspect", *container_ids),
-            step="preflight",
-            env=environment,
-            capture=True,
-            check=False,
-        )
-        if not inspected.stdout.strip():
-            return
-        try:
-            containers = json.loads(inspected.stdout)
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise FbctlError("Docker returned unreadable running-container inventory") from exc
-        if not isinstance(containers, list):
-            raise FbctlError("Docker returned invalid running-container inventory")
-
         required_ports = {
             values[key]: (key, values[project_key], service)
             for key, project_key, service in MANAGED_HOST_PORT_SERVICES
             if key in values and project_key in values
         }
+        occupied_ports: dict[str, tuple[str, str, str]] = {}
+        for host_port, required in required_ports.items():
+            key, _project, _service = required
+            try:
+                port_number = int(host_port)
+                occupied = self.port_probe("127.0.0.1", port_number)
+            except (OSError, ValueError) as exc:
+                raise FbctlError(
+                    f"TCP host port probe failed for {key}={host_port} on 127.0.0.1"
+                ) from exc
+            if occupied:
+                occupied_ports[host_port] = required
+
+        environment = sealed_process_environment(docker_config=docker_config)
+        listed = self.runner.run(
+            ("docker", "container", "ls", "--all", "--quiet", "--no-trunc"),
+            step="preflight",
+            env=environment,
+            capture=True,
+        )
+        container_ids = tuple(line.strip() for line in listed.stdout.splitlines() if line.strip())
+        if any(
+            re.fullmatch(r"[0-9a-f]{64}", container_id) is None for container_id in container_ids
+        ):
+            raise FbctlError("Docker returned an invalid container id")
+        # Контейнер мог завершиться между `ls` и `inspect`: docker вернёт код 1,
+        # напечатав корректный JSON по остальным. Если порт всё ещё занят, ниже
+        # он останется без владельца и preflight завершится fail-closed.
+        containers: object = []
+        if container_ids:
+            inspected = self.runner.run(
+                ("docker", "container", "inspect", *container_ids),
+                step="preflight",
+                env=environment,
+                capture=True,
+                check=False,
+            )
+            if inspected.stdout.strip():
+                try:
+                    containers = json.loads(inspected.stdout)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    raise FbctlError("Docker returned unreadable container inventory") from exc
+        if not isinstance(containers, list):
+            raise FbctlError("Docker returned invalid container inventory")
+        if not occupied_ports:
+            return
+
         conflicts: list[str] = []
         seen: set[tuple[str, str]] = set()
+        attributed_ports: set[str] = set()
         for container in containers:
             if not isinstance(container, dict):
-                raise FbctlError("Docker returned invalid running-container inventory")
+                raise FbctlError("Docker returned invalid container inventory")
             container_id = container.get("Id")
             raw_name = container.get("Name")
             if not isinstance(container_id, str) or not container_id:
-                raise FbctlError("Docker returned a running container without an id")
+                raise FbctlError("Docker returned a container without an id")
             name = raw_name.removeprefix("/") if isinstance(raw_name, str) else ""
             command_target = (
                 name if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]+", name) else container_id
@@ -531,52 +584,84 @@ class ProductionController:
             container_config = container.get("Config")
             network_settings = container.get("NetworkSettings")
             if not isinstance(container_config, dict) or not isinstance(network_settings, dict):
-                raise FbctlError("Docker returned invalid running-container inventory")
+                raise FbctlError("Docker returned invalid container inventory")
             labels = container_config.get("Labels")
-            ports = network_settings.get("Ports")
-            if not isinstance(ports, dict):
+            network_ports = network_settings.get("Ports")
+            if network_ports is None:
+                network_ports = {}
+            if not isinstance(network_ports, dict):
                 raise FbctlError(f"Docker container has unreadable port bindings: {command_target}")
-            for bindings in ports.values():
-                if bindings is None:
-                    continue
-                if not isinstance(bindings, list):
-                    raise FbctlError(
-                        f"Docker container has unreadable port bindings: {command_target}"
-                    )
-                for binding in bindings:
-                    if not isinstance(binding, dict):
+            binding_sources = [network_ports]
+            host_config = container.get("HostConfig")
+            if isinstance(host_config, dict):
+                restart_policy = host_config.get("RestartPolicy")
+                restart_name = (
+                    restart_policy.get("Name") if isinstance(restart_policy, dict) else None
+                )
+                configured_ports = host_config.get("PortBindings")
+                if restart_name not in {None, "", "no"}:
+                    if configured_ports is None:
+                        configured_ports = {}
+                    if not isinstance(configured_ports, dict):
                         raise FbctlError(
                             f"Docker container has unreadable port bindings: {command_target}"
                         )
-                    host_port = binding.get("HostPort")
-                    host_ip = binding.get("HostIp")
-                    required = required_ports.get(host_port)
-                    if required is None or host_ip not in {"", "0.0.0.0", "::", "127.0.0.1"}:
+                    binding_sources.append(configured_ports)
+            for ports in binding_sources:
+                for container_port, bindings in ports.items():
+                    if not isinstance(container_port, str):
                         continue
-                    key, project, service = required
-                    # Свой же контур не считается коллизией: deploy сам остановит
-                    # его на stop_runtime.  Совпадать обязан и cluster-id, иначе
-                    # контейнер принадлежит другому (в том числе брошенному)
-                    # контуру и должен быть остановлен оператором вручную.
-                    is_current_runtime = (
-                        isinstance(labels, dict)
-                        and labels.get("com.fb-agent.managed") == "true"
-                        and labels.get("com.fb-agent.cluster-id")
-                        == values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"]
-                        and labels.get("com.docker.compose.project") == project
-                        and labels.get("com.docker.compose.service") == service
-                    )
-                    if is_current_runtime or (key, container_id) in seen:
+                    _private_port, separator, protocol = container_port.rpartition("/")
+                    if separator != "/" or protocol != "tcp" or bindings is None:
                         continue
-                    seen.add((key, container_id))
-                    display_name = name or container_id
-                    conflicts.append(
-                        f"{key}={host_port} is occupied by container "
-                        f"{display_name} ({container_id[:12]}); stop it manually before retrying: "
-                        f"sudo docker stop {command_target}"
-                    )
+                    if not isinstance(bindings, list):
+                        raise FbctlError(
+                            f"Docker container has unreadable port bindings: {command_target}"
+                        )
+                    for binding in bindings:
+                        if not isinstance(binding, dict):
+                            raise FbctlError(
+                                f"Docker container has unreadable port bindings: {command_target}"
+                            )
+                        host_port = binding.get("HostPort")
+                        required = occupied_ports.get(host_port)
+                        if required is None or not _docker_binding_intersects_host(
+                            binding.get("HostIp"), "127.0.0.1"
+                        ):
+                            continue
+                        attributed_ports.add(host_port)
+                        key, project, service = required
+                        # Свой же контур не считается коллизией: deploy сам остановит
+                        # его на stop_runtime.  Совпадать обязан и cluster-id, иначе
+                        # контейнер принадлежит другому (в том числе брошенному)
+                        # контуру и должен быть остановлен оператором вручную.
+                        is_current_runtime = (
+                            isinstance(labels, dict)
+                            and labels.get("com.fb-agent.managed") == "true"
+                            and labels.get("com.fb-agent.cluster-id")
+                            == values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"]
+                            and labels.get("com.docker.compose.project") == project
+                            and labels.get("com.docker.compose.service") == service
+                        )
+                        if is_current_runtime or (key, container_id) in seen:
+                            continue
+                        seen.add((key, container_id))
+                        display_name = name or container_id
+                        conflicts.append(
+                            f"{key}={host_port} is occupied by container "
+                            f"{display_name} ({container_id[:12]}); stop it manually before "
+                            f"retrying: sudo docker stop {command_target}"
+                        )
+        for host_port, (key, _project, _service) in occupied_ports.items():
+            if host_port in attributed_ports:
+                continue
+            conflicts.append(
+                f"{key}={host_port} is occupied, but Docker has no published TCP port owner; "
+                "a process outside Docker or a host-network container is holding it; "
+                "free the port manually before retrying"
+            )
         if conflicts:
-            raise FbctlError("Docker host port collision: " + "; ".join(conflicts))
+            raise FbctlError("Host TCP port collision: " + "; ".join(conflicts))
 
     @staticmethod
     def _managed_resources(
