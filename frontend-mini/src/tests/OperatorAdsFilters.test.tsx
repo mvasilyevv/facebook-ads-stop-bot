@@ -192,7 +192,7 @@ describe("TMA operator ads URL filters", () => {
     } satisfies OperatorAdsQuery);
   });
 
-  it("ranks by stop proximity in the URL without sending an unsupported sort", () => {
+  it("delegates stop proximity ranking to the server", () => {
     routeSearch = { sort: "stop_proximity" };
     useOperatorAds.mockReturnValue({
       data: {
@@ -215,23 +215,22 @@ describe("TMA operator ads URL filters", () => {
 
     renderPage();
 
-    // Контракт /api/operator/ads не принимает percent_to_stop как sort.
+    // Порядок считает БД: клиент видит только текущую страницу, и самое
+    // опасное объявление может лежать на следующей.
     expect(useOperatorAds).toHaveBeenCalledWith(
       expect.objectContaining({
-        sort: "updated",
+        sort: "percent_to_stop",
       }) as unknown as OperatorAdsQuery,
     );
     const names = screen
       .getAllByText(/Объявление (far|near|unknown)/)
       .map((node) => node.textContent);
+    // Ответ сервера отрисовывается как есть, без переупорядочивания в браузере.
     expect(names).toEqual([
-      "Объявление near",
       "Объявление far",
       "Объявление unknown",
+      "Объявление near",
     ]);
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Порядок по близости к стопу",
-    );
   });
 
   it("uses a focus-managed sheet with typed cabinet options and resets page on filter changes", async () => {

@@ -11,7 +11,6 @@ import { ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
 import type { OperatorSeverity } from "@fb/shared/operator/contracts";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import {
-  isClientRankedAdsSort,
   operatorAdsQuerySort,
   operatorCabinetOptions,
   parseOperatorAdsRouteSearch,
@@ -21,7 +20,6 @@ import {
   type OperatorAdsRouteSort,
   type OperatorCabinetOption,
 } from "@fb/shared/operator/routeFilters";
-import { rankAdsByStopProximity } from "@fb/shared/operator/stopProximity";
 import { adsForRealtimeState } from "@fb/shared/operator/viewModel";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
@@ -70,7 +68,6 @@ function AdsPage() {
   const snapshot = useOperatorSnapshot({ window: "today" });
   const cabinets = operatorCabinetOptions(snapshot.data);
   const page = search.page ?? 1;
-  const rankedByStopProximity = isClientRankedAdsSort(search.sort);
   const query = useOperatorAds({
     search: search.q,
     account_id: search.account_id,
@@ -88,9 +85,8 @@ function AdsPage() {
       )
     : null;
   const displayState = displayPayload?.state;
-  const displayRows = rankedByStopProximity
-    ? displayPayload && rankAdsByStopProximity(displayPayload.rows)
-    : displayPayload?.rows;
+  // Порядок задаёт сервер, включая сортировку по близости к стопу.
+  const displayRows = displayPayload?.rows;
   const currency = confirmedOperatorCurrency(displayPayload?.scope);
   const confirmedEmpty =
     realtimeStatus === "connected" &&
@@ -176,16 +172,6 @@ function AdsPage() {
         </div>
       ) : null}
 
-      {rankedByStopProximity ? (
-        <p
-          role="status"
-          className="mx-4 mt-3 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 px-3 py-2 text-[13px] leading-5 text-bg-9"
-        >
-          {displayPayload && displayPayload.pages > 1
-            ? "Порядок по близости к стопу считается по загруженной странице. Полный список по кабинету — в блоке «Подходят к стопу» на дашборде."
-            : "Порядок по близости к стопу считается на клиенте. Строки без подтверждённой доли уходят вниз."}
-        </p>
-      ) : null}
 
       <section className="grid gap-3 px-4 pt-4" aria-label="Объявления">
         {query.isError && !payload ? (

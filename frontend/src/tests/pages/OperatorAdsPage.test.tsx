@@ -327,16 +327,17 @@ describe("typed operator ads page", () => {
     );
     renderPage();
 
-    // Контракт /api/operator/ads не принимает percent_to_stop как sort.
+    // Порядок считает БД: клиент видит только текущую страницу, и самое
+    // опасное объявление может лежать на следующей.
     expect(useOperatorAds).toHaveBeenCalledWith(
-      expect.objectContaining({ sort: "updated" }) as unknown as OperatorAdsQuery,
+      expect.objectContaining({ sort: "percent_to_stop" }) as unknown as OperatorAdsQuery,
     );
     const names = within(screen.getByRole("table"))
       .getAllByRole("row")
       .slice(1)
       .map((row) => within(row).getByText(/Объявление \d+/).textContent);
-    expect(names).toEqual(["Объявление 222", "Объявление 111", "Объявление 333"]);
-    expect(screen.getByRole("status")).toHaveTextContent("Порядок по близости к стопу");
+    // Ответ сервера отрисовывается как есть, без переупорядочивания в браузере.
+    expect(names).toEqual(["Объявление 111", "Объявление 222", "Объявление 333"]);
   });
 
   it("uses one row view-model for desktop and mobile without changing zero into unknown", () => {

@@ -1857,9 +1857,18 @@ async def get_operator_ads(
     search: str | None = Query(default=None, max_length=200),
     delivery_status: str | None = Query(default=None, max_length=64),
     severity: Literal["ok", "warning", "critical", "unknown"] | None = Query(default=None),
-    sort: Literal["name", "spend", "clicks", "registrations", "ftd", "updated"] = Query(
-        default="updated"
-    ),
+    sort: Literal[
+        "name",
+        "spend",
+        "clicks",
+        "registrations",
+        "ftd",
+        "updated",
+        # Порядок по близости к стопу считает БД: клиент видит только текущую
+        # страницу, и ранжирование внутри неё вводит в заблуждение — самое
+        # опасное объявление может лежать на следующей.
+        "percent_to_stop",
+    ] = Query(default="updated"),
     direction: Literal["asc", "desc"] = Query(default="desc"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=10, le=200),

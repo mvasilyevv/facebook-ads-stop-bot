@@ -7132,7 +7132,14 @@ export interface operations {
         search?: string | null;
         delivery_status?: string | null;
         severity?: ("ok" | "warning" | "critical" | "unknown") | null;
-        sort?: "name" | "spend" | "clicks" | "registrations" | "ftd" | "updated";
+        sort?:
+          | "name"
+          | "spend"
+          | "clicks"
+          | "registrations"
+          | "ftd"
+          | "updated"
+          | "percent_to_stop";
         direction?: "asc" | "desc";
         page?: number;
         page_size?: number;

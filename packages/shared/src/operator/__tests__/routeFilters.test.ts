@@ -58,16 +58,16 @@ describe("operator route filters", () => {
     });
   });
 
-  it("keeps stop proximity sorting in the URL and off the server query", () => {
+  it("sends stop proximity sorting to the server, keeping the URL readable", () => {
     expect(parseOperatorAdsRouteSearch({ sort: "stop_proximity" }).sort).toBe(
       "stop_proximity",
     );
-    // Контракт /api/operator/ads такой сортировки не принимает: запрос обязан
-    // уйти с поддерживаемым значением, а порядок посчитать клиент.
-    expect(operatorAdsQuerySort("stop_proximity")).toBe("updated");
+    // Порядок обязан считать сервер: клиент видит только текущую страницу, и
+    // самое опасное объявление может лежать на следующей.
+    expect(operatorAdsQuerySort("stop_proximity")).toBe("percent_to_stop");
     expect(operatorAdsQuerySort("spend")).toBe("spend");
     expect(operatorAdsQuerySort(undefined)).toBe("updated");
-    expect(isClientRankedAdsSort("stop_proximity")).toBe(true);
+    expect(isClientRankedAdsSort("stop_proximity")).toBe(false);
     expect(isClientRankedAdsSort("spend")).toBe(false);
   });
 

@@ -3392,7 +3392,15 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": ["name", "spend", "clicks", "registrations", "ftd", "updated"],
+              "enum": [
+                "name",
+                "spend",
+                "clicks",
+                "registrations",
+                "ftd",
+                "updated",
+                "percent_to_stop"
+              ],
               "type": "string",
               "default": "updated",
               "title": "Sort"

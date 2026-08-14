@@ -5,7 +5,6 @@ import { ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
 import type { OperatorSeverity } from "@fb/shared/operator/contracts";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import {
-  isClientRankedAdsSort,
   operatorAdsQuerySort,
   operatorCabinetOptions,
   parseOperatorAdsRouteSearch,
@@ -15,7 +14,6 @@ import {
   type OperatorAdsRouteSort,
   type OperatorCabinetOption,
 } from "@fb/shared/operator/routeFilters";
-import { rankAdsByStopProximity } from "@fb/shared/operator/stopProximity";
 import { adsForRealtimeState } from "@fb/shared/operator/viewModel";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
@@ -62,7 +60,6 @@ function AdsPage() {
   const snapshot = useOperatorSnapshot({ window: "today" });
   const cabinets = operatorCabinetOptions(snapshot.data);
   const page = search.page ?? 1;
-  const rankedByStopProximity = isClientRankedAdsSort(search.sort);
   const query = useOperatorAds({
     search: search.q,
     account_id: search.account_id,
@@ -77,9 +74,9 @@ function AdsPage() {
     ? adsForRealtimeState(payload, realtimeStatus === "connected" && !query.isError)
     : null;
   const displayState = displayPayload?.state;
-  const displayRows = rankedByStopProximity
-    ? displayPayload && rankAdsByStopProximity(displayPayload.rows)
-    : displayPayload?.rows;
+  // Порядок задаёт сервер, включая сортировку по близости к стопу: клиент
+  // видит только текущую страницу и переупорядочивать её не должен.
+  const displayRows = displayPayload?.rows;
   const currency = confirmedOperatorCurrency(displayPayload?.scope);
   const hasConfirmedCount = displayState === "ready" || displayState === "empty";
   const activeFilterCount =
@@ -189,16 +186,6 @@ function AdsPage() {
         </div>
       ) : null}
 
-      {rankedByStopProximity ? (
-        <p
-          role="status"
-          className="mb-4 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 px-4 py-3 text-[13px] text-bg-9"
-        >
-          {displayPayload && displayPayload.pages > 1
-            ? "Порядок по близости к стопу считается по загруженной странице. Полный ранжированный список по кабинету — в блоке «Подходят к стопу» на дашборде."
-            : "Порядок по близости к стопу считается на клиенте. Строки без подтверждённой доли уходят вниз и помечены отдельно."}
-        </p>
-      ) : null}
 
       <section className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-3 sm:p-4">
         {query.isPending && !payload ? (

@@ -72,16 +72,26 @@ const AD_ROUTE_SORTS = new Set<OperatorAdsRouteSort>([
 export function operatorAdsQuerySort(
   sort: OperatorAdsRouteSort | undefined,
 ): OperatorAdsSort {
+  // Близость к стопу считает БД: клиентское ранжирование видело только текущую
+  // страницу, а самое опасное объявление могло лежать на следующей. В URL
+  // остаётся читаемое stop_proximity, серверу уходит его ключ сортировки.
+  if (sort === OPERATOR_ADS_STOP_PROXIMITY_SORT) {
+    return "percent_to_stop";
+  }
   return sort && AD_SORTS.has(sort as OperatorAdsSort)
     ? (sort as OperatorAdsSort)
     : "updated";
 }
 
-/** Считает ли порядок клиент, а не сервер (важно для страничной выборки). */
+/**
+ * Считает ли порядок клиент, а не сервер (важно для страничной выборки).
+ * Сейчас все сортировки серверные; функция оставлена как явная точка контроля,
+ * чтобы страничная выборка не начала молча ранжироваться в браузере.
+ */
 export function isClientRankedAdsSort(
-  sort: OperatorAdsRouteSort | undefined,
+  _sort: OperatorAdsRouteSort | undefined,
 ): boolean {
-  return sort === OPERATOR_ADS_STOP_PROXIMITY_SORT;
+  return false;
 }
 
 export function parseOperatorAdsRouteSearch(
