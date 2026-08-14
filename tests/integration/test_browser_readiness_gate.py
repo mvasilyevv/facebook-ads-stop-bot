@@ -10,6 +10,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+import core.tasks.queue as task_queue
 from core.browser.circuit_breaker import AsyncCircuitBreaker
 from core.meta_api.browser_readiness import (
     BrowserReadinessObservation,
@@ -74,7 +75,7 @@ async def _seed_config(pg_engine, *, profile_id: str = "profile-ready"):
     return identity
 
 
-async def _seed_task(pg_engine) -> int:
+async def _seed_task(pg_engine, *, max_attempts: int = 5) -> int:
     task_id = await create_task(
         pg_engine,
         task_type="meta_api_mutation",
@@ -87,6 +88,7 @@ async def _seed_task(pg_engine) -> int:
         },
         requested_by="bot_auto_stop",
         lane="money",
+        max_attempts=max_attempts,
     )
     assert task_id is not None
     return task_id
@@ -403,7 +405,7 @@ async def test_exact_live_rejection_closes_gate_and_consumes_attempt_budget(
     monkeypatch,
 ) -> None:
     identity = await _seed_config(pg_engine)
-    task_id = await _seed_task(pg_engine)
+    task_id = await _seed_task(pg_engine, max_attempts=1)
     assert await persist_browser_readiness(
         pg_engine,
         identity=identity,
@@ -462,6 +464,11 @@ async def test_exact_live_rejection_closes_gate_and_consumes_attempt_budget(
                 operation="upload_image",
                 ad_account_id="123",
             )
+    monkeypatch.setattr(
+        task_queue,
+        "_transition_returned_terminal_tasks",
+        AsyncMock(),
+    )
     assert (
         await release_after_browser_readiness_rejection(
             pg_engine,
@@ -469,7 +476,7 @@ async def test_exact_live_rejection_closes_gate_and_consumes_attempt_budget(
             error="exact live identity rejected",
             target_lock_key="987654321",
         )
-        == "retrying"
+        == "failed"
     )
 
     async with pg_engine.connect() as conn:
@@ -479,6 +486,7 @@ async def test_exact_live_rejection_closes_gate_and_consumes_attempt_budget(
                     """
                     SELECT task.status,
                            task.attempt_count,
+                           task.result,
                            task.external_started_at,
                            readiness.state,
                            readiness.readiness_expires_at,
@@ -492,8 +500,10 @@ async def test_exact_live_rejection_closes_gate_and_consumes_attempt_budget(
                 {"task_id": task_id},
             )
         ).one()
-    assert row.status == "retrying"
+    assert row.status == "failed"
     assert row.attempt_count == 1
+    assert row.result["outcome"] == "REJECTED"
+    assert row.result["reason"] == "browser_readiness_attempts_exhausted"
     assert row.external_started_at is None
     assert row.state == "unavailable"
     assert row.readiness_expires_at is None

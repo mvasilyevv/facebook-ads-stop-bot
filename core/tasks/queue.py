@@ -2121,8 +2121,9 @@ async def release_after_browser_readiness_rejection(
     The exact per-RPC check proves that browser-agent did not issue the
     controlled request. The rejected readiness generation has already been
     CAS-expired by ``MetaApiClient``. A retry waits without an active deadline;
-    the next claim assigns one. Repeated identity churn still consumes attempts
-    so it cannot bypass ``max_attempts`` forever. Existing UNKNOWN evidence is
+    the next claim assigns one. Repeated identity churn in the money lane still
+    consumes attempts so it cannot bypass ``max_attempts`` forever. Other lanes
+    retain their caller-owned retry lifecycle. Existing UNKNOWN evidence is
     preserved because a rejected reconciliation read says nothing about the
     earlier write.
     """
@@ -2153,13 +2154,16 @@ async def release_after_browser_readiness_rejection(
                         WHEN cancel_requested_at IS NOT NULL
                          AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
                           THEN 'cancelled'
-                        WHEN attempt_count + 1 >= max_attempts
+                        WHEN lane = 'money'
+                         AND attempt_count + 1 >= max_attempts
                           THEN 'failed'
                         ELSE 'retrying'
                     END,
                     attempt_count = CASE
                         WHEN cancel_requested_at IS NOT NULL
                          AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
+                          THEN attempt_count
+                        WHEN lane <> 'money'
                           THEN attempt_count
                         ELSE attempt_count + 1
                     END,
@@ -2168,7 +2172,10 @@ async def release_after_browser_readiness_rejection(
                           cancel_requested_at IS NULL
                           OR COALESCE(result->>'reconcile_required', 'false') = 'true'
                         )
-                         AND attempt_count + 1 < max_attempts
+                         AND (
+                           lane <> 'money'
+                           OR attempt_count + 1 < max_attempts
+                         )
                           THEN clock_timestamp()
                         ELSE available_at
                     END,
@@ -2177,7 +2184,10 @@ async def release_after_browser_readiness_rejection(
                           cancel_requested_at IS NULL
                           OR COALESCE(result->>'reconcile_required', 'false') = 'true'
                         )
-                         AND attempt_count + 1 < max_attempts
+                         AND (
+                           lane <> 'money'
+                           OR attempt_count + 1 < max_attempts
+                         )
                           THEN CASE
                             WHEN lane = 'money' THEN NULL
                             ELSE clock_timestamp()
@@ -2190,7 +2200,10 @@ async def release_after_browser_readiness_rejection(
                           cancel_requested_at IS NOT NULL
                           AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
                         )
-                          OR attempt_count + 1 >= max_attempts
+                          OR (
+                            lane = 'money'
+                            AND attempt_count + 1 >= max_attempts
+                          )
                           THEN clock_timestamp()
                         ELSE NULL
                     END,
@@ -2219,7 +2232,8 @@ async def release_after_browser_readiness_rejection(
                             'reason',
                             'cancelled_after_browser_readiness_rejection'
                           )
-                        WHEN attempt_count + 1 >= max_attempts
+                        WHEN lane = 'money'
+                         AND attempt_count + 1 >= max_attempts
                          AND COALESCE(result->>'reconcile_required', 'false') = 'true'
                         THEN
                           (
@@ -2232,7 +2246,8 @@ async def release_after_browser_readiness_rejection(
                             'reason',
                             'browser_readiness_reconciliation_attempts_exhausted'
                           )
-                        WHEN attempt_count + 1 >= max_attempts THEN
+                        WHEN lane = 'money'
+                         AND attempt_count + 1 >= max_attempts THEN
                           (
                             COALESCE(result, '{}'::jsonb)
                               - 'external_boundary_operation'

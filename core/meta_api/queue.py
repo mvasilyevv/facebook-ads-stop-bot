@@ -283,7 +283,7 @@ async def release_task_after_browser_readiness_rejection(
     target_lock_key: str,
     error: str,
 ) -> str | None:
-    """Return a proven exact-live rejection within the finite attempt budget."""
+    """Return a proven exact-live rejection; money consumes its attempt budget."""
     return await release_after_browser_readiness_rejection(
         engine,
         task=task,

@@ -213,6 +213,7 @@ def test_readiness_rejection_cannot_bypass_attempt_budget() -> None:
     source = inspect.getsource(task_queue.release_after_browser_readiness_rejection)
 
     assert "attempt_count = CASE" in source
+    assert "lane = 'money'" in source
     assert "attempt_count + 1 >= max_attempts" in source
     assert "browser_readiness_attempts_exhausted" in source
     assert "browser_readiness_reconciliation_attempts_exhausted" in source
