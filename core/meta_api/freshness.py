@@ -134,7 +134,7 @@ async def defer_auto_stop_for_fresh_snapshot(
                 UPDATE task_queue
                 SET status = 'retrying',
                     available_at = now() + make_interval(secs => :delay_seconds),
-                    deadline_at = now() + make_interval(secs => :delay_seconds + 30),
+                    deadline_at = NULL,
                     external_started_at = NULL,
                     last_error = 'stale_meta_snapshot: observer refresh requested',
                     lease_owner = NULL,
