@@ -46,8 +46,11 @@ export function ErrorState({
       </span>
       <div className="flex-1 min-w-0">
         <div className="text-bg-11 font-display text-[14px] mb-1">{title}</div>
+        {/* Обычный текст, а не моноширинный дамп: сюда попадает операторская
+            копия, сырые сообщения отфильтрованы выше. break-words вместо
+            break-all — иначе строка рвётся посреди слова на узком экране. */}
         {message ? (
-          <div className="text-[12px] text-bg-10 font-numeric break-all">
+          <div className="text-[13px] text-bg-10 font-body break-words">
             {String(message).slice(0, 400)}
           </div>
         ) : null}
