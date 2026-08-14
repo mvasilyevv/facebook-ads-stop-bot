@@ -1,8 +1,9 @@
 import type { ComponentType, ReactNode } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { OperatorSnapshot } from "@fb/shared/operator/contracts";
 import { makeOperatorSnapshot } from "@fb/shared/operator/testFixture";
 
 const mockUseOperatorSnapshot = vi.fn();
@@ -58,6 +59,48 @@ import { readResolvedNavigation } from "@/lib/transientNavigation";
 
 const Dashboard = (Route as unknown as { component: ComponentType }).component;
 
+function approachingRow(
+  fbAdId: string,
+  percentToStop: string,
+): NonNullable<OperatorSnapshot["approaching_stop"]["data"]>["items"][number] {
+  return {
+    id: `row-${fbAdId}`,
+    fb_ad_id: fbAdId,
+    name: `Объявление ${fbAdId}`,
+    campaign_id: "campaign-1",
+    campaign_name: "GH · CR2",
+    adset_id: "adset-1",
+    adset_name: "Broad",
+    account_id: "act_123",
+    delivery_status: "ACTIVE",
+    data_state: "ready",
+    severity: "warning",
+    as_of: "2026-07-18T10:14:45Z",
+    metrics: {
+      spend: "12.50",
+      impressions: 1000,
+      clicks: 30,
+      registrations: 3,
+      ftd: 0,
+      confirmed_deposits: 0,
+      cpc: "0.41",
+      cost_per_registration: "4.16",
+      frequency: "1.84",
+      cost_per_ftd: null,
+    },
+    rule_context: {
+      offer_code: "GH_CR2",
+      rule_code: "cpr_stop",
+      rule_title: "Дорогая рега",
+      value: "0.41",
+      threshold: "0.48",
+      percent_to_stop: percentToStop,
+      stage: "warning",
+    },
+    active_action: null,
+  };
+}
+
 describe("TMA operator dashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -94,13 +137,52 @@ describe("TMA operator dashboard", () => {
     expect(window.location.href).not.toContain("ad-1");
   });
 
+  it("reads a confirmed empty approaching-stop section as calm, not alarming", () => {
+    render(<Dashboard />);
+
+    const section = screen.getByRole("region", { name: "Подходят к стопу" });
+    expect(within(section).getByText("никто не подходит")).toBeInTheDocument();
+    expect(
+      within(section).getByText("Ни одно объявление не подходит к стопу."),
+    ).toBeInTheDocument();
+    expect(section).not.toHaveTextContent("Источник недоступен");
+  });
+
+  it("ranks approaching ads with their rule, threshold and share of the way", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.approaching_stop = {
+      ...snapshot.approaching_stop,
+      state: "ready",
+      data: { items: [approachingRow("ad-9", "93.40")] },
+    };
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<Dashboard />);
+
+    const section = screen.getByRole("region", { name: "Подходят к стопу" });
+    expect(within(section).getByText("93.4%")).toBeInTheDocument();
+    expect(within(section).getByText("Подходит к стопу")).toBeInTheDocument();
+    expect(
+      within(section).getByText("Дорогая рега · $0.41 из $0.48"),
+    ).toBeInTheDocument();
+  });
+
   it("keeps the action-first ledger order on the compact shell", () => {
     render(<Dashboard />);
     const headings = screen
       .getAllByRole("heading", { level: 2 })
       .map((heading) => heading.textContent);
+    // Ранний контур встал сразу после сигналов, но инвариант action-first —
+    // внимание → портфель → действия → воронка — не изменился.
     expect(headings).toEqual([
       "Требует внимания",
+      "Подходят к стопу",
       "Портфель",
       "Действия",
       "Воронка",

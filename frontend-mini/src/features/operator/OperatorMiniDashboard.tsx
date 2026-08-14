@@ -21,8 +21,10 @@ import {
   snapshotOverviewState,
 } from "@fb/shared/operator/viewModel";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
+import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
 import type { components } from "@fb/shared/api/generated";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
+import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import { operatorActionStateReason } from "@fb/shared/operator/actionLabels";
 import {
   formatOperatorDateTime as formatDateTime,
@@ -274,6 +276,11 @@ function OperatorMiniLedgerScreen({
           usdScopeConfirmed={usdScopeConfirmed}
           onAction={openAttentionAction}
         />
+        <MiniApproachingStopLedger
+          section={snapshot.approaching_stop}
+          currency={usdScopeConfirmed ? "USD" : null}
+          timezone={displayTimezone}
+        />
         <MiniPortfolioLedger
           section={snapshot.portfolio}
           timezone={displayTimezone}
@@ -378,6 +385,76 @@ function MiniAttentionItem({
       ) : null}
     </li>
   );
+}
+
+/**
+ * Ранний контур на компактном шелле. `empty` — подтверждённое «никто не
+ * подходит», поэтому блок выглядит спокойно, а не тревожно.
+ */
+function MiniApproachingStopLedger({
+  section,
+  currency,
+  timezone,
+}: {
+  section: OperatorSnapshot["approaching_stop"];
+  currency: string | null;
+  timezone: string | null;
+}) {
+  const items = section.data?.items.slice(0, 5) ?? [];
+  return (
+    <MiniLedgerSection
+      className="mini-ledger-section--approaching"
+      id="mini-approaching-title"
+      title="Подходят к стопу"
+      detail={
+        section.state === "empty"
+          ? "никто не подходит"
+          : `${items.length} ${pluralAd(items.length)}`
+      }
+      section={section}
+      timezone={timezone}
+    >
+      {!section.data ? (
+        <MiniLedgerEmpty text={DATA_STATE_LABEL[section.state]} />
+      ) : items.length === 0 ? (
+        <MiniLedgerEmpty text="Ни одно объявление не подходит к стопу." />
+      ) : (
+        <ol className="mini-approaching-list">
+          {items.map((item) => (
+            <li key={item.id}>
+              <div className="mini-approaching-item__head">
+                <Link
+                  to="/ads/$fbAdId"
+                  params={{ fbAdId: item.fb_ad_id }}
+                  aria-label={`Открыть объявление: ${item.name}`}
+                >
+                  {item.name}
+                </Link>
+                <DataStateBadge state={item.data_state} compact />
+              </div>
+              <span className="mini-approaching-item__meta">
+                {item.campaign_name}
+              </span>
+              <StopProximityReadout
+                proximity={describeStopProximity(item.rule_context, {
+                  currency,
+                })}
+              />
+            </li>
+          ))}
+        </ol>
+      )}
+    </MiniLedgerSection>
+  );
+}
+
+function pluralAd(value: number): string {
+  const remainder100 = value % 100;
+  const remainder10 = value % 10;
+  if (remainder100 >= 11 && remainder100 <= 14) return "объявлений";
+  if (remainder10 === 1) return "объявление";
+  if (remainder10 >= 2 && remainder10 <= 4) return "объявления";
+  return "объявлений";
 }
 
 function MiniPortfolioLedger({

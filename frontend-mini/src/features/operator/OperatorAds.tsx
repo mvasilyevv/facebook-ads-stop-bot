@@ -17,6 +17,7 @@ import {
 } from "@fb/shared/operator/adsViewModel";
 import { operatorCommandTone } from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
+import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import { severityForDataState } from "@fb/shared/operator/viewModel";
 import type {
   OperatorAdRow,
@@ -28,7 +29,7 @@ import {
   isOperatorCommandIntentStorageError,
   type OperatorCommandKind,
 } from "@fb/shared/operator/commandIntent";
-import { DataStateBadge } from "@fb/operator-ui";
+import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import { Button } from "@/components/ui";
@@ -105,6 +106,14 @@ export function MiniOperatorAdCard({
         <MiniSeverityBadge
           severity={severityForDataState(ad.severity, ad.data_state)}
         />
+      </div>
+      <div className="mt-4 border-t border-[var(--color-hairline)] pt-3">
+        <span className="text-[12px] text-bg-8">До стопа</span>
+        <div className="mt-1.5">
+          <StopProximityReadout
+            proximity={describeStopProximity(ad.rule_context, { currency })}
+          />
+        </div>
       </div>
       <dl className="mt-4 grid grid-cols-4 gap-2 text-right">
         <Metric

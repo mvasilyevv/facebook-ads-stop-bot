@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   fireEvent,
   render,
@@ -27,6 +28,9 @@ vi.mock("@tanstack/react-router", () => ({
     useSearch: () => routeSearch,
   }),
   useNavigate: () => navigate,
+  Link: ({ children }: { children: React.ReactNode }) => (
+    <a href="#detail">{children}</a>
+  ),
 }));
 
 vi.mock("@/components/layout/MiniHeader", () => ({
@@ -54,6 +58,9 @@ const useOperatorSnapshot = vi.fn();
 vi.mock("@/lib/operatorApi", () => ({
   useOperatorAds: (...args: unknown[]) => useOperatorAds(...args),
   useOperatorSnapshot: (...args: unknown[]) => useOperatorSnapshot(...args),
+  usePauseOperatorAd: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useActivateOperatorAd: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  fetchOperatorAdForCommand: vi.fn(),
   operatorProblemMessage: (error: unknown) =>
     error instanceof Error ? error.message : "Ошибка",
 }));
@@ -78,11 +85,69 @@ function emptyResponse(): OperatorAdsResponse {
   };
 }
 
+function adRow(
+  fbAdId: string,
+  percentToStop: string | null,
+): OperatorAdsResponse["rows"][number] {
+  return {
+    id: `row-${fbAdId}`,
+    fb_ad_id: fbAdId,
+    name: `Объявление ${fbAdId}`,
+    campaign_id: "campaign-1",
+    campaign_name: "CR2 | GH",
+    adset_id: "adset-1",
+    adset_name: "CR2-adset-1",
+    account_id: "act_123",
+    delivery_status: "ACTIVE",
+    data_state: "ready",
+    severity: "warning",
+    as_of: "2026-08-09T10:00:00Z",
+    metrics: {
+      spend: "12.50",
+      impressions: 1000,
+      clicks: 30,
+      registrations: 3,
+      ftd: 0,
+      confirmed_deposits: 0,
+      cpc: "0.41",
+      cost_per_registration: "4.16",
+      frequency: "1.84",
+      cost_per_ftd: null,
+    },
+    rule_context:
+      percentToStop === null
+        ? {
+            offer_code: null,
+            rule_code: null,
+            rule_title: null,
+            value: null,
+            threshold: null,
+            percent_to_stop: null,
+            stage: null,
+          }
+        : {
+            offer_code: "GH_CR2",
+            rule_code: "cpr_stop",
+            rule_title: "Дорогая рега",
+            value: "0.41",
+            threshold: "0.48",
+            percent_to_stop: percentToStop,
+            stage: "warning",
+          },
+    active_action: null,
+  };
+}
+
 function renderPage() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
-    <OperatorRealtimeStatusProvider status="connected">
-      <AdsPage />
-    </OperatorRealtimeStatusProvider>,
+    <QueryClientProvider client={client}>
+      <OperatorRealtimeStatusProvider status="connected">
+        <AdsPage />
+      </OperatorRealtimeStatusProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -125,6 +190,48 @@ describe("TMA operator ads URL filters", () => {
       page: 3,
       page_size: 30,
     } satisfies OperatorAdsQuery);
+  });
+
+  it("ranks by stop proximity in the URL without sending an unsupported sort", () => {
+    routeSearch = { sort: "stop_proximity" };
+    useOperatorAds.mockReturnValue({
+      data: {
+        ...emptyResponse(),
+        state: "ready",
+        rows: [
+          adRow("far", "12.00"),
+          adRow("unknown", null),
+          adRow("near", "96.50"),
+        ],
+        total: 3,
+        pages: 1,
+      },
+      isPending: false,
+      isFetching: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderPage();
+
+    // Контракт /api/operator/ads не принимает percent_to_stop как sort.
+    expect(useOperatorAds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sort: "updated",
+      }) as unknown as OperatorAdsQuery,
+    );
+    const names = screen
+      .getAllByText(/Объявление (far|near|unknown)/)
+      .map((node) => node.textContent);
+    expect(names).toEqual([
+      "Объявление near",
+      "Объявление far",
+      "Объявление unknown",
+    ]);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Порядок по близости к стопу",
+    );
   });
 
   it("uses a focus-managed sheet with typed cabinet options and resets page on filter changes", async () => {
