@@ -563,6 +563,219 @@ def test_preflight_allows_current_managed_infra_port_owner(tmp_path: Path) -> No
     )
 
 
+def test_preflight_rejects_occupied_app_and_desktop_ports(tmp_path: Path) -> None:
+    """Коллизия вне infra обязана всплыть в preflight, а не после stop_runtime."""
+
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": "d" * 64,
+                "Name": "/stray-api",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {
+                        "8100/tcp": [
+                            {
+                                "HostIp": "127.0.0.1",
+                                "HostPort": config.values["APP_API_PORT"],
+                            }
+                        ]
+                    }
+                },
+            },
+            {
+                "Id": "e" * 64,
+                "Name": "/stray-desktop",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {
+                        "8444/tcp": [
+                            {
+                                "HostIp": "127.0.0.1",
+                                "HostPort": config.values["DESKTOP_HTTPS_PORT"],
+                            }
+                        ]
+                    }
+                },
+            },
+        ]
+    )
+    controller = ProductionController(runner=runner)
+
+    with pytest.raises(FbctlError) as caught:
+        controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=False,
+            validate_caddy=False,
+        )
+
+    message = str(caught.value)
+    assert f"APP_API_PORT={config.values['APP_API_PORT']} is occupied" in message
+    assert f"DESKTOP_HTTPS_PORT={config.values['DESKTOP_HTTPS_PORT']} is occupied" in message
+    assert "sudo docker stop stray-api" in message
+    assert "sudo docker stop stray-desktop" in message
+
+
+def test_preflight_allows_current_app_project_port_owner(tmp_path: Path) -> None:
+    """Свой же app-контур не коллизия: его остановит сам deploy."""
+
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": "f" * 64,
+                "Name": "/fb_agent_app-api-1",
+                "Config": {
+                    "Labels": {
+                        "com.fb-agent.managed": "true",
+                        "com.fb-agent.cluster-id": config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
+                        "com.docker.compose.project": config.values["APP_PROJECT_NAME"],
+                        "com.docker.compose.service": "api",
+                    }
+                },
+                "NetworkSettings": {
+                    "Ports": {
+                        "8100/tcp": [
+                            {
+                                "HostIp": "127.0.0.1",
+                                "HostPort": config.values["APP_API_PORT"],
+                            }
+                        ]
+                    }
+                },
+            }
+        ]
+    )
+    controller = ProductionController(runner=runner)
+
+    controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+        config,
+        DeployOptions(root=root, rehearsal=True),
+        require_resources=False,
+        validate_caddy=False,
+    )
+
+
+def test_preflight_survives_container_disappearing_between_ls_and_inspect(
+    tmp_path: Path,
+) -> None:
+    """Контейнер завершился между ls и inspect: порт он не держит, падать нельзя."""
+
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+
+    class VanishingContainerRunner(DockerPortInventoryRunner):
+        def run(self, command, **kwargs):
+            argv = tuple(os.fspath(part) for part in command)
+            if argv[:3] == ("docker", "container", "inspect"):
+                self.commands.append((kwargs["step"], argv))
+                # docker печатает JSON по выжившим и выходит с кодом 1.
+                return CommandResult(1, "[]")
+            return super().run(command, **kwargs)
+
+    runner = VanishingContainerRunner(
+        [
+            {
+                "Id": "1" * 64,
+                "Name": "/vanished",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "5433"}]}
+                },
+            }
+        ]
+    )
+    controller = ProductionController(runner=runner)
+
+    controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+        config,
+        DeployOptions(root=root, rehearsal=True),
+        require_resources=False,
+        validate_caddy=False,
+    )
+
+
+def test_deploy_preflight_requires_existing_managed_resources(tmp_path: Path) -> None:
+    """Обычный deploy обязан требовать ресурсы: allow_missing не ослабил его."""
+
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    runner = DockerInventoryRunner({})
+    controller = ProductionController(runner=runner)
+
+    with pytest.raises(FbctlError, match="managed Docker network is missing: fb_agent_platform"):
+        controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=True,
+            validate_caddy=False,
+        )
+
+
+def test_preflight_rejects_resource_from_another_cluster(tmp_path: Path) -> None:
+    """Чужой cluster-id на нашем имени — fail-closed, а не молчаливое принятие."""
+
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    runner = DockerInventoryRunner(
+        {
+            ("network", config.values["PLATFORM_NETWORK"]): {
+                "com.fb-agent.managed": "true",
+                "com.fb-agent.cluster-id": "0" * 32,
+                "com.fb-agent.purpose": "platform",
+            }
+        }
+    )
+    controller = ProductionController(runner=runner)
+
+    with pytest.raises(FbctlError, match="belongs to another cluster"):
+        controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=True,
+            validate_caddy=False,
+        )
+
+
 def test_bootstrap_creates_only_the_new_managed_resource_names(tmp_path: Path) -> None:
     root = _root(tmp_path)
     config = prepare_candidate(

@@ -37,14 +37,37 @@ host provisioning.
 
 ## Ресурсы прежнего bootstrap
 
-Ресурсы прежнего неудавшегося bootstrap остаются на host нетронутыми и больше
-не конфликтуют с новым контуром. `fbctl` сообщает об их наличии только как об
-информации. После приёмки production оператор удаляет их вручную:
+Volumes и network прежнего неудавшегося bootstrap остаются на host нетронутыми
+и с новым контуром больше не конфликтуют — имена разведены. `fbctl` сообщает об
+их наличии только как об информации. После приёмки production оператор удаляет
+их вручную:
 
 - network `fb_agent_safety_first_platform`;
 - volume `fb_agent_safety_first_pgdata`;
 - volume `fb_agent_safety_first_redisdata`;
 - volume `fb_agent_safety_first_campaign_uploads`.
+
+**Контейнеры прежнего контура — отдельный случай.** Если PostgreSQL и Redis того
+bootstrap всё ещё запущены, они держат host-порты `5433` и `6380`, и новый
+runtime их не займёт. Preflight обнаруживает это до остановки текущего runtime и
+называет контейнер вместе с готовой командой. Остановить их нужно вручную, до
+`bootstrap`; volumes и network при этом не трогаются:
+
+```bash
+sudo docker stop <container>
+```
+
+## Мониторинг после смены имени сети
+
+Проект `fb_agent_monitoring` не управляется `fbctl` и не пересоздаётся в
+последовательности deploy. Пока он не пересоздан, `alloy-agent` остаётся в
+прежней сети, алиас перестаёт резолвиться, и traces, логи и метрики теряются
+молча — readiness при этом остаётся зелёным. После bootstrap с новым именем
+сети мониторинг нужно поднять заново и убедиться, что targets снова видны:
+
+```bash
+docker compose -p fb_agent_monitoring -f deploy/monitoring/docker-compose.agent.yml up -d
+```
 
 На новом host bootstrap вызывается с явными локальными путями к подготовленным
 секретам и конфигурации; manifest уже вложен в control bundle и не передаётся

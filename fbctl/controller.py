@@ -22,10 +22,12 @@ from typing import Callable, Iterator, Mapping, Sequence
 
 from fbctl.bundle import materialize_candidate
 from fbctl.config import (
+    APP_PROJECT_NAME,
     BOOTSTRAP_CADDY_KEYS,
     BOOTSTRAP_VISION_KEYS,
-    INFRA_HOST_PORTS,
+    DESKTOP_PROJECT_NAME,
     INFRA_PROJECT_NAME,
+    MANAGED_HOST_PORTS,
     RuntimeConfig,
     canonicalize_source,
     parse_bootstrap_source_stdin,
@@ -104,9 +106,18 @@ MANAGED_VOLUME_RESOURCES = (
     ("volume", "fb_agent_infra_redisdata", "infra"),
     ("volume", "fb_agent_app_campaign_uploads", "app"),
 )
-INFRA_HOST_PORT_SERVICES = (
-    ("POSTGRES_HOST_PORT", "postgres"),
-    ("REDIS_HOST_PORT", "redis"),
+# Все published host-порты производственного контура и владеющий каждым портом
+# сервис.  Проверять только infra было мало: коллизия по app/desktop всплывала
+# на start_application, то есть уже после stop_runtime, и production оставался
+# лежать.  Гейт обязан отвергнуть такой deploy до первой остановки.
+MANAGED_HOST_PORT_SERVICES = (
+    ("POSTGRES_HOST_PORT", "INFRA_PROJECT_NAME", "postgres"),
+    ("REDIS_HOST_PORT", "INFRA_PROJECT_NAME", "redis"),
+    ("APP_API_PORT", "APP_PROJECT_NAME", "api"),
+    ("APP_WEB_PORT", "APP_PROJECT_NAME", "frontend"),
+    ("APP_TMA_PORT", "APP_PROJECT_NAME", "mini-app"),
+    ("BROWSER_GRPC_HOST_PORT", "DESKTOP_PROJECT_NAME", "browser-agent"),
+    ("DESKTOP_HTTPS_PORT", "DESKTOP_PROJECT_NAME", "vision-webtop"),
 )
 # Ресурсы брошенного прежнего bootstrap. Мы их не трогаем: только сообщаем
 # оператору, что они есть, чтобы он убрал их вручную после приёмки production.
@@ -480,12 +491,18 @@ class ProductionController:
             re.fullmatch(r"[0-9a-f]{64}", container_id) is None for container_id in container_ids
         ):
             raise FbctlError("Docker returned an invalid running-container id")
+        # Контейнер мог завершиться между `ls` и `inspect`: docker вернёт код 1,
+        # напечатав корректный JSON по остальным.  Исчезнувший контейнер порт не
+        # держит, поэтому это не повод валить preflight.
         inspected = self.runner.run(
             ("docker", "container", "inspect", *container_ids),
             step="preflight",
             env=environment,
             capture=True,
+            check=False,
         )
+        if not inspected.stdout.strip():
+            return
         try:
             containers = json.loads(inspected.stdout)
         except (json.JSONDecodeError, TypeError) as exc:
@@ -493,7 +510,11 @@ class ProductionController:
         if not isinstance(containers, list):
             raise FbctlError("Docker returned invalid running-container inventory")
 
-        required_ports = {values[key]: (key, service) for key, service in INFRA_HOST_PORT_SERVICES}
+        required_ports = {
+            values[key]: (key, values[project_key], service)
+            for key, project_key, service in MANAGED_HOST_PORT_SERVICES
+            if key in values and project_key in values
+        }
         conflicts: list[str] = []
         seen: set[tuple[str, str]] = set()
         for container in containers:
@@ -532,17 +553,20 @@ class ProductionController:
                     required = required_ports.get(host_port)
                     if required is None or host_ip not in {"", "0.0.0.0", "::", "127.0.0.1"}:
                         continue
-                    key, service = required
-                    is_current_infra = (
+                    key, project, service = required
+                    # Свой же контур не считается коллизией: deploy сам остановит
+                    # его на stop_runtime.  Совпадать обязан и cluster-id, иначе
+                    # контейнер принадлежит другому (в том числе брошенному)
+                    # контуру и должен быть остановлен оператором вручную.
+                    is_current_runtime = (
                         isinstance(labels, dict)
                         and labels.get("com.fb-agent.managed") == "true"
                         and labels.get("com.fb-agent.cluster-id")
                         == values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"]
-                        and labels.get("com.fb-agent.purpose") == "infra"
-                        and labels.get("com.docker.compose.project") == values["INFRA_PROJECT_NAME"]
+                        and labels.get("com.docker.compose.project") == project
                         and labels.get("com.docker.compose.service") == service
                     )
-                    if is_current_infra or (key, container_id) in seen:
+                    if is_current_runtime or (key, container_id) in seen:
                         continue
                     seen.add((key, container_id))
                     display_name = name or container_id
@@ -1245,7 +1269,9 @@ def bootstrap_host(
             values={
                 "FB_AGENT_BOOTSTRAP_CLUSTER_ID": source_values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
                 "INFRA_PROJECT_NAME": INFRA_PROJECT_NAME,
-                **dict(INFRA_HOST_PORTS),
+                "APP_PROJECT_NAME": APP_PROJECT_NAME,
+                "DESKTOP_PROJECT_NAME": DESKTOP_PROJECT_NAME,
+                **dict(MANAGED_HOST_PORTS),
             },
             docker_config=docker_config,
         )
