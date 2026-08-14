@@ -66,14 +66,24 @@ def is_special(value: str) -> bool:
     return value.strip().lower() in ("forever", "immediate", "redis_ttl_only")
 
 
+# Сроки подобраны под одно-хостовый runtime с ограниченным диском: храним
+# ровно столько, сколько нужно для разбора инцидента и сравнения периодов.
+# Дольше всех живёт то, чем доказывают денежное действие, а не технический шум.
 _DEFAULT_RETENTION: dict[str, str] = {
-    "ad_metrics": "90 days",
-    "alert_events": "365 days",
+    # Самая объёмная таблица: снимок по каждому объявлению за каждый скан.
+    # Двух месяцев хватает на сравнение с прошлым периодом; всё, что старше,
+    # для решений уже не используется.
+    "ad_metrics": "60 days",
+    "alert_events": "120 days",
     "scan_runs": "30 days",
+    # Аудит мутаций в Meta — доказательство того, что и когда мы отправили.
+    # Ниже месяца опускать нельзя: это последний источник правды при споре
+    # «система остановила» против «остановил кто-то другой».
     "meta_api_audit_log": "30 days",
-    "adsetpro_postback_events": "60 days",
+    "adsetpro_postback_events": "45 days",
     "task_queue_completed": "30 days",
-    "task_queue_failed": "90 days",
+    # Упавшие задачи разбирают дольше успешных, но не кварталами.
+    "task_queue_failed": "45 days",
     "adset_duplicate_previews_expired": "immediate",
     "browser_operation_capabilities_expired": "immediate",
     "telegram_invites_expired": "30 days",
@@ -81,12 +91,15 @@ _DEFAULT_RETENTION: dict[str, str] = {
     # Durable notification/idempotency boundaries.  Only terminal rows are
     # eligible; active incidents, queued deliveries and leased webhook work are
     # preserved regardless of age.
-    "incidents_terminal": "365 days",
-    "notification_events_terminal": "365 days",
-    "telegram_action_tokens_terminal": "90 days",
+    # Закрытые инциденты — история денежных решений, поэтому переживают
+    # остальное, но полугода достаточно: спор о конкретной откруте настолько
+    # старым не бывает.
+    "incidents_terminal": "180 days",
+    "notification_events_terminal": "90 days",
+    "telegram_action_tokens_terminal": "45 days",
     "telegram_navigation_tokens_terminal": "30 days",
-    "telegram_updates_terminal": "90 days",
-    "telegram_command_replies_terminal": "90 days",
+    "telegram_updates_terminal": "30 days",
+    "telegram_command_replies_terminal": "30 days",
     "ai_cache": "redis_ttl_only",
 }
 
