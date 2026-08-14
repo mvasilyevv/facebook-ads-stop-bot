@@ -121,6 +121,24 @@ const UNKNOWN_AD_METRICS: OperatorAdRow["metrics"] = {
   confirmed_deposits: null,
   cpc: null,
   cost_per_registration: null,
+  frequency: null,
+  cost_per_ftd: null,
+};
+
+/**
+ * Близость к стопу — производная от метрик, поэтому она обязана исчезать вместе
+ * с ними. Кэшированные «85% до стопа» на строке без подтверждённых данных
+ * выглядели бы как актуальная оценка риска и влияли на денежное решение.
+ * `stage: null` здесь означает «неизвестно», а не «правила ничего не нашли».
+ */
+const UNKNOWN_RULE_CONTEXT: OperatorAdRow["rule_context"] = {
+  offer_code: null,
+  rule_code: null,
+  rule_title: null,
+  value: null,
+  threshold: null,
+  percent_to_stop: null,
+  stage: null,
 };
 
 /**
@@ -138,10 +156,17 @@ function adRowForDataState(
   const metricsAlreadyUnknown = Object.values(row.metrics).every(
     (value) => value === null,
   );
+  // Отсутствующий rule_context (например, ответ сервера старой версии) — не то
+  // же самое, что известный пустой: строку нужно пересобрать, а не принять как
+  // уже приведённую к unknown.
+  const ruleContextAlreadyUnknown =
+    row.rule_context != null &&
+    Object.values(row.rule_context).every((value) => value === null);
   if (
     row.data_state === "unavailable" &&
     row.delivery_status === null &&
-    metricsAlreadyUnknown
+    metricsAlreadyUnknown &&
+    ruleContextAlreadyUnknown
   ) {
     return row;
   }
@@ -150,6 +175,7 @@ function adRowForDataState(
     data_state: "unavailable",
     delivery_status: null,
     metrics: { ...UNKNOWN_AD_METRICS },
+    rule_context: { ...UNKNOWN_RULE_CONTEXT },
   };
 }
 

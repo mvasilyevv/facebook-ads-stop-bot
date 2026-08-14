@@ -320,7 +320,10 @@ class OperatorRuleContext(BaseModel):
     value: str | None
     threshold: str | None
     percent_to_stop: str | None
-    stage: Literal["none", "warning", "stop"]
+    # None означает «неизвестно»: у строки нет подтверждённой оценки правил.
+    # Отличается от "none" — «правила проверены, ничего не сработало». Смешивать
+    # их нельзя: это money-состояние, и unknown не должен выглядеть спокойным.
+    stage: Literal["none", "warning", "stop"] | None
 
 
 class OperatorAdRow(BaseModel):

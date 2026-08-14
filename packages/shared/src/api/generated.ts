@@ -3744,11 +3744,8 @@ export interface components {
       threshold: string | null;
       /** Percent To Stop */
       percent_to_stop: string | null;
-      /**
-       * Stage
-       * @enum {string}
-       */
-      stage: "none" | "warning" | "stop";
+      /** Stage */
+      stage: ("none" | "warning" | "stop") | null;
     };
     /**
      * OperatorScopeEvidence

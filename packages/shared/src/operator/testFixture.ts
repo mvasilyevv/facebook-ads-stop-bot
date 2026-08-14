@@ -233,6 +233,16 @@ export function makeOperatorSnapshot(): OperatorSnapshot {
         ],
       },
     },
+    // Пустой список — подтверждённое «ничего не подходит к стопу», поэтому
+    // state=empty, а не unavailable.
+    approaching_stop: {
+      state: "empty",
+      as_of: "2026-07-18T10:14:45Z",
+      freshness_seconds: 15,
+      sources: ["observer"],
+      issues: [],
+      data: { items: [] },
+    },
     actions: {
       state: "ready",
       as_of: "2026-07-18T10:14:45Z",
