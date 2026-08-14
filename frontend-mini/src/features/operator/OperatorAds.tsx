@@ -6,6 +6,7 @@ import {
   CircleHelp,
   CirclePause,
   CirclePlay,
+  OctagonAlert,
   ShieldCheck,
 } from "lucide-react";
 
@@ -46,10 +47,12 @@ const LABEL: Record<OperatorSeverity, string> = {
   unknown: "Неизвестно",
 };
 
+// critical и warning не должны различаться одним лишь цветом:
+// восьмиугольник читается как «стоп» и при цветовой слепоте.
 const ICON = {
   ok: ShieldCheck,
   warning: AlertTriangle,
-  critical: AlertTriangle,
+  critical: OctagonAlert,
   unknown: CircleHelp,
 } as const;
 
@@ -272,7 +275,8 @@ export function MiniAdCommand({
   return (
     <Button
       type="button"
-      variant={isPause ? "danger" : "secondary"}
+      // «Включить» возобновляет реальный спенд — предупреждающий вид, не secondary.
+      variant={isPause ? "danger" : "warning"}
       fullWidth={full}
       loading={mutation.isPending}
       className="min-h-11"

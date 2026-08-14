@@ -334,6 +334,18 @@ describe("typed operator ads page", () => {
     expect(pauseMutate).not.toHaveBeenCalled();
   });
 
+  it("marks resume-spend as a warning, not as a neutral utility", () => {
+    setQuery(response([makeAd("111", { delivery_status: "PAUSED" })]));
+    renderPage();
+
+    // «Включить» возобновляет реальный спенд и не должно выглядеть как «Обновить».
+    const resume = screen.getAllByRole("button", { name: "Включить" })[0]!;
+    expect(resume.className).toContain("border-warning");
+    expect(resume.className).toContain("bg-warning-bg");
+    expect(resume.className).not.toContain("border-[var(--color-hairline-strong)]");
+    expect(resume.className).not.toContain("border-danger");
+  });
+
   it("cancels a confirmed intent when the fresh row no longer matches", async () => {
     fetchOperatorAdForCommand.mockResolvedValue(
       makeAd("111", { delivery_status: "PAUSED", as_of: "2026-07-19T10:00:01Z" }),

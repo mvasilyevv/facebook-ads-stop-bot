@@ -1,7 +1,7 @@
 /**
  * ConfirmDialog — деструктивное действие с typed-confirmation или обычный approve.
  * Confirm-кнопка активна только если typed === confirmWord.
- * Variants: danger (default, красная) / primary (одобрение).
+ * Variants: danger (default, красная) / warning (возобновление спенда) / primary (одобрение).
  */
 import { useState, type RefObject } from "react";
 import { Modal, ModalFooter } from "./Modal";
@@ -17,8 +17,8 @@ interface ConfirmDialogProps {
   confirmWord?: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  /** danger — для деструктива, primary — для обычного approve. */
-  confirmVariant?: "danger" | "primary";
+  /** danger — деструктив, warning — возобновление спенда, primary — обычный approve. */
+  confirmVariant?: "danger" | "warning" | "primary";
   onConfirm: () => void | Promise<void>;
   returnFocusRef?: RefObject<HTMLButtonElement | null>;
 }

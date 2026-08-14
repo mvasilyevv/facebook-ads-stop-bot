@@ -1,12 +1,21 @@
 /**
  * Button — кнопка мобильного UI-kit.
  * Тач-цель ≥ 44px (min-h-[44px]).
- * Варианты: primary (accent off-white), secondary (border), ghost, danger.
+ * Варианты: primary (accent off-white), secondary (border), ghost, warning
+ * (возобновление реального спенда), danger (деструктив).
+ *
+ * disabled — плоская заливка, а не opacity: приглушённый красный на тёмном фоне
+ * давал контраст 1.67:1 и делал заблокированную кнопку нечитаемой.
  */
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
 
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+export type ButtonVariant =
+  | "primary"
+  | "secondary"
+  | "ghost"
+  | "warning"
+  | "danger";
 export type ButtonSize = "sm" | "md" | "lg";
 
 const VARIANT_STYLES: Record<ButtonVariant, string> = {
@@ -16,6 +25,8 @@ const VARIANT_STYLES: Record<ButtonVariant, string> = {
     "border border-[var(--color-hairline-strong)] text-[var(--color-bg-11)] hover:border-[var(--color-bg-7)] active:opacity-80",
   ghost:
     "text-[var(--color-bg-10)] hover:text-[var(--color-bg-11)] hover:bg-[var(--color-bg-3)] active:opacity-80",
+  warning:
+    "bg-[var(--color-warning-bg)] text-[var(--color-warning)] border border-[var(--color-warning)] hover:opacity-90 active:opacity-70",
   danger:
     "bg-[var(--color-danger-bg)] text-[var(--color-danger)] border border-[var(--color-danger)] hover:opacity-90 active:opacity-70",
 };
@@ -65,8 +76,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           SIZE_STYLES[size],
           // вариант
           VARIANT_STYLES[variant],
-          // состояния
-          isDisabled && "opacity-40 cursor-not-allowed pointer-events-none",
+          // состояния: плоская заливка вместо opacity — читаемый disabled
+          "disabled:opacity-100 disabled:bg-bg-2 disabled:border disabled:border-[var(--color-hairline)] disabled:text-bg-8",
+          isDisabled && "cursor-not-allowed pointer-events-none",
           fullWidth && "w-full",
           className,
         )}

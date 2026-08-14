@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CircleHelp, CirclePause, CirclePlay, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  CircleHelp,
+  CirclePause,
+  CirclePlay,
+  OctagonAlert,
+  ShieldCheck,
+} from "lucide-react";
 
 import type { OperatorAdRow, OperatorSeverity } from "@fb/shared/operator/contracts";
 import {
@@ -41,10 +48,12 @@ const SEVERITY_LABEL: Record<OperatorSeverity, string> = {
   unknown: "Неизвестно",
 };
 
+// critical и warning не должны различаться одним лишь цветом:
+// восьмиугольник читается как «стоп» и при цветовой слепоте.
 const SEVERITY_ICON = {
   ok: ShieldCheck,
   warning: AlertTriangle,
-  critical: AlertTriangle,
+  critical: OctagonAlert,
   unknown: CircleHelp,
 } as const;
 
@@ -304,7 +313,9 @@ export function AdCommandButtons({
       <Button
         ref={commandButtonRef}
         type="button"
-        variant={isPause ? "danger" : "secondary"}
+        // «Включить» возобновляет реальный спенд — это не нейтральная утилита
+        // рядом с «Обновить», поэтому предупреждающий вид, а не secondary.
+        variant={isPause ? "danger" : "warning"}
         size={compact ? "md" : "lg"}
         className={fullWidth ? "min-h-11 w-full" : "min-h-11"}
         loading={mutation.isPending}
@@ -319,7 +330,7 @@ export function AdCommandButtons({
         title={`${label} объявление?`}
         description={`«${ad.name}». Команда будет поставлена в очередь, а результат подтверждён отдельной задачей.`}
         confirmLabel={label}
-        confirmVariant={isPause ? "danger" : "primary"}
+        confirmVariant={isPause ? "danger" : "warning"}
         onConfirm={runCommand}
         returnFocusRef={commandButtonRef}
       />

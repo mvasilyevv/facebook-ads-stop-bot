@@ -5,6 +5,7 @@ import {
   Check,
   CircleHelp,
   Clock3,
+  OctagonAlert,
   RefreshCw,
   X,
   type LucideIcon,
@@ -64,10 +65,12 @@ import {
 
 import "./operator-ledger.css";
 
+// critical и warning не должны различаться одним лишь цветом:
+// восьмиугольник читается как «стоп» и при цветовой слепоте.
 const SEVERITY_ICON: Record<OperatorSeverity, LucideIcon> = {
   ok: Check,
   warning: AlertTriangle,
-  critical: AlertTriangle,
+  critical: OctagonAlert,
   unknown: CircleHelp,
 };
 
