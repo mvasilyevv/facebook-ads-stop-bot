@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import apps.meta_api_worker.main as mw
-from core.meta_api.errors import TokenInvalidError
+from core.meta_api.errors import LoginRequiredError, TokenInvalidError
 from core.tasks.queue import Task
 
 
@@ -102,4 +102,33 @@ async def test_token_invalid_marks_terminal_result_for_atomic_incident_projectio
         "outcome": "REJECTED",
         "reason": "TokenInvalidError",
         "requires_meta_reauth": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_login_required_marks_distinct_terminal_incident_projection(
+    monkeypatch,
+) -> None:
+    terminal = AsyncMock(return_value=True)
+    monkeypatch.setattr(mw, "load_owner_tag", AsyncMock(return_value=None))
+    monkeypatch.setattr(mw, "load_scanning_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        mw,
+        "load_meta_snapshot_freshness",
+        AsyncMock(return_value=SimpleNamespace(fresh=True)),
+    )
+    monkeypatch.setattr(mw, "check_mutation_ownership", AsyncMock(return_value=_ownership()))
+    monkeypatch.setattr(
+        mw,
+        "execute_mutation",
+        AsyncMock(side_effect=LoginRequiredError("logged out", code=190, subcode=463)),
+    )
+    monkeypatch.setattr(mw, "mark_task_failed", terminal)
+
+    await mw.process_one_task(object(), _task(), client=AsyncMock())
+
+    assert terminal.await_args.kwargs["result"] == {
+        "outcome": "REJECTED",
+        "reason": "LoginRequiredError",
+        "requires_facebook_login": True,
     }

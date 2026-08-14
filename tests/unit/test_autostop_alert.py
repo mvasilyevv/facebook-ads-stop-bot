@@ -17,12 +17,16 @@ from core.meta_api.autostop_alert import (
 from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import (
     AmbiguousResultError,
+    LoginRequiredError,
     NotFoundError,
     PermanentError,
     RateLimitedError,
     SessionUnavailableError,
     TemporaryError,
     TokenInvalidError,
+)
+from core.meta_api.errors import (
+    PermissionError as MetaPermissionError,
 )
 
 
@@ -57,7 +61,9 @@ def test_positive_graph_code_temporary_is_not_channel_down() -> None:
 
 # Permanent-ошибки (токен/нет объекта/нет прав) — не «канал мёртв» (другой алерт-путь)
 def test_permanent_errors_are_not_channel_down() -> None:
+    assert is_channel_down_error(LoginRequiredError("logged out", code=190, subcode=463)) is False
     assert is_channel_down_error(TokenInvalidError("revoked", code=190)) is False
+    assert is_channel_down_error(MetaPermissionError("permissions", code=200)) is False
     assert is_channel_down_error(NotFoundError("gone", code=803)) is False
     assert is_channel_down_error(PermanentError("nope", code=1)) is False
 

@@ -77,7 +77,8 @@ class LoginRequiredError(TokenInvalidError):
     Re-sniff токена НЕ помогает — оператор должен зайти в Vision и залогиниться заново.
 
     Наследник TokenInvalidError → для meta_api_worker это Permanent-класс (mark_failed,
-    без бесконечного retry) И триггерит существующий «нужен re-login Vision» алерт.
+    без бесконечного retry), но terminal projection остаётся отдельной от обычного
+    token-invalid и permission failure.
     Money-критично: слепой канал = слитый бюджет (инцидент 01.07 — канал умер молча).
     """
 

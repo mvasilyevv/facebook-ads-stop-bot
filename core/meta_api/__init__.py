@@ -11,6 +11,7 @@
 """
 
 from core.meta_api.errors import (
+    LoginRequiredError,
     MetaApiError,
     NotFoundError,
     PermanentError,
@@ -31,6 +32,7 @@ from core.meta_api.schemas import (
 
 __all__ = [
     "MUTATION_KINDS",
+    "LoginRequiredError",
     "MetaApiAdRow",
     "MetaApiError",
     "MetaInsightsRequest",

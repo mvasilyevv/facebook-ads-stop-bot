@@ -804,6 +804,28 @@ async def _project_meta_token_incident_in_transaction(
     )
 
 
+async def _project_facebook_login_incident_in_transaction(
+    conn: AsyncConnection,
+    *,
+    task_type: str,
+    payload: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    """Atomically reuse the canonical per-cabinet re-login incident."""
+    if task_type != "meta_api_mutation" or result.get("requires_facebook_login") is not True:
+        return
+    account_id = str(payload.get("ad_account_id") or "").strip()
+    if not account_id:
+        raise ValueError("facebook login incident requires ad_account_id")
+
+    from core.observer.login_required import notify_login_required_incident_in_transaction
+
+    await notify_login_required_incident_in_transaction(
+        conn,
+        ad_account_id=account_id,
+    )
+
+
 async def _resolve_meta_token_incident_in_transaction(
     conn: AsyncConnection,
     *,
@@ -1446,6 +1468,12 @@ async def mark_failed(
                 await _project_meta_token_incident_in_transaction(
                     conn,
                     task_type=str(_returned_value(task, "task_type") or ""),
+                    result=task_result,
+                )
+                await _project_facebook_login_incident_in_transaction(
+                    conn,
+                    task_type=str(_returned_value(task, "task_type") or ""),
+                    payload=task_payload,
                     result=task_result,
                 )
         return (update_result.rowcount or 0) > 0

@@ -46,11 +46,11 @@ def test_subcode_1357045_reauth() -> None:
 
 
 # MID X-16: login-subcode 463 (session expired) = разлогин → LoginRequiredError.
-# Наследник TokenInvalidError (Permanent-класс + триггер re-login алерта в meta_api_worker).
+# Наследник TokenInvalidError (Permanent-класс), но с отдельным incident projection.
 def test_subcode_463_login_required() -> None:
     exc = classify_graph_error(190, 463, "Session has expired")
     assert isinstance(exc, LoginRequiredError)
-    assert isinstance(exc, TokenInvalidError)  # наследование → тот же re-login алерт
+    assert isinstance(exc, TokenInvalidError)
     assert isinstance(exc, PermanentError)  # не ретраится бесконечно
 
 
