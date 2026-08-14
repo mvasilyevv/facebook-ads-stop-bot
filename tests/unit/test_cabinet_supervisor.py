@@ -92,3 +92,65 @@ async def test_actor_progress_persists_errors_only_for_degraded_results(
     assert progress_calls[-1]["stage"] == "idle"
     assert progress_calls[-1]["has_snapshot"] is expected_snapshot
     assert progress_calls[-1]["error_code"] == expected_error
+
+
+@pytest.mark.asyncio
+async def test_lease_acquire_timeout_does_not_cancel_other_cabinets(monkeypatch) -> None:
+    """Таймаут одного кабинета не должен отменять сканирование остальных.
+
+    Таймаут может случиться внутри acquire_cabinet_lease, когда lease ещё None.
+    Раньше обработчик всё равно звал update_cabinet_progress, ловил AttributeError
+    вне актора, и TaskGroup отменял все остальные кабинеты: один зависший коннект
+    оставлял без скана весь тик, то есть откладывал авто-стоп по всем кабинетам.
+    """
+
+    timing_out_account = "111"
+    healthy_account = "222"
+    healthy_lease = CabinetLease(healthy_account, uuid.uuid4(), 1)
+
+    async def acquire(_engine: object, **kwargs: Any) -> CabinetLease:
+        if kwargs["ad_account_id"] == timing_out_account:
+            raise TimeoutError
+        return healthy_lease
+
+    async def update(_engine: object, lease: CabinetLease, **kwargs: Any) -> bool:
+        # Реальная функция читает поля lease, поэтому на None падает так же.
+        if lease is None:
+            raise AttributeError("'NoneType' object has no attribute 'ad_account_id'")
+        return True
+
+    async def release(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def lock(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def unlock(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(supervisor_module, "acquire_cabinet_lease", acquire)
+    monkeypatch.setattr(supervisor_module, "update_cabinet_progress", update)
+    monkeypatch.setattr(supervisor_module, "release_cabinet_lease", release)
+    monkeypatch.setattr(CabinetSupervisor, "_try_actor_lock", lock)
+    monkeypatch.setattr(CabinetSupervisor, "_release_actor_lock", unlock)
+
+    supervisor = CabinetSupervisor(
+        _Engine(),  # type: ignore[arg-type]
+        owner_instance=healthy_lease.owner_instance,
+        scan_deadline_seconds=10,
+        lease_ttl_seconds=20,
+    )
+
+    async def run_cabinet(
+        account_id: str,
+        _index: int,
+        _lease: CabinetLease,
+    ) -> dict[str, object]:
+        return {"ad_account_id": account_id, "outcome": "success", "error": None}
+
+    result = await supervisor.run_cycle([timing_out_account, healthy_account], run_cabinet)
+
+    assert result[0]["outcome"] == "timeout"
+    assert result[0]["error"] == "scan_deadline_exceeded"
+    assert result[1]["outcome"] == "success"
+    assert result[1]["ad_account_id"] == healthy_account

@@ -244,7 +244,7 @@ async def create_task(
     now = datetime.now(timezone.utc)
     effective_available_at = available_at or now
     effective_deadline_at = deadline_at
-    if effective_deadline_at is None:
+    if effective_deadline_at is None and effective_lane != "money":
         effective_deadline_at = now + timedelta(
             seconds=_LANE_DEFAULT_DEADLINE_SECONDS[effective_lane]
         )
@@ -333,6 +333,7 @@ async def _transition_correlated_incident(
     correlation_id: uuid.UUID | None,
     phase: Literal["executing", "confirmed", "failed", "cancelled", "unknown", "recovered"],
     payload: dict[str, Any] | None,
+    keep_open: bool = False,
 ) -> bool:
     """Advance an incident and enqueue its card edit in the task transaction.
 
@@ -362,25 +363,29 @@ async def _transition_correlated_incident(
         status_label = "Угроза снята"
         summary = "Условие риска исчезло до внешнего действия; команда отменена."
     elif phase == "unknown":
-        incident_status = "failed"
+        incident_status = "open" if keep_open else "failed"
         event_type = "action_unknown"
         severity = "critical"
         status_label = "Результат неизвестен"
         summary = "Автоповтор запрещён: проверьте фактический статус в Meta."
     elif phase == "cancelled":
-        incident_status = "failed"
+        incident_status = "open" if keep_open else "failed"
         event_type = "action_cancelled"
         severity = "warning"
         status_label = "Отменено"
         summary = "Действие отменено до внешнего вызова."
     else:
-        incident_status = "failed"
+        incident_status = "open" if keep_open else "failed"
         event_type = "action_failed"
         severity = "critical"
         status_label = "Не выполнено"
         summary = "Действие не подтверждено; откройте карточку для диагностики."
 
-    timestamp_column = "resolved_at = NOW()," if incident_status in {"resolved", "failed"} else ""
+    timestamp_column = (
+        "resolved_at = NOW(),"
+        if incident_status in {"resolved", "failed"}
+        else "resolved_at = NULL,"
+    )
     incident = (
         await conn.execute(
             text(
@@ -391,7 +396,7 @@ async def _transition_correlated_incident(
                     summary = :summary,
                     updated_at = NOW()
                 WHERE correlation_id = :correlation_id
-                  AND status IN ('open','acknowledged','executing')
+                  AND status IN ('open','acknowledged','executing','failed')
                 RETURNING id, title, correlation_id
                 """
             ),
@@ -612,6 +617,7 @@ async def _transition_terminal_task(
         correlation_id=correlation_id,
         phase=phase,
         payload=payload,
+        keep_open=(requested_by == "bot_auto_stop" and _is_money_stop_payload(payload)),
     )
     if not has_incident_event and phase in {"failed", "unknown"}:
         await _enqueue_standalone_money_failure(
@@ -878,6 +884,11 @@ _CLAIM_SQL = text(
     SET status = 'running',
         lease_owner = :worker_id,
         lease_token = task_queue.lease_token + 1,
+        deadline_at = CASE
+          WHEN task_queue.lane = 'money' THEN
+            clock_timestamp() + make_interval(secs => :money_deadline_seconds)
+          ELSE task_queue.deadline_at
+        END,
         lease_expires_at =
           clock_timestamp() + make_interval(secs => :lease_seconds),
         updated_at = clock_timestamp()
@@ -887,7 +898,11 @@ _CLAIM_SQL = text(
           AND status IN ('pending', 'retrying')
           AND lane IN :lanes
           AND available_at <= clock_timestamp()
-          AND (deadline_at IS NULL OR deadline_at > clock_timestamp())
+          AND (
+              lane = 'money'
+              OR deadline_at IS NULL
+              OR deadline_at > clock_timestamp()
+          )
           AND NOT (
               task_type IN ('meta_api_mutation', 'observer_scan', 'campaign_create')
               AND EXISTS (
@@ -955,7 +970,8 @@ _BROWSER_READY_CLAIM_SQL = text(
           AND task.lane IN :lanes
           AND task.available_at <= clock_timestamp()
           AND (
-              task.deadline_at IS NULL
+              task.lane = 'money'
+              OR task.deadline_at IS NULL
               OR task.deadline_at > clock_timestamp()
           )
           AND (
@@ -974,6 +990,11 @@ _BROWSER_READY_CLAIM_SQL = text(
     SET status = 'running',
         lease_owner = :worker_id,
         lease_token = task.lease_token + 1,
+        deadline_at = CASE
+          WHEN task.lane = 'money' THEN
+            clock_timestamp() + make_interval(secs => :money_deadline_seconds)
+          ELSE task.deadline_at
+        END,
         lease_expires_at =
           clock_timestamp() + make_interval(secs => :lease_seconds),
         updated_at = clock_timestamp()
@@ -1069,6 +1090,7 @@ async def claim_next_task(
                     "lanes": effective_lanes,
                     "worker_id": worker_id or _DEFAULT_WORKER_ID,
                     "lease_seconds": max(5, int(lease_seconds)),
+                    "money_deadline_seconds": _LANE_DEFAULT_DEADLINE_SECONDS["money"],
                 },
             )
         ).first()
@@ -1133,6 +1155,7 @@ async def claim_browser_ready_task(
                     "lanes": effective_lanes,
                     "worker_id": worker_id or _DEFAULT_WORKER_ID,
                     "lease_seconds": max(5, int(lease_seconds)),
+                    "money_deadline_seconds": _LANE_DEFAULT_DEADLINE_SECONDS["money"],
                 },
             )
         ).first()
@@ -1412,7 +1435,8 @@ async def mark_cancelled(
                 await conn.execute(
                     text(
                         """
-                        SELECT correlation_id, payload
+                        SELECT correlation_id, payload, result,
+                               requested_by, lane, task_type
                         FROM task_queue
                         WHERE id = :task_id
                         """
@@ -1421,12 +1445,16 @@ async def mark_cancelled(
                 )
             ).first()
             if task is not None:
-                await _transition_correlated_incident(
+                await _transition_terminal_task(
                     conn,
                     task_id=task_id,
                     correlation_id=_optional_uuid(_returned_value(task, "correlation_id")),
                     phase="cancelled",
                     payload=dict(_returned_value(task, "payload") or {}),
+                    result=dict(_returned_value(task, "result") or {}),
+                    requested_by=str(_returned_value(task, "requested_by") or ""),
+                    lane=str(_returned_value(task, "lane") or ""),
+                    task_type=str(_returned_value(task, "task_type") or ""),
                 )
     return bool(result.rowcount)
 
@@ -1894,9 +1922,14 @@ async def requeue_for_retry(
         return False
 
     next_at = _calc_retry_available_at(new_attempt)
-    retry_deadline = next_at + timedelta(
-        seconds=_LANE_DEFAULT_DEADLINE_SECONDS.get(
-            lane, _LANE_DEFAULT_DEADLINE_SECONDS["background"]
+    retry_deadline = (
+        None
+        if lane == "money"
+        else next_at
+        + timedelta(
+            seconds=_LANE_DEFAULT_DEADLINE_SECONDS.get(
+                lane, _LANE_DEFAULT_DEADLINE_SECONDS["background"]
+            )
         )
     )
     async with engine.begin() as conn:
@@ -1976,9 +2009,14 @@ async def requeue_proven_not_committed(
 
     new_attempt = int(attempt_count) + 1
     next_at = _calc_retry_available_at(new_attempt)
-    retry_deadline = next_at + timedelta(
-        seconds=_LANE_DEFAULT_DEADLINE_SECONDS.get(
-            lane, _LANE_DEFAULT_DEADLINE_SECONDS["background"]
+    retry_deadline = (
+        None
+        if lane == "money"
+        else next_at
+        + timedelta(
+            seconds=_LANE_DEFAULT_DEADLINE_SECONDS.get(
+                lane, _LANE_DEFAULT_DEADLINE_SECONDS["background"]
+            )
         )
     )
     async with engine.begin() as conn:
@@ -2078,12 +2116,16 @@ async def release_after_browser_readiness_rejection(
     target_lock_key: str | None = None,
     transactional_effect: (Callable[[AsyncConnection, str], Awaitable[None]] | None) = None,
 ) -> str | None:
-    """Release a live-identity rejection without consuming an attempt.
+    """Release a live-identity rejection within the finite attempt budget.
 
     The exact per-RPC check proves that browser-agent did not issue the
     controlled request. The rejected readiness generation has already been
-    CAS-expired by ``MetaApiClient``; this transition only returns the task to
-    the queue with a fresh absolute deadline.
+    CAS-expired by ``MetaApiClient``. A retry waits without an active deadline;
+    the next claim assigns one. Repeated identity churn in the money lane still
+    consumes attempts so it cannot bypass ``max_attempts`` forever. Other lanes
+    retain their caller-owned retry lifecycle. Existing UNKNOWN evidence is
+    preserved because a rejected reconciliation read says nothing about the
+    earlier write.
     """
     if (
         not _has_valid_fence(task.lease_owner, task.lease_token)
@@ -2110,28 +2152,65 @@ async def release_after_browser_readiness_rejection(
                 UPDATE task_queue
                 SET status = CASE
                         WHEN cancel_requested_at IS NOT NULL
+                         AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
                           THEN 'cancelled'
+                        WHEN lane = 'money'
+                         AND attempt_count + 1 >= max_attempts
+                          THEN 'failed'
                         ELSE 'retrying'
                     END,
+                    attempt_count = CASE
+                        WHEN cancel_requested_at IS NOT NULL
+                         AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
+                          THEN attempt_count
+                        WHEN lane <> 'money'
+                          THEN attempt_count
+                        ELSE attempt_count + 1
+                    END,
                     available_at = CASE
-                        WHEN cancel_requested_at IS NULL
+                        WHEN (
+                          cancel_requested_at IS NULL
+                          OR COALESCE(result->>'reconcile_required', 'false') = 'true'
+                        )
+                         AND (
+                           lane <> 'money'
+                           OR attempt_count + 1 < max_attempts
+                         )
                           THEN clock_timestamp()
                         ELSE available_at
                     END,
                     deadline_at = CASE
-                        WHEN cancel_requested_at IS NULL
-                          THEN clock_timestamp()
-                            + make_interval(secs => :deadline_seconds)
+                        WHEN (
+                          cancel_requested_at IS NULL
+                          OR COALESCE(result->>'reconcile_required', 'false') = 'true'
+                        )
+                         AND (
+                           lane <> 'money'
+                           OR attempt_count + 1 < max_attempts
+                         )
+                          THEN CASE
+                            WHEN lane = 'money' THEN NULL
+                            ELSE clock_timestamp()
+                              + make_interval(secs => :deadline_seconds)
+                          END
                         ELSE deadline_at
                     END,
                     completed_at = CASE
-                        WHEN cancel_requested_at IS NOT NULL
+                        WHEN (
+                          cancel_requested_at IS NOT NULL
+                          AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
+                        )
+                          OR (
+                            lane = 'money'
+                            AND attempt_count + 1 >= max_attempts
+                          )
                           THEN clock_timestamp()
                         ELSE NULL
                     END,
                     external_started_at = NULL,
                     last_error = CASE
                         WHEN cancel_requested_at IS NOT NULL
+                         AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
                           THEN COALESCE(
                             cancel_reason,
                             'cancelled after browser readiness rejection'
@@ -2139,7 +2218,9 @@ async def release_after_browser_readiness_rejection(
                         ELSE :error
                     END,
                     result = CASE
-                        WHEN cancel_requested_at IS NOT NULL THEN
+                        WHEN cancel_requested_at IS NOT NULL
+                         AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
+                        THEN
                           (
                             COALESCE(result, '{}'::jsonb)
                               - 'external_boundary_operation'
@@ -2150,6 +2231,33 @@ async def release_after_browser_readiness_rejection(
                             'outcome', 'REJECTED',
                             'reason',
                             'cancelled_after_browser_readiness_rejection'
+                          )
+                        WHEN lane = 'money'
+                         AND attempt_count + 1 >= max_attempts
+                         AND COALESCE(result->>'reconcile_required', 'false') = 'true'
+                        THEN
+                          (
+                            COALESCE(result, '{}'::jsonb)
+                              - 'external_boundary_operation'
+                              - 'external_boundary_target'
+                          ) || jsonb_build_object(
+                            'outcome', 'UNKNOWN',
+                            'reconcile_required', true,
+                            'reason',
+                            'browser_readiness_reconciliation_attempts_exhausted'
+                          )
+                        WHEN lane = 'money'
+                         AND attempt_count + 1 >= max_attempts THEN
+                          (
+                            COALESCE(result, '{}'::jsonb)
+                              - 'external_boundary_operation'
+                              - 'external_boundary_target'
+                              - 'reconcile_required'
+                              - 'manual_review_required'
+                          ) || jsonb_build_object(
+                            'outcome', 'REJECTED',
+                            'reason',
+                            'browser_readiness_attempts_exhausted'
                           )
                         ELSE
                           COALESCE(result, '{}'::jsonb)
@@ -2220,8 +2328,11 @@ async def requeue_unknown_for_reconciliation(
             lease_token=task.lease_token,
         )
         return False
-    deadline = datetime.now(timezone.utc) + timedelta(
-        seconds=_LANE_DEFAULT_DEADLINE_SECONDS.get(task.lane, 120)
+    deadline = (
+        None
+        if task.lane == "money"
+        else datetime.now(timezone.utc)
+        + timedelta(seconds=_LANE_DEFAULT_DEADLINE_SECONDS.get(task.lane, 120))
     )
     async with engine.begin() as conn:
         result = await conn.execute(
@@ -2279,9 +2390,12 @@ async def defer_unknown_reconciliation(
                 UPDATE task_queue
                 SET status = 'retrying',
                     available_at = NOW() + make_interval(secs => :delay_seconds),
-                    deadline_at = NOW() + make_interval(
-                        secs => :deadline_delay_seconds
-                    ),
+                    deadline_at = CASE
+                        WHEN lane = 'money' THEN NULL
+                        ELSE NOW() + make_interval(
+                            secs => :deadline_delay_seconds
+                        )
+                    END,
                     last_error = :error,
                     result = COALESCE(result, '{}'::jsonb)
                         || jsonb_build_object(
@@ -2476,9 +2590,9 @@ async def reconcile_stuck_running(
 
     До внешней границы задача может быть повторена, пока не исчерпаны попытки.
     После внешней границы status-actions получают только read-before-retry, а
-    необратимые операции закрываются с ``UNKNOWN``.  Каждому допустимому retry
-    выдаётся новый absolute deadline; старый deadline уже истёк и не может быть
-    переиспользован.
+    необратимые операции закрываются с ``UNKNOWN``. Каждому допустимому retry
+    новый execution deadline выдаётся при следующем claim; старый deadline уже
+    истёк и не может быть переиспользован.
 
     Используется reconciler_worker'ом. Возвращает число обработанных строк.
     Не должно быть продублировано в reconciler_worker — иначе attempt_count
@@ -2535,11 +2649,13 @@ async def reconcile_stuck_running(
                     external_started_at IS NULL
                     AND attempt_count + 1 < max_attempts
                 )
-                    THEN NOW() + make_interval(secs => CASE lane
-                        WHEN 'money' THEN 30
-                        WHEN 'bulk' THEN 1800
-                        ELSE 120
-                    END)
+                    THEN CASE
+                        WHEN lane = 'money' THEN NULL
+                        ELSE NOW() + make_interval(secs => CASE lane
+                            WHEN 'bulk' THEN 1800
+                            ELSE 120
+                        END)
+                    END
                 ELSE deadline_at
             END,
             completed_at = CASE
@@ -2655,7 +2771,12 @@ async def request_task_cancel(
 
 
 async def expire_overdue_tasks(engine: AsyncEngine) -> int:
-    """Terminally expire queued work without erasing an ambiguous outcome."""
+    """Expire queued non-money work without erasing an ambiguous outcome.
+
+    Money deadlines start only when a worker claims an execution attempt. Old
+    pre-fix rows may still contain enqueue-time deadlines, so the terminalizer
+    must explicitly leave all pending/retrying money work claimable.
+    """
     async with engine.begin() as conn:
         result = await conn.execute(
             text(
@@ -2687,6 +2808,7 @@ async def expire_overdue_tasks(engine: AsyncEngine) -> int:
                         ),
                     updated_at = NOW()
                 WHERE status IN ('pending', 'retrying')
+                  AND lane <> 'money'
                   AND deadline_at IS NOT NULL
                   AND deadline_at <= NOW()
                 RETURNING id, correlation_id, payload, status, result,

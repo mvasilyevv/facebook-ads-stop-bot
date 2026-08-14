@@ -310,13 +310,18 @@ class CabinetSupervisor:
                             "outcome": "timeout",
                             "error": "scan_deadline_exceeded",
                         }
-                        await update_cabinet_progress(
-                            self._engine,
-                            lease,
-                            stage="timeout",
-                            ttl_seconds=self._lease_ttl_seconds,
-                            error_code="scan_deadline_exceeded",
-                        )
+                        # Таймаут мог случиться внутри acquire_cabinet_lease, тогда
+                        # lease ещё None.  Без этой проверки AttributeError выходил
+                        # из актора и TaskGroup отменял ВСЕ остальные кабинеты: один
+                        # зависший коннект останавливал сканирование целиком.
+                        if lease is not None:
+                            await update_cabinet_progress(
+                                self._engine,
+                                lease,
+                                stage="timeout",
+                                ttl_seconds=self._lease_ttl_seconds,
+                                error_code="scan_deadline_exceeded",
+                            )
                     except Exception as exc:  # noqa: BLE001 - isolate cabinet actors
                         results[index] = {
                             "ad_account_id": account_id,

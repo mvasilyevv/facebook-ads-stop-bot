@@ -612,3 +612,131 @@ async def test_terminal_idempotency_replay_reports_confirmed_not_queued(monkeypa
 
     assert receipt.created is False
     assert receipt.state == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_rejected_autostop_receipt_creates_a_new_attempt(monkeypatch) -> None:
+    incident_correlation_id = uuid.uuid4()
+    stale_scan_correlation_id = uuid.uuid4()
+    command_key = "auto:pause_ad:230011223344:open-token"
+    rejected = SimpleNamespace(
+        id=92,
+        bound_action_kind="pause_ad",
+        bound_target_id="230011223344",
+        task_type="meta_api_mutation",
+        payload={"mutation_kind": "pause_ad", "target_id": "230011223344"},
+        correlation_id=incident_correlation_id,
+        status="failed",
+        result={"outcome": "REJECTED"},
+    )
+    connection = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[
+                _Result(),
+                _Result(rejected),
+                _Result(),
+                _Result(),
+                _Result(
+                    SimpleNamespace(
+                        id=92,
+                        correlation_id=incident_correlation_id,
+                        status="failed",
+                        result={"outcome": "REJECTED"},
+                        action_kind="pause_ad",
+                        has_post_evidence=False,
+                    )
+                ),
+                _Result(
+                    SimpleNamespace(
+                        ad_account_id="42",
+                        ad_name="Ad",
+                        delivery_status="ACTIVE",
+                        metrics_as_of=None,
+                        cabinet_timezone="UTC",
+                        currency="USD",
+                        currency_observed_at=datetime.now(UTC),
+                    )
+                ),
+                _Result(SimpleNamespace(idempotency_key="bound")),
+            ]
+        )
+    )
+    create = AsyncMock(return_value=93)
+    monkeypatch.setattr(service_module, "create_mutation_task", create)
+
+    receipt = await CommandService(SimpleNamespace()).enqueue_ad_action(
+        action_kind="pause_ad",
+        fb_ad_id="230011223344",
+        requested_by="bot_auto_stop",
+        idempotency_key=command_key,
+        correlation_id=stale_scan_correlation_id,
+        max_attempts=15,
+        connection=connection,
+    )
+
+    assert receipt == service_module.CommandReceipt(
+        task_id=93,
+        created=True,
+        state="queued",
+        correlation_id=incident_correlation_id,
+    )
+    assert create.await_args.kwargs["idempotency_key"].startswith("auto:pause_ad:retry:")
+    assert create.await_args.kwargs["correlation_id"] == incident_correlation_id
+
+
+@pytest.mark.asyncio
+async def test_repeated_scan_reuses_live_replacement_attempt(monkeypatch) -> None:
+    incident_correlation_id = uuid.uuid4()
+    rejected = SimpleNamespace(
+        id=92,
+        bound_action_kind="pause_ad",
+        bound_target_id="230011223344",
+        task_type="meta_api_mutation",
+        payload={"mutation_kind": "pause_ad", "target_id": "230011223344"},
+        correlation_id=incident_correlation_id,
+        status="failed",
+        result={"outcome": "REJECTED"},
+    )
+    connection = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[
+                _Result(),
+                _Result(rejected),
+                _Result(),
+                _Result(),
+                _Result(
+                    SimpleNamespace(
+                        id=93,
+                        correlation_id=incident_correlation_id,
+                        status="pending",
+                        result=None,
+                        action_kind="pause_ad",
+                        has_post_evidence=False,
+                    )
+                ),
+                _Result(),
+            ]
+        )
+    )
+    create = AsyncMock()
+    monkeypatch.setattr(service_module, "create_mutation_task", create)
+
+    receipt = await CommandService(SimpleNamespace()).enqueue_ad_action(
+        action_kind="pause_ad",
+        fb_ad_id="230011223344",
+        requested_by="bot_auto_stop",
+        idempotency_key="auto:pause_ad:230011223344:open-token",
+        max_attempts=15,
+        connection=connection,
+    )
+
+    assert receipt == service_module.CommandReceipt(
+        task_id=93,
+        created=False,
+        state="queued",
+        correlation_id=incident_correlation_id,
+    )
+    create.assert_not_awaited()
+    reopen_sql = str(connection.execute.await_args_list[3].args[0])
+    assert "resolved_at = NULL" in reopen_sql
+    assert "status = 'failed'" in reopen_sql

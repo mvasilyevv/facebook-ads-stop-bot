@@ -41,23 +41,23 @@ depends_on = None
 
 BASELINE_ASSET_SHA256 = "535830715e0e2e7269d68a4839eacef098a449d5ccb6e193dd0c1d5af4b79ce1"
 BASELINE_RETENTION_POLICY: dict[str, str] = {
-    "ad_metrics": "90 days",
-    "alert_events": "365 days",
+    "ad_metrics": "45 days",
+    "alert_events": "120 days",
     "scan_runs": "30 days",
     "meta_api_audit_log": "30 days",
-    "adsetpro_postback_events": "60 days",
+    "adsetpro_postback_events": "45 days",
     "task_queue_completed": "30 days",
-    "task_queue_failed": "90 days",
+    "task_queue_failed": "45 days",
     "adset_duplicate_previews_expired": "immediate",
     "browser_operation_capabilities_expired": "immediate",
     "telegram_invites_expired": "30 days",
     "operator_revision_events": "7 days",
-    "incidents_terminal": "365 days",
-    "notification_events_terminal": "365 days",
-    "telegram_action_tokens_terminal": "90 days",
+    "incidents_terminal": "180 days",
+    "notification_events_terminal": "90 days",
+    "telegram_action_tokens_terminal": "45 days",
     "telegram_navigation_tokens_terminal": "30 days",
-    "telegram_updates_terminal": "90 days",
-    "telegram_command_replies_terminal": "90 days",
+    "telegram_updates_terminal": "30 days",
+    "telegram_command_replies_terminal": "30 days",
     "ai_cache": "redis_ttl_only",
 }
 

@@ -2404,7 +2404,7 @@ async def test_task_transition_and_incident_notification_commit_together(
 
 
 @pytest.mark.asyncio
-async def test_deadline_reconciler_projects_unknown_into_incident_transaction(
+async def test_money_deadline_reconciler_keeps_unknown_queued_and_incident_open(
     pg_engine,
     notification_resources,
 ) -> None:
@@ -2444,7 +2444,7 @@ async def test_deadline_reconciler_projects_unknown_into_incident_transaction(
             },
         )
 
-    assert await expire_overdue_tasks(pg_engine) == 1
+    assert await expire_overdue_tasks(pg_engine) == 0
     async with pg_engine.connect() as conn:
         task = (
             await conn.execute(
@@ -2458,22 +2458,20 @@ async def test_deadline_reconciler_projects_unknown_into_incident_transaction(
                 {"id": incident_id},
             )
         ).one()
-        event_id = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT id FROM notification_events
-                    WHERE incident_id = :id AND event_type = 'action_unknown'
-                    """
-                ),
-                {"id": incident_id},
-            )
-        ).scalar_one()
-    notification_resources.event_ids.append(event_id)
-    assert task.status == "failed"
+        event_count = await conn.scalar(
+            text(
+                """
+                SELECT COUNT(*) FROM notification_events
+                WHERE incident_id = :id AND event_type = 'action_unknown'
+                """
+            ),
+            {"id": incident_id},
+        )
+    assert task.status == "retrying"
     assert task.result["outcome"] == "UNKNOWN"
-    assert incident.status == "failed"
-    assert incident.resolved_at is not None
+    assert incident.status == "open"
+    assert incident.resolved_at is None
+    assert event_count == 0
 
 
 @pytest.mark.asyncio

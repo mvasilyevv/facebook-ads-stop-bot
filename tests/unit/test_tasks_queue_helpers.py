@@ -16,8 +16,9 @@ HIGH #8 из backend_test_audit_round_8: функция _calc_retry_available_at
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -30,10 +31,26 @@ from core.tasks.queue import (
     _returned_value,
     _row_to_task,
     claim_next_task,
+    create_task,
 )
 
 # Разрешённое отклонение по времени в мс (потокобезопасность datetime.now())
 _TOLERANCE_SECONDS = 2
+
+
+class _InsertResult:
+    def first(self):
+        return None
+
+
+def _engine_with_connection():
+    connection = SimpleNamespace(execute=AsyncMock(return_value=_InsertResult()))
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=connection)
+    context.__aexit__ = AsyncMock(return_value=False)
+    engine = MagicMock()
+    engine.begin.return_value = context
+    return engine, connection
 
 
 def _approx_seconds(dt: datetime, *, expected: int) -> None:
@@ -131,6 +148,75 @@ def test_terminal_update_requires_returning_rows() -> None:
         _returned_task_rows(SimpleNamespace(rowcount=1))
     with pytest.raises(TypeError, match="named columns"):
         _returned_value(SimpleNamespace(id=1), "id")
+
+
+@pytest.mark.asyncio
+async def test_money_deadline_starts_when_execution_is_claimed() -> None:
+    """Browser queue wait must not spend the operation's 30 second budget."""
+    engine, connection = _engine_with_connection()
+
+    await create_task(
+        engine,
+        task_type="meta_api_mutation",
+        idempotency_key="auto:pause_ad:230011223344:deadline",
+        payload={"mutation_kind": "pause_ad", "target_id": "230011223344"},
+        requested_by="bot_auto_stop",
+    )
+
+    insert_params = connection.execute.await_args.args[1]
+    assert insert_params["lane"] == "money"
+    assert insert_params["deadline_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_money_claim_assigns_fresh_cross_runtime_deadline_after_browser_wait() -> None:
+    """A >30s maintenance wait remains claimable, then execution is bounded."""
+    claim_sql = str(task_queue._BROWSER_READY_CLAIM_SQL)
+
+    assert "task.lane = 'money'" in claim_sql
+    assert "WHEN task.lane = 'money' THEN" in claim_sql
+    assert "make_interval(secs => :money_deadline_seconds)" in claim_sql
+    assert "browser_maintenance" in claim_sql
+
+    from core.deadlines import bind_absolute_deadline
+    from core.meta_api.client import _LIVE_OPERATION_AUTHORITY_SQL, MetaApiClient
+    from core.meta_api.errors import AmbiguousResultError
+    from core.meta_api.operation_authority import _CONSUME_PENDING_CAPABILITY_SQL
+
+    worker_source = inspect.getsource(
+        __import__("apps.meta_api_worker.main", fromlist=["_execute_with_touch"])
+    )
+    assert "tq.deadline_at > clock_timestamp()" in str(_LIVE_OPERATION_AUTHORITY_SQL)
+    assert "task.deadline_at > clock_timestamp()" in str(_CONSUME_PENDING_CAPABILITY_SQL)
+    assert "bind_absolute_deadline(task.deadline_at)" in worker_source
+
+    client = MetaApiClient(session_id="session-deadline")
+    client._stub = SimpleNamespace()
+    with bind_absolute_deadline(datetime.now(timezone.utc) - timedelta(seconds=1)):
+        with pytest.raises(AmbiguousResultError, match="absolute deadline exhausted"):
+            await client.execute_graph_call(
+                method="POST",
+                endpoint="/230011223344",
+                query_params={"status": "PAUSED"},
+                ad_account_id="42",
+            )
+
+
+def test_overdue_reconciler_does_not_reject_unclaimed_money_work() -> None:
+    """Old pre-fix rows with an enqueue-time deadline must survive rollout."""
+    source = inspect.getsource(task_queue.expire_overdue_tasks)
+
+    assert "lane <> 'money'" in source
+
+
+def test_readiness_rejection_cannot_bypass_attempt_budget() -> None:
+    source = inspect.getsource(task_queue.release_after_browser_readiness_rejection)
+
+    assert "attempt_count = CASE" in source
+    assert "lane = 'money'" in source
+    assert "attempt_count + 1 >= max_attempts" in source
+    assert "browser_readiness_attempts_exhausted" in source
+    assert "browser_readiness_reconciliation_attempts_exhausted" in source
 
 
 @pytest.mark.asyncio

@@ -104,6 +104,7 @@ async def maybe_alert_autostop_channel_down(
 # человек как последний рубеж получает конкретную цель, а не общий сигнал.
 
 UNDELIVERED_INCIDENT_KEY_PREFIX = "autostop:undelivered:"
+TERMINAL_UNDELIVERED_INCIDENT_KEY_PREFIX = "autostop:terminal-undelivered:"
 DEFAULT_ESCALATE_AFTER_SECONDS = 10 * 60
 _ESCALATE_QUERY_LIMIT = 50
 
@@ -140,14 +141,38 @@ async def _find_undelivered_candidate_ids(
                 await conn.execute(
                     text(
                         """
-                    SELECT id
-                    FROM task_queue
-                    WHERE task_type = 'meta_api_mutation'
-                      AND payload->>'mutation_kind' = 'pause_ad'
-                      AND requested_by = :rb
-                      AND status IN ('pending', 'retrying', 'running')
-                      AND created_at < NOW() - make_interval(secs => :secs)
-                    ORDER BY created_at ASC
+                    SELECT task.id
+                    FROM task_queue AS task
+                    WHERE task.task_type = 'meta_api_mutation'
+                      AND task.payload->>'mutation_kind' = 'pause_ad'
+                      AND task.requested_by = :rb
+                      AND (
+                        task.status IN ('pending', 'retrying', 'running')
+                        OR (
+                          task.status IN ('failed', 'cancelled')
+                          AND EXISTS (
+                            SELECT 1
+                            FROM fb_ads AS ad
+                            WHERE ad.fb_ad_id = task.payload->>'target_id'
+                              AND UPPER(COALESCE(ad.delivery_status, '')) = 'ACTIVE'
+                          )
+                          AND NOT EXISTS (
+                            SELECT 1
+                            FROM incidents AS terminal_incident
+                            WHERE terminal_incident.incident_key =
+                                  :terminal_prefix || (task.payload->>'target_id')
+                              AND terminal_incident.status IN
+                                  ('open', 'acknowledged', 'executing')
+                          )
+                        )
+                      )
+                      AND task.created_at < NOW() - make_interval(secs => :secs)
+                    ORDER BY
+                      CASE
+                        WHEN task.status IN ('failed', 'cancelled') THEN 0
+                        ELSE 1
+                      END,
+                      task.created_at ASC
                     LIMIT :lim
                     """
                     ),
@@ -155,6 +180,7 @@ async def _find_undelivered_candidate_ids(
                         "rb": requested_by,
                         "secs": stuck_after_seconds,
                         "lim": _ESCALATE_QUERY_LIMIT,
+                        "terminal_prefix": TERMINAL_UNDELIVERED_INCIDENT_KEY_PREFIX,
                     },
                 )
             )
@@ -206,6 +232,7 @@ async def escalate_undelivered_autostop_pauses(
                             """
                             SELECT t.id,
                                    t.payload->>'target_id' AS fb_ad_id,
+                                   t.status,
                                    t.attempt_count,
                                    t.last_error,
                                    GREATEST(
@@ -213,6 +240,7 @@ async def escalate_undelivered_autostop_pauses(
                                        FLOOR(EXTRACT(EPOCH FROM (NOW() - t.created_at)) / 60)
                                    )::integer AS age_minutes,
                                    ad.ad_name,
+                                   ad.delivery_status,
                                    metric.spend,
                                    metric.currency
                             FROM task_queue AS t
@@ -230,7 +258,21 @@ async def escalate_undelivered_autostop_pauses(
                               AND t.task_type = 'meta_api_mutation'
                               AND t.payload->>'mutation_kind' = 'pause_ad'
                               AND t.requested_by = :rb
-                              AND t.status IN ('pending', 'retrying', 'running')
+                              AND (
+                                t.status IN ('pending', 'retrying', 'running')
+                                OR (
+                                  t.status IN ('failed', 'cancelled')
+                                  AND UPPER(COALESCE(ad.delivery_status, '')) = 'ACTIVE'
+                                  AND NOT EXISTS (
+                                    SELECT 1
+                                    FROM incidents AS terminal_incident
+                                    WHERE terminal_incident.incident_key =
+                                          :terminal_prefix || (t.payload->>'target_id')
+                                      AND terminal_incident.status IN
+                                          ('open', 'acknowledged', 'executing')
+                                  )
+                                )
+                              )
                               AND t.created_at < NOW() - make_interval(secs => :secs)
                             FOR UPDATE OF t
                             """
@@ -239,6 +281,7 @@ async def escalate_undelivered_autostop_pauses(
                             "task_id": int(task_id),
                             "rb": requested_by,
                             "secs": stuck_after_seconds,
+                            "terminal_prefix": TERMINAL_UNDELIVERED_INCIDENT_KEY_PREFIX,
                         },
                     )
                 ).first()
@@ -247,6 +290,7 @@ async def escalate_undelivered_autostop_pauses(
                 fb_ad_id = str(row.fb_ad_id)
                 minutes = int(row.age_minutes or 0)
                 spend_text = _confirmed_spend_text(row.spend, row.currency)
+                is_terminal = str(row.status or "").lower() in {"failed", "cancelled"}
                 logger.error(
                     "escalate_undelivered: pause_ad застрял %sмин (ad=%s), error=%r",
                     minutes,
@@ -255,11 +299,23 @@ async def escalate_undelivered_autostop_pauses(
                 )
                 was_accepted = await notify_recurring_incident_in_transaction(
                     conn,
-                    incident_key=f"{UNDELIVERED_INCIDENT_KEY_PREFIX}{fb_ad_id}",
+                    incident_key=(
+                        f"{TERMINAL_UNDELIVERED_INCIDENT_KEY_PREFIX}{fb_ad_id}"
+                        if is_terminal
+                        else f"{UNDELIVERED_INCIDENT_KEY_PREFIX}{fb_ad_id}"
+                    ),
                     audience="owners",
-                    event_type="autostop_undelivered_pause",
+                    event_type=(
+                        "autostop_terminal_undelivered_pause"
+                        if is_terminal
+                        else "autostop_undelivered_pause"
+                    ),
                     severity="critical",
-                    title="Авто-стоп завис — отключи вручную",
+                    title=(
+                        "Авто-стоп отказал — отключи вручную"
+                        if is_terminal
+                        else "Авто-стоп завис — отключи вручную"
+                    ),
                     summary=(
                         f"{row.ad_name or fb_ad_id} · {minutes} мин · "
                         + (

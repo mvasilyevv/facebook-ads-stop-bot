@@ -82,7 +82,7 @@ from core.meta_api.account_tz import (
     resolve_account_currencies,
     resolve_cabinet_days,
 )
-from core.observer.accounts import resolve_scan_account_ids
+from core.observer.accounts import nothing_monitored_reason_for, resolve_scan_account_ids
 from core.operator.queries import (
     fetch_operator_actions,
     fetch_operator_ads,
@@ -1172,6 +1172,16 @@ async def _system_section(
     warning_workers = [worker for worker in workers if worker.severity == OperatorSeverity.WARNING]
     unknown_workers = [worker for worker in workers if worker.severity == OperatorSeverity.UNKNOWN]
     critical_issues = [issue for issue in issues if issue.severity == OperatorSeverity.CRITICAL]
+    # Включённый мониторинг может фактически не покрывать ни одного объявления:
+    # при одном кабинете пустой allowlist означает, что скан не выполняется вовсе
+    # (см. allowlist_blocks_scan в observer). Раньше это давало outcome="empty",
+    # неотличимый от «активных объявлений нет», и секция рисовалась зелёной —
+    # оператор видел исправную систему, пока авто-стоп не покрывал ничего.
+    nothing_monitored_reason: str | None = None
+    if scan.get("enabled") is True and requested_id is None:
+        nothing_monitored_reason = nothing_monitored_reason_for(
+            expected_accounts, list(scan.get("campaign_ids") or [])
+        )
     if scan.get("enabled") is False:
         severity = OperatorSeverity.CRITICAL
         issues.append(
@@ -1179,6 +1189,17 @@ async def _system_section(
                 code="monitoring_disabled",
                 title="Автоматический мониторинг выключен",
                 detail=None,
+                severity=OperatorSeverity.CRITICAL,
+                correlation_id=None,
+            )
+        )
+    elif nothing_monitored_reason is not None:
+        severity = OperatorSeverity.CRITICAL
+        issues.append(
+            OperatorIssue(
+                code="scan_nothing_monitored",
+                title="Мониторинг включён, но не отслеживает ни одного объявления",
+                detail=nothing_monitored_reason,
                 severity=OperatorSeverity.CRITICAL,
                 correlation_id=None,
             )

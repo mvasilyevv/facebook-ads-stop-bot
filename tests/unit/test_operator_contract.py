@@ -26,6 +26,7 @@ from apps.api.routers.v1.schemas.operator import (
     OperatorCabinetLedgerRow,
     OperatorEconomyTotals,
     OperatorSection,
+    OperatorSeverity,
 )
 from core.operator.queries import _task_item, task_action_kind, task_action_state
 
@@ -277,6 +278,55 @@ def test_cabinet_risk_keeps_stale_unknown_and_confirmed_stop_critical() -> None:
 
 
 @pytest.mark.asyncio
+async def test_system_section_flags_monitoring_that_covers_nothing(monkeypatch) -> None:
+    """Включённый мониторинг с пустым allowlist при одном кабинете — CRITICAL.
+
+    Скан в этом случае не выполняется вовсе (allowlist_blocks_scan), но раньше
+    результат приходил как outcome="empty", неотличимый от «активных объявлений
+    нет», и секция рисовалась зелёной. Оператор видел исправную систему, пока
+    авто-стоп не покрывал ни одного объявления.
+    """
+
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        operator_router,
+        "fetch_operator_scan_state",
+        AsyncMock(
+            return_value={
+                "enabled": True,
+                "last_scan_at": now,
+                "last_scan_outcome": "empty",
+                "next_scan_at": None,
+                "campaign_ids": [],
+                "actors": [
+                    {
+                        "ad_account_id": "123",
+                        "owner_instance": None,
+                        "lease_expires_at": None,
+                        "stage": "idle",
+                        "last_progress_at": now,
+                        "last_snapshot_at": now,
+                        "error": None,
+                    }
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        operator_router, "resolve_scan_account_ids", AsyncMock(return_value=["123"])
+    )
+
+    section = await operator_router._system_section(engine=object(), now=now)
+
+    assert section.data is not None
+    assert section.data.severity == OperatorSeverity.CRITICAL
+    codes = {issue.code for issue in section.issues}
+    assert "scan_nothing_monitored" in codes
+    assert section.state is not DataState.READY
+    assert section.state is not DataState.EMPTY
+
+
+@pytest.mark.asyncio
 async def test_system_section_uses_durable_cabinet_activity(monkeypatch) -> None:
     now = datetime.now(UTC)
     monkeypatch.setattr(
@@ -288,6 +338,9 @@ async def test_system_section_uses_durable_cabinet_activity(monkeypatch) -> None
                 "last_scan_at": now,
                 "last_scan_outcome": "success",
                 "next_scan_at": None,
+                # Непустой allowlist: иначе секция справедливо уходит в CRITICAL
+                # «мониторинг ничего не отслеживает», а этот тест не об этом.
+                "campaign_ids": ["c1"],
                 "actors": [
                     {
                         "ad_account_id": "123",
@@ -327,6 +380,9 @@ async def test_system_section_never_hides_a_missing_expected_actor(monkeypatch) 
                 "last_scan_at": now,
                 "last_scan_outcome": "success",
                 "next_scan_at": None,
+                # Непустой allowlist: иначе секция справедливо уходит в CRITICAL
+                # «мониторинг ничего не отслеживает», а этот тест не об этом.
+                "campaign_ids": ["c1"],
                 "actors": [],
             }
         ),
@@ -358,6 +414,9 @@ async def test_system_section_never_false_greens_unknown_monitoring_state(
                 "last_scan_at": now,
                 "last_scan_outcome": "success",
                 "next_scan_at": None,
+                # Непустой allowlist: иначе секция справедливо уходит в CRITICAL
+                # «мониторинг ничего не отслеживает», а этот тест не об этом.
+                "campaign_ids": ["c1"],
                 "actors": [
                     {
                         "ad_account_id": "123",
@@ -936,6 +995,9 @@ async def test_system_section_never_exposes_raw_cabinet_actor_error(monkeypatch)
                 "enabled": True,
                 "last_scan_at": now,
                 "next_scan_at": None,
+                # Непустой allowlist: иначе секция справедливо уходит в CRITICAL
+                # «мониторинг ничего не отслеживает», а этот тест не об этом.
+                "campaign_ids": ["c1"],
                 "last_scan_outcome": "error",
                 "actors": [
                     {

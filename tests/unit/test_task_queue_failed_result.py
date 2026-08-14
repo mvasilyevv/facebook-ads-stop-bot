@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import core.tasks.queue as task_queue
 from core.meta_api.queue import mark_task_failed
 from core.tasks.queue import mark_failed
 
@@ -95,3 +97,52 @@ async def test_meta_queue_wrapper_forwards_optional_result(monkeypatch) -> None:
 
     assert applied is True
     assert spy.await_args.kwargs["result"] == result
+
+
+class _IncidentResult:
+    def __init__(self, row) -> None:
+        self._row = row
+
+    def first(self):
+        return self._row
+
+
+@pytest.mark.asyncio
+async def test_rejected_autostop_keeps_correlated_incident_open(monkeypatch) -> None:
+    correlation_id = uuid.uuid4()
+    incident_id = uuid.uuid4()
+    connection = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=_IncidentResult(
+                SimpleNamespace(
+                    id=incident_id,
+                    title="Ad STOP",
+                    correlation_id=correlation_id,
+                )
+            )
+        )
+    )
+    enqueue = AsyncMock()
+    monkeypatch.setattr(
+        "core.telegram.notifications.enqueue_notification_in_transaction",
+        enqueue,
+    )
+
+    await task_queue._transition_terminal_task(
+        connection,
+        task_id=42,
+        correlation_id=correlation_id,
+        phase="failed",
+        payload={"mutation_kind": "pause_ad", "target_id": "230011223344"},
+        result={"outcome": "REJECTED"},
+        requested_by="bot_auto_stop",
+        lane="money",
+        task_type="meta_api_mutation",
+    )
+
+    statement = str(connection.execute.await_args.args[0])
+    params = connection.execute.await_args.args[1]
+    assert params["status"] == "open"
+    assert "resolved_at = NULL" in statement
+    assert "'failed'" in statement
+    enqueue.assert_awaited_once()
