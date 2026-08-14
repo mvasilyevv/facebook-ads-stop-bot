@@ -13,6 +13,7 @@ import pytest
 
 from core.meta_api.duplicate_incidents import project_duplicate_incident_in_transaction
 from core.observer.writers import (
+    _CURRENCY_UNCONFIRMED,
     _incident_action_line,
     _incident_lines,
     _incident_risk,
@@ -46,11 +47,16 @@ def _render(
     auto_stop: bool,
     severity: str = "critical",
 ) -> str:
+    summary = _incident_summary(metrics, codes, currency=currency)
     facts = NotificationCardFacts(
         title=_incident_title("CR2_CR005", codes),
-        summary=_incident_summary(metrics, codes, currency=currency),
+        summary=summary,
         lines=[
-            *_incident_lines(metrics, currency=currency),
+            *_incident_lines(
+                metrics,
+                currency=currency,
+                currency_reason_stated=_CURRENCY_UNCONFIRMED in summary,
+            ),
             _incident_action_line(auto_stop=auto_stop),
         ],
         risk=_incident_risk(codes),
@@ -134,7 +140,10 @@ def test_card_hides_money_without_confirmed_currency() -> None:
 
     assert "18.40" not in text
     assert "9.56" not in text
-    assert text.count("валюта кабинета не подтверждена") >= 1
+    # Причина названа ровно один раз: два одинаковых объяснения подряд в
+    # короткой карточке читаются как сбой рендера, а не как забота.
+    assert text.count(_CURRENCY_UNCONFIRMED) == 1
+    assert "Расход не показан" in text
     # Метрики без денег остаются: карточка не превращается в пустую.
     assert "43 клика" in text
 

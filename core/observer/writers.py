@@ -590,7 +590,11 @@ async def apply_fsm_transition(
             incident_id = uuid.UUID(str(incident_row.id))
             incident_correlation_id = uuid.UUID(str(incident_row.correlation_id))
             lines = [
-                *_incident_lines(serialized_metrics, currency=currency),
+                *_incident_lines(
+                    serialized_metrics,
+                    currency=currency,
+                    currency_reason_stated=_CURRENCY_UNCONFIRMED in summary,
+                ),
                 _incident_action_line(auto_stop=transition.create_disable_task),
             ]
             await enqueue_notification_in_transaction(
@@ -718,6 +722,7 @@ async def apply_fsm_transition(
                                     *_incident_lines(
                                         serialized_metrics,
                                         currency=currency,
+                                        currency_reason_stated=(_CURRENCY_UNCONFIRMED in summary),
                                     ),
                                     _incident_action_line(auto_stop=False),
                                 ],
@@ -1001,6 +1006,9 @@ def _incident_title(ad_name: str, rule_codes: tuple[str, ...]) -> str:
     return f"{reason}: {ad_name}"
 
 
+_CURRENCY_UNCONFIRMED = "валюта кабинета не подтверждена"
+
+
 def _incident_summary(
     metrics: dict[str, Any],
     rule_codes: tuple[str, ...],
@@ -1033,7 +1041,7 @@ def _incident_summary(
 
     if unit == "money":
         if currency is None:
-            return f"{metric} не показана: валюта кабинета не подтверждена"
+            return f"{metric} не показана: {_CURRENCY_UNCONFIRMED}"
         return f"{metric} {value} {currency} {limit_word} {threshold} {currency}"
     if unit == "percent_of_cpa":
         return f"{metric} {value}% от CPA {limit_word} {threshold}%"
@@ -1049,8 +1057,14 @@ def _incident_lines(
     metrics: dict[str, Any],
     *,
     currency: str | None,
+    currency_reason_stated: bool = False,
 ) -> list[str]:
-    """Строка фактов: сколько потрачено и что объявление успело принести."""
+    """Строка фактов: сколько потрачено и что объявление успело принести.
+
+    ``currency_reason_stated`` означает, что причину уже назвала строка выше:
+    в короткой карточке одно и то же объяснение двумя строками подряд
+    выглядит сбоем, а не заботой.
+    """
     parts: list[str] = []
     spend = metrics.get("spend")
     clicks = metrics.get("clicks")
@@ -1063,7 +1077,10 @@ def _incident_lines(
     elif spend is not None:
         # Сумма без подтверждённой валюты — это не деньги, а голое число:
         # показать её оператору нельзя, промолчать про расход тоже нельзя.
-        parts.append("Расход не показан: валюта кабинета не подтверждена")
+        if currency_reason_stated:
+            parts.append("Расход не показан")
+        else:
+            parts.append(f"Расход не показан: {_CURRENCY_UNCONFIRMED}")
     if clicks is not None:
         parts.append(clicks_ru(int(clicks)))
     if registrations is not None:

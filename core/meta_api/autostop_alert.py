@@ -331,9 +331,7 @@ async def escalate_undelivered_autostop_pauses(
                     summary=(
                         f"Объявление не выключено, а деньги идут · {spend_part}"
                         if is_terminal
-                        else (
-                            f"Команда на выключение висит {minutes_ru(minutes)} · {spend_part}"
-                        )
+                        else (f"Команда на выключение висит {minutes_ru(minutes)} · {spend_part}")
                     ),
                     risk="Объявление может продолжать тратить бюджет",
                     lines=(
