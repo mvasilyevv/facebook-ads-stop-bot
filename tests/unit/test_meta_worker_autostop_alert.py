@@ -7,14 +7,17 @@ durable CRITICAL event даже без Redis; не-autostop фейл алерт 
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import apps.meta_api_worker.main as meta
+import core.meta_api.autostop_alert as autostop_alert
+import core.tasks.queue as task_queue
 from core.meta_api.errors import TemporaryError
 from core.tasks.queue import Task
 
@@ -274,3 +277,74 @@ async def test_malformed_safety_compensation_cannot_bypass_freshness_gate(
     freshness.assert_awaited_once()
     defer.assert_awaited_once()
     execute.assert_not_awaited()
+
+
+class _AlertRowResult:
+    def __init__(self, row) -> None:
+        self._row = row
+
+    def first(self):
+        return self._row
+
+
+@pytest.mark.asyncio
+async def test_terminal_autostop_with_active_ad_gets_non_resolving_escalation(
+    monkeypatch,
+) -> None:
+    candidate_source = inspect.getsource(autostop_alert._find_undelivered_candidate_ids)
+
+    async def execute(statement, _params):
+        sql = str(statement)
+        terminal_active_guard = (
+            "t.status IN ('failed', 'cancelled')" in sql
+            and "UPPER(COALESCE(ad.delivery_status, '')) = 'ACTIVE'" in sql
+        )
+        if not terminal_active_guard:
+            return _AlertRowResult(None)
+        return _AlertRowResult(
+            SimpleNamespace(
+                id=42,
+                fb_ad_id="230011223344",
+                status="failed",
+                delivery_status="ACTIVE",
+                attempt_count=15,
+                last_error="attempts exhausted",
+                age_minutes=12,
+                ad_name="Ad",
+                spend="91.25",
+                currency="USD",
+            )
+        )
+
+    connection = SimpleNamespace(execute=AsyncMock(side_effect=execute))
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=connection)
+    context.__aexit__ = AsyncMock(return_value=False)
+    engine = MagicMock()
+    engine.begin.return_value = context
+    monkeypatch.setattr(
+        autostop_alert,
+        "_find_undelivered_candidate_ids",
+        AsyncMock(return_value=[42]),
+    )
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        autostop_alert,
+        "notify_recurring_incident_in_transaction",
+        notify,
+    )
+
+    accepted = await autostop_alert.escalate_undelivered_autostop_pauses(
+        engine,
+        stuck_after_seconds=600,
+    )
+
+    assert accepted == 1
+    assert "status IN ('failed', 'cancelled')" in candidate_source
+    assert "UPPER(COALESCE(ad.delivery_status, '')) = 'ACTIVE'" in candidate_source
+    assert notify.await_args.kwargs["incident_key"] == (
+        f"{autostop_alert.TERMINAL_UNDELIVERED_INCIDENT_KEY_PREFIX}230011223344"
+    )
+    assert "TERMINAL_UNDELIVERED_INCIDENT_KEY_PREFIX" not in inspect.getsource(
+        task_queue._resolve_confirmed_autostop_incidents_in_transaction
+    )
