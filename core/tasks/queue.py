@@ -333,6 +333,7 @@ async def _transition_correlated_incident(
     correlation_id: uuid.UUID | None,
     phase: Literal["executing", "confirmed", "failed", "cancelled", "unknown", "recovered"],
     payload: dict[str, Any] | None,
+    keep_open: bool = False,
 ) -> bool:
     """Advance an incident and enqueue its card edit in the task transaction.
 
@@ -362,25 +363,29 @@ async def _transition_correlated_incident(
         status_label = "Угроза снята"
         summary = "Условие риска исчезло до внешнего действия; команда отменена."
     elif phase == "unknown":
-        incident_status = "failed"
+        incident_status = "open" if keep_open else "failed"
         event_type = "action_unknown"
         severity = "critical"
         status_label = "Результат неизвестен"
         summary = "Автоповтор запрещён: проверьте фактический статус в Meta."
     elif phase == "cancelled":
-        incident_status = "failed"
+        incident_status = "open" if keep_open else "failed"
         event_type = "action_cancelled"
         severity = "warning"
         status_label = "Отменено"
         summary = "Действие отменено до внешнего вызова."
     else:
-        incident_status = "failed"
+        incident_status = "open" if keep_open else "failed"
         event_type = "action_failed"
         severity = "critical"
         status_label = "Не выполнено"
         summary = "Действие не подтверждено; откройте карточку для диагностики."
 
-    timestamp_column = "resolved_at = NOW()," if incident_status in {"resolved", "failed"} else ""
+    timestamp_column = (
+        "resolved_at = NOW(),"
+        if incident_status in {"resolved", "failed"}
+        else "resolved_at = NULL,"
+    )
     incident = (
         await conn.execute(
             text(
@@ -391,7 +396,7 @@ async def _transition_correlated_incident(
                     summary = :summary,
                     updated_at = NOW()
                 WHERE correlation_id = :correlation_id
-                  AND status IN ('open','acknowledged','executing')
+                  AND status IN ('open','acknowledged','executing','failed')
                 RETURNING id, title, correlation_id
                 """
             ),
@@ -612,6 +617,7 @@ async def _transition_terminal_task(
         correlation_id=correlation_id,
         phase=phase,
         payload=payload,
+        keep_open=(requested_by == "bot_auto_stop" and _is_money_stop_payload(payload)),
     )
     if not has_incident_event and phase in {"failed", "unknown"}:
         await _enqueue_standalone_money_failure(
@@ -1427,7 +1433,8 @@ async def mark_cancelled(
                 await conn.execute(
                     text(
                         """
-                        SELECT correlation_id, payload
+                        SELECT correlation_id, payload, result,
+                               requested_by, lane, task_type
                         FROM task_queue
                         WHERE id = :task_id
                         """
@@ -1436,12 +1443,16 @@ async def mark_cancelled(
                 )
             ).first()
             if task is not None:
-                await _transition_correlated_incident(
+                await _transition_terminal_task(
                     conn,
                     task_id=task_id,
                     correlation_id=_optional_uuid(_returned_value(task, "correlation_id")),
                     phase="cancelled",
                     payload=dict(_returned_value(task, "payload") or {}),
+                    result=dict(_returned_value(task, "result") or {}),
+                    requested_by=str(_returned_value(task, "requested_by") or ""),
+                    lane=str(_returned_value(task, "lane") or ""),
+                    task_type=str(_returned_value(task, "task_type") or ""),
                 )
     return bool(result.rowcount)
 

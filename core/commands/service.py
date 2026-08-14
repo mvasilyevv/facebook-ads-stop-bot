@@ -46,6 +46,7 @@ _SAFETY_COMPENSATION_SOURCE_PARAM = {
 }
 
 _OPERATOR_IDEMPOTENCY_DOMAIN = b"fb-agent:operator-command:v1\0"
+_AUTOSTOP_RETRY_IDEMPOTENCY_DOMAIN = b"fb-agent:auto-pause-retry:v1\0"
 
 
 def principal_scoped_idempotency_key(*, principal: str, client_key: str) -> str:
@@ -274,26 +275,37 @@ class CommandService:
             )
 
             bound = await _get_bound_command(conn, idempotency_key=command_key)
+            rejected_autostop_source = None
             if bound is not None:
                 receipt = _receipt_for_semantics(
                     bound,
                     action_kind=action_kind,
                     target_id=target_id,
                 )
-                await _strengthen_active_task(
-                    conn,
-                    task_id=receipt.task_id,
-                    max_attempts=max_attempts,
-                    priority=requested_priority,
-                )
-                if transaction_authorizer is not None:
-                    await transaction_authorizer(conn, None)
-                return receipt
+                if _is_rejected_autostop_retry_source(
+                    bound,
+                    action_kind=action_kind,
+                    requested_by=requested_by,
+                ):
+                    rejected_autostop_source = bound
+                else:
+                    await _strengthen_active_task(
+                        conn,
+                        task_id=receipt.task_id,
+                        max_attempts=max_attempts,
+                        priority=requested_priority,
+                    )
+                    if transaction_authorizer is not None:
+                        await transaction_authorizer(conn, None)
+                    return receipt
 
             # A queue key without its command receipt is corrupt in the clean
             # schema.  Detect it before same-target command reuse can mask the
             # conflict, but never adopt or execute that orphan row.
-            if await _queue_key_exists(conn, idempotency_key=command_key):
+            if rejected_autostop_source is None and await _queue_key_exists(
+                conn,
+                idempotency_key=command_key,
+            ):
                 raise CommandConflictError(
                     "idempotency key exists outside the command receipt ledger"
                 )
@@ -302,6 +314,11 @@ class CommandService:
                 text("SELECT pg_advisory_xact_lock(hashtext(:target_id))"),
                 {"target_id": target_id},
             )
+            if rejected_autostop_source is not None:
+                await _reopen_rejected_autostop_incident(
+                    conn,
+                    correlation_id=uuid.UUID(str(rejected_autostop_source.correlation_id)),
+                )
 
             # An ambiguous external result is still authoritative control-plane
             # state.  A terminal CONFIRMED result remains a barrier only until
@@ -371,13 +388,14 @@ class CommandService:
                     )
                 if transaction_authorizer is not None:
                     await transaction_authorizer(conn, None)
-                await _bind_command_key(
-                    conn,
-                    idempotency_key=command_key,
-                    task_id=int(barrier.id),
-                    action_kind=action_kind,
-                    target_id=target_id,
-                )
+                if rejected_autostop_source is None:
+                    await _bind_command_key(
+                        conn,
+                        idempotency_key=command_key,
+                        task_id=int(barrier.id),
+                        action_kind=action_kind,
+                        target_id=target_id,
+                    )
                 return CommandReceipt(
                     task_id=int(barrier.id),
                     created=False,
@@ -495,21 +513,32 @@ class CommandService:
                 account_context_observed_at=context_observed_at,
                 account_context_issues=tuple(context_issues),
             )
+            task_correlation_id = effective_correlation_id
+            task_idempotency_key = command_key
+            if rejected_autostop_source is not None:
+                predecessor_task_id = int(
+                    latest.id if latest is not None else rejected_autostop_source.id
+                )
+                task_idempotency_key = _autostop_retry_idempotency_key(
+                    command_key=command_key,
+                    predecessor_task_id=predecessor_task_id,
+                )
+                task_correlation_id = uuid.UUID(str(rejected_autostop_source.correlation_id))
             task_id = await create_mutation_task(
                 self._engine,
                 payload=payload,
                 requested_by=requested_by[:64],
-                idempotency_key=command_key,
+                idempotency_key=task_idempotency_key,
                 max_attempts=max_attempts,
                 priority=requested_priority,
                 created_by_chat_id=created_by_chat_id,
-                correlation_id=effective_correlation_id,
+                correlation_id=task_correlation_id,
                 connection=conn,
             )
             if task_id is not None:
                 await _bind_command_key(
                     conn,
-                    idempotency_key=command_key,
+                    idempotency_key=task_idempotency_key,
                     task_id=task_id,
                     action_kind=action_kind,
                     target_id=target_id,
@@ -518,7 +547,7 @@ class CommandService:
                     task_id=task_id,
                     created=True,
                     state="queued",
-                    correlation_id=effective_correlation_id,
+                    correlation_id=task_correlation_id,
                 )
 
             # With the command-key lock and atomic task+receipt transaction an
@@ -678,6 +707,60 @@ async def _strengthen_active_task(
             "priority": priority,
         },
     )
+
+
+async def _reopen_rejected_autostop_incident(
+    conn: AsyncConnection,
+    *,
+    correlation_id: uuid.UUID,
+) -> None:
+    """Repair pre-fix terminal incidents before a replacement waits in queue."""
+    await conn.execute(
+        text(
+            """
+            UPDATE incidents
+            SET status = 'open',
+                resolved_at = NULL,
+                updated_at = NOW()
+            WHERE correlation_id = :correlation_id
+              AND status = 'failed'
+            """
+        ),
+        {"correlation_id": correlation_id},
+    )
+
+
+def _is_rejected_autostop_retry_source(
+    row: Any,
+    *,
+    action_kind: AdActionKind,
+    requested_by: str,
+) -> bool:
+    """Allow a new generation only after a proven terminal auto-pause reject."""
+    if action_kind != "pause_ad" or requested_by != "bot_auto_stop":
+        return False
+    if str(row.status or "").lower() not in {"failed", "cancelled"}:
+        return False
+    result = row.result if isinstance(row.result, Mapping) else {}
+    return (
+        str(result.get("outcome") or "").upper() == "REJECTED"
+        and result.get("reconcile_required") is not True
+    )
+
+
+def _autostop_retry_idempotency_key(
+    *,
+    command_key: str,
+    predecessor_task_id: int,
+) -> str:
+    """Derive one stable queue/receipt key for the next auto-pause generation."""
+    digest = hashlib.sha256(
+        _AUTOSTOP_RETRY_IDEMPOTENCY_DOMAIN
+        + command_key.encode("utf-8")
+        + b"\0"
+        + str(predecessor_task_id).encode("ascii")
+    ).hexdigest()
+    return f"auto:pause_ad:retry:{digest}"
 
 
 def _command_state(status: object, result: Any) -> CommandState:
