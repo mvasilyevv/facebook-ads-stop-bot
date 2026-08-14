@@ -37,6 +37,7 @@ async def test_observer_default_gate_factory_uses_config_and_start() -> None:
         return_value=SimpleNamespace(
             x_token="tok",
             profile_id="pid",
+            folder_id="folder-1",
             configuration_revision="revision-1",
         )
     )
@@ -52,6 +53,7 @@ async def test_observer_default_gate_factory_uses_config_and_start() -> None:
     config = fake_ctor.call_args.args[0]
     assert config.vision_x_token == "tok"
     assert config.vision_profile_id == "pid"
+    assert config.vision_folder_id == "folder-1"
     assert config.vision_api_url == "http://vision"
     fake_client.start.assert_awaited_once()
     # Фабрика возвращает ScannerGate-обёртку с методом run_one_scan
