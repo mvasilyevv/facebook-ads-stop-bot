@@ -626,19 +626,22 @@ async def test_offline_ad_syncs_stop_sent_to_disabled(pg_engine, offer_kr2) -> N
     assert await mark_disabled_when_offline(pg_engine, ad_id=ad_id) is True
     async with pg_engine.connect() as conn:
         st = (await conn.execute(text("SELECT alert_state FROM ad_alert_state LIMIT 1"))).scalar()
-        sync_events = await conn.scalar(
-            text(
-                """
-                SELECT COUNT(*)
+        sync_card = (
+            await conn.execute(
+                text(
+                    """
+                SELECT facts->>'title' AS title, facts->>'summary' AS summary
                 FROM notification_events
                 WHERE event_type = 'worker_sync_disabled'
-                  AND facts->>'summary' = :summary
                 """
-            ),
-            {"summary": f"{fb_ad_id} подтверждено OFF в Meta"},
-        )
+                )
+            )
+        ).all()
     assert st == "disabled"
-    assert sync_events == 1
+    # Одна карточка, и в ней видно ИМЯ объявления, а не голый ID.
+    assert len(sync_card) == 1
+    assert "Aviator001" in sync_card[0].title
+    assert "выключ" in sync_card[0].summary
 
     # 4) идемпотентность: повторный вызов на disabled → no-op (False)
     assert await mark_disabled_when_offline(pg_engine, ad_id=ad_id) is False
@@ -693,10 +696,8 @@ async def test_offline_sync_rolls_back_state_when_notification_projection_fails(
                 SELECT COUNT(*)
                 FROM notification_events
                 WHERE event_type = 'worker_sync_disabled'
-                  AND facts->>'summary' = :summary
                 """
-            ),
-            {"summary": f"{fb_ad_id} подтверждено OFF в Meta"},
+            )
         )
 
     assert state == "stop_sent"

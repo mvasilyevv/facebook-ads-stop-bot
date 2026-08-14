@@ -29,6 +29,7 @@ from core.db import WORKER_ENGINE_KWARGS
 from core.telegram.digest_builder import build_digest
 from core.telegram.notifications import enqueue_notification
 from core.telegram.schemas import NotificationCardFacts, NotificationEventSpec
+from core.wording import ads_ru, commands_ru, offers_ru, warnings_ru
 from core.worker_metrics import mark_worker_heartbeat
 
 logger = logging.getLogger("digest_scheduler")
@@ -117,18 +118,26 @@ async def run_one_tick(
     )
     top_lines = (
         [
-            (f"Топ: {row.offer_code or row.ad_name} · {format(row.spend, 'f')} {row.currency}")
+            (
+                f"Больше всех потратило: {row.offer_code or row.ad_name} · "
+                f"{format(row.spend, 'f')} {row.currency}"
+            )
             for row in payload.top_ads_by_spend[:2]
         ]
         if money_ready
         else []
     )
     money_summary = (
-        f"Spend {format(payload.total_spend_window, 'f')} {payload.currency}"
+        f"Потрачено {format(payload.total_spend_window, 'f')} {payload.currency}"
         if money_ready
-        else "Spend не подтверждён"
+        # Сумма без подтверждённой валюты и границы суток кабинета — не деньги;
+        # причина уходит отдельной строкой ниже.
+        else "Расход не показан"
     )
-    money_issue_lines = [f"Деньги: {payload.money_issues[0]}"] if payload.money_issues else []
+    money_issue_lines = [f"Почему: {payload.money_issues[0]}"] if payload.money_issues else []
+    disable_line = f"Отключено объявлений: {payload.disable_tasks_succeeded}"
+    if payload.disable_tasks_failed:
+        disable_line += f", не удалось отключить {payload.disable_tasks_failed}"
     result = await enqueue_notification(
         engine,
         NotificationEventSpec(
@@ -138,20 +147,17 @@ async def run_one_tick(
             ),
             audience="all",
             facts=NotificationCardFacts(
-                title=f"Дайджест · {payload.window_start_utc:%Y-%m-%d}",
+                title=f"Итоги суток · {payload.window_start_utc:%Y-%m-%d}",
                 summary=(
                     f"{money_summary} · "
-                    f"warning {payload.alerts_warning_count} · "
-                    f"critical {payload.alerts_stop_count}"
+                    f"{warnings_ru(payload.alerts_warning_count)} · "
+                    f"остановлено {ads_ru(payload.alerts_stop_count)}"
                 ),
                 lines=[
+                    disable_line,
                     (
-                        f"Отключения: {payload.disable_tasks_succeeded} confirmed · "
-                        f"{payload.disable_tasks_failed} failed"
-                    ),
-                    (
-                        f"Активно: {payload.active_offers_count} офферов · "
-                        f"{payload.active_ads_count} объявлений"
+                        f"Активно: {offers_ru(payload.active_offers_count)} · "
+                        f"{ads_ru(payload.active_ads_count)}"
                     ),
                     *money_issue_lines,
                     *top_lines,
@@ -244,11 +250,12 @@ async def run_pulse_tick(
             facts=NotificationCardFacts(
                 title="Пульс кабинета",
                 summary=(
-                    f"Остановлено {signals.stop_count} · warnings {signals.warning_count} · "
-                    f"failed actions {signals.failed_tasks_count}"
+                    f"Остановлено {ads_ru(signals.stop_count)} · "
+                    f"{warnings_ru(signals.warning_count)} · "
+                    f"{commands_ru(signals.failed_tasks_count)} не выполнено"
                 ),
                 lines=[
-                    f"Стоп: {ad_name}{f' · {offer}' if offer else ''}"
+                    f"Остановлено: {ad_name}{f' · {offer}' if offer else ''}"
                     for ad_name, offer, _rules in signals.top_stops[:3]
                 ],
             ),

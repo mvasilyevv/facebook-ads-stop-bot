@@ -161,9 +161,13 @@ def test_currency_exponent_controls_money_summary_precision() -> None:
 
     result = evaluate_stop_rules(row, ctx)
 
+    summary = result.stop_hits[0].summary
     assert result.stage == AlertStage.STOP
-    assert result.stop_hits[0].summary.startswith("CPC 20 ")
-    assert ".00" not in result.stop_hits[0].summary
+    # Оператор должен прочитать метрику по-русски, с суммой и её валютой.
+    assert summary.startswith("Цена клика ")
+    assert "20 JPY" in summary
+    assert ".00" not in summary
+    assert "CPC" not in summary
 
 
 def test_kwd_money_summary_preserves_third_decimal() -> None:
@@ -180,8 +184,10 @@ def test_kwd_money_summary_preserves_third_decimal() -> None:
 
     result = evaluate_stop_rules(row, ctx)
 
+    summary = result.stop_hits[0].summary
     assert result.stage == AlertStage.STOP
-    assert result.stop_hits[0].summary.startswith("CPC 0.001 ")
+    assert summary.startswith("Цена клика ")
+    assert "0.001 KWD" in summary
 
 
 # Проверяем что отдельные проценты CPC переопределяют legacy-настройки только для шага клика.

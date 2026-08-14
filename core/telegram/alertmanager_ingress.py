@@ -116,8 +116,10 @@ def normalize_alert(alert: AlertmanagerAlert) -> NormalizedAlert:
     severity: NotificationSeverity = (
         raw_severity if raw_severity in {"ok", "warning", "critical", "unknown"} else "unknown"
     )
+    # Своего текста у алерта может не быть: тогда карточка честно говорит, что
+    # сработал мониторинг, и называет само правило вместо английской заглушки.
     summary = _short_text(
-        alert.annotations.get("summary") or f"Prometheus reported {alert_name}.",
+        alert.annotations.get("summary") or f"Мониторинг сообщил о срабатывании «{alert_name}».",
         280,
     )
     lines: list[str] = [f"Сервис: {service}"]
@@ -129,7 +131,7 @@ def normalize_alert(alert: AlertmanagerAlert) -> NormalizedAlert:
         fingerprint=fingerprint,
         incident_key=f"alertmanager:{fingerprint}",
         severity=severity,
-        title=_short_text(f"{alert_name} · {service}", 200),
+        title=_short_text(f"Мониторинг: {alert_name} · {service}", 200),
         summary=summary,
         lines=lines[:5],
         starts_at=alert.starts_at.astimezone(timezone.utc),
@@ -214,7 +216,11 @@ async def _persist_firing(
                 title=alert.title,
                 summary=alert.summary,
                 lines=alert.lines,
-                risk="Нарушен критический SLO платформы" if alert.severity == "critical" else None,
+                risk=(
+                    "Платформа работает нештатно: скан и авто-стоп могут не сработать"
+                    if alert.severity == "critical"
+                    else None
+                ),
                 status="Активен",
                 open_target={"kind": "incident", "target_id": str(incident_id)},
             ),
@@ -271,7 +277,7 @@ async def _persist_resolved(
             audience="owners",
             facts=NotificationCardFacts(
                 title=str(incident.title),
-                summary="Источник снова сообщает нормальное состояние.",
+                summary="Мониторинг больше не видит проблему.",
                 status="Восстановлено",
             ),
             dedupe_key=(f"alertmanager:resolved:{incident_id}:{int(incident.generation)}"),

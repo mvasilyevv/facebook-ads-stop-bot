@@ -33,6 +33,7 @@ from core.telegram.worker_notify import (
     notify_recurring_incident,
     notify_recurring_incident_in_transaction,
 )
+from core.wording import minutes_ru
 
 logger = logging.getLogger(__name__)
 
@@ -82,12 +83,15 @@ async def maybe_alert_autostop_channel_down(
             audience="all",
             event_type="autostop_channel_down",
             severity="critical",
-            title="Авто-стоп не исполняется",
-            summary=f"Канал Meta не подтвердил pause · цель: {fb_ad_id}",
-            risk="STOP-вердикты не доходят до Meta",
+            title="Авто-стоп не доходит до Facebook",
+            # Инцидент общий для всего канала, а не для одного объявления:
+            # id из конкретного сбоя ушёл бы в карточку случайной целью.
+            # Он остаётся в логе выше, оператору нужен канал.
+            summary="Команда «выключить объявление» не дошла до кабинета.",
+            risk="Объявления продолжают тратить бюджет без стопа",
             lines=[
                 "Проверь browser-agent и Vision-профиль",
-                "При риске расхода отключи объявление вручную",
+                "Отключи рискованные объявления вручную в Ads Manager",
             ],
             resource_type="meta_channel",
             resource_id="auto_stop",
@@ -297,6 +301,12 @@ async def escalate_undelivered_autostop_pauses(
                     fb_ad_id,
                     row.last_error,
                 )
+                ad_label = str(row.ad_name) if row.ad_name else fb_ad_id
+                spend_part = (
+                    f"потрачено {spend_text}"
+                    if spend_text is not None
+                    else "расход не показан: валюта кабинета не подтверждена"
+                )
                 was_accepted = await notify_recurring_incident_in_transaction(
                     conn,
                     incident_key=(
@@ -311,24 +321,28 @@ async def escalate_undelivered_autostop_pauses(
                         else "autostop_undelivered_pause"
                     ),
                     severity="critical",
+                    # Отказ и зависание — разные новости для оператора: в первом
+                    # случае ждать уже нечего, во втором команда ещё в пути.
                     title=(
-                        "Авто-стоп отказал — отключи вручную"
+                        f"Авто-стоп не сработал: {ad_label}"
                         if is_terminal
-                        else "Авто-стоп завис — отключи вручную"
+                        else f"Авто-стоп завис: {ad_label}"
                     ),
                     summary=(
-                        f"{row.ad_name or fb_ad_id} · {minutes} мин · "
-                        + (
-                            f"spend {spend_text}"
-                            if spend_text is not None
-                            else "spend не показан: валюта не подтверждена"
-                        )
+                        f"Объявление не выключено, а деньги идут · {spend_part}"
+                        if is_terminal
+                        else (f"Команда на выключение висит {minutes_ru(minutes)} · {spend_part}")
                     ),
                     risk="Объявление может продолжать тратить бюджет",
-                    lines=[
-                        f"Цель: {fb_ad_id}",
-                        "Открой Ads Manager и отключи объявление",
-                    ],
+                    lines=(
+                        # Голый ID показываем только если каталог ещё не знает имени.
+                        ["Открой Ads Manager и отключи объявление вручную"]
+                        if row.ad_name
+                        else [
+                            f"Объявление {fb_ad_id}",
+                            "Открой Ads Manager и отключи объявление вручную",
+                        ]
+                    ),
                     resource_type="ad",
                     resource_id=fb_ad_id,
                 )

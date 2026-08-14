@@ -6,7 +6,7 @@ browser-agent детектит redirect на login.php/checkpoint, HTML вмес
 канал умер молча): такой цикл — НЕ «пустой кабинет», а слепота канала. Проверяем:
 - login_required-скан → outcome='error' (не 'empty'): resolve_scan_mode даёт CALM, не IDLE,
   и degraded-счётчик растёт (авто-стоп не «спит» в IDLE при живом инциденте);
-- поднимается durable incident «Vision-профиль разлогинен»;
+- поднимается durable incident «Vision-профиль требует повторного входа»;
 - обычный пустой скан (no_active_ads) НЕ триггерит ни error, ни алерт.
 """
 
@@ -39,8 +39,10 @@ async def test_login_required_alert_delivers_via_recipients(monkeypatch):
     assert ok is True
     spy.assert_awaited_once()
     facts = spy.await_args.kwargs
-    assert "разлогин" in facts["title"].lower()
+    # Заголовок называет проблему, строки — что сделать оператору.
+    assert "повторного входа" in facts["title"].lower()
     assert any("войди" in line.lower() for line in facts["lines"])
+    assert any("вручную" in line.lower() for line in facts["lines"])
     assert "777" in facts["summary"]  # канонический кабинет в типизированных facts
     assert facts["incident_key"] == "observer:login_required:777"
     assert facts["audience"] == "all"

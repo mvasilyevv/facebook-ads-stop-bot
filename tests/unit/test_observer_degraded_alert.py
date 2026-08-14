@@ -29,8 +29,11 @@ async def test_degraded_alert_delivers_via_recipients(monkeypatch):
     spy.assert_awaited_once()
     facts = spy.await_args.kwargs
     assert facts["severity"] == "critical"
-    assert "Observer" in facts["title"]
-    assert "44" in facts["summary"]
+    # Заголовок по-русски и без имени компонента, в сводке — сколько раз подряд.
+    assert "отсканировать кабинет" in facts["title"]
+    assert "Observer" not in facts["title"]
+    assert "44 раза" in facts["summary"]
+    assert any("вручную" in line.lower() for line in facts["lines"])
     assert facts["incident_key"] == ow.OBSERVER_DEGRADED_INCIDENT_KEY
     assert facts["audience"] == "all"
     assert facts["resource_type"] == "worker"

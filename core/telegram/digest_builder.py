@@ -363,16 +363,14 @@ async def build_digest(
     top_ads: list[TopAdRow] = []
     total_spend: Decimal | None = None
     if not money_scopes:
-        money_issues = ("Нет подтверждённых spend-снимков за окно",)
+        money_issues = ("за сутки нет подтверждённых данных о расходе",)
     elif any(scope_currency is None for _account_id, scope_currency in money_scopes):
         money_account_id = account_ids[0] if len(account_ids) == 1 else None
-        money_issues = (
-            "Денежные итоги скрыты: часть spend-снимков не имеет подтверждённой валюты",
-        )
+        money_issues = ("у части данных о расходе не подтверждена валюта",)
     elif len(money_scopes) != 1:
         money_account_id = account_ids[0] if len(account_ids) == 1 else None
         scope_kind = "несколько валют" if len(account_ids) == 1 else "несколько кабинетов"
-        money_issues = (f"Денежные итоги скрыты: окно содержит {scope_kind}",)
+        money_issues = (f"за сутки в данных встретились {scope_kind}",)
     else:
         money_account_id, evidence_currency = money_scopes[0]
         assert evidence_currency is not None
@@ -389,13 +387,13 @@ async def build_digest(
         current_currency = currency_resolution.currency
         currency_observed_at = currency_resolution.observed_at
         if currency_resolution.state != "single" or current_currency is None:
-            money_issues = ("Денежные итоги скрыты: валюта кабинета не подтверждена",)
+            money_issues = ("валюта кабинета не подтверждена",)
             currency_observed_at = None
         elif current_currency != evidence_currency:
-            money_issues = ("Денежные итоги скрыты: валюта кабинета изменилась внутри окна",)
+            money_issues = ("валюта кабинета изменилась в течение суток",)
             currency_observed_at = None
         elif not cabinet_days.timezone_known:
-            money_issues = ("Денежные итоги скрыты: граница суток кабинета не подтверждена",)
+            money_issues = ("граница суток кабинета не подтверждена",)
         else:
             currency = evidence_currency
             top_ads, total_spend = await _top_ads_and_total_spend(

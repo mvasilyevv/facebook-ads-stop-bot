@@ -88,7 +88,7 @@ async def test_digest_queues_durable_card_without_telegram_client() -> None:
         money_state="unavailable",
         currency=None,
         total_spend_window=None,
-        money_issues=("Нет подтверждённых spend-снимков за окно",),
+        money_issues=("за сутки нет подтверждённых данных о расходе",),
         alerts_warning_count=0,
         alerts_stop_count=0,
         disable_tasks_succeeded=0,

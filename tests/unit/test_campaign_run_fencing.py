@@ -306,20 +306,24 @@ async def test_uncorrelated_campaign_unknown_opens_durable_incident(monkeypatch)
         task_type="campaign_create",
     )
 
-    incident.assert_awaited_once_with(
-        connection,
-        incident_key="campaign-create:run-91:unknown",
-        audience="owners",
-        event_type="campaign_create_reconciliation_required",
-        severity="critical",
-        title="Создание кампании требует сверки",
-        summary="Meta могла принять создание, но подтверждение потеряно.",
-        lines=["Задача #91 · ответ Meta не подтверждён"],
-        risk="Не повторяйте запуск до ручной сверки в Ads Manager.",
-        resource_type="campaign_run",
-        resource_id="run-91",
-        correlation_id=correlation_id,
-    )
+    incident.assert_awaited_once()
+    call = incident.await_args
+    assert call.args == (connection,)
+    kwargs = call.kwargs
+    # Ключи идемпотентности фиксированы: от них зависит склейка карточек.
+    assert kwargs["incident_key"] == "campaign-create:run-91:unknown"
+    assert kwargs["audience"] == "owners"
+    assert kwargs["event_type"] == "campaign_create_reconciliation_required"
+    assert kwargs["severity"] == "critical"
+    assert kwargs["resource_type"] == "campaign_run"
+    assert kwargs["resource_id"] == "run-91"
+    assert kwargs["correlation_id"] == correlation_id
+    # Текст: что случилось, номер задачи и конкретное действие оператора.
+    assert "сверк" in kwargs["title"].lower()
+    assert "подтверждение потеряно" in kwargs["summary"]
+    assert any("#91" in line for line in kwargs["lines"])
+    assert any("Ads Manager" in line for line in kwargs["lines"])
+    assert "повтор" in kwargs["risk"].lower()
 
 
 @pytest.mark.asyncio

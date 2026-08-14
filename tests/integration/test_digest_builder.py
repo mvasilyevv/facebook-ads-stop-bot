@@ -388,7 +388,7 @@ async def test_digest_hides_money_when_currency_evidence_is_stale(
     assert payload.currency is None
     assert payload.total_spend_window is None
     assert payload.top_ads_by_spend == []
-    assert payload.money_issues == ("Денежные итоги скрыты: валюта кабинета не подтверждена",)
+    assert payload.money_issues == ("валюта кабинета не подтверждена",)
 
 
 @pytest.mark.asyncio
@@ -461,7 +461,7 @@ async def test_digest_never_ranks_or_sums_across_accounts_and_currencies(
     assert payload.currency is None
     assert payload.total_spend_window is None
     assert payload.top_ads_by_spend == []
-    assert payload.money_issues == ("Денежные итоги скрыты: окно содержит несколько кабинетов",)
+    assert payload.money_issues == ("за сутки в данных встретились несколько кабинетов",)
 
 
 @pytest.mark.asyncio
@@ -493,7 +493,7 @@ async def test_digest_hides_same_account_mixed_currency_evidence(
     assert payload.currency is None
     assert payload.total_spend_window is None
     assert payload.top_ads_by_spend == []
-    assert payload.money_issues == ("Денежные итоги скрыты: окно содержит несколько валют",)
+    assert payload.money_issues == ("за сутки в данных встретились несколько валют",)
 
 
 @pytest.mark.asyncio

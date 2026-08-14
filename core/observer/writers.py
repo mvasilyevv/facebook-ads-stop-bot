@@ -27,6 +27,7 @@ from core.meta_api.identity import require_ad_account_id
 from core.money import validated_currency_code
 from core.observer.cabinet_supervisor import CabinetLease
 from core.observer.state_machine import FsmTransition
+from core.rules.labels import rule_label, rule_metric_label, rule_metric_unit
 from core.telegram.notifications import enqueue_notification_in_transaction
 from core.telegram.schemas import (
     NotificationActionSpec,
@@ -37,18 +38,10 @@ from core.telegram.worker_notify import (
     notify_owners_in_transaction,
     resolve_recurring_incident_in_transaction,
 )
+from core.wording import clicks_ru, deposits_ru, registrations_ru
 
 logger = logging.getLogger(__name__)
 _WARNING_RISK_GROWTH_FACTOR = Decimal("1.25")
-_MONEY_RULE_CODES = frozenset(
-    {
-        "cpc_stop",
-        "cpl_stop",
-        "cpr_stop",
-        "spend_no_dep_range",
-        "spend_with_dep_range",
-    }
-)
 
 
 def _require_canonical_meta_id(value: str | None, *, field_name: str) -> str:
@@ -537,7 +530,7 @@ async def apply_fsm_transition(
                 raise RuntimeError("cannot create incident without fb_ad_id")
             severity = "critical" if transition.alert_stage == "stop" else "warning"
             ad_name = str(context.ad_name) if context and context.ad_name else effective_fb_ad_id
-            title = f"{ad_name} · {'STOP' if severity == 'critical' else 'WARNING'}"
+            title = _incident_title(ad_name, transition.alert_rule_codes)
             summary = _incident_summary(
                 serialized_metrics,
                 transition.alert_rule_codes,
@@ -596,7 +589,14 @@ async def apply_fsm_transition(
             ).one()
             incident_id = uuid.UUID(str(incident_row.id))
             incident_correlation_id = uuid.UUID(str(incident_row.correlation_id))
-            lines = _incident_lines(serialized_metrics, currency=currency)
+            lines = [
+                *_incident_lines(
+                    serialized_metrics,
+                    currency=currency,
+                    currency_reason_stated=_CURRENCY_UNCONFIRMED in summary,
+                ),
+                _incident_action_line(auto_stop=transition.create_disable_task),
+            ]
             await enqueue_notification_in_transaction(
                 conn,
                 NotificationEventSpec(
@@ -718,12 +718,16 @@ async def apply_fsm_transition(
                             facts=NotificationCardFacts(
                                 title=str(active_incident.title),
                                 summary=summary,
-                                lines=_incident_lines(
-                                    serialized_metrics,
-                                    currency=currency,
-                                ),
+                                lines=[
+                                    *_incident_lines(
+                                        serialized_metrics,
+                                        currency=currency,
+                                        currency_reason_stated=(_CURRENCY_UNCONFIRMED in summary),
+                                    ),
+                                    _incident_action_line(auto_stop=False),
+                                ],
                                 risk=_incident_risk(current_rule_codes),
-                                status="Риск вырос ≥25%",
+                                status="Риск вырос минимум на четверть",
                                 open_target={
                                     "kind": "incident",
                                     "target_id": str(incident_id),
@@ -774,7 +778,7 @@ async def apply_fsm_transition(
                         audience="owners",
                         facts=NotificationCardFacts(
                             title=str(recovered.title),
-                            summary="Риск больше не подтверждается актуальным снимком.",
+                            summary="Показатели вернулись в норму, объявление работает дальше.",
                             status="Восстановлено",
                         ),
                         dedupe_key=f"incident:{recovered.id}:resolved",
@@ -882,7 +886,7 @@ async def mark_disabled_when_offline(
                   AND ad.id = state.ad_id
                   AND state.alert_state IN ('warning_sent', 'stop_sent')
                   AND state.last_transition_at < NOW() - make_interval(mins => :cd)
-                RETURNING ad.fb_ad_id, state.open_state_token
+                RETURNING ad.fb_ad_id, ad.ad_name, state.open_state_token
                 """
                 ),
                 {"aid": ad_id, "cd": cooldown_minutes},
@@ -891,6 +895,9 @@ async def mark_disabled_when_offline(
         if row is None:
             return False
         fb_ad_id = str(row.fb_ad_id)
+        # Имя объявления — то, что оператор видит в Ads Manager; голый ID
+        # остаётся запасным вариантом, когда каталог имени ещё не знает.
+        ad_label = str(row.ad_name) if row.ad_name else fb_ad_id
         if row.open_state_token is None:
             raise RuntimeError("offline incident transition has no open_state_token")
         open_state_token = uuid.UUID(str(row.open_state_token))
@@ -898,21 +905,21 @@ async def mark_disabled_when_offline(
             conn,
             incident_key=f"ad:{fb_ad_id}:{open_state_token}",
             audience="owners",
-            summary=f"Объявление {fb_ad_id} подтверждено OFF.",
+            summary=f"Объявление {ad_label} выключено в кабинете.",
         )
         await resolve_recurring_incident_in_transaction(
             conn,
             incident_key=f"{UNDELIVERED_INCIDENT_KEY_PREFIX}{fb_ad_id}",
             audience="owners",
-            summary=f"Объявление {fb_ad_id} подтверждено OFF.",
+            summary=f"Объявление {ad_label} выключено в кабинете.",
         )
         await notify_owners_in_transaction(
             conn,
             event_type="sync_disabled",
             severity="ok",
-            title="Объявление уже отключено",
-            summary=f"{fb_ad_id} подтверждено OFF в Meta",
-            status="confirmed",
+            title=f"Объявление уже выключено: {ad_label}",
+            summary="Facebook показывает объявление выключенным, инцидент закрыт.",
+            status="Подтверждено",
             dedupe_key=f"sync_offline_disabled:{fb_ad_id}:{open_state_token}",
         )
         return True
@@ -993,36 +1000,71 @@ def _decimal_text(value: object) -> str | None:
     return format(amount, "f")
 
 
+def _incident_title(ad_name: str, rule_codes: tuple[str, ...]) -> str:
+    """Заголовок карточки: сначала что случилось, потом какое объявление."""
+    reason = rule_label(rule_codes[0]) if rule_codes else "Показатели вне нормы"
+    return f"{reason}: {ad_name}"
+
+
+_CURRENCY_UNCONFIRMED = "валюта кабинета не подтверждена"
+
+
 def _incident_summary(
     metrics: dict[str, Any],
     rule_codes: tuple[str, ...],
     *,
     currency: str | None,
 ) -> str:
+    """Одна фраза о сработавшем правиле: метрика, её значение и порог.
+
+    Порог берётся из самого срабатывания: у STOP это стоп-порог, у WARNING —
+    порог предупреждения, поэтому подпись к числу разная.
+    """
     hits = metrics.get("_hits") or []
     first = next(
         (hit for hit in hits if isinstance(hit, dict) and hit.get("code") in rule_codes),
         None,
     )
-    if first:
-        code = str(first.get("code") or "risk").upper()
-        rule_code = str(first.get("code") or "")
-        value = _decimal_text(first.get("value")) or "?"
-        threshold = _decimal_text(first.get("threshold")) or "?"
-        if rule_code in _MONEY_RULE_CODES:
-            if currency is None:
-                return f"{code}: денежные значения не подтверждены"
-            value = f"{value} {currency}"
-            threshold = f"{threshold} {currency}"
-        return f"{code}: {value} при пороге {threshold}"
-    return " · ".join(code.upper() for code in rule_codes[:3]) or "Порог риска превышен"
+    if not first:
+        if not rule_codes:
+            return "Показатели вышли за подтверждённый порог"
+        return " · ".join(rule_label(code) for code in rule_codes[:3])
+
+    code = str(first.get("code") or "")
+    metric = rule_metric_label(code)
+    unit = rule_metric_unit(code)
+    value = _decimal_text(first.get("value"))
+    threshold = _decimal_text(first.get("threshold"))
+    limit_word = "при пороге" if str(first.get("stage") or "").lower() == "warning" else "при стопе"
+    if value is None or threshold is None:
+        return f"{metric}: значение не подтверждено"
+
+    if unit == "money":
+        if currency is None:
+            return f"{metric} не показана: {_CURRENCY_UNCONFIRMED}"
+        return f"{metric} {value} {currency} {limit_word} {threshold} {currency}"
+    if unit == "percent_of_cpa":
+        return f"{metric} {value}% от CPA {limit_word} {threshold}%"
+    if unit == "percent":
+        return f"{metric} {value}% {limit_word} {threshold}%"
+    if unit == "count" and code == "regs_no_dep_stop":
+        limit_prefix = "порог с" if limit_word == "при пороге" else "стоп с"
+        return f"{registrations_ru(int(Decimal(value)))} без депозита, {limit_prefix} {threshold}"
+    return f"{metric} {value} {limit_word} {threshold}"
 
 
 def _incident_lines(
     metrics: dict[str, Any],
     *,
     currency: str | None,
+    currency_reason_stated: bool = False,
 ) -> list[str]:
+    """Строка фактов: сколько потрачено и что объявление успело принести.
+
+    ``currency_reason_stated`` означает, что причину уже назвала строка выше:
+    в короткой карточке одно и то же объяснение двумя строками подряд
+    выглядит сбоем, а не заботой.
+    """
     parts: list[str] = []
     spend = metrics.get("spend")
     clicks = metrics.get("clicks")
@@ -1031,29 +1073,48 @@ def _incident_lines(
     if spend is not None and currency is not None:
         amount = _decimal_text(spend)
         if amount is not None:
-            parts.append(f"Spend {amount} {currency}")
+            parts.append(f"Потрачено {amount} {currency}")
     elif spend is not None:
-        parts.append("Spend не показан: валюта не подтверждена")
+        # Сумма без подтверждённой валюты — это не деньги, а голое число:
+        # показать её оператору нельзя, промолчать про расход тоже нельзя.
+        if currency_reason_stated:
+            parts.append("Расход не показан")
+        else:
+            parts.append(f"Расход не показан: {_CURRENCY_UNCONFIRMED}")
     if clicks is not None:
-        parts.append(f"{clicks} кликов")
+        parts.append(clicks_ru(int(clicks)))
     if registrations is not None:
-        parts.append(f"{registrations} рег")
+        parts.append(registrations_ru(int(registrations)))
     if deposits is not None:
-        parts.append(f"{deposits} депозитов")
+        parts.append(deposits_ru(int(deposits)))
     return [" · ".join(parts)] if parts else []
 
 
+def _incident_action_line(*, auto_stop: bool) -> str:
+    """Что делает система и что требуется от оператора."""
+    if auto_stop:
+        return "Отключаю объявление сам, подтверждение пришлю отдельно"
+    return "Пока не отключаю, слежу дальше — действий от тебя не требуется"
+
+
 def _incident_risk(rule_codes: tuple[str, ...]) -> str:
+    """Последствие, если не вмешаться."""
     codes = set(rule_codes)
     if "spend_no_dep_range" in codes:
-        return "расход без первого депозита"
+        return "Деньги уходят, а депозитов всё ещё нет"
     if "spend_with_dep_range" in codes:
-        return "расход выше порога после депозита"
+        return "Расход на объявление превысил дневной кап"
+    if "regs_no_dep_stop" in codes:
+        return "Регистрации идут, а депозитов всё ещё нет"
+    if "frequency_anomaly" in codes:
+        return "Аудитория выгорает, показы идут по кругу"
+    if any("cpr" in code for code in codes):
+        return "Регистрация обходится дороже плана"
     if any("cpl" in code for code in codes):
-        return "стоимость лида выше допустимой"
+        return "Лид обходится дороже плана"
     if any("cpc" in code for code in codes):
-        return "стоимость клика выше допустимой"
-    return "метрики вышли за подтверждённый порог"
+        return "Клик обходится дороже плана"
+    return "Показатели вышли за подтверждённый порог"
 
 
 def _serialize_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
