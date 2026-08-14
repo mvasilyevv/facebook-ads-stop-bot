@@ -29,11 +29,11 @@ REGISTRY_IMAGE = (
     "registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
 )
 IMMUTABLE_IMAGE = re.compile(r"^\S+@sha256:[0-9a-f]{64}$")
-PLATFORM_NETWORK = "fb_agent_safety_first_platform"
+PLATFORM_NETWORK = "fb_agent_platform"
 MANAGED_VOLUMES = (
-    "fb_agent_safety_first_campaign_uploads",
-    "fb_agent_safety_first_pgdata",
-    "fb_agent_safety_first_redisdata",
+    "fb_agent_app_campaign_uploads",
+    "fb_agent_infra_pgdata",
+    "fb_agent_infra_redisdata",
 )
 WORKER_SERVICES = frozenset(
     {

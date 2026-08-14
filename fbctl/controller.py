@@ -97,6 +97,19 @@ CADDY_ENV_PATH = Path("/etc/fb-agent/caddy.env")
 APP_SERVICES = frozenset({"api", "frontend", "mini-app", *WORKERS})
 DESKTOP_SERVICES = frozenset({"vision-webtop", "browser-agent"})
 RESTART_SERVICES = APP_SERVICES | DESKTOP_SERVICES
+MANAGED_VOLUME_RESOURCES = (
+    ("volume", "fb_agent_infra_pgdata", "infra"),
+    ("volume", "fb_agent_infra_redisdata", "infra"),
+    ("volume", "fb_agent_app_campaign_uploads", "app"),
+)
+# Ресурсы брошенного прежнего bootstrap. Мы их не трогаем: только сообщаем
+# оператору, что они есть, чтобы он убрал их вручную после приёмки production.
+LEGACY_DOCKER_RESOURCES = (
+    ("network", "fb_agent_safety_first_platform"),
+    ("volume", "fb_agent_safety_first_pgdata"),
+    ("volume", "fb_agent_safety_first_redisdata"),
+    ("volume", "fb_agent_safety_first_campaign_uploads"),
+)
 REHEARSAL_FAILPOINTS = (
     "preflight",
     "pull",
@@ -286,6 +299,7 @@ class ProductionController:
                 raise FbctlError(f"Compose file is missing or unsafe: {path}")
         environment = self._environment(config)
         self.runner.run(("docker", "compose", "version"), step="preflight", env=environment)
+        self._report_legacy_resources(config)
         for plane in ("infra", "jobs", "desktop"):
             self.runner.run(
                 config.compose(plane, "config", "--quiet"),
@@ -312,8 +326,11 @@ class ProductionController:
                 ),
                 step="preflight",
             )
-        if require_resources:
-            self._require_managed_resources(config, include_campaign=True)
+        self._require_managed_resources(
+            config,
+            include_campaign=True,
+            allow_missing=not require_resources,
+        )
 
     def _require_caddy_credentials(self, config: RuntimeConfig) -> None:
         caddy_env = require_private_file(Path("/etc/fb-agent/caddy.env"))
@@ -387,7 +404,9 @@ class ProductionController:
         cluster_id: str,
         environment: dict[str, str],
         purpose: str,
-    ) -> None:
+        *,
+        allow_missing: bool = False,
+    ) -> bool:
         inspected = self.runner.run(
             ("docker", kind, "inspect", "--format", "{{json .Labels}}", name),
             step="resource_inventory",
@@ -396,74 +415,104 @@ class ProductionController:
             check=False,
         )
         if inspected.returncode:
+            if allow_missing:
+                return False
             raise FbctlError(f"managed Docker {kind} is missing: {name}")
+        resolution = "inspect and resolve this name collision manually before retrying"
         try:
             labels = json.loads(inspected.stdout)
         except (json.JSONDecodeError, TypeError) as exc:
-            raise FbctlError(f"Docker {kind} has unreadable labels: {name}") from exc
+            raise FbctlError(f"Docker {kind} has unreadable labels: {name}; {resolution}") from exc
         if not isinstance(labels, dict) or labels.get("com.fb-agent.managed") != "true":
-            raise FbctlError(f"Docker {kind} is not managed by fbctl: {name}")
+            raise FbctlError(f"Docker {kind} is not managed by fbctl: {name}; {resolution}")
         if labels.get("com.fb-agent.cluster-id") != cluster_id:
-            raise FbctlError(f"Docker {kind} belongs to another cluster: {name}")
+            raise FbctlError(f"Docker {kind} belongs to another cluster: {name}; {resolution}")
         if labels.get("com.fb-agent.purpose") != purpose:
-            raise FbctlError(f"Docker {kind} has the wrong purpose label: {name}")
+            raise FbctlError(f"Docker {kind} has the wrong purpose label: {name}; {resolution}")
+        return True
+
+    def _report_legacy_resources(self, config: RuntimeConfig) -> None:
+        environment = self._environment(config)
+        present: list[str] = []
+        for kind, name in LEGACY_DOCKER_RESOURCES:
+            inspected = self.runner.run(
+                ("docker", kind, "inspect", name),
+                step="resource_inventory",
+                env=environment,
+                capture=True,
+                check=False,
+            )
+            if inspected.returncode == 0:
+                present.append(f"{kind} {name}")
+        if present:
+            self.log(
+                "[fbctl] info: legacy Docker resources detected and left untouched: "
+                + ", ".join(present)
+            )
+
+    @staticmethod
+    def _managed_resources(
+        config: RuntimeConfig,
+        *,
+        include_campaign: bool,
+    ) -> tuple[tuple[str, str, str], ...]:
+        resources = (
+            ("network", config.values["PLATFORM_NETWORK"], "platform"),
+            *MANAGED_VOLUME_RESOURCES[:2],
+        )
+        if include_campaign:
+            return (*resources, MANAGED_VOLUME_RESOURCES[2])
+        return resources
 
     def _require_managed_resources(
         self,
         config: RuntimeConfig,
         *,
         include_campaign: bool,
-    ) -> None:
+        allow_missing: bool = False,
+    ) -> tuple[tuple[str, str, str], ...]:
         environment = self._environment(config)
-        resources = [
-            ("network", config.values["PLATFORM_NETWORK"], "platform"),
-            ("volume", "fb_agent_safety_first_pgdata", "infra"),
-            ("volume", "fb_agent_safety_first_redisdata", "infra"),
-        ]
-        if include_campaign:
-            resources.append(("volume", "fb_agent_safety_first_campaign_uploads", "app"))
-        for kind, name, purpose in resources:
-            self._require_managed_resource(
+        missing: list[tuple[str, str, str]] = []
+        for kind, name, purpose in self._managed_resources(
+            config,
+            include_campaign=include_campaign,
+        ):
+            if not self._require_managed_resource(
                 kind,
                 name,
                 config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
                 environment,
                 purpose,
-            )
+                allow_missing=allow_missing,
+            ):
+                missing.append((kind, name, purpose))
+        return tuple(missing)
 
     def _ensure_bootstrap_resources(self, config: RuntimeConfig) -> None:
         environment = self._environment(config)
         cluster_id = config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"]
-        resources = (
-            ("network", config.values["PLATFORM_NETWORK"], "platform"),
-            ("volume", "fb_agent_safety_first_pgdata", "infra"),
-            ("volume", "fb_agent_safety_first_redisdata", "infra"),
-            ("volume", "fb_agent_safety_first_campaign_uploads", "app"),
+        missing = self._require_managed_resources(
+            config,
+            include_campaign=True,
+            allow_missing=True,
         )
-        for kind, name, purpose in resources:
-            inspected = self.runner.run(
-                ("docker", kind, "inspect", name),
+        for kind, name, purpose in missing:
+            self.runner.run(
+                (
+                    "docker",
+                    kind,
+                    "create",
+                    "--label",
+                    "com.fb-agent.managed=true",
+                    "--label",
+                    f"com.fb-agent.cluster-id={cluster_id}",
+                    "--label",
+                    f"com.fb-agent.purpose={purpose}",
+                    name,
+                ),
                 step="bootstrap_resources",
                 env=environment,
-                check=False,
             )
-            if inspected.returncode:
-                self.runner.run(
-                    (
-                        "docker",
-                        kind,
-                        "create",
-                        "--label",
-                        "com.fb-agent.managed=true",
-                        "--label",
-                        f"com.fb-agent.cluster-id={cluster_id}",
-                        "--label",
-                        f"com.fb-agent.purpose={purpose}",
-                        name,
-                    ),
-                    step="bootstrap_resources",
-                    env=environment,
-                )
         self._require_managed_resources(config, include_campaign=True)
 
     def _migrate(self, config: RuntimeConfig) -> None:

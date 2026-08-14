@@ -40,6 +40,7 @@ from fbctl.config import (
     project_bootstrap_source,
 )
 from fbctl.controller import (
+    LEGACY_DOCKER_RESOURCES,
     REHEARSAL_FAILPOINTS,
     WORKERS,
     DeployOptions,
@@ -229,22 +230,25 @@ class FakeRunner:
             result = CommandResult(0, metrics)
         elif argv[:2] == ("docker", "network") or argv[:2] == ("docker", "volume"):
             if "inspect" in argv:
-                result = CommandResult(
-                    0,
-                    json.dumps(
-                        {
-                            "com.fb-agent.managed": "true",
-                            "com.fb-agent.cluster-id": self.cluster_id,
-                            "com.fb-agent.purpose": (
-                                "platform"
-                                if argv[-1] == "fb_agent_safety_first_platform"
-                                else "app"
-                                if argv[-1] == "fb_agent_safety_first_campaign_uploads"
-                                else "infra"
-                            ),
-                        }
-                    ),
-                )
+                purpose = {
+                    "fb_agent_platform": "platform",
+                    "fb_agent_infra_pgdata": "infra",
+                    "fb_agent_infra_redisdata": "infra",
+                    "fb_agent_app_campaign_uploads": "app",
+                }.get(argv[-1])
+                if purpose is None:
+                    result = CommandResult(1)
+                else:
+                    result = CommandResult(
+                        0,
+                        json.dumps(
+                            {
+                                "com.fb-agent.managed": "true",
+                                "com.fb-agent.cluster-id": self.cluster_id,
+                                "com.fb-agent.purpose": purpose,
+                            }
+                        ),
+                    )
             else:
                 result = CommandResult(0)
         elif argv and argv[0] == "ssh" and argv[-3:-1] == ("rm", "-f"):
@@ -254,6 +258,55 @@ class FakeRunner:
         if check and result.returncode:
             raise FbctlError("fake command failed", step=step)
         return result
+
+
+class DockerInventoryRunner(FakeRunner):
+    def __init__(self, resources: dict[tuple[str, str], dict[str, str]]) -> None:
+        super().__init__()
+        self.resources = dict(resources)
+
+    def run(
+        self,
+        command,
+        *,
+        step,
+        env=None,
+        capture=False,
+        check=True,
+        input_text=None,
+        timeout=None,
+    ) -> CommandResult:
+        argv = tuple(os.fspath(part) for part in command)
+        if argv[:2] in (("docker", "network"), ("docker", "volume")):
+            kind = argv[1]
+            name = argv[-1]
+            if "inspect" in argv:
+                self.commands.append((step, argv))
+                labels = self.resources.get((kind, name))
+                result = (
+                    CommandResult(1) if labels is None else CommandResult(0, json.dumps(labels))
+                )
+                if check and result.returncode:
+                    raise FbctlError("fake command failed", step=step)
+                return result
+            if "create" in argv:
+                self.commands.append((step, argv))
+                labels = {
+                    argv[index + 1].split("=", 1)[0]: argv[index + 1].split("=", 1)[1]
+                    for index, value in enumerate(argv)
+                    if value == "--label"
+                }
+                self.resources[(kind, name)] = labels
+                return CommandResult(0)
+        return super().run(
+            command,
+            step=step,
+            env=env,
+            capture=capture,
+            check=check,
+            input_text=input_text,
+            timeout=timeout,
+        )
 
 
 class FakeProbes:
@@ -316,6 +369,99 @@ class FakeProbes:
         assert url.endswith("/api/settings/observer/scanning")
         assert payload == {"enabled": True}
         return 200, {"is_scanning_enabled": True}
+
+
+def test_bootstrap_preflight_rejects_foreign_new_resource_before_creation(
+    tmp_path: Path,
+) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    resource_name = "fb_agent_infra_redisdata"
+    runner = DockerInventoryRunner({("volume", resource_name): {}})
+    controller = ProductionController(runner=runner)
+
+    with pytest.raises(
+        FbctlError,
+        match=(
+            rf"Docker volume is not managed by fbctl: {resource_name}; "
+            "inspect and resolve this name collision manually before retrying"
+        ),
+    ):
+        controller._preflight(  # noqa: SLF001 - exact bootstrap preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=False,
+            validate_caddy=False,
+        )
+
+    assert not any("create" in command for _step, command in runner.commands)
+
+
+def test_preflight_reports_legacy_resources_without_mutating_or_failing(
+    tmp_path: Path,
+) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    legacy_kind, legacy_name = LEGACY_DOCKER_RESOURCES[1]
+    runner = DockerInventoryRunner({(legacy_kind, legacy_name): {}})
+    log: list[str] = []
+    controller = ProductionController(runner=runner, log=log.append)
+
+    controller._preflight(  # noqa: SLF001 - exact bootstrap preflight contract
+        config,
+        DeployOptions(root=root, rehearsal=True),
+        require_resources=False,
+        validate_caddy=False,
+    )
+
+    assert log == [
+        "[fbctl] info: legacy Docker resources detected and left untouched: "
+        f"{legacy_kind} {legacy_name}"
+    ]
+    legacy_commands = [command for _step, command in runner.commands if command[-1] == legacy_name]
+    assert legacy_commands == [("docker", legacy_kind, "inspect", legacy_name)]
+
+
+def test_bootstrap_creates_only_the_new_managed_resource_names(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    runner = DockerInventoryRunner({})
+    controller = ProductionController(runner=runner)
+
+    controller._ensure_bootstrap_resources(config)  # noqa: SLF001
+
+    created = [
+        command[-1]
+        for step, command in runner.commands
+        if step == "bootstrap_resources" and "create" in command
+    ]
+    assert created == [
+        "fb_agent_platform",
+        "fb_agent_infra_pgdata",
+        "fb_agent_infra_redisdata",
+        "fb_agent_app_campaign_uploads",
+    ]
 
 
 def test_bundle_is_deterministic_and_runnable(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 LEGACY_0036_PROFILE = "legacy-array-0036-no-preferences"
 LEGACY_BASELINE_PREFERENCES_PROFILE = "legacy-array-baseline-with-preferences"
 LEGACY_BASELINE_DISPLAY_PREFERENCES_PROFILE = "legacy-array-baseline-with-display-preferences"
+_LEGACY_BASELINE_REVISION = "_".join(("0001", "safety", "first", "baseline"))
 
 
 class AdoptionSourceProfileError(RuntimeError):
@@ -213,7 +214,7 @@ SOURCE_PROFILES: dict[str, LegacySourceProfile] = {
     ),
     LEGACY_BASELINE_PREFERENCES_PROFILE: LegacySourceProfile(
         name=LEGACY_BASELINE_PREFERENCES_PROFILE,
-        revision="0001_safety_first_baseline",
+        revision=_LEGACY_BASELINE_REVISION,
         table_columns={
             "offers": _OFFER_COLUMNS,
             "offer_rules": _BASELINE_RULE_COLUMNS,
@@ -233,7 +234,7 @@ SOURCE_PROFILES: dict[str, LegacySourceProfile] = {
     ),
     LEGACY_BASELINE_DISPLAY_PREFERENCES_PROFILE: LegacySourceProfile(
         name=LEGACY_BASELINE_DISPLAY_PREFERENCES_PROFILE,
-        revision="0001_safety_first_baseline",
+        revision=_LEGACY_BASELINE_REVISION,
         table_columns={
             "offers": _OFFER_COLUMNS,
             "offer_rules": _BASELINE_RULE_COLUMNS,

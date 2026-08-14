@@ -35,6 +35,17 @@ sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz deploy
 Обычный `deploy` не принимает adoption bundle или desktop seed и не изменяет
 host provisioning.
 
+## Ресурсы прежнего bootstrap
+
+Ресурсы прежнего неудавшегося bootstrap остаются на host нетронутыми и больше
+не конфликтуют с новым контуром. `fbctl` сообщает об их наличии только как об
+информации. После приёмки production оператор удаляет их вручную:
+
+- network `fb_agent_safety_first_platform`;
+- volume `fb_agent_safety_first_pgdata`;
+- volume `fb_agent_safety_first_redisdata`;
+- volume `fb_agent_safety_first_campaign_uploads`.
+
 На новом host bootstrap вызывается с явными локальными путями к подготовленным
 секретам и конфигурации; manifest уже вложен в control bundle и не передаётся
 в `deploy` отдельным аргументом:

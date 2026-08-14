@@ -151,7 +151,7 @@ def _validate_zipapp_preflight() -> None:
             "INFRA_PROJECT_NAME": "fb_agent_infra",
             "APP_PROJECT_NAME": "fb_agent_app",
             "DESKTOP_PROJECT_NAME": "fb_agent_desktop",
-            "PLATFORM_NETWORK": "fb_agent_safety_first_platform",
+            "PLATFORM_NETWORK": "fb_agent_platform",
             "APP_API_PORT": "18100",
             "APP_WEB_PORT": "18080",
             "APP_TMA_PORT": "18081",

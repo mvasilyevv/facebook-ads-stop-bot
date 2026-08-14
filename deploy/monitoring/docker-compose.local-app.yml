@@ -33,7 +33,7 @@ services:
 networks:
   monitoring:
   platform:
-    name: fb_agent_safety_first_platform
+    name: fb_agent_platform
     external: true
 
 volumes:
