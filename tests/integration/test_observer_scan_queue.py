@@ -110,6 +110,67 @@ async def test_parallel_operator_retries_share_one_interactive_scan(
 
 
 @pytest.mark.asyncio
+async def test_scheduler_and_operator_retry_publish_one_interactive_scan(
+    pg_engine,
+    clean_observer_scan_tasks,
+) -> None:
+    scheduled, manual = await asyncio.gather(
+        enqueue_scheduled_observer_scan(
+            pg_engine,
+            now=datetime(2026, 7, 28, 12, 0, tzinfo=UTC),
+        ),
+        CommandService(pg_engine).enqueue_scan_retry(
+            requested_by="integration_operator",
+            idempotency_key=f"test-observer-scan:command:{uuid.uuid4()}",
+        ),
+    )
+
+    assert scheduled.task_id == manual.task_id
+    assert sum((scheduled.created, manual.created)) == 1
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) AS total, MIN(lane) AS lane, MIN(priority) AS priority "
+                    "FROM task_queue WHERE id = :task_id"
+                ),
+                {"task_id": manual.task_id},
+            )
+        ).one()
+    assert row.total == 1
+    assert row.lane == "interactive"
+    assert row.priority == 75
+
+
+@pytest.mark.asyncio
+async def test_promoted_scheduled_scan_remains_reusable_by_scheduler(
+    pg_engine,
+    clean_observer_scan_tasks,
+) -> None:
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    scheduled = await enqueue_scheduled_observer_scan(pg_engine, now=now)
+    manual = await CommandService(pg_engine).enqueue_scan_retry(
+        requested_by="integration_operator",
+        idempotency_key=f"test-observer-scan:command:{uuid.uuid4()}",
+    )
+    next_tick = await enqueue_scheduled_observer_scan(pg_engine, now=now)
+
+    assert scheduled.task_id == manual.task_id == next_tick.task_id
+    assert scheduled.created is True
+    assert manual.created is False
+    assert next_tick.created is False
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT lane, priority FROM task_queue WHERE id = :task_id"),
+                {"task_id": manual.task_id},
+            )
+        ).one()
+    assert row.lane == "interactive"
+    assert row.priority == 75
+
+
+@pytest.mark.asyncio
 async def test_scheduled_scan_reuses_only_the_outstanding_background_task(
     pg_engine,
     clean_observer_scan_tasks,

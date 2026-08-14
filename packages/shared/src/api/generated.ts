@@ -8293,6 +8293,15 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
+      /** @description Existing scan command lifecycle state */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ScanNowResponse"];
+        };
+      };
       /** @description Successful Response */
       202: {
         headers: {

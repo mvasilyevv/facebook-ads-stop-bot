@@ -4901,6 +4901,16 @@
               }
             }
           },
+          "200": {
+            "description": "Existing scan command lifecycle state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanNowResponse"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Canonical API error",
             "content": {

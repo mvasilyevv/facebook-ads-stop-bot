@@ -447,7 +447,17 @@ async def _refresh_observer_campaigns_unfenced(
     return result
 
 
-@router.post("/scan-now", response_model=ScanNowResponse, status_code=202)
+@router.post(
+    "/scan-now",
+    response_model=ScanNowResponse,
+    status_code=202,
+    responses={
+        200: {
+            "model": ScanNowResponse,
+            "description": "Existing scan command lifecycle state",
+        }
+    },
+)
 async def post_scan_now(engine: DepEngine, response: Response) -> ScanNowResponse:
     """Atomically enqueue a scan; ``202`` means queued, never completed."""
     request_nonce = uuid.uuid4().hex

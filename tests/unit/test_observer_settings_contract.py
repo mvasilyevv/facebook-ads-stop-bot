@@ -19,6 +19,7 @@ def test_observer_settings_forbid_full_snapshot_put() -> None:
     assert "patch" in paths["/api/settings/observer/scanning"]
     assert "patch" in paths["/api/settings/observer/owner-tag"]
     assert "patch" in paths["/api/settings/observer/campaigns"]
+    assert "200" in paths["/api/settings/observer/scan-now"]["post"]["responses"]
 
 
 @pytest.mark.asyncio

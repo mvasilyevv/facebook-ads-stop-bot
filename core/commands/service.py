@@ -23,7 +23,11 @@ from core.meta_api.identity import require_ad_account_id
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
 from core.money import validated_currency_code
-from core.observer.scan_tasks import enqueue_observer_scan
+from core.observer.scan_tasks import (
+    OBSERVER_SCAN_DEADLINE_SECONDS,
+    enqueue_observer_scan,
+    lock_observer_scan_publication,
+)
 from core.wording import delivery_status_ru
 
 if TYPE_CHECKING:
@@ -126,45 +130,54 @@ class CommandService:
             raise ValueError("idempotency_key must contain 1..128 characters")
 
         async def _enqueue(conn: AsyncConnection) -> CommandReceipt:
-            # Serialize operator retries. The active-task check is server-side,
-            # so different tabs/principals cannot create parallel scan work.
-            await conn.execute(
-                text(
-                    """
-                    SELECT pg_advisory_xact_lock(
-                      hashtext('fb-agent'),
-                      hashtext('operator-scan-retry')
-                    )
-                    """
-                )
-            )
+            # Serialize every scan publisher. The active-task check is server-side,
+            # so scheduler ticks and different tabs cannot create parallel work.
+            await lock_observer_scan_publication(conn)
             active = (
                 await conn.execute(
                     text(
                         """
-                        SELECT id, status, result, correlation_id
+                        SELECT id, status, result, correlation_id, lane, priority
                         FROM task_queue
                         WHERE task_type = 'observer_scan'
                           AND status IN ('pending', 'retrying', 'running')
                           AND cancel_requested_at IS NULL
-                          AND (
-                            status = 'running'
-                            OR (
-                              available_at <= clock_timestamp()
-                              AND COALESCE(payload->>'dependency_state', '') <> 'waiting'
-                            )
-                          )
+                          AND COALESCE(payload->>'dependency_state', '') <> 'waiting'
                         ORDER BY
                           CASE status WHEN 'running' THEN 0 ELSE 1 END,
                           priority DESC,
                           created_at,
                           id
                         LIMIT 1
+                        FOR UPDATE
                         """
                     )
                 )
             ).first()
             if active is not None:
+                if str(active.status) in {"pending", "retrying"}:
+                    await conn.execute(
+                        text(
+                            """
+                            UPDATE task_queue
+                            SET lane = 'interactive',
+                                priority = GREATEST(priority, 75),
+                                deadline_at = GREATEST(
+                                  COALESCE(deadline_at, '-infinity'::timestamptz),
+                                  available_at + make_interval(secs => :deadline_seconds),
+                                  clock_timestamp() + make_interval(secs => :deadline_seconds)
+                                ),
+                                updated_at = clock_timestamp()
+                            WHERE id = :task_id
+                              AND status IN ('pending', 'retrying')
+                              AND cancel_requested_at IS NULL
+                            """
+                        ),
+                        {
+                            "task_id": int(active.id),
+                            "deadline_seconds": OBSERVER_SCAN_DEADLINE_SECONDS,
+                        },
+                    )
                 return CommandReceipt(
                     task_id=int(active.id),
                     created=False,

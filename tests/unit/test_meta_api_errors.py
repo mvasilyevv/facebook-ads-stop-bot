@@ -19,11 +19,16 @@ from core.meta_api.errors import (
 )
 
 
-# Code 190 — токен сессии invalidated → TokenInvalidError (постоянная, требует re-login).
-def test_classify_190_token_invalid() -> None:
+# Code 190 с явным текстом разлогина → отдельный LoginRequiredError даже без subcode.
+def test_classify_190_login_message_without_subcode() -> None:
     exc = classify_graph_error(190, None, "Session expired")
-    assert isinstance(exc, TokenInvalidError)
+    assert isinstance(exc, LoginRequiredError)
     assert exc.code == 190
+
+
+def test_classify_190_explicit_log_in_message_without_subcode() -> None:
+    exc = classify_graph_error(190, None, "The session has been invalidated, please log in")
+    assert isinstance(exc, LoginRequiredError)
 
 
 # Code 17 — user request limit reached → RateLimitedError (временная, нужно подождать).

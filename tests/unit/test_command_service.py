@@ -84,6 +84,45 @@ async def test_scan_retry_returns_existing_running_task_without_enqueue(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_scan_retry_promotes_existing_background_task_without_enqueue(monkeypatch) -> None:
+    correlation_id = uuid.uuid4()
+    connection = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[
+                _Result(),
+                _Result(
+                    SimpleNamespace(
+                        id=1842,
+                        status="pending",
+                        result=None,
+                        correlation_id=correlation_id,
+                        lane="background",
+                        priority=10,
+                    )
+                ),
+                _Result(),
+            ]
+        )
+    )
+    enqueue = AsyncMock(side_effect=AssertionError("duplicate scan enqueue"))
+    monkeypatch.setattr(service_module, "enqueue_observer_scan", enqueue)
+
+    receipt = await CommandService(SimpleNamespace()).enqueue_scan_retry(
+        requested_by="operator:web",
+        idempotency_key="operator:scan:promote",
+        connection=connection,
+    )
+
+    assert receipt.task_id == 1842
+    assert receipt.created is False
+    assert receipt.state == "queued"
+    promote_call = connection.execute.await_args_list[2]
+    assert "SET lane = 'interactive'" in str(promote_call.args[0])
+    assert promote_call.args[1]["task_id"] == 1842
+    enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_scan_retry_enqueues_one_interactive_task(monkeypatch) -> None:
     correlation_id = uuid.uuid4()
     connection = SimpleNamespace(
