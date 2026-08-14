@@ -3535,6 +3535,140 @@
         }
       }
     },
+    "/api/operator/scan/retry": {
+      "post": {
+        "tags": ["operator"],
+        "summary": "Retry Operator Scan",
+        "description": "Queue an interactive recovery scan; 202 never means scan success.",
+        "operationId": "retry_operator_scan_api_operator_scan_retry_post",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "X-Operator-Principal",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "default": "operator:web",
+              "title": "X-Operator-Principal"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorCommandResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Existing command lifecycle state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorCommandResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Permission denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Command lifecycle conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Ad projection changed before enqueue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operator source unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Canonical API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/operator/ads/{ad_id}/pause": {
       "post": {
         "tags": ["operator"],
@@ -10552,6 +10686,18 @@
                 "type": "null"
               }
             ]
+          },
+          "recovery_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "retry_scan"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Action"
           }
         },
         "type": "object",
@@ -10564,7 +10710,8 @@
           "reason",
           "occurred_at",
           "target",
-          "action"
+          "action",
+          "recovery_action"
         ],
         "title": "OperatorAttentionItem"
       },
@@ -13068,7 +13215,7 @@
         "properties": {
           "status": {
             "type": "string",
-            "const": "queued",
+            "enum": ["queued", "running", "confirmed", "failed", "cancelled", "unknown"],
             "title": "Status"
           },
           "task_id": {
@@ -13079,10 +13226,14 @@
             "type": "string",
             "format": "uuid",
             "title": "Correlation Id"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
           }
         },
         "type": "object",
-        "required": ["status", "task_id", "correlation_id"],
+        "required": ["status", "task_id", "correlation_id", "created"],
         "title": "ScanNowResponse",
         "description": "Ответ на POST /settings/observer/scan-now."
       },

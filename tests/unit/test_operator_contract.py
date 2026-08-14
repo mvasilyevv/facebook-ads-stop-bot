@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import WebSocketDisconnect
+from fastapi import Response, WebSocketDisconnect
 from pydantic import ValidationError
 
 import apps.api.routers.v1.operator as operator_router
@@ -185,6 +185,78 @@ def test_api_problem_never_omits_nullable_field_errors() -> None:
         "correlation_id",
         "field_errors",
     }
+
+
+def test_login_required_incident_exposes_only_typed_scan_recovery() -> None:
+    now = datetime(2026, 8, 14, 10, tzinfo=UTC)
+    base = {
+        "id": "00000000-0000-0000-0000-000000000777",
+        "severity": "critical",
+        "status": "open",
+        "title": "В Facebook нужно войти снова",
+        "summary": "Кабинет: 777",
+        "resource_type": "ad_account",
+        "resource_id": "777",
+        "resource_label": None,
+        "opened_at": now,
+    }
+
+    login_item = operator_router._incident_attention_item(
+        {**base, "incident_key": "observer:login_required:777"}
+    )
+    channel_item = operator_router._incident_attention_item(
+        {**base, "incident_key": "autostop:channel_down"}
+    )
+
+    assert login_item.recovery_action == "retry_scan"
+    assert login_item.target.kind == "account"
+    assert channel_item.recovery_action is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "created", "expected_status"),
+    [("queued", True, 202), ("running", False, 200)],
+)
+async def test_retry_scan_endpoint_preserves_command_lifecycle(
+    monkeypatch,
+    state: str,
+    created: bool,
+    expected_status: int,
+) -> None:
+    correlation_id = "00000000-0000-0000-0000-000000001842"
+    enqueue = AsyncMock(
+        return_value=SimpleNamespace(
+            task_id=1842,
+            state=state,
+            created=created,
+            correlation_id=correlation_id,
+        )
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "CommandService",
+        lambda _engine: SimpleNamespace(enqueue_scan_retry=enqueue),
+    )
+    response = Response()
+
+    result = await operator_router.retry_operator_scan(
+        engine=object(),
+        response=response,
+        request=SimpleNamespace(
+            state=SimpleNamespace(operator_principal="owner:42"),
+        ),
+        idempotency_key="scan-retry-key",
+        requested_by="untrusted-header",
+    )
+
+    assert not isinstance(result, operator_router.JSONResponse)
+    assert response.status_code == expected_status
+    assert result.task_id == 1842
+    assert result.state == state
+    assert result.created is created
+    assert enqueue.await_args.kwargs["requested_by"] == "owner:42"
+    assert enqueue.await_args.kwargs["idempotency_key"].startswith("operator:v1:")
 
 
 def _cabinet_row(

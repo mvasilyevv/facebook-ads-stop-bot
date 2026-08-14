@@ -56,6 +56,7 @@ export function makeOperatorSnapshot(): OperatorSnapshot {
             occurred_at: "2026-07-18T10:10:00Z",
             target: { kind: "ad", id: "ad-1", label: "GH_CR2" },
             action: { label: "Открыть объявление", href: "/ads/ad-1" },
+            recovery_action: null,
           },
         ],
       },

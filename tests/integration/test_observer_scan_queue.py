@@ -10,6 +10,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+from core.commands.service import CommandService
 from core.meta_api.freshness import defer_auto_stop_for_fresh_snapshot
 from core.observer.scan_tasks import (
     ObserverScanCancelled,
@@ -73,6 +74,39 @@ async def test_parallel_enqueue_and_claim_produce_exactly_one_execution(
     assert claimed[0].id == receipts[0].task_id
     assert claimed[0].lease_owner is not None
     assert claimed[0].lease_token == 1
+
+
+@pytest.mark.asyncio
+async def test_parallel_operator_retries_share_one_interactive_scan(
+    pg_engine,
+    clean_observer_scan_tasks,
+) -> None:
+    service = CommandService(pg_engine)
+    receipts = await asyncio.gather(
+        *(
+            service.enqueue_scan_retry(
+                requested_by="integration_operator",
+                idempotency_key=f"test-observer-scan:command:{uuid.uuid4()}",
+            )
+            for _ in range(10)
+        )
+    )
+
+    assert len({receipt.task_id for receipt in receipts}) == 1
+    assert sum(receipt.created for receipt in receipts) == 1
+    assert {receipt.state for receipt in receipts} == {"queued"}
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) AS total, BOOL_AND(lane = 'interactive') AS interactive "
+                    "FROM task_queue "
+                    "WHERE requested_by = 'integration_operator'"
+                ),
+            )
+        ).one()
+    assert row.total == 1
+    assert row.interactive is True
 
 
 @pytest.mark.asyncio

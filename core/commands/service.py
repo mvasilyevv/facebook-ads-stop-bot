@@ -23,6 +23,7 @@ from core.meta_api.identity import require_ad_account_id
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
 from core.money import validated_currency_code
+from core.observer.scan_tasks import enqueue_observer_scan
 from core.wording import delivery_status_ru
 
 if TYPE_CHECKING:
@@ -108,6 +109,109 @@ class CommandService:
 
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
+
+    async def enqueue_scan_retry(
+        self,
+        *,
+        requested_by: str,
+        idempotency_key: str,
+        connection: AsyncConnection | None = None,
+    ) -> CommandReceipt:
+        """Queue one interactive scan or return the already active scan."""
+        normalized_requested_by = requested_by.strip()
+        normalized_idempotency_key = idempotency_key.strip()
+        if not normalized_requested_by or len(normalized_requested_by) > 64:
+            raise ValueError("requested_by must contain 1..64 characters")
+        if not normalized_idempotency_key or len(normalized_idempotency_key) > 128:
+            raise ValueError("idempotency_key must contain 1..128 characters")
+
+        async def _enqueue(conn: AsyncConnection) -> CommandReceipt:
+            # Serialize operator retries. The active-task check is server-side,
+            # so different tabs/principals cannot create parallel scan work.
+            await conn.execute(
+                text(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                      hashtext('fb-agent'),
+                      hashtext('operator-scan-retry')
+                    )
+                    """
+                )
+            )
+            active = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT id, status, result, correlation_id
+                        FROM task_queue
+                        WHERE task_type = 'observer_scan'
+                          AND status IN ('pending', 'retrying', 'running')
+                          AND cancel_requested_at IS NULL
+                          AND (
+                            status = 'running'
+                            OR (
+                              available_at <= clock_timestamp()
+                              AND COALESCE(payload->>'dependency_state', '') <> 'waiting'
+                            )
+                          )
+                        ORDER BY
+                          CASE status WHEN 'running' THEN 0 ELSE 1 END,
+                          priority DESC,
+                          created_at,
+                          id
+                        LIMIT 1
+                        """
+                    )
+                )
+            ).first()
+            if active is not None:
+                return CommandReceipt(
+                    task_id=int(active.id),
+                    created=False,
+                    state=_command_state(active.status, active.result),
+                    correlation_id=uuid.UUID(str(active.correlation_id)),
+                )
+
+            try:
+                receipt = await enqueue_observer_scan(
+                    self._engine,
+                    requested_by=normalized_requested_by,
+                    reason="operator_retry_scan",
+                    idempotency_key=normalized_idempotency_key,
+                    lane="interactive",
+                    priority=75,
+                    connection=conn,
+                )
+            except RuntimeError as exc:
+                if "idempotency key" in str(exc):
+                    raise CommandConflictError(str(exc)) from exc
+                raise
+
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT status, result, correlation_id
+                        FROM task_queue
+                        WHERE id = :task_id
+                        """
+                    ),
+                    {"task_id": receipt.task_id},
+                )
+            ).first()
+            if row is None:
+                raise RuntimeError("observer scan command row disappeared")
+            return CommandReceipt(
+                task_id=receipt.task_id,
+                created=receipt.created,
+                state=_command_state(row.status, row.result),
+                correlation_id=uuid.UUID(str(row.correlation_id)),
+            )
+
+        if connection is not None:
+            return await _enqueue(connection)
+        async with self._engine.begin() as conn:
+            return await _enqueue(conn)
 
     async def abort_campaign_run(
         self,
