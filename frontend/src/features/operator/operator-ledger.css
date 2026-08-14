@@ -621,11 +621,18 @@
   background: var(--color-hairline-strong);
 }
 
+/* Ход money-команды нельзя измерить в процентах: очередь и выполнение
+ * не отдают долю готовности. Полоса indeterminate — повторяющийся проход
+ * штриховки, а не доля выполнения. Смысл несёт текстовый ActionState. */
 .ledger-action-item__progress::after {
   position: absolute;
   inset: 0;
-  width: 44%;
-  background: var(--color-warning);
+  animation: fbBarSweep 1.2s var(--ease-out) infinite;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--color-warning) 0 8px,
+    transparent 8px 16px
+  );
   content: "";
 }
 
@@ -675,7 +682,9 @@
   outline-offset: 3px;
 }
 
-@media (max-width: 1120px) {
+/* Пороги совпадают с дефолтами Tailwind v4 (lg 1024): иначе шелл и
+ * дашборд переключаются на разной ширине. */
+@media (max-width: 1023px) {
   .operator-ledger__grid {
     grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.7fr);
   }
@@ -686,7 +695,15 @@
   }
 }
 
-@media (max-width: 820px) {
+/* Одна колонка с action-first порядком — до 768px ВКЛЮЧИТЕЛЬНО.
+ *
+ * Порог намеренно на пиксель шире шелла (Tailwind md = min-width 768px):
+ * 768px — это планшет в портрете, где две колонки по 300px+ уже не дают
+ * читаемой плотности, а «требует внимания» обязано стоять первым. Инвариант
+ * закреплён e2e (operator-responsive.spec.ts, проект 768px). Прежние 820px
+ * растягивали этот режим на весь диапазон 768–820, где шелл был уже
+ * десктопным, — вот это и выглядело как «фронт ушёл в мобильный». */
+@media (max-width: 768px) {
   .operator-ledger__header {
     align-items: flex-start;
   }

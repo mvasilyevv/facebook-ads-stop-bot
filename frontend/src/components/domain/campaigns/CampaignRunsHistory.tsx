@@ -20,7 +20,7 @@ import {
   type CampaignRunTaskState,
   type OperatorCommandKind,
 } from "@fb/shared";
-import { apiProblemMessage } from "@fb/operator-api";
+import { safeApiProblemMessage } from "@fb/operator-api";
 import {
   Ban,
   CheckCircle2,
@@ -356,7 +356,7 @@ function RunExpandedDetails({
     } catch (error) {
       const message = isOperatorCommandIntentStorageError(error)
         ? error.userMessage
-        : apiProblemMessage(error, `${actionLabel} недоступна`);
+        : safeApiProblemMessage(error, `${actionLabel} недоступна`);
       setCommandError(message);
       toast.error(`${actionLabel} не отправлена`, message);
     }

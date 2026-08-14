@@ -32,14 +32,17 @@ export const colors = {
   active: "#b8a36a",
   activeBg: "#211c11",
 
-  // Semantic — яркое кодирование статусов (вариант C)
+  // Semantic — яркое кодирование статусов (вариант C).
+  // Статусный цвет обязан отличаться и от декора, и от соседнего статуса:
+  // warning не повторяет accent/active, danger ярче unknown (яркость идёт по
+  // важности) и проходит WCAG AA на bg-4/bg-5, info не сливается с success.
   success: "#86a77b",
   successBg: "#121a13",
-  warning: "#b8a36a",
+  warning: "#d4a858",
   warningBg: "#211c11",
-  danger: "#cf6259",
+  danger: "#e58177",
   dangerBg: "#281513",
-  info: "#91a0aa",
+  info: "#7f95a6",
   infoBg: "#151b1f",
   hairline: "#292f32",
   hairlineStrong: "#34383a",

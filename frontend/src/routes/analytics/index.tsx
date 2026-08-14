@@ -278,7 +278,10 @@ function AnalyticsPage() {
               </div>
               <ErrorState
                 title="Аналитика недоступна. Неподтверждённые данные скрыты."
-                error={performanceQ.error}
+                error={safeApiProblemMessage(
+                  performanceQ.error,
+                  "Подтверждённых значений нет. Повторите запрос.",
+                )}
                 onRetry={() => void performanceQ.refetch()}
               />
             </div>
@@ -437,7 +440,10 @@ function UploadsView({
             budgetQ.isError ? (
               <ErrorState
                 title="График бюджета недоступен. Неподтверждённые точки скрыты."
-                error={budgetQ.error}
+                error={safeApiProblemMessage(
+                  budgetQ.error,
+                  "Подтверждённых точек нет. Повторите запрос.",
+                )}
                 onRetry={() => void budgetQ.refetch()}
               />
             ) : (
@@ -478,7 +484,10 @@ function UploadsView({
         <Card padded className="p-5">
           <ErrorState
             title="Почасовое распределение недоступно. Неподтверждённые ячейки скрыты."
-            error={daypartQ.error}
+            error={safeApiProblemMessage(
+              daypartQ.error,
+              "Подтверждённых ячеек нет. Повторите запрос.",
+            )}
             onRetry={() => void daypartQ.refetch()}
           />
         </Card>

@@ -20,20 +20,20 @@ const badgeStyles = cva(
       variant: {
         // FSM alert_state
         normal: "bg-bg-2 border-bg-6 text-bg-10",
-        warning: "bg-warning-bg border-[rgba(212,168,88,0.3)] text-warning",
-        stop: "bg-danger-bg border-[rgba(199,98,92,0.3)] text-danger",
-        claimed: "bg-info-bg border-[rgba(122,160,180,0.3)] text-info",
+        warning: "bg-warning-bg border-warning/30 text-warning",
+        stop: "bg-danger-bg border-danger/30 text-danger",
+        claimed: "bg-info-bg border-info/30 text-info",
         disabled: "bg-bg-2 border-bg-5 text-bg-9",
         // Дополнительные
-        success: "bg-success-bg border-[rgba(126,180,122,0.3)] text-success",
-        info: "bg-info-bg border-[rgba(122,160,180,0.3)] text-info",
+        success: "bg-success-bg border-success/30 text-success",
+        info: "bg-info-bg border-info/30 text-info",
         neutral: "bg-bg-3 border-bg-6 text-bg-10",
         // Task statuses
         pending: "bg-bg-3 border-bg-6 text-bg-9",
-        running: "bg-info-bg border-[rgba(122,160,180,0.3)] text-info",
-        done: "bg-success-bg border-[rgba(126,180,122,0.3)] text-success",
-        failed: "bg-danger-bg border-[rgba(199,98,92,0.3)] text-danger",
-        retrying: "bg-warning-bg border-[rgba(212,168,88,0.3)] text-warning",
+        running: "bg-info-bg border-info/30 text-info",
+        done: "bg-success-bg border-success/30 text-success",
+        failed: "bg-danger-bg border-danger/30 text-danger",
+        retrying: "bg-warning-bg border-warning/30 text-warning",
         cancelled: "bg-bg-2 border-bg-5 text-bg-9",
       },
       size: {

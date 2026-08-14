@@ -1,5 +1,6 @@
 import type { ComponentType, ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OperatorRealtimeStatusProvider, type OperatorRealtimeStatus } from "@fb/operator-api";
@@ -40,8 +41,15 @@ vi.mock("@/lib/api/operator", () => ({
   operatorProblemMessage: (error: unknown) => (error instanceof Error ? error.message : "Ошибка"),
 }));
 
+const mockToast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warning: vi.fn(),
+}));
+
 vi.mock("@/components/ui/toastStore", () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: mockToast,
 }));
 
 import { Route } from "@/routes/index";
@@ -361,5 +369,64 @@ describe("operator dashboard", () => {
     expect(screen.queryByText("В работе")).not.toBeInTheDocument();
     expect(screen.getByText("Выполняется")).toBeInTheDocument();
     expect(screen.queryByText("Подтверждено")).not.toBeInTheDocument();
+  });
+
+  it("counts every attention reason, not only the five rendered cards", () => {
+    const snapshot = makeOperatorSnapshot();
+    const incident = snapshot.attention.data!.items[0]!;
+    snapshot.attention.data!.items = Array.from({ length: 7 }, (_, index) => ({
+      ...incident,
+      id: `incident-${index}`,
+    }));
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderDashboard();
+
+    expect(screen.getByText("7 причин")).toBeInTheDocument();
+    expect(screen.queryByText("5 причин")).not.toBeInTheDocument();
+  });
+
+  it("prints — instead of 0 when attention and action evidence is missing", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.attention.state = "unavailable";
+    snapshot.attention.data = null;
+    snapshot.actions.state = "stale";
+    snapshot.actions.data = null;
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderDashboard();
+
+    // Нет подтверждённого списка — нет и числа. Ноль означал бы «сигналов нет».
+    expect(screen.queryByText("0 причин")).not.toBeInTheDocument();
+    expect(screen.queryByText("0 выполняется")).not.toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("reports a queued scan as queued, never as a green success", async () => {
+    mockScan.mockImplementation(
+      (_vars: unknown, options?: { onSuccess?: () => void }) => options?.onSuccess?.(),
+    );
+
+    renderDashboard();
+    await userEvent.click(screen.getByRole("button", { name: "Сканировать" }));
+
+    // HTTP 202 = queued. Зелёный toast.success означал бы выполненное сканирование.
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(mockToast.info).toHaveBeenCalledWith(
+      "Сканирование поставлено в очередь",
+      expect.stringContaining("не подтверждено"),
+    );
   });
 });

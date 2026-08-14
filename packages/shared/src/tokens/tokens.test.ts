@@ -271,4 +271,66 @@ describe("muted production text contrast", () => {
       contrastRatio(colors.danger, colors.dangerBg),
     ).toBeGreaterThanOrEqual(4.5);
   });
+
+  it("keeps danger readable on the raised surfaces it is actually used on", () => {
+    // bg4 и bg5 — фон карточек и строк таблиц: прежний danger давал там
+    // 4.05:1 и 3.58:1, то есть не проходил WCAG AA.
+    for (const surface of [colors.bg4, colors.bg5]) {
+      expect(contrastRatio(colors.danger, surface)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+function hueDegrees(hex: string): number {
+  const [red, green, blue] = hex
+    .slice(1)
+    .match(/.{2}/g)!
+    .map((value) => Number.parseInt(value, 16) / 255) as [number, number, number];
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  if (max === min) return 0;
+  const delta = max - min;
+  const hue =
+    max === red
+      ? ((green - blue) / delta) % 6
+      : max === green
+        ? (blue - red) / delta + 2
+        : (red - green) / delta + 4;
+  return ((hue * 60) % 360) + (hue < 0 ? 360 : 0);
+}
+
+function hueDistance(first: string, second: string): number {
+  const delta = Math.abs(hueDegrees(first) - hueDegrees(second)) % 360;
+  return Math.min(delta, 360 - delta);
+}
+
+function chroma(hex: string): number {
+  const channels = hex
+    .slice(1)
+    .match(/.{2}/g)!
+    .map((value) => Number.parseInt(value, 16));
+  return Math.max(...channels) - Math.min(...channels);
+}
+
+describe("semantic colours stay distinguishable from each other and from decor", () => {
+  it("does not reuse the decorative accent hex for warning", () => {
+    // Предупреждение, покрашенное в цвет декора, сливается с подсветкой
+    // и перестаёт читаться как статус.
+    expect(colors.warning).not.toBe(colors.accent);
+    expect(colors.warning).not.toBe(colors.active);
+  });
+
+  it("orders brightness by importance: danger is never darker than unknown", () => {
+    // unknown рисуется цветом bg8. Прежний danger был темнее него, то есть
+    // яркость шла обратно важности.
+    expect(relativeLuminance(colors.danger)).toBeGreaterThan(
+      relativeLuminance(colors.bg8),
+    );
+  });
+
+  it("keeps info apart from success and from the grey scale", () => {
+    expect(hueDistance(colors.info, colors.success)).toBeGreaterThanOrEqual(60);
+    expect(chroma(colors.info)).toBeGreaterThan(chroma(colors.bg9));
+    expect(chroma(colors.info)).toBeGreaterThanOrEqual(32);
+  });
 });

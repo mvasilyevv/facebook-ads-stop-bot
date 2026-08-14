@@ -6,6 +6,7 @@ import {
   CircleHelp,
   CirclePause,
   CirclePlay,
+  OctagonAlert,
   ShieldCheck,
 } from "lucide-react";
 
@@ -14,6 +15,7 @@ import {
   formatOperatorCount,
   operatorActiveActionLabel,
 } from "@fb/shared/operator/adsViewModel";
+import { operatorCommandTone } from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
 import { severityForDataState } from "@fb/shared/operator/viewModel";
 import type {
@@ -45,10 +47,12 @@ const LABEL: Record<OperatorSeverity, string> = {
   unknown: "Неизвестно",
 };
 
+// critical и warning не должны различаться одним лишь цветом:
+// восьмиугольник читается как «стоп» и при цветовой слепоте.
 const ICON = {
   ok: ShieldCheck,
   warning: AlertTriangle,
-  critical: AlertTriangle,
+  critical: OctagonAlert,
   unknown: CircleHelp,
 } as const;
 
@@ -249,7 +253,9 @@ export function MiniAdCommand({
         if (!isOperatorCommandIntentStorageError(error)) throw error;
         intentCleanupWarning = error.userMessage;
       }
-      haptic.notify("success");
+      // 202 — это queued: «успех» подтверждаем только для confirmed.
+      const tone = operatorCommandTone(receipt.state);
+      haptic.notify(tone === "success" ? "success" : "warning");
       if (intentCleanupWarning) {
         haptic.notify("warning");
         await tgAlert(
@@ -269,7 +275,8 @@ export function MiniAdCommand({
   return (
     <Button
       type="button"
-      variant={isPause ? "danger" : "secondary"}
+      // «Включить» возобновляет реальный спенд — предупреждающий вид, не secondary.
+      variant={isPause ? "danger" : "warning"}
       fullWidth={full}
       loading={mutation.isPending}
       className="min-h-11"

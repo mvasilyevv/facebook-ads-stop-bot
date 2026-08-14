@@ -8,7 +8,6 @@ import type {
 import type { operations } from "@fb/shared/api/generated";
 import { actionProjectionFromResponse } from "@fb/shared/operator/viewModel";
 import {
-  apiProblemMessage as formatApiProblem,
   isApiProblem,
   reconcileOperatorReadModels,
   reconcileOperatorSnapshots,
@@ -241,7 +240,12 @@ export function useAcknowledgeOperatorIncident() {
 }
 
 export function operatorProblemMessage(error: unknown): string {
-  return formatApiProblem(error, "Операторский снимок недоступен");
+  // Fallback — это подсказка к действию, а не повтор заголовка: ErrorState уже
+  // сообщил, что именно недоступно, и дублирование строки ничего не добавляет.
+  return safeApiProblemMessage(
+    error,
+    "Сервер не подтвердил данные. Повторите попытку; если не помогает — откройте «Источники и воркеры».",
+  );
 }
 
 export function operatorIncidentProblemMessage(error: unknown): string {

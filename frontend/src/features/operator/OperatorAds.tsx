@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CircleHelp, CirclePause, CirclePlay, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  CircleHelp,
+  CirclePause,
+  CirclePlay,
+  OctagonAlert,
+  ShieldCheck,
+} from "lucide-react";
 
 import type { OperatorAdRow, OperatorSeverity } from "@fb/shared/operator/contracts";
 import {
@@ -15,8 +22,12 @@ import {
   formatOperatorCount,
   operatorActiveActionLabel,
 } from "@fb/shared/operator/adsViewModel";
+import {
+  operatorActionStateReason,
+  operatorCommandTone,
+} from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
-import { severityForDataState } from "@fb/shared/operator/viewModel";
+import { ACTION_STATE_LABEL, severityForDataState } from "@fb/shared/operator/viewModel";
 import { DataStateBadge } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
@@ -37,10 +48,12 @@ const SEVERITY_LABEL: Record<OperatorSeverity, string> = {
   unknown: "Неизвестно",
 };
 
+// critical и warning не должны различаться одним лишь цветом:
+// восьмиугольник читается как «стоп» и при цветовой слепоте.
 const SEVERITY_ICON = {
   ok: ShieldCheck,
   warning: AlertTriangle,
-  critical: AlertTriangle,
+  critical: OctagonAlert,
   unknown: CircleHelp,
 } as const;
 
@@ -274,8 +287,13 @@ export function AdCommandButtons({
         if (!isOperatorCommandIntentStorageError(error)) throw error;
         intentCleanupWarning = error.userMessage;
       }
-      toast.success(
-        `${receipt.public_id}: ${receipt.created ? "поставлено в очередь" : "задача уже существует"}`,
+      // 202 — это queued, а не выполнено: зелёный тон только для confirmed.
+      const tone = operatorCommandTone(receipt.state);
+      toast[tone](
+        `${receipt.public_id}: ${ACTION_STATE_LABEL[receipt.state]}`,
+        receipt.created
+          ? operatorActionStateReason(receipt.state)
+          : `Задача уже существует — не повторяйте команду. ${operatorActionStateReason(receipt.state)}`,
       );
       if (intentCleanupWarning) {
         toast.error(
@@ -295,7 +313,9 @@ export function AdCommandButtons({
       <Button
         ref={commandButtonRef}
         type="button"
-        variant={isPause ? "danger" : "secondary"}
+        // «Включить» возобновляет реальный спенд — это не нейтральная утилита
+        // рядом с «Обновить», поэтому предупреждающий вид, а не secondary.
+        variant={isPause ? "danger" : "warning"}
         size={compact ? "md" : "lg"}
         className={fullWidth ? "min-h-11 w-full" : "min-h-11"}
         loading={mutation.isPending}
@@ -310,7 +330,7 @@ export function AdCommandButtons({
         title={`${label} объявление?`}
         description={`«${ad.name}». Команда будет поставлена в очередь, а результат подтверждён отдельной задачей.`}
         confirmLabel={label}
-        confirmVariant={isPause ? "danger" : "primary"}
+        confirmVariant={isPause ? "danger" : "warning"}
         onConfirm={runCommand}
         returnFocusRef={commandButtonRef}
       />

@@ -16,10 +16,16 @@ vi.mock("@fb/operator-api", async (importOriginal) => ({
   useOperatorRealtimeStatus: () => mockRealtimeStatus(),
 }));
 
-vi.mock("@/lib/api/operator", () => ({
-  useOperatorSnapshot: (...args: unknown[]) => mockUseOperatorSnapshot(...args),
-  operatorProblemMessage: (error: unknown) => (error instanceof Error ? error.message : "Ошибка"),
-}));
+// operatorProblemMessage делегирует канону safeApiProblemMessage: тест обязан
+// проверять реальную санитизацию, а не подставлять сырой error.message.
+vi.mock("@/lib/api/operator", async () => {
+  const { safeApiProblemMessage } = await import("@fb/operator-api");
+  return {
+    useOperatorSnapshot: (...args: unknown[]) => mockUseOperatorSnapshot(...args),
+    operatorProblemMessage: (error: unknown) =>
+      safeApiProblemMessage(error, "Операторский снимок недоступен"),
+  };
+});
 
 vi.mock("@/components/layout/PageHeader", () => ({
   PageHeader: ({ title, action }: { title: string; action?: ReactNode }) => (
@@ -79,6 +85,8 @@ describe("web operator system sources", () => {
 
     render(<SystemSourcesPage />);
 
-    expect(screen.getByText("Snapshot failed")).toBeInTheDocument();
+    // Сырое сообщение исключения оператору не показывается: только recovery-копия.
+    expect(screen.queryByText("Snapshot failed")).not.toBeInTheDocument();
+    expect(screen.getByText("Операторский снимок недоступен")).toBeInTheDocument();
   });
 });

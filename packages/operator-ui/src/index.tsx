@@ -66,8 +66,15 @@ export function DataStateNotice({
       data-tone={stateTone(state)}
       role={state === "unavailable" ? "alert" : "status"}
     >
+      {/* Форма метки — второй канал различия, независимый от цвета. */}
       <span className="operator-state-notice-mark" aria-hidden="true">
-        {state === "unavailable" ? "!" : state === "empty" ? "○" : "△"}
+        {state === "unavailable"
+          ? "!"
+          : state === "empty"
+            ? "○"
+            : state === "stale"
+              ? "↺"
+              : "△"}
       </span>
       <div>
         <strong>{firstIssue?.title ?? DATA_STATE_LABEL[state]}</strong>
@@ -202,9 +209,25 @@ function shortStateLabel(state: DataState): string {
   return "Недоступно";
 }
 
-function stateTone(state: DataState): "confirmed" | "degraded" | "neutral" {
+export type DataStateTone =
+  | "confirmed"
+  | "degraded"
+  | "stale"
+  | "unavailable"
+  | "neutral";
+
+/**
+ * Каждое непроверенное состояние получает собственный тон. Раньше empty, stale
+ * и unavailable схлопывались в один серый: подтверждённый пустой результат,
+ * устаревший снимок и отсутствие источника выглядели одинаково, а unavailable
+ * читался спокойнее, чем partial. Тон дополняется формой метки в styles.css,
+ * поэтому цвет не является единственным каналом различия.
+ */
+function stateTone(state: DataState): DataStateTone {
   if (state === "ready") return "confirmed";
   if (state === "partial") return "degraded";
+  if (state === "stale") return "stale";
+  if (state === "unavailable") return "unavailable";
   return "neutral";
 }
 

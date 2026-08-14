@@ -36,6 +36,11 @@ export async function noContentOrThrow(
   throw new GeneratedApiError(result.response.status, result.error);
 }
 
+/**
+ * Diagnostic-grade message for Error.message and logs. Correlation identifiers
+ * are deliberately omitted: this string can end up in a rendered surface, and a
+ * raw UUID is never operator copy. Prefer safeApiProblemMessage for any UI.
+ */
 export function apiProblemMessage(
   value: unknown,
   fallback = "Неизвестная ошибка",
@@ -43,9 +48,7 @@ export function apiProblemMessage(
   if (!isApiProblem(value)) {
     return value instanceof Error ? value.message : fallback;
   }
-  return value.correlation_id
-    ? `${value.message} · reference ${value.correlation_id}`
-    : value.message;
+  return value.message;
 }
 
 /**
