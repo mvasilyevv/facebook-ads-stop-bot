@@ -135,7 +135,15 @@ describe("ErrorState", () => {
     expect(alert).not.toHaveTextContent("{");
   });
 
-  it("показывает message канонического ApiProblem без его correlation_id", () => {
+  it("печатает готовую операторскую копию, которую подготовил вызывающий", () => {
+    // Разбор ApiProblem — ответственность вызывающего (safeApiProblemMessage):
+    // презентационный компонент не зависит от API-слоя. Сюда приходит строка.
+    render(<ErrorState error="Снимок временно недоступен" />);
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Снимок временно недоступен");
+  });
+
+  it("не печатает объект, если он всё же дошёл до компонента", () => {
     render(
       <ErrorState
         error={{
@@ -147,8 +155,10 @@ describe("ErrorState", () => {
       />,
     );
     const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent("Снимок временно недоступен");
+    expect(alert).toHaveTextContent("Подробности недоступны");
     expect(alert).not.toHaveTextContent("00000000-0000-0000-0000-000000000099");
+    expect(alert).not.toHaveTextContent("snapshot_unavailable");
+    expect(alert).not.toHaveTextContent("{");
   });
 });
 
