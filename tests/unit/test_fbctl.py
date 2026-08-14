@@ -34,7 +34,9 @@ from fbctl.bundle import (
     inspect_bundle,
 )
 from fbctl.config import (
+    BOOTSTRAP_LEGACY_DROP_KEYS,
     MANAGED_HOST_PORTS,
+    SOURCE_ALLOWED_KEYS,
     canonicalize_source,
     load_active,
     prepare_candidate,
@@ -1218,6 +1220,14 @@ def _legacy_source_values() -> dict[str, str]:
     return {
         "API_HOST": "0.0.0.0",
         "API_PORT": "8100",
+        "DESKTOP_GUACAMOLE_POSTGRES_DB": "guacamole",
+        "DESKTOP_GUACAMOLE_POSTGRES_HOST": "legacy-guacamole-db",
+        "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD": "guacamole-secret",
+        "DESKTOP_GUACAMOLE_POSTGRES_PORT": "5432",
+        "DESKTOP_GUACAMOLE_POSTGRES_USER": "guacamole",
+        "DESKTOP_PUBLIC_ORIGIN": "https://legacy.example.invalid",
+        "DESKTOP_VNC_PASSWORD": "vnc-secret",
+        "DESKTOP_WEBTOP_IMAGE": "legacy.example.invalid/webtop:latest",
         "DEV_TOOLS_ENABLED": "legacy-enable-dev-tools",
         "FRONTEND_ORIGIN": "http://legacy.example.invalid",
         "GRPC_PORT": "50051",
@@ -1279,6 +1289,16 @@ def test_bootstrap_projects_only_the_exact_known_legacy_source_shape() -> None:
         "DESKTOP_OWNER_TELEGRAM_USER_ID": "123456",
         "VISION_FOLDER_ID": "folder-current",
     }
+
+
+def test_bootstrap_drop_list_never_swallows_a_supported_key() -> None:
+    """Отбрасываемый ключ не должен быть одновременно принимаемым.
+
+    Пересечение означало бы, что bootstrap молча выбрасывает значение,
+    которое оператор задал осознанно, и разница вскроется только на
+    работающем production.
+    """
+    assert not (BOOTSTRAP_LEGACY_DROP_KEYS & SOURCE_ALLOWED_KEYS)
 
 
 def test_bootstrap_projection_reports_all_unknown_names_without_values() -> None:

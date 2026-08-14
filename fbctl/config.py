@@ -73,6 +73,20 @@ BOOTSTRAP_LEGACY_DROP_KEYS = frozenset(
     {
         "API_HOST",
         "API_PORT",
+        # Guacamole демонтирован: удалённый доступ идёт через KasmVNC, а его
+        # сервисная пара приходит из source как DESKTOP_KASM_SERVICE_*.
+        "DESKTOP_GUACAMOLE_POSTGRES_DB",
+        "DESKTOP_GUACAMOLE_POSTGRES_HOST",
+        "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD",
+        "DESKTOP_GUACAMOLE_POSTGRES_PORT",
+        "DESKTOP_GUACAMOLE_POSTGRES_USER",
+        # Ниже — то, чем теперь владеет сам fbctl: образ, публичный origin и
+        # VNC-пароль задаются runtime-конфигурацией, а не приходят из source.
+        # Ретированные имена сюда не добавляются: устаревший ключ в source
+        # означает несвежий конфиг, и bootstrap обязан назвать его вслух.
+        "DESKTOP_PUBLIC_ORIGIN",
+        "DESKTOP_VNC_PASSWORD",
+        "DESKTOP_WEBTOP_IMAGE",
         "DEV_TOOLS_ENABLED",
         "FRONTEND_ORIGIN",
         "GRPC_PORT",
