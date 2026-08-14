@@ -23,7 +23,9 @@ from apps.api.routers.v1.schemas.operator import (
     OperatorActionsData,
     OperatorActionsResponse,
     OperatorAdCommandRequest,
+    OperatorAdRow,
     OperatorAdsResponse,
+    OperatorApproachingStopData,
     OperatorAttentionAction,
     OperatorAttentionData,
     OperatorAttentionItem,
@@ -96,6 +98,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/operator", tags=["operator"])
 
 _MONEY = Decimal("0.01")
+_MONEY_RULE_CODES = {
+    "cpc_stop",
+    "cpl_stop",
+    "cpr_stop",
+    "spend_no_dep_range",
+    "spend_with_dep_range",
+}
 _PROBLEM_RESPONSES = {
     401: {"model": ApiProblem, "description": "Authentication failed"},
     403: {"model": ApiProblem, "description": "Permission denied"},
@@ -1409,6 +1418,99 @@ def _attention_section(
     )
 
 
+def _approaching_stop_section(
+    *,
+    rows: list[dict[str, Any]],
+    now: datetime,
+) -> OperatorSection[OperatorApproachingStopData]:
+    """Build a ranked early-warning section from persisted evaluator context."""
+    items: list[OperatorAdRow] = []
+    for row in rows:
+        item = OperatorAdRow.model_validate(row)
+        if (
+            item.rule_context.percent_to_stop is None
+            or item.rule_context.stage == "stop"
+            or item.severity == OperatorSeverity.CRITICAL
+            or (item.delivery_status or "").strip().upper() != "ACTIVE"
+        ):
+            continue
+        items.append(item)
+    items.sort(
+        key=lambda item: (
+            -Decimal(item.rule_context.percent_to_stop or "0"),
+            item.id,
+        )
+    )
+    if not items:
+        return OperatorSection(
+            state=DataState.EMPTY,
+            as_of=now,
+            freshness_seconds=0,
+            sources=["postgresql", "meta", "adsetpro"],
+            issues=[],
+            data=OperatorApproachingStopData(items=[]),
+        )
+    as_of = min((item.as_of for item in items if item.as_of is not None), default=None)
+    return OperatorSection(
+        state=_combined_data_state([item.data_state for item in items]),
+        as_of=as_of,
+        freshness_seconds=_age(now, as_of),
+        sources=["postgresql", "meta", "adsetpro"],
+        issues=[],
+        data=OperatorApproachingStopData(items=items[:50]),
+    )
+
+
+def _hide_unconfirmed_rule_money(rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        metrics = row["metrics"]
+        metrics["spend"] = None
+        metrics["cpc"] = None
+        metrics["cost_per_registration"] = None
+        metrics["cost_per_ftd"] = None
+        context = row["rule_context"]
+        if context["rule_code"] in _MONEY_RULE_CODES:
+            context["value"] = None
+            context["threshold"] = None
+
+
+async def _fetch_approaching_stop_rows(
+    *,
+    engine: Any,
+    account_id: str | None,
+    now: datetime,
+) -> list[dict[str, Any]]:
+    from_dt, to_dt, _, _, cabinet_days = await _window(
+        engine,
+        "today",
+        account_id=account_id,
+        now=now,
+    )
+    sources = await fetch_source_quality(
+        engine,
+        from_dt=from_dt,
+        to_dt=to_dt,
+        cabinet_days=cabinet_days,
+        account_id=account_id,
+    )
+    payload = await fetch_operator_ads(
+        engine,
+        from_dt=from_dt,
+        to_dt=to_dt,
+        account_id=account_id,
+        search=None,
+        delivery_status=None,
+        severity=None,
+        sort="percent_to_stop",
+        direction="desc",
+        page=1,
+        page_size=50,
+        tracker_available=sources["tracker"].get("status") == "good",
+        approaching_only=True,
+    )
+    return payload["rows"]
+
+
 @router.get(
     "/events",
     response_model=list[OperatorEventItem],
@@ -1533,6 +1635,11 @@ async def get_operator_snapshot(
         system_task = _system_section(engine=engine, now=now, account_id=account_id)
         actions_task = fetch_operator_actions(engine, limit=20, account_id=account_id)
         incidents_task = fetch_operator_incidents(engine, account_id=account_id, limit=50)
+        approaching_stop_task = _fetch_approaching_stop_rows(
+            engine=engine,
+            account_id=account_id,
+            now=now,
+        )
         revision_task = fetch_operator_revision(engine)
         account_task = _account_meta(engine, account_id)
         currency_task = resolve_account_currencies(
@@ -1549,6 +1656,7 @@ async def get_operator_snapshot(
                 actions_as_of,
             ),
             incidents,
+            approaching_stop_rows,
             (sequence, revision),
             account,
             currencies,
@@ -1558,6 +1666,7 @@ async def get_operator_snapshot(
             system_task,
             actions_task,
             incidents_task,
+            approaching_stop_task,
             revision_task,
             account_task,
             currency_task,
@@ -1591,6 +1700,9 @@ async def get_operator_snapshot(
         now=now,
         include_system_issues=account_id is None,
     )
+    if _currency_issue(currencies) is not None:
+        _hide_unconfirmed_rule_money(approaching_stop_rows)
+    approaching_stop = _approaching_stop_section(rows=approaching_stop_rows, now=now)
     cabinet_end = to_dt
     if window == "today":
         if cabinet_days.cabinet_timezone is not None:
@@ -1616,6 +1728,7 @@ async def get_operator_snapshot(
             cabinet_day={"starts_at": from_dt, "ends_at": cabinet_end},
         ),
         attention=attention,
+        approaching_stop=approaching_stop,
         portfolio=portfolio,
         economy=economy,
         funnel=funnel,
@@ -1862,10 +1975,7 @@ async def get_operator_ads(
             state_value = DataState.PARTIAL
             for row in payload["rows"]:
                 row["data_state"] = DataState.PARTIAL
-                metrics = row["metrics"]
-                metrics["spend"] = None
-                metrics["cpc"] = None
-                metrics["cost_per_registration"] = None
+            _hide_unconfirmed_rule_money(payload["rows"])
     return OperatorAdsResponse(
         state=state_value,
         as_of=as_of,

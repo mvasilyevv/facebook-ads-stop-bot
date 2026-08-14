@@ -8,7 +8,9 @@
   "paths": {
     "/healthz": {
       "get": {
-        "tags": ["health"],
+        "tags": [
+          "health"
+        ],
         "summary": "Healthz",
         "description": "Liveness probe платформы: всегда 200, не лезет в БД/Redis.",
         "operationId": "healthz_healthz_get",
@@ -32,7 +34,9 @@
     },
     "/readyz": {
       "get": {
-        "tags": ["health"],
+        "tags": [
+          "health"
+        ],
         "summary": "Readyz",
         "description": "Readiness probe: PostgreSQL is required; Redis is optional degraded state.",
         "operationId": "readyz_readyz_get",
@@ -54,7 +58,9 @@
     },
     "/system-readyz": {
       "get": {
-        "tags": ["health"],
+        "tags": [
+          "health"
+        ],
         "summary": "System Readyz",
         "description": "Готовность бизнес-контура auto-stop.\n\nВ отличие от ``/readyz`` проверяет persisted scan/actor/task lifecycle.\nRedis и process-local heartbeats сюда намеренно не входят: process liveness\nпроверяют Prometheus/blackbox, а этот endpoint не должен расходиться с\nPostgreSQL control plane после restart или single-slot redeploy.",
         "operationId": "system_readyz_system_readyz_get",
@@ -84,7 +90,9 @@
     },
     "/metrics": {
       "get": {
-        "tags": ["health"],
+        "tags": [
+          "health"
+        ],
         "summary": "Metrics",
         "description": "Prometheus exposition format. Метрики собираются в middleware.",
         "operationId": "metrics_metrics_get",
@@ -102,7 +110,9 @@
     },
     "/api/v1/postback/adsetpro": {
       "get": {
-        "tags": ["postback"],
+        "tags": [
+          "postback"
+        ],
         "summary": "Receive AdSet.pro GET postback",
         "description": "AdSet.pro-compatible GET endpoint. The raw URL is never logged here.",
         "operationId": "receive_adsetpro_get_api_v1_postback_adsetpro_get",
@@ -158,7 +168,9 @@
     },
     "/api/tools/adset-duplicates/preview": {
       "post": {
-        "tags": ["tools"],
+        "tags": [
+          "tools"
+        ],
         "summary": "Preview Adset Duplicate",
         "description": "Read-only dry-run; сохраняет канонический план в PostgreSQL на 15 минут.",
         "operationId": "preview_adset_duplicate_api_tools_adset_duplicates_preview_post",
@@ -208,7 +220,9 @@
     },
     "/api/tools/adset-duplicates/launch": {
       "post": {
-        "tags": ["tools"],
+        "tags": [
+          "tools"
+        ],
         "summary": "Launch Adset Duplicate",
         "description": "Queues one idempotent durable task after the explicit web launch request.",
         "operationId": "launch_adset_duplicate_api_tools_adset_duplicates_launch_post",
@@ -258,7 +272,9 @@
     },
     "/api/tools/adset-duplicates/{task_id}": {
       "get": {
-        "tags": ["tools"],
+        "tags": [
+          "tools"
+        ],
         "summary": "Get Adset Duplicate Status",
         "description": "Статус только duplicate_adset_structure; чужие task IDs возвращают 404.",
         "operationId": "get_adset_duplicate_status_api_tools_adset_duplicates__task_id__get",
@@ -310,7 +326,9 @@
     },
     "/api/ai/analyze": {
       "post": {
-        "tags": ["ai"],
+        "tags": [
+          "ai"
+        ],
         "summary": "Ai Analyze",
         "description": "Возвращает AI-анализ блока данных с Redis-кэшем TTL 600s.\n\nПри force_refresh=True кэш игнорируется и перезаписывается.\nRate-limit: 20 запросов/час per remote IP. Превышение → 429.\nЕсли AI-провайдеры не настроены → 503.",
         "operationId": "ai_analyze_api_ai_analyze_post",
@@ -360,7 +378,9 @@
     },
     "/api/ai/chat": {
       "post": {
-        "tags": ["ai"],
+        "tags": [
+          "ai"
+        ],
         "summary": "Ai Chat",
         "description": "Ответ ассистента на вопрос из веб-виджета (с tool-use, read-only канал).\n\n429 — превышен лимит; 503 — AI-провайдеры не настроены.",
         "operationId": "ai_chat_api_ai_chat_post",
@@ -410,7 +430,9 @@
     },
     "/api/ai/pulse": {
       "post": {
-        "tags": ["ai"],
+        "tags": [
+          "ai"
+        ],
         "summary": "Ai Pulse",
         "description": "Почасовой пульс кабинета для веб-виджета.\n\nВиджет опрашивает раз в час (пока вкладка открыта). Двухступенчатый контракт\nпротив шума и лишних токенов: детерминированный pre-check сигналов (стопы /\nупавшие задачи / шквал warnings за прошедший час) — если пусто, AI НЕ\nвызывается и возвращается important=false (виджет молчит). Результат\nкэшируется на календарный час — повторные опросы и вторые вкладки бесплатны.",
         "operationId": "ai_pulse_api_ai_pulse_post",
@@ -440,7 +462,9 @@
     },
     "/api/v1/integrations/alertmanager/webhook": {
       "post": {
-        "tags": ["alertmanager"],
+        "tags": [
+          "alertmanager"
+        ],
         "summary": "Receive Alertmanager Webhook",
         "description": "Return 204 only after incident and notification intent commit together.",
         "operationId": "receive_alertmanager_webhook_api_v1_integrations_alertmanager_webhook_post",
@@ -521,7 +545,9 @@
     },
     "/api/analytics/performance": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Get Analytics Performance",
         "description": "Return lossless performance metrics at one hierarchy level.",
         "operationId": "get_analytics_performance_api_analytics_performance_get",
@@ -531,7 +557,12 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": ["today", "7d", "30d", "custom"],
+              "enum": [
+                "today",
+                "7d",
+                "30d",
+                "custom"
+              ],
               "type": "string",
               "default": "today",
               "title": "Period"
@@ -576,7 +607,11 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": ["campaign", "adset", "ad"],
+              "enum": [
+                "campaign",
+                "adset",
+                "ad"
+              ],
               "type": "string",
               "default": "campaign",
               "title": "Level"
@@ -691,7 +726,10 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": ["asc", "desc"],
+              "enum": [
+                "asc",
+                "desc"
+              ],
               "type": "string",
               "default": "desc",
               "title": "Direction"
@@ -757,7 +795,9 @@
     },
     "/api/analytics/live-budget": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Get Analytics Live Budget",
         "description": "Return hourly actual/base/stop series for the current cabinet day.",
         "operationId": "get_analytics_live_budget_api_analytics_live_budget_get",
@@ -849,7 +889,9 @@
     },
     "/api/analytics/daypart": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Get Analytics Daypart",
         "description": "Return weekday x hour cells in the server-owned display timezone.",
         "operationId": "get_analytics_daypart_api_analytics_daypart_get",
@@ -973,7 +1015,9 @@
     },
     "/api/v1/internal/browser-operations/consume": {
       "post": {
-        "tags": ["internal-browser-operations"],
+        "tags": [
+          "internal-browser-operations"
+        ],
         "summary": "Consume Browser Operation",
         "operationId": "consume_browser_operation_api_v1_internal_browser_operations_consume_post",
         "parameters": [
@@ -1033,7 +1077,9 @@
     },
     "/api/v1/internal/browser-maintenance/consume": {
       "post": {
-        "tags": ["internal-browser-operations"],
+        "tags": [
+          "internal-browser-operations"
+        ],
         "summary": "Consume Browser Maintenance",
         "operationId": "consume_browser_maintenance_api_v1_internal_browser_maintenance_consume_post",
         "parameters": [
@@ -1093,7 +1139,9 @@
     },
     "/api/tools/campaigns/draft": {
       "get": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Get Campaign Draft",
         "description": "Return the one owner draft; absence is an explicit null document.",
         "operationId": "get_campaign_draft_api_tools_campaigns_draft_get",
@@ -1141,7 +1189,9 @@
         }
       },
       "put": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Put Campaign Draft",
         "description": "Create or update the owner draft with optimistic revision CAS.",
         "operationId": "put_campaign_draft_api_tools_campaigns_draft_put",
@@ -1209,7 +1259,9 @@
         }
       },
       "delete": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Delete Campaign Draft",
         "description": "Delete only the exact owner draft revision.",
         "operationId": "delete_campaign_draft_api_tools_campaigns_draft_delete",
@@ -1274,7 +1326,9 @@
     },
     "/api/tools/campaigns/presets": {
       "get": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "List Presets",
         "description": "Список всех пресетов (новые сверху).",
         "operationId": "list_presets_api_tools_campaigns_presets_get",
@@ -1306,7 +1360,9 @@
         }
       },
       "post": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Create Preset",
         "description": "Создать пресет. 409 при дубле имени (UNIQUE name).",
         "operationId": "create_preset_api_tools_campaigns_presets_post",
@@ -1356,7 +1412,9 @@
     },
     "/api/tools/campaigns/presets/{preset_id}": {
       "put": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Update Preset",
         "description": "Полное обновление пресета. 404 если нет, 409 при дубле имени.",
         "operationId": "update_preset_api_tools_campaigns_presets__preset_id__put",
@@ -1415,7 +1473,9 @@
         }
       },
       "delete": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Delete Preset",
         "description": "Удалить пресет. FK run→preset с ON DELETE SET NULL (история запусков цела).",
         "operationId": "delete_preset_api_tools_campaigns_presets__preset_id__delete",
@@ -1459,7 +1519,9 @@
     },
     "/api/tools/campaigns/upload": {
       "post": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Upload Concepts",
         "description": "Загрузка концептов креативов в per-run временную папку на сервере.\n\nВозвращает upload_id (входит в config.creo_root для воркера) + список refs\nс размерами для превью. Тяжёлая уникализация — в воркере, не здесь.",
         "operationId": "upload_concepts_api_tools_campaigns_upload_post",
@@ -1509,7 +1571,9 @@
     },
     "/api/tools/campaigns/validate": {
       "post": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Validate Config",
         "description": "Dry-run: собирает план (число объектов + нейминг) без создания в Meta.\n\nКоличество концептов берётся только из config.campaigns[*].concept_refs —\nраскладка K концептов × copies совпадает с исполнителем.",
         "operationId": "validate_config_api_tools_campaigns_validate_post",
@@ -1559,7 +1623,9 @@
     },
     "/api/tools/campaigns/launch": {
       "post": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Launch Campaign",
         "description": "Создать campaign_run(queued) + task_queue(campaign_create) в одной транзакции.\n\nMoney-safety: idempotency_key (по конфигу) общий для run и задачи. Повторный\nlaunch того же конфига → находим существующий run, ничего не дублируем (202-shape).\nВоркер по run_id грузит CampaignRun и исполняет залив.",
         "operationId": "launch_campaign_api_tools_campaigns_launch_post",
@@ -1609,7 +1675,9 @@
     },
     "/api/tools/campaigns/runs": {
       "get": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "List Runs",
         "description": "Список запусков (новые сверху). offer_code извлекается из снимка config.",
         "operationId": "list_runs_api_tools_campaigns_runs_get",
@@ -1696,7 +1764,9 @@
     },
     "/api/tools/campaigns/runs/{run_id}": {
       "get": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Get Run",
         "description": "Return bounded progress, lifecycle evidence and safe control guidance.",
         "operationId": "get_run_api_tools_campaigns_runs__run_id__get",
@@ -1747,7 +1817,9 @@
     },
     "/api/tools/campaigns/runs/{run_id}/abort": {
       "post": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Abort Run",
         "description": "Request cooperative cancellation; acceptance is never completion.",
         "operationId": "abort_run_api_tools_campaigns_runs__run_id__abort_post",
@@ -1860,7 +1932,9 @@
     },
     "/api/tools/campaigns/runs/{run_id}/resume": {
       "post": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Resume Run",
         "description": "Resume only a verified REJECTED pre-external checkpoint.",
         "operationId": "resume_run_api_tools_campaigns_runs__run_id__resume_post",
@@ -1973,7 +2047,9 @@
     },
     "/api/campaigns/ad-account-context": {
       "get": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Get Ad Account Context",
         "description": "Return durable context state without navigating or querying Meta live.",
         "operationId": "get_ad_account_context_api_campaigns_ad_account_context_get",
@@ -2026,7 +2102,9 @@
     },
     "/api/campaigns/ad-account-pages": {
       "get": {
-        "tags": ["campaigns"],
+        "tags": [
+          "campaigns"
+        ],
         "summary": "Get Ad Account Pages",
         "description": "Список FB-страниц кабинета (promote_pages) для дропдауна page_id.\n\n400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула\nошибку или кабинет не найден. read-only: один GET /act_{id}/promote_pages через\nVision-сессию, без открытия браузера. Массив может быть пустым (нет страниц).",
         "operationId": "get_ad_account_pages_api_campaigns_ad_account_pages_get",
@@ -2079,7 +2157,9 @@
     },
     "/api/desktop/transports": {
       "get": {
-        "tags": ["desktop"],
+        "tags": [
+          "desktop"
+        ],
         "summary": "List Desktop Transports",
         "description": "Return owner-visible transport choices without issuing a ticket.",
         "operationId": "list_desktop_transports_api_desktop_transports_get",
@@ -2109,7 +2189,9 @@
     },
     "/api/desktop/launch": {
       "post": {
-        "tags": ["desktop"],
+        "tags": [
+          "desktop"
+        ],
         "summary": "Launch Desktop",
         "description": "Issue one single-use URL bound to a predefined presentation profile.",
         "operationId": "launch_desktop_api_desktop_launch_post",
@@ -2189,7 +2271,9 @@
     },
     "/api/offers": {
       "get": {
-        "tags": ["offers"],
+        "tags": [
+          "offers"
+        ],
         "summary": "List Offers",
         "description": "Возвращает список офферов.\n\nПо умолчанию только активные (is_active=true).\nПри include_inactive=true — все, включая soft-deleted.",
         "operationId": "list_offers_api_offers_get",
@@ -2243,7 +2327,9 @@
         }
       },
       "post": {
-        "tags": ["offers"],
+        "tags": [
+          "offers"
+        ],
         "summary": "Create Offer",
         "description": "Создаёт новый оффер.\n\nПри конфликте по UNIQUE code → 409 Conflict.",
         "operationId": "create_offer_api_offers_post",
@@ -2293,7 +2379,9 @@
     },
     "/api/offers/{offer_id}": {
       "put": {
-        "tags": ["offers"],
+        "tags": [
+          "offers"
+        ],
         "summary": "Update Offer",
         "description": "Обновляет оффер.\n\n404 если оффер не найден.",
         "operationId": "update_offer_api_offers__offer_id__put",
@@ -2353,7 +2441,9 @@
         }
       },
       "delete": {
-        "tags": ["offers"],
+        "tags": [
+          "offers"
+        ],
         "summary": "Deactivate Offer",
         "description": "Idempotently deactivate an offer while retaining its history.",
         "operationId": "deactivate_offer_api_offers__offer_id__delete",
@@ -2398,7 +2488,9 @@
     },
     "/api/offers/{offer_id}/rules": {
       "get": {
-        "tags": ["offers"],
+        "tags": [
+          "offers"
+        ],
         "summary": "Get Offer Rules",
         "description": "Возвращает правила оффера.\n\nЕсли OfferRule для оффера не существует — возвращает дефолтную структуру\nс offer_id и всеми порогами null (правило не настроено).\n404 если сам оффер не найден.",
         "operationId": "get_offer_rules_api_offers__offer_id__rules_get",
@@ -2448,7 +2540,9 @@
         }
       },
       "put": {
-        "tags": ["offers"],
+        "tags": [
+          "offers"
+        ],
         "summary": "Upsert Offer Rules",
         "description": "Upsert правил оффера.\n\nЕсли OfferRule не существует — создаёт. Если существует — обновляет.\n404 если оффер не найден.\nНевалидные пороги (отрицательные) → 422.",
         "operationId": "upsert_offer_rules_api_offers__offer_id__rules_put",
@@ -2510,7 +2604,9 @@
     },
     "/api/offers/rules/preview": {
       "get": {
-        "tags": ["offers"],
+        "tags": [
+          "offers"
+        ],
         "summary": "Preview Rule Thresholds",
         "description": "При какой $-стоимости сработают правила и ворнинги для CPA + чувствительности.\n\nИспользует RuleContext — единый расчёт с автостопом: значения в превью ТОЧНО совпадают\nс реальными порогами, по которым observer отключает объявления. Базовые проценты\n(CPC 2% / CPL 10% / CPR 20% / spend 50-70%/70-90%) фиксированы.",
         "operationId": "preview_rule_thresholds_api_offers_rules_preview_get",
@@ -2617,7 +2713,9 @@
     },
     "/api/operator/events": {
       "get": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Get Operator Events",
         "description": "Return the bounded alert and terminal-action feed used by Analytics.",
         "operationId": "get_operator_events_api_operator_events_get",
@@ -2627,7 +2725,12 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": ["today", "7d", "30d", "custom"],
+              "enum": [
+                "today",
+                "7d",
+                "30d",
+                "custom"
+              ],
               "type": "string",
               "default": "30d",
               "title": "Period"
@@ -2865,7 +2968,9 @@
     },
     "/api/operator/snapshot": {
       "get": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Get Operator Snapshot",
         "operationId": "get_operator_snapshot_api_operator_snapshot_get",
         "parameters": [
@@ -2891,7 +2996,12 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": ["today", "24h", "7d", "30d"],
+              "enum": [
+                "today",
+                "24h",
+                "7d",
+                "30d"
+              ],
               "type": "string",
               "default": "today",
               "title": "Window"
@@ -3012,7 +3122,9 @@
     },
     "/api/operator/cabinets/{cabinet_id}/snapshot": {
       "get": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Get Operator Cabinet Snapshot",
         "description": "Return the canonical operator snapshot narrowed to one cabinet.",
         "operationId": "get_operator_cabinet_snapshot_api_operator_cabinets__cabinet_id__snapshot_get",
@@ -3034,7 +3146,12 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": ["today", "24h", "7d", "30d"],
+              "enum": [
+                "today",
+                "24h",
+                "7d",
+                "30d"
+              ],
               "type": "string",
               "default": "today",
               "title": "Window"
@@ -3155,7 +3272,9 @@
     },
     "/api/operator/actions": {
       "get": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Get Operator Actions",
         "operationId": "get_operator_actions_api_operator_actions_get",
         "parameters": [
@@ -3315,7 +3434,9 @@
     },
     "/api/operator/ads": {
       "get": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Get Operator Ads",
         "operationId": "get_operator_ads_api_operator_ads_get",
         "parameters": [
@@ -3377,7 +3498,12 @@
             "schema": {
               "anyOf": [
                 {
-                  "enum": ["ok", "warning", "critical", "unknown"],
+                  "enum": [
+                    "ok",
+                    "warning",
+                    "critical",
+                    "unknown"
+                  ],
                   "type": "string"
                 },
                 {
@@ -3392,7 +3518,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": ["name", "spend", "clicks", "registrations", "ftd", "updated"],
+              "enum": [
+                "name",
+                "spend",
+                "clicks",
+                "registrations",
+                "ftd",
+                "updated"
+              ],
               "type": "string",
               "default": "updated",
               "title": "Sort"
@@ -3403,7 +3536,10 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": ["asc", "desc"],
+              "enum": [
+                "asc",
+                "desc"
+              ],
               "type": "string",
               "default": "desc",
               "title": "Direction"
@@ -3529,7 +3665,9 @@
     },
     "/api/operator/ads/{ad_id}/pause": {
       "post": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Pause Operator Ad",
         "operationId": "pause_operator_ad_api_operator_ads__ad_id__pause_post",
         "parameters": [
@@ -3681,7 +3819,9 @@
     },
     "/api/operator/ads/{ad_id}/activate": {
       "post": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Activate Operator Ad",
         "operationId": "activate_operator_ad_api_operator_ads__ad_id__activate_post",
         "parameters": [
@@ -3833,7 +3973,9 @@
     },
     "/api/operator/incidents": {
       "get": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Get Operator Incidents",
         "description": "Return the complete incident journal with explicit cabinet evidence.",
         "operationId": "get_operator_incidents_api_operator_incidents_get",
@@ -3863,7 +4005,12 @@
             "schema": {
               "type": "array",
               "items": {
-                "enum": ["ok", "warning", "critical", "unknown"],
+                "enum": [
+                  "ok",
+                  "warning",
+                  "critical",
+                  "unknown"
+                ],
                 "type": "string"
               },
               "title": "Severity"
@@ -3876,7 +4023,13 @@
             "schema": {
               "type": "array",
               "items": {
-                "enum": ["open", "acknowledged", "executing", "resolved", "failed"],
+                "enum": [
+                  "open",
+                  "acknowledged",
+                  "executing",
+                  "resolved",
+                  "failed"
+                ],
                 "type": "string"
               },
               "title": "Status"
@@ -4003,7 +4156,9 @@
     },
     "/api/operator/incidents/{incident_id}": {
       "get": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Get Operator Incident",
         "operationId": "get_operator_incident_api_operator_incidents__incident_id__get",
         "parameters": [
@@ -4114,7 +4269,9 @@
     },
     "/api/operator/incidents/{incident_id}/ack": {
       "post": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Acknowledge Operator Incident",
         "operationId": "acknowledge_operator_incident_api_operator_incidents__incident_id__ack_post",
         "parameters": [
@@ -4236,7 +4393,9 @@
     },
     "/api/operator/preferences/display": {
       "get": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Get Display Preference",
         "operationId": "get_display_preference_api_operator_preferences_display_get",
         "responses": {
@@ -4303,7 +4462,9 @@
         }
       },
       "put": {
-        "tags": ["operator"],
+        "tags": [
+          "operator"
+        ],
         "summary": "Put Display Preference",
         "operationId": "put_display_preference_api_operator_preferences_display_put",
         "requestBody": {
@@ -4382,7 +4543,9 @@
     },
     "/api/settings/observer": {
       "get": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Get Observer Settings",
         "description": "Возвращает текущий ObserverConfig singleton.",
         "operationId": "get_observer_settings_api_settings_observer_get",
@@ -4412,7 +4575,9 @@
     },
     "/api/settings/observer/interval": {
       "patch": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Patch Observer Interval",
         "description": "Меняет только интервал, не перезаписывая scanning/tag/allowlist.",
         "operationId": "patch_observer_interval_api_settings_observer_interval_patch",
@@ -4462,7 +4627,9 @@
     },
     "/api/settings/observer/scanning": {
       "patch": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Patch Observer Scanning",
         "description": "Переключает только is_scanning_enabled, не трогая остальные поля.\n\nГейт включения: не даём включить скан, если мониторить нечего (пустой allowlist при\nодном кабинете / нет активных офферов). Иначе скан крутился бы вхолостую раз в интервал,\nничего не отслеживая. Возвращаем 409 с понятной причиной — фронт показывает её на клике\n«Включить», а заполнять кампании пользователь идёт на страницу «Кампании».",
         "operationId": "patch_observer_scanning_api_settings_observer_scanning_patch",
@@ -4512,7 +4679,9 @@
     },
     "/api/settings/observer/owner-tag": {
       "patch": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Patch Observer Owner Tag",
         "description": "Меняет только owner_campaign_tag, не трогая остальные поля.\n\nТочечный PATCH против лост-апдейта (аудит 2026-07-12, C-1): фронты сохраняли тег\nчерез full-PUT из закэшированного состояния и молча откатывали is_scanning_enabled.",
         "operationId": "patch_observer_owner_tag_api_settings_observer_owner_tag_patch",
@@ -4562,7 +4731,9 @@
     },
     "/api/settings/observer/campaigns": {
       "patch": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Patch Observer Campaigns",
         "description": "Задаёт allowlist кампаний для am-режима (#3).\n\nФильтрует am_tabular по campaign.id IN [...]: в общем кабинете не тянем чужие ад'ы.\nПустой список — без фильтра по кампаниям (owner_campaign_tag всё равно отсекает чужое).",
         "operationId": "patch_observer_campaigns_api_settings_observer_campaigns_patch",
@@ -4610,7 +4781,9 @@
         }
       },
       "get": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "List Observer Campaigns",
         "description": "Список кампаний (накопленных observer'ом) для выбора allowlist (#3).\n\nФильтр по owner_campaign_tag (word-boundary, через campaign_matches_owner).\nselected — входит ли кампания в текущий allowlist (cfg.campaign_ids).\nКампании без Meta fb_campaign_id пропускаются — их нельзя заскоупить по campaign.id.\nСвежесть: по умолчанию кампании с датой в имени старше CAMPAIGN_LIST_HORIZON_DAYS\nскрываются (если не выбраны) — see include_stale.",
         "operationId": "list_observer_campaigns_api_settings_observer_campaigns_get",
@@ -4668,7 +4841,9 @@
     },
     "/api/settings/observer/campaigns/refresh": {
       "post": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Refresh Observer Campaigns",
         "description": "Run discovery under an exclusive fence because StartBrowser may restart.",
         "operationId": "refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post",
@@ -4744,7 +4919,9 @@
     },
     "/api/settings/observer/scan-now": {
       "post": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Post Scan Now",
         "description": "Atomically enqueue a scan; ``202`` means queued, never completed.",
         "operationId": "post_scan_now_api_settings_observer_scan_now_post",
@@ -4774,7 +4951,9 @@
     },
     "/api/settings/telegram": {
       "get": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Get Telegram Settings",
         "description": "Возвращает публичные поля TelegramConfig с compute-полями.\n\nНЕ возвращает bot_token_encrypted. web_app_url — только из system_config.",
         "operationId": "get_telegram_settings_api_settings_telegram_get",
@@ -4802,7 +4981,9 @@
         }
       },
       "delete": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Delete Telegram Settings",
         "description": "Disable sends now and durably delete the remote webhook before token wipe.",
         "operationId": "delete_telegram_settings_api_settings_telegram_delete",
@@ -4832,7 +5013,9 @@
     },
     "/api/settings/telegram/web-app-url": {
       "put": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Put Telegram Web App Url",
         "description": "Сохраняет Web App URL Mini App в system_config (без рестарта).\n\nПустая строка/None — явная очистка (DB tombstone; env не восстанавливает).\nНепустой URL обязан быть HTTPS (требование Telegram Mini Apps) → иначе 422.",
         "operationId": "put_telegram_web_app_url_api_settings_telegram_web_app_url_put",
@@ -4882,7 +5065,9 @@
     },
     "/api/settings/telegram/token": {
       "put": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Put Telegram Token",
         "description": "Atomically persist a token and its durable desired webhook generation.",
         "operationId": "put_telegram_token_api_settings_telegram_token_put",
@@ -4932,7 +5117,9 @@
     },
     "/api/settings/telegram/recipients": {
       "get": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Get Telegram Recipients",
         "description": "Возвращает список активных (не отозванных) получателей Telegram.",
         "operationId": "get_telegram_recipients_api_settings_telegram_recipients_get",
@@ -4962,7 +5149,9 @@
     },
     "/api/settings/telegram/recipients/{recipient_id}": {
       "delete": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Delete Telegram Recipient",
         "description": "Soft-delete: выставляет revoked_at = NOW() для получателя с заданным id.\n\nВозвращает 404, если получатель не найден или уже отозван.",
         "operationId": "delete_telegram_recipient_api_settings_telegram_recipients__recipient_id__delete",
@@ -5013,7 +5202,9 @@
     },
     "/api/settings/telegram/recipients/{recipient_id}/preferences": {
       "get": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Get Telegram Recipient Preferences",
         "operationId": "get_telegram_recipient_preferences_api_settings_telegram_recipients__recipient_id__preferences_get",
         "parameters": [
@@ -5062,7 +5253,9 @@
         }
       },
       "put": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Put Telegram Recipient Preferences",
         "operationId": "put_telegram_recipient_preferences_api_settings_telegram_recipients__recipient_id__preferences_put",
         "parameters": [
@@ -5123,7 +5316,9 @@
     },
     "/api/settings/telegram/diagnostics": {
       "get": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Get Telegram Notification Diagnostics",
         "operationId": "get_telegram_notification_diagnostics_api_settings_telegram_diagnostics_get",
         "responses": {
@@ -5152,7 +5347,9 @@
     },
     "/api/settings/telegram/recipients/invite": {
       "post": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Post Telegram Invite",
         "description": "Генерирует invite-код (TTL 24h) и сохраняет в telegram_invites.\n\nВозвращает { code, expires_at }.",
         "operationId": "post_telegram_invite_api_settings_telegram_recipients_invite_post",
@@ -5182,7 +5379,9 @@
     },
     "/api/settings/telegram/owner-invite": {
       "post": {
-        "tags": ["settings"],
+        "tags": [
+          "settings"
+        ],
         "summary": "Post Telegram Owner Invite",
         "description": "Вернуть действующую owner-ссылку или создать её атомарно.\n\nПовторный клик и сетевой retry возвращают тот же код до его использования или\nистечения. GET настроек никогда не создаёт секреты сам — он только показывает\nуже существующую ссылку.",
         "operationId": "post_telegram_owner_invite_api_settings_telegram_owner_invite_post",
@@ -5212,7 +5411,10 @@
     },
     "/api/settings/vision": {
       "get": {
-        "tags": ["settings", "settings"],
+        "tags": [
+          "settings",
+          "settings"
+        ],
         "summary": "Get Vision Settings",
         "description": "Возвращает canonical PostgreSQL VisionConfig и browser-agent status.",
         "operationId": "get_vision_settings_api_settings_vision_get",
@@ -5240,7 +5442,10 @@
         }
       },
       "put": {
-        "tags": ["settings", "settings"],
+        "tags": [
+          "settings",
+          "settings"
+        ],
         "summary": "Put Vision Settings",
         "description": "Обновляет x_token / profile_id в VisionConfig singleton.\n\nЕсли x_token передан — шифрует и сохраняет.\nЕсли profile_id передан — обновляет.\nЕсли строки ещё нет — создаёт с server-defaults.",
         "operationId": "put_vision_settings_api_settings_vision_put",
@@ -5290,7 +5495,10 @@
     },
     "/api/vision/reconnect": {
       "post": {
-        "tags": ["settings", "settings"],
+        "tags": [
+          "settings",
+          "settings"
+        ],
         "summary": "Post Vision Reconnect",
         "description": "Триггерит gRPC ReconnectBrowser к browser-agent.\n\nЧитает x_token и profile_id только из PostgreSQL.\nВозвращает 503 при недоступности gRPC.",
         "operationId": "post_vision_reconnect_api_vision_reconnect_post",
@@ -5320,7 +5528,10 @@
     },
     "/api/vision/ensure-cdp": {
       "post": {
-        "tags": ["settings", "settings"],
+        "tags": [
+          "settings",
+          "settings"
+        ],
         "summary": "Post Vision Ensure Cdp",
         "description": "Bootstrap browser channel: direct probe, then exclusive recovery when needed.\n\nНикогда не падает 5xx — всегда {ok,status,action,message}. Если CDP уже готов,\naction=none. Иначе подтверждённый maintenance owner разрешает ровно один\nпринудительный restart canonical Vision-профиля с обязательным повторным probe.",
         "operationId": "post_vision_ensure_cdp_api_vision_ensure_cdp_post",
@@ -5350,7 +5561,9 @@
     },
     "/api/v1/integrations/telegram/webhook": {
       "post": {
-        "tags": ["telegram"],
+        "tags": [
+          "telegram"
+        ],
         "summary": "Receive Telegram Webhook",
         "description": "Return 204 only after the update is durable in PostgreSQL.",
         "operationId": "receive_telegram_webhook_api_v1_integrations_telegram_webhook_post",
@@ -5441,7 +5654,9 @@
     },
     "/api/tma/auth": {
       "post": {
-        "tags": ["tma"],
+        "tags": [
+          "tma"
+        ],
         "summary": "Tma Auth",
         "description": "Валидирует initData и выдаёт сессионный токен + роль.\n\n503 — Telegram/secret не настроены; 401 — initData невалиден/истёк;\n403 — пользователь не в списке доступа (нет активного recipient'а).",
         "operationId": "tma_auth_api_tma_auth_post",
@@ -5491,7 +5706,9 @@
     },
     "/api/tma/me": {
       "get": {
-        "tags": ["tma"],
+        "tags": [
+          "tma"
+        ],
         "summary": "Tma Me",
         "description": "Проверка сессии: возвращает текущего пользователя (под Bearer-guard).",
         "operationId": "tma_me_api_tma_me_get",
@@ -5521,7 +5738,9 @@
     },
     "/api/tma/navigation/resolve": {
       "post": {
-        "tags": ["tma"],
+        "tags": [
+          "tma"
+        ],
         "summary": "Resolve Tma Navigation",
         "description": "Consume a recipient-bound navigation capability exactly once.",
         "operationId": "resolve_tma_navigation_api_tma_navigation_resolve_post",
@@ -5571,7 +5790,9 @@
     },
     "/api/tools/creative-uniquify": {
       "post": {
-        "tags": ["tools"],
+        "tags": [
+          "tools"
+        ],
         "summary": "Creative Uniquify",
         "description": "Уникализирует загруженные изображения и сохраняет в FB_Agent_Creo.\n\nПринимает form-data с полями offer_name, copies и files (multipart).\nНе удаляет выходную папку — клиент может открыть её через open-folder.",
         "operationId": "creative_uniquify_api_tools_creative_uniquify_post",
@@ -5621,7 +5842,9 @@
     },
     "/api/tools/creative-uniquify/open-folder": {
       "post": {
-        "tags": ["tools"],
+        "tags": [
+          "tools"
+        ],
         "summary": "Open Creative Folder",
         "description": "Открывает папку с результатом уникализации в Finder (macOS) или xdg-open (Linux).\n\nПРЕДУПРЕЖДЕНИЕ: dev-only endpoint. На удалённом/prod-сервере не имеет смысла,\nтак как открывает Finder на сервере, а не у пользователя.\n\nБезопасность: разрешает открывать только папки внутри корня FB_Agent_Creo.",
         "operationId": "open_creative_folder_api_tools_creative_uniquify_open_folder_post",
@@ -5673,7 +5896,9 @@
     },
     "/api/tools/campaign-create/folders": {
       "get": {
-        "tags": ["tools"],
+        "tags": [
+          "tools"
+        ],
         "summary": "Get Campaign Creative Folders",
         "description": "Возвращает список папок с креативами из корня FB_Agent_Creo.\n\nProd-safe: читает структуру FS без открытия GUI или записи файлов.\nСканирует 1 уровень глубины. Возвращает пустой список если корня нет.\nИспользуется Mini App Scripts-экраном.",
         "operationId": "get_campaign_creative_folders_api_tools_campaign_create_folders_get",
@@ -5707,7 +5932,9 @@
     },
     "/api/tools/campaign-create/plan": {
       "post": {
-        "tags": ["tools"],
+        "tags": [
+          "tools"
+        ],
         "summary": "Build Campaign Plan",
         "description": "Строит план создания кампании из папки с креативами и настроек UI.\n\nЧитает структуру папки, валидирует файлы, собирает имена кампании/групп/объявлений,\nURL-параметры и ручной чек-лист.",
         "operationId": "build_campaign_plan_api_tools_campaign_create_plan_post",
@@ -5762,7 +5989,12 @@
         "properties": {
           "block_type": {
             "type": "string",
-            "enum": ["dashboard_overview", "ad_detail", "campaign_summary", "history_summary"],
+            "enum": [
+              "dashboard_overview",
+              "ad_detail",
+              "campaign_summary",
+              "history_summary"
+            ],
             "title": "Block Type"
           },
           "scope_key": {
@@ -5793,7 +6025,9 @@
           }
         },
         "type": "object",
-        "required": ["block_type"],
+        "required": [
+          "block_type"
+        ],
         "title": "AIAnalyzeRequest",
         "description": "Тело запроса AI-анализа."
       },
@@ -5849,7 +6083,9 @@
           }
         },
         "type": "object",
-        "required": ["messages"],
+        "required": [
+          "messages"
+        ],
         "title": "AIChatRequest",
         "description": "Запрос чата: история (последнее сообщение — вопрос пользователя)."
       },
@@ -5876,7 +6112,11 @@
           }
         },
         "type": "object",
-        "required": ["answer", "generated_at", "model"],
+        "required": [
+          "answer",
+          "generated_at",
+          "model"
+        ],
         "title": "AIChatResponse",
         "description": "Ответ ассистента."
       },
@@ -5903,7 +6143,10 @@
           }
         },
         "type": "object",
-        "required": ["important", "generated_at"],
+        "required": [
+          "important",
+          "generated_at"
+        ],
         "title": "AIPulseResponse",
         "description": "Почасовой пульс для веб-виджета.\n\nimportant=False → за окно ничего значимого, виджет молчит (text = null)."
       },
@@ -5915,7 +6158,11 @@
           },
           "state": {
             "type": "string",
-            "enum": ["ready", "stale", "unavailable"],
+            "enum": [
+              "ready",
+              "stale",
+              "unavailable"
+            ],
             "title": "State"
           },
           "timezone_name": {
@@ -6012,7 +6259,10 @@
           }
         },
         "type": "object",
-        "required": ["id", "name"],
+        "required": [
+          "id",
+          "name"
+        ],
         "title": "AdAccountPage",
         "description": "FB-страница, доступная кабинету для промо (id + человекочитаемое имя)."
       },
@@ -6027,7 +6277,9 @@
           }
         },
         "type": "object",
-        "required": ["pages"],
+        "required": [
+          "pages"
+        ],
         "title": "AdAccountPagesResponse",
         "description": "Список страниц кабинета для дропдауна page_id в шаге «Идентичность»."
       },
@@ -6053,7 +6305,10 @@
         "properties": {
           "level": {
             "type": "string",
-            "enum": ["ABO", "CBO"],
+            "enum": [
+              "ABO",
+              "CBO"
+            ],
             "title": "Level"
           },
           "unit_daily_budget": {
@@ -6108,7 +6363,12 @@
           }
         },
         "type": "object",
-        "required": ["campaigns", "adsets", "ads", "total_objects"],
+        "required": [
+          "campaigns",
+          "adsets",
+          "ads",
+          "total_objects"
+        ],
         "title": "AdsetDuplicateCounts"
       },
       "AdsetDuplicateGeneratedNames": {
@@ -6129,7 +6389,10 @@
           }
         },
         "type": "object",
-        "required": ["campaigns", "adsets"],
+        "required": [
+          "campaigns",
+          "adsets"
+        ],
         "title": "AdsetDuplicateGeneratedNames"
       },
       "AdsetDuplicateLaunchIn": {
@@ -6144,7 +6407,9 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["preview_token"],
+        "required": [
+          "preview_token"
+        ],
         "title": "AdsetDuplicateLaunchIn"
       },
       "AdsetDuplicateLaunchOut": {
@@ -6159,7 +6424,10 @@
           }
         },
         "type": "object",
-        "required": ["task_id", "status"],
+        "required": [
+          "task_id",
+          "status"
+        ],
         "title": "AdsetDuplicateLaunchOut"
       },
       "AdsetDuplicatePreviewIn": {
@@ -6197,7 +6465,10 @@
           },
           "budget_level": {
             "type": "string",
-            "enum": ["ABO", "CBO"],
+            "enum": [
+              "ABO",
+              "CBO"
+            ],
             "title": "Budget Level"
           },
           "daily_budget": {
@@ -6390,7 +6661,12 @@
           }
         },
         "type": "object",
-        "required": ["timezone_name", "offset", "start_time_utc", "start_time_local"],
+        "required": [
+          "timezone_name",
+          "offset",
+          "start_time_utc",
+          "start_time_local"
+        ],
         "title": "AdsetDuplicateSchedule"
       },
       "AdsetDuplicateSource": {
@@ -6413,7 +6689,12 @@
           }
         },
         "type": "object",
-        "required": ["account", "campaign", "adset", "ads"],
+        "required": [
+          "account",
+          "campaign",
+          "adset",
+          "ads"
+        ],
         "title": "AdsetDuplicateSource"
       },
       "AdsetDuplicateStatusOut": {
@@ -6466,7 +6747,12 @@
           }
         },
         "type": "object",
-        "required": ["task_id", "status", "progress", "error"],
+        "required": [
+          "task_id",
+          "status",
+          "progress",
+          "error"
+        ],
         "title": "AdsetDuplicateStatusOut"
       },
       "AdsetPlanOut": {
@@ -6486,7 +6772,11 @@
           }
         },
         "type": "object",
-        "required": ["name", "status", "ad_count"],
+        "required": [
+          "name",
+          "status",
+          "ad_count"
+        ],
         "title": "AdsetPlanOut",
         "description": "Сводка по одному adset в плане."
       },
@@ -6494,7 +6784,10 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["firing", "resolved"],
+            "enum": [
+              "firing",
+              "resolved"
+            ],
             "title": "Status"
           },
           "labels": {
@@ -6550,7 +6843,10 @@
         },
         "additionalProperties": true,
         "type": "object",
-        "required": ["status", "startsAt"],
+        "required": [
+          "status",
+          "startsAt"
+        ],
         "title": "AlertmanagerAlert",
         "description": "The stable subset of Alertmanager webhook v4 used by the control plane."
       },
@@ -6563,7 +6859,10 @@
           },
           "status": {
             "type": "string",
-            "enum": ["firing", "resolved"],
+            "enum": [
+              "firing",
+              "resolved"
+            ],
             "title": "Status"
           },
           "receiver": {
@@ -6590,7 +6889,11 @@
         },
         "additionalProperties": true,
         "type": "object",
-        "required": ["version", "status", "alerts"],
+        "required": [
+          "version",
+          "status",
+          "alerts"
+        ],
         "title": "AlertmanagerWebhookPayload",
         "description": "Bounded Alertmanager webhook envelope."
       },
@@ -6646,7 +6949,12 @@
           }
         },
         "type": "object",
-        "required": ["ts", "actual", "base", "stop"],
+        "required": [
+          "ts",
+          "actual",
+          "base",
+          "stop"
+        ],
         "title": "AnalyticsBudgetPointOut"
       },
       "AnalyticsDaypartCellOut": {
@@ -6698,7 +7006,13 @@
           }
         },
         "type": "object",
-        "required": ["weekday", "hour", "clicks", "registrations", "ftds"],
+        "required": [
+          "weekday",
+          "hour",
+          "clicks",
+          "registrations",
+          "ftds"
+        ],
         "title": "AnalyticsDaypartCellOut"
       },
       "AnalyticsDaypartOut": {
@@ -6791,7 +7105,10 @@
           }
         },
         "type": "object",
-        "required": ["value", "label"],
+        "required": [
+          "value",
+          "label"
+        ],
         "title": "AnalyticsFilterOptionOut"
       },
       "AnalyticsFilterOptionsOut": {
@@ -6825,7 +7142,13 @@
         "properties": {
           "stage": {
             "type": "string",
-            "enum": ["click", "lead", "registration", "deposit", "mixed"],
+            "enum": [
+              "click",
+              "lead",
+              "registration",
+              "deposit",
+              "mixed"
+            ],
             "title": "Stage"
           },
           "base_unit": {
@@ -6879,7 +7202,13 @@
           }
         },
         "type": "object",
-        "required": ["stage", "base_budget", "stop_budget", "base_delta", "stop_delta"],
+        "required": [
+          "stage",
+          "base_budget",
+          "stop_budget",
+          "base_delta",
+          "stop_delta"
+        ],
         "title": "AnalyticsLiveBudgetOut"
       },
       "AnalyticsLiveBudgetSeriesOut": {
@@ -6936,7 +7265,15 @@
           }
         },
         "type": "object",
-        "required": ["state", "as_of", "freshness_seconds", "sources", "scope", "window", "points"],
+        "required": [
+          "state",
+          "as_of",
+          "freshness_seconds",
+          "sources",
+          "scope",
+          "window",
+          "points"
+        ],
         "title": "AnalyticsLiveBudgetSeriesOut"
       },
       "AnalyticsMetricsOut": {
@@ -7163,7 +7500,12 @@
           }
         },
         "type": "object",
-        "required": ["page", "page_size", "total", "pages"],
+        "required": [
+          "page",
+          "page_size",
+          "total",
+          "pages"
+        ],
         "title": "AnalyticsPaginationOut"
       },
       "AnalyticsPerformanceOut": {
@@ -7474,7 +7816,11 @@
           },
           "level": {
             "type": "string",
-            "enum": ["campaign", "adset", "ad"],
+            "enum": [
+              "campaign",
+              "adset",
+              "ad"
+            ],
             "title": "Level"
           },
           "parent_id": {
@@ -7532,7 +7878,11 @@
           },
           "timezone_state": {
             "type": "string",
-            "enum": ["single", "mixed", "unknown"],
+            "enum": [
+              "single",
+              "mixed",
+              "unknown"
+            ],
             "title": "Timezone State"
           },
           "offer_id": {
@@ -7614,12 +7964,20 @@
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["meta", "tracker"],
+            "enum": [
+              "meta",
+              "tracker"
+            ],
             "title": "Source"
           },
           "status": {
             "type": "string",
-            "enum": ["good", "degraded", "missing", "unknown"],
+            "enum": [
+              "good",
+              "degraded",
+              "missing",
+              "unknown"
+            ],
             "title": "Status"
           },
           "last_event_at": {
@@ -7688,7 +8046,10 @@
           }
         },
         "type": "object",
-        "required": ["source", "status"],
+        "required": [
+          "source",
+          "status"
+        ],
         "title": "AnalyticsSourceOut"
       },
       "AnalyticsSourcesOut": {
@@ -7701,7 +8062,10 @@
           }
         },
         "type": "object",
-        "required": ["meta", "tracker"],
+        "required": [
+          "meta",
+          "tracker"
+        ],
         "title": "AnalyticsSourcesOut"
       },
       "AnalyticsWindowOut": {
@@ -7737,7 +8101,11 @@
           },
           "timezone_state": {
             "type": "string",
-            "enum": ["single", "mixed", "unknown"],
+            "enum": [
+              "single",
+              "mixed",
+              "unknown"
+            ],
             "title": "Timezone State"
           },
           "missing_timezone_account_ids": {
@@ -7810,7 +8178,12 @@
             "title": "Field Errors"
           }
         },
-        "required": ["code", "message", "correlation_id", "field_errors"],
+        "required": [
+          "code",
+          "message",
+          "correlation_id",
+          "field_errors"
+        ],
         "title": "ApiProblem",
         "type": "object"
       },
@@ -7834,7 +8207,11 @@
           }
         },
         "type": "object",
-        "required": ["offer_name", "copies", "files"],
+        "required": [
+          "offer_name",
+          "copies",
+          "files"
+        ],
         "title": "Body_creative_uniquify_api_tools_creative_uniquify_post"
       },
       "Body_upload_concepts_api_tools_campaigns_upload_post": {
@@ -7860,7 +8237,9 @@
           }
         },
         "type": "object",
-        "required": ["files"],
+        "required": [
+          "files"
+        ],
         "title": "Body_upload_concepts_api_tools_campaigns_upload_post"
       },
       "BrowserCapabilityConsumeRequest": {
@@ -7872,7 +8251,11 @@
           },
           "rpc": {
             "type": "string",
-            "enum": ["execute_graph_call", "upload_image", "upload_video"],
+            "enum": [
+              "execute_graph_call",
+              "upload_image",
+              "upload_video"
+            ],
             "title": "Rpc"
           },
           "operation": {
@@ -7901,7 +8284,11 @@
           },
           "authorized_caller": {
             "type": "string",
-            "enum": ["autopause", "meta_api", "campaign_creator"],
+            "enum": [
+              "autopause",
+              "meta_api",
+              "campaign_creator"
+            ],
             "title": "Authorized Caller"
           },
           "task_id": {
@@ -8047,7 +8434,11 @@
           }
         },
         "type": "object",
-        "required": ["name", "folder_path", "ads"],
+        "required": [
+          "name",
+          "folder_path",
+          "ads"
+        ],
         "title": "CampaignAdSetPlanOut",
         "description": "План одной группы объявлений."
       },
@@ -8305,7 +8696,10 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["key", "adset_count"],
+        "required": [
+          "key",
+          "adset_count"
+        ],
         "title": "CampaignDraftCampaign"
       },
       "CampaignDraftConcept": {
@@ -8352,7 +8746,11 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["ref", "original_name", "size_bytes"],
+        "required": [
+          "ref",
+          "original_name",
+          "size_bytes"
+        ],
         "title": "CampaignDraftConcept"
       },
       "CampaignDraftCreatives": {
@@ -8414,7 +8812,11 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["revision", "state", "updated_at"],
+        "required": [
+          "revision",
+          "state",
+          "updated_at"
+        ],
         "title": "CampaignDraftDocument"
       },
       "CampaignDraftEnvelope": {
@@ -8432,7 +8834,9 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["draft"],
+        "required": [
+          "draft"
+        ],
         "title": "CampaignDraftEnvelope"
       },
       "CampaignDraftGoal": {
@@ -8482,7 +8886,10 @@
           },
           "budget_level": {
             "type": "string",
-            "enum": ["campaign", "adset"],
+            "enum": [
+              "campaign",
+              "adset"
+            ],
             "title": "Budget Level",
             "default": "campaign"
           },
@@ -8533,19 +8940,30 @@
           },
           "click_through_days": {
             "type": "integer",
-            "enum": [1, 7, 28],
+            "enum": [
+              1,
+              7,
+              28
+            ],
             "title": "Click Through Days",
             "default": 1
           },
           "view_through_days": {
             "type": "integer",
-            "enum": [1, 7, 28],
+            "enum": [
+              1,
+              7,
+              28
+            ],
             "title": "View Through Days",
             "default": 1
           },
           "ad_text_mode": {
             "type": "string",
-            "enum": ["none", "text"],
+            "enum": [
+              "none",
+              "text"
+            ],
             "title": "Ad Text Mode",
             "default": "none"
           },
@@ -8582,7 +9000,11 @@
           },
           "account_context_state": {
             "type": "string",
-            "enum": ["ready", "stale", "unavailable"],
+            "enum": [
+              "ready",
+              "stale",
+              "unavailable"
+            ],
             "title": "Account Context State",
             "default": "unavailable"
           },
@@ -8594,7 +9016,10 @@
           },
           "currency": {
             "type": "string",
-            "enum": ["", "USD"],
+            "enum": [
+              "",
+              "USD"
+            ],
             "title": "Currency",
             "default": ""
           },
@@ -8664,14 +9089,20 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["expected_revision", "state"],
+        "required": [
+          "expected_revision",
+          "state"
+        ],
         "title": "CampaignDraftPutIn"
       },
       "CampaignDraftStart": {
         "properties": {
           "mode": {
             "type": "string",
-            "enum": ["new", "preset"],
+            "enum": [
+              "new",
+              "preset"
+            ],
             "title": "Mode",
             "default": "new"
           },
@@ -8696,7 +9127,15 @@
         "properties": {
           "current_step": {
             "type": "integer",
-            "enum": [1, 2, 3, 4, 5, 6, 7],
+            "enum": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
             "title": "Current Step",
             "default": 1
           },
@@ -8725,7 +9164,15 @@
         "properties": {
           "current_step": {
             "type": "integer",
-            "enum": [1, 2, 3, 4, 5, 6, 7],
+            "enum": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
             "title": "Current Step",
             "default": 1
           },
@@ -8803,7 +9250,14 @@
           }
         },
         "type": "object",
-        "required": ["name", "path", "adset_count", "creative_count", "media_type", "updated_at"],
+        "required": [
+          "name",
+          "path",
+          "adset_count",
+          "creative_count",
+          "media_type",
+          "updated_at"
+        ],
         "title": "CampaignFolderItem",
         "description": "Краткое описание одной папки креативов для UI выбора."
       },
@@ -8864,7 +9318,10 @@
           }
         },
         "type": "object",
-        "required": ["label", "value"],
+        "required": [
+          "label",
+          "value"
+        ],
         "title": "CampaignManualGuideItemOut",
         "description": "Одна строка ручного помощника."
       },
@@ -8883,7 +9340,10 @@
           }
         },
         "type": "object",
-        "required": ["title", "items"],
+        "required": [
+          "title",
+          "items"
+        ],
         "title": "CampaignManualGuideSectionOut",
         "description": "Секция ручного помощника."
       },
@@ -8903,7 +9363,11 @@
           }
         },
         "type": "object",
-        "required": ["id", "name", "selected"],
+        "required": [
+          "id",
+          "name",
+          "selected"
+        ],
         "title": "CampaignOption",
         "description": "Кампания для выбора в allowlist сканирования (#3)."
       },
@@ -8931,7 +9395,12 @@
           }
         },
         "type": "object",
-        "required": ["key", "name", "status", "adsets"],
+        "required": [
+          "key",
+          "name",
+          "status",
+          "adsets"
+        ],
         "title": "CampaignPlanOut",
         "description": "Сводка по одной кампании в плане."
       },
@@ -8977,7 +9446,12 @@
           }
         },
         "type": "object",
-        "required": ["offer_code", "offer_country_name", "cabinet_id", "folder_name"],
+        "required": [
+          "offer_code",
+          "offer_country_name",
+          "cabinet_id",
+          "folder_name"
+        ],
         "title": "CampaignPlanRequest",
         "description": "Параметры создания кампании — совпадают с CampaignScriptConfig."
       },
@@ -9108,7 +9582,11 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["key", "adset_count", "concept_refs"],
+        "required": [
+          "key",
+          "adset_count",
+          "concept_refs"
+        ],
         "title": "CampaignStructureIn",
         "description": "Одна кампания в плоской структуре фронта.\n\nНесёт `key`/`label`/`adset_count`/`concept_refs`. Доменные имена adset'ов\nи dir/glob генерируются детерминированно в `to_domain` (фронт их не знает).\n`label` — произвольная метка кампании; если задана, добавляется в конец имени\nкампании и каждого adset'а. Пустая/None — ничего не добавляется."
       },
@@ -9116,7 +9594,10 @@
         "properties": {
           "role": {
             "type": "string",
-            "enum": ["user", "assistant"],
+            "enum": [
+              "user",
+              "assistant"
+            ],
             "title": "Role"
           },
           "content": {
@@ -9127,7 +9608,10 @@
           }
         },
         "type": "object",
-        "required": ["role", "content"],
+        "required": [
+          "role",
+          "content"
+        ],
         "title": "ChatMessageIn",
         "description": "Одно сообщение истории (историю держит клиент и шлёт с каждым запросом)."
       },
@@ -9172,19 +9656,30 @@
       },
       "DataState": {
         "type": "string",
-        "enum": ["ready", "empty", "partial", "stale", "unavailable"],
+        "enum": [
+          "ready",
+          "empty",
+          "partial",
+          "stale",
+          "unavailable"
+        ],
         "title": "DataState"
       },
       "DesktopLaunchRequest": {
         "properties": {
           "presentation": {
             "type": "string",
-            "enum": ["desktop", "mobile"],
+            "enum": [
+              "desktop",
+              "mobile"
+            ],
             "title": "Presentation"
           }
         },
         "type": "object",
-        "required": ["presentation"],
+        "required": [
+          "presentation"
+        ],
         "title": "DesktopLaunchRequest",
         "description": "Platform-selected presentation profile carried into the desktop session."
       },
@@ -9206,7 +9701,11 @@
           }
         },
         "type": "object",
-        "required": ["url", "expires_at", "transport"],
+        "required": [
+          "url",
+          "expires_at",
+          "transport"
+        ],
         "title": "DesktopLaunchResponse",
         "description": "A short-lived, single-use URL that establishes a desktop session."
       },
@@ -9227,7 +9726,10 @@
           }
         },
         "type": "object",
-        "required": ["active", "available"],
+        "required": [
+          "active",
+          "available"
+        ],
         "title": "DesktopTransportsResponse",
         "description": "Configured transport selection exposed to owner launchers."
       },
@@ -9254,7 +9756,12 @@
           }
         },
         "type": "object",
-        "required": ["id", "name", "currency", "currency_exponent"],
+        "required": [
+          "id",
+          "name",
+          "currency",
+          "currency_exponent"
+        ],
         "title": "DuplicateSourceAccount"
       },
       "DuplicateSourceAd": {
@@ -9295,7 +9802,11 @@
           }
         },
         "type": "object",
-        "required": ["id", "name", "fb_ad_id"],
+        "required": [
+          "id",
+          "name",
+          "fb_ad_id"
+        ],
         "title": "DuplicateSourceAd"
       },
       "DuplicateSourceEntity": {
@@ -9310,7 +9821,10 @@
           }
         },
         "type": "object",
-        "required": ["id", "name"],
+        "required": [
+          "id",
+          "name"
+        ],
         "title": "DuplicateSourceEntity"
       },
       "LaunchIn": {
@@ -9344,7 +9858,9 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["config"],
+        "required": [
+          "config"
+        ],
         "title": "LaunchIn",
         "description": "Запрос запуска залива: конфиг + опц. ссылка на пресет/upload.\n\n`config` — единственная каноническая плоская форма фронта (`CampaignConfigIn`)."
       },
@@ -9380,7 +9896,12 @@
           }
         },
         "type": "object",
-        "required": ["run_id", "task_id", "status", "idempotency_key"],
+        "required": [
+          "run_id",
+          "task_id",
+          "status",
+          "idempotency_key"
+        ],
         "title": "LaunchOut",
         "description": "Ответ запуска: id созданного run + id задачи."
       },
@@ -9395,7 +9916,9 @@
           }
         },
         "type": "object",
-        "required": ["default_interval_seconds"],
+        "required": [
+          "default_interval_seconds"
+        ],
         "title": "ObserverIntervalPatchRequest",
         "description": "Точечное обновление интервала без перезаписи runtime-флагов."
       },
@@ -9429,7 +9952,10 @@
           }
         },
         "type": "object",
-        "required": ["is_scanning_enabled", "default_interval_seconds"],
+        "required": [
+          "is_scanning_enabled",
+          "default_interval_seconds"
+        ],
         "title": "ObserverSettingsResponse",
         "description": "Текущая конфигурация observer без удалённых legacy-порогов."
       },
@@ -9489,7 +10015,10 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["code", "ad_account_ids"],
+        "required": [
+          "code",
+          "ad_account_ids"
+        ],
         "title": "OfferCreateIn",
         "description": "Тело POST /offers."
       },
@@ -9596,7 +10125,12 @@
           }
         },
         "type": "object",
-        "required": ["id", "code", "name", "is_active"],
+        "required": [
+          "id",
+          "code",
+          "name",
+          "is_active"
+        ],
         "title": "OfferOut",
         "description": "Ответ для одного оффера (GET /offers, POST /offers, PUT /offers/{id})."
       },
@@ -9827,7 +10361,9 @@
           }
         },
         "type": "object",
-        "required": ["path"],
+        "required": [
+          "path"
+        ],
         "title": "OpenFolderRequest",
         "description": "Запрос открытия папки результата."
       },
@@ -9857,7 +10393,10 @@
           }
         },
         "type": "object",
-        "required": ["id", "name"],
+        "required": [
+          "id",
+          "name"
+        ],
         "title": "OperatorAccount"
       },
       "OperatorActionItem": {
@@ -9872,7 +10411,14 @@
           },
           "kind": {
             "type": "string",
-            "enum": ["pause", "activate", "scan", "create", "duplicate", "other"],
+            "enum": [
+              "pause",
+              "activate",
+              "scan",
+              "create",
+              "duplicate",
+              "other"
+            ],
             "title": "Kind"
           },
           "state": {
@@ -10016,7 +10562,14 @@
       },
       "OperatorActionState": {
         "type": "string",
-        "enum": ["queued", "running", "confirmed", "failed", "cancelled", "unknown"],
+        "enum": [
+          "queued",
+          "running",
+          "confirmed",
+          "failed",
+          "cancelled",
+          "unknown"
+        ],
         "title": "OperatorActionState"
       },
       "OperatorActionsData": {
@@ -10030,7 +10583,9 @@
           }
         },
         "type": "object",
-        "required": ["items"],
+        "required": [
+          "items"
+        ],
         "title": "OperatorActionsData"
       },
       "OperatorActionsResponse": {
@@ -10126,7 +10681,10 @@
           }
         },
         "type": "object",
-        "required": ["expected_delivery_status", "expected_as_of"],
+        "required": [
+          "expected_delivery_status",
+          "expected_as_of"
+        ],
         "title": "OperatorAdCommandRequest",
         "description": "Optimistic precondition captured from the confirmed ad row."
       },
@@ -10219,6 +10777,28 @@
               }
             ],
             "title": "Cost Per Registration"
+          },
+          "frequency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency"
+          },
+          "cost_per_ftd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Per Ftd"
           }
         },
         "type": "object",
@@ -10230,7 +10810,9 @@
           "ftd",
           "confirmed_deposits",
           "cpc",
-          "cost_per_registration"
+          "cost_per_registration",
+          "frequency",
+          "cost_per_ftd"
         ],
         "title": "OperatorAdMetrics"
       },
@@ -10307,6 +10889,9 @@
           "metrics": {
             "$ref": "#/components/schemas/OperatorAdMetrics"
           },
+          "rule_context": {
+            "$ref": "#/components/schemas/OperatorRuleContext"
+          },
           "active_action": {
             "anyOf": [
               {
@@ -10333,6 +10918,7 @@
           "severity",
           "as_of",
           "metrics",
+          "rule_context",
           "active_action"
         ],
         "title": "OperatorAdRow"
@@ -10423,6 +11009,22 @@
         ],
         "title": "OperatorAdsResponse"
       },
+      "OperatorApproachingStopData": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorAdRow"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "OperatorApproachingStopData"
+      },
       "OperatorAttentionAction": {
         "properties": {
           "label": {
@@ -10435,7 +11037,10 @@
           }
         },
         "type": "object",
-        "required": ["label", "href"],
+        "required": [
+          "label",
+          "href"
+        ],
         "title": "OperatorAttentionAction"
       },
       "OperatorAttentionData": {
@@ -10449,7 +11054,9 @@
           }
         },
         "type": "object",
-        "required": ["items"],
+        "required": [
+          "items"
+        ],
         "title": "OperatorAttentionData"
       },
       "OperatorAttentionItem": {
@@ -10460,7 +11067,12 @@
           },
           "kind": {
             "type": "string",
-            "enum": ["incident", "action", "source", "recommendation"],
+            "enum": [
+              "incident",
+              "action",
+              "source",
+              "recommendation"
+            ],
             "title": "Kind"
           },
           "severity": {
@@ -10522,7 +11134,12 @@
         "properties": {
           "kind": {
             "type": "string",
-            "enum": ["ad", "campaign", "account", "system"],
+            "enum": [
+              "ad",
+              "campaign",
+              "account",
+              "system"
+            ],
             "title": "Kind"
           },
           "id": {
@@ -10549,7 +11166,11 @@
           }
         },
         "type": "object",
-        "required": ["kind", "id", "label"],
+        "required": [
+          "kind",
+          "id",
+          "label"
+        ],
         "title": "OperatorAttentionTarget"
       },
       "OperatorCabinetDay": {
@@ -10566,7 +11187,10 @@
           }
         },
         "type": "object",
-        "required": ["starts_at", "ends_at"],
+        "required": [
+          "starts_at",
+          "ends_at"
+        ],
         "title": "OperatorCabinetDay"
       },
       "OperatorCabinetLedgerRow": {
@@ -10712,7 +11336,13 @@
           }
         },
         "type": "object",
-        "required": ["task_id", "public_id", "state", "created", "correlation_id"],
+        "required": [
+          "task_id",
+          "public_id",
+          "state",
+          "created",
+          "correlation_id"
+        ],
         "title": "OperatorCommandResponse"
       },
       "OperatorCurrencyGroup": {
@@ -10775,7 +11405,15 @@
           }
         },
         "type": "object",
-        "required": ["id", "state", "severity", "as_of", "freshness_seconds", "totals", "cabinets"],
+        "required": [
+          "id",
+          "state",
+          "severity",
+          "as_of",
+          "freshness_seconds",
+          "totals",
+          "cabinets"
+        ],
         "title": "OperatorCurrencyGroup"
       },
       "OperatorDisplayPreferencePutRequest": {
@@ -10789,7 +11427,9 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["timezone_name"],
+        "required": [
+          "timezone_name"
+        ],
         "title": "OperatorDisplayPreferencePutRequest"
       },
       "OperatorDisplayPreferenceResponse": {
@@ -10805,7 +11445,10 @@
           }
         },
         "type": "object",
-        "required": ["timezone_name", "updated_at"],
+        "required": [
+          "timezone_name",
+          "updated_at"
+        ],
         "title": "OperatorDisplayPreferenceResponse"
       },
       "OperatorEconomyData": {
@@ -10822,7 +11465,10 @@
           }
         },
         "type": "object",
-        "required": ["totals", "series"],
+        "required": [
+          "totals",
+          "series"
+        ],
         "title": "OperatorEconomyData"
       },
       "OperatorEconomyTotals": {
@@ -10873,14 +11519,22 @@
           }
         },
         "type": "object",
-        "required": ["spend", "base", "stop", "base_delta"],
+        "required": [
+          "spend",
+          "base",
+          "stop",
+          "base_delta"
+        ],
         "title": "OperatorEconomyTotals"
       },
       "OperatorEventItem": {
         "properties": {
           "event_type": {
             "type": "string",
-            "enum": ["alert", "task"],
+            "enum": [
+              "alert",
+              "task"
+            ],
             "title": "Event Type"
           },
           "ts": {
@@ -10981,7 +11635,10 @@
           }
         },
         "type": "object",
-        "required": ["event_type", "ts"],
+        "required": [
+          "event_type",
+          "ts"
+        ],
         "title": "OperatorEventItem",
         "description": "One immutable alert or terminal command event in the operator feed."
       },
@@ -10996,14 +11653,21 @@
           }
         },
         "type": "object",
-        "required": ["stages"],
+        "required": [
+          "stages"
+        ],
         "title": "OperatorFunnelData"
       },
       "OperatorFunnelStage": {
         "properties": {
           "key": {
             "type": "string",
-            "enum": ["clicks", "registrations", "ftd", "confirmed_deposits"],
+            "enum": [
+              "clicks",
+              "registrations",
+              "ftd",
+              "confirmed_deposits"
+            ],
             "title": "Key"
           },
           "label": {
@@ -11045,7 +11709,13 @@
           }
         },
         "type": "object",
-        "required": ["key", "label", "count", "conversion", "cost"],
+        "required": [
+          "key",
+          "label",
+          "count",
+          "conversion",
+          "cost"
+        ],
         "title": "OperatorFunnelStage"
       },
       "OperatorIncidentAckResponse": {
@@ -11070,7 +11740,12 @@
           }
         },
         "type": "object",
-        "required": ["incident_id", "status", "acknowledged_at", "correlation_id"],
+        "required": [
+          "incident_id",
+          "status",
+          "acknowledged_at",
+          "correlation_id"
+        ],
         "title": "OperatorIncidentAckResponse"
       },
       "OperatorIncidentDetailResponse": {
@@ -11142,7 +11817,13 @@
           },
           "status": {
             "type": "string",
-            "enum": ["open", "acknowledged", "executing", "resolved", "failed"],
+            "enum": [
+              "open",
+              "acknowledged",
+              "executing",
+              "resolved",
+              "failed"
+            ],
             "title": "Status"
           },
           "title": {
@@ -11329,7 +12010,13 @@
           }
         },
         "type": "object",
-        "required": ["code", "title", "detail", "severity", "correlation_id"],
+        "required": [
+          "code",
+          "title",
+          "detail",
+          "severity",
+          "correlation_id"
+        ],
         "title": "OperatorIssue"
       },
       "OperatorPortfolioData": {
@@ -11343,8 +12030,100 @@
           }
         },
         "type": "object",
-        "required": ["currency_groups"],
+        "required": [
+          "currency_groups"
+        ],
         "title": "OperatorPortfolioData"
+      },
+      "OperatorRuleContext": {
+        "properties": {
+          "offer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          },
+          "rule_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Code"
+          },
+          "rule_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule Title"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          },
+          "percent_to_stop": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent To Stop"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "none",
+              "warning",
+              "stop"
+            ],
+            "title": "Stage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "offer_code",
+          "rule_code",
+          "rule_title",
+          "value",
+          "threshold",
+          "percent_to_stop",
+          "stage"
+        ],
+        "title": "OperatorRuleContext"
       },
       "OperatorScopeEvidence": {
         "properties": {
@@ -11372,7 +12151,11 @@
           },
           "cabinet_timezone_state": {
             "type": "string",
-            "enum": ["single", "mixed", "unknown"],
+            "enum": [
+              "single",
+              "mixed",
+              "unknown"
+            ],
             "title": "Cabinet Timezone State"
           },
           "missing_timezone_account_ids": {
@@ -11396,7 +12179,11 @@
           },
           "currency_state": {
             "type": "string",
-            "enum": ["single", "mixed", "unknown"],
+            "enum": [
+              "single",
+              "mixed",
+              "unknown"
+            ],
             "title": "Currency State"
           },
           "missing_currency_account_ids": {
@@ -11488,8 +12275,80 @@
           }
         },
         "type": "object",
-        "required": ["state", "as_of", "freshness_seconds", "sources", "issues", "data"],
+        "required": [
+          "state",
+          "as_of",
+          "freshness_seconds",
+          "sources",
+          "issues",
+          "data"
+        ],
         "title": "OperatorSection[OperatorActionsData]"
+      },
+      "OperatorSection_OperatorApproachingStopData_": {
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/DataState"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "freshness_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freshness Seconds"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorIssue"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperatorApproachingStopData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "as_of",
+          "freshness_seconds",
+          "sources",
+          "issues",
+          "data"
+        ],
+        "title": "OperatorSection[OperatorApproachingStopData]"
       },
       "OperatorSection_OperatorAttentionData_": {
         "properties": {
@@ -11546,7 +12405,14 @@
           }
         },
         "type": "object",
-        "required": ["state", "as_of", "freshness_seconds", "sources", "issues", "data"],
+        "required": [
+          "state",
+          "as_of",
+          "freshness_seconds",
+          "sources",
+          "issues",
+          "data"
+        ],
         "title": "OperatorSection[OperatorAttentionData]"
       },
       "OperatorSection_OperatorEconomyData_": {
@@ -11604,7 +12470,14 @@
           }
         },
         "type": "object",
-        "required": ["state", "as_of", "freshness_seconds", "sources", "issues", "data"],
+        "required": [
+          "state",
+          "as_of",
+          "freshness_seconds",
+          "sources",
+          "issues",
+          "data"
+        ],
         "title": "OperatorSection[OperatorEconomyData]"
       },
       "OperatorSection_OperatorFunnelData_": {
@@ -11662,7 +12535,14 @@
           }
         },
         "type": "object",
-        "required": ["state", "as_of", "freshness_seconds", "sources", "issues", "data"],
+        "required": [
+          "state",
+          "as_of",
+          "freshness_seconds",
+          "sources",
+          "issues",
+          "data"
+        ],
         "title": "OperatorSection[OperatorFunnelData]"
       },
       "OperatorSection_OperatorPortfolioData_": {
@@ -11720,7 +12600,14 @@
           }
         },
         "type": "object",
-        "required": ["state", "as_of", "freshness_seconds", "sources", "issues", "data"],
+        "required": [
+          "state",
+          "as_of",
+          "freshness_seconds",
+          "sources",
+          "issues",
+          "data"
+        ],
         "title": "OperatorSection[OperatorPortfolioData]"
       },
       "OperatorSection_OperatorSystemData_": {
@@ -11778,12 +12665,24 @@
           }
         },
         "type": "object",
-        "required": ["state", "as_of", "freshness_seconds", "sources", "issues", "data"],
+        "required": [
+          "state",
+          "as_of",
+          "freshness_seconds",
+          "sources",
+          "issues",
+          "data"
+        ],
         "title": "OperatorSection[OperatorSystemData]"
       },
       "OperatorSeverity": {
         "type": "string",
-        "enum": ["ok", "warning", "critical", "unknown"],
+        "enum": [
+          "ok",
+          "warning",
+          "critical",
+          "unknown"
+        ],
         "title": "OperatorSeverity"
       },
       "OperatorSnapshot": {
@@ -11793,6 +12692,9 @@
           },
           "attention": {
             "$ref": "#/components/schemas/OperatorSection_OperatorAttentionData_"
+          },
+          "approaching_stop": {
+            "$ref": "#/components/schemas/OperatorSection_OperatorApproachingStopData_"
           },
           "portfolio": {
             "$ref": "#/components/schemas/OperatorSection_OperatorPortfolioData_"
@@ -11811,7 +12713,16 @@
           }
         },
         "type": "object",
-        "required": ["meta", "attention", "portfolio", "economy", "funnel", "actions", "system"],
+        "required": [
+          "meta",
+          "attention",
+          "approaching_stop",
+          "portfolio",
+          "economy",
+          "funnel",
+          "actions",
+          "system"
+        ],
         "title": "OperatorSnapshot"
       },
       "OperatorSnapshotMeta": {
@@ -11851,7 +12762,11 @@
           },
           "cabinet_timezone_state": {
             "type": "string",
-            "enum": ["single", "mixed", "unknown"],
+            "enum": [
+              "single",
+              "mixed",
+              "unknown"
+            ],
             "title": "Cabinet Timezone State"
           },
           "missing_timezone_account_ids": {
@@ -11875,7 +12790,11 @@
           },
           "currency_state": {
             "type": "string",
-            "enum": ["single", "mixed", "unknown"],
+            "enum": [
+              "single",
+              "mixed",
+              "unknown"
+            ],
             "title": "Currency State"
           },
           "missing_currency_account_ids": {
@@ -11899,7 +12818,12 @@
           },
           "window": {
             "type": "string",
-            "enum": ["today", "24h", "7d", "30d"],
+            "enum": [
+              "today",
+              "24h",
+              "7d",
+              "30d"
+            ],
             "title": "Window"
           },
           "account": {
@@ -11970,7 +12894,12 @@
           }
         },
         "type": "object",
-        "required": ["at", "actual", "base", "stop"],
+        "required": [
+          "at",
+          "actual",
+          "base",
+          "stop"
+        ],
         "title": "OperatorSpendPoint"
       },
       "OperatorSystemData": {
@@ -12022,7 +12951,13 @@
           }
         },
         "type": "object",
-        "required": ["severity", "monitoring_enabled", "last_scan_at", "next_scan_at", "workers"],
+        "required": [
+          "severity",
+          "monitoring_enabled",
+          "last_scan_at",
+          "next_scan_at",
+          "workers"
+        ],
         "title": "OperatorSystemData"
       },
       "OperatorWorkerState": {
@@ -12056,7 +12991,13 @@
           }
         },
         "type": "object",
-        "required": ["id", "label", "severity", "status", "last_activity_at"],
+        "required": [
+          "id",
+          "label",
+          "severity",
+          "status",
+          "last_activity_at"
+        ],
         "title": "OperatorWorkerState"
       },
       "OwnerTagPatchRequest": {
@@ -12202,7 +13143,12 @@
           }
         },
         "type": "object",
-        "required": ["name", "act_id", "page_id", "pixel_id"],
+        "required": [
+          "name",
+          "act_id",
+          "page_id",
+          "pixel_id"
+        ],
         "title": "PresetIn",
         "description": "Тело создания/обновления пресета (стабильный конфиг залива)."
       },
@@ -12428,7 +13374,13 @@
           }
         },
         "type": "object",
-        "required": ["rule", "label", "base", "stop", "warning"],
+        "required": [
+          "rule",
+          "label",
+          "base",
+          "stop",
+          "warning"
+        ],
         "title": "RuleThresholdPreview",
         "description": "Один денежный порог: при какой стоимости сработают стоп и ворнинг."
       },
@@ -12436,7 +13388,10 @@
         "properties": {
           "action": {
             "type": "string",
-            "enum": ["abort", "resume"],
+            "enum": [
+              "abort",
+              "resume"
+            ],
             "title": "Action"
           },
           "run_id": {
@@ -12449,7 +13404,14 @@
           },
           "state": {
             "type": "string",
-            "enum": ["queued", "running", "confirmed", "failed", "cancelled", "unknown"],
+            "enum": [
+              "queued",
+              "running",
+              "confirmed",
+              "failed",
+              "cancelled",
+              "unknown"
+            ],
             "title": "State"
           },
           "run_status": {
@@ -12475,7 +13437,15 @@
           }
         },
         "type": "object",
-        "required": ["action", "run_id", "task_id", "state", "run_status", "created", "reason"],
+        "required": [
+          "action",
+          "run_id",
+          "task_id",
+          "state",
+          "run_status",
+          "created",
+          "reason"
+        ],
         "title": "RunCommandOut",
         "description": "Accepted or replayed abort/resume command lifecycle."
       },
@@ -12491,7 +13461,10 @@
           }
         },
         "type": "object",
-        "required": ["available", "reason"],
+        "required": [
+          "available",
+          "reason"
+        ],
         "title": "RunControlOptionOut",
         "description": "One control and a stable machine-readable availability reason."
       },
@@ -12505,7 +13478,10 @@
           }
         },
         "type": "object",
-        "required": ["abort", "resume"],
+        "required": [
+          "abort",
+          "resume"
+        ],
         "title": "RunControlsOut"
       },
       "RunDetailOut": {
@@ -12661,7 +13637,9 @@
           }
         },
         "type": "object",
-        "required": ["stage"],
+        "required": [
+          "stage"
+        ],
         "title": "RunProgressOut",
         "description": "Bounded operator progress; arbitrary worker checkpoint keys stay private."
       },
@@ -12747,19 +13725,37 @@
           },
           "state": {
             "type": "string",
-            "enum": ["queued", "running", "confirmed", "failed", "cancelled", "unknown"],
+            "enum": [
+              "queued",
+              "running",
+              "confirmed",
+              "failed",
+              "cancelled",
+              "unknown"
+            ],
             "title": "State"
           },
           "queue_status": {
             "type": "string",
-            "enum": ["pending", "retrying", "running", "succeeded", "failed", "cancelled"],
+            "enum": [
+              "pending",
+              "retrying",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
             "title": "Queue Status"
           },
           "outcome": {
             "anyOf": [
               {
                 "type": "string",
-                "enum": ["CONFIRMED", "REJECTED", "UNKNOWN"]
+                "enum": [
+                  "CONFIRMED",
+                  "REJECTED",
+                  "UNKNOWN"
+                ]
               },
               {
                 "type": "null"
@@ -12869,7 +13865,11 @@
           }
         },
         "type": "object",
-        "required": ["status", "task_id", "correlation_id"],
+        "required": [
+          "status",
+          "task_id",
+          "correlation_id"
+        ],
         "title": "ScanNowResponse",
         "description": "Ответ на POST /settings/observer/scan-now."
       },
@@ -12881,7 +13881,9 @@
           }
         },
         "type": "object",
-        "required": ["enabled"],
+        "required": [
+          "enabled"
+        ],
         "title": "ScanningToggleRequest",
         "description": "Тело PATCH /settings/observer/scanning."
       },
@@ -12912,7 +13914,13 @@
           }
         },
         "type": "object",
-        "required": ["rule", "label", "stop_from", "stop_to", "warning_from"],
+        "required": [
+          "rule",
+          "label",
+          "stop_from",
+          "stop_to",
+          "warning_from"
+        ],
         "title": "SpendRangePreview",
         "description": "Диапазон расхода в валюте CPA."
       },
@@ -12928,7 +13936,11 @@
           },
           "overall": {
             "type": "string",
-            "enum": ["HEALTHY", "DEGRADED", "CRITICAL"],
+            "enum": [
+              "HEALTHY",
+              "DEGRADED",
+              "CRITICAL"
+            ],
             "title": "Overall"
           },
           "actors_active": {
@@ -13002,7 +14014,11 @@
           }
         },
         "type": "object",
-        "required": ["ready", "infrastructure_ready", "overall"],
+        "required": [
+          "ready",
+          "infrastructure_ready",
+          "overall"
+        ],
         "title": "SystemReadinessResponse",
         "description": "Строгая готовность money-критичного контура, не простой liveness probe."
       },
@@ -13031,7 +14047,13 @@
           }
         },
         "type": "object",
-        "required": ["delivery_id", "state", "error_code", "updated_at", "correlation_id"],
+        "required": [
+          "delivery_id",
+          "state",
+          "error_code",
+          "updated_at",
+          "correlation_id"
+        ],
         "title": "TelegramDeliveryErrorSummary"
       },
       "TelegramInviteResponse": {
@@ -13067,7 +14089,11 @@
           }
         },
         "type": "object",
-        "required": ["code", "expires_at", "activation_command"],
+        "required": [
+          "code",
+          "expires_at",
+          "activation_command"
+        ],
         "title": "TelegramInviteResponse",
         "description": "Готовый invite-код, команда и опциональная Telegram deep-link."
       },
@@ -13080,7 +14106,14 @@
           },
           "webhook_state": {
             "type": "string",
-            "enum": ["unconfigured", "pending", "applying", "retry", "configured", "failed"],
+            "enum": [
+              "unconfigured",
+              "pending",
+              "applying",
+              "retry",
+              "configured",
+              "failed"
+            ],
             "title": "Webhook State"
           },
           "webhook_generation": {
@@ -13210,12 +14243,20 @@
           },
           "gateway_state": {
             "type": "string",
-            "enum": ["configured", "auth_error", "unconfigured"],
+            "enum": [
+              "configured",
+              "auth_error",
+              "unconfigured"
+            ],
             "title": "Gateway State"
           },
           "outbox_state": {
             "type": "string",
-            "enum": ["idle", "active", "degraded"],
+            "enum": [
+              "idle",
+              "active",
+              "degraded"
+            ],
             "title": "Outbox State"
           },
           "last_webhook_update_at": {
@@ -13325,7 +14366,12 @@
           },
           "min_severity": {
             "type": "string",
-            "enum": ["ok", "warning", "critical", "unknown"],
+            "enum": [
+              "ok",
+              "warning",
+              "critical",
+              "unknown"
+            ],
             "title": "Min Severity",
             "default": "warning"
           },
@@ -13368,7 +14414,14 @@
           "categories": {
             "additionalProperties": {
               "type": "string",
-              "enum": ["off", "inherit", "ok", "warning", "critical", "unknown"]
+              "enum": [
+                "off",
+                "inherit",
+                "ok",
+                "warning",
+                "critical",
+                "unknown"
+              ]
             },
             "type": "object",
             "title": "Categories"
@@ -13394,7 +14447,12 @@
           },
           "min_severity": {
             "type": "string",
-            "enum": ["ok", "warning", "critical", "unknown"],
+            "enum": [
+              "ok",
+              "warning",
+              "critical",
+              "unknown"
+            ],
             "title": "Min Severity",
             "default": "warning"
           },
@@ -13437,7 +14495,14 @@
           "categories": {
             "additionalProperties": {
               "type": "string",
-              "enum": ["off", "inherit", "ok", "warning", "critical", "unknown"]
+              "enum": [
+                "off",
+                "inherit",
+                "ok",
+                "warning",
+                "critical",
+                "unknown"
+              ]
             },
             "type": "object",
             "title": "Categories"
@@ -13466,7 +14531,9 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["recipient_id"],
+        "required": [
+          "recipient_id"
+        ],
         "title": "TelegramRecipientPreferenceResponse"
       },
       "TelegramRecipientResponse": {
@@ -13501,7 +14568,12 @@
           }
         },
         "type": "object",
-        "required": ["id", "chat_id", "role", "created_at"],
+        "required": [
+          "id",
+          "chat_id",
+          "role",
+          "created_at"
+        ],
         "title": "TelegramRecipientResponse",
         "description": "Одна строка telegram_recipients для GET /settings/telegram/recipients."
       },
@@ -13520,7 +14592,10 @@
           }
         },
         "type": "object",
-        "required": ["recipients", "total"],
+        "required": [
+          "recipients",
+          "total"
+        ],
         "title": "TelegramRecipientsListResponse",
         "description": "Список получателей для GET /settings/telegram/recipients."
       },
@@ -13591,7 +14666,10 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": ["synced", "incomplete"]
+                "enum": [
+                  "synced",
+                  "incomplete"
+                ]
               },
               {
                 "type": "null"
@@ -13614,7 +14692,9 @@
           }
         },
         "type": "object",
-        "required": ["bot_token"],
+        "required": [
+          "bot_token"
+        ],
         "title": "TelegramTokenRequest",
         "description": "Тело PUT /settings/telegram/token — новый токен бота в открытом виде."
       },
@@ -13647,7 +14727,9 @@
         },
         "additionalProperties": true,
         "type": "object",
-        "required": ["update_id"],
+        "required": [
+          "update_id"
+        ],
         "title": "TelegramWebhookUpdate",
         "description": "Minimum Bot API update envelope; unknown fields remain durable verbatim."
       },
@@ -13660,7 +14742,9 @@
           }
         },
         "type": "object",
-        "required": ["init_data"],
+        "required": [
+          "init_data"
+        ],
         "title": "TmaAuthRequest",
         "description": "Тело POST /tma/auth."
       },
@@ -13676,7 +14760,10 @@
           }
         },
         "type": "object",
-        "required": ["token", "role"],
+        "required": [
+          "token",
+          "role"
+        ],
         "title": "TmaAuthResponse",
         "description": "Ответ авторизации: сессионный токен + роль recipient'а."
       },
@@ -13692,7 +14779,10 @@
           }
         },
         "type": "object",
-        "required": ["telegram_user_id", "role"],
+        "required": [
+          "telegram_user_id",
+          "role"
+        ],
         "title": "TmaMeResponse",
         "description": "Кто я — для проверки сессии фронтом (под guard)."
       },
@@ -13707,7 +14797,9 @@
           }
         },
         "type": "object",
-        "required": ["token"],
+        "required": [
+          "token"
+        ],
         "title": "TmaNavigationResolveRequest",
         "description": "Opaque one-time capability received through start_param or the Mini App URL."
       },
@@ -13715,7 +14807,11 @@
         "properties": {
           "target_kind": {
             "type": "string",
-            "enum": ["ad", "action", "incident"],
+            "enum": [
+              "ad",
+              "action",
+              "incident"
+            ],
             "title": "Target Kind"
           },
           "target_id": {
@@ -13724,7 +14820,10 @@
           }
         },
         "type": "object",
-        "required": ["target_kind", "target_id"],
+        "required": [
+          "target_kind",
+          "target_id"
+        ],
         "title": "TmaNavigationResolveResponse"
       },
       "ToolCallOut": {
@@ -13746,7 +14845,9 @@
           }
         },
         "type": "object",
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "title": "ToolCallOut",
         "description": "След вызова инструмента — фронт показывает «что ассистент проверял»."
       },
@@ -13780,7 +14881,13 @@
           }
         },
         "type": "object",
-        "required": ["upload_id", "upload_dir", "concepts", "added_refs", "total_bytes"],
+        "required": [
+          "upload_id",
+          "upload_dir",
+          "concepts",
+          "added_refs",
+          "total_bytes"
+        ],
         "title": "UploadConceptsOut",
         "description": "Ответ загрузки концептов: id временной папки + список файлов."
       },
@@ -13811,7 +14918,11 @@
           }
         },
         "type": "object",
-        "required": ["ref", "original_name", "size_bytes"],
+        "required": [
+          "ref",
+          "original_name",
+          "size_bytes"
+        ],
         "title": "UploadedConceptOut",
         "description": "Метаданные одного загруженного концепта (превью для UI)."
       },
@@ -13823,7 +14934,9 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["config"],
+        "required": [
+          "config"
+        ],
         "title": "ValidateIn",
         "description": "Запрос dry-run валидации конфига.\n\n`config` — единственная каноническая плоская форма фронта (`CampaignConfigIn`)."
       },
@@ -13971,7 +15084,12 @@
           },
           "channel_status": {
             "type": "string",
-            "enum": ["READY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"],
+            "enum": [
+              "READY",
+              "DEGRADED",
+              "UNAVAILABLE",
+              "UNKNOWN"
+            ],
             "title": "Channel Status",
             "default": "UNKNOWN"
           },
@@ -14040,7 +15158,9 @@
           }
         },
         "type": "object",
-        "required": ["required_browser_contract_version"],
+        "required": [
+          "required_browser_contract_version"
+        ],
         "title": "VisionSettingsResponse",
         "description": "Public Vision configuration plus a direct browser-agent channel probe."
       },

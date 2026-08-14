@@ -274,16 +274,6 @@ class OperatorSystemData(BaseModel):
     workers: list[OperatorWorkerState]
 
 
-class OperatorSnapshot(BaseModel):
-    meta: OperatorSnapshotMeta
-    attention: OperatorSection[OperatorAttentionData]
-    portfolio: OperatorSection[OperatorPortfolioData]
-    economy: OperatorSection[OperatorEconomyData]
-    funnel: OperatorSection[OperatorFunnelData]
-    actions: OperatorSection[OperatorActionsData]
-    system: OperatorSection[OperatorSystemData]
-
-
 class OperatorActionsResponse(BaseModel):
     state: DataState
     as_of: datetime | None
@@ -319,6 +309,18 @@ class OperatorAdMetrics(BaseModel):
     confirmed_deposits: int | None
     cpc: str | None
     cost_per_registration: str | None
+    frequency: str | None
+    cost_per_ftd: str | None
+
+
+class OperatorRuleContext(BaseModel):
+    offer_code: str | None
+    rule_code: str | None
+    rule_title: str | None
+    value: str | None
+    threshold: str | None
+    percent_to_stop: str | None
+    stage: Literal["none", "warning", "stop"]
 
 
 class OperatorAdRow(BaseModel):
@@ -335,7 +337,12 @@ class OperatorAdRow(BaseModel):
     severity: OperatorSeverity
     as_of: datetime | None
     metrics: OperatorAdMetrics
+    rule_context: OperatorRuleContext
     active_action: OperatorActionItem | None
+
+
+class OperatorApproachingStopData(BaseModel):
+    items: list[OperatorAdRow]
 
 
 class OperatorAdsResponse(BaseModel):
@@ -350,6 +357,17 @@ class OperatorAdsResponse(BaseModel):
     page_size: int
     total: int
     pages: int
+
+
+class OperatorSnapshot(BaseModel):
+    meta: OperatorSnapshotMeta
+    attention: OperatorSection[OperatorAttentionData]
+    approaching_stop: OperatorSection[OperatorApproachingStopData]
+    portfolio: OperatorSection[OperatorPortfolioData]
+    economy: OperatorSection[OperatorEconomyData]
+    funnel: OperatorSection[OperatorFunnelData]
+    actions: OperatorSection[OperatorActionsData]
+    system: OperatorSection[OperatorSystemData]
 
 
 class OperatorCommandResponse(BaseModel):
