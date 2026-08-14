@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SecretStr
 
 
 class VisionSettingsResponse(BaseModel):
@@ -14,6 +14,11 @@ class VisionSettingsResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     has_token: bool = False
+    has_cloud_credentials: bool = False
+    has_cloud_username: bool = False
+    has_cloud_password: bool = False
+    has_team_id: bool = False
+    has_folder_id: bool = False
     profile_id: str | None = None
     configuration_revision: str | None = None
     channel_status: Literal["READY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"] = "UNKNOWN"
@@ -28,12 +33,16 @@ class VisionSettingsResponse(BaseModel):
 
 
 class VisionSettingsUpdateRequest(BaseModel):
-    """Тело PUT /settings/vision — обновить x_token / profile_id."""
+    """Тело PUT /settings/vision — обновить токен, профиль и cloud-креды."""
 
     model_config = ConfigDict(extra="forbid")
 
     x_token: str | None = None
     profile_id: str | None = None
+    username: SecretStr | None = None
+    password: SecretStr | None = None
+    team_id: SecretStr | None = None
+    folder_id: SecretStr | None = None
 
 
 class VisionReconnectResponse(BaseModel):

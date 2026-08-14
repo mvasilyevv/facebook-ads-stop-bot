@@ -1340,10 +1340,11 @@ export interface paths {
     get: operations["get_vision_settings_api_settings_vision_get"];
     /**
      * Put Vision Settings
-     * @description Обновляет x_token / profile_id в VisionConfig singleton.
+     * @description Обновляет token/profile и cloud-креды в VisionConfig singleton.
      *
      *     Если x_token передан — шифрует и сохраняет.
-     *     Если profile_id передан — обновляет.
+     *     Если profile_id или cloud-поле передано — обновляет только это поле.
+     *     Пустое cloud-поле удаляет сохранённое значение; отсутствие поля его не меняет.
      *     Если строки ещё нет — создаёт с server-defaults.
      */
     put: operations["put_vision_settings_api_settings_vision_put"];
@@ -4847,6 +4848,31 @@ export interface components {
        * @default false
        */
       has_token: boolean;
+      /**
+       * Has Cloud Credentials
+       * @default false
+       */
+      has_cloud_credentials: boolean;
+      /**
+       * Has Cloud Username
+       * @default false
+       */
+      has_cloud_username: boolean;
+      /**
+       * Has Cloud Password
+       * @default false
+       */
+      has_cloud_password: boolean;
+      /**
+       * Has Team Id
+       * @default false
+       */
+      has_team_id: boolean;
+      /**
+       * Has Folder Id
+       * @default false
+       */
+      has_folder_id: boolean;
       /** Profile Id */
       profile_id?: string | null;
       /** Configuration Revision */
@@ -4885,13 +4911,21 @@ export interface components {
     };
     /**
      * VisionSettingsUpdateRequest
-     * @description Тело PUT /settings/vision — обновить x_token / profile_id.
+     * @description Тело PUT /settings/vision — обновить токен, профиль и cloud-креды.
      */
     VisionSettingsUpdateRequest: {
       /** X Token */
       x_token?: string | null;
       /** Profile Id */
       profile_id?: string | null;
+      /** Username */
+      username?: string | null;
+      /** Password */
+      password?: string | null;
+      /** Team Id */
+      team_id?: string | null;
+      /** Folder Id */
+      folder_id?: string | null;
     };
   };
   responses: never;

@@ -63,6 +63,9 @@ async def test_get_vision_no_config_returns_defaults(app_client) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["has_token"] is False
+    assert data["has_cloud_credentials"] is False
+    assert data["has_cloud_username"] is False
+    assert data["has_cloud_password"] is False
     assert "token_source" not in data
     assert data["profile_id"] is None
     assert data["channel_status"] == "UNAVAILABLE"
@@ -362,6 +365,49 @@ async def test_put_vision_only_profile_id(app_client) -> None:
     assert data["profile_id"] == "new-profile"
     # Токен должен остаться
     assert data["has_token"] is True
+
+
+@pytest.mark.asyncio
+async def test_put_vision_cloud_credentials_are_encrypted_and_never_returned(
+    app_client,
+    pg_engine,
+) -> None:
+    from core.crypto import decrypt
+
+    secrets = {
+        "username": "integration-user-secret",
+        "password": "integration-password-secret",
+        "team_id": "integration-team-secret",
+        "folder_id": "integration-folder-secret",
+    }
+    response = await app_client.put(
+        "/api/settings/vision",
+        json={"x_token": "db-token", "profile_id": "db-profile", **secrets},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["has_cloud_credentials"] is True
+    assert payload["has_cloud_username"] is True
+    assert payload["has_cloud_password"] is True
+    assert payload["has_team_id"] is True
+    assert payload["has_folder_id"] is True
+    assert all(secret not in response.text for secret in secrets.values())
+
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT username_encrypted, password_encrypted, "
+                    "team_id_encrypted, folder_id_encrypted, token_refresh_attempted_at "
+                    "FROM vision_config WHERE singleton_key = 'default'"
+                )
+            )
+        ).one()
+    encrypted_values = row[:4]
+    assert all(value not in encrypted_values for value in secrets.values())
+    assert [decrypt(value) for value in encrypted_values] == list(secrets.values())
+    assert row.token_refresh_attempted_at is None
 
 
 @pytest.mark.asyncio

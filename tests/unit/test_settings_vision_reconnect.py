@@ -2,6 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from apps.api.routers.v1.schemas.settings_vision import VisionSettingsUpdateRequest
+
 
 @pytest.mark.asyncio
 async def test_reconnect_passes_folder_id_for_stopped_profile(monkeypatch) -> None:
@@ -82,3 +84,18 @@ async def test_maintenance_recovery_passes_proven_owner(monkeypatch) -> None:
 
     assert captured["maintenance_owner"] == "a" * 32
     assert captured["config"].vision_profile_id == "db-profile"
+
+
+def test_vision_cloud_secrets_are_hidden_by_request_model() -> None:
+    request = VisionSettingsUpdateRequest(
+        username="secret-user",
+        password="secret-password",
+        team_id="secret-team",
+        folder_id="secret-folder",
+    )
+
+    visible = repr(request)
+    assert "secret-user" not in visible
+    assert "secret-password" not in visible
+    assert "secret-team" not in visible
+    assert "secret-folder" not in visible
