@@ -16,7 +16,7 @@ HIGH #8 из backend_test_audit_round_8: функция _calc_retry_available_at
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -168,7 +168,8 @@ async def test_money_deadline_starts_when_execution_is_claimed() -> None:
     assert insert_params["deadline_at"] is None
 
 
-def test_money_claim_assigns_fresh_cross_runtime_deadline_after_browser_wait() -> None:
+@pytest.mark.asyncio
+async def test_money_claim_assigns_fresh_cross_runtime_deadline_after_browser_wait() -> None:
     """A >30s maintenance wait remains claimable, then execution is bounded."""
     claim_sql = str(task_queue._BROWSER_READY_CLAIM_SQL)
 
@@ -177,7 +178,9 @@ def test_money_claim_assigns_fresh_cross_runtime_deadline_after_browser_wait() -
     assert "make_interval(secs => 30)" in claim_sql
     assert "browser_maintenance" in claim_sql
 
-    from core.meta_api.client import _LIVE_OPERATION_AUTHORITY_SQL
+    from core.deadlines import bind_absolute_deadline
+    from core.meta_api.client import _LIVE_OPERATION_AUTHORITY_SQL, MetaApiClient
+    from core.meta_api.errors import AmbiguousResultError
     from core.meta_api.operation_authority import _CONSUME_PENDING_CAPABILITY_SQL
 
     worker_source = inspect.getsource(
@@ -186,6 +189,17 @@ def test_money_claim_assigns_fresh_cross_runtime_deadline_after_browser_wait() -
     assert "tq.deadline_at > clock_timestamp()" in str(_LIVE_OPERATION_AUTHORITY_SQL)
     assert "task.deadline_at > clock_timestamp()" in str(_CONSUME_PENDING_CAPABILITY_SQL)
     assert "bind_absolute_deadline(task.deadline_at)" in worker_source
+
+    client = MetaApiClient(session_id="session-deadline")
+    client._stub = SimpleNamespace()
+    with bind_absolute_deadline(datetime.now(timezone.utc) - timedelta(seconds=1)):
+        with pytest.raises(AmbiguousResultError, match="absolute deadline exhausted"):
+            await client.execute_graph_call(
+                method="POST",
+                endpoint="/230011223344",
+                query_params={"status": "PAUSED"},
+                ad_account_id="42",
+            )
 
 
 def test_overdue_reconciler_does_not_reject_unclaimed_money_work() -> None:
