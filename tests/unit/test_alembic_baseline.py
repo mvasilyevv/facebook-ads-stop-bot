@@ -273,6 +273,23 @@ def test_baseline_retention_seed_equals_current_policy() -> None:
     assert len(migration.BASELINE_RETENTION_POLICY) == 18
 
 
+def test_retention_tightening_migration_matches_the_current_policy() -> None:
+    """Правка дефолтов без миграции оставила бы старую базу на прежних сроках.
+
+    Рабочее значение читается из system_config, поэтому короткий срок в коде
+    сам по себе ничего не сокращает: guard требует, чтобы каждый сокращённый
+    ключ доезжал до уже созданной базы отдельной ревизией.
+    """
+    migration = importlib.import_module("migrations.versions.0003_tighten_retention_policy")
+    policy = get_default_policy()
+    baseline = importlib.import_module(REVISION_MODULE).BASELINE_RETENTION_POLICY
+
+    for name, old_value, new_value in migration._TIGHTENED:
+        assert policy[name] == new_value, f"{name}: миграция расходится с retention.py"
+        assert baseline[name] == new_value, f"{name}: baseline расходится с миграцией"
+        assert old_value != new_value
+
+
 def test_sql_splitter_preserves_functions_literals_and_nested_comments() -> None:
     migration = importlib.import_module(REVISION_MODULE)
     sql = """
