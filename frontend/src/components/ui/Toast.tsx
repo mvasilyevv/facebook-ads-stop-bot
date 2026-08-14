@@ -27,10 +27,10 @@ const ICONS: Record<ToastVariant, ReactNode> = {
 };
 
 const VARIANT_BORDER: Record<ToastVariant, string> = {
-  success: "border-[rgba(126,180,122,0.3)]",
-  error: "border-[rgba(199,98,92,0.3)]",
-  info: "border-[rgba(122,160,180,0.3)]",
-  warning: "border-[rgba(212,168,88,0.3)]",
+  success: "border-success/30",
+  error: "border-danger/30",
+  info: "border-info/30",
+  warning: "border-warning/30",
 };
 
 /** Рендерит стек тостов. Положить один раз в layout. */

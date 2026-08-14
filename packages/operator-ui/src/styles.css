@@ -22,14 +22,38 @@
   background: var(--color-bg-8);
 }
 
+/* Тон различает состояния цветом, метка — формой, unavailable — ещё и
+ * начертанием. Ни одно непроверенное состояние не выглядит спокойнее, чем
+ * partial, и ни одно не читается как подтверждённое. */
 .operator-state-badge[data-tone="confirmed"] .operator-state-dot {
   background: var(--color-success);
 }
 .operator-state-badge[data-tone="degraded"] .operator-state-dot {
   background: var(--color-warning);
 }
+/* empty — подтверждённый пустой результат: спокойный сплошной квадрат. */
 .operator-state-badge[data-tone="neutral"] .operator-state-dot {
   background: var(--color-bg-8);
+}
+/* stale — снимок есть, но он больше не актуален: полая метка. */
+.operator-state-badge[data-tone="stale"] {
+  color: var(--color-info);
+}
+.operator-state-badge[data-tone="stale"] .operator-state-dot {
+  border: 1px solid var(--color-info);
+  background: transparent;
+}
+/* unavailable — подтверждённых значений нет вообще: ромб, плотная рамка
+ * и более тяжёлое начертание, чтобы не читаться тише, чем partial. */
+.operator-state-badge[data-tone="unavailable"] {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  font-weight: 700;
+}
+.operator-state-badge[data-tone="unavailable"] .operator-state-dot {
+  border-radius: 0;
+  background: var(--color-danger);
+  transform: rotate(45deg);
 }
 
 .operator-incident-status {
@@ -101,6 +125,17 @@
 }
 .operator-state-notice[data-tone="degraded"] .operator-state-notice-mark {
   color: var(--color-warning);
+}
+.operator-state-notice[data-tone="stale"] .operator-state-notice-mark {
+  color: var(--color-info);
+}
+.operator-state-notice[data-tone="unavailable"] {
+  border-top-color: var(--color-danger);
+  border-bottom-color: var(--color-danger);
+}
+.operator-state-notice[data-tone="unavailable"] .operator-state-notice-mark {
+  color: var(--color-danger);
+  font-weight: 700;
 }
 .operator-state-notice strong {
   color: var(--color-bg-11);

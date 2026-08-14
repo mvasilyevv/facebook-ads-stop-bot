@@ -24,14 +24,18 @@
   --color-active: #b8a36a;
   --color-active-bg: #211c11;
 
-  /* ─── Semantic — яркое кодирование статусов (вариант C) ────────────────── */
+  /* ─── Semantic — яркое кодирование статусов (вариант C) ────────────────────
+   * Каждый статусный цвет обязан отличаться от декора и от соседнего статуса:
+   * warning раньше повторял accent/active и сливался с декоративной подсветкой;
+   * danger был темнее unknown, то есть яркость шла обратно важности, и не
+   * проходил WCAG AA на bg-4/bg-5; info лежал в тех же серых, что и success. */
   --color-success: #86a77b;
   --color-success-bg: #121a13;
-  --color-warning: #b8a36a;
+  --color-warning: #d4a858;
   --color-warning-bg: #211c11;
-  --color-danger: #cf6259;
+  --color-danger: #e58177;
   --color-danger-bg: #281513;
-  --color-info: #91a0aa;
+  --color-info: #7f95a6;
   --color-info-bg: #151b1f;
   --color-hairline: #292f32;
   --color-hairline-strong: #34383a;
@@ -141,11 +145,11 @@
 
   --color-success: #86a77b;
   --color-success-bg: #121a13;
-  --color-warning: #b8a36a;
+  --color-warning: #d4a858;
   --color-warning-bg: #211c11;
-  --color-danger: #cf6259;
+  --color-danger: #e58177;
   --color-danger-bg: #281513;
-  --color-info: #91a0aa;
+  --color-info: #7f95a6;
   --color-info-bg: #151b1f;
   --color-hairline: #292f32;
   --color-hairline-strong: #34383a;
