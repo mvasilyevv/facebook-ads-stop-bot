@@ -417,8 +417,8 @@ async def _browser_agent_client(
             vision_api_url=api_url,
             vision_profile_id=runtime.profile_id,
             # Без folder_id остановленный профиль отсутствует в /list, и reconnect
-            # не может вызвать Vision /start, хотя все идентификаторы есть в .env.
-            vision_folder_id=os.environ.get("VISION_FOLDER_ID") or None,
+            # не может вызвать Vision /start. Каноническое значение живёт в БД.
+            vision_folder_id=runtime.folder_id,
             # grpc_host/port из env — иначе в Docker api пойдёт на localhost:50051
             # (browser-agent на хосте). Зеркало фикса observer (main.py).
             grpc_host=os.environ.get("BROWSER_AGENT_HOST", "localhost"),

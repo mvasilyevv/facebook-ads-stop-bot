@@ -364,7 +364,7 @@ async def _refresh_observer_campaigns_unfenced(
             vision_x_token=vision.x_token,
             vision_api_url=settings.vision_api_url,
             vision_profile_id=vision.profile_id,
-            vision_folder_id=os.environ.get("VISION_FOLDER_ID") or None,
+            vision_folder_id=vision.folder_id,
             # grpc_host/port из env — иначе из Docker api клиент идёт на localhost:50051,
             # а browser-agent на хосте (host.docker.internal). Это и была причина «пусто»:
             # refresh не достукивался до browser-agent. Зеркало settings_vision/observer.

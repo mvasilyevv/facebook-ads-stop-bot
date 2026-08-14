@@ -11,6 +11,7 @@ async def test_reconnect_passes_folder_id_for_stopped_profile(monkeypatch) -> No
         return SimpleNamespace(
             x_token="db-token",
             profile_id="db-profile",
+            folder_id="db-folder",
         )
 
     captured = {}
@@ -30,7 +31,7 @@ async def test_reconnect_passes_folder_id_for_stopped_profile(monkeypatch) -> No
 
     monkeypatch.setattr(module, "load_vision_runtime_config", fake_load_runtime)
     monkeypatch.setattr(module, "BrowserAgentClient", FakeBrowserAgentClient)
-    monkeypatch.setenv("VISION_FOLDER_ID", "folder-current")
+    monkeypatch.setenv("VISION_FOLDER_ID", "must-not-be-used")
     monkeypatch.setenv("BROWSER_AGENT_HOST", "vision-webtop")
 
     settings = SimpleNamespace(vision_api_url="http://127.0.0.1:3030")
@@ -39,7 +40,7 @@ async def test_reconnect_passes_folder_id_for_stopped_profile(monkeypatch) -> No
     config = captured["config"]
     assert config.vision_x_token == "db-token"
     assert config.vision_profile_id == "db-profile"
-    assert config.vision_folder_id == "folder-current"
+    assert config.vision_folder_id == "db-folder"
     assert config.grpc_host == "vision-webtop"
 
 
@@ -51,6 +52,7 @@ async def test_maintenance_recovery_passes_proven_owner(monkeypatch) -> None:
         return SimpleNamespace(
             x_token="db-token",
             profile_id="db-profile",
+            folder_id="db-folder",
         )
 
     captured = {}

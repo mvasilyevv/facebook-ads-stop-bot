@@ -18,6 +18,7 @@ def test_settings_do_not_define_vision_credentials() -> None:
     assert "vision_x_token" not in Settings.model_fields
     assert "vision_profile_id" not in Settings.model_fields
     assert "vision_api_url" in Settings.model_fields
+    assert "vision_cloud_url" in Settings.model_fields
 
 
 class _Result:
@@ -46,10 +47,12 @@ def _row(
     *,
     token: str = "encrypted",
     profile_id: str = "profile-1",
+    folder_id: str | None = "encrypted-folder",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         x_token_encrypted=token,
         profile_id=profile_id,
+        folder_id_encrypted=folder_id,
         updated_at=datetime(2026, 7, 28, tzinfo=UTC),
     )
 
@@ -61,16 +64,22 @@ async def test_load_vision_runtime_config_returns_detached_db_credentials(
     import core.vision_runtime as module
 
     monkeypatch.setattr(module, "AsyncSession", lambda _engine: _Session(_row()))
-    monkeypatch.setattr(module, "decrypt", lambda _token: "plain-token")
+    monkeypatch.setattr(
+        module,
+        "decrypt",
+        lambda token: "folder-1" if token == "encrypted-folder" else "plain-token",
+    )
 
     runtime = await load_vision_runtime_config(object())  # type: ignore[arg-type]
 
     assert runtime == VisionRuntimeConfig(
         x_token="plain-token",
         profile_id="profile-1",
+        folder_id="folder-1",
         configuration_revision="2026-07-28T00:00:00+00:00",
     )
     assert "plain-token" not in repr(runtime)
+    assert "folder-1" not in repr(runtime)
 
 
 @pytest.mark.asyncio

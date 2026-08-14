@@ -121,8 +121,9 @@ class EncryptionKeyRotationError(RuntimeError):
 async def rotate_encryption_key(old_key: str, new_key: str) -> int:
     """Перешифровывает все зашифрованные поля в БД при смене ключа.
 
-    Затронутые поля: telegram_config.bot_token_encrypted, vision_config.x_token_encrypted,
-    adsetpro_credentials.api_key_encrypted/postback_secret_encrypted (BYTEA — N4).
+    Затронутые поля: telegram_config.bot_token_encrypted, все Fernet-поля
+    vision_config, adsetpro_credentials.api_key_encrypted/postback_secret_encrypted
+    (BYTEA — N4).
     Использует raw SQL через AsyncEngine — без ORM-моделей, чтобы не зависеть от
     конкретной версии схемы.
 
@@ -182,17 +183,35 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
                 except InvalidToken:
                     problems.append(f"telegram_config[{row_id}].bot_token_encrypted")
 
+            vision_columns = (
+                "x_token_encrypted",
+                "username_encrypted",
+                "password_encrypted",
+                "team_id_encrypted",
+                "folder_id_encrypted",
+            )
             vis_rows = (
-                await conn.execute(text("SELECT id, x_token_encrypted FROM vision_config"))
+                await conn.execute(
+                    text(
+                        "SELECT id, x_token_encrypted, username_encrypted, "
+                        "password_encrypted, team_id_encrypted, folder_id_encrypted "
+                        "FROM vision_config"
+                    )
+                )
             ).all()
-            vis_plain: dict[object, str] = {}
-            for row_id, encrypted in vis_rows:
-                if not encrypted:
-                    continue
-                try:
-                    vis_plain[row_id] = fernet_old.decrypt(encrypted.encode()).decode()
-                except InvalidToken:
-                    problems.append(f"vision_config[{row_id}].x_token_encrypted")
+            vis_plain: dict[object, dict[str, str]] = {}
+            for row in vis_rows:
+                row_id = row[0]
+                decoded: dict[str, str] = {}
+                for col, encrypted in zip(vision_columns, row[1:], strict=False):
+                    if not encrypted:
+                        continue
+                    try:
+                        decoded[col] = fernet_old.decrypt(encrypted.encode()).decode()
+                    except InvalidToken:
+                        problems.append(f"vision_config[{row_id}].{col}")
+                if decoded:
+                    vis_plain[row_id] = decoded
 
             # adsetpro_credentials.api_key_encrypted/postback_secret_encrypted (N4).
             # BYTEA (не TEXT): хранит Fernet-токен как utf-8 байты (core/adset_pro/
@@ -249,17 +268,22 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
                 rotated += 1
                 logger.info("telegram_config[%s]: bot_token_encrypted перешифрован", row_id)
 
-            for row_id, plaintext in vis_plain.items():
-                new_blob = fernet_new.encrypt(plaintext.encode()).decode()
+            for row_id, decoded in vis_plain.items():
+                updates = {
+                    col: fernet_new.encrypt(plaintext.encode()).decode()
+                    for col, plaintext in decoded.items()
+                }
+                set_sql = ", ".join(f"{col} = :{col}" for col in updates)
                 await conn.execute(
-                    text(
-                        "UPDATE vision_config SET x_token_encrypted = :b, "
-                        "updated_at = NOW() WHERE id = :i"
-                    ),
-                    {"b": new_blob, "i": row_id},
+                    text(f"UPDATE vision_config SET {set_sql}, updated_at = NOW() WHERE id = :i"),
+                    {**updates, "i": row_id},
                 )
-                rotated += 1
-                logger.info("vision_config[%s]: x_token_encrypted перешифрован", row_id)
+                rotated += len(updates)
+                logger.info(
+                    "vision_config[%s]: перешифровано %d поле(й)",
+                    row_id,
+                    len(updates),
+                )
 
             for row_id, decoded in asp_plain.items():
                 updates: dict[str, bytes] = {

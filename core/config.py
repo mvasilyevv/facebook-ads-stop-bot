@@ -114,6 +114,7 @@ class Settings(BaseSettings):
 
     # --- Vision transport (credentials live only in PostgreSQL vision_config) ---
     vision_api_url: str = "http://127.0.0.1:3030"
+    vision_cloud_url: str = "https://v1.empr.cloud/api/v1"
 
     # --- Redis (non-durable cache and wake-up acceleration only) ---
     redis_url: str = "redis://localhost:6380/0"
