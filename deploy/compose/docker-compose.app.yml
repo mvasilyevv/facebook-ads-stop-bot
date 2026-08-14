@@ -246,5 +246,5 @@ networks:
 
 volumes:
   campaign_uploads:
-    name: fb_agent_safety_first_campaign_uploads
+    name: fb_agent_app_campaign_uploads
     external: true

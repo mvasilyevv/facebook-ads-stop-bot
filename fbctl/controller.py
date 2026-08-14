@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import base64
+import errno
 import fcntl
 import grp
+import ipaddress
 import json
 import os
 import pwd
 import re
 import secrets
 import shutil
+import socket
 import stat
 import sys
 import time
@@ -18,12 +21,16 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Iterator, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
 
 from fbctl.bundle import materialize_candidate
 from fbctl.config import (
+    APP_PROJECT_NAME,
     BOOTSTRAP_CADDY_KEYS,
     BOOTSTRAP_VISION_KEYS,
+    DESKTOP_PROJECT_NAME,
+    INFRA_PROJECT_NAME,
+    MANAGED_HOST_PORTS,
     RuntimeConfig,
     canonicalize_source,
     parse_bootstrap_source_stdin,
@@ -97,6 +104,32 @@ CADDY_ENV_PATH = Path("/etc/fb-agent/caddy.env")
 APP_SERVICES = frozenset({"api", "frontend", "mini-app", *WORKERS})
 DESKTOP_SERVICES = frozenset({"vision-webtop", "browser-agent"})
 RESTART_SERVICES = APP_SERVICES | DESKTOP_SERVICES
+MANAGED_VOLUME_RESOURCES = (
+    ("volume", "fb_agent_infra_pgdata", "infra"),
+    ("volume", "fb_agent_infra_redisdata", "infra"),
+    ("volume", "fb_agent_app_campaign_uploads", "app"),
+)
+# Все published host-порты производственного контура и владеющий каждым портом
+# сервис.  Проверять только infra было мало: коллизия по app/desktop всплывала
+# на start_application, то есть уже после stop_runtime, и production оставался
+# лежать.  Гейт обязан отвергнуть такой deploy до первой остановки.
+MANAGED_HOST_PORT_SERVICES = (
+    ("POSTGRES_HOST_PORT", "INFRA_PROJECT_NAME", "postgres"),
+    ("REDIS_HOST_PORT", "INFRA_PROJECT_NAME", "redis"),
+    ("APP_API_PORT", "APP_PROJECT_NAME", "api"),
+    ("APP_WEB_PORT", "APP_PROJECT_NAME", "frontend"),
+    ("APP_TMA_PORT", "APP_PROJECT_NAME", "mini-app"),
+    ("BROWSER_GRPC_HOST_PORT", "DESKTOP_PROJECT_NAME", "browser-agent"),
+    ("DESKTOP_HTTPS_PORT", "DESKTOP_PROJECT_NAME", "vision-webtop"),
+)
+# Ресурсы брошенного прежнего bootstrap. Мы их не трогаем: только сообщаем
+# оператору, что они есть, чтобы он убрал их вручную после приёмки production.
+LEGACY_DOCKER_RESOURCES = (
+    ("network", "fb_agent_safety_first_platform"),
+    ("volume", "fb_agent_safety_first_pgdata"),
+    ("volume", "fb_agent_safety_first_redisdata"),
+    ("volume", "fb_agent_safety_first_campaign_uploads"),
+)
 REHEARSAL_FAILPOINTS = (
     "preflight",
     "pull",
@@ -117,6 +150,39 @@ REHEARSAL_FAILPOINTS = (
     # commits an already-complete payload by switching the runtime pointer.
     "before_promote",
 )
+
+
+def _tcp_port_is_occupied(host: str, port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind((host, port))
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            return True
+        raise
+    return False
+
+
+def _docker_binding_intersects_host(binding_host: object, target_host: str) -> bool:
+    if binding_host == "":
+        return True
+    if not isinstance(binding_host, str):
+        return False
+    try:
+        binding_address = ipaddress.ip_address(binding_host)
+        target_address = ipaddress.ip_address(target_host)
+    except ValueError:
+        return False
+    if binding_address.version == target_address.version:
+        return binding_address.is_unspecified or binding_address == target_address
+    if isinstance(binding_address, ipaddress.IPv6Address) and isinstance(
+        target_address, ipaddress.IPv4Address
+    ):
+        mapped_address = binding_address.ipv4_mapped
+        return mapped_address is not None and (
+            mapped_address.is_unspecified or mapped_address == target_address
+        )
+    return False
 
 
 @dataclass(frozen=True)
@@ -157,6 +223,7 @@ class ProductionController:
         materialize: Callable[[Path], dict[str, object]] = materialize_candidate,
         prepare: Callable[..., RuntimeConfig] = prepare_candidate,
         promotion_hook: Callable[[str], None] = lambda _stage: None,
+        port_probe: Callable[[str, int], bool] | None = None,
     ) -> None:
         self.runner = runner or SubprocessRunner()
         self.probes = probes or UrllibProbeClient()
@@ -167,6 +234,7 @@ class ProductionController:
         self.materialize = materialize
         self.prepare = prepare
         self._promotion_hook = promotion_hook
+        self.port_probe = port_probe or _tcp_port_is_occupied
         self._runtime_stopped = False
         self._promoted = False
         self._completed_steps: list[str] = []
@@ -286,6 +354,11 @@ class ProductionController:
                 raise FbctlError(f"Compose file is missing or unsafe: {path}")
         environment = self._environment(config)
         self.runner.run(("docker", "compose", "version"), step="preflight", env=environment)
+        self._report_legacy_resources(config)
+        self._require_available_infra_ports(
+            values=config.values,
+            docker_config=config.docker_config,
+        )
         for plane in ("infra", "jobs", "desktop"):
             self.runner.run(
                 config.compose(plane, "config", "--quiet"),
@@ -312,8 +385,11 @@ class ProductionController:
                 ),
                 step="preflight",
             )
-        if require_resources:
-            self._require_managed_resources(config, include_campaign=True)
+        self._require_managed_resources(
+            config,
+            include_campaign=True,
+            allow_missing=not require_resources,
+        )
 
     def _require_caddy_credentials(self, config: RuntimeConfig) -> None:
         caddy_env = require_private_file(Path("/etc/fb-agent/caddy.env"))
@@ -387,7 +463,9 @@ class ProductionController:
         cluster_id: str,
         environment: dict[str, str],
         purpose: str,
-    ) -> None:
+        *,
+        allow_missing: bool = False,
+    ) -> bool:
         inspected = self.runner.run(
             ("docker", kind, "inspect", "--format", "{{json .Labels}}", name),
             step="resource_inventory",
@@ -396,74 +474,258 @@ class ProductionController:
             check=False,
         )
         if inspected.returncode:
+            if allow_missing:
+                return False
             raise FbctlError(f"managed Docker {kind} is missing: {name}")
+        resolution = "inspect and resolve this name collision manually before retrying"
         try:
             labels = json.loads(inspected.stdout)
         except (json.JSONDecodeError, TypeError) as exc:
-            raise FbctlError(f"Docker {kind} has unreadable labels: {name}") from exc
+            raise FbctlError(f"Docker {kind} has unreadable labels: {name}; {resolution}") from exc
         if not isinstance(labels, dict) or labels.get("com.fb-agent.managed") != "true":
-            raise FbctlError(f"Docker {kind} is not managed by fbctl: {name}")
+            raise FbctlError(f"Docker {kind} is not managed by fbctl: {name}; {resolution}")
         if labels.get("com.fb-agent.cluster-id") != cluster_id:
-            raise FbctlError(f"Docker {kind} belongs to another cluster: {name}")
+            raise FbctlError(f"Docker {kind} belongs to another cluster: {name}; {resolution}")
         if labels.get("com.fb-agent.purpose") != purpose:
-            raise FbctlError(f"Docker {kind} has the wrong purpose label: {name}")
+            raise FbctlError(f"Docker {kind} has the wrong purpose label: {name}; {resolution}")
+        return True
+
+    def _report_legacy_resources(self, config: RuntimeConfig) -> None:
+        environment = self._environment(config)
+        present: list[str] = []
+        for kind, name in LEGACY_DOCKER_RESOURCES:
+            inspected = self.runner.run(
+                ("docker", kind, "inspect", name),
+                step="resource_inventory",
+                env=environment,
+                capture=True,
+                check=False,
+            )
+            if inspected.returncode == 0:
+                present.append(f"{kind} {name}")
+        if present:
+            self.log(
+                "[fbctl] info: legacy Docker resources detected and left untouched: "
+                + ", ".join(present)
+            )
+
+    def _require_available_infra_ports(
+        self,
+        *,
+        values: Mapping[str, str],
+        docker_config: Path | None,
+    ) -> None:
+        required_ports = {
+            values[key]: (key, values[project_key], service)
+            for key, project_key, service in MANAGED_HOST_PORT_SERVICES
+            if key in values and project_key in values
+        }
+        occupied_ports: dict[str, tuple[str, str, str]] = {}
+        for host_port, required in required_ports.items():
+            key, _project, _service = required
+            try:
+                port_number = int(host_port)
+                occupied = self.port_probe("127.0.0.1", port_number)
+            except (OSError, ValueError) as exc:
+                raise FbctlError(
+                    f"TCP host port probe failed for {key}={host_port} on 127.0.0.1"
+                ) from exc
+            if occupied:
+                occupied_ports[host_port] = required
+
+        environment = sealed_process_environment(docker_config=docker_config)
+        listed = self.runner.run(
+            ("docker", "container", "ls", "--all", "--quiet", "--no-trunc"),
+            step="preflight",
+            env=environment,
+            capture=True,
+        )
+        container_ids = tuple(line.strip() for line in listed.stdout.splitlines() if line.strip())
+        if any(
+            re.fullmatch(r"[0-9a-f]{64}", container_id) is None for container_id in container_ids
+        ):
+            raise FbctlError("Docker returned an invalid container id")
+        # Контейнер мог завершиться между `ls` и `inspect`: docker вернёт код 1,
+        # напечатав корректный JSON по остальным. Если порт всё ещё занят, ниже
+        # он останется без владельца и preflight завершится fail-closed.
+        containers: object = []
+        if container_ids:
+            inspected = self.runner.run(
+                ("docker", "container", "inspect", *container_ids),
+                step="preflight",
+                env=environment,
+                capture=True,
+                check=False,
+            )
+            if inspected.stdout.strip():
+                try:
+                    containers = json.loads(inspected.stdout)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    raise FbctlError("Docker returned unreadable container inventory") from exc
+        if not isinstance(containers, list):
+            raise FbctlError("Docker returned invalid container inventory")
+        if not occupied_ports:
+            return
+
+        conflicts: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        attributed_ports: set[str] = set()
+        for container in containers:
+            if not isinstance(container, dict):
+                raise FbctlError("Docker returned invalid container inventory")
+            container_id = container.get("Id")
+            raw_name = container.get("Name")
+            if not isinstance(container_id, str) or not container_id:
+                raise FbctlError("Docker returned a container without an id")
+            name = raw_name.removeprefix("/") if isinstance(raw_name, str) else ""
+            command_target = (
+                name if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]+", name) else container_id
+            )
+            container_config = container.get("Config")
+            network_settings = container.get("NetworkSettings")
+            if not isinstance(container_config, dict) or not isinstance(network_settings, dict):
+                raise FbctlError("Docker returned invalid container inventory")
+            labels = container_config.get("Labels")
+            network_ports = network_settings.get("Ports")
+            if network_ports is None:
+                network_ports = {}
+            if not isinstance(network_ports, dict):
+                raise FbctlError(f"Docker container has unreadable port bindings: {command_target}")
+            binding_sources = [network_ports]
+            host_config = container.get("HostConfig")
+            if isinstance(host_config, dict):
+                restart_policy = host_config.get("RestartPolicy")
+                restart_name = (
+                    restart_policy.get("Name") if isinstance(restart_policy, dict) else None
+                )
+                configured_ports = host_config.get("PortBindings")
+                if restart_name not in {None, "", "no"}:
+                    if configured_ports is None:
+                        configured_ports = {}
+                    if not isinstance(configured_ports, dict):
+                        raise FbctlError(
+                            f"Docker container has unreadable port bindings: {command_target}"
+                        )
+                    binding_sources.append(configured_ports)
+            for ports in binding_sources:
+                for container_port, bindings in ports.items():
+                    if not isinstance(container_port, str):
+                        continue
+                    _private_port, separator, protocol = container_port.rpartition("/")
+                    if separator != "/" or protocol != "tcp" or bindings is None:
+                        continue
+                    if not isinstance(bindings, list):
+                        raise FbctlError(
+                            f"Docker container has unreadable port bindings: {command_target}"
+                        )
+                    for binding in bindings:
+                        if not isinstance(binding, dict):
+                            raise FbctlError(
+                                f"Docker container has unreadable port bindings: {command_target}"
+                            )
+                        host_port = binding.get("HostPort")
+                        required = occupied_ports.get(host_port)
+                        if required is None or not _docker_binding_intersects_host(
+                            binding.get("HostIp"), "127.0.0.1"
+                        ):
+                            continue
+                        attributed_ports.add(host_port)
+                        key, project, service = required
+                        # Свой же контур не считается коллизией: deploy сам остановит
+                        # его на stop_runtime.  Совпадать обязан и cluster-id, иначе
+                        # контейнер принадлежит другому (в том числе брошенному)
+                        # контуру и должен быть остановлен оператором вручную.
+                        is_current_runtime = (
+                            isinstance(labels, dict)
+                            and labels.get("com.fb-agent.managed") == "true"
+                            and labels.get("com.fb-agent.cluster-id")
+                            == values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"]
+                            and labels.get("com.docker.compose.project") == project
+                            and labels.get("com.docker.compose.service") == service
+                        )
+                        if is_current_runtime or (key, container_id) in seen:
+                            continue
+                        seen.add((key, container_id))
+                        display_name = name or container_id
+                        conflicts.append(
+                            f"{key}={host_port} is occupied by container "
+                            f"{display_name} ({container_id[:12]}); stop it manually before "
+                            f"retrying: sudo docker stop {command_target}"
+                        )
+        for host_port, (key, _project, _service) in occupied_ports.items():
+            if host_port in attributed_ports:
+                continue
+            conflicts.append(
+                f"{key}={host_port} is occupied, but Docker has no published TCP port owner; "
+                "a process outside Docker or a host-network container is holding it; "
+                "free the port manually before retrying"
+            )
+        if conflicts:
+            raise FbctlError("Host TCP port collision: " + "; ".join(conflicts))
+
+    @staticmethod
+    def _managed_resources(
+        config: RuntimeConfig,
+        *,
+        include_campaign: bool,
+    ) -> tuple[tuple[str, str, str], ...]:
+        resources = (
+            ("network", config.values["PLATFORM_NETWORK"], "platform"),
+            *MANAGED_VOLUME_RESOURCES[:2],
+        )
+        if include_campaign:
+            return (*resources, MANAGED_VOLUME_RESOURCES[2])
+        return resources
 
     def _require_managed_resources(
         self,
         config: RuntimeConfig,
         *,
         include_campaign: bool,
-    ) -> None:
+        allow_missing: bool = False,
+    ) -> tuple[tuple[str, str, str], ...]:
         environment = self._environment(config)
-        resources = [
-            ("network", config.values["PLATFORM_NETWORK"], "platform"),
-            ("volume", "fb_agent_safety_first_pgdata", "infra"),
-            ("volume", "fb_agent_safety_first_redisdata", "infra"),
-        ]
-        if include_campaign:
-            resources.append(("volume", "fb_agent_safety_first_campaign_uploads", "app"))
-        for kind, name, purpose in resources:
-            self._require_managed_resource(
+        missing: list[tuple[str, str, str]] = []
+        for kind, name, purpose in self._managed_resources(
+            config,
+            include_campaign=include_campaign,
+        ):
+            if not self._require_managed_resource(
                 kind,
                 name,
                 config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
                 environment,
                 purpose,
-            )
+                allow_missing=allow_missing,
+            ):
+                missing.append((kind, name, purpose))
+        return tuple(missing)
 
     def _ensure_bootstrap_resources(self, config: RuntimeConfig) -> None:
         environment = self._environment(config)
         cluster_id = config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"]
-        resources = (
-            ("network", config.values["PLATFORM_NETWORK"], "platform"),
-            ("volume", "fb_agent_safety_first_pgdata", "infra"),
-            ("volume", "fb_agent_safety_first_redisdata", "infra"),
-            ("volume", "fb_agent_safety_first_campaign_uploads", "app"),
+        missing = self._require_managed_resources(
+            config,
+            include_campaign=True,
+            allow_missing=True,
         )
-        for kind, name, purpose in resources:
-            inspected = self.runner.run(
-                ("docker", kind, "inspect", name),
+        for kind, name, purpose in missing:
+            self.runner.run(
+                (
+                    "docker",
+                    kind,
+                    "create",
+                    "--label",
+                    "com.fb-agent.managed=true",
+                    "--label",
+                    f"com.fb-agent.cluster-id={cluster_id}",
+                    "--label",
+                    f"com.fb-agent.purpose={purpose}",
+                    name,
+                ),
                 step="bootstrap_resources",
                 env=environment,
-                check=False,
             )
-            if inspected.returncode:
-                self.runner.run(
-                    (
-                        "docker",
-                        kind,
-                        "create",
-                        "--label",
-                        "com.fb-agent.managed=true",
-                        "--label",
-                        f"com.fb-agent.cluster-id={cluster_id}",
-                        "--label",
-                        f"com.fb-agent.purpose={purpose}",
-                        name,
-                    ),
-                    step="bootstrap_resources",
-                    env=environment,
-                )
         self._require_managed_resources(config, include_campaign=True)
 
     def _migrate(self, config: RuntimeConfig) -> None:
@@ -1068,9 +1330,9 @@ def bootstrap_host(
         canonical_required_uid=VISION_RUNTIME_UID,
         canonical_required_gid=VISION_RUNTIME_GID,
     )
+    controller = ProductionController(runner=runner)
     with trusted_shared_directory(root, required_uid=os.getuid(), create=True) as shared_fd:
         assert shared_fd is not None
-    controller = ProductionController(runner=runner)
     candidate = root / "candidate"
     with controller._deployment_lock_owned(  # noqa: SLF001 - same deep module
         root,
@@ -1085,6 +1347,19 @@ def bootstrap_host(
             raise FbctlError("bootstrap identity sources changed after preflight")
         if not bootstrap_profile_is_current(profile_input):
             raise FbctlError("bootstrap Vision profile changed after preflight")
+        # Занятый host-порт — единственная оставшаяся причина, по которой infra
+        # не поднимется.  Проверяем здесь: identity и Vision profile уже
+        # перепроверены под локом, а первой мутации ещё не было.
+        controller._require_available_infra_ports(  # noqa: SLF001 - same deep module
+            values={
+                "FB_AGENT_BOOTSTRAP_CLUSTER_ID": source_values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
+                "INFRA_PROJECT_NAME": INFRA_PROJECT_NAME,
+                "APP_PROJECT_NAME": APP_PROJECT_NAME,
+                "DESKTOP_PROJECT_NAME": DESKTOP_PROJECT_NAME,
+                **dict(MANAGED_HOST_PORTS),
+            },
+            docker_config=docker_config,
+        )
         # Persist durable identity before the first Docker/DB mutation.  A
         # retry must reuse exactly these values even when the supplied source
         # omits generated fields.  Bootstrap-only Vision/Caddy plaintext was

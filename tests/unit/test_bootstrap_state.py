@@ -25,8 +25,8 @@ def test_owned_bootstrap_state_is_idempotent_across_release_ids(tmp_path: Path) 
     state = tmp_path / "bootstrap-state.json"
     arguments = {
         "cluster_id": "a" * 32,
-        "postgres_volume": "fb_agent_safety_first_pgdata",
-        "platform_network": "fb_agent_safety_first_platform",
+        "postgres_volume": "fb_agent_infra_pgdata",
+        "platform_network": "fb_agent_platform",
         "owner_uid": os.getuid(),
     }
 
@@ -47,8 +47,8 @@ def test_owned_bootstrap_state_rejects_different_cluster_or_volume(
     MODULE.record_owned(
         state,
         cluster_id="a" * 32,
-        postgres_volume="fb_agent_safety_first_pgdata",
-        platform_network="fb_agent_safety_first_platform",
+        postgres_volume="fb_agent_infra_pgdata",
+        platform_network="fb_agent_platform",
         owner_uid=owner_uid,
     )
 
@@ -56,8 +56,8 @@ def test_owned_bootstrap_state_rejects_different_cluster_or_volume(
         MODULE.validate_owned(
             state,
             cluster_id="b" * 32,
-            postgres_volume="fb_agent_safety_first_pgdata",
-            platform_network="fb_agent_safety_first_platform",
+            postgres_volume="fb_agent_infra_pgdata",
+            platform_network="fb_agent_platform",
             owner_uid=owner_uid,
         )
 
@@ -67,8 +67,8 @@ def test_unowned_state_is_absent_not_implicitly_adopted(tmp_path: Path) -> None:
         MODULE.validate_owned(
             tmp_path / "bootstrap-state.json",
             cluster_id="a" * 32,
-            postgres_volume="fb_agent_safety_first_pgdata",
-            platform_network="fb_agent_safety_first_platform",
+            postgres_volume="fb_agent_infra_pgdata",
+            platform_network="fb_agent_platform",
             owner_uid=os.getuid(),
         )
         is False

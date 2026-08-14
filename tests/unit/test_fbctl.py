@@ -34,12 +34,14 @@ from fbctl.bundle import (
     inspect_bundle,
 )
 from fbctl.config import (
+    MANAGED_HOST_PORTS,
     canonicalize_source,
     load_active,
     prepare_candidate,
     project_bootstrap_source,
 )
 from fbctl.controller import (
+    LEGACY_DOCKER_RESOURCES,
     REHEARSAL_FAILPOINTS,
     WORKERS,
     DeployOptions,
@@ -74,6 +76,12 @@ def _local_vision_runtime_identity(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(fbctl_controller, "VISION_RUNTIME_UID", os.getuid())
     monkeypatch.setattr(fbctl_controller, "VISION_RUNTIME_GID", os.getgid())
+    monkeypatch.setattr(
+        fbctl_controller,
+        "_tcp_port_is_occupied",
+        lambda _host, _port: False,
+        raising=False,
+    )
 
 
 def _write(path: Path, content: str | bytes, mode: int = 0o600) -> Path:
@@ -229,22 +237,25 @@ class FakeRunner:
             result = CommandResult(0, metrics)
         elif argv[:2] == ("docker", "network") or argv[:2] == ("docker", "volume"):
             if "inspect" in argv:
-                result = CommandResult(
-                    0,
-                    json.dumps(
-                        {
-                            "com.fb-agent.managed": "true",
-                            "com.fb-agent.cluster-id": self.cluster_id,
-                            "com.fb-agent.purpose": (
-                                "platform"
-                                if argv[-1] == "fb_agent_safety_first_platform"
-                                else "app"
-                                if argv[-1] == "fb_agent_safety_first_campaign_uploads"
-                                else "infra"
-                            ),
-                        }
-                    ),
-                )
+                purpose = {
+                    "fb_agent_platform": "platform",
+                    "fb_agent_infra_pgdata": "infra",
+                    "fb_agent_infra_redisdata": "infra",
+                    "fb_agent_app_campaign_uploads": "app",
+                }.get(argv[-1])
+                if purpose is None:
+                    result = CommandResult(1)
+                else:
+                    result = CommandResult(
+                        0,
+                        json.dumps(
+                            {
+                                "com.fb-agent.managed": "true",
+                                "com.fb-agent.cluster-id": self.cluster_id,
+                                "com.fb-agent.purpose": purpose,
+                            }
+                        ),
+                    )
             else:
                 result = CommandResult(0)
         elif argv and argv[0] == "ssh" and argv[-3:-1] == ("rm", "-f"):
@@ -254,6 +265,105 @@ class FakeRunner:
         if check and result.returncode:
             raise FbctlError("fake command failed", step=step)
         return result
+
+
+class DockerInventoryRunner(FakeRunner):
+    def __init__(self, resources: dict[tuple[str, str], dict[str, str]]) -> None:
+        super().__init__()
+        self.resources = dict(resources)
+
+    def run(
+        self,
+        command,
+        *,
+        step,
+        env=None,
+        capture=False,
+        check=True,
+        input_text=None,
+        timeout=None,
+    ) -> CommandResult:
+        argv = tuple(os.fspath(part) for part in command)
+        if argv[:2] in (("docker", "network"), ("docker", "volume")):
+            kind = argv[1]
+            name = argv[-1]
+            if "inspect" in argv:
+                self.commands.append((step, argv))
+                labels = self.resources.get((kind, name))
+                result = (
+                    CommandResult(1) if labels is None else CommandResult(0, json.dumps(labels))
+                )
+                if check and result.returncode:
+                    raise FbctlError("fake command failed", step=step)
+                return result
+            if "create" in argv:
+                self.commands.append((step, argv))
+                labels = {
+                    argv[index + 1].split("=", 1)[0]: argv[index + 1].split("=", 1)[1]
+                    for index, value in enumerate(argv)
+                    if value == "--label"
+                }
+                self.resources[(kind, name)] = labels
+                return CommandResult(0)
+        return super().run(
+            command,
+            step=step,
+            env=env,
+            capture=capture,
+            check=check,
+            input_text=input_text,
+            timeout=timeout,
+        )
+
+
+class DockerPortInventoryRunner(DockerInventoryRunner):
+    def __init__(self, containers: list[dict[str, object]]) -> None:
+        super().__init__({})
+        self.containers = containers
+
+    def run(
+        self,
+        command,
+        *,
+        step,
+        env=None,
+        capture=False,
+        check=True,
+        input_text=None,
+        timeout=None,
+    ) -> CommandResult:
+        argv = tuple(os.fspath(part) for part in command)
+        if argv in {
+            ("docker", "container", "ls", "--quiet", "--no-trunc"),
+            ("docker", "container", "ls", "--all", "--quiet", "--no-trunc"),
+        }:
+            self.commands.append((step, argv))
+            return CommandResult(
+                0,
+                "".join(f"{container['Id']}\n" for container in self.containers),
+            )
+        if argv[:3] == ("docker", "container", "inspect"):
+            self.commands.append((step, argv))
+            return CommandResult(0, json.dumps(self.containers))
+        return super().run(
+            command,
+            step=step,
+            env=env,
+            capture=capture,
+            check=check,
+            input_text=input_text,
+            timeout=timeout,
+        )
+
+
+class RecordingTcpPortProbe:
+    def __init__(self, *occupied_ports: int) -> None:
+        self.occupied_ports = frozenset(occupied_ports)
+        self.calls: list[tuple[str, int]] = []
+
+    def __call__(self, host: str, port: int) -> bool:
+        self.calls.append((host, port))
+        return port in self.occupied_ports
 
 
 class FakeProbes:
@@ -316,6 +426,690 @@ class FakeProbes:
         assert url.endswith("/api/settings/observer/scanning")
         assert payload == {"enabled": True}
         return 200, {"is_scanning_enabled": True}
+
+
+def test_bootstrap_preflight_rejects_foreign_new_resource_before_creation(
+    tmp_path: Path,
+) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    resource_name = "fb_agent_infra_redisdata"
+    runner = DockerInventoryRunner({("volume", resource_name): {}})
+    controller = ProductionController(runner=runner)
+
+    with pytest.raises(
+        FbctlError,
+        match=(
+            rf"Docker volume is not managed by fbctl: {resource_name}; "
+            "inspect and resolve this name collision manually before retrying"
+        ),
+    ):
+        controller._preflight(  # noqa: SLF001 - exact bootstrap preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=False,
+            validate_caddy=False,
+        )
+
+    assert not any("create" in command for _step, command in runner.commands)
+
+
+def test_preflight_reports_legacy_resources_without_mutating_or_failing(
+    tmp_path: Path,
+) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    legacy_kind, legacy_name = LEGACY_DOCKER_RESOURCES[1]
+    runner = DockerInventoryRunner({(legacy_kind, legacy_name): {}})
+    log: list[str] = []
+    controller = ProductionController(runner=runner, log=log.append)
+
+    controller._preflight(  # noqa: SLF001 - exact bootstrap preflight contract
+        config,
+        DeployOptions(root=root, rehearsal=True),
+        require_resources=False,
+        validate_caddy=False,
+    )
+
+    assert log == [
+        "[fbctl] info: legacy Docker resources detected and left untouched: "
+        f"{legacy_kind} {legacy_name}"
+    ]
+    legacy_commands = [command for _step, command in runner.commands if command[-1] == legacy_name]
+    assert legacy_commands == [("docker", legacy_kind, "inspect", legacy_name)]
+
+
+def test_preflight_rejects_occupied_infra_ports_before_mutation(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    postgres_id = "a" * 64
+    redis_id = "b" * 64
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": postgres_id,
+                "Name": "/legacy-postgres",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "5433"}]}
+                },
+            },
+            {
+                "Id": redis_id,
+                "Name": "/legacy-redis",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {"6379/tcp": [{"HostIp": "0.0.0.0", "HostPort": "6380"}]}
+                },
+            },
+        ]
+    )
+    controller = ProductionController(
+        runner=runner,
+        port_probe=RecordingTcpPortProbe(5433, 6380),
+    )
+
+    with pytest.raises(FbctlError) as caught:
+        controller._preflight(  # noqa: SLF001 - exact bootstrap preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=False,
+            validate_caddy=False,
+        )
+
+    message = str(caught.value)
+    assert "POSTGRES_HOST_PORT=5433 is occupied by container legacy-postgres" in message
+    assert "sudo docker stop legacy-postgres" in message
+    assert "REDIS_HOST_PORT=6380 is occupied by container legacy-redis" in message
+    assert "sudo docker stop legacy-redis" in message
+    mutation_words = {"create", "down", "rm", "rename", "stop", "up"}
+    assert not any(mutation_words.intersection(command) for _step, command in runner.commands)
+
+
+def test_preflight_allows_current_managed_infra_port_owner(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    labels = {
+        "com.fb-agent.managed": "true",
+        "com.fb-agent.cluster-id": config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
+        "com.fb-agent.purpose": "infra",
+        "com.docker.compose.project": config.values["INFRA_PROJECT_NAME"],
+        "com.docker.compose.service": "postgres",
+    }
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": "c" * 64,
+                "Name": "/fb_agent_infra-postgres-1",
+                "Config": {"Labels": labels},
+                "NetworkSettings": {
+                    "Ports": {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "5433"}]}
+                },
+            }
+        ]
+    )
+    controller = ProductionController(
+        runner=runner,
+        port_probe=RecordingTcpPortProbe(5433),
+    )
+
+    controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+        config,
+        DeployOptions(root=root, rehearsal=True),
+        require_resources=False,
+        validate_caddy=False,
+    )
+
+
+def test_preflight_rejects_occupied_app_and_desktop_ports(tmp_path: Path) -> None:
+    """Коллизия вне infra обязана всплыть в preflight, а не после stop_runtime."""
+
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": "d" * 64,
+                "Name": "/stray-api",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {
+                        "8100/tcp": [
+                            {
+                                "HostIp": "127.0.0.1",
+                                "HostPort": config.values["APP_API_PORT"],
+                            }
+                        ]
+                    }
+                },
+            },
+            {
+                "Id": "e" * 64,
+                "Name": "/stray-desktop",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {
+                        "8444/tcp": [
+                            {
+                                "HostIp": "127.0.0.1",
+                                "HostPort": config.values["DESKTOP_HTTPS_PORT"],
+                            }
+                        ]
+                    }
+                },
+            },
+        ]
+    )
+    controller = ProductionController(
+        runner=runner,
+        port_probe=RecordingTcpPortProbe(
+            int(config.values["APP_API_PORT"]),
+            int(config.values["DESKTOP_HTTPS_PORT"]),
+        ),
+    )
+
+    with pytest.raises(FbctlError) as caught:
+        controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=False,
+            validate_caddy=False,
+        )
+
+    message = str(caught.value)
+    assert f"APP_API_PORT={config.values['APP_API_PORT']} is occupied" in message
+    assert f"DESKTOP_HTTPS_PORT={config.values['DESKTOP_HTTPS_PORT']} is occupied" in message
+    assert "sudo docker stop stray-api" in message
+    assert "sudo docker stop stray-desktop" in message
+
+
+def test_preflight_allows_current_app_project_port_owner(tmp_path: Path) -> None:
+    """Свой же app-контур не коллизия: его остановит сам deploy."""
+
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": "f" * 64,
+                "Name": "/fb_agent_app-api-1",
+                "Config": {
+                    "Labels": {
+                        "com.fb-agent.managed": "true",
+                        "com.fb-agent.cluster-id": config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
+                        "com.docker.compose.project": config.values["APP_PROJECT_NAME"],
+                        "com.docker.compose.service": "api",
+                    }
+                },
+                "NetworkSettings": {
+                    "Ports": {
+                        "8100/tcp": [
+                            {
+                                "HostIp": "127.0.0.1",
+                                "HostPort": config.values["APP_API_PORT"],
+                            }
+                        ]
+                    }
+                },
+            }
+        ]
+    )
+    controller = ProductionController(
+        runner=runner,
+        port_probe=RecordingTcpPortProbe(int(config.values["APP_API_PORT"])),
+    )
+
+    controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+        config,
+        DeployOptions(root=root, rehearsal=True),
+        require_resources=False,
+        validate_caddy=False,
+    )
+
+
+def test_preflight_rejects_host_process_without_docker_owner(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    probe = RecordingTcpPortProbe(int(config.values["POSTGRES_HOST_PORT"]))
+    controller = ProductionController(runner=DockerPortInventoryRunner([]))
+    controller.port_probe = probe
+
+    with pytest.raises(FbctlError) as caught:
+        controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=False,
+            validate_caddy=False,
+        )
+
+    message = str(caught.value)
+    assert "POSTGRES_HOST_PORT=5433 is occupied" in message
+    assert "process outside Docker" in message
+    assert "free the port manually before retrying" in message
+    assert len(probe.calls) == len(MANAGED_HOST_PORTS)
+    assert set(probe.calls) == {
+        ("127.0.0.1", int(config.values[key])) for key, _default in MANAGED_HOST_PORTS
+    }
+
+
+def test_preflight_probes_but_allows_current_managed_tcp_owner(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    postgres_port = int(config.values["POSTGRES_HOST_PORT"])
+    probe = RecordingTcpPortProbe(postgres_port)
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": "2" * 64,
+                "Name": "/fb_agent_infra-postgres-1",
+                "Config": {
+                    "Labels": {
+                        "com.fb-agent.managed": "true",
+                        "com.fb-agent.cluster-id": config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
+                        "com.docker.compose.project": config.values["INFRA_PROJECT_NAME"],
+                        "com.docker.compose.service": "postgres",
+                    }
+                },
+                "NetworkSettings": {
+                    "Ports": {
+                        "5432/tcp": [
+                            {
+                                "HostIp": "127.0.0.1",
+                                "HostPort": str(postgres_port),
+                            }
+                        ]
+                    }
+                },
+            }
+        ]
+    )
+    controller = ProductionController(runner=runner, port_probe=probe)
+
+    controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+        config,
+        DeployOptions(root=root, rehearsal=True),
+        require_resources=False,
+        validate_caddy=False,
+    )
+
+    assert ("127.0.0.1", postgres_port) in probe.calls
+
+
+def test_preflight_ignores_udp_mapping_for_occupied_tcp_port(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    postgres_port = int(config.values["POSTGRES_HOST_PORT"])
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": "3" * 64,
+                "Name": "/foreign-udp",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {"5432/udp": [{"HostIp": "127.0.0.1", "HostPort": str(postgres_port)}]}
+                },
+            },
+            {
+                "Id": "4" * 64,
+                "Name": "/fb_agent_infra-postgres-1",
+                "Config": {
+                    "Labels": {
+                        "com.fb-agent.managed": "true",
+                        "com.fb-agent.cluster-id": config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
+                        "com.docker.compose.project": config.values["INFRA_PROJECT_NAME"],
+                        "com.docker.compose.service": "postgres",
+                    }
+                },
+                "NetworkSettings": {
+                    "Ports": {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(postgres_port)}]}
+                },
+            },
+        ]
+    )
+    controller = ProductionController(runner=runner)
+    controller.port_probe = RecordingTcpPortProbe(postgres_port)
+
+    controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+        config,
+        DeployOptions(root=root, rehearsal=True),
+        require_resources=False,
+        validate_caddy=False,
+    )
+
+
+def test_preflight_rejects_stopped_restart_policy_port_owner(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    app_port = int(config.values["APP_API_PORT"])
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": "5" * 64,
+                "Name": "/stopped-api",
+                "Config": {"Labels": {}},
+                "State": {"Status": "exited"},
+                "HostConfig": {
+                    "RestartPolicy": {"Name": "always"},
+                    "PortBindings": {
+                        "8100/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(app_port)}]
+                    },
+                },
+                "NetworkSettings": {"Ports": {}},
+            }
+        ]
+    )
+    controller = ProductionController(runner=runner)
+    controller.port_probe = RecordingTcpPortProbe(app_port)
+
+    with pytest.raises(FbctlError) as caught:
+        controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=False,
+            validate_caddy=False,
+        )
+
+    message = str(caught.value)
+    assert f"APP_API_PORT={app_port} is occupied by container stopped-api" in message
+    assert "sudo docker stop stopped-api" in message
+    assert any(
+        command == ("docker", "container", "ls", "--all", "--quiet", "--no-trunc")
+        for _step, command in runner.commands
+    )
+
+
+def test_preflight_does_not_treat_ipv6_wildcard_as_ipv4_owner(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    postgres_port = int(config.values["POSTGRES_HOST_PORT"])
+    own_labels = {
+        "com.fb-agent.managed": "true",
+        "com.fb-agent.cluster-id": config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
+        "com.docker.compose.project": config.values["INFRA_PROJECT_NAME"],
+        "com.docker.compose.service": "postgres",
+    }
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": "6" * 64,
+                "Name": "/foreign-ipv6",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {"5432/tcp": [{"HostIp": "::", "HostPort": str(postgres_port)}]}
+                },
+            },
+            {
+                "Id": "7" * 64,
+                "Name": "/fb_agent_infra-postgres-1",
+                "Config": {"Labels": own_labels},
+                "NetworkSettings": {
+                    "Ports": {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(postgres_port)}]}
+                },
+            },
+        ]
+    )
+    controller = ProductionController(runner=runner)
+    controller.port_probe = RecordingTcpPortProbe(postgres_port)
+
+    controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+        config,
+        DeployOptions(root=root, rehearsal=True),
+        require_resources=False,
+        validate_caddy=False,
+    )
+
+
+def test_preflight_matches_ipv4_mapped_ipv6_port_owner(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    postgres_port = int(config.values["POSTGRES_HOST_PORT"])
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": "8" * 64,
+                "Name": "/foreign-mapped-ipv6",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {
+                        "5432/tcp": [
+                            {
+                                "HostIp": "::ffff:127.0.0.1",
+                                "HostPort": str(postgres_port),
+                            }
+                        ]
+                    }
+                },
+            }
+        ]
+    )
+    controller = ProductionController(runner=runner)
+    controller.port_probe = RecordingTcpPortProbe(postgres_port)
+
+    with pytest.raises(FbctlError) as caught:
+        controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=False,
+            validate_caddy=False,
+        )
+
+    message = str(caught.value)
+    assert "POSTGRES_HOST_PORT=5433 is occupied by container foreign-mapped-ipv6" in message
+    assert "sudo docker stop foreign-mapped-ipv6" in message
+
+
+def test_preflight_survives_container_disappearing_between_ls_and_inspect(
+    tmp_path: Path,
+) -> None:
+    """Контейнер завершился между ls и inspect: порт он не держит, падать нельзя."""
+
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+
+    class VanishingContainerRunner(DockerPortInventoryRunner):
+        def run(self, command, **kwargs):
+            argv = tuple(os.fspath(part) for part in command)
+            if argv[:3] == ("docker", "container", "inspect"):
+                self.commands.append((kwargs["step"], argv))
+                # docker печатает JSON по выжившим и выходит с кодом 1.
+                return CommandResult(1, "[]")
+            return super().run(command, **kwargs)
+
+    runner = VanishingContainerRunner(
+        [
+            {
+                "Id": "1" * 64,
+                "Name": "/vanished",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "5433"}]}
+                },
+            }
+        ]
+    )
+    controller = ProductionController(runner=runner)
+
+    controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+        config,
+        DeployOptions(root=root, rehearsal=True),
+        require_resources=False,
+        validate_caddy=False,
+    )
+
+
+def test_deploy_preflight_requires_existing_managed_resources(tmp_path: Path) -> None:
+    """Обычный deploy обязан требовать ресурсы: allow_missing не ослабил его."""
+
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    runner = DockerInventoryRunner({})
+    controller = ProductionController(runner=runner)
+
+    with pytest.raises(FbctlError, match="managed Docker network is missing: fb_agent_platform"):
+        controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=True,
+            validate_caddy=False,
+        )
+
+
+def test_preflight_rejects_resource_from_another_cluster(tmp_path: Path) -> None:
+    """Чужой cluster-id на нашем имени — fail-closed, а не молчаливое принятие."""
+
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    runner = DockerInventoryRunner(
+        {
+            ("network", config.values["PLATFORM_NETWORK"]): {
+                "com.fb-agent.managed": "true",
+                "com.fb-agent.cluster-id": "0" * 32,
+                "com.fb-agent.purpose": "platform",
+            }
+        }
+    )
+    controller = ProductionController(runner=runner)
+
+    with pytest.raises(FbctlError, match="belongs to another cluster"):
+        controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=True,
+            validate_caddy=False,
+        )
+
+
+def test_bootstrap_creates_only_the_new_managed_resource_names(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    runner = DockerInventoryRunner({})
+    controller = ProductionController(runner=runner)
+
+    controller._ensure_bootstrap_resources(config)  # noqa: SLF001
+
+    created = [
+        command[-1]
+        for step, command in runner.commands
+        if step == "bootstrap_resources" and "create" in command
+    ]
+    assert created == [
+        "fb_agent_platform",
+        "fb_agent_infra_pgdata",
+        "fb_agent_infra_redisdata",
+        "fb_agent_app_campaign_uploads",
+    ]
 
 
 def test_bundle_is_deterministic_and_runnable(tmp_path: Path) -> None:
@@ -1325,7 +2119,9 @@ def test_bootstrap_imports_only_verified_candidate_bundle_snapshot(
         assert not original_bundle.exists()
     assert not snapshot.exists()
     assert not (root / "candidate").exists()
-    assert runner.commands == []
+    assert runner.commands == [
+        ("preflight", ("docker", "container", "ls", "--all", "--quiet", "--no-trunc"))
+    ]
 
 
 def test_deploy_orders_webhook_before_workers_and_promotes_after_all_evidence(

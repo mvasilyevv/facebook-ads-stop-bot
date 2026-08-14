@@ -66,8 +66,8 @@ networks:
 
 volumes:
   pgdata:
-    name: fb_agent_safety_first_pgdata
+    name: fb_agent_infra_pgdata
     external: true
   redisdata:
-    name: fb_agent_safety_first_redisdata
+    name: fb_agent_infra_redisdata
     external: true
