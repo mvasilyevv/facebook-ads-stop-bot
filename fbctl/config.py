@@ -26,6 +26,11 @@ from fbctl.files import (
 
 RUNTIME_SCHEMA = "fb-agent-production-runtime/v2"
 PUBLIC_URL = "https://app.adpulse.su"
+INFRA_PROJECT_NAME = "fb_agent_infra"
+INFRA_HOST_PORTS = (
+    ("POSTGRES_HOST_PORT", "5433"),
+    ("REDIS_HOST_PORT", "6380"),
+)
 POSTGRES_IMAGE = (
     "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20"
 )
@@ -362,7 +367,7 @@ def prepare_candidate(
         "FB_AGENT_BOOTSTRAP_CLUSTER_ID": source_values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
         "POSTGRES_USER": source_values["POSTGRES_USER"],
         "POSTGRES_DB": source_values["POSTGRES_DB"],
-        "INFRA_PROJECT_NAME": "fb_agent_infra",
+        "INFRA_PROJECT_NAME": INFRA_PROJECT_NAME,
         "APP_PROJECT_NAME": "fb_agent_app",
         "DESKTOP_PROJECT_NAME": "fb_agent_desktop",
         "MONITORING_PROJECT_NAME": "fb_agent_monitoring",
@@ -370,8 +375,7 @@ def prepare_candidate(
         "APP_API_PORT": "18100",
         "APP_WEB_PORT": "18080",
         "APP_TMA_PORT": "18081",
-        "POSTGRES_HOST_PORT": "5433",
-        "REDIS_HOST_PORT": "6380",
+        **dict(INFRA_HOST_PORTS),
         "DESKTOP_HTTPS_PORT": "8444",
         "BROWSER_GRPC_HOST_PORT": "50051",
         "PUID": "1000",

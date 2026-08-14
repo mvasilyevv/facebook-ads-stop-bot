@@ -309,6 +309,43 @@ class DockerInventoryRunner(FakeRunner):
         )
 
 
+class DockerPortInventoryRunner(DockerInventoryRunner):
+    def __init__(self, containers: list[dict[str, object]]) -> None:
+        super().__init__({})
+        self.containers = containers
+
+    def run(
+        self,
+        command,
+        *,
+        step,
+        env=None,
+        capture=False,
+        check=True,
+        input_text=None,
+        timeout=None,
+    ) -> CommandResult:
+        argv = tuple(os.fspath(part) for part in command)
+        if argv == ("docker", "container", "ls", "--quiet", "--no-trunc"):
+            self.commands.append((step, argv))
+            return CommandResult(
+                0,
+                "".join(f"{container['Id']}\n" for container in self.containers),
+            )
+        if argv[:3] == ("docker", "container", "inspect"):
+            self.commands.append((step, argv))
+            return CommandResult(0, json.dumps(self.containers))
+        return super().run(
+            command,
+            step=step,
+            env=env,
+            capture=capture,
+            check=check,
+            input_text=input_text,
+            timeout=timeout,
+        )
+
+
 class FakeProbes:
     def status(self, url: str, *, timeout: float = 15) -> int:
         del timeout
@@ -434,6 +471,96 @@ def test_preflight_reports_legacy_resources_without_mutating_or_failing(
     ]
     legacy_commands = [command for _step, command in runner.commands if command[-1] == legacy_name]
     assert legacy_commands == [("docker", legacy_kind, "inspect", legacy_name)]
+
+
+def test_preflight_rejects_occupied_infra_ports_before_mutation(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    postgres_id = "a" * 64
+    redis_id = "b" * 64
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": postgres_id,
+                "Name": "/legacy-postgres",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "5433"}]}
+                },
+            },
+            {
+                "Id": redis_id,
+                "Name": "/legacy-redis",
+                "Config": {"Labels": {}},
+                "NetworkSettings": {
+                    "Ports": {"6379/tcp": [{"HostIp": "0.0.0.0", "HostPort": "6380"}]}
+                },
+            },
+        ]
+    )
+    controller = ProductionController(runner=runner)
+
+    with pytest.raises(FbctlError) as caught:
+        controller._preflight(  # noqa: SLF001 - exact bootstrap preflight contract
+            config,
+            DeployOptions(root=root, rehearsal=True),
+            require_resources=False,
+            validate_caddy=False,
+        )
+
+    message = str(caught.value)
+    assert "POSTGRES_HOST_PORT=5433 is occupied by container legacy-postgres" in message
+    assert "sudo docker stop legacy-postgres" in message
+    assert "REDIS_HOST_PORT=6380 is occupied by container legacy-redis" in message
+    assert "sudo docker stop legacy-redis" in message
+    mutation_words = {"create", "down", "rm", "rename", "stop", "up"}
+    assert not any(mutation_words.intersection(command) for _step, command in runner.commands)
+
+
+def test_preflight_allows_current_managed_infra_port_owner(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    labels = {
+        "com.fb-agent.managed": "true",
+        "com.fb-agent.cluster-id": config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
+        "com.fb-agent.purpose": "infra",
+        "com.docker.compose.project": config.values["INFRA_PROJECT_NAME"],
+        "com.docker.compose.service": "postgres",
+    }
+    runner = DockerPortInventoryRunner(
+        [
+            {
+                "Id": "c" * 64,
+                "Name": "/fb_agent_infra-postgres-1",
+                "Config": {"Labels": labels},
+                "NetworkSettings": {
+                    "Ports": {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "5433"}]}
+                },
+            }
+        ]
+    )
+    controller = ProductionController(runner=runner)
+
+    controller._preflight(  # noqa: SLF001 - exact deploy preflight contract
+        config,
+        DeployOptions(root=root, rehearsal=True),
+        require_resources=False,
+        validate_caddy=False,
+    )
 
 
 def test_bootstrap_creates_only_the_new_managed_resource_names(tmp_path: Path) -> None:
@@ -1471,7 +1598,9 @@ def test_bootstrap_imports_only_verified_candidate_bundle_snapshot(
         assert not original_bundle.exists()
     assert not snapshot.exists()
     assert not (root / "candidate").exists()
-    assert runner.commands == []
+    assert runner.commands == [
+        ("preflight", ("docker", "container", "ls", "--quiet", "--no-trunc"))
+    ]
 
 
 def test_deploy_orders_webhook_before_workers_and_promotes_after_all_evidence(

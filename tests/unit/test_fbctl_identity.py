@@ -172,6 +172,7 @@ def _patch_bootstrap_runtime(
     fail_at: str | None = None,
     provision_hook=None,
     stage_observer=None,
+    port_preflight_hook=None,
 ) -> dict[str, str | None]:
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr(fbctl_controller.sys, "version_info", (3, 12))
@@ -199,6 +200,15 @@ def _patch_bootstrap_runtime(
 
     monkeypatch.setattr(fbctl_controller, "materialize_candidate", materialize)
     monkeypatch.setattr(fbctl_controller, "prepare_candidate", prepare)
+    monkeypatch.setattr(
+        fbctl_controller.ProductionController,
+        "_require_available_infra_ports",
+        (
+            (lambda _controller, **kwargs: port_preflight_hook(**kwargs))
+            if port_preflight_hook is not None
+            else (lambda *_args, **_kwargs: None)
+        ),
+    )
     monkeypatch.setattr(
         fbctl_controller,
         "_normalize_profile_tree",
@@ -913,6 +923,53 @@ def test_bootstrap_migrates_only_identity_from_fixed_legacy_source_after_full_su
     assert "REDIS_URL" not in canonical
     assert stat.S_IMODE(canonical_path.stat().st_mode) == 0o600
     assert not legacy.exists()
+    assert runner.commands == []
+
+
+def test_bootstrap_port_collision_fails_before_host_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _legacy = _legacy_root(tmp_path)
+    source = _bootstrap_source_without_identity(tmp_path)
+    runner = _NoRemoteRunner()
+    observed_values: dict[str, str] = {}
+
+    def reject_port_collision(*, values, docker_config) -> None:
+        assert docker_config is None
+        observed_values.update(values)
+        raise FbctlError(
+            "Docker host port collision: POSTGRES_HOST_PORT=5433 is occupied by container "
+            "legacy-postgres; stop it manually before retrying: sudo docker stop legacy-postgres"
+        )
+
+    _patch_bootstrap_runtime(
+        monkeypatch,
+        root,
+        port_preflight_hook=reject_port_collision,
+    )
+    before = _tree_state(root)
+
+    with pytest.raises(FbctlError, match="POSTGRES_HOST_PORT=5433"):
+        bootstrap_host(
+            runner=runner,
+            root=root,
+            source_env=source,
+            adoption_bundle=None,
+            desktop_profile_seed=None,
+            docker_config=None,
+            migrate_existing_bootstrap_identity=True,
+        )
+
+    assert observed_values["INFRA_PROJECT_NAME"] == "fb_agent_infra"
+    assert observed_values["POSTGRES_HOST_PORT"] == "5433"
+    assert observed_values["REDIS_HOST_PORT"] == "6380"
+    # Порт-гейт стоит внутри deployment lock, после перепроверки identity и
+    # Vision profile: иначе внешний вызов случился бы раньше, чем мы убедились,
+    # что снимок не подменили.  Поэтому shared-директория и файл лока к этому
+    # моменту уже созданы, а вот durable identity и Docker — ещё нетронуты.
+    assert not (root / "shared" / "source.env").exists()
+    assert _tree_state(root / "candidate") == before.get("candidate", {})
     assert runner.commands == []
 
 

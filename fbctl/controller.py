@@ -18,12 +18,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Iterator, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
 
 from fbctl.bundle import materialize_candidate
 from fbctl.config import (
     BOOTSTRAP_CADDY_KEYS,
     BOOTSTRAP_VISION_KEYS,
+    INFRA_HOST_PORTS,
+    INFRA_PROJECT_NAME,
     RuntimeConfig,
     canonicalize_source,
     parse_bootstrap_source_stdin,
@@ -101,6 +103,10 @@ MANAGED_VOLUME_RESOURCES = (
     ("volume", "fb_agent_infra_pgdata", "infra"),
     ("volume", "fb_agent_infra_redisdata", "infra"),
     ("volume", "fb_agent_app_campaign_uploads", "app"),
+)
+INFRA_HOST_PORT_SERVICES = (
+    ("POSTGRES_HOST_PORT", "postgres"),
+    ("REDIS_HOST_PORT", "redis"),
 )
 # Ресурсы брошенного прежнего bootstrap. Мы их не трогаем: только сообщаем
 # оператору, что они есть, чтобы он убрал их вручную после приёмки production.
@@ -300,6 +306,10 @@ class ProductionController:
         environment = self._environment(config)
         self.runner.run(("docker", "compose", "version"), step="preflight", env=environment)
         self._report_legacy_resources(config)
+        self._require_available_infra_ports(
+            values=config.values,
+            docker_config=config.docker_config,
+        )
         for plane in ("infra", "jobs", "desktop"):
             self.runner.run(
                 config.compose(plane, "config", "--quiet"),
@@ -449,6 +459,100 @@ class ProductionController:
                 "[fbctl] info: legacy Docker resources detected and left untouched: "
                 + ", ".join(present)
             )
+
+    def _require_available_infra_ports(
+        self,
+        *,
+        values: Mapping[str, str],
+        docker_config: Path | None,
+    ) -> None:
+        environment = sealed_process_environment(docker_config=docker_config)
+        listed = self.runner.run(
+            ("docker", "container", "ls", "--quiet", "--no-trunc"),
+            step="preflight",
+            env=environment,
+            capture=True,
+        )
+        container_ids = tuple(line.strip() for line in listed.stdout.splitlines() if line.strip())
+        if not container_ids:
+            return
+        if any(
+            re.fullmatch(r"[0-9a-f]{64}", container_id) is None for container_id in container_ids
+        ):
+            raise FbctlError("Docker returned an invalid running-container id")
+        inspected = self.runner.run(
+            ("docker", "container", "inspect", *container_ids),
+            step="preflight",
+            env=environment,
+            capture=True,
+        )
+        try:
+            containers = json.loads(inspected.stdout)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise FbctlError("Docker returned unreadable running-container inventory") from exc
+        if not isinstance(containers, list):
+            raise FbctlError("Docker returned invalid running-container inventory")
+
+        required_ports = {values[key]: (key, service) for key, service in INFRA_HOST_PORT_SERVICES}
+        conflicts: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        for container in containers:
+            if not isinstance(container, dict):
+                raise FbctlError("Docker returned invalid running-container inventory")
+            container_id = container.get("Id")
+            raw_name = container.get("Name")
+            if not isinstance(container_id, str) or not container_id:
+                raise FbctlError("Docker returned a running container without an id")
+            name = raw_name.removeprefix("/") if isinstance(raw_name, str) else ""
+            command_target = (
+                name if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]+", name) else container_id
+            )
+            container_config = container.get("Config")
+            network_settings = container.get("NetworkSettings")
+            if not isinstance(container_config, dict) or not isinstance(network_settings, dict):
+                raise FbctlError("Docker returned invalid running-container inventory")
+            labels = container_config.get("Labels")
+            ports = network_settings.get("Ports")
+            if not isinstance(ports, dict):
+                raise FbctlError(f"Docker container has unreadable port bindings: {command_target}")
+            for bindings in ports.values():
+                if bindings is None:
+                    continue
+                if not isinstance(bindings, list):
+                    raise FbctlError(
+                        f"Docker container has unreadable port bindings: {command_target}"
+                    )
+                for binding in bindings:
+                    if not isinstance(binding, dict):
+                        raise FbctlError(
+                            f"Docker container has unreadable port bindings: {command_target}"
+                        )
+                    host_port = binding.get("HostPort")
+                    host_ip = binding.get("HostIp")
+                    required = required_ports.get(host_port)
+                    if required is None or host_ip not in {"", "0.0.0.0", "::", "127.0.0.1"}:
+                        continue
+                    key, service = required
+                    is_current_infra = (
+                        isinstance(labels, dict)
+                        and labels.get("com.fb-agent.managed") == "true"
+                        and labels.get("com.fb-agent.cluster-id")
+                        == values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"]
+                        and labels.get("com.fb-agent.purpose") == "infra"
+                        and labels.get("com.docker.compose.project") == values["INFRA_PROJECT_NAME"]
+                        and labels.get("com.docker.compose.service") == service
+                    )
+                    if is_current_infra or (key, container_id) in seen:
+                        continue
+                    seen.add((key, container_id))
+                    display_name = name or container_id
+                    conflicts.append(
+                        f"{key}={host_port} is occupied by container "
+                        f"{display_name} ({container_id[:12]}); stop it manually before retrying: "
+                        f"sudo docker stop {command_target}"
+                    )
+        if conflicts:
+            raise FbctlError("Docker host port collision: " + "; ".join(conflicts))
 
     @staticmethod
     def _managed_resources(
@@ -1117,9 +1221,9 @@ def bootstrap_host(
         canonical_required_uid=VISION_RUNTIME_UID,
         canonical_required_gid=VISION_RUNTIME_GID,
     )
+    controller = ProductionController(runner=runner)
     with trusted_shared_directory(root, required_uid=os.getuid(), create=True) as shared_fd:
         assert shared_fd is not None
-    controller = ProductionController(runner=runner)
     candidate = root / "candidate"
     with controller._deployment_lock_owned(  # noqa: SLF001 - same deep module
         root,
@@ -1134,6 +1238,17 @@ def bootstrap_host(
             raise FbctlError("bootstrap identity sources changed after preflight")
         if not bootstrap_profile_is_current(profile_input):
             raise FbctlError("bootstrap Vision profile changed after preflight")
+        # Занятый host-порт — единственная оставшаяся причина, по которой infra
+        # не поднимется.  Проверяем здесь: identity и Vision profile уже
+        # перепроверены под локом, а первой мутации ещё не было.
+        controller._require_available_infra_ports(  # noqa: SLF001 - same deep module
+            values={
+                "FB_AGENT_BOOTSTRAP_CLUSTER_ID": source_values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"],
+                "INFRA_PROJECT_NAME": INFRA_PROJECT_NAME,
+                **dict(INFRA_HOST_PORTS),
+            },
+            docker_config=docker_config,
+        )
         # Persist durable identity before the first Docker/DB mutation.  A
         # retry must reuse exactly these values even when the supplied source
         # omits generated fields.  Bootstrap-only Vision/Caddy plaintext was
