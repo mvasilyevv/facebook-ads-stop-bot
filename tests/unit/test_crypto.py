@@ -207,7 +207,8 @@ async def test_rotate_encryption_key_success_writes_all(monkeypatch) -> None:
 
     rotated = await crypto.rotate_encryption_key(old_key, new_key)
 
-    assert rotated == 3
+    # Счётчик — строки, а не отдельные Fernet-поля: одна строка в каждой таблице.
+    assert rotated == 2
     # UPDATE выполнился по обеим таблицам с расшифровываемыми полями.
     assert any("telegram_config" in u for u in conn.updates)
     assert any("vision_config" in u for u in conn.updates)

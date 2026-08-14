@@ -278,7 +278,7 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
                     text(f"UPDATE vision_config SET {set_sql}, updated_at = NOW() WHERE id = :i"),
                     {**updates, "i": row_id},
                 )
-                rotated += len(updates)
+                rotated += 1
                 logger.info(
                     "vision_config[%s]: перешифровано %d поле(й)",
                     row_id,
@@ -297,7 +297,7 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
                     ),
                     {**updates, "i": row_id},
                 )
-                rotated += len(updates)
+                rotated += 1
                 logger.info(
                     "adsetpro_credentials[%s]: перешифровано %d поле(й)",
                     row_id,
