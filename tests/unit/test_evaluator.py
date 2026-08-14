@@ -53,6 +53,47 @@ def _make_ctx(**kwargs) -> RuleContext:
     return RuleContext(**defaults)
 
 
+def test_nearest_stop_selects_largest_ratio_across_enabled_rules() -> None:
+    row = _make_row(
+        spend=Decimal("0.35"),
+        clicks=1,
+        cpc=Decimal("0.05"),
+        frequency=Decimal("2.10"),
+    )
+    ctx = _make_ctx(
+        frequency_anomaly_enabled=True,
+        frequency_current=row.frequency,
+        frequency_warning_threshold=Decimal("2.80"),
+        frequency_stop_threshold=Decimal("3.50"),
+    )
+
+    result = evaluate_stop_rules(row, ctx)
+
+    assert result.stage is None
+    assert result.nearest_stop is not None
+    assert result.nearest_stop.code == "cpl_stop"
+    assert result.nearest_stop.value == Decimal("0.35")
+    assert result.nearest_stop.threshold == Decimal("0.50")
+    assert result.nearest_stop.stage is None
+
+
+def test_unknown_metric_is_not_treated_as_zero_progress() -> None:
+    row = _make_row(
+        spend=Decimal("0.00"),
+        clicks=1,
+        cpc=None,
+    )
+    ctx = _make_ctx(
+        cpl_enabled=False,
+        frequency_anomaly_enabled=False,
+    )
+
+    result = evaluate_stop_rules(row, ctx)
+
+    assert result.stage is None
+    assert result.nearest_stop is None
+
+
 # Проверяем что на стадии клика срабатывает прямой STOP по дорогому CPC.
 def test_click_stage_returns_cpc_stop():
     row = _make_row(spend=Decimal("0.15"), clicks=1, cpc=Decimal("0.15"))

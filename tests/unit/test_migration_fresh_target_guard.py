@@ -8,7 +8,7 @@ import pytest
 from alembic.config import Config
 
 from migrations.baseline_contract import BASELINE_DEFAULT_PARTITIONS, BASELINE_REVISION
-from migrations.revision_guard import LinearRevisionChain
+from migrations.revision_guard import LinearRevisionChain, load_project_revision_chain
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/run-migrations-locked.py"
@@ -16,6 +16,7 @@ SPEC = importlib.util.spec_from_file_location("run_migrations_locked", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+HEAD_REVISION = load_project_revision_chain().head
 
 
 class _Connection:
@@ -41,7 +42,7 @@ class _Connection:
             ("pg_catalog", "plpgsql", "1.0", False),
             *(
                 [("public", "pgcrypto", "1.3", True)]
-                if self.revisions == [BASELINE_REVISION]
+                if self.revisions and self.revisions[0] in {BASELINE_REVISION, HEAD_REVISION}
                 else []
             ),
         ]
@@ -64,7 +65,7 @@ class _Connection:
                     BASELINE_DEFAULT_PARTITIONS.items(), start=1
                 )
             ]
-            if self.revisions == [BASELINE_REVISION]
+            if self.revisions and self.revisions[0] in {BASELINE_REVISION, HEAD_REVISION}
             else []
         )
         self.sentinel_checks: list[str] = []
@@ -148,12 +149,12 @@ async def test_fresh_target_guard_accepts_empty_database(version_table: bool) ->
 
 
 @pytest.mark.asyncio
-async def test_fresh_target_guard_accepts_exact_installed_baseline(
+async def test_fresh_target_guard_accepts_exact_installed_head(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     connection = _Connection(
         version_table=True,
-        revisions=[BASELINE_REVISION],
+        revisions=[HEAD_REVISION],
     )
     checked_rows: list[object] = []
     monkeypatch.setattr(
@@ -244,12 +245,12 @@ async def test_fresh_target_guard_rejects_standalone_public_catalog_objects(
 
 
 @pytest.mark.asyncio
-async def test_installed_baseline_rejects_late_standalone_public_type(
+async def test_installed_head_rejects_late_standalone_public_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     connection = _Connection(
         version_table=True,
-        revisions=[BASELINE_REVISION],
+        revisions=[HEAD_REVISION],
         catalog_objects=[("type", "legacy_state", "enum")],
     )
     monkeypatch.setattr(MODULE, "assert_catalog_artifacts", lambda _rows: None)
@@ -263,7 +264,7 @@ async def test_fresh_target_guard_rejects_stamped_partial_baseline() -> None:
     missing = {"public.notification_events"}
     connection = _Connection(
         version_table=True,
-        revisions=[BASELINE_REVISION],
+        revisions=[HEAD_REVISION],
         missing_sentinels=missing,
     )
 
@@ -279,7 +280,7 @@ async def test_fresh_target_guard_rejects_catalog_artifact_drift(
 ) -> None:
     connection = _Connection(
         version_table=True,
-        revisions=[BASELINE_REVISION],
+        revisions=[HEAD_REVISION],
     )
 
     def _reject(_rows: object) -> None:

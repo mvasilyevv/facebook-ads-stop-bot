@@ -466,6 +466,35 @@ async def _process_one_row(
 
     result.rows_with_offer += 1
 
+    # Вычисляем durable rule-context тем же evaluator до catalog upsert, но
+    # откладываем любую ошибку до записи scan metrics. Так сохраняется прежний
+    # fail-closed порядок: ошибочная конфигурация не создаёт money-action, а сам
+    # подтверждённый снимок остаётся наблюдаемым и не маскируется пропуском строки.
+    ad_external_deposits = external_deposits.get(row.fb_ad_id, 0) if row.fb_ad_id else 0
+    evaluation: RuleEvaluation | None = None
+    evaluation_error: Exception | None = None
+    try:
+        ctx = build_rule_context(
+            matched_offer,
+            account_currency=account_currency,
+            currency_exponent=account_currency_exponent,
+            external_deposits=ad_external_deposits,
+            frequency_current=row.frequency,
+            impressions=row.impressions,
+            reach=row.reach,
+        )
+        evaluation = evaluate_stop_rules(row, ctx)
+    except Exception as exc:  # сохраняем прежний persist-before-fail порядок
+        evaluation_error = exc
+    nearest_stop = evaluation.nearest_stop if evaluation is not None else None
+    nearest_stage = (
+        nearest_stop.stage.value.lower()
+        if nearest_stop is not None and nearest_stop.stage is not None
+        else "none"
+        if nearest_stop is not None
+        else None
+    )
+
     # --- Catalog upsert ---
     ad_id = await upsert_catalog_hierarchy(
         engine,
@@ -485,6 +514,11 @@ async def _process_one_row(
         adset_lifetime_budget=row.adset_lifetime_budget,
         adset_budget_remaining=row.adset_budget_remaining,
         adset_learning_stage=row.adset_learning_stage,
+        nearest_rule_code=nearest_stop.code if nearest_stop is not None else None,
+        nearest_rule_value=nearest_stop.value if nearest_stop is not None else None,
+        nearest_rule_threshold=nearest_stop.threshold if nearest_stop is not None else None,
+        nearest_rule_stage=nearest_stage,
+        matched_offer_code=matched_offer.code if evaluation is not None else None,
         **fence_kwargs,
     )
 
@@ -505,14 +539,11 @@ async def _process_one_row(
         # auto-pause while the scan itself appeared healthy and unauditable.
         raise RuntimeError("ad_metrics_insert_failed")
 
-    if matched_offer.currency != account_currency:
+    if isinstance(evaluation_error, OfferCurrencyMismatchError):
         marker = f"{matched_offer.code}:{matched_offer.currency or 'unknown'}!={account_currency}"
         if marker not in result.currency_mismatch_offers:
             result.currency_mismatch_offers.append(marker)
-        raise OfferCurrencyMismatchError(
-            f"offer {matched_offer.code!r} currency "
-            f"{matched_offer.currency!r} does not match cabinet {account_currency!r}"
-        )
+        raise evaluation_error
 
     current = states.get(row.fb_ad_id)
     if (
@@ -540,18 +571,11 @@ async def _process_one_row(
             enable_grace_currency_exponent=None,
         )
 
-    # --- Оценка правил (одна функция возвращает оба уровня severity) ---
-    ad_external_deposits = external_deposits.get(row.fb_ad_id, 0) if row.fb_ad_id else 0
-    ctx = build_rule_context(
-        matched_offer,
-        account_currency=account_currency,
-        currency_exponent=account_currency_exponent,
-        external_deposits=ad_external_deposits,
-        frequency_current=row.frequency,
-        impressions=row.impressions,
-        reach=row.reach,
-    )
-    evaluation = evaluate_stop_rules(row, ctx)
+    if evaluation_error is not None:
+        raise evaluation_error
+    assert evaluation is not None
+
+    # --- Оценка правил уже выполнена до upsert; здесь меняется только FSM ---
     stop_codes = tuple(evaluation.stop_rule_codes)
     warning_codes = tuple(evaluation.warning_rule_codes)
 

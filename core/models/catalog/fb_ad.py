@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -63,6 +64,19 @@ class FbAd(UUIDPrimaryKey, Timestamp, Base):
         String(64),
         nullable=True,
     )
+    # Durable evaluator projection for operator surfaces. Values are written
+    # from RuleEvaluation.nearest_stop and never reconstructed in the API.
+    nearest_rule_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    nearest_rule_value: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 6),
+        nullable=True,
+    )
+    nearest_rule_threshold: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 6),
+        nullable=True,
+    )
+    nearest_rule_stage: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    matched_offer_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

@@ -29,11 +29,11 @@ SPEND_WITH_DEP_TO_PERCENT = Decimal("90")  # …90% от CPA
 
 @dataclass(slots=True, frozen=True)
 class RuleHit:
-    """Одно сработавшее правило."""
+    """Контекст одного правила: срабатывание или прогресс до STOP."""
 
     code: str
     title: str
-    stage: AlertStage
+    stage: AlertStage | None
     value: Decimal
     threshold: Decimal
     summary: str
@@ -47,6 +47,7 @@ class RuleEvaluation:
     stage: AlertStage | None
     warning_hits: tuple[RuleHit, ...]
     stop_hits: tuple[RuleHit, ...]
+    nearest_stop: RuleHit | None = None
 
     @property
     def warning_rule_codes(self) -> list[str]:
