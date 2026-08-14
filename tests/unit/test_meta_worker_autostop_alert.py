@@ -298,6 +298,7 @@ async def test_terminal_autostop_with_active_ad_gets_non_resolving_escalation(
         terminal_active_guard = (
             "t.status IN ('failed', 'cancelled')" in sql
             and "UPPER(COALESCE(ad.delivery_status, '')) = 'ACTIVE'" in sql
+            and "FROM incidents AS terminal_incident" in sql
         )
         if not terminal_active_guard:
             return _AlertRowResult(None)
@@ -342,6 +343,9 @@ async def test_terminal_autostop_with_active_ad_gets_non_resolving_escalation(
     assert accepted == 1
     assert "status IN ('failed', 'cancelled')" in candidate_source
     assert "UPPER(COALESCE(ad.delivery_status, '')) = 'ACTIVE'" in candidate_source
+    assert "FROM incidents AS terminal_incident" in candidate_source
+    assert "terminal_prefix" in candidate_source
+    assert "WHEN task.status IN ('failed', 'cancelled') THEN 0" in candidate_source
     assert notify.await_args.kwargs["incident_key"] == (
         f"{autostop_alert.TERMINAL_UNDELIVERED_INCIDENT_KEY_PREFIX}230011223344"
     )

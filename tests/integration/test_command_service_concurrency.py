@@ -13,6 +13,10 @@ from core.commands import (
     CommandReceipt,
     CommandService,
 )
+from core.meta_api.autostop_alert import (
+    TERMINAL_UNDELIVERED_INCIDENT_KEY_PREFIX,
+    escalate_undelivered_autostop_pauses,
+)
 
 
 async def _seed_ad(engine, *, fb_ad_id: str) -> uuid.UUID:
@@ -1018,3 +1022,141 @@ async def test_concurrent_same_key_different_targets_commits_one_binding(pg_engi
     finally:
         await _cleanup(pg_engine, fb_ad_id=target_a, offer_id=offer_a)
         await _cleanup(pg_engine, fb_ad_id=target_b, offer_id=offer_b)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_autostop_scans_replace_rejected_generation_once(
+    pg_engine,
+) -> None:
+    fb_ad_id = f"2390{uuid.uuid4().int % 10**14:014d}"
+    offer_id = await _seed_ad(pg_engine, fb_ad_id=fb_ad_id)
+    service = CommandService(pg_engine)
+    command_key = f"auto:pause_ad:{fb_ad_id}:{uuid.uuid4()}"
+    incident_id = uuid.uuid4()
+    incident_key = f"ad:{fb_ad_id}:{uuid.uuid4()}"
+    terminal_key = f"{TERMINAL_UNDELIVERED_INCIDENT_KEY_PREFIX}{fb_ad_id}"
+    try:
+        original = await service.enqueue_ad_action(
+            action_kind="pause_ad",
+            fb_ad_id=fb_ad_id,
+            requested_by="bot_auto_stop",
+            idempotency_key=command_key,
+            max_attempts=15,
+        )
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO incidents
+                        (id, incident_key, generation, resource_type, resource_id,
+                         severity, status, title, correlation_id, resolved_at)
+                    VALUES
+                        (:id, :incident_key, 1, 'ad', :resource_id,
+                         'critical', 'failed', 'Auto-stop rejected',
+                         :correlation_id, NOW())
+                    """
+                ),
+                {
+                    "id": incident_id,
+                    "incident_key": incident_key,
+                    "resource_id": fb_ad_id,
+                    "correlation_id": original.correlation_id,
+                },
+            )
+            await conn.execute(
+                text(
+                    """
+                    UPDATE task_queue
+                    SET status = 'failed',
+                        result = '{"outcome":"REJECTED"}'::jsonb,
+                        completed_at = NOW(),
+                        created_at = NOW() - INTERVAL '15 minutes',
+                        updated_at = NOW()
+                    WHERE id = :task_id
+                    """
+                ),
+                {"task_id": original.task_id},
+            )
+
+        assert (
+            await escalate_undelivered_autostop_pauses(
+                pg_engine,
+                stuck_after_seconds=600,
+            )
+            == 1
+        )
+        assert (
+            await escalate_undelivered_autostop_pauses(
+                pg_engine,
+                stuck_after_seconds=600,
+            )
+            == 0
+        )
+
+        scans = await asyncio.gather(
+            service.enqueue_ad_action(
+                action_kind="pause_ad",
+                fb_ad_id=fb_ad_id,
+                requested_by="bot_auto_stop",
+                idempotency_key=command_key,
+                max_attempts=15,
+            ),
+            service.enqueue_ad_action(
+                action_kind="pause_ad",
+                fb_ad_id=fb_ad_id,
+                requested_by="bot_auto_stop",
+                idempotency_key=command_key,
+                max_attempts=15,
+            ),
+        )
+
+        assert scans[0].task_id == scans[1].task_id
+        assert scans[0].task_id != original.task_id
+        assert {scan.created for scan in scans} == {False, True}
+        async with pg_engine.connect() as conn:
+            tasks = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT id, status, idempotency_key, correlation_id
+                        FROM task_queue
+                        WHERE payload->>'target_id' = :fb_ad_id
+                          AND payload->>'mutation_kind' = 'pause_ad'
+                        ORDER BY id
+                        """
+                    ),
+                    {"fb_ad_id": fb_ad_id},
+                )
+            ).all()
+            incidents = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT incident_key, status, resolved_at
+                        FROM incidents
+                        WHERE incident_key IN (:incident_key, :terminal_key)
+                        ORDER BY incident_key
+                        """
+                    ),
+                    {"incident_key": incident_key, "terminal_key": terminal_key},
+                )
+            ).all()
+
+        assert len(tasks) == 2
+        assert [(row.id, row.status) for row in tasks] == [
+            (original.task_id, "failed"),
+            (scans[0].task_id, "pending"),
+        ]
+        assert tasks[1].idempotency_key.startswith("auto:pause_ad:retry:")
+        assert {row.correlation_id for row in tasks} == {original.correlation_id}
+        assert [(row.incident_key, row.status, row.resolved_at) for row in incidents] == [
+            (incident_key, "open", None),
+            (terminal_key, "open", None),
+        ]
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM incidents WHERE incident_key IN (:incident_key, :terminal_key)"),
+                {"incident_key": incident_key, "terminal_key": terminal_key},
+            )
+        await _cleanup(pg_engine, fb_ad_id=fb_ad_id, offer_id=offer_id)

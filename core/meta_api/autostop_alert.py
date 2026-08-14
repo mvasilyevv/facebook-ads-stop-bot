@@ -156,10 +156,23 @@ async def _find_undelivered_candidate_ids(
                             WHERE ad.fb_ad_id = task.payload->>'target_id'
                               AND UPPER(COALESCE(ad.delivery_status, '')) = 'ACTIVE'
                           )
+                          AND NOT EXISTS (
+                            SELECT 1
+                            FROM incidents AS terminal_incident
+                            WHERE terminal_incident.incident_key =
+                                  :terminal_prefix || (task.payload->>'target_id')
+                              AND terminal_incident.status IN
+                                  ('open', 'acknowledged', 'executing')
+                          )
                         )
                       )
                       AND task.created_at < NOW() - make_interval(secs => :secs)
-                    ORDER BY task.created_at ASC
+                    ORDER BY
+                      CASE
+                        WHEN task.status IN ('failed', 'cancelled') THEN 0
+                        ELSE 1
+                      END,
+                      task.created_at ASC
                     LIMIT :lim
                     """
                     ),
@@ -167,6 +180,7 @@ async def _find_undelivered_candidate_ids(
                         "rb": requested_by,
                         "secs": stuck_after_seconds,
                         "lim": _ESCALATE_QUERY_LIMIT,
+                        "terminal_prefix": TERMINAL_UNDELIVERED_INCIDENT_KEY_PREFIX,
                     },
                 )
             )
@@ -249,6 +263,14 @@ async def escalate_undelivered_autostop_pauses(
                                 OR (
                                   t.status IN ('failed', 'cancelled')
                                   AND UPPER(COALESCE(ad.delivery_status, '')) = 'ACTIVE'
+                                  AND NOT EXISTS (
+                                    SELECT 1
+                                    FROM incidents AS terminal_incident
+                                    WHERE terminal_incident.incident_key =
+                                          :terminal_prefix || (t.payload->>'target_id')
+                                      AND terminal_incident.status IN
+                                          ('open', 'acknowledged', 'executing')
+                                  )
                                 )
                               )
                               AND t.created_at < NOW() - make_interval(secs => :secs)
@@ -259,6 +281,7 @@ async def escalate_undelivered_autostop_pauses(
                             "task_id": int(task_id),
                             "rb": requested_by,
                             "secs": stuck_after_seconds,
+                            "terminal_prefix": TERMINAL_UNDELIVERED_INCIDENT_KEY_PREFIX,
                         },
                     )
                 ).first()
