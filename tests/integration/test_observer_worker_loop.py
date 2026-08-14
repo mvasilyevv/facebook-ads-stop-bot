@@ -485,7 +485,9 @@ async def test_main_loop_degraded_alert_after_threshold(
         c for c in spy.await_args_list if c.kwargs.get("event_type") == "observer_degraded"
     ]
     assert len(degraded_calls) == 2
-    assert "Observer" in degraded_calls[0].kwargs["title"]
+    # Заголовок пишется для оператора, поэтому проверяем смысл, а не внутреннее
+    # имя подсистемы: «Observer» в карточке ему ничего не говорит.
+    assert "скан" in degraded_calls[0].kwargs["title"].lower()
     assert degraded_calls[0].kwargs["severity"] == "critical"
     assert {call.kwargs["incident_key"] for call in degraded_calls} == {"observer:degraded"}
 
