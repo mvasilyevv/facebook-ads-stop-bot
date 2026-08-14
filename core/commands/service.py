@@ -23,6 +23,7 @@ from core.meta_api.identity import require_ad_account_id
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
 from core.money import validated_currency_code
+from core.wording import delivery_status_ru
 
 if TYPE_CHECKING:
     from core.commands.campaign_runs import CampaignRunCommandReceipt
@@ -879,15 +880,23 @@ async def _open_status_divergence_incident(
         audience="owners",
         event_type="meta_status_divergence",
         severity="critical",
-        title=f"{target_label} · статус Meta расходится",
+        title=f"Статус в Facebook разошёлся: {target_label}",
         summary=(
-            f"После задачи #{previous_task_id} новый снимок снова показывает "
-            f"{observed_delivery_status}."
+            f"После задачи #{previous_task_id} объявление снова показывается как "
+            f"{delivery_status_ru(observed_delivery_status)}."
         ),
+        lines=[
+            (
+                "Отправляю команду выключить ещё раз"
+                if was_pause
+                else "Отправляю команду включить ещё раз"
+            ),
+            "Если не подтвердится, поменяй статус в Ads Manager вручную",
+        ],
         risk=(
-            "Расход может продолжаться до подтверждения повторного отключения."
+            "Объявление может продолжать тратить бюджет"
             if was_pause
-            else "Доставка остаётся остановленной до подтверждения повторного включения."
+            else "Объявление остаётся выключенным и не приносит трафик"
         ),
         resource_type="fb_ad",
         resource_id=target_id,

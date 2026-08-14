@@ -607,10 +607,13 @@ async def test_fast_confirmed_command_blocks_distinct_keys_until_post_command_ev
         assert counts.incident_count == 1
         assert counts.event_count == 1
         assert counts.incident_correlation == corrective.correlation_id
-        assert counts.event_facts["title"] == "CAS ad · статус Meta расходится"
-        assert counts.event_facts["summary"] == (
-            f"После задачи #{original.task_id} новый снимок снова показывает ACTIVE."
-        )
+        # Карточка: что случилось, с каким объявлением и что делает система.
+        assert counts.event_facts["title"].startswith("Статус в Facebook разошёлся")
+        assert "CAS ad" in counts.event_facts["title"]
+        assert f"#{original.task_id}" in counts.event_facts["summary"]
+        assert "включённое" in counts.event_facts["summary"]
+        assert "ACTIVE" not in counts.event_facts["summary"]
+        assert any("Ads Manager" in line for line in counts.event_facts["lines"])
         assert fb_ad_id not in str(counts.event_facts)
     finally:
         await _cleanup(pg_engine, fb_ad_id=fb_ad_id, offer_id=offer_id)

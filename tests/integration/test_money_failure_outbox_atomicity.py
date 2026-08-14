@@ -69,7 +69,7 @@ async def _cleanup(pg_engine, *, task_ids: list[int], recipient_id: uuid.UUID) -
         "task_type",
         "mutation_kind",
         "mutation_params",
-        "expected_title",
+        "expected_title_prefix",
         "expected_risk",
     ),
     [
@@ -77,7 +77,7 @@ async def _cleanup(pg_engine, *, task_ids: list[int], recipient_id: uuid.UUID) -
             "meta_api_mutation",
             "pause_ad",
             {},
-            "Пауза не подтверждена",
+            "Отключение не подтверждено",
             "Объявление может продолжать тратить бюджет",
         ),
         (
@@ -85,14 +85,14 @@ async def _cleanup(pg_engine, *, task_ids: list[int], recipient_id: uuid.UUID) -
             "activate_ad",
             {},
             "Денежное действие не подтверждено",
-            "Фактическое состояние Meta требует ручной проверки",
+            "Фактическое состояние в Facebook нужно проверить руками",
         ),
         (
             "meta_api_mutation",
             "bulk_status_change",
             {"action": "activate"},
             "Денежное действие не подтверждено",
-            "Фактическое состояние Meta требует ручной проверки",
+            "Фактическое состояние в Facebook нужно проверить руками",
         ),
     ],
 )
@@ -101,7 +101,7 @@ async def test_uncorrelated_money_failure_commits_one_durable_delivery(
     task_type: str,
     mutation_kind: str | None,
     mutation_params: dict[str, str],
-    expected_title: str,
+    expected_title_prefix: str,
     expected_risk: str,
 ) -> None:
     marker = uuid.uuid4().hex
@@ -168,8 +168,12 @@ async def test_uncorrelated_money_failure_commits_one_durable_delivery(
         assert len(rows) == 1
         assert rows[0].event_type == "action_failed"
         assert rows[0].incident_id is None
-        assert rows[0].facts["title"] == expected_title
+        # Заголовок называет проблему и объявление, риск — последствие,
+        # а строка ниже — конкретное действие оператора.
+        assert rows[0].facts["title"].startswith(expected_title_prefix)
+        assert f"ad-{marker}" in rows[0].facts["title"]
         assert rows[0].facts["risk"] == expected_risk
+        assert any("Ads Manager" in line for line in rows[0].facts["lines"])
         assert rows[0].state == "pending"
     finally:
         await _cleanup(pg_engine, task_ids=task_ids, recipient_id=recipient_id)

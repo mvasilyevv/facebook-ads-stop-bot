@@ -23,6 +23,13 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from core.tasks.wakeup import TASK_QUEUE_NOTIFY_CHANNEL
+from core.wording import (
+    action_label_ru,
+    ads_ru,
+    adsets_ru,
+    campaigns_ru,
+    creatives_ru,
+)
 from core.worker_metrics import (
     TASK_CLAIM_LATENCY,
     TASK_OLDEST_PENDING_AGE,
@@ -349,37 +356,37 @@ async def _transition_correlated_incident(
         event_type = "action_executing"
         severity = "warning"
         status_label = "Выполняется"
-        summary = "Денежное действие принято выделенным воркером."
+        summary = "Команда взята в работу, отвечу результатом."
     elif phase == "confirmed":
         incident_status = "resolved"
         event_type = "action_confirmed"
         severity = "ok"
         status_label = "Подтверждено"
-        summary = "Изменение подтверждено фактическим ответом Meta."
+        summary = "Facebook подтвердил изменение."
     elif phase == "recovered":
         incident_status = "resolved"
         event_type = "incident_recovered"
         severity = "ok"
         status_label = "Угроза снята"
-        summary = "Условие риска исчезло до внешнего действия; команда отменена."
+        summary = "Показатели вернулись в норму, команда отменена."
     elif phase == "unknown":
         incident_status = "open" if keep_open else "failed"
         event_type = "action_unknown"
         severity = "critical"
         status_label = "Результат неизвестен"
-        summary = "Автоповтор запрещён: проверьте фактический статус в Meta."
+        summary = "Facebook не подтвердил результат. Сам повторять не буду."
     elif phase == "cancelled":
         incident_status = "open" if keep_open else "failed"
         event_type = "action_cancelled"
         severity = "warning"
         status_label = "Отменено"
-        summary = "Действие отменено до внешнего вызова."
+        summary = "Команда отменена до отправки в Facebook."
     else:
         incident_status = "open" if keep_open else "failed"
         event_type = "action_failed"
         severity = "critical"
         status_label = "Не выполнено"
-        summary = "Действие не подтверждено; откройте карточку для диагностики."
+        summary = "Команда не выполнена."
 
     timestamp_column = (
         "resolved_at = NOW(),"
@@ -414,7 +421,10 @@ async def _transition_correlated_incident(
     from core.telegram.notifications import enqueue_notification_in_transaction
     from core.telegram.schemas import NotificationCardFacts, NotificationEventSpec
 
-    action_kind = str((payload or {}).get("mutation_kind") or "action")
+    action_kind = str((payload or {}).get("mutation_kind") or "")
+    card_lines = [f"Задача #{task_id} · {action_label_ru(action_kind)}"]
+    if phase in {"failed", "unknown"}:
+        card_lines.append("Проверь статус объявления в Ads Manager")
     await enqueue_notification_in_transaction(
         conn,
         NotificationEventSpec(
@@ -424,7 +434,7 @@ async def _transition_correlated_incident(
             facts=NotificationCardFacts(
                 title=str(incident.title),
                 summary=summary,
-                lines=[f"Задача #{task_id} · {action_kind}"],
+                lines=card_lines,
                 status=status_label,
             ),
             dedupe_key=f"task:{task_id}:{phase}",
@@ -488,6 +498,18 @@ def _is_partial_money_result(
         return False
 
 
+async def _ad_name_by_fb_ad_id(conn: AsyncConnection, fb_ad_id: str) -> str | None:
+    """Имя объявления из каталога; None, если каталог его ещё не видел."""
+    if not fb_ad_id:
+        return None
+    name = await conn.scalar(
+        text("SELECT ad_name FROM fb_ads WHERE fb_ad_id = :fb_ad_id LIMIT 1"),
+        {"fb_ad_id": fb_ad_id},
+    )
+    normalized = str(name).strip() if name else ""
+    return normalized or None
+
+
 async def _enqueue_standalone_money_failure(
     conn: AsyncConnection,
     *,
@@ -507,21 +529,29 @@ async def _enqueue_standalone_money_failure(
     from core.telegram.notifications import enqueue_notification_in_transaction
     from core.telegram.schemas import NotificationCardFacts, NotificationEventSpec
 
-    mutation_kind = str(
-        payload.get("mutation_kind") or payload.get("action") or task_type or "action"
-    )
-    target_id = str(payload.get("target_id") or "unknown")
+    mutation_kind = str(payload.get("mutation_kind") or payload.get("action") or task_type or "")
+    target_id = str(payload.get("target_id") or "")
+    # Имя объявления читаем в той же транзакции: карточка про деньги без имени
+    # заставляет оператора искать голый ID в Ads Manager.
+    ad_name = await _ad_name_by_fb_ad_id(conn, target_id)
+    target_label = ad_name or target_id
     is_unknown = phase == "unknown"
     is_stop_action = _is_money_stop_payload(payload)
     title = (
-        ("Авто-стоп не подтверждён" if requested_by == "bot_auto_stop" else "Пауза не подтверждена")
+        (
+            "Авто-стоп не подтверждён"
+            if requested_by == "bot_auto_stop"
+            else "Отключение не подтверждено"
+        )
         if is_stop_action
         else "Денежное действие не подтверждено"
     )
+    if target_label:
+        title = f"{title}: {target_label[:120]}"
     risk = (
         "Объявление может продолжать тратить бюджет"
         if is_stop_action
-        else "Фактическое состояние Meta требует ручной проверки"
+        else "Фактическое состояние в Facebook нужно проверить руками"
     )
     await enqueue_notification_in_transaction(
         conn,
@@ -531,8 +561,18 @@ async def _enqueue_standalone_money_failure(
             audience="owners",
             facts=NotificationCardFacts(
                 title=title,
-                summary=f"Цель: {target_id[:160]} · операция: {mutation_kind}",
-                lines=[f"Задача #{task_id} · проверь статус вручную"],
+                summary=(
+                    f"Задача #{task_id} · {action_label_ru(mutation_kind)} · "
+                    + (
+                        "Facebook не подтвердил результат"
+                        if is_unknown
+                        else "команда завершилась ошибкой"
+                    )
+                ),
+                lines=[
+                    *([f"Объявление {target_id}"] if target_id and not ad_name else []),
+                    "Открой Ads Manager и проверь статус объявления",
+                ],
                 risk=risk,
                 status="Результат неизвестен" if is_unknown else "Не выполнено",
             ),
@@ -540,6 +580,13 @@ async def _enqueue_standalone_money_failure(
             correlation_id=correlation_id,
         ),
     )
+
+
+def _created_kind_count(values: Any) -> int:
+    """Сколько объектов одного типа успел создать Meta до потери подтверждения."""
+    if isinstance(values, list):
+        return len(values)
+    return 1 if values else 0
 
 
 async def _enqueue_standalone_campaign_unknown(
@@ -562,19 +609,26 @@ async def _enqueue_standalone_campaign_unknown(
 
     created = result.get("created_ids")
     created_ids = created if isinstance(created, dict) else {}
-    labels = {
-        "campaigns": "Кампаний",
-        "adsets": "Адсетов",
-        "ads": "Объявлений",
-        "creatives": "Креативов",
-    }
-    lines: list[str] = []
-    for kind, values in created_ids.items():
-        count = len(values) if isinstance(values, list) else 1
-        if count > 0:
-            lines.append(f"{labels.get(kind, kind)}: {count}")
-    if not lines:
-        lines.append(f"Задача #{task_id} · ответ Meta не подтверждён")
+    # Всё созданное — одной строкой: карточка про деньги должна читаться
+    # целиком, а не упираться в лимит строк перечислением по типам.
+    created_parts = [
+        counted(count)
+        for kind, counted in (
+            ("campaigns", campaigns_ru),
+            ("adsets", adsets_ru),
+            ("ads", ads_ru),
+            ("creatives", creatives_ru),
+        )
+        if (count := _created_kind_count(created_ids.get(kind))) > 0
+    ]
+    lines = [
+        (
+            f"Успело создаться: {' · '.join(created_parts)}"
+            if created_parts
+            else f"Задача #{task_id} · Facebook не подтвердил, что успел создать"
+        ),
+        "Сверь результат в Ads Manager до повторного запуска",
+    ]
 
     from core.telegram.worker_notify import notify_recurring_incident_in_transaction
 
@@ -586,12 +640,12 @@ async def _enqueue_standalone_campaign_unknown(
         severity="critical",
         title="Создание кампании требует сверки",
         summary=(
-            "Meta могла создать только часть объектов."
+            "Facebook мог создать только часть объектов."
             if created_ids
-            else "Meta могла принять создание, но подтверждение потеряно."
+            else "Facebook мог принять создание, но подтверждение потеряно."
         ),
-        lines=lines[:5],
-        risk="Не повторяйте запуск до ручной сверки в Ads Manager.",
+        lines=lines,
+        risk="Повторный запуск без сверки удвоит кампанию и бюджет",
         resource_type="campaign_run",
         resource_id=run_id,
         correlation_id=correlation_id,
@@ -708,11 +762,12 @@ async def _resolve_confirmed_autostop_incidents_in_transaction(
     )
     from core.telegram.worker_notify import resolve_recurring_incident_in_transaction
 
+    ad_name = await _ad_name_by_fb_ad_id(conn, target_id)
     await resolve_recurring_incident_in_transaction(
         conn,
         incident_key=f"{UNDELIVERED_INCIDENT_KEY_PREFIX}{target_id}",
         audience="owners",
-        summary=f"Объявление {target_id} подтверждено OFF.",
+        summary=f"Объявление {ad_name or target_id} выключено, Facebook подтвердил.",
     )
 
 
@@ -737,10 +792,13 @@ async def _project_meta_token_incident_in_transaction(
         audience="owners",
         event_type="meta_token_invalid",
         severity="critical",
-        title="Marketing API требует повторного входа",
-        summary="Токен не принят Meta",
-        risk="Money-операции не будут исполняться",
-        lines=["Войди в Facebook в Vision-профиле"],
+        title="Facebook требует повторного входа",
+        summary="Кабинет не принял наш доступ — команды в Facebook не проходят.",
+        risk="Отключение и включение объявлений не исполняется",
+        lines=[
+            "Войди в Facebook в Vision-профиле",
+            "До входа отключай рискованные объявления вручную",
+        ],
         resource_type="meta_session",
         resource_id="marketing-api",
     )
@@ -761,7 +819,7 @@ async def _resolve_meta_token_incident_in_transaction(
         conn,
         incident_key=_META_TOKEN_INVALID_INCIDENT_KEY,
         audience="owners",
-        summary="Marketing API снова принимает операции.",
+        summary="Facebook снова принимает наши команды.",
     )
 
 

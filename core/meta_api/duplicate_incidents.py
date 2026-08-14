@@ -16,6 +16,7 @@ from core.telegram.worker_notify import (
     notify_recurring_incident_in_transaction,
     resolve_recurring_incident_in_transaction,
 )
+from core.wording import errors_ru, objects_ru
 
 DuplicateIncidentStage = Literal[
     "partial",
@@ -65,55 +66,56 @@ async def project_duplicate_incident_in_transaction(
     created_count = _created_object_count(checkpoint)
     failure_count = _cleanup_failure_count(checkpoint)
 
+    created_text = objects_ru(created_count)
     if stage == "partial":
-        title = "Дублирование адсетов завершилось частично"
-        summary = f"Задача #{task_id} · создано объектов: {created_count}"
+        title = "Дублирование адсетов прошло не полностью"
+        summary = f"Задача #{task_id} · успело создаться {created_text}"
         lines = [
             (
-                "PAUSE-only recovery будет повторён автоматически"
+                f"Не удалось выключить {errors_ru(failure_count)} — повторю сам"
                 if failure_count
-                else "Все известные созданные объекты подтверждены PAUSED"
+                else "Все созданные объекты уже выключены"
             ),
-            "Проверь результат вручную в Ads Manager",
+            "Проверь результат в Ads Manager",
         ]
         risk = (
-            "Часть созданных объектов может оставаться активной"
+            "Часть созданных объектов может остаться включённой"
             if failure_count
-            else "Создание выполнено не полностью"
+            else "Структура создана не до конца"
         )
     elif stage == "recovery_scheduled":
-        title = "Запущен crash-recovery дублирования"
-        summary = f"Задача #{task_id} · объектов в checkpoint: {created_count}"
+        title = "Доделываю дублирование после сбоя"
+        summary = f"Задача #{task_id} · известно про {created_text}"
         lines = [
-            "Поставлен только PAUSE-recovery без повторного создания",
-            "Проверь Ads Manager до подтверждённого PAUSED",
+            "Только выключаю созданное, заново ничего не создаю",
+            "Проверь Ads Manager, пока не подтвердится выключение",
         ]
-        risk = "Часть созданных объектов может оставаться активной"
+        risk = "Часть созданных объектов может остаться включённой"
     elif stage == "recovery_retrying":
-        title = "Crash-recovery: PAUSE не подтверждён"
+        title = "Не удалось выключить созданные объекты"
         summary = (
-            f"Задача #{task_id} · ошибок PAUSE: {failure_count}"
+            f"Задача #{task_id} · {errors_ru(failure_count)} при выключении"
             if failure_count
-            else f"Задача #{task_id} · recovery будет повторён"
+            else f"Задача #{task_id} · попробую выключить ещё раз"
         )
         lines = [
-            "Повторяется только PAUSE известных объектов",
-            "Исходный create-план не запускается повторно",
+            "Повторяю только выключение уже созданных объектов",
+            "Создание заново не запускается",
         ]
-        risk = "Часть созданных объектов может оставаться активной"
+        risk = "Часть созданных объектов может остаться включённой"
     elif stage == "recovery_invalid":
-        title = "Crash-recovery не смог прочитать checkpoint"
-        summary = f"Задача #{task_id} · требуется ручная проверка"
-        lines = ["Проверь все созданные объекты в Ads Manager"]
+        title = "Не могу разобрать, что успело создаться"
+        summary = f"Задача #{task_id} · нужна ручная проверка"
+        lines = ["Проверь в Ads Manager все объекты этой задачи"]
         risk = "Фактический статус созданных объектов неизвестен"
     else:
         title = "Результат дублирования неизвестен"
-        summary = f"Задача #{task_id} · checkpoint созданных объектов отсутствует"
+        summary = f"Задача #{task_id} · записи о созданных объектах нет"
         lines = [
             "Повторное создание заблокировано",
-            "Проверь результат вручную в Ads Manager",
+            "Проверь результат в Ads Manager",
         ]
-        risk = "Meta могла принять часть запросов до сбоя"
+        risk = "Facebook мог принять часть запросов до сбоя"
 
     await notify_recurring_incident_in_transaction(
         conn,
@@ -143,8 +145,8 @@ async def resolve_duplicate_incident_in_transaction(
         incident_key=duplicate_incident_key(task_id),
         audience="owners",
         summary=(
-            f"Задача #{task_id}: подтверждено PAUSED объектов — {created_count}. "
-            "Повторного создания не было."
+            f"Задача #{task_id}: выключено {objects_ru(created_count)}. "
+            "Заново ничего не создавалось."
         ),
     )
     if not resolved:
