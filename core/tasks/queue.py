@@ -886,7 +886,7 @@ _CLAIM_SQL = text(
         lease_token = task_queue.lease_token + 1,
         deadline_at = CASE
           WHEN task_queue.lane = 'money' THEN
-            clock_timestamp() + make_interval(secs => 30)
+            clock_timestamp() + make_interval(secs => :money_deadline_seconds)
           ELSE task_queue.deadline_at
         END,
         lease_expires_at =
@@ -992,7 +992,7 @@ _BROWSER_READY_CLAIM_SQL = text(
         lease_token = task.lease_token + 1,
         deadline_at = CASE
           WHEN task.lane = 'money' THEN
-            clock_timestamp() + make_interval(secs => 30)
+            clock_timestamp() + make_interval(secs => :money_deadline_seconds)
           ELSE task.deadline_at
         END,
         lease_expires_at =
@@ -1090,6 +1090,7 @@ async def claim_next_task(
                     "lanes": effective_lanes,
                     "worker_id": worker_id or _DEFAULT_WORKER_ID,
                     "lease_seconds": max(5, int(lease_seconds)),
+                    "money_deadline_seconds": _LANE_DEFAULT_DEADLINE_SECONDS["money"],
                 },
             )
         ).first()
@@ -1154,6 +1155,7 @@ async def claim_browser_ready_task(
                     "lanes": effective_lanes,
                     "worker_id": worker_id or _DEFAULT_WORKER_ID,
                     "lease_seconds": max(5, int(lease_seconds)),
+                    "money_deadline_seconds": _LANE_DEFAULT_DEADLINE_SECONDS["money"],
                 },
             )
         ).first()
@@ -2114,12 +2116,15 @@ async def release_after_browser_readiness_rejection(
     target_lock_key: str | None = None,
     transactional_effect: (Callable[[AsyncConnection, str], Awaitable[None]] | None) = None,
 ) -> str | None:
-    """Release a live-identity rejection without consuming an attempt.
+    """Release a live-identity rejection within the finite attempt budget.
 
     The exact per-RPC check proves that browser-agent did not issue the
     controlled request. The rejected readiness generation has already been
-    CAS-expired by ``MetaApiClient``; this transition only returns the task to
-    the queue. The next claim assigns a fresh execution deadline.
+    CAS-expired by ``MetaApiClient``. A retry waits without an active deadline;
+    the next claim assigns one. Repeated identity churn still consumes attempts
+    so it cannot bypass ``max_attempts`` forever. Existing UNKNOWN evidence is
+    preserved because a rejected reconciliation read says nothing about the
+    earlier write.
     """
     if (
         not _has_valid_fence(task.lease_owner, task.lease_token)
@@ -2146,16 +2151,33 @@ async def release_after_browser_readiness_rejection(
                 UPDATE task_queue
                 SET status = CASE
                         WHEN cancel_requested_at IS NOT NULL
+                         AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
                           THEN 'cancelled'
+                        WHEN attempt_count + 1 >= max_attempts
+                          THEN 'failed'
                         ELSE 'retrying'
                     END,
+                    attempt_count = CASE
+                        WHEN cancel_requested_at IS NOT NULL
+                         AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
+                          THEN attempt_count
+                        ELSE attempt_count + 1
+                    END,
                     available_at = CASE
-                        WHEN cancel_requested_at IS NULL
+                        WHEN (
+                          cancel_requested_at IS NULL
+                          OR COALESCE(result->>'reconcile_required', 'false') = 'true'
+                        )
+                         AND attempt_count + 1 < max_attempts
                           THEN clock_timestamp()
                         ELSE available_at
                     END,
                     deadline_at = CASE
-                        WHEN cancel_requested_at IS NULL
+                        WHEN (
+                          cancel_requested_at IS NULL
+                          OR COALESCE(result->>'reconcile_required', 'false') = 'true'
+                        )
+                         AND attempt_count + 1 < max_attempts
                           THEN CASE
                             WHEN lane = 'money' THEN NULL
                             ELSE clock_timestamp()
@@ -2164,13 +2186,18 @@ async def release_after_browser_readiness_rejection(
                         ELSE deadline_at
                     END,
                     completed_at = CASE
-                        WHEN cancel_requested_at IS NOT NULL
+                        WHEN (
+                          cancel_requested_at IS NOT NULL
+                          AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
+                        )
+                          OR attempt_count + 1 >= max_attempts
                           THEN clock_timestamp()
                         ELSE NULL
                     END,
                     external_started_at = NULL,
                     last_error = CASE
                         WHEN cancel_requested_at IS NOT NULL
+                         AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
                           THEN COALESCE(
                             cancel_reason,
                             'cancelled after browser readiness rejection'
@@ -2178,7 +2205,9 @@ async def release_after_browser_readiness_rejection(
                         ELSE :error
                     END,
                     result = CASE
-                        WHEN cancel_requested_at IS NOT NULL THEN
+                        WHEN cancel_requested_at IS NOT NULL
+                         AND COALESCE(result->>'reconcile_required', 'false') <> 'true'
+                        THEN
                           (
                             COALESCE(result, '{}'::jsonb)
                               - 'external_boundary_operation'
@@ -2189,6 +2218,31 @@ async def release_after_browser_readiness_rejection(
                             'outcome', 'REJECTED',
                             'reason',
                             'cancelled_after_browser_readiness_rejection'
+                          )
+                        WHEN attempt_count + 1 >= max_attempts
+                         AND COALESCE(result->>'reconcile_required', 'false') = 'true'
+                        THEN
+                          (
+                            COALESCE(result, '{}'::jsonb)
+                              - 'external_boundary_operation'
+                              - 'external_boundary_target'
+                          ) || jsonb_build_object(
+                            'outcome', 'UNKNOWN',
+                            'reconcile_required', true,
+                            'reason',
+                            'browser_readiness_reconciliation_attempts_exhausted'
+                          )
+                        WHEN attempt_count + 1 >= max_attempts THEN
+                          (
+                            COALESCE(result, '{}'::jsonb)
+                              - 'external_boundary_operation'
+                              - 'external_boundary_target'
+                              - 'reconcile_required'
+                              - 'manual_review_required'
+                          ) || jsonb_build_object(
+                            'outcome', 'REJECTED',
+                            'reason',
+                            'browser_readiness_attempts_exhausted'
                           )
                         ELSE
                           COALESCE(result, '{}'::jsonb)

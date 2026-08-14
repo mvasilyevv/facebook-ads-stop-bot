@@ -169,7 +169,7 @@ async def test_crash_before_external_gets_fresh_deadline_and_stale_fence_is_reje
         ).one()
     assert row.status == "retrying"
     assert row.attempt_count == 1
-    assert row.deadline_at > datetime.now(UTC)
+    assert row.deadline_at is None
     assert row.lease_owner is None
 
     new_owner = uuid.uuid4()
@@ -181,6 +181,8 @@ async def test_crash_before_external_gets_fresh_deadline_and_stale_fence_is_reje
     )
     assert second.task is not None
     assert second.task.lease_token == old_token + 1
+    assert second.task.deadline_at is not None
+    assert second.task.deadline_at > datetime.now(UTC)
     assert not await mark_succeeded(
         pg_engine,
         task_id=task_id,
@@ -239,7 +241,7 @@ async def test_crash_after_status_send_requires_reconciliation_before_retry(
     assert row.status == "retrying"
     assert row.result["outcome"] == "UNKNOWN"
     assert row.result["reconcile_required"] is True
-    assert row.deadline_at > datetime.now(UTC)
+    assert row.deadline_at is None
 
 
 @pytest.mark.asyncio
@@ -294,7 +296,10 @@ async def test_crash_after_non_status_send_is_terminal_unknown(
 
 
 @pytest.mark.asyncio
-async def test_deadline_before_claim_is_rejected_not_unknown(pg_engine, clean_safety_tasks) -> None:
+async def test_expired_enqueue_deadline_does_not_reject_unclaimed_money(
+    pg_engine,
+    clean_safety_tasks,
+) -> None:
     task_id = await create_task(
         pg_engine,
         task_type="meta_api_mutation",
@@ -304,7 +309,18 @@ async def test_deadline_before_claim_is_rejected_not_unknown(pg_engine, clean_sa
         deadline_at=datetime.now(UTC) - timedelta(seconds=1),
     )
     assert task_id is not None
-    assert await expire_overdue_tasks(pg_engine) == 1
+    assert await expire_overdue_tasks(pg_engine) == 0
+
+    claim = await claim_next_task(
+        pg_engine,
+        task_type="meta_api_mutation",
+        lanes=("money",),
+        worker_id=uuid.uuid4(),
+    )
+    assert claim.task is not None
+    assert claim.task.id == task_id
+    assert claim.task.deadline_at is not None
+    assert claim.task.deadline_at > datetime.now(UTC)
 
     async with pg_engine.connect() as conn:
         row = (
@@ -313,8 +329,8 @@ async def test_deadline_before_claim_is_rejected_not_unknown(pg_engine, clean_sa
                 {"task_id": task_id},
             )
         ).one()
-    assert row.status == "failed"
-    assert row.result["outcome"] == "REJECTED"
+    assert row.status == "running"
+    assert row.result is None
 
 
 @pytest.mark.asyncio
@@ -444,7 +460,7 @@ async def test_cancel_after_unknown_waits_for_verified_status_read(
 
 
 @pytest.mark.asyncio
-async def test_expired_reconciliation_deadline_stays_unknown(
+async def test_expired_queued_money_reconciliation_gets_fresh_claim_deadline(
     pg_engine,
     clean_safety_tasks,
 ) -> None:
@@ -481,17 +497,20 @@ async def test_expired_reconciliation_deadline_stays_unknown(
             {"id": task_id},
         )
 
-    assert await expire_overdue_tasks(pg_engine) == 1
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(
-                text("SELECT status, result FROM task_queue WHERE id = :task_id"),
-                {"task_id": task_id},
-            )
-        ).one()
-    assert row.status == "failed"
-    assert row.result["outcome"] == "UNKNOWN"
-    assert row.result["reconcile_required"] is True
+    assert await expire_overdue_tasks(pg_engine) == 0
+    reclaimed = await claim_next_task(
+        pg_engine,
+        task_type="meta_api_mutation",
+        lanes=("money",),
+        worker_id=uuid.uuid4(),
+    )
+    assert reclaimed.task is not None
+    assert reclaimed.task.id == task_id
+    assert reclaimed.task.deadline_at is not None
+    assert reclaimed.task.deadline_at > datetime.now(UTC)
+    assert reclaimed.task.result is not None
+    assert reclaimed.task.result["outcome"] == "UNKNOWN"
+    assert reclaimed.task.result["reconcile_required"] is True
 
 
 @pytest.mark.asyncio

@@ -10,11 +10,16 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+from core.meta_api.browser_readiness import (
+    BrowserReadinessObservation,
+    persist_browser_readiness,
+)
 from core.tasks import (
     claim_next_task,
     create_task,
@@ -26,6 +31,7 @@ from core.tasks.queue import (
     checkpoint_duplicate_adset_structure,
     claim_browser_ready_task,
     defer_unknown_reconciliation,
+    expire_overdue_tasks,
     get_task_by_idempotency_key,
     requeue_duplicate_recovery,
     requeue_unknown_for_reconciliation,
@@ -244,6 +250,88 @@ async def test_browser_maintenance_blocks_external_claims_until_expiry(
             )
         released = await claim_next_task(pg_engine, task_type="observer_scan")
         assert released.task is not None
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(text("DELETE FROM system_config WHERE key = 'browser_maintenance'"))
+
+
+@pytest.mark.asyncio
+async def test_money_task_waits_past_enqueue_deadline_then_gets_fresh_claim_budget(
+    pg_engine,
+    clean_task_queue,
+    fresh_browser_readiness,
+) -> None:
+    task_id = await create_task(
+        pg_engine,
+        task_type="meta_api_mutation",
+        idempotency_key=f"maintenance-money-{uuid.uuid4().hex}",
+        payload={
+            "mutation_kind": "pause_ad",
+            "target_id": "maintenance-money-ad",
+            "ad_account_id": "123",
+        },
+        requested_by="bot_auto_stop",
+        deadline_at=datetime.now(UTC) - timedelta(seconds=1),
+    )
+    assert task_id is not None
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO system_config (key, value, description)
+                VALUES (
+                  'browser_maintenance',
+                  jsonb_build_object(
+                    'owner', 'deadline-regression',
+                    'expires_at', to_char(
+                      clock_timestamp() + interval '5 minutes',
+                      'YYYY-MM-DD"T"HH24:MI:SS.USOF'
+                    )
+                  ),
+                  'deadline regression'
+                )
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                """
+            )
+        )
+    try:
+        assert await expire_overdue_tasks(pg_engine) == 0
+        blocked = await claim_browser_ready_task(
+            pg_engine,
+            task_type="meta_api_mutation",
+            lanes=("money",),
+            worker_id=uuid.uuid4(),
+        )
+        assert blocked.task is None
+
+        async with pg_engine.begin() as conn:
+            await conn.execute(text("DELETE FROM system_config WHERE key = 'browser_maintenance'"))
+        assert await persist_browser_readiness(
+            pg_engine,
+            identity=fresh_browser_readiness,
+            observation=BrowserReadinessObservation(
+                state="ready",
+                reason_code="ready",
+                observed_contract_version=5,
+                observed_profile_id=fresh_browser_readiness.profile_id,
+                observed_session_id="deadline-regression-session",
+            ),
+            writer_instance=uuid.uuid4(),
+            ttl_seconds=30,
+        )
+
+        claimed_at = datetime.now(UTC)
+        claim = await claim_browser_ready_task(
+            pg_engine,
+            task_type="meta_api_mutation",
+            lanes=("money",),
+            worker_id=uuid.uuid4(),
+        )
+        assert claim.task is not None
+        assert claim.task.id == task_id
+        assert claim.task.deadline_at is not None
+        remaining = (claim.task.deadline_at - claimed_at).total_seconds()
+        assert 28 <= remaining <= 31
     finally:
         async with pg_engine.begin() as conn:
             await conn.execute(text("DELETE FROM system_config WHERE key = 'browser_maintenance'"))

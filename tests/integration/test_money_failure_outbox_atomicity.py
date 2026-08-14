@@ -377,9 +377,17 @@ async def test_correlated_failure_emits_only_incident_lifecycle_event(pg_engine)
                     {"dedupe_key": f"task:{task_id}:failed"},
                 )
             ).all()
+            incident = (
+                await conn.execute(
+                    text("SELECT status, resolved_at FROM incidents WHERE id = :id"),
+                    {"id": incident_id},
+                )
+            ).one()
         assert [(row.event_type, row.incident_id) for row in failed_events] == [
             ("action_failed", incident_id)
         ]
+        assert incident.status == "open"
+        assert incident.resolved_at is None
     finally:
         await _cleanup(pg_engine, task_ids=task_ids, recipient_id=recipient_id)
         async with pg_engine.begin() as conn:

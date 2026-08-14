@@ -175,7 +175,7 @@ async def test_money_claim_assigns_fresh_cross_runtime_deadline_after_browser_wa
 
     assert "task.lane = 'money'" in claim_sql
     assert "WHEN task.lane = 'money' THEN" in claim_sql
-    assert "make_interval(secs => 30)" in claim_sql
+    assert "make_interval(secs => :money_deadline_seconds)" in claim_sql
     assert "browser_maintenance" in claim_sql
 
     from core.deadlines import bind_absolute_deadline
@@ -207,6 +207,15 @@ def test_overdue_reconciler_does_not_reject_unclaimed_money_work() -> None:
     source = inspect.getsource(task_queue.expire_overdue_tasks)
 
     assert "lane <> 'money'" in source
+
+
+def test_readiness_rejection_cannot_bypass_attempt_budget() -> None:
+    source = inspect.getsource(task_queue.release_after_browser_readiness_rejection)
+
+    assert "attempt_count = CASE" in source
+    assert "attempt_count + 1 >= max_attempts" in source
+    assert "browser_readiness_attempts_exhausted" in source
+    assert "browser_readiness_reconciliation_attempts_exhausted" in source
 
 
 @pytest.mark.asyncio

@@ -398,7 +398,7 @@ async def test_observation_age_and_order_are_not_refreshed_by_lock_wait(
 
 
 @pytest.mark.asyncio
-async def test_exact_live_rejection_cas_closes_gate_without_attempt_burn(
+async def test_exact_live_rejection_closes_gate_and_consumes_attempt_budget(
     pg_engine,
     monkeypatch,
 ) -> None:
@@ -493,7 +493,7 @@ async def test_exact_live_rejection_cas_closes_gate_without_attempt_burn(
             )
         ).one()
     assert row.status == "retrying"
-    assert row.attempt_count == 0
+    assert row.attempt_count == 1
     assert row.external_started_at is None
     assert row.state == "unavailable"
     assert row.readiness_expires_at is None
@@ -509,7 +509,7 @@ async def test_exact_live_rejection_cas_closes_gate_without_attempt_burn(
 
 
 @pytest.mark.asyncio
-async def test_presend_circuit_open_cas_closes_gate_and_requeues_without_burn(
+async def test_presend_circuit_open_closes_gate_and_consumes_attempt_budget(
     pg_engine,
     monkeypatch,
 ) -> None:
@@ -621,7 +621,7 @@ async def test_presend_circuit_open_cas_closes_gate_and_requeues_without_burn(
             )
         ).one()
     assert row.status == "retrying"
-    assert row.attempt_count == 0
+    assert row.attempt_count == 1
     assert row.external_started_at is None
     assert row.state == "unavailable"
     assert row.reason_code == "presend_circuit_open"
