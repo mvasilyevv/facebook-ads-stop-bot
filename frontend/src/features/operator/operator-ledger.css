@@ -682,7 +682,9 @@
   outline-offset: 3px;
 }
 
-@media (max-width: 1120px) {
+/* Пороги совпадают с дефолтами Tailwind v4 (lg 1024): иначе шелл и
+ * дашборд переключаются на разной ширине. */
+@media (max-width: 1023px) {
   .operator-ledger__grid {
     grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.7fr);
   }
@@ -693,7 +695,9 @@
   }
 }
 
-@media (max-width: 820px) {
+/* md 768 у Tailwind v4: до этой правки на 800px шелл был десктопным,
+ * а дашборд уже мобильным. */
+@media (max-width: 767px) {
   .operator-ledger__header {
     align-items: flex-start;
   }

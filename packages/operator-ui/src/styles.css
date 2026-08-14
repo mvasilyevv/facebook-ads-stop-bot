@@ -276,7 +276,8 @@
   text-align: left;
 }
 
-@media (max-width: 640px) {
+/* md 768 у Tailwind v4 — общий порог для шелла и секций оператора. */
+@media (max-width: 767px) {
   .operator-section-header,
   .operator-chart figcaption {
     flex-direction: column;
