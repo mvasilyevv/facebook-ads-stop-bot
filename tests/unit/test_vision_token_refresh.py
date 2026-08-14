@@ -182,6 +182,97 @@ async def test_live_token_refresh_failure_is_warning(
     assert notify.await_args.kwargs["severity"] == "warning"
 
 
+async def test_configuration_read_failure_is_critical_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        refresh,
+        "_load_refresh_snapshot",
+        AsyncMock(side_effect=RuntimeError("secret-database-detail")),
+    )
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(refresh, "notify_recurring_incident", notify)
+    caplog.set_level(logging.INFO, logger=refresh.__name__)
+
+    result = await refresh.refresh_vision_token_if_needed(
+        object(),  # type: ignore[arg-type]
+        vision_cloud_url="https://v1.empr.cloud/api/v1",
+        now=NOW,
+    )
+
+    assert result.outcome == "failed"
+    assert notify.await_args.kwargs["severity"] == "critical"
+    assert "secret-database-detail" not in caplog.text
+    assert "secret-database-detail" not in str(notify.await_args.kwargs)
+
+
+async def test_attempt_marker_failure_creates_warning_without_exception_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    decrypted_secrets: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    del decrypted_secrets
+    current = _jwt(NOW + timedelta(days=2))
+    monkeypatch.setattr(
+        refresh, "_load_refresh_snapshot", AsyncMock(return_value=_snapshot(token=current))
+    )
+    monkeypatch.setattr(
+        refresh,
+        "_mark_refresh_attempt",
+        AsyncMock(side_effect=RuntimeError("secret-marker-detail")),
+    )
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(refresh, "notify_recurring_incident", notify)
+    caplog.set_level(logging.INFO, logger=refresh.__name__)
+
+    result = await refresh.refresh_vision_token_if_needed(
+        object(),  # type: ignore[arg-type]
+        vision_cloud_url="https://v1.empr.cloud/api/v1",
+        now=NOW,
+    )
+
+    assert result.outcome == "failed"
+    assert notify.await_args.kwargs["severity"] == "warning"
+    assert "secret-marker-detail" not in caplog.text
+    assert "secret-marker-detail" not in str(notify.await_args.kwargs)
+
+
+async def test_expired_token_store_failure_stays_critical_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    decrypted_secrets: dict[str, str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    del decrypted_secrets
+    expired = _jwt(NOW - timedelta(minutes=1))
+    monkeypatch.setattr(
+        refresh, "_load_refresh_snapshot", AsyncMock(return_value=_snapshot(token=expired))
+    )
+    monkeypatch.setattr(refresh, "_mark_refresh_attempt", AsyncMock(return_value=True))
+    monkeypatch.setattr(refresh, "login_to_vision_cloud", AsyncMock(return_value="new-token"))
+    monkeypatch.setattr(
+        refresh,
+        "_store_refreshed_token",
+        AsyncMock(side_effect=RuntimeError("secret-store-detail")),
+    )
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(refresh, "notify_recurring_incident", notify)
+    caplog.set_level(logging.INFO, logger=refresh.__name__)
+
+    result = await refresh.refresh_vision_token_if_needed(
+        object(),  # type: ignore[arg-type]
+        vision_cloud_url="https://v1.empr.cloud/api/v1",
+        now=NOW,
+    )
+
+    assert result.outcome == "failed"
+    assert notify.await_count == 2
+    assert {call.kwargs["severity"] for call in notify.await_args_list} == {"critical"}
+    visible = caplog.text + " ".join(str(call.kwargs) for call in notify.await_args_list)
+    assert "secret-store-detail" not in visible
+    assert expired not in visible
+
+
 async def test_missing_credentials_repeat_uses_one_stable_incident_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

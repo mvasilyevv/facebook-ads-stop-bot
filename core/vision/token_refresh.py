@@ -285,22 +285,33 @@ async def _notify_refresh_problem(
     title: str,
     summary: str,
 ) -> bool:
-    return await notify_recurring_incident(
-        engine,
-        incident_key=VISION_TOKEN_REFRESH_INCIDENT_KEY,
-        audience="all",
-        event_type="vision_token_refresh_failed",
-        severity=severity,
-        title=title,
-        summary=summary,
-        lines=(
-            "Проверь доступность облака Vision и сохранённые cloud-креды",
-            "Если скан уже недоступен, останови рискованные объявления вручную",
-        ),
-        risk="Скан потеряет доступ к Vision; авто-стоп не сработает",
-        resource_type="vision",
-        resource_id="token_refresh",
-    )
+    try:
+        notified = await notify_recurring_incident(
+            engine,
+            incident_key=VISION_TOKEN_REFRESH_INCIDENT_KEY,
+            audience="all",
+            event_type="vision_token_refresh_failed",
+            severity=severity,
+            title=title,
+            summary=summary,
+            lines=(
+                "Открой настройки Vision и проверь сохранённые cloud-креды",
+                "Проверь доступность v1.empr.cloud, PostgreSQL и журнал health_watchdog",
+                "Если скан уже недоступен, останови рискованные объявления вручную",
+            ),
+            risk="Скан потеряет доступ к Vision; авто-стоп не сработает",
+            resource_type="vision",
+            resource_id="token_refresh",
+        )
+    except Exception as exc:  # noqa: BLE001 - notifier is the last observability boundary
+        logger.error(
+            "Vision token refresh incident could not be persisted (error_type=%s)",
+            type(exc).__name__,
+        )
+        return False
+    if not notified:
+        logger.error("Vision token refresh incident could not be persisted")
+    return notified
 
 
 async def _notify_missing_configuration(engine: AsyncEngine, *, summary: str) -> None:
@@ -310,6 +321,38 @@ async def _notify_missing_configuration(engine: AsyncEngine, *, summary: str) ->
         severity="critical",
         title="Автопродление токена Vision не настроено",
         summary=summary,
+    )
+
+
+async def _report_refresh_failure(
+    engine: AsyncEngine,
+    *,
+    is_critical: bool,
+    stage: str,
+    error: Exception,
+) -> None:
+    """Log and persist a sanitized failure for every refresh boundary."""
+    severity: Literal["warning", "critical"] = "critical" if is_critical else "warning"
+    status_code = error.status_code if isinstance(error, VisionCloudAuthError) else None
+    log_method = logger.critical if is_critical else logger.warning
+    log_method(
+        "Vision token refresh %s: stage failed (stage=%s, error_type=%s, http_status=%s)",
+        severity.upper(),
+        stage,
+        type(error).__name__,
+        status_code,
+    )
+    await _notify_refresh_problem(
+        engine,
+        severity=severity,
+        title=(
+            "Токен Vision не восстановлен" if is_critical else "Не удалось обновить токен Vision"
+        ),
+        summary=(
+            "Токен уже недоступен: скан слепнет, а авто-стоп не сработает."
+            if is_critical
+            else "Текущий токен пока действует, но автоматическое продление не сработало."
+        ),
     )
 
 
@@ -331,7 +374,16 @@ async def refresh_vision_token_if_needed(
     if minimum_attempt_interval <= timedelta(0):
         raise ValueError("minimum_attempt_interval must be positive")
 
-    snapshot = await _load_refresh_snapshot(engine)
+    try:
+        snapshot = await _load_refresh_snapshot(engine)
+    except Exception as exc:  # noqa: BLE001 - unreadable canonical state is fail-closed
+        await _report_refresh_failure(
+            engine,
+            is_critical=True,
+            stage="configuration_read",
+            error=exc,
+        )
+        return VisionTokenRefreshResult("failed")
     if snapshot is None:
         await _notify_missing_configuration(
             engine,
@@ -387,12 +439,21 @@ async def refresh_vision_token_if_needed(
     if attempted_at is not None and attempted_at > current_time - minimum_attempt_interval:
         return VisionTokenRefreshResult("throttled", expires_at)
 
-    marked = await _mark_refresh_attempt(
-        engine,
-        snapshot=snapshot,
-        attempted_at=current_time,
-        minimum_attempt_interval=minimum_attempt_interval,
-    )
+    try:
+        marked = await _mark_refresh_attempt(
+            engine,
+            snapshot=snapshot,
+            attempted_at=current_time,
+            minimum_attempt_interval=minimum_attempt_interval,
+        )
+    except Exception as exc:  # noqa: BLE001 - DB/throttle failures need the same incident
+        await _report_refresh_failure(
+            engine,
+            is_critical=is_critical,
+            stage="attempt_marker",
+            error=exc,
+        )
+        return VisionTokenRefreshResult("failed", expires_at)
     if not marked:
         return VisionTokenRefreshResult("throttled", expires_at)
 
@@ -405,39 +466,29 @@ async def refresh_vision_token_if_needed(
             http_client=http_client,
         )
     except Exception as exc:  # noqa: BLE001 - every refresh failure must become observable
-        stage = exc.stage if isinstance(exc, VisionCloudAuthError) else "unexpected"
-        status_code = exc.status_code if isinstance(exc, VisionCloudAuthError) else None
-        severity: Literal["warning", "critical"] = "critical" if is_critical else "warning"
-        log_method = logger.critical if severity == "critical" else logger.warning
-        log_method(
-            "Vision token refresh %s: cloud login failed (stage=%s, error_type=%s, http_status=%s)",
-            severity.upper(),
-            stage,
-            type(exc).__name__,
-            status_code,
-        )
-        await _notify_refresh_problem(
+        await _report_refresh_failure(
             engine,
-            severity=severity,
-            title=(
-                "Токен Vision не восстановлен"
-                if severity == "critical"
-                else "Не удалось обновить токен Vision"
-            ),
-            summary=(
-                "Токен уже недоступен: скан слепнет, а авто-стоп не сработает."
-                if severity == "critical"
-                else "Текущий токен пока действует, но автоматическое продление не сработало."
-            ),
+            is_critical=is_critical,
+            stage=(exc.stage if isinstance(exc, VisionCloudAuthError) else "cloud_login"),
+            error=exc,
         )
         return VisionTokenRefreshResult("failed", expires_at)
 
-    stored = await _store_refreshed_token(
-        engine,
-        snapshot=snapshot,
-        attempted_at=current_time,
-        token=new_token,
-    )
+    try:
+        stored = await _store_refreshed_token(
+            engine,
+            snapshot=snapshot,
+            attempted_at=current_time,
+            token=new_token,
+        )
+    except Exception as exc:  # noqa: BLE001 - token encryption/write must be observable
+        await _report_refresh_failure(
+            engine,
+            is_critical=is_critical,
+            stage="token_store",
+            error=exc,
+        )
+        return VisionTokenRefreshResult("failed", expires_at)
     if not stored:
         logger.info("Vision token refresh superseded by a newer configuration revision")
         return VisionTokenRefreshResult("superseded", expires_at)
