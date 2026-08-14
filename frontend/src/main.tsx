@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider, MutationCache } from "@tanstack/react-query";
-import { apiProblemMessage } from "@fb/operator-api";
+import { safeApiProblemMessage } from "@fb/operator-api";
 
 import { toast } from "@/components/ui/toastStore";
 import { shouldRetryApiQuery } from "@/lib/api/client";
@@ -42,7 +42,8 @@ const queryClient = new QueryClient({
   mutationCache: new MutationCache({
     onError: (error, _vars, _ctx, mutation) => {
       if (mutation.options.meta?.suppressGlobalError) return;
-      const msg = apiProblemMessage(error);
+      // Только recovery-копия: сырой exception и correlation_id оператору не показываем.
+      const msg = safeApiProblemMessage(error, "Повторите попытку позже.");
       toast.error("Ошибка операции", msg);
     },
   }),

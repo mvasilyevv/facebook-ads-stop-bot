@@ -625,11 +625,18 @@
   background: var(--color-hairline-strong);
 }
 
+/* Ход money-команды нельзя измерить в процентах: очередь и выполнение
+ * не отдают долю готовности. Полоса indeterminate — повторяющийся проход
+ * штриховки, а не доля выполнения. Смысл несёт текстовый ActionState. */
 .mini-action-journal__progress::after {
   position: absolute;
   inset: 0;
-  width: 44%;
-  background: var(--color-warning);
+  animation: fbBarSweep 1.2s var(--ease-out) infinite;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--color-warning) 0 8px,
+    transparent 8px 16px
+  );
   content: "";
 }
 

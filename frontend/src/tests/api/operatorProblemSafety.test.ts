@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { GeneratedApiError, safeApiProblemMessage } from "@fb/operator-api";
+import {
+  GeneratedApiError,
+  apiProblemMessage,
+  safeApiProblemMessage,
+} from "@fb/operator-api";
+
+import { operatorProblemMessage } from "@/lib/api/operator";
 
 describe("operator-visible API problems", () => {
   it("keeps correlation ids and raw exceptions out of incident copy", () => {
@@ -18,5 +24,42 @@ describe("operator-visible API problems", () => {
       "Данные временно недоступны",
     );
     expect(safeApiProblemMessage(problem)).not.toContain(correlationId);
+  });
+
+  it("never appends a correlation reference to the diagnostic message either", () => {
+    const correlationId = "00000000-0000-0000-0000-000000000042";
+    const problem = {
+      code: "command_rejected",
+      message: "Команда отклонена",
+      correlation_id: correlationId,
+      field_errors: null,
+    };
+
+    // GeneratedApiError.message доходит до рендера через сторонние обработчики,
+    // поэтому UUID не дописывается даже в диагностическую копию.
+    expect(apiProblemMessage(problem)).toBe("Команда отклонена");
+    expect(apiProblemMessage(problem)).not.toContain(correlationId);
+    expect(new GeneratedApiError(409, problem).message).not.toContain(correlationId);
+  });
+
+  it("keeps operatorProblemMessage free of raw exceptions and identifiers", () => {
+    const correlationId = "00000000-0000-0000-0000-000000000077";
+
+    expect(
+      operatorProblemMessage(new Error("Traceback: postgres://user:pw@db-01 secret token")),
+    ).toBe("Операторский снимок недоступен");
+    expect(
+      operatorProblemMessage(
+        new GeneratedApiError(503, {
+          code: "snapshot_unavailable",
+          message: "Снимок временно недоступен",
+          correlation_id: correlationId,
+          field_errors: null,
+        }),
+      ),
+    ).toBe("Снимок временно недоступен");
+    expect(operatorProblemMessage({ detail: "internal worker crash" })).toBe(
+      "Операторский снимок недоступен",
+    );
   });
 });

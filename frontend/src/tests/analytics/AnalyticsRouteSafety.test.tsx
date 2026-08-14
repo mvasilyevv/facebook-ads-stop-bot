@@ -288,7 +288,12 @@ describe("analytics route fail-closed state", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Аналитика недоступна. Неподтверждённые данные скрыты.",
     );
-    expect(screen.getByRole("alert")).toHaveTextContent("Ответ аналитики неполный");
+    // Тело алерта — только recovery-копия маршрута. Сырой текст исключения
+    // (в том числе AnalyticsPayloadError) в operator UI не попадает.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Подтверждённых значений нет. Повторите запрос.",
+    );
+    expect(screen.getByRole("alert")).not.toHaveTextContent("Ответ аналитики неполный");
     expect(screen.queryByText("META")).not.toBeInTheDocument();
     expect(screen.queryByText("$18.40")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Повторить" })).toBeInTheDocument();

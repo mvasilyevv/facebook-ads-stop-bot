@@ -147,7 +147,11 @@ export const ObserverTab: FC = () => {
   async function handleScanNow() {
     try {
       await scanNow.mutateAsync();
-      toast.success("Сканирование поставлено в очередь");
+      // 202 = queued: результат сканирования ещё не подтверждён, зелёный тон запрещён.
+      toast.info(
+        "Сканирование поставлено в очередь",
+        "Завершение ещё не подтверждено. Дождитесь обновления снимка.",
+      );
     } catch (error) {
       toast.error(
         "Сканирование не поставлено в очередь",

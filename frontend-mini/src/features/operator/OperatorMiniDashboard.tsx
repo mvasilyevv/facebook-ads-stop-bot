@@ -299,13 +299,16 @@ function MiniAttentionLedger({
   usdScopeConfirmed: boolean;
   onAction: (href: string) => Promise<void>;
 }) {
+  // Счётчик считается по полному списку, а не по первым пяти карточкам.
+  // Без подтверждённых данных выводим «—»: ноль означал бы «причин нет».
+  const total = section.data ? section.data.items.length : null;
   const items = section.data?.items.slice(0, 5) ?? [];
   return (
     <MiniLedgerSection
       className="mini-ledger-section--attention"
       id="mini-attention-title"
       title="Требует внимания"
-      detail={`${items.length} ${pluralReason(items.length)}`}
+      detail={total === null ? "—" : `${total} ${pluralReason(total)}`}
       section={section}
       timezone={timezone}
     >
@@ -568,13 +571,18 @@ function MiniActionJournal({
 }: {
   section: OperatorSnapshot["actions"];
 }) {
+  // Счётчик считается по полному списку, а не по первым пяти карточкам.
+  // Без подтверждённых данных выводим «—»: ноль означал бы «команд нет».
+  const activeTotal = section.data
+    ? section.data.items.filter(isActiveAction).length
+    : null;
   const items = section.data?.items.slice(0, 5) ?? [];
   return (
     <MiniLedgerSection
       className="mini-ledger-section--actions"
       id="mini-actions-title"
       title="Действия"
-      detail={`${items.filter(isActiveAction).length} выполняется`}
+      detail={activeTotal === null ? "—" : `${activeTotal} выполняется`}
       section={section}
     >
       {!section.data ? (

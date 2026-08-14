@@ -8,7 +8,6 @@ import type {
 } from "@fb/shared/operator/contracts";
 import { actionProjectionFromResponse } from "@fb/shared/operator/viewModel";
 import {
-  apiProblemMessage as formatApiProblem,
   isApiProblem,
   reconcileOperatorReadModels,
   reconcileOperatorSnapshots,
@@ -273,7 +272,7 @@ export function useResumeCampaignRun() {
 }
 
 export function operatorProblemMessage(error: unknown): string {
-  return formatApiProblem(error, "Операторский снимок недоступен");
+  return safeApiProblemMessage(error, "Операторский снимок недоступен");
 }
 
 export function operatorIncidentProblemMessage(error: unknown): string {

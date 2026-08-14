@@ -4,6 +4,7 @@ import {
   operatorActionKindLabel,
   operatorActionRecovery,
   operatorActionStateReason,
+  operatorCommandTone,
 } from "../actionLabels";
 
 describe("operator action labels", () => {
@@ -56,6 +57,26 @@ describe("operator action labels", () => {
       label: "Проверить объявление",
       destination: "target",
     });
+  });
+
+  it.each([
+    ["confirmed", "success"],
+    ["queued", "info"],
+    ["running", "info"],
+    ["unknown", "warning"],
+    ["failed", "error"],
+    ["cancelled", "error"],
+  ] as const)("tones %s as %s", (state, tone) => {
+    expect(operatorCommandTone(state)).toBe(tone);
+  });
+
+  it("reserves the success tone for a confirmed result only", () => {
+    // HTTP 202 = queued. Зелёный тон на принятой, но не выполненной команде
+    // означал бы для оператора завершённое money-действие.
+    expect(operatorCommandTone("queued")).not.toBe("success");
+    expect(operatorCommandTone("running")).not.toBe("success");
+    expect(operatorCommandTone("internal_future_state")).toBe("warning");
+    expect(operatorCommandTone(undefined)).toBe("warning");
   });
 
   it("falls back to source diagnostics without inventing a target", () => {

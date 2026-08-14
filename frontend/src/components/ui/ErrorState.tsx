@@ -4,6 +4,7 @@
  */
 import { AlertOctagon } from "lucide-react";
 import { type ReactNode } from "react";
+import { safeApiProblemMessage } from "@fb/operator-api";
 import { cn } from "@/lib/utils/cn";
 import { Button } from "./Button";
 
@@ -21,14 +22,16 @@ export function ErrorState({
   onRetry,
   className,
 }: ErrorStateProps) {
+  // Строку callers уже подготовили как operator copy. Любой другой объект
+  // (Error, traceback, ApiProblem, произвольный payload) проходит через
+  // safeApiProblemMessage: наружу выходит только recovery-текст, без сырого
+  // exception, JSON-дампа и correlation_id.
   const message =
-    error instanceof Error
-      ? error.message
-      : typeof error === "string"
-        ? error
-        : error
-          ? JSON.stringify(error)
-          : null;
+    typeof error === "string"
+      ? error
+      : error
+        ? safeApiProblemMessage(error, "Подробности недоступны. Повторите попытку.")
+        : null;
 
   return (
     <div

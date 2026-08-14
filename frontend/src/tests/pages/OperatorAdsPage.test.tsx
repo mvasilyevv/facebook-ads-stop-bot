@@ -42,6 +42,18 @@ vi.mock("@/lib/api/operator", () => ({
     error instanceof Error ? error.message : "Неизвестная ошибка",
 }));
 
+const commandToast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warning: vi.fn(),
+}));
+
+vi.mock("@/components/ui/Toast", () => ({
+  toast: commandToast,
+  ToastViewport: () => null,
+}));
+
 import { Route } from "@/routes/ads/index";
 
 const AdsPage = (Route as unknown as { component: ComponentType }).component;
@@ -134,8 +146,18 @@ describe("typed operator ads page", () => {
     routeSearch = {};
     pausePending = false;
     activatePending = false;
-    pauseMutate.mockResolvedValue({ task_id: 1842, public_id: "#1842", created: true });
-    activateMutate.mockResolvedValue({ task_id: 1843, public_id: "#1843", created: true });
+    pauseMutate.mockResolvedValue({
+      task_id: 1842,
+      public_id: "#1842",
+      created: true,
+      state: "queued",
+    });
+    activateMutate.mockResolvedValue({
+      task_id: 1843,
+      public_id: "#1843",
+      created: true,
+      state: "queued",
+    });
     fetchOperatorAdForCommand.mockImplementation(async (_client: unknown, id: string) => {
       const row = currentAdsResponse?.rows.find((candidate) => candidate.fb_ad_id === id);
       if (!row || !row.as_of || !row.delivery_status) throw new Error("row unavailable");
@@ -245,6 +267,60 @@ describe("typed operator ads page", () => {
         to: "/actions/$actionId",
         params: { actionId: "1842" },
       }),
+    );
+  });
+
+  it("never paints a queued pause as a completed success", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await confirmRowCommand(user, "Отключить");
+
+    // HTTP 202 = queued: команда принята, но объявление ещё тратит деньги.
+    await waitFor(() => expect(commandToast.info).toHaveBeenCalledOnce());
+    expect(commandToast.success).not.toHaveBeenCalled();
+    expect(commandToast.info).toHaveBeenCalledWith(
+      "#1842: В очереди",
+      "Команда принята и ожидает выполнения.",
+    );
+  });
+
+  it("paints only a confirmed command result green", async () => {
+    pauseMutate.mockResolvedValue({
+      task_id: 1842,
+      public_id: "#1842",
+      created: true,
+      state: "confirmed",
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await confirmRowCommand(user, "Отключить");
+
+    await waitFor(() => expect(commandToast.success).toHaveBeenCalledOnce());
+    expect(commandToast.success).toHaveBeenCalledWith(
+      "#1842: Подтверждено",
+      "Результат команды подтверждён.",
+    );
+    expect(commandToast.info).not.toHaveBeenCalled();
+  });
+
+  it("warns instead of celebrating when the command result is unknown", async () => {
+    pauseMutate.mockResolvedValue({
+      task_id: 1842,
+      public_id: "#1842",
+      created: false,
+      state: "unknown",
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await confirmRowCommand(user, "Отключить");
+
+    await waitFor(() => expect(commandToast.warning).toHaveBeenCalledOnce());
+    expect(commandToast.success).not.toHaveBeenCalled();
+    expect(commandToast.warning.mock.calls[0]?.[1]).toContain(
+      "Задача уже существует — не повторяйте команду.",
     );
   });
 

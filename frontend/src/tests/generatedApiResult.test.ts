@@ -21,7 +21,7 @@ describe("generated API result helpers", () => {
     ).resolves.toBe(false);
   });
 
-  it("throws the canonical ApiProblem with status and correlation reference", async () => {
+  it("throws the canonical ApiProblem and keeps the correlation id out of the message", async () => {
     const problem = {
       code: "COMMAND_REJECTED",
       message: "Команда отклонена",
@@ -40,8 +40,11 @@ describe("generated API result helpers", () => {
       name: "GeneratedApiError",
       status: 409,
       payload: problem,
-      message: "Команда отклонена · reference corr-409",
+      // correlation_id остаётся в payload для диагностики, но не дописывается
+      // в message: этот текст доходит до operator UI и Telegram.
+      message: "Команда отклонена",
     });
+    expect(apiProblemMessage(problem)).not.toContain("corr-409");
   });
 
   it("accepts generated 204 responses without inventing a body", async () => {

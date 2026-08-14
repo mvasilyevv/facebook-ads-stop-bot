@@ -111,6 +111,45 @@ describe("ErrorState", () => {
     // Рендерится без ошибки
     expect(screen.getByRole("alert")).toBeInTheDocument();
   });
+
+  it("не печатает сырой exception и traceback", () => {
+    render(<ErrorState error={new Error("Traceback: postgres://user:pw@db-01")} />);
+    const alert = screen.getByRole("alert");
+    expect(alert).not.toHaveTextContent("Traceback");
+    expect(alert).not.toHaveTextContent("postgres");
+    expect(alert).toHaveTextContent("Подробности недоступны. Повторите попытку.");
+  });
+
+  it("не печатает JSON-дамп произвольного payload и correlation_id", () => {
+    render(
+      <ErrorState
+        error={{
+          detail: "internal worker crash",
+          correlation_id: "00000000-0000-0000-0000-000000000099",
+        }}
+      />,
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).not.toHaveTextContent("internal worker crash");
+    expect(alert).not.toHaveTextContent("00000000-0000-0000-0000-000000000099");
+    expect(alert).not.toHaveTextContent("{");
+  });
+
+  it("показывает message канонического ApiProblem без его correlation_id", () => {
+    render(
+      <ErrorState
+        error={{
+          code: "snapshot_unavailable",
+          message: "Снимок временно недоступен",
+          correlation_id: "00000000-0000-0000-0000-000000000099",
+          field_errors: null,
+        }}
+      />,
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Снимок временно недоступен");
+    expect(alert).not.toHaveTextContent("00000000-0000-0000-0000-000000000099");
+  });
 });
 
 describe("Card", () => {

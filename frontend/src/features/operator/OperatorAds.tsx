@@ -15,8 +15,12 @@ import {
   formatOperatorCount,
   operatorActiveActionLabel,
 } from "@fb/shared/operator/adsViewModel";
+import {
+  operatorActionStateReason,
+  operatorCommandTone,
+} from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
-import { severityForDataState } from "@fb/shared/operator/viewModel";
+import { ACTION_STATE_LABEL, severityForDataState } from "@fb/shared/operator/viewModel";
 import { DataStateBadge } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
@@ -274,8 +278,13 @@ export function AdCommandButtons({
         if (!isOperatorCommandIntentStorageError(error)) throw error;
         intentCleanupWarning = error.userMessage;
       }
-      toast.success(
-        `${receipt.public_id}: ${receipt.created ? "поставлено в очередь" : "задача уже существует"}`,
+      // 202 — это queued, а не выполнено: зелёный тон только для confirmed.
+      const tone = operatorCommandTone(receipt.state);
+      toast[tone](
+        `${receipt.public_id}: ${ACTION_STATE_LABEL[receipt.state]}`,
+        receipt.created
+          ? operatorActionStateReason(receipt.state)
+          : `Задача уже существует — не повторяйте команду. ${operatorActionStateReason(receipt.state)}`,
       );
       if (intentCleanupWarning) {
         toast.error(

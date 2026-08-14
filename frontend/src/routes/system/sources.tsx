@@ -49,7 +49,7 @@ function OperatorSystemSourcesPage() {
         <PageHeader eyebrowNum="05" eyebrow="СИСТЕМА · ЕДИНЫЙ СНИМОК" title="Источники и воркеры" />
         <ErrorState
           title="Снимок недоступен"
-          error={new Error(operatorProblemMessage(snapshotQuery.error))}
+          error={operatorProblemMessage(snapshotQuery.error)}
           onRetry={() => void snapshotQuery.refetch()}
         />
       </div>

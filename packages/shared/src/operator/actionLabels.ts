@@ -44,6 +44,22 @@ export function operatorActionStateReason(state: unknown): string {
   return "Состояние команды требует сверки. Не повторяйте действие вслепую.";
 }
 
+export type OperatorCommandTone = "success" | "info" | "warning" | "error";
+
+/**
+ * Тон уведомления о команде выводится только из подтверждённого lifecycle.
+ * HTTP 202 означает queued, а не выполнено, поэтому «успех» (зелёный) доступен
+ * исключительно для confirmed; queued и running — нейтральный info,
+ * неизвестный итог — warning, отказ и отмена — error.
+ */
+export function operatorCommandTone(state: unknown): OperatorCommandTone {
+  if (state === "confirmed") return "success";
+  if (state === "queued" || state === "running") return "info";
+  if (state === "unknown") return "warning";
+  if (state === "failed" || state === "cancelled") return "error";
+  return "warning";
+}
+
 export interface OperatorActionRecovery {
   label: string;
   destination: "target" | "sources";

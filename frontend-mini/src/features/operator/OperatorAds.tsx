@@ -14,6 +14,7 @@ import {
   formatOperatorCount,
   operatorActiveActionLabel,
 } from "@fb/shared/operator/adsViewModel";
+import { operatorCommandTone } from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
 import { severityForDataState } from "@fb/shared/operator/viewModel";
 import type {
@@ -249,7 +250,9 @@ export function MiniAdCommand({
         if (!isOperatorCommandIntentStorageError(error)) throw error;
         intentCleanupWarning = error.userMessage;
       }
-      haptic.notify("success");
+      // 202 — это queued: «успех» подтверждаем только для confirmed.
+      const tone = operatorCommandTone(receipt.state);
+      haptic.notify(tone === "success" ? "success" : "warning");
       if (intentCleanupWarning) {
         haptic.notify("warning");
         await tgAlert(
