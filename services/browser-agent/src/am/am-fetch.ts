@@ -675,6 +675,8 @@ async function runAmScanWithContextInternal(
       'id',
       'name',
       'effective_status',
+      'ad_review_feedback',
+      'issues_info',
       'campaign_id',
       'adset_id',
       // Канонная форма: модификатор thumbnail_width на edge creative невалиден
@@ -732,6 +734,7 @@ async function runAmScanWithContextInternal(
     adMeta.set(ad.id, {
       adName: ad.name,
       effectiveStatus: ad.effectiveStatus,
+      moderationReason: ad.moderationReason,
       campaignId: ad.campaignId,
       adsetId: ad.adsetId,
       campaignName: ad.campaignId ? campName.get(ad.campaignId) : undefined,

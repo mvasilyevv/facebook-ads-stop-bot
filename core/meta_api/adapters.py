@@ -19,6 +19,7 @@ from core.meta_api.schemas import MetaApiAdRow, MetaInsightsRow
 from core.scanner.models import ScannedAdRow
 
 logger = logging.getLogger(__name__)
+_MODERATION_REASON_LIMIT = 600
 
 
 # ====================== низкоуровневые helpers ======================
@@ -75,6 +76,58 @@ def _parse_iso_date(value: Any) -> date | None:
         return date.fromisoformat(str(value))
     except (ValueError, TypeError):
         return None
+
+
+def _clean_moderation_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.split())
+    return normalized or None
+
+
+def _collect_moderation_feedback(
+    value: Any,
+    parts: list[str],
+    *,
+    label: str | None = None,
+) -> None:
+    text_value = _clean_moderation_text(value)
+    if text_value is not None:
+        parts.append(f"{label}: {text_value}" if label else text_value)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_moderation_feedback(item, parts, label=label)
+        return
+    if not isinstance(value, dict):
+        return
+    for key, nested in value.items():
+        _collect_moderation_feedback(
+            nested,
+            parts,
+            label=str(key).replace("_", " "),
+        )
+
+
+def extract_moderation_reason(ad: dict[str, Any]) -> str | None:
+    """Причина только из явного ответа Meta; отсутствие не реконструируется."""
+    parts: list[str] = []
+    _collect_moderation_feedback(ad.get("ad_review_feedback"), parts)
+    issues = ad.get("issues_info")
+    if isinstance(issues, list):
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            summary = _clean_moderation_text(issue.get("error_summary"))
+            message = _clean_moderation_text(issue.get("error_message"))
+            if summary and message and summary != message:
+                parts.append(f"{summary}: {message}")
+            elif message or summary:
+                parts.append(message or summary or "")
+    unique_parts = list(dict.fromkeys(parts))
+    if not unique_parts:
+        return None
+    return " · ".join(unique_parts)[:_MODERATION_REASON_LIMIT]
 
 
 # ====================== Insights row парсинг ======================
@@ -144,25 +197,11 @@ def merge_insights_and_ad(
         frequency=insights.frequency,
         actions=insights.actions,
         observed_at=datetime.now(timezone.utc),
+        moderation_reason=extract_moderation_reason(ad),
     )
 
 
 # ====================== MetaApiAdRow → ScannedAdRow ======================
-
-
-# Маппинг Meta effective_status → delivery_status, понятный observer FSM/rules.
-_DELIVERY_STATUS_MAP: dict[str, str] = {
-    "ACTIVE": "Active",
-    "PAUSED": "Paused",
-    "DELETED": "Deleted",
-    "ARCHIVED": "Archived",
-    "PENDING_REVIEW": "In Review",
-    "DISAPPROVED": "Disapproved",
-    "PENDING_BILLING_INFO": "Pending Billing",
-    "CAMPAIGN_PAUSED": "Campaign Paused",
-    "ADSET_PAUSED": "Adset Paused",
-    "WITH_ISSUES": "With Issues",
-}
 
 
 def meta_api_ad_row_to_scanned_row(
@@ -197,10 +236,9 @@ def meta_api_ad_row_to_scanned_row(
         campaign_name=api_row.campaign_name,
         adset_name=api_row.adset_name,
         ad_name=api_row.name,
-        delivery_status=_DELIVERY_STATUS_MAP.get(
-            api_row.effective_status, api_row.effective_status
-        ),
+        delivery_status=api_row.effective_status.strip().upper() or "UNKNOWN",
         spend=api_row.spend,
+        moderation_reason=api_row.moderation_reason,
         budget="",  # из insights не известен — нужен отдельный запрос /adsets
         reach=api_row.reach,
         impressions=api_row.impressions,

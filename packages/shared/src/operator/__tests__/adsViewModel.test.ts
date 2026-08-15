@@ -5,6 +5,8 @@ import {
   confirmedOperatorCurrency,
   formatOperatorCount,
   operatorActiveActionLabel,
+  operatorDeliveryLabel,
+  operatorDeliverySeverity,
 } from "../adsViewModel";
 
 describe("operator ad view model", () => {
@@ -22,9 +24,21 @@ describe("operator ad view model", () => {
     expect(classifyOperatorDelivery("PAUSED")).toBe("inactive");
     expect(classifyOperatorDelivery("INACTIVE")).toBe("inactive");
     expect(classifyOperatorDelivery("DISABLED")).toBe("inactive");
-    expect(classifyOperatorDelivery("ARCHIVED")).toBe("unknown");
+    expect(classifyOperatorDelivery("ARCHIVED")).toBe("terminal");
     expect(classifyOperatorDelivery("PAUSED_BY_USER")).toBe("unknown");
-    expect(classifyOperatorDelivery("NOT_DELIVERING")).toBe("unknown");
+    expect(classifyOperatorDelivery("NOT_DELIVERING")).toBe("pending");
+    expect(classifyOperatorDelivery("ADSET_PAUSED")).toBe("parent_paused");
+  });
+
+  it("keeps moderation statuses explicit and action-safe", () => {
+    expect(classifyOperatorDelivery("DISAPPROVED")).toBe("rejected");
+    expect(operatorDeliveryLabel("DISAPPROVED")).toBe("Отклонено модерацией");
+    expect(operatorDeliverySeverity("DISAPPROVED")).toBe("critical");
+    expect(classifyOperatorDelivery("WITH_ISSUES")).toBe("active");
+    expect(operatorDeliveryLabel("WITH_ISSUES")).toBe("Активно, есть замечания");
+    expect(operatorDeliverySeverity("WITH_ISSUES")).toBe("warning");
+    expect(classifyOperatorDelivery("PENDING_REVIEW")).toBe("pending");
+    expect(operatorDeliveryLabel(null)).toBe("Статус не подтверждён");
   });
 
   it("keeps confirmed zero distinct from unknown", () => {

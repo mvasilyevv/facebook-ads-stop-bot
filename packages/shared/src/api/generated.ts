@@ -3380,7 +3380,10 @@ export interface components {
       adset_name: string;
       /** Account Id */
       account_id: string | null;
-      /** Delivery Status */
+      /**
+       * Delivery Status
+       * @description Точный нормализованный Meta effective_status (например ACTIVE, DISAPPROVED, WITH_ISSUES, PENDING_REVIEW, ADSET_PAUSED или CAMPAIGN_PAUSED); null означает, что статус не подтверждён.
+       */
       delivery_status: string | null;
       data_state: components["schemas"]["DataState"];
       severity: components["schemas"]["OperatorSeverity"];

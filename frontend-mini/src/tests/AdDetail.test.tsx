@@ -554,6 +554,25 @@ describe("TMA typed operator ad detail", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows moderation rejection explicitly and blocks a status command", () => {
+    adsData = operatorAdsResponse(
+      makeAd({ delivery_status: "DISAPPROVED", severity: "critical" }),
+    );
+    renderDetail();
+
+    expect(screen.getByText("Доставка").parentElement).toHaveTextContent(
+      "Отклонено модерацией",
+    );
+    expect(
+      screen.getByText(
+        "Исправьте объявление или запросите повторную проверку в Ads Manager",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Отключить|Включить/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("neutralizes stale health and blocks money commands until refresh", () => {
     adsData = operatorAdsResponse(
       makeAd({ data_state: "stale", severity: "ok" }),
@@ -609,7 +628,7 @@ describe("TMA typed operator ad detail", () => {
       expect(screen.getByText(label).parentElement).toHaveTextContent("—");
     }
     expect(screen.getByText("Доставка").parentElement).toHaveTextContent(
-      "Не подтверждено",
+      "Статус не подтверждён",
     );
   });
 

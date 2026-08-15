@@ -10316,7 +10316,8 @@
                 "type": "null"
               }
             ],
-            "title": "Delivery Status"
+            "title": "Delivery Status",
+            "description": "Точный нормализованный Meta effective_status (например ACTIVE, DISAPPROVED, WITH_ISSUES, PENDING_REVIEW, ADSET_PAUSED или CAMPAIGN_PAUSED); null означает, что статус не подтверждён."
           },
           "data_state": {
             "$ref": "#/components/schemas/DataState"

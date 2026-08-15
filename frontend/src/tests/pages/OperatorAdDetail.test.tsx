@@ -537,6 +537,17 @@ describe("typed operator ad detail", () => {
     expect(screen.queryByRole("button", { name: /Отключить|Включить/ })).not.toBeInTheDocument();
   });
 
+  it("shows moderation rejection explicitly and blocks a status command", () => {
+    mockAds(response([makeAd({ delivery_status: "DISAPPROVED", severity: "critical" })]));
+    renderDetail();
+
+    expect(screen.getByText("Доставка").parentElement).toHaveTextContent("Отклонено модерацией");
+    expect(
+      screen.getByText("Исправьте объявление или запросите повторную проверку в Ads Manager"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Отключить|Включить/ })).not.toBeInTheDocument();
+  });
+
   it("blocks money commands until the live snapshot is reconciled", () => {
     renderDetail("reconnecting");
 

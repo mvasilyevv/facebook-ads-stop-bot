@@ -61,3 +61,20 @@ def test_proto_mapping_carries_canonical_adset_id_without_runtime_fallback() -> 
 
     assert isinstance(row, ScannedAdRow)
     assert row.adset_id == "120200000000003"
+    assert row.moderation_reason is None
+
+
+def test_proto_mapping_preserves_nullable_moderation_reason() -> None:
+    proto = scanner_pb2.ScannedAdRow(
+        fb_ad_id="120200000000001",
+        campaign_id="120200000000002",
+        adset_id="120200000000003",
+        campaign_name="MV | CR2 | KE",
+        adset_name="KE broad",
+        ad_name="Creative 1",
+        delivery_status="DISAPPROVED",
+        spend="0",
+        moderation_reason="Meta policy reason",
+    )
+
+    assert _proto_to_row(proto).moderation_reason == "Meta policy reason"

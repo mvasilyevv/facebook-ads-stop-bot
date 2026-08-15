@@ -157,12 +157,12 @@ describe('LPV omni/non-omni (BA-6)', () => {
 describe('mapEffectiveStatus (H-8)', () => {
   it('известные статусы → канон', () => {
     assert.equal(mapEffectiveStatus('ACTIVE'), 'ACTIVE');
-    assert.equal(mapEffectiveStatus('PAUSED'), 'OFF');
-    assert.equal(mapEffectiveStatus('ADSET_PAUSED'), 'OFF');
-    assert.equal(mapEffectiveStatus('ARCHIVED'), 'OFF');
-    assert.equal(mapEffectiveStatus('PENDING_REVIEW'), 'IN_REVIEW');
-    assert.equal(mapEffectiveStatus('DISAPPROVED'), 'NOT_DELIVERING');
-    assert.equal(mapEffectiveStatus('IN_PROCESS'), 'PROCESSING');
+    assert.equal(mapEffectiveStatus('PAUSED'), 'PAUSED');
+    assert.equal(mapEffectiveStatus('ADSET_PAUSED'), 'ADSET_PAUSED');
+    assert.equal(mapEffectiveStatus('ARCHIVED'), 'ARCHIVED');
+    assert.equal(mapEffectiveStatus('PENDING_REVIEW'), 'PENDING_REVIEW');
+    assert.equal(mapEffectiveStatus('DISAPPROVED'), 'DISAPPROVED');
+    assert.equal(mapEffectiveStatus('IN_PROCESS'), 'IN_PROCESS');
   });
 
   it('пусто → UNKNOWN, неизвестное → passthrough (uppercase)', () => {

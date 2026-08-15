@@ -30,6 +30,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
+from core.scanner.status import is_delivery_disabled
+
 # Допустимые состояния — должны совпадать с тем что хранится в ad_alert_state.alert_state
 AlertState = Literal["normal", "warning_sent", "stop_sent", "claimed", "disabled"]
 
@@ -248,14 +250,14 @@ def should_sync_disabled(current_state: AlertState, delivery_status: str | None)
     рассинхрон (косметика, но вечный: метрик у OFF-ада нет → переходов нет). Обнаружив
     OFF у инцидентного ада, observer сам приводит FSM к disabled.
 
-    Строго `OFF` (paused/archived/deleted — реально выключен). НЕ трогаем ACTIVE
+    Только подтверждённые disabled-статусы (paused/archived/deleted). НЕ трогаем ACTIVE
     (крутит — stop остаётся в силе, pause ретраится), модерацию (IN_REVIEW/
     NOT_DELIVERING/PROCESSING — ад может сам вернуться в ACTIVE) и терминальные/normal.
     Writer добавляет time-guard (cooldown), чтобы не опередить штатный fsm_sync.
     """
     if current_state not in ("warning_sent", "stop_sent"):
         return False
-    return (delivery_status or "").strip().upper() == "OFF"
+    return is_delivery_disabled(delivery_status)
 
 
 __all__ = [

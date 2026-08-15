@@ -578,6 +578,9 @@ def _proto_to_row(proto) -> object:
         ad_name=proto.ad_name,
         delivery_status=proto.delivery_status,
         spend=_dec(proto.spend) or Decimal("0"),
+        moderation_reason=(
+            proto.moderation_reason if proto.HasField("moderation_reason") else None
+        ),
         budget=proto.budget,
         reach=proto.reach,
         impressions=proto.impressions,

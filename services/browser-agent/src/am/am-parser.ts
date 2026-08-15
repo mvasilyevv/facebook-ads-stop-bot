@@ -39,6 +39,7 @@ export interface LightMeta {
   id: string;
   name?: string;
   effectiveStatus?: string;
+  moderationReason?: string;
   campaignId?: string;
   adsetId?: string;
   dailyBudget?: string;
@@ -52,6 +53,7 @@ export interface LightMeta {
 }
 
 const NULLISH = new Set(['na', 'null', '', '--', '-', '—']);
+const MODERATION_REASON_LIMIT = 600;
 
 // Сырое значение am_tabular -> string | null. Отбрасываем плейсхолдеры FB.
 function clean(v: string | null | undefined): string | null {
@@ -59,6 +61,51 @@ function clean(v: string | null | undefined): string | null {
   const s = String(v).trim();
   if (NULLISH.has(s.toLowerCase())) return null;
   return s;
+}
+
+function cleanModerationText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized || null;
+}
+
+function collectModerationFeedback(
+  value: unknown,
+  parts: string[],
+  label?: string,
+): void {
+  const text = cleanModerationText(value);
+  if (text) {
+    parts.push(label ? `${label}: ${text}` : text);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectModerationFeedback(item, parts, label);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    collectModerationFeedback(nested, parts, key.replace(/_/g, ' '));
+  }
+}
+
+/** Причина модерации только из явных полей Meta; отсутствие остаётся unknown. */
+export function extractModerationReason(value: Record<string, any>): string | undefined {
+  const parts: string[] = [];
+  collectModerationFeedback(value.ad_review_feedback, parts);
+
+  const issues = Array.isArray(value.issues_info) ? value.issues_info : [];
+  for (const issue of issues) {
+    if (!issue || typeof issue !== 'object') continue;
+    const summary = cleanModerationText(issue.error_summary);
+    const message = cleanModerationText(issue.error_message);
+    if (summary && message && summary !== message) parts.push(`${summary}: ${message}`);
+    else if (message || summary) parts.push(message ?? summary!);
+  }
+
+  const unique = [...new Set(parts)];
+  if (!unique.length) return undefined;
+  return unique.join(' · ').slice(0, MODERATION_REASON_LIMIT);
 }
 
 // Индекс колонки по имени с приоритетом окна default; иначе первое совпадение по имени.
@@ -193,6 +240,7 @@ export function parseLightList(body: unknown): LightMeta[] {
     const meta: LightMeta = { id: String(d.id) };
     if (d.name !== undefined) meta.name = String(d.name);
     if (d.effective_status !== undefined) meta.effectiveStatus = String(d.effective_status);
+    meta.moderationReason = extractModerationReason(d);
     if (d.campaign_id !== undefined) meta.campaignId = String(d.campaign_id);
     if (d.adset_id !== undefined) meta.adsetId = String(d.adset_id);
     if (d.daily_budget !== undefined) meta.dailyBudget = String(d.daily_budget);

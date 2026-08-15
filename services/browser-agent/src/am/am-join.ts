@@ -106,6 +106,7 @@ export interface AmAdMeta {
   campaignId?: string;
   adsetId?: string;
   effectiveStatus?: string;
+  moderationReason?: string;
   budget?: string;
   creativeThumbUrl?: string;
   creativeImageUrl?: string;
@@ -116,35 +117,11 @@ export interface AmAdMeta {
   learningStage?: string;
 }
 
-// effective_status (light_*) -> те же коды, что detectDeliveryStatus в DOM-пути.
-// Не зависит от локали профиля Vision — статус берём из данных, а не из текста.
+// effective_status (light_*) сохраняется отдельными кодами Meta. Это не зависит
+// от локали профиля Vision и не скрывает DISAPPROVED внутри NOT_DELIVERING.
 export function mapEffectiveStatus(status: string | undefined): string {
   const s = (status || '').trim().toUpperCase();
-  if (!s) return 'UNKNOWN';
-  switch (s) {
-    case 'ACTIVE':
-      return 'ACTIVE';
-    case 'PAUSED':
-    case 'ADSET_PAUSED':
-    case 'CAMPAIGN_PAUSED':
-    case 'CAMPAIGN_GROUP_PAUSED':
-    case 'ARCHIVED':
-    case 'DELETED':
-      return 'OFF';
-    case 'IN_PROCESS':
-    case 'PROCESSING':
-      return 'PROCESSING';
-    case 'PENDING_REVIEW':
-    case 'PREAPPROVED':
-      return 'IN_REVIEW';
-    case 'DISAPPROVED':
-    case 'WITH_ISSUES':
-    case 'PENDING_BILLING_INFO':
-    case 'ADSET_PAUSED_NOT_DELIVERING':
-      return 'NOT_DELIVERING';
-    default:
-      return s;
-  }
+  return s || 'UNKNOWN';
 }
 
 // Конверсии: какие action_type считаем лидами/регами/LPV
@@ -175,6 +152,7 @@ export function buildScannedRow(am: AmRow, meta: AmAdMeta = {}): ScannedAdRow {
     adset_name: meta.adsetName ?? '',
     ad_name: meta.adName ?? '',
     delivery_status: mapEffectiveStatus(meta.effectiveStatus),
+    moderation_reason: meta.moderationReason ?? null,
     spend: amMoney(a['spend']),
     budget: meta.budget ?? '',
     reach: amInt(a['reach']),

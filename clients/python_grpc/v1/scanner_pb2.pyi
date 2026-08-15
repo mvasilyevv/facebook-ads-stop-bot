@@ -141,7 +141,7 @@ class ScrollMetrics(_message.Message):
     def __init__(self, found: bool = ..., scroll_top: _Optional[float] = ..., max_scroll_top: _Optional[float] = ..., at_bottom: bool = ...) -> None: ...
 
 class ScannedAdRow(_message.Message):
-    __slots__ = ("fb_ad_id", "campaign_name", "adset_name", "ad_name", "delivery_status", "spend", "budget", "reach", "impressions", "clicks", "cpc", "ctr", "outbound_clicks", "outbound_ctr", "landing_page_views", "cost_per_landing_page_view", "cost_per_result", "cpm", "frequency", "leads", "cost_per_lead", "registrations", "cost_per_registration", "deposits", "resolved_offer_code", "campaign_id", "creative_thumb_url", "creative_image_url", "adset_pixel_id", "adset_daily_budget", "adset_lifetime_budget", "adset_budget_remaining", "adset_learning_stage", "adset_id")
+    __slots__ = ("fb_ad_id", "campaign_name", "adset_name", "ad_name", "delivery_status", "spend", "budget", "reach", "impressions", "clicks", "cpc", "ctr", "outbound_clicks", "outbound_ctr", "landing_page_views", "cost_per_landing_page_view", "cost_per_result", "cpm", "frequency", "leads", "cost_per_lead", "registrations", "cost_per_registration", "deposits", "resolved_offer_code", "campaign_id", "creative_thumb_url", "creative_image_url", "adset_pixel_id", "adset_daily_budget", "adset_lifetime_budget", "adset_budget_remaining", "adset_learning_stage", "adset_id", "moderation_reason")
     FB_AD_ID_FIELD_NUMBER: _ClassVar[int]
     CAMPAIGN_NAME_FIELD_NUMBER: _ClassVar[int]
     ADSET_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -176,6 +176,7 @@ class ScannedAdRow(_message.Message):
     ADSET_BUDGET_REMAINING_FIELD_NUMBER: _ClassVar[int]
     ADSET_LEARNING_STAGE_FIELD_NUMBER: _ClassVar[int]
     ADSET_ID_FIELD_NUMBER: _ClassVar[int]
+    MODERATION_REASON_FIELD_NUMBER: _ClassVar[int]
     fb_ad_id: str
     campaign_name: str
     adset_name: str
@@ -210,4 +211,5 @@ class ScannedAdRow(_message.Message):
     adset_budget_remaining: str
     adset_learning_stage: str
     adset_id: str
-    def __init__(self, fb_ad_id: _Optional[str] = ..., campaign_name: _Optional[str] = ..., adset_name: _Optional[str] = ..., ad_name: _Optional[str] = ..., delivery_status: _Optional[str] = ..., spend: _Optional[str] = ..., budget: _Optional[str] = ..., reach: _Optional[int] = ..., impressions: _Optional[int] = ..., clicks: _Optional[int] = ..., cpc: _Optional[str] = ..., ctr: _Optional[str] = ..., outbound_clicks: _Optional[int] = ..., outbound_ctr: _Optional[str] = ..., landing_page_views: _Optional[int] = ..., cost_per_landing_page_view: _Optional[str] = ..., cost_per_result: _Optional[str] = ..., cpm: _Optional[str] = ..., frequency: _Optional[str] = ..., leads: _Optional[int] = ..., cost_per_lead: _Optional[str] = ..., registrations: _Optional[int] = ..., cost_per_registration: _Optional[str] = ..., deposits: _Optional[int] = ..., resolved_offer_code: _Optional[str] = ..., campaign_id: _Optional[str] = ..., creative_thumb_url: _Optional[str] = ..., creative_image_url: _Optional[str] = ..., adset_pixel_id: _Optional[str] = ..., adset_daily_budget: _Optional[str] = ..., adset_lifetime_budget: _Optional[str] = ..., adset_budget_remaining: _Optional[str] = ..., adset_learning_stage: _Optional[str] = ..., adset_id: _Optional[str] = ...) -> None: ...
+    moderation_reason: str
+    def __init__(self, fb_ad_id: _Optional[str] = ..., campaign_name: _Optional[str] = ..., adset_name: _Optional[str] = ..., ad_name: _Optional[str] = ..., delivery_status: _Optional[str] = ..., spend: _Optional[str] = ..., budget: _Optional[str] = ..., reach: _Optional[int] = ..., impressions: _Optional[int] = ..., clicks: _Optional[int] = ..., cpc: _Optional[str] = ..., ctr: _Optional[str] = ..., outbound_clicks: _Optional[int] = ..., outbound_ctr: _Optional[str] = ..., landing_page_views: _Optional[int] = ..., cost_per_landing_page_view: _Optional[str] = ..., cost_per_result: _Optional[str] = ..., cpm: _Optional[str] = ..., frequency: _Optional[str] = ..., leads: _Optional[int] = ..., cost_per_lead: _Optional[str] = ..., registrations: _Optional[int] = ..., cost_per_registration: _Optional[str] = ..., deposits: _Optional[int] = ..., resolved_offer_code: _Optional[str] = ..., campaign_id: _Optional[str] = ..., creative_thumb_url: _Optional[str] = ..., creative_image_url: _Optional[str] = ..., adset_pixel_id: _Optional[str] = ..., adset_daily_budget: _Optional[str] = ..., adset_lifetime_budget: _Optional[str] = ..., adset_budget_remaining: _Optional[str] = ..., adset_learning_stage: _Optional[str] = ..., adset_id: _Optional[str] = ..., moderation_reason: _Optional[str] = ...) -> None: ...

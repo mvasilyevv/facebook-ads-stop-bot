@@ -28,6 +28,7 @@ from core.money import validated_currency_code
 from core.observer.cabinet_supervisor import CabinetLease
 from core.observer.state_machine import FsmTransition
 from core.rules.labels import rule_label, rule_metric_label, rule_metric_unit
+from core.scanner.status import is_delivery_active, is_moderation_rejected
 from core.telegram.notifications import enqueue_notification_in_transaction
 from core.telegram.schemas import (
     NotificationActionSpec,
@@ -36,12 +37,14 @@ from core.telegram.schemas import (
 )
 from core.telegram.worker_notify import (
     notify_owners_in_transaction,
+    notify_recurring_incident_in_transaction,
     resolve_recurring_incident_in_transaction,
 )
-from core.wording import clicks_ru, deposits_ru, registrations_ru
+from core.wording import clicks_ru, delivery_status_ru, deposits_ru, registrations_ru
 
 logger = logging.getLogger(__name__)
 _WARNING_RISK_GROWTH_FACTOR = Decimal("1.25")
+MODERATION_REJECTED_INCIDENT_KEY_PREFIX = "moderation-rejected:"
 
 
 def _require_canonical_meta_id(value: str | None, *, field_name: str) -> str:
@@ -53,6 +56,54 @@ def _require_canonical_meta_id(value: str | None, *, field_name: str) -> str:
 
 class CabinetFenceRejected(RuntimeError):
     """The observer actor no longer owns the cabinet write fence."""
+
+
+async def _sync_moderation_incident_in_transaction(
+    conn: AsyncConnection,
+    *,
+    fb_ad_id: str,
+    ad_name: str,
+    delivery_status: str | None,
+    previous_delivery_status: str | None,
+    moderation_reason: str | None,
+    incident_was_open: bool = False,
+) -> None:
+    """Открыть rejection incident или закрыть его после подтверждённого возврата."""
+    incident_key = f"{MODERATION_REJECTED_INCIDENT_KEY_PREFIX}{fb_ad_id}"
+    ad_label = ad_name.strip() or "название не получено"
+    if is_moderation_rejected(delivery_status):
+        reason = " ".join((moderation_reason or "").split()) or None
+        await notify_recurring_incident_in_transaction(
+            conn,
+            incident_key=incident_key,
+            audience="owners",
+            event_type="moderation_rejected",
+            severity="critical",
+            title=f"Объявление отклонено: {ad_label}",
+            summary=(
+                f"Причина: {reason}"
+                if reason is not None
+                else "Причина неизвестна: Facebook не передал её в данных скана."
+            ),
+            lines=[
+                f"Facebook показывает объявление как {delivery_status_ru(delivery_status or '')}",
+                "Исправь объявление или запроси повторную проверку в Ads Manager",
+            ],
+            risk="Объявление не получает показов и конверсий",
+            resource_type="ad",
+            resource_id=fb_ad_id,
+        )
+        return
+
+    if (
+        is_moderation_rejected(previous_delivery_status) or incident_was_open
+    ) and is_delivery_active(delivery_status):
+        await resolve_recurring_incident_in_transaction(
+            conn,
+            incident_key=incident_key,
+            audience="owners",
+            summary=f"Объявление {ad_label} снова активно.",
+        )
 
 
 async def _lock_and_assert_cabinet_fence(
@@ -113,6 +164,7 @@ async def upsert_catalog_hierarchy(
     campaign_name: str,
     offer_id: uuid.UUID | None,
     delivery_status: str | None = None,
+    moderation_reason: str | None = None,
     ad_account_id: str,
     creative_thumb_url: str | None = None,
     creative_image_url: str | None = None,
@@ -268,6 +320,18 @@ async def upsert_catalog_hierarchy(
             await conn.execute(
                 text(
                     """
+                    WITH previous AS (
+                        SELECT delivery_status
+                        FROM fb_ads
+                        WHERE fb_ad_id = :fbid
+                    ), incident_state AS (
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM incidents
+                            WHERE incident_key = :moderation_incident_key
+                              AND status IN ('open', 'acknowledged', 'executing')
+                        ) AS moderation_incident_open
+                    ), upserted AS (
                     INSERT INTO fb_ads
                         (adset_id, fb_ad_id, ad_name, delivery_status, last_seen_at,
                          creative_thumb_url, creative_image_url,
@@ -292,6 +356,13 @@ async def upsert_catalog_hierarchy(
                             COALESCE(EXCLUDED.creative_image_url, fb_ads.creative_image_url),
                         is_active = TRUE
                     RETURNING id
+                    )
+                    SELECT upserted.id,
+                           previous.delivery_status AS previous_delivery_status,
+                           incident_state.moderation_incident_open
+                    FROM upserted
+                    LEFT JOIN previous ON TRUE
+                    CROSS JOIN incident_state
                     """
                 ),
                 {
@@ -307,9 +378,25 @@ async def upsert_catalog_hierarchy(
                     "nr_threshold": nearest_rule_threshold,
                     "nr_stage": nearest_rule_stage,
                     "offer_code": matched_offer_code,
+                    "moderation_incident_key": (
+                        f"{MODERATION_REJECTED_INCIDENT_KEY_PREFIX}{fb_ad_id}"
+                    ),
                 },
             )
         ).first()
+        await _sync_moderation_incident_in_transaction(
+            conn,
+            fb_ad_id=fb_ad_id,
+            ad_name=ad_name,
+            delivery_status=delivery_status,
+            previous_delivery_status=(
+                str(getattr(ad_row, "previous_delivery_status", None))
+                if getattr(ad_row, "previous_delivery_status", None) is not None
+                else None
+            ),
+            moderation_reason=moderation_reason,
+            incident_was_open=bool(getattr(ad_row, "moderation_incident_open", False)),
+        )
     return ad_row[0]
 
 

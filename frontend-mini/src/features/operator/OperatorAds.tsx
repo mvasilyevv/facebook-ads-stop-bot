@@ -14,6 +14,8 @@ import {
   classifyOperatorDelivery,
   formatOperatorCount,
   operatorActiveActionLabel,
+  operatorDeliveryLabel,
+  operatorDeliverySeverity,
 } from "@fb/shared/operator/adsViewModel";
 import { operatorCommandTone } from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
@@ -107,6 +109,11 @@ export function MiniOperatorAdCard({
           severity={severityForDataState(ad.severity, ad.data_state)}
         />
       </div>
+      <p
+        className={`mt-2 text-[13px] ${deliveryStatusTextClass(ad.delivery_status)}`}
+      >
+        {operatorDeliveryLabel(ad.delivery_status)}
+      </p>
       <div className="mt-4 border-t border-[var(--color-hairline)] pt-3">
         <span className="text-[12px] text-bg-8">До стопа</span>
         <div className="mt-1.5">
@@ -194,6 +201,39 @@ export function MiniAdCommand({
         }`}
       >
         Обновите данные перед действием
+      </span>
+    );
+  }
+  if (delivery === "rejected") {
+    return (
+      <span
+        role="status"
+        className={`text-[12px] font-semibold text-danger ${
+          full
+            ? "block w-full min-w-0 whitespace-normal break-words text-left"
+            : "text-right"
+        }`}
+      >
+        Исправьте объявление или запросите повторную проверку в Ads Manager
+      </span>
+    );
+  }
+  if (
+    delivery === "pending" ||
+    delivery === "parent_paused" ||
+    delivery === "terminal"
+  ) {
+    return (
+      <span
+        role="status"
+        className={`text-[12px] text-warning ${
+          full
+            ? "block w-full min-w-0 whitespace-normal break-words text-left"
+            : "text-right"
+        }`}
+      >
+        {operatorDeliveryLabel(ad.delivery_status)} · действие доступно в Ads
+        Manager
       </span>
     );
   }
@@ -294,6 +334,13 @@ export function MiniAdCommand({
       <Icon aria-hidden="true" size={16} /> {label}
     </Button>
   );
+}
+
+function deliveryStatusTextClass(value: string | null): string {
+  const severity = operatorDeliverySeverity(value);
+  if (severity === "critical") return "font-semibold text-danger";
+  if (severity === "warning") return "font-semibold text-warning";
+  return "text-bg-8";
 }
 
 function operatorCommandProblemMessage(error: unknown): string {

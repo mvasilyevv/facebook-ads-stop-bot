@@ -637,6 +637,9 @@ function toProtoRow(row: any): any {
     adset_name: row.adset_name,
     ad_name: row.ad_name,
     delivery_status: row.delivery_status,
+    ...(row.moderation_reason === null
+      ? {}
+      : { moderation_reason: row.moderation_reason }),
     spend: row.spend,
     budget: row.budget,
     reach: row.reach,
