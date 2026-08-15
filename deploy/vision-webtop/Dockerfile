@@ -47,12 +47,31 @@ ENV DEBIAN_FRONTEND=noninteractive \
     XDG_CONFIG_HOME=/config/.config \
     XDG_CACHE_HOME=/config/.cache
 
+# Полное окружение XFCE, а не пять пакетов: настройки внешнего вида, клавиатуры
+# и мыши, поиск программ, уведомления, буфер обмена, снимок экрана, диспетчер
+# задач, менеджер архивов, просмотр изображений и PDF, редактор, калькулятор,
+# монтирование дисков. Так стол ведёт себя как обычный Linux, а не как киоск с
+# одной программой.
+#
+# Пакеты перечислены поимённо, а не метапакетами xfce4/xfce4-goodies: при
+# --no-install-recommends метапакет тянет только Depends, и состав окружения
+# начинает зависеть от того, что мейнтейнер счёл обязательным. Здесь состав
+# задаём мы и видим его при чтении.
+#
+# База остаётся своей, закреплённой по digest. Полнота окружения и доверенная
+# цепочка поставки — разные вещи, второй жертвовать незачем: возврат к чужому
+# готовому образу отдал бы и digest, и собственный entrypoint, и KasmVNC.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl dbus-x11 fonts-dejavu-core fonts-liberation2 gosu locales \
+        ca-certificates curl dbus-x11 gosu locales procps tini xz-utils \
+        fonts-dejavu-core fonts-liberation2 fonts-noto-color-emoji \
         libasound2t64 libdbus-glib-1-2 libnss3 libxt6t64 \
-        procps tini thunar wmctrl x11-utils xfce4-panel xfce4-session xfce4-terminal \
-        xfdesktop4 xfwm4 xz-utils \
+        gvfs gvfs-backends wmctrl x11-utils xdg-utils \
+        xfce4-appfinder xfce4-notifyd xfce4-panel xfce4-session xfce4-settings \
+        xfce4-terminal xfdesktop4 xfwm4 \
+        thunar thunar-archive-plugin thunar-volman \
+        xfce4-clipman-plugin xfce4-screenshooter xfce4-taskmanager \
+        atril engrampa galculator mousepad ristretto \
     && curl --fail --location --retry 4 --output /tmp/firefox.tar.xz \
       "https://ftp.mozilla.org/pub/firefox/releases/${FIREFOX_VERSION}/linux-x86_64/en-US/firefox-${FIREFOX_VERSION}.tar.xz" \
     && echo "${FIREFOX_SHA256}  /tmp/firefox.tar.xz" | sha256sum --check --strict \

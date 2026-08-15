@@ -60,6 +60,40 @@ def test_immutable_image_pins_kasmvnc_vision_and_first_party_client() -> None:
     assert "Firefox 140.13.0esr" in notices
 
 
+def test_desktop_is_a_full_environment_not_a_single_app_kiosk() -> None:
+    """Стол обязан оставаться полноценным окружением.
+
+    До 18.07 образ собирался на готовом linuxserver/webtop и был полным. При
+    переходе на KasmVNC его пересобрали с нуля и оставили пять пакетов —
+    владелец увидел это как «урезанный стол» и попросил вернуть полный.
+    Список поимённый: метапакет при --no-install-recommends тянет только
+    Depends, и состав окружения перестаёт быть нашим решением.
+    """
+    dockerfile = (WEBTOP / "Dockerfile").read_text(encoding="utf-8")
+
+    for package in (
+        "xfce4-appfinder",
+        "xfce4-settings",
+        "xfce4-notifyd",
+        "xfce4-clipman-plugin",
+        "xfce4-screenshooter",
+        "xfce4-taskmanager",
+        "thunar-archive-plugin",
+        "thunar-volman",
+        "atril",
+        "engrampa",
+        "galculator",
+        "mousepad",
+        "ristretto",
+        "gvfs",
+    ):
+        assert package in dockerfile, f"полный стол потерял {package}"
+    # Блокировка экрана внутри контейнера оставила бы оператора перед паролем,
+    # которого он не знает; управление питанием там бессмысленно.
+    assert "xfce4-screensaver" not in dockerfile
+    assert "xfce4-power-manager" not in dockerfile
+
+
 def test_desktop_ships_a_plain_browser_the_operator_can_find() -> None:
     """Браузер должен быть виден на столе, а не только в меню.
 

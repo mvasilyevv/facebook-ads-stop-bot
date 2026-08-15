@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=Браузер
-Name[en]=Browser
+Name=Firefox
+Name[en]=Firefox
 Comment=Обычный браузер для облачных панелей. Кабинеты Facebook открывать только через профиль Vision.
 Comment[en]=Plain browser for cloud panels. Open Facebook accounts only through a Vision profile.
 Exec=/opt/firefox/firefox %u
