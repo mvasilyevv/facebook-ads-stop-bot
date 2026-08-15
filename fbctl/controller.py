@@ -135,6 +135,33 @@ LEGACY_DOCKER_RESOURCES = (
     ("volume", "fb_agent_safety_first_redisdata"),
     ("volume", "fb_agent_safety_first_campaign_uploads"),
 )
+SYSTEMD_UNIT_DIR = Path("/etc/systemd/system")
+# Эти unit-файлы управляли topology, удалённой при переходе на fbctl. Бэкапная
+# пара намеренно отсутствует: её судьба остаётся отдельным решением owner.
+RETIRED_SYSTEMD_UNITS = (
+    "fb-agent-healthcheck.timer",
+    "vision-token-refresh.timer",
+    "fb-agent.service",
+    "fb-agent-release-reconcile.service",
+    "fb-agent-healthcheck.service",
+    "vision-token-refresh.service",
+    "fb-agent-host-operation-failed@.service",
+)
+RETIRED_SYSTEMD_DISABLE_UNITS = frozenset(
+    {
+        "fb-agent-healthcheck.timer",
+        "vision-token-refresh.timer",
+        "fb-agent.service",
+        "fb-agent-release-reconcile.service",
+    }
+)
+RETIRED_SYSTEMD_STOP_UNITS = frozenset(
+    {
+        "fb-agent-healthcheck.service",
+        "vision-token-refresh.service",
+    }
+)
+RETIRED_SYSTEMD_RELOAD_MARKER = ".fb-agent-retired-units-reload-pending"
 REHEARSAL_FAILPOINTS = (
     "preflight",
     "pull",
@@ -279,6 +306,15 @@ class ProductionController:
             try:
                 self._step("preflight", options, lambda: self._preflight(config, options))
                 self._step("pull", options, lambda: self._pull(config))
+                if not options.rehearsal:
+                    self._step(
+                        "retire_legacy_systemd",
+                        options,
+                        lambda: _retire_legacy_systemd_units(
+                            self.runner,
+                            step="retire_legacy_systemd",
+                        ),
+                    )
                 self._step("stop_runtime", options, lambda: self._stop_runtime(config))
                 self._step("start_infra", options, lambda: self._start_infra(config))
                 self._step("migrate", options, lambda: self._migrate(config))
@@ -1415,6 +1451,7 @@ def bootstrap_host(
         release_id: str | None = None
         legacy_cleanup = "not_applicable"
         profile_seed_cleanup = "not_applicable"
+        retired_systemd_units: list[str] = []
         try:
             atomic_write(
                 bootstrap_transport,
@@ -1474,6 +1511,7 @@ def bootstrap_host(
                     caddy_bootstrap,
                     runner,
                 )
+                retired_systemd_units = _retire_legacy_systemd_units(runner)
             profile_seed_cleanup = _consume_bootstrap_inputs(
                 adoption_bundle=verified_adoption_source,
                 desktop_profile_seed=profile_input.seed_cleanup_receipt,
@@ -1502,6 +1540,7 @@ def bootstrap_host(
         "rehearsal": rehearsal,
         "legacy_identity_cleanup": legacy_cleanup,
         "profile_seed_cleanup": profile_seed_cleanup,
+        "retired_systemd_units": retired_systemd_units,
     }
 
 
@@ -1681,6 +1720,45 @@ def _provision_caddy(
         step="bootstrap",
     )
     runner.run(("systemctl", "reload", "caddy"), step="bootstrap")
+
+
+def _retire_legacy_systemd_units(
+    runner: CommandRunner,
+    *,
+    unit_dir: Path = SYSTEMD_UNIT_DIR,
+    step: str = "bootstrap",
+) -> list[str]:
+    """Disable and remove exact units retired by the fbctl topology."""
+    reload_marker = unit_dir / RETIRED_SYSTEMD_RELOAD_MARKER
+    if reload_marker.is_symlink() or (reload_marker.exists() and not reload_marker.is_file()):
+        raise FbctlError(f"legacy systemd reload marker is unsafe: {reload_marker}")
+    reload_pending = reload_marker.is_file()
+    present: list[str] = []
+    for unit in RETIRED_SYSTEMD_UNITS:
+        path = unit_dir / unit
+        if path.is_symlink() or path.is_file():
+            present.append(unit)
+        elif path.exists():
+            raise FbctlError(f"legacy systemd unit path is unsafe: {path}")
+    if not present and not reload_pending:
+        return []
+
+    # Сначала гасим все возможные активаторы. Только после полного успеха
+    # systemctl удаляем определения, чтобы повтор bootstrap мог безопасно
+    # закончить незавершённую очистку.
+    for unit in present:
+        if unit in RETIRED_SYSTEMD_DISABLE_UNITS:
+            runner.run(("systemctl", "disable", "--now", unit), step=step)
+        elif unit in RETIRED_SYSTEMD_STOP_UNITS:
+            runner.run(("systemctl", "stop", unit), step=step)
+
+    if present:
+        atomic_write(reload_marker, b"pending\n", mode=0o600)
+        for unit in present:
+            (unit_dir / unit).unlink()
+    runner.run(("systemctl", "daemon-reload"), step=step)
+    reload_marker.unlink(missing_ok=True)
+    return present
 
 
 def _consume_bootstrap_inputs(

@@ -885,11 +885,20 @@ def test_bootstrap_migrates_only_identity_from_fixed_legacy_source_after_full_su
     def provision(*_args, **_kwargs) -> None:
         observe("caddy")
 
+    def retire_systemd(_runner) -> list[str]:
+        observe("systemd_retirement")
+        return ["vision-token-refresh.timer"]
+
     _patch_bootstrap_runtime(
         monkeypatch,
         root,
         provision_hook=provision,
         stage_observer=observe,
+    )
+    monkeypatch.setattr(
+        fbctl_controller,
+        "_retire_legacy_systemd_units",
+        retire_systemd,
     )
 
     result = bootstrap_host(
@@ -906,6 +915,7 @@ def test_bootstrap_migrates_only_identity_from_fixed_legacy_source_after_full_su
     canonical = parse_dotenv(canonical_path)
     assert result["status"] == "READY"
     assert result["legacy_identity_cleanup"] == "removed"
+    assert result["retired_systemd_units"] == ["vision-token-refresh.timer"]
     assert observed_stages == [
         "preflight",
         "pull",
@@ -916,6 +926,7 @@ def test_bootstrap_migrates_only_identity_from_fixed_legacy_source_after_full_su
         "runtime_config",
         "vision_config",
         "caddy",
+        "systemd_retirement",
     ]
     assert {key: canonical[key] for key in IDENTITY_KEYS} == _identity_values()
     assert canonical["OPENAI_MODEL"] == "explicit-model"

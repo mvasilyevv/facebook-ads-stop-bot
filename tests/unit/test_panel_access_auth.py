@@ -126,7 +126,12 @@ def test_rejects_invalid_security_claims(overrides: dict, message: str) -> None:
 
 def test_rejects_forged_signature() -> None:
     token, jwks = _signed_token(claims=_claims())
-    forged = f"{token[:-2]}aa"
+    # Портим ПЕРВЫЙ символ подписи, а не последний. В последнем символе base64url
+    # значимы лишь два бита, остальные — добивка: примерно каждая четвёртая
+    # «подделка» декодировалась в те же байты, подпись сходилась, и тест падал
+    # с «DID NOT RAISE» на ровном месте. Первый символ значим целиком.
+    header, payload, signature = token.split(".")
+    forged = f"{header}.{payload}.{'B' if signature[0] != 'B' else 'C'}{signature[1:]}"
     with pytest.raises(PanelAuthError, match="Подпись"):
         verify_telegram_id_token(
             forged,
