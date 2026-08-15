@@ -20,7 +20,14 @@ from apps.cleanup_worker.retention import (
     get_default_policy,
     is_special,
 )
+from apps.cleanup_worker.storage import (
+    collect_database_storage,
+    publish_cleanup_run_health,
+    publish_database_metrics,
+    publish_retention_health,
+)
 from core.auth.panel_access import cleanup_expired_panel_auth_records
+from core.metrics import record_cleanup_run
 
 logger = logging.getLogger(__name__)
 
@@ -536,6 +543,7 @@ async def write_audit(
     *,
     started_at: datetime,
     finished_at: datetime,
+    outcome: str,
     counts: dict[str, Any],
 ) -> None:
     """Запись audit в system_config.value под ключом cleanup_runs."""
@@ -543,6 +551,7 @@ async def write_audit(
         "last_run_started_at": started_at.isoformat(),
         "last_run_finished_at": finished_at.isoformat(),
         "duration_ms": int((finished_at - started_at).total_seconds() * 1000),
+        "outcome": outcome,
         "counts": counts,
     }
     async with engine.begin() as conn:
@@ -556,6 +565,26 @@ async def write_audit(
             ),
             {"k": "cleanup_runs", "v": json.dumps(payload)},
         )
+
+
+def _error_count(counts: dict[str, Any]) -> int:
+    return sum(1 for key in counts if key.endswith("_error"))
+
+
+def _deleted_rows(counts: dict[str, Any]) -> dict[str, int]:
+    rows: dict[str, int] = {}
+    for key, value in counts.items():
+        if not key.endswith("_deleted"):
+            continue
+        target = key.removesuffix("_deleted")
+        if isinstance(value, int):
+            rows[target] = value
+        elif isinstance(value, dict):
+            for nested_target, nested_value in value.items():
+                if isinstance(nested_value, int):
+                    rows[str(nested_target)] = nested_value
+    rows["all"] = sum(rows.values())
+    return rows
 
 
 async def run_once(engine: AsyncEngine) -> dict[str, Any]:
@@ -639,13 +668,57 @@ async def run_once(engine: AsyncEngine) -> dict[str, Any]:
         logger.exception("cleanup_expired_panel_auth_records failed: %s", exc)
         counts["panel_auth_expired_deleted_error"] = str(exc)
 
+    try:
+        storage_snapshot = await collect_database_storage(engine)
+        observed_at = datetime.now(timezone.utc)
+        publish_database_metrics(storage_snapshot, now=observed_at)
+        counts["database_relations_observed"] = len(storage_snapshot.relations)
+        await publish_retention_health(
+            engine,
+            snapshot=storage_snapshot,
+            policy=policy,
+            now=observed_at,
+        )
+    except Exception as exc:
+        logger.exception("storage observation failed: %s", exc)
+        counts["storage_observation_error"] = str(exc)
+
     finished_at = datetime.now(timezone.utc)
     logger.info("=== Cleanup worker run finished at %s ===", finished_at.isoformat())
     logger.info("Counts: %s", counts)
 
+    outcome = "failed" if _error_count(counts) else "success"
     try:
-        await write_audit(engine, started_at=started_at, finished_at=finished_at, counts=counts)
+        await write_audit(
+            engine,
+            started_at=started_at,
+            finished_at=finished_at,
+            outcome=outcome,
+            counts=counts,
+        )
     except Exception as exc:
         logger.exception("write_audit failed: %s", exc)
+        counts["write_audit_error"] = str(exc)
+
+    error_count = _error_count(counts)
+    success = error_count == 0
+    partitions_dropped = counts.get("partitions_dropped")
+    record_cleanup_run(
+        finished_at=finished_at,
+        success=success,
+        rows_deleted=_deleted_rows(counts),
+        partitions_dropped=(
+            {str(table): int(value) for table, value in partitions_dropped.items()}
+            if isinstance(partitions_dropped, dict)
+            else {}
+        ),
+    )
+    accepted = await publish_cleanup_run_health(
+        engine,
+        success=success,
+        error_count=error_count,
+    )
+    if not accepted and not success:
+        logger.warning("cleanup failure incident was not accepted by durable plane")
 
     return counts

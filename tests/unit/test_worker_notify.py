@@ -69,14 +69,17 @@ async def test_outbox_failure_is_reported_without_direct_fallback(monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_recurring_incident_rejects_non_operational_severity() -> None:
+@pytest.mark.parametrize("severity", ["unknown", "ok"])
+async def test_recurring_incident_rejects_non_operational_severity(severity: str) -> None:
+    # "ok" отбивается наравне с "unknown": повторяющийся инцидент — это всегда
+    # сигнал тревоги, и восстановление закрывается отдельным путём.
     with pytest.raises(ValueError, match="must be warning or critical"):
         await worker_notify.notify_recurring_incident(
             object(),
             incident_key="worker:test",
             audience="owners",
             event_type="test_unknown",
-            severity="unknown",
+            severity=severity,
             title="Unknown",
         )
 

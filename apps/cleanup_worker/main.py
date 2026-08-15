@@ -11,27 +11,76 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from apps.cleanup_worker.storage import (
+    collect_disk_space,
+    disk_thresholds_from_env,
+    publish_cleanup_freshness,
+    publish_cleanup_run_health,
+    publish_disk_check_unavailable,
+    publish_disk_health,
+)
 from apps.cleanup_worker.worker import create_next_partition_if_missing, run_once
 from core.db import WORKER_ENGINE_KWARGS
-from core.worker_metrics import mark_worker_heartbeat
+from core.worker_metrics import mark_worker_db_poll_success, mark_worker_heartbeat
 
 logger = logging.getLogger("cleanup_worker")
 
 WORKER_NAME = "cleanup"
 _METRICS_INTERVAL_SECONDS = 15.0
+_STORAGE_CHECK_INTERVAL_SECONDS = 15 * 60.0
 
 # Час прогона (UTC), default 4:00
 _RUN_HOUR_UTC = int(os.environ.get("CLEANUP_WORKER_RUN_HOUR_UTC", "4"))
 
 
-async def metrics_loop(stop: asyncio.Event) -> None:
-    """Refresh Prometheus even though cleanup itself runs only once per day."""
+async def metrics_loop(stop: asyncio.Event, engine) -> None:
+    """Refresh heartbeat plus disk/run health between daily cleanup runs."""
+    next_storage_check = 0.0
     while not stop.is_set():
         mark_worker_heartbeat(WORKER_NAME)
+        loop_time = asyncio.get_running_loop().time()
+        if loop_time >= next_storage_check:
+            try:
+                await publish_cleanup_freshness(
+                    engine,
+                    now=datetime.now(timezone.utc),
+                )
+                mark_worker_db_poll_success(WORKER_NAME)
+            except Exception as exc:
+                logger.exception("cleanup freshness check failed: %s", exc)
+            try:
+                min_free_bytes, min_free_ratio = disk_thresholds_from_env()
+                await publish_disk_health(
+                    engine,
+                    disk=collect_disk_space(),
+                    min_free_bytes=min_free_bytes,
+                    min_free_ratio=min_free_ratio,
+                )
+            except Exception as exc:
+                logger.exception("database disk check failed: %s", exc)
+                accepted = await publish_disk_check_unavailable(engine)
+                if not accepted:
+                    logger.warning("disk check incident was not accepted by durable plane")
+            next_storage_check = loop_time + _STORAGE_CHECK_INTERVAL_SECONDS
         try:
             await asyncio.wait_for(stop.wait(), timeout=_METRICS_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
             pass
+
+
+async def _run_cleanup(engine):
+    """Run cleanup and emit an immediate durable warning on an unhandled crash."""
+    try:
+        return await run_once(engine)
+    except Exception:
+        accepted = await publish_cleanup_run_health(
+            engine,
+            success=False,
+            error_count=1,
+        )
+        if not accepted:
+            logger.warning("cleanup crash incident was not accepted by durable plane")
+        raise
 
 
 async def _initialize_partition_storage(
@@ -51,7 +100,7 @@ async def _initialize_partition_storage(
     logger.info("Startup partition preparation complete: %s", created)
     if run_cleanup_on_start:
         logger.info("CLEANUP_RUN_ON_START=true → запуск сразу")
-        await run_once(engine)
+        await _run_cleanup(engine)
 
 
 def _seconds_until_next_run(now: datetime) -> float:
@@ -77,7 +126,7 @@ async def main_loop(database_url: str) -> None:
         except (NotImplementedError, ValueError):
             pass
 
-    metrics_task = asyncio.create_task(metrics_loop(stop_event))
+    metrics_task = asyncio.create_task(metrics_loop(stop_event, engine))
 
     try:
         await _initialize_partition_storage(
@@ -105,7 +154,7 @@ async def main_loop(database_url: str) -> None:
                 break
 
             try:
-                await run_once(engine)
+                await _run_cleanup(engine)
             except Exception as exc:
                 logger.exception("run_once упал: %s", exc)
                 # Не падаем — спим до следующего запланированного прогона
