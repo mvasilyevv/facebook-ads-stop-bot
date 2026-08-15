@@ -724,7 +724,10 @@ def test_preflight_rejects_host_process_without_docker_owner(tmp_path: Path) -> 
         rehearsal=True,
     )
     probe = RecordingTcpPortProbe(int(config.values["POSTGRES_HOST_PORT"]))
-    controller = ProductionController(runner=DockerPortInventoryRunner([]))
+    controller = ProductionController(
+        runner=DockerPortInventoryRunner([]),
+        sleep=lambda _seconds: None,
+    )
     controller.port_probe = probe
 
     with pytest.raises(FbctlError) as caught:
@@ -739,7 +742,13 @@ def test_preflight_rejects_host_process_without_docker_owner(tmp_path: Path) -> 
     assert "POSTGRES_HOST_PORT=5433 is occupied" in message
     assert "process outside Docker" in message
     assert "free the port manually before retrying" in message
-    assert len(probe.calls) == len(MANAGED_HOST_PORTS)
+    # Каждый управляемый порт опрошен, а спорный — переспрошен: догорающий
+    # сокет освобождается за секунды, чужой процесс держит порт устойчиво.
+    assert set(probe.calls) >= {
+        ("127.0.0.1", int(config.values[key])) for key, _default in MANAGED_HOST_PORTS
+    }
+    postgres_probe = ("127.0.0.1", int(config.values["POSTGRES_HOST_PORT"]))
+    assert probe.calls.count(postgres_probe) > 1
     assert set(probe.calls) == {
         ("127.0.0.1", int(config.values[key])) for key, _default in MANAGED_HOST_PORTS
     }
@@ -2857,3 +2866,44 @@ def test_managed_port_owners_match_the_service_that_publishes_them() -> None:
         key: (project_key, service) for key, project_key, service in MANAGED_HOST_PORT_SERVICES
     }
     assert declared == published
+
+
+class _LingeringSocketProbe:
+    """Порт занят на первой пробе и свободен на следующих."""
+
+    def __init__(self, port: int) -> None:
+        self._port = port
+        self.calls: list[tuple[str, int]] = []
+
+    def __call__(self, host: str, port: int) -> bool:
+        self.calls.append((host, port))
+        return port == self._port and self.calls.count((host, port)) == 1
+
+
+def test_preflight_waits_out_a_socket_the_kernel_has_not_released(tmp_path: Path) -> None:
+    """Догорающий сокет — не чужой процесс.
+
+    Сразу после остановки контейнера порт ещё занят, а владельца среди
+    контейнеров уже нет. Без переспроса повторный деплой на живом хосте
+    падал бы с обвинением в адрес несуществующего чужого процесса.
+    """
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    probe = _LingeringSocketProbe(int(config.values["POSTGRES_HOST_PORT"]))
+    controller = ProductionController(
+        runner=DockerPortInventoryRunner([]),
+        sleep=lambda _seconds: None,
+    )
+    controller.port_probe = probe
+
+    controller._require_available_infra_ports(values=config.values, docker_config=None)
+
+    postgres_probe = ("127.0.0.1", int(config.values["POSTGRES_HOST_PORT"]))
+    assert probe.calls.count(postgres_probe) > 1

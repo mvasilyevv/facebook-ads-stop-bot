@@ -514,6 +514,25 @@ class ProductionController:
                 + ", ".join(present)
             )
 
+    # Отпущенный ядром сокет освобождается за секунды; чужой процесс держит
+    # порт и через десять. Пять проб с секундной паузой разводят эти случаи,
+    # не растягивая preflight на живом хосте.
+    _UNOWNED_PORT_PROBES = 5
+    _UNOWNED_PORT_PROBE_DELAY_SECONDS = 1.0
+
+    def _port_stays_occupied(self, host_port: str) -> bool:
+        """True, если порт занят устойчиво, а не догорающим сокетом."""
+        for attempt in range(self._UNOWNED_PORT_PROBES):
+            if attempt:
+                self.sleep(self._UNOWNED_PORT_PROBE_DELAY_SECONDS)
+            try:
+                if not self.port_probe("127.0.0.1", int(host_port)):
+                    return False
+            except (OSError, ValueError):
+                # Проба сломалась — это не доказательство свободного порта.
+                return True
+        return True
+
     def _require_available_infra_ports(
         self,
         *,
@@ -659,6 +678,13 @@ class ProductionController:
                         )
         for host_port, (key, _project, _service) in occupied_ports.items():
             if host_port in attributed_ports:
+                continue
+            # Порт занят, но владельца среди контейнеров нет — так же выглядит
+            # сокет только что остановленного контейнера, который ещё не
+            # отпущен ядром. Повторный деплой сразу после остановки натыкался
+            # бы на «его держит чужой процесс». Чужой процесс держит порт
+            # устойчиво, поэтому переспрашиваем, прежде чем обвинять.
+            if not self._port_stays_occupied(host_port):
                 continue
             conflicts.append(
                 f"{key}={host_port} is occupied, but Docker has no published TCP port owner; "
