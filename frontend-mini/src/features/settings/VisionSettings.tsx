@@ -15,6 +15,10 @@ export function VisionSettings({ canEdit }: { canEdit: boolean }) {
   const reconnect = useReconnectVision();
   const [token, setToken] = useState("");
   const [profileId, setProfileId] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [teamId, setTeamId] = useState("");
+  const [folderId, setFolderId] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
 
@@ -77,8 +81,16 @@ export function VisionSettings({ canEdit }: { canEdit: boolean }) {
       await updateSettings.mutateAsync({
         profile_id: profileId.trim() || null,
         ...(token.trim() ? { x_token: token.trim() } : {}),
+        ...(username.trim() ? { username: username.trim() } : {}),
+        ...(password.trim() ? { password: password.trim() } : {}),
+        ...(teamId.trim() ? { team_id: teamId.trim() } : {}),
+        ...(folderId.trim() ? { folder_id: folderId.trim() } : {}),
       });
       setToken("");
+      setUsername("");
+      setPassword("");
+      setTeamId("");
+      setFolderId("");
       setProblem(null);
       setReceipt("Конфигурация Vision сохранена");
       haptic.notify("success");
@@ -142,6 +154,30 @@ export function VisionSettings({ canEdit }: { canEdit: boolean }) {
               {settings.has_token ? "Задан" : "Не задан"}
             </Badge>
           </StatusRow>
+          <StatusRow label="Cloud-логин">
+            <Badge
+              variant={settings.has_cloud_username ? "neutral" : "warning"}
+            >
+              {settings.has_cloud_username ? "Задан" : "Не задан"}
+            </Badge>
+          </StatusRow>
+          <StatusRow label="Cloud-пароль">
+            <Badge
+              variant={settings.has_cloud_password ? "neutral" : "warning"}
+            >
+              {settings.has_cloud_password ? "Задан" : "Не задан"}
+            </Badge>
+          </StatusRow>
+          <StatusRow label="Team ID">
+            <Badge variant={settings.has_team_id ? "neutral" : "warning"}>
+              {settings.has_team_id ? "Задан" : "Не задан"}
+            </Badge>
+          </StatusRow>
+          <StatusRow label="Folder ID">
+            <Badge variant={settings.has_folder_id ? "neutral" : "warning"}>
+              {settings.has_folder_id ? "Задан" : "Не задан"}
+            </Badge>
+          </StatusRow>
           <StatusRow label="Контракт браузера" noBorder>
             <Badge
               variant={
@@ -155,9 +191,15 @@ export function VisionSettings({ canEdit }: { canEdit: boolean }) {
           </StatusRow>
         </div>
         <p className="m-0 mt-3 text-[13px] leading-5 text-bg-8">
-          {status === "READY"
-            ? "Канал и browser contract подтверждены."
-            : "Готовность не подтверждена: денежные операции не считаются доступными."}
+          <span className="block">
+            {settings.channel_message ??
+              "Готовность канала Vision не подтверждена."}
+          </span>
+          {settings.channel_next_step ? (
+            <span className="mt-1 block">
+              Следующий шаг: {settings.channel_next_step}
+            </span>
+          ) : null}
         </p>
         <Button
           className="mt-3"
@@ -197,6 +239,48 @@ export function VisionSettings({ canEdit }: { canEdit: boolean }) {
             value={profileId}
             disabled={!canEdit}
             onChange={(event) => setProfileId(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <div className="border-t border-[var(--color-hairline)] pt-4">
+            <p className="m-0 text-[13px] font-medium text-bg-10">
+              Cloud-креды Vision
+            </p>
+            <p className="m-0 mt-1 text-[13px] leading-5 text-bg-8">
+              Нужны для автоматического обновления токена. Сохранённые значения
+              сервер не возвращает.
+            </p>
+          </div>
+          <Input
+            label="Логин"
+            value={username}
+            disabled={!canEdit}
+            onChange={(event) => setUsername(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <Input
+            label="Пароль"
+            type="password"
+            value={password}
+            disabled={!canEdit}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete="new-password"
+            spellCheck={false}
+          />
+          <Input
+            label="Team ID"
+            value={teamId}
+            disabled={!canEdit}
+            onChange={(event) => setTeamId(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <Input
+            label="Folder ID"
+            value={folderId}
+            disabled={!canEdit}
+            onChange={(event) => setFolderId(event.target.value)}
             autoComplete="off"
             spellCheck={false}
           />

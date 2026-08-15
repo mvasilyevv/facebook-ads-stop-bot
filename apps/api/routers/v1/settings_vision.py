@@ -37,6 +37,11 @@ from core.tasks.browser_fence import (
     BrowserOperationDrainTimeout,
     BrowserOperationFence,
 )
+from core.vision.channel import (
+    VisionChannelAssessment,
+    assess_vision_channel,
+)
+from core.vision.cloud_probe import probe_vision_cloud
 from core.vision_runtime import VisionConfigurationError, load_vision_runtime_config
 
 logger = logging.getLogger(__name__)
@@ -126,6 +131,59 @@ def _refresh_state(snapshot: _VisionSnapshot | None) -> dict[str, bool]:
 async def _load_config(session: AsyncSession) -> VisionConfig | None:
     """Читает singleton VisionConfig или возвращает None, если строки нет."""
     return await session.scalar(select(VisionConfig).where(VisionConfig.singleton_key == "default"))
+
+
+async def _diagnose_vision_channel(
+    engine: AsyncEngine,
+    meta_api_client: object | None,
+    settings: object,
+    snapshot: _VisionSnapshot | None,
+    maintenance_owner: str = "",
+) -> tuple[_BrowserChannelProbe, VisionChannelAssessment]:
+    """Проверить cloud/profile и затем browser-agent, не раскрывая secrets."""
+
+    has_token = bool(snapshot and (snapshot.x_token_encrypted or "").strip())
+    profile_configured = bool(snapshot and (snapshot.profile_id or "").strip())
+    refresh_state = _refresh_state(snapshot)
+    runtime = None
+    if has_token and profile_configured:
+        try:
+            runtime = await load_vision_runtime_config(engine)
+        except VisionConfigurationError:
+            runtime = None
+
+    cloud_state = None
+    if runtime is not None:
+        try:
+            cloud_state = (
+                await probe_vision_cloud(
+                    settings.vision_cloud_url,  # type: ignore[attr-defined]
+                    token=runtime.x_token,
+                    profile_id=runtime.profile_id,
+                )
+            ).state
+        except Exception as exc:  # noqa: BLE001 - diagnostics must fail closed
+            logger.warning("Vision cloud probe failed: error_type=%s", type(exc).__name__)
+            cloud_state = "unavailable"
+
+    empty_probe = _BrowserChannelProbe("UNKNOWN", None, None, False)
+    browser_probe = empty_probe
+    if cloud_state == "ready" and runtime is not None:
+        browser_probe = await _fenced_settings_probe(
+            engine,
+            meta_api_client,
+            expected_profile_id=runtime.profile_id,
+            maintenance_owner=maintenance_owner,
+        )
+
+    assessment = assess_vision_channel(
+        has_token=has_token,
+        profile_configured=profile_configured,
+        has_cloud_credentials=refresh_state["has_cloud_credentials"],
+        cloud_state=cloud_state,
+        browser_status=browser_probe.status,  # type: ignore[arg-type]
+    )
+    return browser_probe, assessment
 
 
 async def _probe_browser_channel(
@@ -285,26 +343,23 @@ async def get_vision_settings(
     request: Request,
     engine: DepEngine,
     meta_api_client: DepMetaApiClient,
+    settings: DepSettings,
 ) -> VisionSettingsResponse:
     """Возвращает canonical PostgreSQL VisionConfig и browser-agent status."""
     async with AsyncSession(engine) as session:
         config = await _load_config(session)
         snap = _snapshot(config)
 
-    try:
-        runtime = await load_vision_runtime_config(engine)
-    except VisionConfigurationError as exc:
-        probe = _BrowserChannelProbe("UNAVAILABLE", str(exc), None, False)
-    else:
-        probe = await _fenced_settings_probe(
-            engine,
-            meta_api_client,
-            expected_profile_id=runtime.profile_id,
-            maintenance_owner=request.headers.get(
-                "X-FB-Agent-Browser-Maintenance-Owner",
-                "",
-            ),
-        )
+    probe, assessment = await _diagnose_vision_channel(
+        engine,
+        meta_api_client,
+        settings,
+        snap,
+        maintenance_owner=request.headers.get(
+            "X-FB-Agent-Browser-Maintenance-Owner",
+            "",
+        ),
+    )
 
     profile_id: str | None = None
     if snap and snap.profile_id:
@@ -315,8 +370,10 @@ async def get_vision_settings(
         **_refresh_state(snap),
         profile_id=profile_id,
         configuration_revision=snap.updated_at.isoformat() if snap else None,
-        channel_status=probe.status,  # type: ignore[arg-type]
-        channel_message=probe.message,
+        channel_status=assessment.status,
+        channel_reason=assessment.reason,
+        channel_message=assessment.message,
+        channel_next_step=assessment.next_step,
         required_browser_contract_version=BROWSER_CONTRACT_VERSION,
         browser_contract_version=probe.browser_contract_version,
         browser_contract_compatible=probe.browser_contract_compatible,
@@ -332,6 +389,7 @@ async def put_vision_settings(
     body: VisionSettingsUpdateRequest,
     engine: DepEngine,
     meta_api_client: DepMetaApiClient,
+    settings: DepSettings,
 ) -> VisionSettingsResponse:
     """Обновляет token/profile и cloud-креды в VisionConfig singleton.
 
@@ -408,16 +466,12 @@ async def put_vision_settings(
             detail="Vision configuration fence was lost; retry after reconciliation",
         ) from exc
 
-    try:
-        runtime = await load_vision_runtime_config(engine)
-    except VisionConfigurationError as exc:
-        probe = _BrowserChannelProbe("UNAVAILABLE", str(exc), None, False)
-    else:
-        probe = await _fenced_settings_probe(
-            engine,
-            meta_api_client,
-            expected_profile_id=runtime.profile_id,
-        )
+    probe, assessment = await _diagnose_vision_channel(
+        engine,
+        meta_api_client,
+        settings,
+        snap,
+    )
 
     profile_id_val: str | None = None
     if snap and snap.profile_id:
@@ -428,8 +482,10 @@ async def put_vision_settings(
         **_refresh_state(snap),
         profile_id=profile_id_val,
         configuration_revision=snap.updated_at.isoformat() if snap else None,
-        channel_status=probe.status,  # type: ignore[arg-type]
-        channel_message=probe.message,
+        channel_status=assessment.status,
+        channel_reason=assessment.reason,
+        channel_message=assessment.message,
+        channel_next_step=assessment.next_step,
         required_browser_contract_version=BROWSER_CONTRACT_VERSION,
         browser_contract_version=probe.browser_contract_version,
         browser_contract_compatible=probe.browser_contract_compatible,

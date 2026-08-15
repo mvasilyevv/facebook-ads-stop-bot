@@ -4988,8 +4988,25 @@ export interface components {
        * @enum {string}
        */
       channel_status: "READY" | "DEGRADED" | "UNAVAILABLE" | "UNKNOWN";
+      /**
+       * Channel Reason
+       * @default UNKNOWN
+       * @enum {string}
+       */
+      channel_reason:
+        | "TOKEN_MISSING"
+        | "TOKEN_REJECTED"
+        | "CLOUD_CREDENTIALS_MISSING"
+        | "PROFILE_NOT_CONFIGURED"
+        | "PROFILE_NOT_FOUND"
+        | "CLOUD_UNAVAILABLE"
+        | "BROWSER_UNAVAILABLE"
+        | "READY"
+        | "UNKNOWN";
       /** Channel Message */
       channel_message?: string | null;
+      /** Channel Next Step */
+      channel_next_step?: string | null;
       /** Required Browser Contract Version */
       required_browser_contract_version: number;
       /** Browser Contract Version */

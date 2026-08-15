@@ -1,6 +1,6 @@
 /**
  * VisionTab — настройки Vision anti-detect браузера:
- * x_token (скрытый), profile_id, статус CDP, кнопка Reconnect.
+ * x_token/cloud-креды (скрытые), profile_id, статус канала, кнопка Reconnect.
  */
 
 import { useState, useEffect, type FC } from "react";
@@ -21,6 +21,10 @@ export const VisionTab: FC = () => {
 
   const [xToken, setXToken] = useState("");
   const [profileId, setProfileId] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [teamId, setTeamId] = useState("");
+  const [folderId, setFolderId] = useState("");
 
   useEffect(() => {
     if (data) {
@@ -48,13 +52,28 @@ export const VisionTab: FC = () => {
   }
 
   const handleSave = async () => {
-    const patch: { x_token?: string; profile_id?: string | null } = {
+    const patch: {
+      x_token?: string;
+      profile_id?: string | null;
+      username?: string;
+      password?: string;
+      team_id?: string;
+      folder_id?: string;
+    } = {
       profile_id: profileId.trim() || null,
     };
     if (xToken.trim()) patch.x_token = xToken.trim();
+    if (username.trim()) patch.username = username.trim();
+    if (password.trim()) patch.password = password.trim();
+    if (teamId.trim()) patch.team_id = teamId.trim();
+    if (folderId.trim()) patch.folder_id = folderId.trim();
     try {
       await updateMut.mutateAsync(patch);
       setXToken("");
+      setUsername("");
+      setPassword("");
+      setTeamId("");
+      setFolderId("");
       toast.success("Vision-настройки сохранены");
     } catch (e) {
       toast.error("Ошибка сохранения", safeApiProblemMessage(e, "Проверьте настройки Vision"));
@@ -81,8 +100,17 @@ export const VisionTab: FC = () => {
         ? ("warning" as const)
         : channelStatus === "UNAVAILABLE"
           ? ("stop" as const)
-          : ("neutral" as const);
+        : ("neutral" as const);
+  const channelStatusLabel =
+    channelStatus === "READY"
+      ? "Канал готов"
+      : channelStatus === "DEGRADED"
+        ? "Канал деградирован"
+        : channelStatus === "UNAVAILABLE"
+          ? "Канал недоступен"
+          : "Готовность не подтверждена";
   const tokenLabel = data?.has_token ? "Задан" : "Не задан";
+  const credentialLabel = (value: boolean | undefined) => (value ? "Задан" : "Не задан");
 
   return (
     <div className="space-y-5 max-w-xl">
@@ -98,17 +126,40 @@ export const VisionTab: FC = () => {
           <div className="flex items-center justify-between">
             <span className="text-[13px] text-bg-10">Browser channel</span>
             <Badge variant={channelVariant} size="sm">
-              {channelStatus}
+              {channelStatusLabel}
+            </Badge>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-bg-10">Cloud-логин</span>
+            <Badge variant={data?.has_cloud_username ? "success" : "neutral"} size="sm">
+              {credentialLabel(data?.has_cloud_username)}
+            </Badge>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-bg-10">Cloud-пароль</span>
+            <Badge variant={data?.has_cloud_password ? "success" : "neutral"} size="sm">
+              {credentialLabel(data?.has_cloud_password)}
+            </Badge>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-bg-10">Team ID</span>
+            <Badge variant={data?.has_team_id ? "success" : "neutral"} size="sm">
+              {credentialLabel(data?.has_team_id)}
+            </Badge>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-bg-10">Folder ID</span>
+            <Badge variant={data?.has_folder_id ? "success" : "neutral"} size="sm">
+              {credentialLabel(data?.has_folder_id)}
             </Badge>
           </div>
           <div className="mt-1 text-[13px] leading-5 text-bg-8">
-            {channelStatus === "READY"
-              ? "Browser channel и контракт подтверждены."
-              : channelStatus === "DEGRADED"
-                ? "Канал отвечает, но не готов к операциям. Проверьте профиль и переподключение."
-                : channelStatus === "UNAVAILABLE"
-                  ? "Browser channel недоступен. Переподключение безопасно повторить вручную."
-                  : "Готовность канала не подтверждена. Денежные операции не считаются доступными."}
+            <p className="m-0">
+              {data?.channel_message ?? "Готовность канала Vision не подтверждена."}
+            </p>
+            {data?.channel_next_step ? (
+              <p className="m-0 mt-1">Следующий шаг: {data.channel_next_step}</p>
+            ) : null}
           </div>
         </div>
 
@@ -124,7 +175,7 @@ export const VisionTab: FC = () => {
         </div>
       </Card>
 
-      {/* Токен + Profile ID */}
+      {/* Токен, профиль и cloud-креды */}
       <Card eyebrow="Конфигурация" padded>
         <div className="space-y-4">
           <Input
@@ -144,6 +195,50 @@ export const VisionTab: FC = () => {
             placeholder="Идентификатор профиля Vision"
             value={profileId}
             onChange={(e) => setProfileId(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <div className="border-t border-[var(--color-hairline)] pt-4">
+            <p className="m-0 text-[13px] font-medium text-bg-10">Cloud-креды Vision</p>
+            <p className="m-0 mt-1 text-[12px] leading-5 text-bg-8">
+              Нужны для автоматического обновления токена. Сохранённые значения сервер не
+              возвращает.
+            </p>
+          </div>
+          <Input
+            id="vision-cloud-username"
+            label="Логин"
+            placeholder="Логин Vision"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <Input
+            id="vision-cloud-password"
+            label="Пароль"
+            type="password"
+            placeholder="Пароль Vision (оставьте пустым чтобы не менять)"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="new-password"
+            spellCheck={false}
+          />
+          <Input
+            id="vision-team-id"
+            label="Team ID"
+            placeholder="Необязательно"
+            value={teamId}
+            onChange={(e) => setTeamId(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <Input
+            id="vision-folder-id"
+            label="Folder ID"
+            placeholder="Необязательно"
+            value={folderId}
+            onChange={(e) => setFolderId(e.target.value)}
             autoComplete="off"
             spellCheck={false}
           />

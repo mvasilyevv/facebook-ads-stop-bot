@@ -16,6 +16,21 @@ from sqlalchemy import text
 
 from apps.api.deps import get_engine, get_meta_api_client
 from apps.api.main import create_app
+from core.vision.cloud_probe import VisionCloudProbe
+
+
+@pytest.fixture(autouse=True)
+def no_external_vision_cloud_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Интеграционный suite не должен обращаться в облако Vision."""
+
+    async def fake_probe(*_args: object, **_kwargs: object) -> VisionCloudProbe:
+        return VisionCloudProbe("ready")
+
+    monkeypatch.setattr(
+        "apps.api.routers.v1.settings_vision.probe_vision_cloud",
+        fake_probe,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -69,7 +84,9 @@ async def test_get_vision_no_config_returns_defaults(app_client) -> None:
     assert "token_source" not in data
     assert data["profile_id"] is None
     assert data["channel_status"] == "UNAVAILABLE"
-    assert data["channel_message"] == "Vision is not configured in PostgreSQL"
+    assert data["channel_reason"] == "TOKEN_MISSING"
+    assert data["channel_message"] == "Токен Vision не задан."
+    assert data["channel_next_step"] == "Введите X-Token и сохраните настройки."
     assert data["browser_contract_version"] is None
     assert data["browser_contract_compatible"] is False
 
@@ -227,8 +244,8 @@ async def test_get_vision_rejects_incompatible_browser_contract(pg_engine) -> No
     assert payload["required_browser_contract_version"] == 5
     assert payload["browser_contract_version"] == 4
     assert payload["browser_contract_compatible"] is False
-    assert "incompatible" in payload["channel_message"]
-    assert "required=5, observed=4" in payload["channel_message"]
+    assert payload["channel_reason"] == "BROWSER_UNAVAILABLE"
+    assert "рабочий браузерный канал" in payload["channel_message"]
 
     async with pg_engine.begin() as conn:
         await conn.execute(text("DELETE FROM vision_config"))
@@ -245,7 +262,7 @@ async def test_get_vision_rejects_incompatible_browser_contract(pg_engine) -> No
                 "probe_performed": True,
                 "probe_ok": True,
             },
-            "does not match",
+            "рабочий браузерный канал",
         ),
         (
             {
@@ -254,7 +271,7 @@ async def test_get_vision_rejects_incompatible_browser_contract(pg_engine) -> No
                 "probe_performed": False,
                 "probe_ok": False,
             },
-            "did not perform",
+            "рабочий браузерный канал",
         ),
     ],
 )
