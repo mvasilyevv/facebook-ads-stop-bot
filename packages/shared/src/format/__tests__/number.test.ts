@@ -1,11 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
+  compareDecimalStrings,
+  formatDecimalPercent,
+  formatDecimalValue,
   formatSpend,
   formatSpendPerUnit,
   formatCompact,
   formatInt,
   formatPercent,
   formatPercentValue,
+  isDecimalString,
   isSupportedCurrencyCode,
 } from "../number";
 
@@ -161,5 +165,66 @@ describe("formatPercentValue", () => {
   // Пустая строка → "—"
   it("пустая строка → —", () => {
     expect(formatPercentValue("")).toBe("—");
+  });
+});
+
+describe("isDecimalString", () => {
+  it("принимает только точные десятичные строки контракта", () => {
+    expect(isDecimalString("85.40")).toBe(true);
+    expect(isDecimalString("-3")).toBe(true);
+    expect(isDecimalString("1e3")).toBe(false);
+    expect(isDecimalString("")).toBe(false);
+    expect(isDecimalString(85.4)).toBe(false);
+    expect(isDecimalString(null)).toBe(false);
+  });
+});
+
+describe("compareDecimalStrings", () => {
+  it("сравнивает разные масштабы без потери хвоста", () => {
+    expect(compareDecimalStrings("99.999999999999996", "100")).toBe(-1);
+    expect(compareDecimalStrings("100", "99.999999999999996")).toBe(1);
+    expect(compareDecimalStrings("85.40", "85.4")).toBe(0);
+  });
+
+  it("сохраняет порядок за пределами Number.MAX_SAFE_INTEGER", () => {
+    expect(
+      compareDecimalStrings("9007199254740993.01", "9007199254740993.02"),
+    ).toBe(-1);
+  });
+
+  it("учитывает знак", () => {
+    expect(compareDecimalStrings("-1.5", "0")).toBe(-1);
+    expect(compareDecimalStrings("-1.5", "-2.5")).toBe(1);
+  });
+});
+
+describe("formatDecimalPercent", () => {
+  it("усекает долю вместо округления вверх", () => {
+    expect(formatDecimalPercent("85.40")).toBe("85.4%");
+    expect(formatDecimalPercent("99.99")).toBe("99.9%");
+    expect(formatDecimalPercent("100.00")).toBe("100%");
+  });
+
+  it("оставляет прочерк для неизвестного значения", () => {
+    expect(formatDecimalPercent(null)).toBe("—");
+    expect(formatDecimalPercent("")).toBe("—");
+    expect(formatDecimalPercent("много")).toBe("—");
+  });
+
+  it("не подменяет подтверждённый ноль прочерком", () => {
+    expect(formatDecimalPercent("0.00")).toBe("0%");
+  });
+});
+
+describe("formatDecimalValue", () => {
+  it("усекает хвост и убирает незначащие нули", () => {
+    expect(formatDecimalValue("1.234567")).toBe("1.23");
+    expect(formatDecimalValue("3.000")).toBe("3");
+    expect(formatDecimalValue("2.5", 0)).toBe("2");
+  });
+
+  it("оставляет прочерк для неизвестного значения", () => {
+    expect(formatDecimalValue(null)).toBe("—");
+    expect(formatDecimalValue("0")).toBe("0");
   });
 });

@@ -313,9 +313,19 @@ export function snapshotForRealtimeState(
   if (realtimeConnected) {
     const actions = actionSectionForDataState(snapshot.actions);
     const portfolio = portfolioSectionForDataState(snapshot.portfolio);
-    return actions === snapshot.actions && portfolio === snapshot.portfolio
+    const approachingStop = approachingStopSectionForDataState(
+      snapshot.approaching_stop,
+    );
+    return actions === snapshot.actions &&
+      portfolio === snapshot.portfolio &&
+      approachingStop === snapshot.approaching_stop
       ? snapshot
-      : { ...snapshot, actions, portfolio };
+      : {
+          ...snapshot,
+          actions,
+          portfolio,
+          approaching_stop: approachingStop,
+        };
   }
 
   const staleSection = <T extends OperatorSection<unknown>>(section: T): T => {
@@ -336,15 +346,40 @@ export function snapshotForRealtimeState(
   const portfolio = portfolioSectionForDataState(
     staleSection(snapshot.portfolio),
   );
+  const approachingStop = approachingStopSectionForDataState(
+    staleSection(snapshot.approaching_stop),
+  );
   return {
     ...snapshot,
     attention: staleSection(snapshot.attention),
+    approaching_stop: approachingStop,
     portfolio,
     economy: staleSection(snapshot.economy),
     funnel: staleSection(snapshot.funnel),
     actions,
     system: staleSection(snapshot.system),
   };
+}
+
+/**
+ * Близость к стопу подчиняется тем же правилам, что и каталог объявлений:
+ * потерявшая свежесть строка не имеет права сохранять кэшированные «85% до
+ * стопа», иначе устаревшая оценка риска повлияет на денежное решение.
+ */
+function approachingStopSectionForDataState(
+  section: OperatorSnapshot["approaching_stop"],
+): OperatorSnapshot["approaching_stop"] {
+  if (!section.data) return section;
+  const items = section.data.items.map((item) =>
+    adRowForDataState(
+      item,
+      rowStateForCollection(item.data_state, section.state),
+    ),
+  );
+  if (items.every((item, index) => item === section.data?.items[index])) {
+    return section;
+  }
+  return { ...section, data: { ...section.data, items } };
 }
 
 function portfolioSectionForDataState(

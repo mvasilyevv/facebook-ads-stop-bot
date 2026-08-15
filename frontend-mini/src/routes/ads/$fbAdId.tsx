@@ -4,16 +4,21 @@ import {
   formatZonedDateTime,
   timezoneEvidenceLabel,
 } from "@fb/shared/format/time";
-import { formatSpend } from "@fb/shared/format/number";
+import { formatDecimalValue, formatSpend } from "@fb/shared/format/number";
 import {
   confirmedOperatorCurrency,
   formatOperatorCount,
 } from "@fb/shared/operator/adsViewModel";
+import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import {
   adsForRealtimeState,
   severityForDataState,
 } from "@fb/shared/operator/viewModel";
-import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
+import {
+  DataStateBadge,
+  DataStateNotice,
+  StopProximityReadout,
+} from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import { EmptyState, ErrorState, Skeleton } from "@/components/ui";
@@ -131,6 +136,23 @@ export function MiniAdDetail({ fbAdId }: { fbAdId: string }) {
 
         <section
           className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-4"
+          aria-labelledby="mini-ad-stop-proximity"
+        >
+          <h2
+            id="mini-ad-stop-proximity"
+            className="m-0 font-display text-[18px] text-bg-11"
+          >
+            До стопа
+          </h2>
+          <div className="mt-4">
+            <StopProximityReadout
+              proximity={describeStopProximity(ad.rule_context, { currency })}
+            />
+          </div>
+        </section>
+
+        <section
+          className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-4"
           aria-labelledby="mini-ad-metrics"
         >
           <h2
@@ -165,6 +187,14 @@ export function MiniAdDetail({ fbAdId }: { fbAdId: string }) {
             <Metric
               label="Цена рег."
               value={formatSpend(ad.metrics.cost_per_registration, currency)}
+            />
+            <Metric
+              label="Цена деп."
+              value={formatSpend(ad.metrics.cost_per_ftd, currency)}
+            />
+            <Metric
+              label="Частота"
+              value={formatDecimalValue(ad.metrics.frequency)}
             />
           </dl>
         </section>

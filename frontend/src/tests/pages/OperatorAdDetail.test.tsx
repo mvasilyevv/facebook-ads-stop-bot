@@ -64,15 +64,17 @@ function makeAd(overrides: Partial<OperatorAdRow> = {}): OperatorAdRow {
       confirmed_deposits: 0,
       cpc: "42.10",
       cost_per_registration: null,
-      frequency: null,
-      cost_per_ftd: null,
-    },    rule_context: {
+      frequency: "2.4567",
+      cost_per_ftd: "178.24",
+    },
+    // Доля до стопа приходит в процентных единицах: 0.41 из 0.48 — это 85.41%.
+    rule_context: {
       offer_code: "GH_CR2",
       rule_code: "cpr_stop",
-      rule_title: "Цена регистрации",
+      rule_title: "Дорогая рега",
       value: "0.41",
       threshold: "0.48",
-      percent_to_stop: "0.854",
+      percent_to_stop: "85.41",
       stage: "warning",
     },
     active_action: null,
@@ -168,6 +170,77 @@ describe("typed operator ad detail", () => {
 
     expect(screen.getByText("Депозиты").parentElement).toHaveTextContent("0");
     expect(screen.getByText("Цена регистрации").parentElement).toHaveTextContent("—");
+  });
+
+  it("shows frequency and deposit cost with the same unknown semantics", () => {
+    renderDetail();
+
+    expect(screen.getByText("Частота").parentElement).toHaveTextContent("2.45");
+    expect(screen.getByText("Цена депозита").parentElement).toHaveTextContent("$178.24");
+
+    mockAds(
+      response([makeAd({ metrics: { ...makeAd().metrics, frequency: null, cost_per_ftd: null } })]),
+    );
+    renderDetail();
+
+    expect(screen.getAllByText("Частота")[1]!.parentElement).toHaveTextContent("—");
+    expect(screen.getAllByText("Цена депозита")[1]!.parentElement).toHaveTextContent("—");
+  });
+
+  it("shows the rule threshold and the distance to stop on the card", () => {
+    renderDetail();
+
+    const section = screen.getByRole("region", { name: "До стопа" });
+    expect(within(section).getByText("Подходит к стопу")).toBeInTheDocument();
+    expect(within(section).getByText("85.4%")).toBeInTheDocument();
+    expect(within(section).getByText("Дорогая рега · $0.41 из $0.48")).toBeInTheDocument();
+  });
+
+  it("keeps an unconfirmed rule context as a dash instead of zero percent", () => {
+    mockAds(
+      response([
+        makeAd({
+          rule_context: {
+            offer_code: null,
+            rule_code: null,
+            rule_title: null,
+            value: null,
+            threshold: null,
+            percent_to_stop: null,
+            stage: null,
+          },
+        }),
+      ]),
+    );
+    renderDetail();
+
+    const section = screen.getByRole("region", { name: "До стопа" });
+    expect(within(section).getByText("Не подтверждено")).toBeInTheDocument();
+    expect(within(section).getByText("—")).toBeInTheDocument();
+    expect(section).not.toHaveTextContent("0%");
+  });
+
+  it("says explicitly that an unmatched ad is not protected by the rule", () => {
+    mockAds(
+      response([
+        makeAd({
+          rule_context: {
+            offer_code: null,
+            rule_code: null,
+            rule_title: null,
+            value: null,
+            threshold: null,
+            percent_to_stop: null,
+            stage: "none",
+          },
+        }),
+      ]),
+    );
+    renderDetail();
+
+    const section = screen.getByRole("region", { name: "До стопа" });
+    expect(within(section).getByText("Правило не применяется")).toBeInTheDocument();
+    expect(section).toHaveTextContent("авто-стоп его не остановит");
   });
 
   it("keeps timezone evidence but hides money for a non-USD scope", () => {

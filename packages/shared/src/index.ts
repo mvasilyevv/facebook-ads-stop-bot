@@ -14,6 +14,7 @@ export * from "./api/types";
 export * from "./operator/contracts";
 export * from "./operator/chartModel";
 export * from "./operator/commandIntent";
+export * from "./operator/stopProximity";
 export * from "./operator/viewModel";
 
 // ─── Константы правил / мутаций ───────────────────────────────────────────────

@@ -123,6 +123,83 @@ export function formatPercentValue(
   return `${n.toFixed(1)}%`;
 }
 
+/** Строка ли это точное десятичное число контракта (без экспоненты и пробелов). */
+export function isDecimalString(value: unknown): value is string {
+  return typeof value === "string" && DECIMAL.test(value.trim());
+}
+
+/**
+ * Сравнение двух decimal-строк без промежуточного Number.
+ *
+ * Порядок близости к стопу — денежное решение, а float ломает его на хвостах
+ * («99.999999999999996» против «100»). Обе строки обязаны быть валидными;
+ * проверяй их `isDecimalString` до вызова.
+ */
+export function compareDecimalStrings(left: string, right: string): number {
+  const scale = Math.max(fractionLength(left), fractionLength(right));
+  const scaledLeft = decimalToScaledBigInt(left, scale);
+  const scaledRight = decimalToScaledBigInt(right, scale);
+  if (scaledLeft === null || scaledRight === null) return 0;
+  if (scaledLeft === scaledRight) return 0;
+  return scaledLeft < scaledRight ? -1 : 1;
+}
+
+/**
+ * Decimal-строка как значение метрики: "1.234567" → "1.23".
+ *
+ * Хвост усекается, а не округляется: показанное значение всегда не больше
+ * подтверждённого сервером. `null` остаётся прочерком, а не нулём.
+ */
+export function formatDecimalValue(
+  value: string | null | undefined,
+  fractionDigits = 2,
+): string {
+  const truncated = truncateDecimalString(value, fractionDigits);
+  return truncated ?? "—";
+}
+
+/**
+ * Процент, пришедший decimal-строкой в процентных единицах: "85.40" → "85.4%".
+ *
+ * Усечение вместо округления выбрано сознательно: «99.99%» не должно
+ * превратиться в «100%» и прочитаться как уже сработавший стоп.
+ */
+export function formatDecimalPercent(
+  value: string | null | undefined,
+  fractionDigits = 1,
+): string {
+  const truncated = truncateDecimalString(value, fractionDigits);
+  return truncated === null ? "—" : `${truncated}%`;
+}
+
+function truncateDecimalString(
+  value: string | null | undefined,
+  fractionDigits: number,
+): string | null {
+  if (!isDecimalString(value)) return null;
+  const normalized = value.trim();
+  const [whole, fraction = ""] = normalized.split(".");
+  const kept = fraction
+    .slice(0, Math.max(0, fractionDigits))
+    .replace(/0+$/, "");
+  return kept ? `${whole}.${kept}` : (whole ?? normalized);
+}
+
+function fractionLength(value: string): number {
+  const index = value.trim().indexOf(".");
+  return index === -1 ? 0 : value.trim().length - index - 1;
+}
+
+function decimalToScaledBigInt(value: string, scale: number): bigint | null {
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
+  if (!match) return null;
+  const integerDigits = match[2];
+  if (integerDigits === undefined) return null;
+  const fractionDigits = (match[3] ?? "").padEnd(scale, "0").slice(0, scale);
+  const scaled = BigInt(`${integerDigits}${fractionDigits}`);
+  return match[1] === "-" ? -scaled : scaled;
+}
+
 function formatExactNumber(
   formatter: Intl.NumberFormat,
   value: number | string,

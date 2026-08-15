@@ -125,6 +125,7 @@
   grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.72fr);
   grid-template-areas:
     "portfolio attention"
+    "approaching approaching"
     "funnel actions";
   gap: 20px 22px;
   margin-top: 20px;
@@ -165,6 +166,10 @@
 
 .ledger-section--attention {
   grid-area: attention;
+}
+
+.ledger-section--approaching {
+  grid-area: approaching;
 }
 
 .ledger-section--funnel {
@@ -497,10 +502,52 @@
 
 .ledger-attention-list,
 .ledger-action-list,
+.ledger-approaching-list,
 .ledger-funnel {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.ledger-approaching-item {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.ledger-approaching-item:last-child {
+  border-bottom: 0;
+}
+
+.ledger-approaching-item__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ledger-approaching-item__head a {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-bg-11);
+  font-family: var(--font-display);
+  font-size: 15px;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-approaching-item__head a:hover {
+  color: var(--color-accent);
+}
+
+.ledger-approaching-item__meta {
+  overflow: hidden;
+  color: var(--color-bg-9);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ledger-attention-item {
@@ -717,6 +764,7 @@
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
       "attention"
+      "approaching"
       "portfolio"
       "actions"
       "funnel";

@@ -5,11 +5,13 @@ import { ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
 import type { OperatorSeverity } from "@fb/shared/operator/contracts";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import {
+  operatorAdsQuerySort,
   operatorCabinetOptions,
   parseOperatorAdsRouteSearch,
+  OPERATOR_ADS_STOP_PROXIMITY_SORT,
   type OperatorAdsDirection,
   type OperatorAdsRouteSearch,
-  type OperatorAdsSort,
+  type OperatorAdsRouteSort,
   type OperatorCabinetOption,
 } from "@fb/shared/operator/routeFilters";
 import { adsForRealtimeState } from "@fb/shared/operator/viewModel";
@@ -33,7 +35,8 @@ const SEVERITIES: Array<{ value: OperatorSeverity | ""; label: string }> = [
   { value: "unknown", label: "Неизвестно" },
 ];
 
-const SORTS: Array<{ value: OperatorAdsSort; label: string }> = [
+const SORTS: Array<{ value: OperatorAdsRouteSort; label: string }> = [
+  { value: OPERATOR_ADS_STOP_PROXIMITY_SORT, label: "Близость к стопу" },
   { value: "updated", label: "Обновление" },
   { value: "spend", label: "Расход" },
   { value: "clicks", label: "Клики" },
@@ -61,7 +64,7 @@ function AdsPage() {
     search: search.q,
     account_id: search.account_id,
     severity: search.severity,
-    sort: search.sort ?? "updated",
+    sort: operatorAdsQuerySort(search.sort),
     direction: search.direction ?? "desc",
     page,
     page_size: 50,
@@ -71,6 +74,8 @@ function AdsPage() {
     ? adsForRealtimeState(payload, realtimeStatus === "connected" && !query.isError)
     : null;
   const displayState = displayPayload?.state;
+  // Порядок задаёт сервер, включая сортировку по близости к стопу: клиент
+  // видит только текущую страницу и переупорядочивать её не должен.
   const displayRows = displayPayload?.rows;
   const currency = confirmedOperatorCurrency(displayPayload?.scope);
   const hasConfirmedCount = displayState === "ready" || displayState === "empty";
@@ -180,6 +185,7 @@ function AdsPage() {
           <DataStateNotice state={displayState} issues={displayPayload.issues} />
         </div>
       ) : null}
+
 
       <section className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-3 sm:p-4">
         {query.isPending && !payload ? (
@@ -335,7 +341,7 @@ function AdsFilterFields({
       <Select
         label="Сортировка"
         value={search.sort ?? "updated"}
-        onChange={(value) => onChange({ sort: value as OperatorAdsSort, page: undefined })}
+        onChange={(value) => onChange({ sort: value as OperatorAdsRouteSort, page: undefined })}
       >
         {SORTS.map((item) => (
           <option key={item.value} value={item.value}>

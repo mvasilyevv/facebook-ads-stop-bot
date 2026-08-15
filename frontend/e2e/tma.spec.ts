@@ -22,8 +22,17 @@ test("@tma initializes always-dark shell and applies every Telegram safe area", 
     }),
   ).toHaveCount(0);
 
+  // Порядок — это продуктовый инвариант, а не деталь вёрстки: сверху то, что
+  // требует решения сейчас, следом — что подходит к стопу, и только потом
+  // сводки. Деньги первыми, отчётность после.
   const sectionOrder = await page.locator(".mini-ledger-section > header h2").allTextContents();
-  expect(sectionOrder).toEqual(["Требует внимания", "Портфель", "Действия", "Воронка"]);
+  expect(sectionOrder).toEqual([
+    "Требует внимания",
+    "Подходят к стопу",
+    "Портфель",
+    "Действия",
+    "Воронка",
+  ]);
 
   const shell = await page.locator("main").evaluate((node) => {
     const style = getComputedStyle(node);

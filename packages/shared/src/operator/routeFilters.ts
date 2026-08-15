@@ -8,11 +8,22 @@ import type {
 export type OperatorAdsSort = NonNullable<OperatorAdsQuery["sort"]>;
 export type OperatorAdsDirection = NonNullable<OperatorAdsQuery["direction"]>;
 
+/**
+ * Близость к стопу — сортировка уровня маршрута: `/api/operator/ads` её не
+ * принимает, поэтому порядок считает клиент по уже полученной странице.
+ * Значение живёт в URL наравне с серверными сортировками.
+ */
+export const OPERATOR_ADS_STOP_PROXIMITY_SORT = "stop_proximity";
+
+export type OperatorAdsRouteSort =
+  | OperatorAdsSort
+  | typeof OPERATOR_ADS_STOP_PROXIMITY_SORT;
+
 export interface OperatorAdsRouteSearch {
   q?: string;
   account_id?: string;
   severity?: OperatorSeverity;
-  sort?: OperatorAdsSort;
+  sort?: OperatorAdsRouteSort;
   direction?: OperatorAdsDirection;
   page?: number;
 }
@@ -52,6 +63,37 @@ const AD_SORTS = new Set<OperatorAdsSort>([
   "updated",
 ]);
 
+const AD_ROUTE_SORTS = new Set<OperatorAdsRouteSort>([
+  ...AD_SORTS,
+  OPERATOR_ADS_STOP_PROXIMITY_SORT,
+]);
+
+/** Серверная сортировка, которой соответствует выбор в URL. */
+export function operatorAdsQuerySort(
+  sort: OperatorAdsRouteSort | undefined,
+): OperatorAdsSort {
+  // Близость к стопу считает БД: клиентское ранжирование видело только текущую
+  // страницу, а самое опасное объявление могло лежать на следующей. В URL
+  // остаётся читаемое stop_proximity, серверу уходит его ключ сортировки.
+  if (sort === OPERATOR_ADS_STOP_PROXIMITY_SORT) {
+    return "percent_to_stop";
+  }
+  return sort && AD_SORTS.has(sort as OperatorAdsSort)
+    ? (sort as OperatorAdsSort)
+    : "updated";
+}
+
+/**
+ * Считает ли порядок клиент, а не сервер (важно для страничной выборки).
+ * Сейчас все сортировки серверные; функция оставлена как явная точка контроля,
+ * чтобы страничная выборка не начала молча ранжироваться в браузере.
+ */
+export function isClientRankedAdsSort(
+  _sort: OperatorAdsRouteSort | undefined,
+): boolean {
+  return false;
+}
+
 export function parseOperatorAdsRouteSearch(
   raw: Record<string, unknown>,
 ): OperatorAdsRouteSearch {
@@ -59,7 +101,7 @@ export function parseOperatorAdsRouteSearch(
     q: boundedText(raw.q, 200),
     account_id: boundedText(raw.account_id, 64),
     severity: setMember(raw.severity, AD_SEVERITIES),
-    sort: setMember(raw.sort, AD_SORTS),
+    sort: setMember(raw.sort, AD_ROUTE_SORTS),
     direction:
       raw.direction === "asc" || raw.direction === "desc"
         ? raw.direction

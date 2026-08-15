@@ -81,15 +81,17 @@ function makeAd(id: string, overrides: Partial<OperatorAdRow> = {}): OperatorAdR
       confirmed_deposits: 0,
       cpc: null,
       cost_per_registration: null,
-      frequency: null,
+      frequency: "1.84",
       cost_per_ftd: null,
-    },    rule_context: {
+    },
+    // Доля до стопа приходит в процентных единицах: 0.41 из 0.48 — это 85.41%.
+    rule_context: {
       offer_code: "GH_CR2",
       rule_code: "cpr_stop",
-      rule_title: "Цена регистрации",
+      rule_title: "Дорогая рега",
       value: "0.41",
       threshold: "0.48",
-      percent_to_stop: "0.854",
+      percent_to_stop: "85.41",
       stage: "warning",
     },
     active_action: null,
@@ -202,6 +204,140 @@ describe("typed operator ads page", () => {
       page_size: 50,
     } satisfies OperatorAdsQuery);
     expect(screen.getByText("Страница 3 из 5")).toBeInTheDocument();
+  });
+
+  it("shows the rule, its threshold and the distance to stop in the list", () => {
+    renderPage();
+
+    const tableRow = within(screen.getByRole("table")).getByText("Объявление 111").closest("tr")!;
+    expect(within(tableRow).getByText("Подходит к стопу")).toBeInTheDocument();
+    expect(within(tableRow).getByText("85.4%")).toBeInTheDocument();
+    expect(within(tableRow).getByText("Дорогая рега · $0.41 из $0.48")).toBeInTheDocument();
+  });
+
+  it("keeps warning and stop distinguishable without colour", () => {
+    setQuery(
+      response([
+        makeAd("111"),
+        makeAd("222", {
+          rule_context: {
+            offer_code: "GH_CR2",
+            rule_code: "cpr_stop",
+            rule_title: "Дорогая рега",
+            value: "0.52",
+            threshold: "0.48",
+            percent_to_stop: "108.33",
+            stage: "stop",
+          },
+        }),
+      ]),
+    );
+    renderPage();
+
+    const table = screen.getByRole("table");
+    const warningRow = within(table).getByText("Объявление 111").closest("tr")!;
+    const stopRow = within(table).getByText("Объявление 222").closest("tr")!;
+    const warningBadge = within(warningRow)
+      .getByText("Подходит к стопу")
+      .closest(".operator-stop-proximity")!;
+    const stopBadge = within(stopRow)
+      .getByText("Порог пройден")
+      .closest(".operator-stop-proximity")!;
+
+    // Разными обязаны быть форма и текст, а не только тон: цвет может быть
+    // недоступен в ч/б, forced-colors и при дальтонизме.
+    expect(warningBadge.getAttribute("data-shape")).not.toBe(stopBadge.getAttribute("data-shape"));
+    expect(warningBadge.getAttribute("data-stage")).toBe("warning");
+    expect(stopBadge.getAttribute("data-stage")).toBe("stop");
+    expect(warningBadge).toHaveTextContent("▲");
+    expect(stopBadge).toHaveTextContent("■");
+  });
+
+  it("renders an unconfirmed rule context as a dash instead of zero percent", () => {
+    setQuery(
+      response([
+        makeAd("111", {
+          rule_context: {
+            offer_code: null,
+            rule_code: null,
+            rule_title: null,
+            value: null,
+            threshold: null,
+            percent_to_stop: null,
+            stage: null,
+          },
+        }),
+      ]),
+    );
+    renderPage();
+
+    const tableRow = within(screen.getByRole("table")).getByText("Объявление 111").closest("tr")!;
+    expect(within(tableRow).getByText("Не подтверждено")).toBeInTheDocument();
+    expect(tableRow).not.toHaveTextContent("0%");
+    expect(tableRow).not.toHaveTextContent("В пределах порога");
+  });
+
+  it("marks an ad without a matched offer as unprotected by the rule", () => {
+    setQuery(
+      response([
+        makeAd("111", {
+          rule_context: {
+            offer_code: null,
+            rule_code: null,
+            rule_title: null,
+            value: null,
+            threshold: null,
+            percent_to_stop: null,
+            stage: "none",
+          },
+        }),
+      ]),
+    );
+    renderPage();
+
+    const tableRow = within(screen.getByRole("table")).getByText("Объявление 111").closest("tr")!;
+    expect(within(tableRow).getByText("Правило не применяется")).toBeInTheDocument();
+    expect(
+      within(tableRow).getByText(/авто-стоп его не остановит/, { exact: false }),
+    ).toBeInTheDocument();
+  });
+
+  it("ranks rows by stop proximity without asking the server for an unsupported sort", () => {
+    routeSearch = { sort: "stop_proximity" };
+    setQuery(
+      response([
+        makeAd("111", {
+          rule_context: { ...makeAd("111").rule_context, percent_to_stop: "41.00" },
+        }),
+        makeAd("222", {
+          rule_context: { ...makeAd("222").rule_context, percent_to_stop: "97.10" },
+        }),
+        makeAd("333", {
+          rule_context: {
+            offer_code: null,
+            rule_code: null,
+            rule_title: null,
+            value: null,
+            threshold: null,
+            percent_to_stop: null,
+            stage: null,
+          },
+        }),
+      ]),
+    );
+    renderPage();
+
+    // Порядок считает БД: клиент видит только текущую страницу, и самое
+    // опасное объявление может лежать на следующей.
+    expect(useOperatorAds).toHaveBeenCalledWith(
+      expect.objectContaining({ sort: "percent_to_stop" }) as unknown as OperatorAdsQuery,
+    );
+    const names = within(screen.getByRole("table"))
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => within(row).getByText(/Объявление \d+/).textContent);
+    // Ответ сервера отрисовывается как есть, без переупорядочивания в браузере.
+    expect(names).toEqual(["Объявление 111", "Объявление 222", "Объявление 333"]);
   });
 
   it("uses one row view-model for desktop and mobile without changing zero into unknown", () => {
@@ -402,7 +538,10 @@ describe("typed operator ads page", () => {
     expect(screen.queryByRole("button", { name: /Отключить|Включить/ })).not.toBeInTheDocument();
     const tableRow = within(screen.getByRole("table")).getByText("Объявление 111").closest("tr");
     expect(tableRow).not.toBeNull();
-    expect(within(tableRow as HTMLElement).getAllByText("—")).toHaveLength(4);
+    // Четыре метрики плюс доля до стопа: кэшированные «85.4%» на строке без
+    // подтверждённых данных выглядели бы как актуальная оценка риска.
+    expect(within(tableRow as HTMLElement).getAllByText("—")).toHaveLength(5);
+    expect(within(tableRow as HTMLElement).getByText("Не подтверждено")).toBeInTheDocument();
     expect(tableRow).not.toHaveTextContent("12,50");
   });
 

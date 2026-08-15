@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -94,16 +94,17 @@ function makeAd(overrides: Partial<OperatorAdRow> = {}): OperatorAdRow {
       confirmed_deposits: 0,
       cpc: "1.20",
       cost_per_registration: null,
-      frequency: null,
-      cost_per_ftd: null,
+      frequency: "1.8412",
+      cost_per_ftd: "30.10",
     },
+    // Доля до стопа приходит в процентных единицах: 0.41 из 0.48 — это 85.41%.
     rule_context: {
       offer_code: "GH_CR2",
       rule_code: "cpr_stop",
-      rule_title: "Цена регистрации",
+      rule_title: "Дорогая рега",
       value: "0.41",
       threshold: "0.48",
-      percent_to_stop: "0.854",
+      percent_to_stop: "85.41",
       stage: "warning",
     },
     active_action: null,
@@ -218,6 +219,118 @@ describe("TMA typed operator ad detail", () => {
     expect(screen.getByText("Часовой пояс").parentElement).toHaveTextContent(
       "Europe/Kaliningrad",
     );
+  });
+
+  it("shows the rule, its threshold and the distance to stop on the card", () => {
+    renderDetail();
+
+    const section = screen.getByRole("region", { name: "До стопа" });
+    expect(within(section).getByText("Подходит к стопу")).toBeInTheDocument();
+    expect(within(section).getByText("85.4%")).toBeInTheDocument();
+    expect(
+      within(section).getByText("Дорогая рега · $0.41 из $0.48"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps warning and stop distinguishable without colour", () => {
+    renderDetail();
+    const warningBadge = screen
+      .getByText("Подходит к стопу")
+      .closest(".operator-stop-proximity")!;
+
+    adsData = operatorAdsResponse(
+      makeAd({
+        rule_context: {
+          offer_code: "GH_CR2",
+          rule_code: "cpr_stop",
+          rule_title: "Дорогая рега",
+          value: "0.52",
+          threshold: "0.48",
+          percent_to_stop: "108.33",
+          stage: "stop",
+        },
+      }),
+    );
+    renderDetail();
+    const stopBadge = screen
+      .getByText("Порог пройден")
+      .closest(".operator-stop-proximity")!;
+
+    expect(warningBadge.getAttribute("data-shape")).not.toBe(
+      stopBadge.getAttribute("data-shape"),
+    );
+    expect(warningBadge).toHaveTextContent("▲");
+    expect(stopBadge).toHaveTextContent("■");
+  });
+
+  it("renders an unconfirmed rule context as a dash instead of zero percent", () => {
+    adsData = operatorAdsResponse(
+      makeAd({
+        rule_context: {
+          offer_code: null,
+          rule_code: null,
+          rule_title: null,
+          value: null,
+          threshold: null,
+          percent_to_stop: null,
+          stage: null,
+        },
+      }),
+    );
+
+    renderDetail();
+
+    const section = screen.getByRole("region", { name: "До стопа" });
+    expect(within(section).getByText("Не подтверждено")).toBeInTheDocument();
+    expect(within(section).getByText("—")).toBeInTheDocument();
+    expect(section).not.toHaveTextContent("0%");
+  });
+
+  it("says explicitly that an unmatched ad is not protected by the rule", () => {
+    adsData = operatorAdsResponse(
+      makeAd({
+        rule_context: {
+          offer_code: null,
+          rule_code: null,
+          rule_title: null,
+          value: null,
+          threshold: null,
+          percent_to_stop: null,
+          stage: "none",
+        },
+      }),
+    );
+
+    renderDetail();
+
+    const section = screen.getByRole("region", { name: "До стопа" });
+    expect(
+      within(section).getByText("Правило не применяется"),
+    ).toBeInTheDocument();
+    expect(section).toHaveTextContent("авто-стоп его не остановит");
+  });
+
+  it("shows frequency and deposit cost with the same unknown semantics", () => {
+    renderDetail();
+
+    expect(screen.getByText("Частота").parentElement).toHaveTextContent("1.84");
+    expect(screen.getByText("Цена деп.").parentElement).toHaveTextContent(
+      "$30.10",
+    );
+
+    adsData = operatorAdsResponse(
+      makeAd({
+        metrics: { ...makeAd().metrics, frequency: null, cost_per_ftd: null },
+      }),
+    );
+    renderDetail();
+
+    expect(screen.getAllByText("Частота")[1]!.parentElement).toHaveTextContent(
+      "—",
+    );
+    expect(
+      screen.getAllByText("Цена деп.")[1]!.parentElement,
+    ).toHaveTextContent("—");
   });
 
   it("keeps timezone evidence but hides money for a non-USD scope", () => {

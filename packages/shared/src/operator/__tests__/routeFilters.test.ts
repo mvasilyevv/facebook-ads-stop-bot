@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { makeOperatorSnapshot } from "../testFixture";
 import {
+  isClientRankedAdsSort,
+  operatorAdsQuerySort,
   operatorCabinetOptions,
   parseOperatorActionsRouteSearch,
   parseOperatorAdsRouteSearch,
@@ -54,6 +56,19 @@ describe("operator route filters", () => {
       account_id: undefined,
       state: undefined,
     });
+  });
+
+  it("sends stop proximity sorting to the server, keeping the URL readable", () => {
+    expect(parseOperatorAdsRouteSearch({ sort: "stop_proximity" }).sort).toBe(
+      "stop_proximity",
+    );
+    // Порядок обязан считать сервер: клиент видит только текущую страницу, и
+    // самое опасное объявление может лежать на следующей.
+    expect(operatorAdsQuerySort("stop_proximity")).toBe("percent_to_stop");
+    expect(operatorAdsQuerySort("spend")).toBe("spend");
+    expect(operatorAdsQuerySort(undefined)).toBe("updated");
+    expect(isClientRankedAdsSort("stop_proximity")).toBe(false);
+    expect(isClientRankedAdsSort("spend")).toBe(false);
   });
 
   it("derives cabinet IDs and labels from the typed global snapshot without currency inference", () => {

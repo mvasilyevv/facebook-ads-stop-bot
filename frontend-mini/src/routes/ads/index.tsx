@@ -11,11 +11,13 @@ import { ChevronLeft, ChevronRight, Filter, Search } from "lucide-react";
 import type { OperatorSeverity } from "@fb/shared/operator/contracts";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import {
+  operatorAdsQuerySort,
   operatorCabinetOptions,
   parseOperatorAdsRouteSearch,
+  OPERATOR_ADS_STOP_PROXIMITY_SORT,
   type OperatorAdsDirection,
   type OperatorAdsRouteSearch,
-  type OperatorAdsSort,
+  type OperatorAdsRouteSort,
   type OperatorCabinetOption,
 } from "@fb/shared/operator/routeFilters";
 import { adsForRealtimeState } from "@fb/shared/operator/viewModel";
@@ -46,7 +48,8 @@ const SEVERITIES: Array<{ value: OperatorSeverity | ""; label: string }> = [
   { value: "unknown", label: "Неизвестно" },
 ];
 
-const SORTS: Array<{ value: OperatorAdsSort; label: string }> = [
+const SORTS: Array<{ value: OperatorAdsRouteSort; label: string }> = [
+  { value: OPERATOR_ADS_STOP_PROXIMITY_SORT, label: "Близость к стопу" },
   { value: "updated", label: "Обновление" },
   { value: "spend", label: "Расход" },
   { value: "clicks", label: "Клики" },
@@ -69,7 +72,7 @@ function AdsPage() {
     search: search.q,
     account_id: search.account_id,
     severity: search.severity,
-    sort: search.sort ?? "updated",
+    sort: operatorAdsQuerySort(search.sort),
     direction: search.direction ?? "desc",
     page,
     page_size: 30,
@@ -82,6 +85,7 @@ function AdsPage() {
       )
     : null;
   const displayState = displayPayload?.state;
+  // Порядок задаёт сервер, включая сортировку по близости к стопу.
   const displayRows = displayPayload?.rows;
   const currency = confirmedOperatorCurrency(displayPayload?.scope);
   const confirmedEmpty =
@@ -167,6 +171,7 @@ function AdsPage() {
           />
         </div>
       ) : null}
+
 
       <section className="grid gap-3 px-4 pt-4" aria-label="Объявления">
         {query.isError && !payload ? (
@@ -298,7 +303,7 @@ function AdsFilterFields({
         label="Сортировка"
         value={search.sort ?? "updated"}
         onChange={(value) =>
-          onChange({ sort: value as OperatorAdsSort, page: undefined })
+          onChange({ sort: value as OperatorAdsRouteSort, page: undefined })
         }
       >
         {SORTS.map((sort) => (

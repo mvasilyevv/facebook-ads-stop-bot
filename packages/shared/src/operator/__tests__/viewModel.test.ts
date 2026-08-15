@@ -435,4 +435,72 @@ describe("operator view model", () => {
       completeSnapshot,
     );
   });
+
+  it("drops cached stop proximity from an unavailable approaching row", () => {
+    const completeSnapshot = makeOperatorSnapshot();
+    completeSnapshot.approaching_stop = {
+      ...completeSnapshot.approaching_stop,
+      state: "unavailable",
+      data: {
+        items: [
+          {
+            id: "row-1",
+            fb_ad_id: "ad-1",
+            name: "Cached ad",
+            campaign_id: "campaign-1",
+            campaign_name: "Campaign",
+            adset_id: "adset-1",
+            adset_name: "Ad set",
+            account_id: "act_123",
+            delivery_status: "ACTIVE",
+            data_state: "ready",
+            severity: "warning",
+            as_of: "2026-07-18T10:14:45Z",
+            metrics: {
+              spend: "12.50",
+              impressions: 100,
+              clicks: 10,
+              registrations: 2,
+              ftd: 0,
+              confirmed_deposits: 0,
+              cpc: "1.25",
+              cost_per_registration: "6.25",
+              frequency: "1.80",
+              cost_per_ftd: null,
+            },
+            rule_context: {
+              offer_code: "GH_CR2",
+              rule_code: "cpr_stop",
+              rule_title: "Дорогая рега",
+              value: "6.25",
+              threshold: "7.00",
+              percent_to_stop: "89.28",
+              stage: "warning",
+            },
+            active_action: null,
+          },
+        ],
+      },
+    };
+
+    const projected = snapshotForRealtimeState(completeSnapshot, true);
+    const row = projected.approaching_stop.data?.items[0];
+
+    expect(row?.data_state).toBe("unavailable");
+    expect(row?.rule_context.percent_to_stop).toBeNull();
+    expect(row?.rule_context.stage).toBeNull();
+    expect(row?.metrics.frequency).toBeNull();
+  });
+
+  it("marks the approaching stop section stale until realtime reconciliation", () => {
+    const disconnected = snapshotForRealtimeState(
+      makeOperatorSnapshot(),
+      false,
+    );
+
+    expect(disconnected.approaching_stop.state).toBe("stale");
+    expect(disconnected.approaching_stop.issues[0]?.code).toBe(
+      "REALTIME_RECONCILING",
+    );
+  });
 });

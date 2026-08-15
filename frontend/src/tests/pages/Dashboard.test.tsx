@@ -1,9 +1,10 @@
 import type { ComponentType, ReactNode } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OperatorRealtimeStatusProvider, type OperatorRealtimeStatus } from "@fb/operator-api";
+import type { OperatorSnapshot } from "@fb/shared/operator/contracts";
 import { makeOperatorSnapshot } from "@fb/shared/operator/testFixture";
 
 const mockUseOperatorSnapshot = vi.fn();
@@ -56,6 +57,48 @@ import { Route } from "@/routes/index";
 import { OperatorCabinetDashboard } from "@/features/operator/OperatorDashboard";
 
 const Dashboard = (Route as unknown as { component: ComponentType }).component;
+
+function approachingRow(
+  fbAdId: string,
+  percentToStop: string,
+): NonNullable<OperatorSnapshot["approaching_stop"]["data"]>["items"][number] {
+  return {
+    id: `row-${fbAdId}`,
+    fb_ad_id: fbAdId,
+    name: `Объявление ${fbAdId}`,
+    campaign_id: "campaign-1",
+    campaign_name: "GH_CR | 18.06",
+    adset_id: "adset-1",
+    adset_name: "adset-android",
+    account_id: "act_123",
+    delivery_status: "ACTIVE",
+    data_state: "ready",
+    severity: "warning",
+    as_of: "2026-07-18T10:14:45Z",
+    metrics: {
+      spend: "12.50",
+      impressions: 1000,
+      clicks: 30,
+      registrations: 3,
+      ftd: 0,
+      confirmed_deposits: 0,
+      cpc: "0.41",
+      cost_per_registration: "4.16",
+      frequency: "1.84",
+      cost_per_ftd: null,
+    },
+    rule_context: {
+      offer_code: "GH_CR2",
+      rule_code: "cpr_stop",
+      rule_title: "Дорогая рега",
+      value: "0.41",
+      threshold: "0.48",
+      percent_to_stop: percentToStop,
+      stage: "warning",
+    },
+    active_action: null,
+  };
+}
 
 function renderDashboard(status: OperatorRealtimeStatus = "connected") {
   return render(
@@ -163,6 +206,67 @@ describe("operator dashboard", () => {
     );
     expect(screen.getAllByText("не подтверждено").length).toBeGreaterThan(0);
     expect(screen.queryByText(/18\.07\.2026, 12:1[45]/)).not.toBeInTheDocument();
+  });
+
+  it("reads a confirmed empty approaching-stop section as calm, not alarming", () => {
+    renderDashboard();
+
+    const section = screen.getByRole("region", { name: "Подходят к стопу" });
+    expect(within(section).getByText("никто не подходит")).toBeInTheDocument();
+    expect(
+      within(section).getByText("Ни одно объявление не подходит к стопу."),
+    ).toBeInTheDocument();
+    expect(section).not.toHaveTextContent("Источник недоступен");
+    expect(section).not.toHaveTextContent("Нет данных");
+  });
+
+  it("ranks approaching ads with their rule, threshold and share of the way", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.approaching_stop = {
+      ...snapshot.approaching_stop,
+      state: "ready",
+      data: { items: [approachingRow("ad-9", "93.40"), approachingRow("ad-8", "71.05")] },
+    };
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderDashboard();
+
+    const section = screen.getByRole("region", { name: "Подходят к стопу" });
+    expect(within(section).getByText("93.4%")).toBeInTheDocument();
+    expect(within(section).getAllByText("Дорогая рега · $0.41 из $0.48").length).toBe(2);
+    expect(within(section).getAllByText("Подходит к стопу").length).toBe(2);
+    expect(
+      within(section).getByRole("link", { name: "Открыть объявление: Объявление ad-9" }),
+    ).toHaveAttribute("href", "/ads/ad-9");
+  });
+
+  it("shows an unavailable approaching-stop section without inventing a share", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.approaching_stop = {
+      ...snapshot.approaching_stop,
+      state: "unavailable",
+      data: null,
+    };
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderDashboard();
+
+    const section = screen.getByRole("region", { name: "Подходят к стопу" });
+    expect(within(section).getByText("Источник недоступен")).toBeInTheDocument();
+    expect(section).not.toHaveTextContent("никто не подходит");
+    expect(section).not.toHaveTextContent("0%");
   });
 
   it("uses typed source links and hides source/action attention internals", () => {
