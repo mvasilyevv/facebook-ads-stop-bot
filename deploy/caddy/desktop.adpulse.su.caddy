@@ -61,9 +61,14 @@ desktop.adpulse.su {
 		handle {
 			import desktop_session_auth
 			reverse_proxy 127.0.0.1:8444 {
-				# forward_auth runs at stream establishment. Bound every public Kasm
-				# connection so an owner revoke is enforced on reconnect within 60s.
-				stream_timeout 1m
+				# forward_auth runs at stream establishment, поэтому отзыв доступа
+				# срабатывает не позже следующего переподключения. При 1m рабочий
+				# стол рвался раз в минуту и был непригоден для работы: полный
+				# перерисов кадра и красная плашка каждые 60 секунд. 15m — это
+				# осознанный размен: окно отзыва для уже открытой вкладки шире,
+				# новый вход по-прежнему проходит проверку сразу. Cookie-сессия
+				# остаётся единственной границей доступа.
+				stream_timeout 15m
 				stream_close_delay 5m
 				# Kasm BasicAuth is an upstream-only service credential. The browser
 				# authenticates exclusively with the host-only desktop session cookie.
