@@ -572,6 +572,7 @@ def _capture_open_tree(
             raise FbctlError(f"{label} changed while it was inspected")
 
     visit(root_fd, (), 0)
+    _require_hard_links_stay_inside(entries, label=label)
     marker = next(
         (entry for entry in entries if entry.relative == (VISION_PROFILE_MARKER,)),
         None,
@@ -795,6 +796,34 @@ def _open_child_file(parent_fd: int, name: str, label: str) -> int:
         raise FbctlError(f"{label} contains an unsafe entry") from exc
 
 
+def _require_hard_links_stay_inside(
+    entries: list[TreeEntryReceipt],
+    *,
+    label: str,
+) -> None:
+    """Убедиться, что все жёсткие ссылки файла найдены внутри профиля.
+
+    Опасна не сама множественность ссылок, а ссылка, ведущая наружу: через неё
+    в профиль попадает чужой файл, и снимок начинает отвечать за содержимое,
+    которого в дереве нет. Поэтому считаем вхождения каждого inode: если их
+    ровно столько, сколько ссылок у файла, наружу не ведёт ни одна.
+
+    Кэш WebKit внутри профиля раскладывает один блоб двумя ссылками — Blobs и
+    Records, — и обе лежат в дереве.
+    """
+    counted: dict[tuple[int, int], int] = {}
+    expected: dict[tuple[int, int], int] = {}
+    for entry in entries:
+        if entry.kind != "file" or entry.links == 1:
+            continue
+        key = (entry.device, entry.inode)
+        counted[key] = counted.get(key, 0) + 1
+        expected[key] = entry.links
+    for key, links in expected.items():
+        if counted[key] != links:
+            raise FbctlError(f"{label} contains a hard link from outside")
+
+
 def _readlink_inside_tree(
     directory_fd: int,
     name: str,
@@ -863,8 +892,10 @@ def _validate_entry_metadata(
     # ссылки определяется её целью — см. _readlink_inside_tree.
     if not stat.S_ISLNK(metadata.st_mode) and mode & 0o022:
         raise FbctlError(f"{label} contains an unsafe entry")
-    if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1:
-        raise FbctlError(f"{label} contains an unsafe entry")
+    # Число ссылок у обычного файла проверяется не здесь, а по всему дереву
+    # разом: см. _require_hard_links_stay_inside. Кэш WebKit внутри профиля
+    # честно раскладывает один блоб двумя жёсткими ссылками, и запрет на месте
+    # отвергал бы профиль, которым пользовались.
     if relative == (VISION_PROFILE_MARKER,) and mode != 0o600:
         raise FbctlError(f"{label} marker is invalid")
 
