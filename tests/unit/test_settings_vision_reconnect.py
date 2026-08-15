@@ -2,7 +2,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.api.routers.v1.schemas.settings_vision import VisionSettingsUpdateRequest
+from apps.api.routers.v1.schemas.settings_vision import (
+    VisionSettingsResponse,
+    VisionSettingsUpdateRequest,
+)
 
 
 @pytest.mark.asyncio
@@ -99,3 +102,25 @@ def test_vision_cloud_secrets_are_hidden_by_request_model() -> None:
     assert "secret-password" not in visible
     assert "secret-team" not in visible
     assert "secret-folder" not in visible
+
+
+def test_vision_cloud_fields_reach_update_request_and_response_has_no_password() -> None:
+    request = VisionSettingsUpdateRequest(
+        username="cloud-user",
+        password="cloud-password",
+        team_id="team-1",
+        folder_id="folder-1",
+    )
+
+    assert request.username is not None
+    assert request.username.get_secret_value() == "cloud-user"
+    assert request.password is not None
+    assert request.password.get_secret_value() == "cloud-password"
+    assert request.team_id is not None
+    assert request.team_id.get_secret_value() == "team-1"
+    assert request.folder_id is not None
+    assert request.folder_id.get_secret_value() == "folder-1"
+
+    response_payload = VisionSettingsResponse(required_browser_contract_version=5).model_dump()
+    assert "password" not in response_payload
+    assert "cloud-password" not in str(response_payload)

@@ -1,0 +1,63 @@
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+
+const updateVision = vi.fn().mockResolvedValue({});
+
+vi.mock("@/lib/api", () => ({
+  useVisionSettings: () => ({
+    data: {
+      has_token: true,
+      has_cloud_username: false,
+      has_cloud_password: false,
+      has_team_id: false,
+      has_folder_id: false,
+      profile_id: "profile-1",
+      channel_status: "READY",
+      channel_message: "Канал Vision жив.",
+      channel_next_step: "Действий не требуется.",
+      browser_contract_compatible: true,
+    },
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+  useUpdateVisionSettings: () => ({
+    mutateAsync: updateVision,
+    isPending: false,
+  }),
+  useReconnectVision: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}));
+
+vi.mock("@/lib/tg", () => ({
+  haptic: { notify: vi.fn() },
+}));
+
+import { VisionSettings } from "@/features/settings/VisionSettings";
+
+describe("TMA Vision cloud credentials", () => {
+  it("sends credentials and does not repopulate the password after save", async () => {
+    const user = userEvent.setup();
+    render(<VisionSettings canEdit />);
+
+    await user.type(screen.getByLabelText("Логин"), "vision-user");
+    await user.type(screen.getByLabelText("Пароль"), "vision-password");
+    await user.type(screen.getByLabelText("Team ID"), "team-1");
+    await user.type(screen.getByLabelText("Folder ID"), "folder-1");
+    const password = screen.getByLabelText("Пароль");
+
+    expect(password).toHaveAttribute("type", "password");
+    expect(password).toHaveAttribute("autocomplete", "new-password");
+    await user.click(screen.getByRole("button", { name: "Сохранить Vision" }));
+
+    expect(updateVision).toHaveBeenCalledWith({
+      profile_id: "profile-1",
+      username: "vision-user",
+      password: "vision-password",
+      team_id: "team-1",
+      folder_id: "folder-1",
+    });
+    expect(password).toHaveValue("");
+  });
+});

@@ -22,7 +22,19 @@ class VisionSettingsResponse(BaseModel):
     profile_id: str | None = None
     configuration_revision: str | None = None
     channel_status: Literal["READY", "DEGRADED", "UNAVAILABLE", "UNKNOWN"] = "UNKNOWN"
+    channel_reason: Literal[
+        "TOKEN_MISSING",
+        "TOKEN_REJECTED",
+        "CLOUD_CREDENTIALS_MISSING",
+        "PROFILE_NOT_CONFIGURED",
+        "PROFILE_NOT_FOUND",
+        "CLOUD_UNAVAILABLE",
+        "BROWSER_UNAVAILABLE",
+        "READY",
+        "UNKNOWN",
+    ] = "UNKNOWN"
     channel_message: str | None = None
+    channel_next_step: str | None = None
     required_browser_contract_version: int
     browser_contract_version: int | None = None
     browser_contract_compatible: bool = False
