@@ -9,14 +9,9 @@ readonly display=:1
 # помечался unhealthy, хотя каждая проверка по отдельности проходила.
 dpyinfo="$(DISPLAY="${display}" xdpyinfo 2>/dev/null)"
 readonly dpyinfo
-# Конкретный размер не проверяем: стол подстраивается под окно оператора, и
-# требование ровно 1366x768 объявило бы десктоп больным сразу после первого
-# изменения размера. Проверяем то, что действительно нужно: сервер отвечает и
-# у экрана осмысленные размеры.
 grep -Eq 'dimensions:[[:space:]]+[1-9][0-9]{2,4}x[1-9][0-9]{2,4}' <<<"${dpyinfo}"
-pgrep -f 'X(kasmvnc|vnc).*:1' >/dev/null
+pgrep -x Xvfb >/dev/null
 pgrep -x Vision >/dev/null
-curl --fail --silent --show-error \
-  --user "${DESKTOP_KASM_SERVICE_USER}:${DESKTOP_KASM_SERVICE_PASSWORD}" \
-  --output /dev/null \
-  http://127.0.0.1:8444/
+# Канал к столу единственный: без него машина недостижима, и это не «деградация»,
+# а неработоспособность — контейнер обязан сообщить о ней как о болезни.
+pgrep -x rustdesk >/dev/null

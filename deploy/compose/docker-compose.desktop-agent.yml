@@ -29,7 +29,6 @@ services:
       TZ: ${TZ:-Europe/Kaliningrad}
     ports:
       - "127.0.0.1:${BROWSER_GRPC_HOST_PORT:?set BROWSER_GRPC_HOST_PORT}:50051"
-      - "127.0.0.1:${DESKTOP_HTTPS_PORT:?set DESKTOP_HTTPS_PORT}:8444"
     volumes:
       - ${VISION_CONFIG_DIR:?set VISION_CONFIG_DIR}:/config
     networks:
