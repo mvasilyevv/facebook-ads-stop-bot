@@ -20,6 +20,7 @@ from migrations.baseline_contract import (
     BASELINE_RELATION_SENTINELS,
     CATALOG_ARTIFACTS_SQL,
     DATABASE_EXTENSION_LAYOUT_SQL,
+    HEAD_ARTIFACT_HASHES,
     PUBLIC_APPLICATION_RELATIONS_SQL,
     PUBLIC_PARTITION_LAYOUT_SQL,
     PUBLIC_STANDALONE_CATALOG_OBJECTS_SQL,
@@ -126,7 +127,10 @@ def _validate_migration_target(connection) -> frozenset[str]:
             )
         partition_rows = list(connection.execute(text(PUBLIC_PARTITION_LAYOUT_SQL)).mappings())
         if current_revision == revision_chain.head:
-            assert_catalog_artifacts(connection.execute(text(CATALOG_ARTIFACTS_SQL)).mappings())
+            assert_catalog_artifacts(
+                connection.execute(text(CATALOG_ARTIFACTS_SQL)).mappings(),
+                expected=HEAD_ARTIFACT_HASHES,
+            )
             validate_database_extension_layout(
                 connection.execute(text(DATABASE_EXTENSION_LAYOUT_SQL)).mappings(),
                 baseline_installed=True,

@@ -1080,6 +1080,26 @@ def definition_sha256(definition: str) -> str:
     return hashlib.sha256(definition.encode("utf-8")).hexdigest()
 
 
+# Артефакты каталога, добавленные ревизиями после baseline. Baseline
+# обязан создавать ровно свою поверхность, поэтому его проверка их не ждёт;
+# на голове каталог обязан равняться сумме обоих наборов.
+POST_BASELINE_ARTIFACT_HASHES: dict[str, str] = {
+    "check_constraint:public.campaign_preset.ck_campaign_preset_age_range": "e8e40d2c446af886a9bb65638422d5115e31da4f1c926af3a9da6b4fb5442080",
+    "check_constraint:public.campaign_preset.ck_campaign_preset_budget_level": "3f78f15e93e89d02c2fdd42b03a5a3f9f97a25cabccfb657df1cec941ad25f93",
+    "check_constraint:public.campaign_preset.ck_campaign_preset_countries_array": "07a4bad0515083eb38affbf02164a5a79cd075211562350ad1c739d268a9d9b1",
+    "check_constraint:public.campaign_preset.ck_campaign_preset_daily_budget": "1ce7108c2f51185d27857a472a63443207529e82e65f10d9c5b03fc7900fad36",
+    "check_constraint:public.campaign_preset.ck_campaign_preset_genders_array": "e7a27fd44be82c2557faa654b2abb9be7ae5086695151e12a13b642e60207a1c",
+    "check_constraint:public.campaign_preset.ck_campaign_preset_placements_array": "8532ed0790039cb55e838e122cf3552d1058eca87c12244eb9b3eb9a43bc7f84",
+    "check_constraint:public.campaign_preset.ck_campaign_preset_purchase_only": "0fdd1fff1b1a4541923e9ce01199fe5b89608b9af1f5388f566a6bfbc3777391",
+}
+
+
+HEAD_ARTIFACT_HASHES: dict[str, str] = {
+    **BASELINE_ARTIFACT_HASHES,
+    **POST_BASELINE_ARTIFACT_HASHES,
+}
+
+
 def catalog_artifact_hashes(rows: Iterable[Mapping[str, Any]]) -> dict[str, str]:
     """Convert catalog query rows into the exact comparable manifest."""
 
@@ -1095,11 +1115,20 @@ def catalog_artifact_hashes(rows: Iterable[Mapping[str, Any]]) -> dict[str, str]
     return dict(sorted(result.items()))
 
 
-def catalog_artifact_drift(rows: Iterable[Mapping[str, Any]]) -> list[str]:
-    """Describe missing, unexpected and definition-drifted artifacts."""
+def catalog_artifact_drift(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    expected: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Describe missing, unexpected and definition-drifted artifacts.
+
+    ``expected`` по умолчанию — поверхность самого baseline. На голове база
+    обязана совпадать с ``HEAD_ARTIFACT_HASHES``: ревизии после baseline
+    добавляют артефакты, и молчаливо принимать их нельзя.
+    """
 
     actual = catalog_artifact_hashes(rows)
-    expected = BASELINE_ARTIFACT_HASHES
+    expected = BASELINE_ARTIFACT_HASHES if expected is None else expected
     messages = [f"missing {key}" for key in sorted(expected.keys() - actual.keys())]
     messages.extend(f"unexpected {key}" for key in sorted(actual.keys() - expected.keys()))
     messages.extend(
@@ -1110,9 +1139,13 @@ def catalog_artifact_drift(rows: Iterable[Mapping[str, Any]]) -> list[str]:
     return messages
 
 
-def assert_catalog_artifacts(rows: Iterable[Mapping[str, Any]]) -> None:
+def assert_catalog_artifacts(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    expected: Mapping[str, str] | None = None,
+) -> None:
     """Fail closed unless catalog artifacts exactly equal the manifest."""
 
-    drift = catalog_artifact_drift(rows)
+    drift = catalog_artifact_drift(rows, expected=expected)
     if drift:
         raise RuntimeError("safety-first baseline catalog artifact drift: " + "; ".join(drift))
