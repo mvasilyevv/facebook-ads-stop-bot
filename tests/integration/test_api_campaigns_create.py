@@ -229,8 +229,10 @@ async def test_delete_preset_preserves_run_snapshot_and_stale_launch(
 
     assert len(rows) == 2
     assert all(row.preset_id is None for row in rows)
-    assert rows[0].config["countries"] == ["DE"]
-    assert rows[0].config["daily_budget"] == "50.00"
+    # В БД лежит канонический доменный снимок, а не плоское тело запроса:
+    # значения запуска обязаны пережить удаление шаблона.
+    assert rows[0].config["targeting"]["countries"] == ["DE"]
+    assert rows[0].config["budget"]["daily_amount"] == "50.00"
 
 
 # ─────────────────────────── validate ───────────────────────────
