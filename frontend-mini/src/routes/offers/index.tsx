@@ -871,18 +871,37 @@ function OffersPage() {
         {/* Пусто */}
         {!isLoading && !isError && filteredOffers.length === 0 && (
           <EmptyState
-            title="Офферов нет"
-            description="Создайте первый оффер для настройки стоп-правил"
+            title={
+              filter === "active"
+                ? "Активных офферов нет"
+                : filter === "inactive"
+                  ? "Выключенных офферов нет"
+                  : "Офферов нет"
+            }
+            description={
+              filter === "all"
+                ? "Создайте первый оффер для настройки стоп-правил"
+                : "В выбранном состоянии офферов нет. Вернитесь к полному каталогу."
+            }
             action={
-              canEdit
+              filter !== "all"
                 ? {
-                    label: "Создать оффер",
-                    onClick: () => {
-                      setSelected(null);
-                      setSheetMode("create");
-                    },
+                    label: "Показать все",
+                    onClick: () =>
+                      void navigate({
+                        to: "/offers",
+                        search: { filter: "all" },
+                      }),
                   }
-                : undefined
+                : canEdit
+                  ? {
+                      label: "Создать оффер",
+                      onClick: () => {
+                        setSelected(null);
+                        setSheetMode("create");
+                      },
+                    }
+                  : undefined
             }
           />
         )}

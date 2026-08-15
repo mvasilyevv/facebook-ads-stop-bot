@@ -282,6 +282,35 @@ describe("operator dashboard", () => {
     ).toHaveAttribute("href", "/ads/ad-9");
   });
 
+  it("keeps the full approaching-stop count visible when the ledger is capped", () => {
+    const snapshot = makeOperatorSnapshot();
+    snapshot.approaching_stop = {
+      ...snapshot.approaching_stop,
+      state: "ready",
+      data: {
+        items: Array.from({ length: 7 }, (_, index) =>
+          approachingRow(`ad-${index + 1}`, String(99 - index)),
+        ),
+      },
+    };
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderDashboard();
+
+    const section = screen.getByRole("region", { name: "Подходят к стопу" });
+    expect(within(section).getByText("7 объявлений")).toBeInTheDocument();
+    expect(within(section).getAllByRole("link", { name: /Открыть объявление:/ })).toHaveLength(5);
+    expect(
+      within(section).getByRole("link", { name: "Все объявления по близости к стопу" }),
+    ).toHaveAttribute("href", "/ads");
+  });
+
   it("shows an unavailable approaching-stop section without inventing a share", () => {
     const snapshot = makeOperatorSnapshot();
     snapshot.approaching_stop = {

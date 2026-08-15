@@ -192,6 +192,22 @@ describe("TMA operator ads URL filters", () => {
     } satisfies OperatorAdsQuery);
   });
 
+  it("prioritizes the ads closest to stop on the unfiltered landing", () => {
+    renderPage();
+
+    expect(useOperatorAds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sort: "percent_to_stop",
+        direction: "desc",
+      }) as unknown as OperatorAdsQuery,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Открыть фильтры объявлений" }),
+    );
+    expect(screen.getByLabelText("Сортировка")).toHaveValue("stop_proximity");
+  });
+
   it("delegates stop proximity ranking to the server", () => {
     routeSearch = { sort: "stop_proximity" };
     useOperatorAds.mockReturnValue({
@@ -264,5 +280,14 @@ describe("TMA operator ads URL filters", () => {
 
     fireEvent.click(close);
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("offers one-step recovery from an empty filtered result", () => {
+    routeSearch = { q: "missing", severity: "critical", page: 3 };
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "Сбросить фильтры" }));
+
+    expect(navigate).toHaveBeenCalledWith({ search: {}, replace: true });
   });
 });

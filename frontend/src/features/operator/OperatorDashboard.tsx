@@ -39,6 +39,7 @@ import {
   operatorPortfolioScalePosition,
 } from "@fb/shared/operator/portfolioModel";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
+import { OPERATOR_ADS_STOP_PROXIMITY_SORT } from "@fb/shared/operator/routeFilters";
 import {
   operatorReloginRecovery,
   RELOGIN_RECOVERY_BUTTON_LABEL,
@@ -590,6 +591,7 @@ function ApproachingStopLedger({
   currency: string | null;
   timezone: string | null;
 }) {
+  const total = section.data ? section.data.items.length : null;
   const items = section.data?.items.slice(0, 5) ?? [];
   return (
     <section
@@ -603,7 +605,9 @@ function ApproachingStopLedger({
         detail={
           section.state === "empty"
             ? "никто не подходит"
-            : `${items.length} ${pluralAd(items.length)}`
+            : total === null
+              ? "—"
+              : `${total} ${pluralAd(total)}`
         }
         section={section}
         timezone={timezone}
@@ -635,6 +639,16 @@ function ApproachingStopLedger({
           ))}
         </ol>
       )}
+      {total ? (
+        <Link
+          className="ledger-attention-item__action min-h-11 px-5"
+          to="/ads"
+          search={{ sort: OPERATOR_ADS_STOP_PROXIMITY_SORT, direction: "desc" }}
+        >
+          Все объявления по близости к стопу
+          <ArrowRight size={14} aria-hidden="true" />
+        </Link>
+      ) : null}
     </section>
   );
 }

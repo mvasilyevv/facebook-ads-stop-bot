@@ -206,6 +206,18 @@ describe("typed operator ads page", () => {
     expect(screen.getByText("Страница 3 из 5")).toBeInTheDocument();
   });
 
+  it("prioritizes the ads closest to stop on the unfiltered landing", () => {
+    renderPage();
+
+    expect(useOperatorAds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sort: "percent_to_stop",
+        direction: "desc",
+      }) as unknown as OperatorAdsQuery,
+    );
+    expect(screen.getByLabelText("Сортировка")).toHaveValue("stop_proximity");
+  });
+
   it("shows the rule, its threshold and the distance to stop in the list", () => {
     renderPage();
 
@@ -633,5 +645,15 @@ describe("typed operator ads page", () => {
       </QueryClientProvider>,
     );
     expect(screen.getByRole("alert")).toHaveTextContent("Каталог недоступен");
+  });
+
+  it("offers one-step recovery from an empty filtered result", async () => {
+    routeSearch = { q: "missing", severity: "critical", page: 3 };
+    setQuery(response([]));
+    renderPage();
+
+    await userEvent.click(screen.getByRole("button", { name: "Сбросить фильтры" }));
+
+    expect(navigate).toHaveBeenCalledWith({ search: {}, replace: true });
   });
 });

@@ -83,6 +83,28 @@ describe("typed operator incident detail", () => {
     expect(screen.queryByRole("button", { name: "Подтвердить получение" })).not.toBeInTheDocument();
   });
 
+  it("exposes the server-provided incident action instead of ending at diagnostics", () => {
+    const current = useOperatorIncident();
+    useOperatorIncident.mockReturnValue({
+      ...current,
+      data: {
+        ...current.data,
+        incident: {
+          ...current.data.incident,
+          target: { kind: "ad", id: "ad-51", label: "Объявление CR2" },
+          action: { label: "Открыть объявление", href: "/ads/ad-51" },
+        },
+      },
+    });
+
+    render(<IncidentDetail />);
+
+    expect(screen.getByRole("link", { name: "Открыть объявление" })).toHaveAttribute(
+      "href",
+      "/ads/ad-51",
+    );
+  });
+
   it("shows partial evidence, freshness context and an unknown timezone", () => {
     const current = useOperatorIncident();
     useOperatorIncident.mockReturnValue({

@@ -8,6 +8,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { Offer, OfferRules } from "@fb/shared";
 
 const routeState = vi.hoisted(() => ({ filter: "all", role: "owner" }));
+const navigate = vi.hoisted(() => vi.fn());
 
 // Мок роутера
 vi.mock("@tanstack/react-router", () => ({
@@ -15,7 +16,7 @@ vi.mock("@tanstack/react-router", () => ({
     ...options,
     useSearch: () => ({ filter: routeState.filter }),
   }),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => navigate,
 }));
 
 vi.mock("@/lib/auth", () => ({
@@ -100,6 +101,7 @@ const OffersTestWrapper = (Route as unknown as { component: ComponentType })
 
 describe("OffersPage", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     routeState.filter = "all";
     routeState.role = "owner";
     mockUseOffers.mockReturnValue({
@@ -313,6 +315,25 @@ describe("OffersPage", () => {
     });
     render(<OffersTestWrapper />);
     expect(screen.getByText(/Офферов нет/i)).toBeInTheDocument();
+  });
+
+  it("объясняет пустой фильтр и позволяет вернуться ко всем офферам", () => {
+    routeState.filter = "active";
+    mockUseOffers.mockReturnValue({
+      data: [MOCK_OFFERS[1]],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    render(<OffersTestWrapper />);
+
+    expect(screen.getByText("Активных офферов нет")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Показать все" }));
+    expect(navigate).toHaveBeenCalledWith({
+      to: "/offers",
+      search: { filter: "all" },
+    });
   });
 
   // Кнопка "Редактировать" в detail-sheet переходит к форме редактирования

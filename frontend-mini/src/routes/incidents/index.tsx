@@ -106,6 +106,11 @@ function MiniIncidentsPage() {
     });
   }
 
+  function resetFilters() {
+    haptic.selection();
+    void navigate({ search: {}, replace: true });
+  }
+
   async function openIncident(item: OperatorIncidentItem) {
     haptic.selection();
     storeResolvedNavigation({ target_kind: "incident", target_id: item.id });
@@ -241,7 +246,16 @@ function MiniIncidentsPage() {
           <div className="px-4">
             <EmptyState
               title="Инцидентов не найдено"
-              description="Сервер подтвердил пустой результат. Измените фильтры."
+              description={
+                activeFilterCount
+                  ? "Сервер подтвердил пустой результат для выбранных условий."
+                  : "Сервер подтвердил, что новых инцидентов нет."
+              }
+              action={
+                activeFilterCount
+                  ? { label: "Сбросить фильтры", onClick: resetFilters }
+                  : undefined
+              }
             />
           </div>
         ) : (
@@ -325,9 +339,7 @@ function MiniIncidentCard({
         {formatZonedDateTime(item.occurred_at, timezone)}
       </time>
       <div
-        className={`mt-4 grid gap-2 ${
-          item.status === "open" ? "grid-cols-2" : "grid-cols-1"
-        }`}
+        className={`mt-4 grid gap-2 ${item.status === "open" ? "grid-cols-2" : "grid-cols-1"}`}
       >
         <Button variant="secondary" onClick={() => void onOpen(item)}>
           Открыть <ArrowRight size={15} aria-hidden="true" />

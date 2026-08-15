@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, ShieldCheck } from "lucide-react";
 
 import { formatZonedDateTime } from "@fb/shared/format/time";
 import type { OperatorSeverity } from "@fb/shared/operator/contracts";
@@ -12,6 +12,7 @@ import {
 } from "@fb/shared/operator/incidentViewModel";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { operatorSourceLabel } from "@fb/shared/operator/ledgerSemantics";
+import { safeOperatorAttentionHref } from "@fb/shared/operator/attentionNavigation";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 
 import { Button } from "@/components/ui/Button";
@@ -77,6 +78,7 @@ function IncidentDetailPage() {
   );
   const severityTone = incidentSeverityTone(incident.severity, displayState);
   const copy = operatorIncidentCopy(incident, detail.scope);
+  const actionHref = safeOperatorAttentionHref(incident.action.href);
 
   return (
     <article className="mx-auto max-w-3xl">
@@ -133,6 +135,15 @@ function IncidentDetailPage() {
           >
             Часовой пояс кабинета не подтверждён; время показано как оценочное.
           </p>
+        ) : null}
+        {actionHref ? (
+          <a
+            href={actionHref}
+            className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] px-4 text-[14px] font-semibold text-bg-11 hover:bg-bg-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            {incident.action.label}
+            <ArrowRight size={16} aria-hidden="true" />
+          </a>
         ) : null}
         {actionError ? (
           <p
