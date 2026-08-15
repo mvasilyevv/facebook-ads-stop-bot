@@ -404,3 +404,28 @@ def test_failure_reason_names_the_invariant_without_leaking_command_secrets() ->
         FileNotFoundError(2, "No such file or directory", "/tmp/missing-bundle")
     )
     assert reason == "FileNotFoundError: No such file or directory"
+
+
+def test_deploy_outcome_distinguishes_no_stop_from_stopping_elsewhere() -> None:
+    """«Не остановился» и «остановился не там» — разные диагнозы.
+
+    Вывод failpoint-деплоя захватывается и в лог CI не попадает, поэтому без
+    этого различия причина провала не восстанавливается по логу вообще.
+    """
+    promoted = subprocess.CompletedProcess(["fbctl"], 0, stdout="", stderr="")
+    assert single_slot._deploy_outcome(promoted) == "deploy exited 0 and promoted the release"
+
+    elsewhere = subprocess.CompletedProcess(
+        ["fbctl"],
+        1,
+        stdout="",
+        stderr='[fbctl] step=migrate completed\n{"error": "rehearsal failpoint triggered", "step": "failure_cleanup"}\n',
+    )
+    assert single_slot._deploy_outcome(elsewhere) == (
+        "deploy exited 1 at step failure_cleanup: rehearsal failpoint triggered"
+    )
+
+    unstructured = subprocess.CompletedProcess(["fbctl"], 2, stdout="", stderr="boom\n")
+    assert single_slot._deploy_outcome(unstructured) == (
+        "deploy exited 2 without a structured fbctl error"
+    )

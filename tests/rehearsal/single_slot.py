@@ -390,6 +390,31 @@ def _deploy_arguments(bundle: Path, root: Path, *extra: str) -> list[str]:
     ]
 
 
+def _deploy_outcome(completed: subprocess.CompletedProcess[str]) -> str:
+    """Сказать, чем на самом деле кончился деплой с внедрённым failpoint.
+
+    Его вывод захватывается и в лог CI не попадает, поэтому «не остановился»
+    и «остановился не на том шаге» выглядели одинаково. fbctl печатает свою
+    ошибку одним JSON: берём из него только собственные поля fbctl, не
+    вываливая в публичный лог весь поток.
+    """
+    if completed.returncode == 0:
+        return "deploy exited 0 and promoted the release"
+    for line in reversed(completed.stderr.splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and ("error" in payload or "step" in payload):
+            reported_step = payload.get("step") or "unknown"
+            reported_error = payload.get("error") or "unknown"
+            return f"deploy exited {completed.returncode} at step {reported_step}: {reported_error}"
+    return f"deploy exited {completed.returncode} without a structured fbctl error"
+
+
 def _exercise_failpoints(
     bundle: Path,
     root: Path,
@@ -425,7 +450,9 @@ def _exercise_failpoints(
             capture=True,
         )
         if failed.returncode == 0 or f'"step": "{step}"' not in failed.stderr:
-            raise RehearsalError(f"deploy failpoint did not stop after {step}")
+            raise RehearsalError(
+                f"deploy failpoint did not stop after {step}: {_deploy_outcome(failed)}"
+            )
         if positions[step] >= stopped_index:
             _assert_workers_off(cluster_id)
         _run(_deploy_arguments(bundle, root, "--enable-scanning"))
