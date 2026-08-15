@@ -91,6 +91,33 @@ def minutes_ru(count: int) -> str:
     return counted_ru(count, "минута", "минуты", "минут")
 
 
+def hours_ru(count: int) -> str:
+    """«25 часов»."""
+    return counted_ru(count, "час", "часа", "часов")
+
+
+def days_ru(count: int) -> str:
+    """«3 дня»."""
+    return counted_ru(count, "день", "дня", "дней")
+
+
+def human_bytes_ru(value: int) -> str:
+    """Компактный двоичный размер: «5 ГиБ», «1,5 ТиБ»."""
+    amount = max(0, int(value))
+    if amount < 1024:
+        return counted_ru(amount, "байт", "байта", "байт")
+    units = ("КиБ", "МиБ", "ГиБ", "ТиБ", "ПиБ")
+    scaled = float(amount)
+    unit = units[0]
+    for candidate in units:
+        scaled /= 1024
+        unit = candidate
+        if scaled < 1024 or candidate == units[-1]:
+            break
+    rendered = f"{scaled:.0f}" if scaled >= 10 or scaled.is_integer() else f"{scaled:.1f}"
+    return f"{rendered.replace('.', ',')} {unit}"
+
+
 def objects_ru(count: int) -> str:
     """«3 объекта» — про созданные в Meta сущности."""
     return counted_ru(count, "объект", "объекта", "объектов")
@@ -164,9 +191,12 @@ __all__ = [
     "commands_ru",
     "counted_ru",
     "creatives_ru",
+    "days_ru",
     "delivery_status_ru",
     "deposits_ru",
     "errors_ru",
+    "hours_ru",
+    "human_bytes_ru",
     "leads_ru",
     "minutes_ru",
     "objects_ru",

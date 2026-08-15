@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -50,6 +51,26 @@ async def test_startup_fails_when_partition_preparation_fails(
             object(),
             run_cleanup_on_start=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_unhandled_cleanup_crash_opens_durable_warning(monkeypatch) -> None:
+    async def _run_once(_engine):
+        raise RuntimeError("boom")
+
+    publish_health = AsyncMock(return_value=True)
+    monkeypatch.setattr(cleanup_main, "run_once", _run_once)
+    monkeypatch.setattr(cleanup_main, "publish_cleanup_run_health", publish_health)
+    engine = object()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await cleanup_main._run_cleanup(engine)
+
+    publish_health.assert_awaited_once_with(
+        engine,
+        success=False,
+        error_count=1,
+    )
 
 
 def test_full_cleanup_creates_partitions_before_dropping_old_ones() -> None:

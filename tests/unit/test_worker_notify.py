@@ -71,6 +71,38 @@ async def test_outbox_failure_is_reported_without_direct_fallback(monkeypatch) -
 @pytest.mark.asyncio
 async def test_recurring_incident_rejects_non_operational_severity() -> None:
     with pytest.raises(ValueError, match="must be warning or critical"):
+
+async def test_recurring_incident_accepts_warning_severity(monkeypatch) -> None:
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(worker_notify, "notify_recurring_incident_in_transaction", notify)
+
+    class _Begin:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Engine:
+        def begin(self):
+            return _Begin()
+
+    accepted = await worker_notify.notify_recurring_incident(
+        _Engine(),
+        incident_key="worker:test",
+        audience="owners",
+        event_type="test_warning",
+        severity="warning",
+        title="Предупреждение",
+    )
+
+    assert accepted is True
+    assert notify.await_args.kwargs["severity"] == "warning"
+
+
+@pytest.mark.asyncio
+async def test_recurring_incident_rejects_non_alert_severity() -> None:
+    with pytest.raises(ValueError, match="warning or critical"):
         await worker_notify.notify_recurring_incident(
             object(),
             incident_key="worker:test",
@@ -78,6 +110,10 @@ async def test_recurring_incident_rejects_non_operational_severity() -> None:
             event_type="test_unknown",
             severity="unknown",
             title="Unknown",
+
+            event_type="test_recovery",
+            severity="ok",
+            title="Не алерт",
         )
 
 
