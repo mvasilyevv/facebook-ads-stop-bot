@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from apps.api.routers.v1.vision_channel import assess_vision_channel
+from core.vision.channel import assess_vision_channel
 
 
 @pytest.mark.parametrize(

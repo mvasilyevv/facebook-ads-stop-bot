@@ -25,10 +25,6 @@ from apps.api.routers.v1.schemas.settings_vision import (
     VisionSettingsResponse,
     VisionSettingsUpdateRequest,
 )
-from apps.api.routers.v1.vision_channel import (
-    VisionChannelAssessment,
-    assess_vision_channel,
-)
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
 from core.meta_api.client import BROWSER_CONTRACT_VERSION
 from core.models.settings.vision_config import VisionConfig
@@ -40,6 +36,10 @@ from core.tasks.browser_fence import (
     BrowserOperationBlocked,
     BrowserOperationDrainTimeout,
     BrowserOperationFence,
+)
+from core.vision.channel import (
+    VisionChannelAssessment,
+    assess_vision_channel,
 )
 from core.vision.cloud_probe import probe_vision_cloud
 from core.vision_runtime import VisionConfigurationError, load_vision_runtime_config
