@@ -867,6 +867,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/operator/scan/retry": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Retry Operator Scan
+     * @description Queue an interactive recovery scan; 202 never means scan success.
+     */
+    post: operations["retry_operator_scan_api_operator_scan_retry_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/operator/ads/{ad_id}/pause": {
     parameters: {
       query?: never;
@@ -3454,6 +3474,8 @@ export interface components {
       occurred_at: string;
       target: components["schemas"]["OperatorAttentionTarget"];
       action: components["schemas"]["OperatorAttentionAction"] | null;
+      /** Recovery Action */
+      recovery_action: "retry_scan" | null;
     };
     /** OperatorAttentionTarget */
     OperatorAttentionTarget: {
@@ -4327,9 +4349,9 @@ export interface components {
     ScanNowResponse: {
       /**
        * Status
-       * @constant
+       * @enum {string}
        */
-      status: "queued";
+      status: "queued" | "running" | "confirmed" | "failed" | "cancelled" | "unknown";
       /** Task Id */
       task_id: number;
       /**
@@ -4337,6 +4359,8 @@ export interface components {
        * Format: uuid
        */
       correlation_id: string;
+      /** Created */
+      created: boolean;
     };
     /**
      * ScanningToggleRequest
@@ -7267,6 +7291,110 @@ export interface operations {
       };
     };
   };
+  retry_operator_scan_api_operator_scan_retry_post: {
+    parameters: {
+      query?: never;
+      header: {
+        "Idempotency-Key": string;
+        "X-Operator-Principal"?: string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Existing command lifecycle state */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorCommandResponse"];
+        };
+      };
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OperatorCommandResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Permission denied */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Resource not found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Command lifecycle conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Ad projection changed before enqueue */
+      412: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Request validation failed */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Operator source unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
   pause_operator_ad_api_operator_ads__ad_id__pause_post: {
     parameters: {
       query?: never;
@@ -8199,6 +8327,15 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
+      /** @description Existing scan command lifecycle state */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ScanNowResponse"];
+        };
+      };
       /** @description Successful Response */
       202: {
         headers: {

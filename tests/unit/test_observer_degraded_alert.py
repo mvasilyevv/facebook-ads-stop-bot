@@ -96,6 +96,25 @@ async def test_degraded_lifecycle_never_resolves_partial_or_unknown(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_login_required_does_not_open_duplicate_generic_degraded_incident(
+    monkeypatch,
+) -> None:
+    state = ow._ObserverState(consecutive_scan_failures=2)
+    alert = AsyncMock(return_value=True)
+    monkeypatch.setattr(ow, "_maybe_alert_degraded", alert)
+    monkeypatch.setattr(ow, "DEGRADED_ALERT_THRESHOLD", 3)
+
+    await ow._track_degraded_incident(
+        object(),
+        state=state,
+        summary={"outcome": "error", "error": "login_required"},
+    )
+
+    assert state.consecutive_scan_failures == 3
+    alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_degraded_lifecycle_resolves_only_confirmed_complete_scan(monkeypatch) -> None:
     state = ow._ObserverState(consecutive_scan_failures=4)
     resolve = AsyncMock(return_value=True)

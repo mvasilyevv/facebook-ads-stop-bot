@@ -337,7 +337,7 @@ async def fetch_operator_incidents(
             await conn.execute(
                 text(
                     f"""
-                    SELECT i.id, i.severity, i.status, i.title, i.summary,
+                    SELECT i.id, i.incident_key, i.severity, i.status, i.title, i.summary,
                            i.resource_type, i.resource_id, i.opened_at,
                            i.correlation_id, i.facts,
                            CASE WHEN i.resource_type IN ('ad','fb_ad')

@@ -60,6 +60,11 @@ from core.observer.cabinet_supervisor import (
     assert_cabinet_lease,
     publish_next_scan_at,
 )
+from core.observer.login_required import (
+    LOGIN_REQUIRED_INCIDENT_PREFIX,
+    login_required_incident_key,
+    notify_login_required_incident,
+)
 from core.observer.pipeline import CycleResult, process_scan_rows
 from core.observer.queries import (
     load_observer_config,
@@ -112,7 +117,7 @@ OBSERVER_DEGRADED_INCIDENT_KEY = "observer:degraded"
 # redirect на login.php/checkpoint, HTML вместо JSON или Graph 190 с login-subcode и
 # отдаёт empty_reason='login_required'. Money-критично: скан слеп, авто-стоп не работает —
 # owner должен получить ЯВНЫЙ алерт «нужен ре-логин», а не тихий пустой скан.
-OBSERVER_LOGIN_REQUIRED_INCIDENT_PREFIX = "observer:login_required:"
+OBSERVER_LOGIN_REQUIRED_INCIDENT_PREFIX = LOGIN_REQUIRED_INCIDENT_PREFIX
 OBSERVER_TIMEZONE_UNKNOWN_INCIDENT_PREFIX = "observer:cabinet_timezone_unknown:"
 OBSERVER_CURRENCY_UNKNOWN_INCIDENT_PREFIX = "observer:cabinet_currency_unknown:"
 OBSERVER_OFFER_CURRENCY_INCIDENT_PREFIX = "observer:offer_currency_mismatch:"
@@ -316,15 +321,6 @@ async def _run_account_scan(
                 ad_account_id=ad_account_id,
             )
 
-        if live_scan_performed and _scan_confirms_authenticated_session(scan_out):
-            confirmed_account_id = require_ad_account_id(ad_account_id)
-            await resolve_recurring_incident(
-                engine,
-                incident_key=(f"{OBSERVER_LOGIN_REQUIRED_INCIDENT_PREFIX}{confirmed_account_id}"),
-                audience="all",
-                summary=(f"Кабинет {confirmed_account_id}: вход в Facebook подтверждён."),
-            )
-
         scan_issues = list(scan_out.warnings or [])
         if (
             live_scan_performed
@@ -495,6 +491,18 @@ async def _run_account_scan(
         error_message=error_msg,
         duration_ms=duration_ms,
     )
+    if (
+        live_scan_performed
+        and outcome in {"success", "empty"}
+        and _scan_confirms_authenticated_session(scan_out)
+    ):
+        confirmed_account_id = require_ad_account_id(ad_account_id)
+        await resolve_recurring_incident(
+            engine,
+            incident_key=login_required_incident_key(confirmed_account_id),
+            audience="all",
+            summary=f"Кабинет {confirmed_account_id}: успешный скан подтвердил вход.",
+        )
 
     return {
         "outcome": outcome,
@@ -849,21 +857,9 @@ async def _maybe_alert_login_required(
     account_id = require_ad_account_id(ad_account_id)
     logger.error("ALERT (observer login_required): кабинет=%s", account_id)
 
-    sent = await notify_recurring_incident(
+    sent = await notify_login_required_incident(
         engine,
-        incident_key=f"{OBSERVER_LOGIN_REQUIRED_INCIDENT_PREFIX}{account_id}",
-        audience="all",
-        event_type="observer_login_required",
-        severity="critical",
-        title="Vision-профиль требует повторного входа",
-        summary=f"Кабинет {account_id}: Facebook разлогинил профиль.",
-        risk="Скан и авто-стоп не работают",
-        lines=[
-            "Войди в Facebook в Vision-профиле и открой Ads Manager",
-            "При риске расхода отключи объявления вручную",
-        ],
-        resource_type="ad_account",
-        resource_id=account_id,
+        ad_account_id=account_id,
     )
     if not sent:
         logger.warning("observer login_required event не принят durable outbox")
@@ -914,6 +910,10 @@ async def _track_degraded_incident(
     outcome = str(summary.get("outcome") or "")
     if outcome in {"error", "partial"}:
         state.consecutive_scan_failures += 1
+        if summary.get("error") == "login_required":
+            # Для разлогина уже открыт точный per-cabinet incident с конкретным
+            # действием. Не добавляем поверх него generic degraded-карточку.
+            return
         if state.consecutive_scan_failures >= DEGRADED_ALERT_THRESHOLD:
             await _maybe_alert_degraded(
                 engine,

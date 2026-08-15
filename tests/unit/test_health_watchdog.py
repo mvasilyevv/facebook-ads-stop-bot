@@ -182,6 +182,38 @@ async def test_check_meta_api_channel_alerts_when_scanning_on_and_down(monkeypat
     assert notify.await_args.kwargs["event_type"] == "meta_channel_unavailable"
 
 
+async def test_check_meta_api_channel_routes_login_to_canonical_incident(monkeypatch) -> None:
+    from core.observer import queries as observer_queries
+
+    monkeypatch.setattr(
+        observer_queries,
+        "load_observer_config",
+        AsyncMock(return_value={"is_scanning_enabled": True}),
+    )
+    client = SimpleNamespace(
+        check_health=AsyncMock(
+            return_value={
+                "healthy": False,
+                "probe_performed": True,
+                "probe_detail": "login_required",
+            }
+        )
+    )
+    login_alert = AsyncMock(return_value=True)
+    channel_alert = AsyncMock(return_value=True)
+    resolve_channel = AsyncMock(return_value=True)
+    monkeypatch.setattr(hw, "_alert_login_required_accounts", login_alert)
+    monkeypatch.setattr(hw, "_enqueue_critical_notification", channel_alert)
+    monkeypatch.setattr(hw, "_resolve_critical_notification", resolve_channel)
+
+    sent = await hw.check_meta_api_channel(client, engine=object())
+
+    assert sent is True
+    login_alert.assert_awaited_once()
+    channel_alert.assert_not_awaited()
+    assert resolve_channel.await_args.kwargs["incident_key"] == hw.META_CHANNEL_INCIDENT_KEY
+
+
 async def test_meta_probe_reads_canonical_profile_inside_shared_fence(monkeypatch) -> None:
     from core.observer import queries as observer_queries
 

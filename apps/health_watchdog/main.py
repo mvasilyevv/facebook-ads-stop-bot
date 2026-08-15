@@ -52,6 +52,7 @@ from core.meta_api.shadow_spend import (
     detect_shadow,
 )
 from core.models.settings.vision_config import VisionConfig
+from core.observer.login_required import notify_login_required_incident
 from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
 from core.tasks.browser_fence import (
     BrowserFenceLeaseLost,
@@ -214,6 +215,27 @@ LOGIN_REQUIRED_MARKER = "login_required"
 def is_login_required_reason(reason: str) -> bool:
     """True, если reason из probe — маркер разлогина/чекпоинта (нужен ре-логин профиля)."""
     return LOGIN_REQUIRED_MARKER in str(reason).lower()
+
+
+async def _alert_login_required_accounts(engine: AsyncEngine) -> bool:
+    """Open the canonical per-cabinet incident instead of channel-down."""
+    from core.meta_api.account_tz import active_account_ids
+
+    account_ids = await active_account_ids(engine)
+    if not account_ids:
+        logger.error("meta probe: login_required без активного кабинета")
+        return False
+
+    accepted = False
+    for account_id in account_ids:
+        accepted = (
+            await notify_login_required_incident(
+                engine,
+                ad_account_id=account_id,
+            )
+            or accepted
+        )
+    return accepted
 
 
 def classify_meta_probe(
@@ -586,23 +608,25 @@ async def check_meta_api_channel(
 
     logger.error("канал Marketing API мёртв (probe): %s", reason)
     login_required = is_login_required_reason(reason)
+    if login_required:
+        # Если раньше причина была транспортной, закрой старую channel-down
+        # generation. Login-required имеет другой operator action и отдельный key.
+        await _resolve_critical_notification(
+            incident_key=META_CHANNEL_INCIDENT_KEY,
+            engine=engine,
+            summary="Причина уточнена: Facebook требует повторного входа.",
+        )
+        return await _alert_login_required_accounts(engine)
+
     return await _enqueue_critical_notification(
         incident_key=META_CHANNEL_INCIDENT_KEY,
         engine=engine,
         event_type="meta_channel_unavailable",
-        title=(
-            "Vision-профиль требует повторного входа"
-            if login_required
-            else "Канал Marketing API недоступен"
-        ),
+        title="Канал Marketing API недоступен",
         summary="Проверочный запрос к Meta не подтверждён",
         risk="Авто-стоп может не дойти до Meta",
         lines=[
-            (
-                "Войди в Facebook в Vision-профиле"
-                if login_required
-                else "Проверь browser-agent и Vision-профиль"
-            ),
+            "Проверь browser-agent и Vision-профиль",
             "При риске расхода отключи объявления вручную",
         ],
         resource_type="meta_channel",

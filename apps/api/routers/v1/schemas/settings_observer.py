@@ -65,9 +65,10 @@ class CampaignAllowlistRequest(BaseModel):
 class ScanNowResponse(BaseModel):
     """Ответ на POST /settings/observer/scan-now."""
 
-    status: Literal["queued"]
+    status: Literal["queued", "running", "confirmed", "failed", "cancelled", "unknown"]
     task_id: int
     correlation_id: uuid.UUID
+    created: bool
 
 
 class CampaignOption(BaseModel):

@@ -23,6 +23,11 @@ from core.meta_api.identity import require_ad_account_id
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
 from core.money import validated_currency_code
+from core.observer.scan_tasks import (
+    OBSERVER_SCAN_DEADLINE_SECONDS,
+    enqueue_observer_scan,
+    lock_observer_scan_publication,
+)
 from core.wording import delivery_status_ru
 
 if TYPE_CHECKING:
@@ -108,6 +113,124 @@ class CommandService:
 
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
+
+    async def enqueue_scan_retry(
+        self,
+        *,
+        requested_by: str,
+        idempotency_key: str,
+        reason: str = "operator_retry_scan",
+        connection: AsyncConnection | None = None,
+    ) -> CommandReceipt:
+        """Queue one interactive scan or return the already active scan.
+
+        ``reason`` — диагностическая метка в очереди. Ручной скан из настроек и
+        повтор после разлогина идут одним путём, но в задаче должны остаться
+        разными: иначе разбор очереди начинается с вопроса, чего это повтор.
+        """
+        normalized_requested_by = requested_by.strip()
+        normalized_idempotency_key = idempotency_key.strip()
+        if not normalized_requested_by or len(normalized_requested_by) > 64:
+            raise ValueError("requested_by must contain 1..64 characters")
+        if not normalized_idempotency_key or len(normalized_idempotency_key) > 128:
+            raise ValueError("idempotency_key must contain 1..128 characters")
+
+        async def _enqueue(conn: AsyncConnection) -> CommandReceipt:
+            # Serialize every scan publisher. The active-task check is server-side,
+            # so scheduler ticks and different tabs cannot create parallel work.
+            await lock_observer_scan_publication(conn)
+            active = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT id, status, result, correlation_id, lane, priority
+                        FROM task_queue
+                        WHERE task_type = 'observer_scan'
+                          AND status IN ('pending', 'retrying', 'running')
+                          AND cancel_requested_at IS NULL
+                          AND COALESCE(payload->>'dependency_state', '') <> 'waiting'
+                        ORDER BY
+                          CASE status WHEN 'running' THEN 0 ELSE 1 END,
+                          priority DESC,
+                          created_at,
+                          id
+                        LIMIT 1
+                        FOR UPDATE
+                        """
+                    )
+                )
+            ).first()
+            if active is not None:
+                if str(active.status) in {"pending", "retrying"}:
+                    await conn.execute(
+                        text(
+                            """
+                            UPDATE task_queue
+                            SET lane = 'interactive',
+                                priority = GREATEST(priority, 75),
+                                deadline_at = GREATEST(
+                                  COALESCE(deadline_at, '-infinity'::timestamptz),
+                                  available_at + make_interval(secs => :deadline_seconds),
+                                  clock_timestamp() + make_interval(secs => :deadline_seconds)
+                                ),
+                                updated_at = clock_timestamp()
+                            WHERE id = :task_id
+                              AND status IN ('pending', 'retrying')
+                              AND cancel_requested_at IS NULL
+                            """
+                        ),
+                        {
+                            "task_id": int(active.id),
+                            "deadline_seconds": OBSERVER_SCAN_DEADLINE_SECONDS,
+                        },
+                    )
+                return CommandReceipt(
+                    task_id=int(active.id),
+                    created=False,
+                    state=_command_state(active.status, active.result),
+                    correlation_id=uuid.UUID(str(active.correlation_id)),
+                )
+
+            try:
+                receipt = await enqueue_observer_scan(
+                    self._engine,
+                    requested_by=normalized_requested_by,
+                    reason=reason,
+                    idempotency_key=normalized_idempotency_key,
+                    lane="interactive",
+                    priority=75,
+                    connection=conn,
+                )
+            except RuntimeError as exc:
+                if "idempotency key" in str(exc):
+                    raise CommandConflictError(str(exc)) from exc
+                raise
+
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT status, result, correlation_id
+                        FROM task_queue
+                        WHERE id = :task_id
+                        """
+                    ),
+                    {"task_id": receipt.task_id},
+                )
+            ).first()
+            if row is None:
+                raise RuntimeError("observer scan command row disappeared")
+            return CommandReceipt(
+                task_id=receipt.task_id,
+                created=receipt.created,
+                state=_command_state(row.status, row.result),
+                correlation_id=uuid.UUID(str(row.correlation_id)),
+            )
+
+        if connection is not None:
+            return await _enqueue(connection)
+        async with self._engine.begin() as conn:
+            return await _enqueue(conn)
 
     async def abort_campaign_run(
         self,

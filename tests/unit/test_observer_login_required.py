@@ -32,28 +32,19 @@ from core.scanner.models import (
 @pytest.mark.asyncio
 async def test_login_required_alert_delivers_via_recipients(monkeypatch):
     spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(ow, "notify_recurring_incident", spy)
+    monkeypatch.setattr(ow, "notify_login_required_incident", spy)
 
     ok = await ow._maybe_alert_login_required(object(), ad_account_id="act_777")
 
     assert ok is True
     spy.assert_awaited_once()
-    facts = spy.await_args.kwargs
-    # Заголовок называет проблему, строки — что сделать оператору.
-    assert "повторного входа" in facts["title"].lower()
-    assert any("войди" in line.lower() for line in facts["lines"])
-    assert any("вручную" in line.lower() for line in facts["lines"])
-    assert "777" in facts["summary"]  # канонический кабинет в типизированных facts
-    assert facts["incident_key"] == "observer:login_required:777"
-    assert facts["audience"] == "all"
-    assert facts["resource_type"] == "ad_account"
-    assert facts["resource_id"] == "777"
+    assert spy.await_args.kwargs["ad_account_id"] == "777"
 
 
 @pytest.mark.asyncio
 async def test_login_required_alert_rejects_missing_account(monkeypatch):
     spy = AsyncMock(return_value=True)
-    monkeypatch.setattr(ow, "notify_recurring_incident", spy)
+    monkeypatch.setattr(ow, "notify_login_required_incident", spy)
     with pytest.raises(ValueError, match="explicit numeric account id"):
         await ow._maybe_alert_login_required(
             object(),
@@ -67,7 +58,7 @@ async def test_login_required_alert_rejects_missing_account(monkeypatch):
 @pytest.mark.asyncio
 async def test_login_required_alert_outbox_rejection_warns(monkeypatch, caplog):
     spy = AsyncMock(return_value=False)
-    monkeypatch.setattr(ow, "notify_recurring_incident", spy)
+    monkeypatch.setattr(ow, "notify_login_required_incident", spy)
     with caplog.at_level("WARNING"):
         ok = await ow._maybe_alert_login_required(object(), ad_account_id="act_1")
 
@@ -192,8 +183,8 @@ async def test_incomplete_identity_is_partial_and_never_reaches_money_writers(
     assert summary["error"] == "partial_rows:1"
     ow.process_scan_rows.assert_not_awaited()
     assert gate._output.partial_row_ids == ["120200000000001"]
-    # Rows prove authentication even though incomplete metrics must not drive FSM.
-    _stub_scan_db.assert_awaited_once()
+    # Частичный scan не закрывает login incident: нужен полный успешный цикл.
+    _stub_scan_db.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -230,7 +221,7 @@ async def test_incomplete_metric_marker_is_partial_and_never_reaches_money_write
     assert summary["outcome"] == "partial"
     assert summary["error"] == "partial_rows:1"
     ow.process_scan_rows.assert_not_awaited()
-    _stub_scan_db.assert_awaited_once()
+    _stub_scan_db.assert_not_awaited()
 
 
 @pytest.mark.asyncio

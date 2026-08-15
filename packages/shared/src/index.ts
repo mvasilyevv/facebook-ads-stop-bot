@@ -15,6 +15,7 @@ export * from "./operator/contracts";
 export * from "./operator/chartModel";
 export * from "./operator/commandIntent";
 export * from "./operator/stopProximity";
+export * from "./operator/reloginRecovery";
 export * from "./operator/viewModel";
 
 // ─── Константы правил / мутаций ───────────────────────────────────────────────

@@ -83,6 +83,7 @@ from core.meta_api.account_tz import (
     resolve_cabinet_days,
 )
 from core.observer.accounts import nothing_monitored_reason_for, resolve_scan_account_ids
+from core.observer.login_required import LOGIN_REQUIRED_INCIDENT_PREFIX
 from core.operator.queries import (
     fetch_operator_actions,
     fetch_operator_ads,
@@ -1278,7 +1279,7 @@ def _incident_attention_item(incident: dict[str, Any]) -> OperatorAttentionItem:
         else "campaign"
         if resource_type == "campaign"
         else "account"
-        if resource_type == "account"
+        if resource_type in {"account", "ad_account"}
         else "system"
     )
     return OperatorAttentionItem(
@@ -1295,6 +1296,11 @@ def _incident_attention_item(incident: dict[str, Any]) -> OperatorAttentionItem:
             label=str(incident.get("resource_label")) if incident.get("resource_label") else None,
         ),
         action=OperatorAttentionAction(label="Открыть", href=f"/incidents/{incident['id']}"),
+        recovery_action=(
+            "retry_scan"
+            if str(incident.get("incident_key") or "").startswith(LOGIN_REQUIRED_INCIDENT_PREFIX)
+            else None
+        ),
     )
 
 
@@ -1400,6 +1406,7 @@ def _attention_section(
                     label=action.get("target_label"),
                 ),
                 action=OperatorAttentionAction(label="Открыть", href=f"/actions/{action['id']}"),
+                recovery_action=None,
             )
         )
     if include_system_issues:
@@ -1417,6 +1424,7 @@ def _attention_section(
                     occurred_at=system.as_of or now,
                     target=OperatorAttentionTarget(kind="system", id=None, label="Система"),
                     action=OperatorAttentionAction(label="Диагностика", href="/system/sources"),
+                    recovery_action=None,
                 )
             )
     rank = {"critical": 0, "warning": 1, "unknown": 2, "ok": 3}
@@ -2077,6 +2085,66 @@ async def _enqueue_operator_command(
             message=str(exc),
             correlation_id=correlation_id,
         )
+    response.status_code = (
+        status.HTTP_202_ACCEPTED if receipt.state == "queued" else status.HTTP_200_OK
+    )
+    return OperatorCommandResponse(
+        task_id=receipt.task_id,
+        public_id=f"#{receipt.task_id}",
+        state=receipt.state,
+        created=receipt.created,
+        correlation_id=str(receipt.correlation_id),
+    )
+
+
+@router.post(
+    "/scan/retry",
+    response_model=OperatorCommandResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=_COMMAND_RESPONSES,
+)
+async def retry_operator_scan(
+    engine: DepEngine,
+    response: Response,
+    request: Request,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+    requested_by: str = Header(default="operator:web", alias="X-Operator-Principal", max_length=64),
+) -> OperatorCommandResponse | JSONResponse:
+    """Queue an interactive recovery scan; 202 never means scan success."""
+    correlation_id = str(uuid.uuid4())
+    principal = getattr(request.state, "operator_principal", requested_by)
+    try:
+        scoped_idempotency_key = principal_scoped_idempotency_key(
+            principal=principal,
+            client_key=idempotency_key,
+        )
+        receipt = await CommandService(engine).enqueue_scan_retry(
+            requested_by=principal,
+            idempotency_key=scoped_idempotency_key,
+        )
+    except CommandConflictError:
+        return _problem(
+            status_code=409,
+            code="idempotency_conflict",
+            message="Idempotency-Key уже связан с другим действием",
+            correlation_id=correlation_id,
+        )
+    except ValueError as exc:
+        return _problem(
+            status_code=422,
+            code="invalid_command",
+            message=str(exc),
+            correlation_id=correlation_id,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("operator retry scan failed correlation_id=%s", correlation_id)
+        return _problem(
+            status_code=503,
+            code="scan_retry_unavailable",
+            message="Повторный скан временно недоступен",
+            correlation_id=correlation_id,
+        )
+
     response.status_code = (
         status.HTTP_202_ACCEPTED if receipt.state == "queued" else status.HTTP_200_OK
     )

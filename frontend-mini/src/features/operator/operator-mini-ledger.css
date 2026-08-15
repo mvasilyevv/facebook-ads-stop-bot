@@ -79,7 +79,16 @@
 }
 
 .mini-scan:disabled {
-  opacity: 0.5;
+  border-color: var(--color-hairline);
+  color: var(--color-bg-8);
+  background: var(--color-bg-2);
+  opacity: 1;
+}
+
+.mini-scan[data-state="error"] {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
 }
 
 .mini-ledger__receipt {

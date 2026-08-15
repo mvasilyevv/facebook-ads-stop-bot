@@ -54,6 +54,20 @@ class ObserverScanCancelled(ObserverScanControlStop):
         super().__init__(f"observer scan stopped: {reason}")
 
 
+async def lock_observer_scan_publication(conn: AsyncConnection) -> None:
+    """Serialize scheduler and operator publishers before their active-task check."""
+    await conn.execute(
+        text(
+            """
+            SELECT pg_advisory_xact_lock(
+              hashtext('fb-agent'),
+              hashtext('observer-scan-publication')
+            )
+            """
+        )
+    )
+
+
 def observer_scan_idempotency_key(namespace: str, value: str) -> str:
     """Build a bounded opaque key without leaking raw operator input."""
     scope = namespace.strip().lower().replace("_", "-")[:32]
@@ -183,52 +197,55 @@ async def enqueue_scheduled_observer_scan(
 
     The observer may legitimately run more than once inside the 120-second
     operation deadline, so a wall-clock bucket is not an execution identity.
-    A PostgreSQL advisory transaction lock instead serializes publishers.  An
-    already pending/running scheduled scan is reused (including while browser
-    maintenance blocks claims); after it reaches a terminal state the next
-    adaptive tick receives a fresh durable task.
+    A shared PostgreSQL advisory transaction lock serializes scheduler and
+    operator publishers. An already runnable pending/running scan is reused;
+    after it reaches a terminal state the next adaptive tick receives a fresh
+    durable task.
     """
 
     scheduled_at = now or datetime.now(UTC)
     async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                SELECT pg_advisory_xact_lock(
-                  hashtext('fb-agent'),
-                  hashtext('observer-scheduled-scan')
-                )
-                """
-            )
-        )
+        await lock_observer_scan_publication(conn)
         existing_rows = (
             await conn.execute(
                 text(
                     """
-                    SELECT id, correlation_id, lane, priority, status, deadline_at
+                    SELECT id, correlation_id, lane, priority, status, deadline_at,
+                           requested_by, payload
                     FROM task_queue
                     WHERE task_type = 'observer_scan'
-                      AND requested_by = 'observer_scheduler'
-                      AND payload->>'reason' = 'adaptive_schedule'
                       AND status IN ('pending', 'retrying', 'running')
                       AND cancel_requested_at IS NULL
-                    ORDER BY created_at, id
+                      AND COALESCE(payload->>'dependency_state', '') <> 'waiting'
+                    ORDER BY
+                      CASE status WHEN 'running' THEN 0 ELSE 1 END,
+                      priority DESC,
+                      created_at,
+                      id
                     LIMIT 2
+                    FOR UPDATE
                     """
                 )
             )
         ).all()
         if len(existing_rows) > 1:
-            raise RuntimeError(
-                "multiple outstanding scheduled observer scans violate the singleton contract"
-            )
+            raise RuntimeError("multiple runnable observer scans violate the singleton contract")
         if existing_rows:
             existing = existing_rows[0]
-            if str(existing.lane) != "background" or int(existing.priority) != 10:
+            payload = existing.payload if isinstance(existing.payload, dict) else {}
+            is_scheduled = (
+                str(existing.requested_by) == "observer_scheduler"
+                and payload.get("reason") == "adaptive_schedule"
+            )
+            scheduling_class = (str(existing.lane), int(existing.priority))
+            scheduled_class_valid = scheduling_class == ("background", 10) or (
+                scheduling_class[0] == "interactive" and scheduling_class[1] >= 75
+            )
+            if is_scheduled and not scheduled_class_valid:
                 raise RuntimeError(
                     "outstanding scheduled observer scan has an invalid scheduling class"
                 )
-            if str(existing.status) in {"pending", "retrying"}:
+            if is_scheduled and str(existing.status) in {"pending", "retrying"}:
                 await conn.execute(
                     text(
                         """

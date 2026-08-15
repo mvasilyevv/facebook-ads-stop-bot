@@ -17,7 +17,7 @@ import re
 import uuid
 from datetime import UTC, date, datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,9 +31,10 @@ from apps.api.routers.v1.schemas.settings_observer import (
     ScanningToggleRequest,
     ScanNowResponse,
 )
+from core.commands.service import CommandService
 from core.models.settings.observer_config import ObserverConfig
 from core.observer.queries import campaign_matches_owner
-from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
+from core.observer.scan_tasks import observer_scan_idempotency_key
 from core.tasks.browser_fence import (
     BrowserExclusiveMaintenance,
     BrowserFenceLeaseLost,
@@ -446,18 +447,31 @@ async def _refresh_observer_campaigns_unfenced(
     return result
 
 
-@router.post("/scan-now", response_model=ScanNowResponse, status_code=202)
-async def post_scan_now(engine: DepEngine) -> ScanNowResponse:
+@router.post(
+    "/scan-now",
+    response_model=ScanNowResponse,
+    status_code=202,
+    responses={
+        200: {
+            "model": ScanNowResponse,
+            "description": "Existing scan command lifecycle state",
+        }
+    },
+)
+async def post_scan_now(engine: DepEngine, response: Response) -> ScanNowResponse:
     """Atomically enqueue a scan; ``202`` means queued, never completed."""
     request_nonce = uuid.uuid4().hex
-    receipt = await enqueue_observer_scan(
-        engine,
+    receipt = await CommandService(engine).enqueue_scan_retry(
         requested_by="operator_api",
-        reason="operator_scan_now",
         idempotency_key=observer_scan_idempotency_key("api", request_nonce),
+        reason="operator_scan_now",
+    )
+    response.status_code = (
+        status.HTTP_202_ACCEPTED if receipt.state == "queued" else status.HTTP_200_OK
     )
     return ScanNowResponse(
-        status="queued",
+        status=receipt.state,
         task_id=receipt.task_id,
         correlation_id=receipt.correlation_id,
+        created=receipt.created,
     )

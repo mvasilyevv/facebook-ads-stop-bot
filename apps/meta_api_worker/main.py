@@ -52,6 +52,7 @@ from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import (
     AmbiguousResultError,
     BrowserReadinessRejectedError,
+    LoginRequiredError,
     MutationValidationError,
     NotFoundError,
     PermanentError,
@@ -1792,7 +1793,9 @@ async def process_one_task(
             "outcome": "REJECTED",
             "reason": type(exc).__name__,
         }
-        if isinstance(exc, TokenInvalidError):
+        if isinstance(exc, LoginRequiredError):
+            failure_result["requires_facebook_login"] = True
+        elif isinstance(exc, TokenInvalidError):
             failure_result["requires_meta_reauth"] = True
         applied = await mark_task_failed(
             engine,

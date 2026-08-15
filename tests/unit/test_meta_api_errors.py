@@ -19,11 +19,16 @@ from core.meta_api.errors import (
 )
 
 
-# Code 190 — токен сессии invalidated → TokenInvalidError (постоянная, требует re-login).
-def test_classify_190_token_invalid() -> None:
+# Code 190 с явным текстом разлогина → отдельный LoginRequiredError даже без subcode.
+def test_classify_190_login_message_without_subcode() -> None:
     exc = classify_graph_error(190, None, "Session expired")
-    assert isinstance(exc, TokenInvalidError)
+    assert isinstance(exc, LoginRequiredError)
     assert exc.code == 190
+
+
+def test_classify_190_explicit_log_in_message_without_subcode() -> None:
+    exc = classify_graph_error(190, None, "The session has been invalidated, please log in")
+    assert isinstance(exc, LoginRequiredError)
 
 
 # Code 17 — user request limit reached → RateLimitedError (временная, нужно подождать).
@@ -46,11 +51,11 @@ def test_subcode_1357045_reauth() -> None:
 
 
 # MID X-16: login-subcode 463 (session expired) = разлогин → LoginRequiredError.
-# Наследник TokenInvalidError (Permanent-класс + триггер re-login алерта в meta_api_worker).
+# Наследник TokenInvalidError (Permanent-класс), но с отдельным incident projection.
 def test_subcode_463_login_required() -> None:
     exc = classify_graph_error(190, 463, "Session has expired")
     assert isinstance(exc, LoginRequiredError)
-    assert isinstance(exc, TokenInvalidError)  # наследование → тот же re-login алерт
+    assert isinstance(exc, TokenInvalidError)
     assert isinstance(exc, PermanentError)  # не ретраится бесконечно
 
 

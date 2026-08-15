@@ -15,6 +15,7 @@ from core.commands import (
     CommandService,
     principal_scoped_idempotency_key,
 )
+from core.observer.scan_tasks import ObserverScanReceipt
 
 
 class _Result:
@@ -46,6 +47,121 @@ def test_operator_idempotency_keys_are_scoped_by_verified_principal() -> None:
     )
     assert owner_a.startswith("operator:v1:")
     assert len(owner_a) <= 128
+
+
+@pytest.mark.asyncio
+async def test_scan_retry_returns_existing_running_task_without_enqueue(monkeypatch) -> None:
+    correlation_id = uuid.uuid4()
+    connection = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[
+                _Result(),
+                _Result(
+                    SimpleNamespace(
+                        id=1842,
+                        status="running",
+                        result=None,
+                        correlation_id=correlation_id,
+                    )
+                ),
+            ]
+        )
+    )
+    enqueue = AsyncMock(side_effect=AssertionError("duplicate scan enqueue"))
+    monkeypatch.setattr(service_module, "enqueue_observer_scan", enqueue)
+
+    receipt = await CommandService(SimpleNamespace()).enqueue_scan_retry(
+        requested_by="operator:web",
+        idempotency_key="operator:scan:first",
+        connection=connection,
+    )
+
+    assert receipt.task_id == 1842
+    assert receipt.created is False
+    assert receipt.state == "running"
+    assert receipt.correlation_id == correlation_id
+    enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scan_retry_promotes_existing_background_task_without_enqueue(monkeypatch) -> None:
+    correlation_id = uuid.uuid4()
+    connection = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[
+                _Result(),
+                _Result(
+                    SimpleNamespace(
+                        id=1842,
+                        status="pending",
+                        result=None,
+                        correlation_id=correlation_id,
+                        lane="background",
+                        priority=10,
+                    )
+                ),
+                _Result(),
+            ]
+        )
+    )
+    enqueue = AsyncMock(side_effect=AssertionError("duplicate scan enqueue"))
+    monkeypatch.setattr(service_module, "enqueue_observer_scan", enqueue)
+
+    receipt = await CommandService(SimpleNamespace()).enqueue_scan_retry(
+        requested_by="operator:web",
+        idempotency_key="operator:scan:promote",
+        connection=connection,
+    )
+
+    assert receipt.task_id == 1842
+    assert receipt.created is False
+    assert receipt.state == "queued"
+    promote_call = connection.execute.await_args_list[2]
+    assert "SET lane = 'interactive'" in str(promote_call.args[0])
+    assert promote_call.args[1]["task_id"] == 1842
+    enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scan_retry_enqueues_one_interactive_task(monkeypatch) -> None:
+    correlation_id = uuid.uuid4()
+    connection = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=[
+                _Result(),
+                _Result(),
+                _Result(
+                    SimpleNamespace(
+                        status="pending",
+                        result=None,
+                        correlation_id=correlation_id,
+                    )
+                ),
+            ]
+        )
+    )
+    enqueue = AsyncMock(
+        return_value=ObserverScanReceipt(
+            task_id=1843,
+            created=True,
+            correlation_id=correlation_id,
+        )
+    )
+    monkeypatch.setattr(service_module, "enqueue_observer_scan", enqueue)
+
+    receipt = await CommandService(SimpleNamespace()).enqueue_scan_retry(
+        requested_by="operator:web",
+        idempotency_key="operator:scan:second",
+        connection=connection,
+    )
+
+    assert receipt.task_id == 1843
+    assert receipt.created is True
+    assert receipt.state == "queued"
+    enqueue.assert_awaited_once()
+    assert enqueue.await_args.kwargs["lane"] == "interactive"
+    assert enqueue.await_args.kwargs["priority"] == 75
+    assert enqueue.await_args.kwargs["connection"] is connection
 
 
 @pytest.mark.parametrize(

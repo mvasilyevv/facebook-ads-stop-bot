@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import re
+
 
 class MutationValidationError(ValueError):
     """Ошибка валидации payload в mutation handler'е.
@@ -77,7 +79,8 @@ class LoginRequiredError(TokenInvalidError):
     Re-sniff токена НЕ помогает — оператор должен зайти в Vision и залогиниться заново.
 
     Наследник TokenInvalidError → для meta_api_worker это Permanent-класс (mark_failed,
-    без бесконечного retry) И триггерит существующий «нужен re-login Vision» алерт.
+    без бесконечного retry), но terminal projection остаётся отдельной от обычного
+    token-invalid и permission failure.
     Money-критично: слепой канал = слитый бюджет (инцидент 01.07 — канал умер молча).
     """
 
@@ -164,6 +167,11 @@ _SUBCODE_OVERRIDES: dict[int, type[MetaApiError]] = {
     1357045: TokenInvalidError,  # session re-auth required
 }
 
+_LOGIN_REQUIRED_MESSAGE_RE = re.compile(
+    r"session.*expired|log ?in|checkpoint|re-?authenticate|not logged in|logged out",
+    re.IGNORECASE,
+)
+
 
 def classify_graph_error(
     code: int | None,
@@ -181,6 +189,11 @@ def classify_graph_error(
     exc_cls: type[MetaApiError]
     if subcode and subcode in _SUBCODE_OVERRIDES:
         exc_cls = _SUBCODE_OVERRIDES[subcode]
+    elif code == 190 and _LOGIN_REQUIRED_MESSAGE_RE.search(message or ""):
+        # Some Graph 190 responses omit error_subcode but still state that the
+        # browser session is logged out. Keep this aligned with browser-agent's
+        # isLoginRequiredError() so the same failure gets the same incident.
+        exc_cls = LoginRequiredError
     elif code and code in _CODE_MAP:
         exc_cls = _CODE_MAP[code]
     else:

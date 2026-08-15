@@ -123,6 +123,7 @@ class OperatorAttentionItem(BaseModel):
     occurred_at: datetime
     target: OperatorAttentionTarget
     action: OperatorAttentionAction | None
+    recovery_action: Literal["retry_scan"] | None
 
 
 class OperatorAttentionData(BaseModel):

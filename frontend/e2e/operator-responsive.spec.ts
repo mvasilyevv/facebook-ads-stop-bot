@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { installOperatorHarness } from "./operatorTestHarness";
 
 test.beforeEach(async ({ page }) => {
-  await installOperatorHarness(page);
+  await installOperatorHarness(page, { reloginRequired: true });
 });
 
 test("operator snapshot stays action-first and responsive", async ({ page }, testInfo) => {
@@ -11,7 +11,7 @@ test("operator snapshot stays action-first and responsive", async ({ page }, tes
 
   await expect(page.getByRole("heading", { name: "Сейчас" })).toBeVisible();
   await expect(page.getByText("Есть отклонения, требующие решения")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Сканировать" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Повторить скан" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Портфель" })).toBeVisible();
   await expect(page.getByText("$47.80")).toBeVisible();
   await expect(page.getByRole("link", { name: "Открыть кабинет: GH_CR2" })).toBeVisible();
@@ -110,14 +110,15 @@ test("cabinet ledger opens a typed cabinet snapshot", async ({ page }) => {
   await expect(page.getByText("$ · Africa/Accra · контроль кабинета")).toBeVisible();
 });
 
-test("scan uses the canonical settings route", async ({ page }) => {
+test("re-login recovery uses the canonical operator command", async ({ page }) => {
   const requestPromise = page.waitForRequest((request) =>
-    request.url().endsWith("/api/settings/observer/scan-now"),
+    request.url().endsWith("/api/operator/scan/retry"),
   );
   await page.goto("/");
-  await page.getByRole("button", { name: "Сканировать" }).click();
+  await page.getByRole("button", { name: "Повторить скан" }).click();
   const request = await requestPromise;
   expect(request.method()).toBe("POST");
+  expect(request.headers()["idempotency-key"]).toBeTruthy();
 });
 
 test("attention CTA lands on a real typed ad detail", async ({ page }) => {
