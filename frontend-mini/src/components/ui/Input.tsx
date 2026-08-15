@@ -9,12 +9,15 @@ import { cn } from "@/lib/cn";
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
   errorMessage?: string;
+  /** Пояснение под полем: почему значение ограничено или откуда оно берётся. */
+  helpText?: string;
   inputRef?: Ref<HTMLInputElement>;
 }
 
 export function Input({
   label,
   errorMessage,
+  helpText,
   id,
   className,
   inputRef,
@@ -25,7 +28,12 @@ export function Input({
   const generatedId = useId();
   const inputId = id ?? generatedId;
   const errorId = `${inputId}-error`;
-  const describedBy = [ariaDescribedBy, errorMessage ? errorId : undefined]
+  const helpId = `${inputId}-help`;
+  const describedBy = [
+    ariaDescribedBy,
+    errorMessage ? errorId : undefined,
+    helpText && !errorMessage ? helpId : undefined,
+  ]
     .filter(Boolean)
     .join(" ");
   return (
@@ -63,6 +71,11 @@ export function Input({
           className="text-[12px] text-[var(--color-danger)]"
         >
           {errorMessage}
+        </p>
+      )}
+      {helpText && !errorMessage && (
+        <p id={helpId} className="text-[12px] text-[var(--color-bg-9)]">
+          {helpText}
         </p>
       )}
     </div>

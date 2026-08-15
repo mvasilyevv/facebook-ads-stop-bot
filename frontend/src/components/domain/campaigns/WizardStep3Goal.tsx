@@ -179,12 +179,21 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
               value={String(values.age_min)}
               onChange={(e) => onChange({ age_min: Number(e.target.value) })}
             />
+            {/* При Advantage+ билдер форсит верхнюю границу 65 (Meta иначе
+                отвергает adset). Поле показывает то, что реально уедет, а не
+                выбор, который будет молча заменён. */}
             <Input
               label="Возраст до"
               type="number"
               min={18}
               max={65}
-              value={String(values.age_max)}
+              disabled={values.advantage_audience}
+              value={values.advantage_audience ? "65" : String(values.age_max)}
+              helpText={
+                values.advantage_audience
+                  ? "Advantage+ сам расширяет аудиторию — верхнюю границу задать нельзя"
+                  : undefined
+              }
               onChange={(e) => onChange({ age_max: Number(e.target.value) })}
             />
             <div className="pb-1">
@@ -269,14 +278,16 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
             placeholder="{byer} | {offer} | adset.pro | {date}"
             value={values.naming_template}
             onChange={(event) => onChange({ naming_template: event.target.value })}
-            helpText="Пусто — стандартный шаблон. Доступны {byer}, {offer}, {date}."
+            helpText="Пусто — стандартный шаблон. Доступны {byer}, {offer}, {type}, {date}."
           />
+          {/* Плейсхолдеры вида {byer} тут не подставляются: своя строка уезжает
+              буквально, раскрывает её уже Meta. Пример не должен учить обратному. */}
           <Input
             label="URL Tags"
-            placeholder="sub2={byer}&sub5={{campaign.name}}"
+            placeholder="sub2=mv&sub5={{campaign.name}}"
             value={values.url_tags_template}
             onChange={(event) => onChange({ url_tags_template: event.target.value })}
-            helpText="Пусто — SOP-теги. sub8={{ad.id}} сервер добавит автоматически."
+            helpText="Пусто — SOP-теги. Своя строка уедет буквально; sub8={{ad.id}} сервер добавит сам."
           />
         </div>
         {/* Ad text */}

@@ -60,6 +60,27 @@ describe("WizardStep3Goal — редактируемые поля пресета
   });
 });
 
+describe("WizardStep3Goal — верхняя граница возраста при Advantage+", () => {
+  it("при Advantage+ показывает 65 и не даёт задать своё значение", () => {
+    // Билдер всё равно отправит 65: Meta отвергает adset с меньшим капом.
+    // Поле не должно показывать выбор, который будет молча заменён.
+    renderGoal({ ...BASE_VALUES, advantage_audience: true, age_max: 45 });
+
+    const ageMax = screen.getByLabelText("Возраст до");
+    expect(ageMax).toHaveValue(65);
+    expect(ageMax).toBeDisabled();
+    expect(screen.getByText(/Advantage\+ сам расширяет аудиторию/)).toBeInTheDocument();
+  });
+
+  it("без Advantage+ верхняя граница остаётся выбором оператора", () => {
+    renderGoal({ ...BASE_VALUES, advantage_audience: false, age_max: 45 });
+
+    const ageMax = screen.getByLabelText("Возраст до");
+    expect(ageMax).toHaveValue(45);
+    expect(ageMax).toBeEnabled();
+  });
+});
+
 describe("WizardStep3Goal — SOP-инварианты", () => {
   it("не содержит редактируемых Objective, Optimization Goal и Bid Strategy", () => {
     renderGoal();

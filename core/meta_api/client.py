@@ -487,6 +487,38 @@ def _campaign_positive_integer(value: Any, *, label: str) -> int:
     return value
 
 
+# Списки продублированы намеренно: capability — независимый рубеж, он не должен
+# доверять тому же перечислению, по которому строилось тело запроса.
+_CAMPAIGN_GENDER_IDS: frozenset[int] = frozenset({1, 2})
+_CAMPAIGN_PUBLISHER_PLATFORMS: frozenset[str] = frozenset(
+    {"facebook", "instagram", "messenger", "audience_network"}
+)
+
+
+def _campaign_optional_closed_list(
+    mapping: Mapping[str, Any],
+    *,
+    key: str,
+    allowed: frozenset[Any],
+    label: str,
+) -> None:
+    """Проверить необязательный список с закрытым набором значений.
+
+    Отсутствие ключа — нормальный случай «оператор не сужал выбор». Если ключ
+    есть, он обязан нести непустой список без повторов и без значений вне
+    набора: молча пропущенное сужение уводит открутку не на ту аудиторию.
+    """
+    if key not in mapping:
+        return
+    value = mapping[key]
+    if not isinstance(value, list) or not value:
+        raise PermanentError(f"campaign Graph {label} is invalid")
+    if any(isinstance(item, bool) or item not in allowed for item in value):
+        raise PermanentError(f"campaign Graph {label} is invalid")
+    if len(value) != len(set(value)):
+        raise PermanentError(f"campaign Graph {label} is invalid")
+
+
 def _validate_campaign_call_to_action(value: Any) -> None:
     cta = _campaign_mapping(
         value,
@@ -577,7 +609,19 @@ def _validate_campaign_create_body(
         targeting = _campaign_mapping(
             body.get("targeting"),
             required=frozenset({"geo_locations", "age_min", "age_max", "targeting_automation"}),
-            allowed=frozenset({"geo_locations", "age_min", "age_max", "targeting_automation"}),
+            allowed=frozenset(
+                {
+                    "geo_locations",
+                    "age_min",
+                    "age_max",
+                    "targeting_automation",
+                    # Пол и плейсменты необязательны: пустой выбор оператора означает
+                    # «все», и билдер тогда ключ не кладёт. Но если выбор сделан, он
+                    # обязан доехать — иначе кампания уже создана, а adset падает.
+                    "genders",
+                    "publisher_platforms",
+                }
+            ),
             label="targeting",
         )
         geo = _campaign_mapping(
@@ -600,6 +644,18 @@ def _validate_campaign_create_body(
         )
         if automation.get("advantage_audience") not in {0, 1}:
             raise PermanentError("campaign Graph advantage_audience is invalid")
+        _campaign_optional_closed_list(
+            targeting,
+            key="genders",
+            allowed=_CAMPAIGN_GENDER_IDS,
+            label="targeting genders",
+        )
+        _campaign_optional_closed_list(
+            targeting,
+            key="publisher_platforms",
+            allowed=_CAMPAIGN_PUBLISHER_PLATFORMS,
+            label="targeting publisher_platforms",
+        )
         return
 
     if edge == "adcreatives":
