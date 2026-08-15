@@ -168,7 +168,12 @@ async def _diagnose_vision_channel(
 
     empty_probe = _BrowserChannelProbe("UNKNOWN", None, None, False)
     browser_probe = empty_probe
-    if cloud_state == "ready" and runtime is not None:
+    # Облако отвечает на вопрос «почему сломано», а на вопрос «работает ли
+    # канал» отвечает только эта проба: она идёт в живую сессию браузера и
+    # делает настоящий запрос к Graph. Пока она стояла за облаком, недоступное
+    # облако объявляло канал мёртвым при полностью исправном браузере — и
+    # деньги вставали из-за чужого сервиса.
+    if runtime is not None:
         browser_probe = await _fenced_settings_probe(
             engine,
             meta_api_client,
