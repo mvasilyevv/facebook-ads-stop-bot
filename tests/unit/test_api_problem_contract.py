@@ -89,20 +89,23 @@ def test_not_found_uses_the_same_contract_and_generated_correlation_id() -> None
     assert len(payload["correlation_id"]) == 26
 
 
-def test_raw_uuid_request_id_is_not_reflected_to_response() -> None:
+@pytest.mark.parametrize(
+    "untrusted_request_id",
+    ["trace-123", "00000000-0000-4000-8000-000000000099"],
+)
+def test_untrusted_request_id_is_not_reflected_to_response(untrusted_request_id: str) -> None:
     app = create_app()
-    raw_uuid = "00000000-0000-4000-8000-000000000099"
 
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.get(
             "/__test__/missing",
-            headers={"X-Request-Id": raw_uuid},
+            headers={"X-Request-Id": untrusted_request_id},
         )
 
     payload = _assert_problem(response, status=404, code="not_found")
     assert payload["correlation_id"].startswith("req_")
-    assert raw_uuid not in response.text
-    assert response.headers["x-request-id"] != raw_uuid
+    assert untrusted_request_id not in response.text
+    assert response.headers["x-request-id"] != untrusted_request_id
 
 
 def test_validation_error_has_field_errors_without_echoing_input() -> None:

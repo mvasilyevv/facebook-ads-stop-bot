@@ -258,10 +258,20 @@ async def test_system_readyz_treats_operator_pause_as_not_business_ready(
     assert resp.json()["blockers"] == ["scanning_paused"]
 
 
-# X-Request-Id из запроса проксируется обратно в ответ — для трассировки.
-def test_request_id_is_echoed_back() -> None:
+# Произвольный клиентский id может содержать чувствительные данные, поэтому он
+# не отражается наружу. Сквозная трассировка сохраняется только для bounded
+# opaque id из межсервисного контракта ``req_…``.
+def test_request_id_only_reuses_bounded_opaque_client_id() -> None:
     app = _make_app_with_overrides()
     client = TestClient(app)
     resp = client.get("/healthz", headers={"X-Request-Id": "trace-123"})
     assert resp.status_code == 200
-    assert resp.headers.get("x-request-id") == "trace-123"
+    request_id = resp.headers.get("x-request-id")
+    assert request_id is not None and request_id.startswith("req_")
+    assert request_id != "trace-123"
+    assert "trace-123" not in resp.text
+
+    upstream_request_id = "req_upstream-trace-123"
+    traced = client.get("/healthz", headers={"X-Request-Id": upstream_request_id})
+    assert traced.status_code == 200
+    assert traced.headers.get("x-request-id") == upstream_request_id

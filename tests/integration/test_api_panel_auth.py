@@ -12,7 +12,7 @@ from sqlalchemy import text
 
 from apps.api.deps import get_engine, get_settings
 from apps.api.main import create_app
-from apps.api.routers.panel_auth import _exchange_code
+from apps.api.routers.panel_auth import _PANEL_TICKET_COOKIE, _exchange_code
 from core.auth.panel_access import PANEL_SESSION_COOKIE, TELEGRAM_TOKEN_URL
 from core.config import Settings
 
@@ -118,9 +118,18 @@ async def test_owner_flow_uses_callback_ticket_then_secure_12h_cookie(
             follow_redirects=False,
         )
         assert callback.status_code == 303
-        assert callback.headers["location"].startswith("/auth/redeem?ticket=")
+        # Одноразовый ticket передаётся только в HttpOnly cookie: query string
+        # оседает в browser history, Referer и access logs.
+        assert callback.headers["location"] == "/auth/redeem"
+        assert urlsplit(callback.headers["location"]).query == ""
+        callback_cookie = callback.headers["set-cookie"]
         assert PANEL_SESSION_COOKIE not in callback.headers.get("set-cookie", "")
-        ticket = parse_qs(urlsplit(callback.headers["location"]).query)["ticket"][0]
+        assert f"{_PANEL_TICKET_COOKIE}=" in callback_cookie
+        assert "HttpOnly" in callback_cookie and "Secure" in callback_cookie
+        assert "SameSite=strict" in callback_cookie
+        assert "Path=/" in callback_cookie and "Max-Age=60" in callback_cookie
+        ticket = client.cookies.get(_PANEL_TICKET_COOKIE)
+        assert ticket
         async with pg_engine.connect() as conn:
             stored = (
                 (
@@ -144,7 +153,9 @@ async def test_owner_flow_uses_callback_ticket_then_secure_12h_cookie(
         assert verified.headers["x-verified-operator-principal"] == f"panel:{owner_id}"
 
         replay = await client.get(callback.headers["location"], follow_redirects=False)
-        assert replay.status_code == 403 and "уже был использован" in replay.text
+        assert replay.status_code == 403
+        assert "Ссылка входа недействительна" in replay.text
+        assert PANEL_SESSION_COOKIE not in replay.headers.get("set-cookie", "")
 
         logout = await client.get("/auth/logout", follow_redirects=False)
         assert logout.status_code == 303
@@ -183,13 +194,28 @@ async def test_state_replay_and_non_owner_fail_closed(pg_engine, panel_recipient
             params={"state": state, "code": "valid"},
             follow_redirects=False,
         )
-        assert denied.status_code == 403 and "не назначен владельцем" in denied.text
+        # Публичный текст намеренно не различает non-owner и другие отказы OIDC,
+        # но смысловой инвариант остаётся: ticket/session не выдаются.
+        assert denied.status_code == 403 and "Telegram Login не подтверждён" in denied.text
+        assert _PANEL_TICKET_COOKIE not in denied.headers.get("set-cookie", "")
+        assert PANEL_SESSION_COOKIE not in denied.headers.get("set-cookie", "")
+        async with pg_engine.connect() as conn:
+            ticket_count = await conn.scalar(
+                text(
+                    "SELECT COUNT(*) FROM panel_login_tickets "
+                    "WHERE telegram_user_id = :telegram_user_id"
+                ),
+                {"telegram_user_id": user_id},
+            )
+        assert ticket_count == 0
         replay = await client.get(
             "/auth/telegram/callback",
             params={"state": state, "code": "valid"},
             follow_redirects=False,
         )
-        assert replay.status_code == 403 and "уже был использован" in replay.text
+        assert replay.status_code == 403 and "Telegram Login не подтверждён" in replay.text
+        assert _PANEL_TICKET_COOKIE not in replay.headers.get("set-cookie", "")
+        assert PANEL_SESSION_COOKIE not in replay.headers.get("set-cookie", "")
 
 
 @pytest.mark.asyncio

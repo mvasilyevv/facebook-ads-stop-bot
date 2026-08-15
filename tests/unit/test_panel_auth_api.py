@@ -161,3 +161,43 @@ async def test_unknown_kid_forces_exactly_one_jwks_refresh(monkeypatch):
     assert "httponly" in callback.headers["set-cookie"].lower()
     assert refreshes == [False, True]
     assert verification_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_non_owner_callback_fails_before_ticket_creation(monkeypatch):
+    attempt = OidcAttempt("nonce", "verifier", "/")
+    ticket_creation_attempted = False
+
+    async def recipient(_engine, *, telegram_user_id):
+        return SimpleNamespace(telegram_user_id=telegram_user_id, role="recipient")
+
+    async def create_ticket(*_args, **_kwargs):
+        nonlocal ticket_creation_attempted
+        ticket_creation_attempted = True
+        return "must-not-be-issued", object()
+
+    monkeypatch.setattr(panel_auth, "consume_oidc_attempt", lambda *_args: _value(attempt))
+    monkeypatch.setattr(panel_auth, "find_recipient_by_telegram_user_id", recipient)
+    monkeypatch.setattr(panel_auth, "_exchange_code", lambda **_kwargs: _value("token"))
+    monkeypatch.setattr(panel_auth, "_load_jwks", lambda **_kwargs: _value({"keys": []}))
+    monkeypatch.setattr(
+        panel_auth,
+        "verify_telegram_id_token",
+        lambda *_args, **_kwargs: {"id": 654321},
+    )
+    monkeypatch.setattr(panel_auth, "create_panel_ticket", create_ticket)
+
+    app = _app(_settings())
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://app.adpulse.su"
+    ) as client:
+        response = await client.get(
+            "/auth/telegram/callback",
+            params={"state": "state", "code": "valid"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403
+    assert "Telegram Login не подтверждён" in response.text
+    assert ticket_creation_attempted is False
+    assert "set-cookie" not in response.headers
