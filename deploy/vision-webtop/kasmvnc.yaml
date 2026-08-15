@@ -73,7 +73,7 @@ server:
   http:
     httpd_directory: /usr/share/kasmvnc/www
   advanced:
-    kasm_password_file: /run/kasmvnc/.kasmpasswd
+    kasm_password_file: /config/.kasmpasswd
     x_authority_file: auto
   auto_shutdown:
     no_user_session_timeout: never

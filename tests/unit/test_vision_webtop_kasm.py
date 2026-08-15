@@ -156,15 +156,16 @@ def test_entrypoint_installs_managed_config_into_the_mounted_profile() -> None:
     assert "/etc/kasmvnc/kasmvnc.yaml" in entrypoint
     assert '"${config_home}/.vnc/kasmvnc.yaml"' in entrypoint
     # Путь к файлу паролей задаёт именно управляемый конфиг.
-    assert "kasm_password_file: /run/kasmvnc/.kasmpasswd" in config
-    assert "readonly password_file=/run/kasmvnc/.kasmpasswd" in entrypoint
+    assert "kasm_password_file: /config/.kasmpasswd" in config
+    assert "readonly password_file=/config/.kasmpasswd" in entrypoint
     # Конфиг теперь действительно применяется, поэтому его значения обязаны
     # быть валидными: log_dest: stdout эта сборка отвергает при разборе.
     assert "log_dest: logfile" in config
     assert "log_dest: stdout" not in config
     # Сервер ищет пользователей только в ${HOME}/.kasmpasswd, поэтому ссылка
     # обязательна; сам пароль остаётся в /run и на диск профиля не попадает.
-    assert 'ln -sfn "${password_file}" "${config_home}/.kasmpasswd"' in entrypoint
+    # Управляемый профиль не принимает симлинки, поэтому файл паролей — обычный.
+    assert "ln -sfn" not in entrypoint
     # Ключ snakeoil закрыт группой ssl-cert: без членства сервер сообщает об
     # отказе в доступе как об отсутствии файла и не стартует.
     dockerfile = (WEBTOP / "Dockerfile").read_text(encoding="utf-8")
