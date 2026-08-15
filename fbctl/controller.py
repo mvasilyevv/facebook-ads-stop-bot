@@ -119,7 +119,12 @@ MANAGED_HOST_PORT_SERVICES = (
     ("APP_API_PORT", "APP_PROJECT_NAME", "api"),
     ("APP_WEB_PORT", "APP_PROJECT_NAME", "frontend"),
     ("APP_TMA_PORT", "APP_PROJECT_NAME", "mini-app"),
-    ("BROWSER_GRPC_HOST_PORT", "DESKTOP_PROJECT_NAME", "browser-agent"),
+    # gRPC браузер-агента публикует сам vision-webtop: агент живёт в его
+    # сетевом пространстве и своего published-порта не имеет. Ошибка здесь
+    # не видна на глаз — она превращает собственный контейнер в «чужой»
+    # и блокирует любой повторный деплой. Таблицу стережёт тест,
+    # сверяющий её с ports в Compose.
+    ("BROWSER_GRPC_HOST_PORT", "DESKTOP_PROJECT_NAME", "vision-webtop"),
     ("DESKTOP_HTTPS_PORT", "DESKTOP_PROJECT_NAME", "vision-webtop"),
 )
 # Ресурсы брошенного прежнего bootstrap. Мы их не трогаем: только сообщаем

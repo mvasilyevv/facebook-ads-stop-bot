@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import time
 from contextlib import asynccontextmanager
@@ -44,6 +45,7 @@ from fbctl.config import (
 )
 from fbctl.controller import (
     LEGACY_DOCKER_RESOURCES,
+    MANAGED_HOST_PORT_SERVICES,
     REHEARSAL_FAILPOINTS,
     WORKERS,
     DeployOptions,
@@ -2798,3 +2800,33 @@ def test_nested_vision_profile_is_normalized_for_runtime_uid(tmp_path: Path, mon
         nested / "Preferences",
     }
     assert all(item[1:] == (1000, 1000, False) for item in ownership)
+
+
+def test_managed_port_owners_match_the_service_that_publishes_them() -> None:
+    """Таблица владельцев портов обязана совпадать с ports в Compose.
+
+    Гейт свободных портов считает «своим» только контейнер того сервиса,
+    который здесь назван. Ошибка в имени превращает собственный контейнер
+    в чужой и блокирует любой повторный деплой на живом хосте — при этом
+    на глаз таблица выглядит правдоподобно.
+    """
+    compose_files = {
+        "INFRA_PROJECT_NAME": ROOT / "deploy/compose/docker-compose.infra.yml",
+        "APP_PROJECT_NAME": ROOT / "deploy/compose/docker-compose.app.yml",
+        "DESKTOP_PROJECT_NAME": ROOT / "deploy/compose/docker-compose.desktop-agent.yml",
+    }
+    published: dict[str, tuple[str, str]] = {}
+    for project_key, path in compose_files.items():
+        service: str | None = None
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            if re.fullmatch(r"  [A-Za-z0-9_-]+:", raw.rstrip()):
+                service = raw.strip().rstrip(":")
+                continue
+            match = re.search(r"\$\{([A-Z_]+):", raw)
+            if match and "127.0.0.1:" in raw and service is not None:
+                published[match.group(1)] = (project_key, service)
+
+    declared = {
+        key: (project_key, service) for key, project_key, service in MANAGED_HOST_PORT_SERVICES
+    }
+    assert declared == published
