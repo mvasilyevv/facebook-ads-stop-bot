@@ -140,3 +140,21 @@ def test_legacy_split_desktop_runtime_cannot_reenter_release_contract() -> None:
         source = path.read_text(encoding="utf-8")
         for token in retired_tokens:
             assert token not in source, (path.relative_to(ROOT), token)
+
+
+def test_entrypoint_installs_managed_config_into_the_mounted_profile() -> None:
+    """Пустой профиль не должен ронять десктоп.
+
+    Конфиг из образа лежит в /etc/kasmvnc, а профиль монтируется поверх HOME.
+    На чистом профиле сервер создаёт там свой дефолт, тот перекрывает
+    системный конфиг, теряет путь к файлу паролей и падает с «No users
+    configured» — что и случилось на первом боевом bootstrap.
+    """
+    entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
+    config = (WEBTOP / "kasmvnc.yaml").read_text(encoding="utf-8")
+
+    assert "/etc/kasmvnc/kasmvnc.yaml" in entrypoint
+    assert '"${config_home}/.vnc/kasmvnc.yaml"' in entrypoint
+    # Путь к файлу паролей задаёт именно управляемый конфиг.
+    assert "kasm_password_file: /run/kasmvnc/.kasmpasswd" in config
+    assert "readonly password_file=/run/kasmvnc/.kasmpasswd" in entrypoint

@@ -68,6 +68,13 @@ install -d -o "${requested_uid}" -g "${requested_gid}" -m 0700 \
   "${config_home}/.local" "${config_home}/.vnc"
 install -d -o "${requested_uid}" -g "${requested_gid}" -m 0700 /run/kasmvnc
 
+# Конфиг из образа лежит в /etc/kasmvnc, но профиль монтируется поверх HOME, и
+# на пустом профиле сервер создаёт там свой дефолт — он перекрывает системный,
+# теряет путь к файлу паролей и падает с «No users configured». Раскладываем
+# управляемый конфиг в профиль на каждом старте: он наш, а не пользовательский.
+install -o "${requested_uid}" -g "${requested_gid}" -m 0600 \
+  /etc/kasmvnc/kasmvnc.yaml "${config_home}/.vnc/kasmvnc.yaml"
+
 umask 077
 printf '%s\n%s\n' \
   "${DESKTOP_KASM_SERVICE_PASSWORD}" \
