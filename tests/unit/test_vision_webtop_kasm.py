@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -67,6 +69,50 @@ def test_single_runtime_owns_display_one_and_health() -> None:
     assert "kasmxproxy" not in entrypoint
     assert ":10" not in entrypoint
     assert "X10" not in entrypoint
+
+
+def _healthcheck_with_stubs(tmp_path: Path, *, vision_running: bool = True) -> int:
+    """Выполнить настоящий healthcheck.sh, подменив внешние команды заглушками.
+
+    xdpyinfo печатает строку с разрешением, а следом ещё много вывода: так
+    проверяется, что скрипт дочитывает его до конца. Конвейер `| grep -q`
+    здесь обрывает чтение, xdpyinfo ловит SIGPIPE и pipefail возвращает 141 —
+    здоровый рабочий стол становится unhealthy.
+    """
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    (stubs / "xdpyinfo").write_text(
+        '#!/bin/sh\necho "  dimensions:    1366x768 pixels"\n'
+        'i=0\nwhile [ "$i" -lt 4000 ]; do echo "  filler line $i"; i=$((i + 1)); done\n',
+        encoding="utf-8",
+    )
+    (stubs / "pgrep").write_text(
+        "#!/bin/sh\n"
+        + ("exit 0\n" if vision_running else 'case "$*" in *Vision*) exit 1;; esac\nexit 0\n'),
+        encoding="utf-8",
+    )
+    (stubs / "curl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    for stub in stubs.iterdir():
+        stub.chmod(0o755)
+
+    return subprocess.run(
+        ["bash", str(WEBTOP / "healthcheck.sh")],
+        env={
+            "PATH": f"{stubs}:{os.environ['PATH']}",
+            "DESKTOP_KASM_SERVICE_USER": "service",
+            "DESKTOP_KASM_SERVICE_PASSWORD": "x" * 16,
+        },
+        capture_output=True,
+        check=False,
+    ).returncode
+
+
+def test_healthcheck_passes_when_desktop_is_actually_up(tmp_path: Path) -> None:
+    assert _healthcheck_with_stubs(tmp_path) == 0
+
+
+def test_healthcheck_fails_when_vision_is_gone(tmp_path: Path) -> None:
+    assert _healthcheck_with_stubs(tmp_path, vision_running=False) != 0
 
 
 def test_first_party_client_is_profile_bound_and_fail_closed() -> None:
