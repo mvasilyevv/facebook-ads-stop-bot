@@ -51,27 +51,27 @@ rehearsal.
 
 ## Подтверждённые дефекты
 
-### 1. KasmVNC password принимался за пределом CLI-контракта — исправлено
+### 1. KasmVNC password за пределом документированного диапазона — не подтвердилось
 
-- Место до исправления: `fbctl/config.py:641-644` проверяло только minimum для
-  `DESKTOP_KASM_SERVICE_PASSWORD`.
-- Практика: `canonicalize_source` принимал 129+ символов, bootstrap сохранял
-  пароль и доходил до первого `vision-webtop`; `kasmvncpasswd` отвергал его,
-  поэтому desktop не становился healthy.
-- Первый падающий шаг: `start_desktop` следующего routine deploy после
-  bootstrap, внутри `deploy/vision-webtop/entrypoint.sh:78-83`.
-- Исправление: upper bound `128` добавлен в canonical source validation.
-- Красный тест до исправления:
+Гипотеза была такая: `canonicalize_source` принимает пароль длиннее 128
+символов, а `kasmvncpasswd` его отвергает, поэтому desktop не станет healthy.
+Основание — документация KasmVNC, где для `vncpasswd` указан диапазон 6–128:
+<https://www.kasmweb.com/kasmvnc/docs/master/man/vncpasswd.html>.
 
-  ```text
-  test_fresh_source_rejects_kasm_password_above_tool_limit
-  Failed: DID NOT RAISE <class 'fbctl.errors.FbctlError'>
-  ```
+Проверка на живом бинарнике из нашего образа гипотезу **не подтвердила**:
 
-  После исправления проверены значения `128` (accept) и `129` (reject).
+```text
+len128 rc=0
+len129 rc=0
+```
 
-Официальный `vncpasswd` указывает диапазон 6–128 и default password file
-`$HOME/.kasmpasswd`: <https://www.kasmweb.com/kasmvnc/docs/master/man/vncpasswd.html>.
+Пароли на 128 и 129 символов принимаются одинаково, и сохранённые хеши
+различаются — то есть обрезки, из-за которой Caddy слал бы один пароль, а Kasm
+хранил другой, тоже нет. Плюс fbctl генерирует 32 символа сам, так что путь
+недостижим и в теории.
+
+Верхняя граница не добавлена: это был бы предохранитель от несуществующей
+поломки, а документация разошлась с поведением сборки.
 
 ### 2. Clean-host Caddy contract не содержит prerequisite — не исправлено
 

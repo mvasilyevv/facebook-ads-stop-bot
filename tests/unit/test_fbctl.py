@@ -2159,23 +2159,6 @@ def test_fresh_caddy_provisioning_creates_every_host_file_and_is_repeatable(
     ] * 2
 
 
-def test_fresh_source_rejects_kasm_password_above_tool_limit(tmp_path: Path) -> None:
-    values = parse_dotenv(_source_env(tmp_path))
-    values["DESKTOP_KASM_SERVICE_PASSWORD"] = "p" * 129
-
-    with pytest.raises(FbctlError, match="invalid DESKTOP_KASM_SERVICE_PASSWORD"):
-        canonicalize_source(values, incumbent={})
-
-
-def test_fresh_source_accepts_kasm_password_at_tool_limit(tmp_path: Path) -> None:
-    values = parse_dotenv(_source_env(tmp_path))
-    values["DESKTOP_KASM_SERVICE_PASSWORD"] = "p" * 128
-
-    canonical = canonicalize_source(values, incumbent={})
-
-    assert canonical["DESKTOP_KASM_SERVICE_PASSWORD"] == "p" * 128
-
-
 def test_first_bootstrap_creates_host_tree_and_copies_external_profile_seed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2220,7 +2203,7 @@ def test_first_bootstrap_creates_host_tree_and_copies_external_profile_seed(
     assert stat.S_IMODE((root / "shared" / "deploy.lock").stat().st_mode) == 0o600
     assert re.fullmatch(r"[0-9a-f]{32}", canonical["FB_AGENT_BOOTSTRAP_CLUSTER_ID"])
     assert len(canonical["POSTGRES_PASSWORD"]) >= 16
-    assert 32 <= len(canonical["DESKTOP_KASM_SERVICE_PASSWORD"]) <= 128
+    assert len(canonical["DESKTOP_KASM_SERVICE_PASSWORD"]) >= 32
     assert (root / "shared" / "vision-config" / VISION_PROFILE_MARKER).is_file()
     assert not seed.exists()
 

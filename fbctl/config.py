@@ -639,8 +639,7 @@ def validate_source_values(values: dict[str, str]) -> None:
     if vision_folder_id and not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", vision_folder_id):
         raise FbctlError("source environment has an invalid Vision folder id")
     for key, minimum in GENERATED_SECRETS.items():
-        value = values.get(key, "")
-        if len(value) < minimum or (key == "DESKTOP_KASM_SERVICE_PASSWORD" and len(value) > 128):
+        if len(values.get(key, "")) < minimum:
             raise FbctlError(f"source environment has an invalid {key}")
 
 
