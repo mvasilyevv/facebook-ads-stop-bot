@@ -50,6 +50,67 @@ def test_immutable_image_pins_kasmvnc_vision_and_first_party_client() -> None:
     assert "COPY --from=kasm-client-builder" in dockerfile
     assert "KasmVNC 1.5.0" in notices
     assert "17265facc40ab50db5740cdf0d12c61173edafc9" in notices
+    # Браузер на столе приходит тем же путём, что KasmVNC и Vision: официальный
+    # артефакт по фиксированной версии со сверкой контрольной суммы. apt-пакет
+    # firefox в Ubuntu 24.04 — заглушка над snap и внутри контейнера не работает.
+    assert "FIREFOX_VERSION=140.13.0esr" in dockerfile
+    assert "866d7e5f94abe93132e02a0db72da32b6e133905fcbea6afa417a96d496021da" in dockerfile
+    assert "ftp.mozilla.org/pub/firefox/releases" in dockerfile
+    assert '"${FIREFOX_SHA256}  /tmp/firefox.tar.xz" | sha256sum --check --strict' in dockerfile
+    assert "Firefox 140.13.0esr" in notices
+
+
+def test_desktop_is_a_full_environment_not_a_single_app_kiosk() -> None:
+    """Стол обязан оставаться полноценным окружением.
+
+    До 18.07 образ собирался на готовом linuxserver/webtop и был полным. При
+    переходе на KasmVNC его пересобрали с нуля и оставили пять пакетов —
+    владелец увидел это как «урезанный стол» и попросил вернуть полный.
+    Список поимённый: метапакет при --no-install-recommends тянет только
+    Depends, и состав окружения перестаёт быть нашим решением.
+    """
+    dockerfile = (WEBTOP / "Dockerfile").read_text(encoding="utf-8")
+
+    for package in (
+        "xfce4-appfinder",
+        "xfce4-settings",
+        "xfce4-notifyd",
+        "xfce4-clipman-plugin",
+        "xfce4-screenshooter",
+        "xfce4-taskmanager",
+        "thunar-archive-plugin",
+        "thunar-volman",
+        "atril",
+        "engrampa",
+        "galculator",
+        "mousepad",
+        "ristretto",
+        "gvfs",
+    ):
+        assert package in dockerfile, f"полный стол потерял {package}"
+    # Блокировка экрана внутри контейнера оставила бы оператора перед паролем,
+    # которого он не знает; управление питанием там бессмысленно.
+    assert "xfce4-screensaver" not in dockerfile
+    assert "xfce4-power-manager" not in dockerfile
+
+
+def test_desktop_ships_a_plain_browser_the_operator_can_find() -> None:
+    """Браузер должен быть виден на столе, а не только в меню.
+
+    Стол собран минимальным намеренно, но без обычного браузера оператор не мог
+    открыть облачные панели — ни Vision, ни трекер, ни кабинет.
+    """
+    entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
+    launcher = (WEBTOP / "firefox.desktop").read_text(encoding="utf-8")
+    dockerfile = (WEBTOP / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY firefox.desktop /usr/share/applications/firefox.desktop" in dockerfile
+    assert "ln -s /opt/firefox/firefox /usr/local/bin/firefox" in dockerfile
+    assert '"${config_home}/Desktop"' in entrypoint
+    assert '"${config_home}/Desktop/firefox.desktop"' in entrypoint
+    assert "Exec=/opt/firefox/firefox %u" in launcher
+    # Предупреждение в подписи: кабинеты открываются только через профиль Vision.
+    assert "только через профиль Vision" in launcher
 
 
 def test_single_runtime_owns_display_one_and_health() -> None:

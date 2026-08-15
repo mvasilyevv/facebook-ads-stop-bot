@@ -65,8 +65,14 @@ fi
 
 install -d -o "${requested_uid}" -g "${requested_gid}" -m 0700 \
   "${config_home}" "${config_home}/.cache" "${config_home}/.config" \
-  "${config_home}/.local" "${config_home}/.vnc"
+  "${config_home}/.local" "${config_home}/.vnc" "${config_home}/Desktop"
 install -d -o "${requested_uid}" -g "${requested_gid}" -m 0700 /run/kasmvnc
+
+# Ярлык браузера прямо на столе: меню XFCE его тоже показывает, но искать там
+# оператору незачем. Раскладываем на каждом старте — ярлык наш, а не
+# пользовательский, и должен переживать смену версии.
+install -o "${requested_uid}" -g "${requested_gid}" -m 0700 \
+  /usr/share/applications/firefox.desktop "${config_home}/Desktop/firefox.desktop"
 
 # Конфиг из образа лежит в /etc/kasmvnc, но профиль монтируется поверх HOME, и
 # на пустом профиле сервер создаёт там свой дефолт — он перекрывает системный,
