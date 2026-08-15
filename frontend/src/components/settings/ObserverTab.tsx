@@ -6,7 +6,7 @@ import {
   validateObserverInterval,
 } from "@fb/features/settings";
 import { safeApiProblemMessage } from "@fb/operator-api";
-import { RefreshCw, ScanSearch } from "lucide-react";
+import { RefreshCw, RotateCcw, ScanSearch } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -20,6 +20,7 @@ import {
   useScanObserverNow,
   useSetCampaignAllowlist,
   useToggleScanning,
+  useUpdateAdsManagerColumns,
   useUpdateObserverInterval,
   useUpdateOwnerTag,
 } from "@/lib/api/settings";
@@ -52,10 +53,12 @@ export const ObserverTab: FC = () => {
   const setAllowlist = useSetCampaignAllowlist();
   const refreshCampaigns = useRefreshObserverCampaigns();
   const scanNow = useScanObserverNow();
+  const updateAdsManagerColumns = useUpdateAdsManagerColumns();
 
   const [interval, setInterval] = useState("60");
   const [ownerTags, setOwnerTags] = useState("");
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
+  const [selectedAmColumns, setSelectedAmColumns] = useState<string[]>([]);
   const [intervalError, setIntervalError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -63,6 +66,7 @@ export const ObserverTab: FC = () => {
     setInterval(String(settingsQuery.data.default_interval_seconds));
     setOwnerTags(settingsQuery.data.owner_campaign_tag ?? "");
     setSelectedCampaigns(settingsQuery.data.campaign_ids ?? []);
+    setSelectedAmColumns(settingsQuery.data.am_columns ?? []);
   }, [settingsQuery.data]);
 
   if (settingsQuery.isLoading) {
@@ -172,6 +176,29 @@ export const ObserverTab: FC = () => {
     }
   }
 
+  async function saveAdsManagerColumns() {
+    if (!selectedAmColumns.length) return;
+    try {
+      await updateAdsManagerColumns.mutateAsync(selectedAmColumns);
+      toast.success("Колонки Ads Manager сохранены");
+    } catch (error) {
+      toast.error(
+        "Не удалось сохранить колонки",
+        safeApiProblemMessage(error, "Повторите попытку"),
+      );
+    }
+  }
+
+  async function resetAdsManagerColumns() {
+    try {
+      const updated = await updateAdsManagerColumns.mutateAsync(null);
+      setSelectedAmColumns(updated.am_columns);
+      toast.success("Восстановлен системный набор колонок");
+    } catch (error) {
+      toast.error("Не удалось сбросить колонки", safeApiProblemMessage(error, "Повторите попытку"));
+    }
+  }
+
   return (
     <div className="max-w-4xl space-y-8">
       <section aria-labelledby="observer-runtime-heading">
@@ -251,6 +278,88 @@ export const ObserverTab: FC = () => {
               Поставить scan в очередь
             </Button>
           </SettingRow>
+        </div>
+      </section>
+
+      <section aria-labelledby="ads-manager-columns-heading">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 id="ads-manager-columns-heading" className="m-0 text-[16px] font-medium text-bg-11">
+              Вкладка Ads Manager
+            </h2>
+            <p className="m-0 mt-1 max-w-[70ch] text-[13px] leading-5 text-bg-8">
+              Эти галочки меняют только колонки, которые видны человеку. Метрики сканирования и
+              правила автостопа используют отдельный фиксированный набор. Изменение применится к
+              вкладке при следующем scan.
+            </p>
+          </div>
+          <span className="text-[13px] text-bg-9" role="status">
+            {settings.am_columns_use_default ? "Fallback browser-agent" : "Свой набор"}
+          </span>
+        </div>
+
+        {settings.am_columns_use_default ? (
+          <p className="m-0 mt-2 max-w-[70ch] text-[13px] leading-5 text-bg-8">
+            Активен системный fallback: сначала env-настройка browser-agent, затем встроенный набор.
+            Галочки ниже показывают встроенный набор; точное env-переопределение API не видит.
+          </p>
+        ) : null}
+
+        <fieldset className="mt-3">
+          <legend className="sr-only">Колонки видимой вкладки Ads Manager</legend>
+          <div className="grid border-y border-[var(--color-hairline)] sm:grid-cols-2">
+            {settings.am_column_options.map((column, index) => {
+              const checked = selectedAmColumns.includes(column.id);
+              return (
+                <label
+                  key={column.id}
+                  className={`flex min-h-11 cursor-pointer items-center gap-3 py-2.5 text-[14px] text-bg-10 ${
+                    index % 2 === 0
+                      ? "sm:border-r sm:border-[var(--color-hairline)] sm:pr-4"
+                      : "sm:pl-4"
+                  } border-b border-[var(--color-hairline)]`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() =>
+                      setSelectedAmColumns((current) =>
+                        checked
+                          ? current.filter((id) => id !== column.id)
+                          : [...current, column.id],
+                      )
+                    }
+                    className="size-4 shrink-0 accent-[var(--color-accent)]"
+                  />
+                  <span>{column.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="m-0 text-[13px] text-bg-8">
+            Выбрано: {selectedAmColumns.length} из {settings.am_column_options.length}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="ghost"
+              leftIcon={<RotateCcw size={14} aria-hidden="true" />}
+              onClick={() => void resetAdsManagerColumns()}
+              loading={updateAdsManagerColumns.isPending}
+            >
+              Сбросить к дефолту
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!selectedAmColumns.length}
+              onClick={() => void saveAdsManagerColumns()}
+              loading={updateAdsManagerColumns.isPending}
+            >
+              Сохранить колонки
+            </Button>
+          </div>
         </div>
       </section>
 
