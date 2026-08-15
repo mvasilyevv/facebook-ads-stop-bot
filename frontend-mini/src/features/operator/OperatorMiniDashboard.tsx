@@ -22,7 +22,6 @@ import {
 } from "@fb/shared/operator/viewModel";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
-import type { components } from "@fb/shared/api/generated";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import { operatorActionStateReason } from "@fb/shared/operator/actionLabels";

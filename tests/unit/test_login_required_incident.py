@@ -22,6 +22,9 @@ async def test_login_required_card_has_one_key_risk_and_concrete_action(monkeypa
     assert facts["incident_key"] == "observer:login_required:777"
     assert facts["title"] == "В Facebook нужно войти снова"
     assert facts["risk"] == "Пока не войдёшь, скан не идёт и авто-стоп не сработает"
-    assert facts["lines"] == ["Открой удалённый рабочий стол и войди в Facebook"]
+    assert facts["lines"] == [
+        "Открой удалённый рабочий стол и войди в Facebook",
+        "Если объявления тратят бюджет — отключи их вручную",
+    ]
     assert facts["resource_type"] == "ad_account"
     assert facts["resource_id"] == "777"

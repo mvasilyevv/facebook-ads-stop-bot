@@ -99,6 +99,8 @@ function approachingRow(
     },
     active_action: null,
   };
+}
+
 function makeReloginSnapshot(scanState?: "queued" | "running" | "failed") {
   const snapshot = makeOperatorSnapshot();
   snapshot.attention.data!.items[0] = {
