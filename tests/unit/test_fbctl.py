@@ -2167,10 +2167,10 @@ def test_explicit_caddy_pair_wins_when_reuse_fallback_is_enabled(
     }
 
 
-def test_fresh_caddy_provisioning_creates_every_host_file_and_is_repeatable(
+def _map_caddy_host(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+) -> dict[str, Path]:
     real_path = Path
     mapped_paths = {
         "/etc/caddy/Caddyfile": tmp_path / "etc/caddy/Caddyfile",
@@ -2185,7 +2185,11 @@ def test_fresh_caddy_provisioning_creates_every_host_file_and_is_repeatable(
         return mapped_paths.get(rendered, real_path(rendered))
 
     monkeypatch.setattr(fbctl_controller, "Path", mapped_path)
-    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        fbctl_controller,
+        "CADDY_ENV_PATH",
+        mapped_paths["/etc/fb-agent/caddy.env"],
+    )
     monkeypatch.setattr(
         fbctl_controller.pwd,
         "getpwnam",
@@ -2196,6 +2200,15 @@ def test_fresh_caddy_provisioning_creates_every_host_file_and_is_repeatable(
         "getgrnam",
         lambda name: SimpleNamespace(gr_gid=os.getgid()) if name == "caddy" else None,
     )
+    return mapped_paths
+
+
+def test_fresh_caddy_provisioning_creates_every_host_file_and_is_repeatable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mapped_paths = _map_caddy_host(tmp_path, monkeypatch)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
     resources = tmp_path / "resources"
     _materialize(resources)
     source_values = canonicalize_source(parse_dotenv(_source_env(tmp_path)), incumbent={})
@@ -2245,20 +2258,83 @@ def test_fresh_caddy_provisioning_creates_every_host_file_and_is_repeatable(
         log = mapped_paths["/var/log/caddy"] / name
         assert log.is_file()
         assert stat.S_IMODE(log.stat().st_mode) == 0o600
-    assert [command for step, command in runner.commands if step == "bootstrap"] == [
-        ("systemctl", "daemon-reload"),
-        (
-            "caddy",
-            "validate",
-            "--config",
-            os.fspath(mapped_paths["/etc/caddy/Caddyfile"]),
-            "--adapter",
-            "caddyfile",
-            "--envfile",
-            os.fspath(mapped_paths["/etc/fb-agent/caddy.env"]),
-        ),
-        ("systemctl", "reload", "caddy"),
-    ] * 2
+    commands = [command for step, command in runner.commands if step == "bootstrap"]
+    assert len(commands) == 8
+    live_validation = (
+        "caddy",
+        "validate",
+        "--config",
+        os.fspath(mapped_paths["/etc/caddy/Caddyfile"]),
+        "--adapter",
+        "caddyfile",
+        "--envfile",
+        os.fspath(mapped_paths["/etc/fb-agent/caddy.env"]),
+    )
+    for offset in (0, 4):
+        staged_validation = commands[offset]
+        assert staged_validation[:3] == ("caddy", "validate", "--config")
+        assert ".fb-agent-caddy-" in staged_validation[3]
+        assert commands[offset + 1] == live_validation
+        assert commands[offset + 2] == ("systemctl", "daemon-reload")
+        assert commands[offset + 3] == ("systemctl", "reload", "caddy")
+
+
+def test_caddy_reload_failure_restores_previous_managed_host_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mapped_paths = _map_caddy_host(tmp_path, monkeypatch)
+    caddy_file = _write(
+        mapped_paths["/etc/caddy/Caddyfile"],
+        "import /etc/caddy/sites-enabled/*.caddy\n",
+        0o644,
+    )
+    sites = mapped_paths["/etc/caddy/sites-enabled"]
+    app = _write(sites / "app.adpulse.su.caddy", "old app config\n", 0o644)
+    desktop = _write(sites / "desktop.adpulse.su.caddy", "old desktop config\n", 0o644)
+    dropin = _write(
+        mapped_paths["/etc/systemd/system/caddy.service.d"] / "fb-agent-env.conf",
+        "old drop-in\n",
+        0o644,
+    )
+    previous = {target: target.read_bytes() for target in (caddy_file, app, desktop, dropin)}
+    resources = tmp_path / "resources"
+    _materialize(resources)
+    source_values = canonicalize_source(parse_dotenv(_source_env(tmp_path)), incumbent={})
+    panel_values = {
+        "PANEL_BASIC_AUTH_USER": "owner",
+        "PANEL_BASIC_AUTH_HASH": "$2b$12$" + "a" * 53,
+    }
+
+    class FailFirstReloadRunner(FakeRunner):
+        reload_failed = False
+
+        def run(self, command, **kwargs):
+            result = super().run(command, **kwargs)
+            argv = tuple(os.fspath(part) for part in command)
+            if argv == ("systemctl", "reload", "caddy") and not self.reload_failed:
+                self.reload_failed = True
+                raise FbctlError("injected Caddy reload failure")
+            return result
+
+    runner = FailFirstReloadRunner()
+
+    with pytest.raises(FbctlError, match="injected Caddy reload failure"):
+        fbctl_controller._reconcile_caddy(  # noqa: SLF001 - transactional host seam
+            resources,
+            source_values,
+            panel_values,
+            runner,
+            step="sync_caddy",
+        )
+
+    assert previous == {target: target.read_bytes() for target in previous}
+    assert not mapped_paths["/etc/fb-agent/caddy.env"].exists()
+    assert [
+        command
+        for step, command in runner.commands
+        if step == "sync_caddy" and command == ("systemctl", "reload", "caddy")
+    ] == [("systemctl", "reload", "caddy")] * 2
 
 
 def test_first_bootstrap_creates_host_tree_and_copies_external_profile_seed(
@@ -2521,6 +2597,130 @@ def test_deploy_orders_webhook_before_workers_and_promotes_after_all_evidence(
     assert deploy_state["completed_steps"] == [*REHEARSAL_FAILPOINTS, "promote"]
 
 
+def test_real_deploy_reconciles_stale_managed_caddy_config_before_public_smoke(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _root(tmp_path)
+    mapped_paths = _map_caddy_host(tmp_path, monkeypatch)
+    _write(
+        mapped_paths["/etc/caddy/Caddyfile"],
+        "import /etc/caddy/sites-enabled/*.caddy\n",
+        0o644,
+    )
+    sites = mapped_paths["/etc/caddy/sites-enabled"]
+    _write(
+        sites / "app.adpulse.su.caddy",
+        (ROOT / "deploy/caddy/app.adpulse.su.caddy").read_bytes(),
+        0o644,
+    )
+    stale_desktop = _write(
+        sites / "desktop.adpulse.su.caddy",
+        'desktop.adpulse.su { respond "stale host config" }\n',
+        0o644,
+    )
+    unmanaged_site = _write(
+        sites / "other.example.caddy",
+        'other.example { respond "managed elsewhere" }\n',
+        0o640,
+    )
+    unmanaged_snapshot = unmanaged_site.read_bytes()
+    _write(
+        mapped_paths["/etc/systemd/system/caddy.service.d"] / "fb-agent-env.conf",
+        (ROOT / "deploy/systemd/caddy-fb-agent-env.conf").read_bytes(),
+        0o644,
+    )
+
+    def prepare_with_host_caddy(**kwargs) -> object:
+        config = prepare_candidate(**kwargs)
+        caddy_values = {
+            "PANEL_BASIC_AUTH_USER": "owner",
+            "PANEL_BASIC_AUTH_HASH": "$2b$12$" + "a" * 53,
+        }
+        fbctl_controller._sync_caddy_values(  # noqa: SLF001 - exact deploy host seam
+            {**config.app_values, **config.desktop_values},
+            caddy_values,
+        )
+        _write(
+            mapped_paths["/etc/fb-agent/caddy.env"],
+            "".join(f"{key}={value}\n" for key, value in caddy_values.items()),
+        )
+        return config
+
+    now = time.time()
+    runner = FakeRunner(now=now)
+    log: list[str] = []
+    controller = ProductionController(
+        runner=runner,
+        probes=FakeProbes(),
+        materialize=_materialize,
+        prepare=prepare_with_host_caddy,
+        now=lambda: now,
+        sleep=lambda _seconds: None,
+        log=log.append,
+    )
+
+    assert controller.deploy(DeployOptions(root=root)).status == "READY"
+
+    assert (
+        stale_desktop.read_bytes() == (ROOT / "deploy/caddy/desktop.adpulse.su.caddy").read_bytes()
+    )
+    assert unmanaged_site.read_bytes() == unmanaged_snapshot
+    assert stat.S_IMODE(unmanaged_site.stat().st_mode) == 0o640
+    assert ("sync_caddy", ("systemctl", "reload", "caddy")) in runner.commands
+    assert not any(command[:2] == ("caddy", "reload") for _step, command in runner.commands)
+    completed = [
+        message.removeprefix("[fbctl] step=").removesuffix(" completed")
+        for message in log
+        if message.startswith("[fbctl] step=") and message.endswith(" completed")
+    ]
+    assert completed.index("sync_caddy") < completed.index("public_smoke")
+
+
+def test_real_deploy_rolls_caddy_back_when_post_reload_smoke_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _root(tmp_path)
+    rollback_steps: list[str] = []
+
+    class CaddyChange:
+        @staticmethod
+        def rollback(_runner, *, step: str) -> None:
+            rollback_steps.append(step)
+
+    def fail_public_smoke(_controller, _config) -> None:
+        raise FbctlError("injected public smoke failure")
+
+    monkeypatch.setattr(
+        ProductionController,
+        "_require_caddy_credentials",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        ProductionController,
+        "_sync_caddy",
+        lambda *_args: CaddyChange(),
+    )
+    monkeypatch.setattr(ProductionController, "_public_smoke", fail_public_smoke)
+    monkeypatch.setattr(
+        fbctl_controller,
+        "_retire_legacy_systemd_units",
+        lambda *_args, **_kwargs: [],
+    )
+    controller = ProductionController(
+        runner=FakeRunner(),
+        probes=FakeProbes(),
+        materialize=_materialize,
+        sleep=lambda _seconds: None,
+    )
+
+    with pytest.raises(FbctlError, match="injected public smoke failure"):
+        controller.deploy(DeployOptions(root=root))
+
+    assert rollback_steps == ["sync_caddy_rollback"]
+
+
 def test_real_deploy_retires_legacy_systemd_after_pull_before_runtime_stop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2539,6 +2739,7 @@ def test_real_deploy_retires_legacy_systemd_after_pull_before_runtime_stop(
         "_require_caddy_credentials",
         lambda *_args: None,
     )
+    monkeypatch.setattr(ProductionController, "_sync_caddy", lambda *_args: None)
     controller = ProductionController(
         runner=FakeRunner(),
         probes=FakeProbes(),

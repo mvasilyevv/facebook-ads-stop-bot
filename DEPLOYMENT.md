@@ -33,7 +33,9 @@ sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz deploy
 создаёт host directories, fixed Caddy configuration, Compose network/volumes,
 применяет baseline, импортирует adoption bundle и активирует desktop profile.
 Обычный `deploy` не принимает adoption bundle или desktop seed и не изменяет
-host provisioning.
+одноразовые identity/profile/Docker/DB-ресурсы. Управляемая часть Caddy — два
+site-файла, `caddy.env`, systemd drop-in, каталоги и права логов — исключение:
+она сверяется с candidate-бандлом и обновляется каждым production deploy.
 
 ## Ресурсы после первого production bootstrap
 
@@ -132,7 +134,9 @@ Routine deploy:
 6. поднимает API/web/TMA и проверяет typed operator snapshot;
 7. применяет и проверяет Telegram webhook до запуска delivery worker;
 8. поднимает workers и ждёт heartbeats плюс `/system-readyz`;
-9. выполняет public smoke и только затем продвигает candidate configuration.
+9. атомарно синхронизирует управляемую Caddy-конфигурацию, валидирует общий
+   Caddyfile и выполняет только `systemctl reload caddy`;
+10. выполняет public smoke и только затем продвигает candidate configuration.
 
 При ошибке `fbctl` возвращает ненулевой код и имя шага. Money workers не
 запускаются до подтверждённой готовности safety-контура. Повтор той же команды
@@ -145,9 +149,28 @@ sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz doctor
 ```
 
 `doctor` проверяет строгую конфигурацию без повторяющихся/неизвестных ключей,
-manifest, executable modes, четыре Compose-файла, Caddy, digest-only images,
-browser capability isolation, порты и свободное место. Проверка не меняет
-active configuration и не останавливает runtime.
+manifest, executable modes, четыре Compose-файла, точное содержимое управляемых
+Caddy-файлов, Caddy, digest-only images, browser capability isolation, порты и
+свободное место. Проверка не меняет active configuration и не останавливает
+runtime.
+
+### Caddy в routine deploy
+
+Caddy общий с другими сайтами, поэтому `fbctl` сохраняет остальное содержимое
+общего Caddyfile и не трогает чужие site-файлы. Он управляет только точным import
+`/etc/caddy/sites-enabled/*.caddy`, двумя файлами FB Agent, собственным env и
+drop-in. Panel BasicAuth-пара сохраняется из root-owned host env; производные
+`API_KEY` и Kasm service auth заново выводятся из candidate configuration.
+
+До записи на host управляемая пара валидируется в отдельном staging-каталоге.
+Затем целевые файлы меняются атомарно, полный общий Caddyfile валидируется уже
+на host, выполняются `systemctl daemon-reload` и `systemctl reload caddy`.
+Прямой `caddy reload` запрещён: его default admin socket на этом host общий и
+может остановить systemd-Caddy. Если live validation, daemon-reload или reload
+падает, `fbctl` восстанавливает предыдущие файлы; после уже начатого reload он
+повторно загружает восстановленную конфигурацию. Ошибка шага `sync_caddy`
+происходит до public smoke и promotion, поэтому release не может завершиться
+`READY` со старой Caddy-конфигурацией.
 
 ## Контракт каталога PostgreSQL
 
