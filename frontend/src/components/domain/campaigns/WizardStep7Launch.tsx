@@ -231,7 +231,7 @@ function LaunchBatchProgress({ receipt, onFinish }: { receipt: LaunchOut; onFini
           aria-label={`Кабинет act_${account.account_id}`}
         >
           <div className="mb-3 flex items-center justify-between gap-3 border-b border-[var(--color-hairline)] pb-3">
-            <strong className="font-mono text-[13px] text-bg-11">act_{account.account_id}</strong>
+            <strong className="font-numeric text-[13px] text-bg-11">act_{account.account_id}</strong>
             <span className="text-[12px] text-bg-9">
               {account.run_id ? "Отдельный run" : "Не поставлен в очередь"}
             </span>
@@ -451,7 +451,7 @@ function SuccessSummary({
         <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 border-y border-success/15 divide-x divide-y sm:divide-y-0 divide-success/15">
           {groups.map((group) => (
             <div key={group.key} className="px-3 py-3 first:pl-0 sm:first:pl-0 last:pr-0">
-              <div className="font-mono text-[19px] leading-none tabular-nums text-bg-11">
+              <div className="font-numeric text-[19px] leading-none tabular-nums text-bg-11">
                 {group.ids.length}
               </div>
               <div className="mt-1 font-display text-[12px] tracking-wider uppercase text-bg-8">
@@ -542,7 +542,7 @@ function TechnicalDetails({ ids }: { ids: Record<string, unknown> }) {
                 <span className="text-[12px] text-bg-8">{group.ids.length}</span>
                 <CopyButton value={value} label={`ID: ${group.label}`} />
               </div>
-              <code className="mt-1.5 block font-mono text-[12px] leading-relaxed text-bg-9 break-all">
+              <code className="mt-1.5 block font-numeric text-[12px] leading-relaxed text-bg-9 break-all">
                 {value}
               </code>
             </div>

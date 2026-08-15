@@ -41,7 +41,7 @@ export function Input({
       {label && (
         <label
           htmlFor={inputId}
-          className="text-[12px] uppercase tracking-[0.07em] text-[var(--color-bg-9)] font-mono"
+          className="text-[12px] uppercase tracking-[0.07em] text-[var(--color-bg-9)]"
         >
           {label}
         </label>

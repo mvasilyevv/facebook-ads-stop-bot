@@ -39,7 +39,7 @@ export function CampaignRunManualReview({ createdMetaIds }: CampaignRunManualRev
               <div className="text-[12px] font-semibold uppercase tracking-wider text-bg-8">
                 {group.label} · {group.ids.length}
               </div>
-              <div className="mt-1 break-all font-mono text-[12px] leading-5 text-bg-11">
+              <div className="mt-1 break-all font-numeric text-[12px] leading-5 text-bg-11">
                 {group.ids.join(", ")}
               </div>
             </div>

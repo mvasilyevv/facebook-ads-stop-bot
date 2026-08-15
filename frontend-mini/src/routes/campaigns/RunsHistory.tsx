@@ -152,7 +152,7 @@ function ManualReviewRequired({ run }: { run: CampaignRunDetail }) {
               <p className="text-[12px] font-semibold uppercase tracking-[.06em] text-bg-8">
                 {group.label} · {group.ids.length}
               </p>
-              <p className="mt-1 break-all font-mono text-[12px] leading-5 text-bg-11">
+              <p className="mt-1 break-all font-numeric text-[12px] leading-5 text-bg-11">
                 {group.ids.join(", ")}
               </p>
             </div>
@@ -359,7 +359,7 @@ function RunDetail({
                   )}
                 >
                   <dt className="text-[12px] text-bg-8">{label}</dt>
-                  <dd className="mt-1 break-words font-mono text-[13px] text-bg-11">
+                  <dd className="mt-1 break-words font-numeric text-[13px] text-bg-11">
                     {value}
                   </dd>
                 </div>

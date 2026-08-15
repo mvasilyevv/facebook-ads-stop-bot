@@ -91,7 +91,7 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
       {/* upload_id badge */}
       {values.upload_id && (
         <div className="text-[12px] text-bg-8">
-          upload_id: <span className="font-mono text-bg-9">{values.upload_id}</span>
+          upload_id: <span className="font-numeric text-bg-9">{values.upload_id}</span>
         </div>
       )}
 

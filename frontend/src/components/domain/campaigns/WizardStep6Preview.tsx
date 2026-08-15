@@ -81,7 +81,7 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({ config, previe
           <AlertCircle size={14} className="shrink-0 mt-0.5" />
           <span>
             Без концептов (нет файлов подходящего типа):{" "}
-            <span className="font-mono">{emptyBlocks.join(", ")}</span>. Вернись на шаг 5 — запуск
+            <span>{emptyBlocks.join(", ")}</span>. Вернись на шаг 5 — запуск
             таких кампаний будет отклонён.
           </span>
         </div>
@@ -184,7 +184,7 @@ function PlanView({ plan }: { plan: ValidatePlanOut }) {
         <dl className="mt-2 grid grid-cols-1 gap-x-4 gap-y-2 text-[12px] sm:grid-cols-2">
           <div>
             <dt className="text-bg-8">Старт</dt>
-            <dd className="mt-0.5 font-mono text-bg-11">{plan.start_time}</dd>
+            <dd className="mt-0.5 font-numeric text-bg-11">{plan.start_time}</dd>
           </div>
           <div>
             <dt className="text-bg-8">Часовой пояс</dt>
@@ -220,7 +220,7 @@ function PlanView({ plan }: { plan: ValidatePlanOut }) {
         <CheckCircle size={13} className="text-success" />
         Оффер: <span className="text-bg-11 font-medium">{plan.offer_code}</span>
         <span className="text-bg-8">·</span>
-        Политика: <span className="text-bg-11 font-mono">{plan.creation_policy}</span>
+        Политика: <span className="text-bg-11 font-numeric">{plan.creation_policy}</span>
       </div>
     </div>
   );
@@ -245,7 +245,7 @@ function CampaignPlanRow({ campaign }: { campaign: CampaignPlanOut }) {
           <ChevronRight size={13} className="text-bg-8 shrink-0" />
         )}
         <Layers size={13} className="text-bg-8 shrink-0" />
-        <span className="font-mono text-[12px] text-bg-11 flex-1 truncate" title={campaign.name}>
+        <span className="text-[12px] text-bg-11 flex-1 truncate" title={campaign.name}>
           {campaign.name}
         </span>
         <span className="text-[12px] text-bg-8 font-display uppercase tracking-wider shrink-0">
@@ -257,7 +257,7 @@ function CampaignPlanRow({ campaign }: { campaign: CampaignPlanOut }) {
         <div className="divide-y divide-[var(--color-hairline)]">
           {campaign.adsets.map((adset) => (
             <div key={adset.name} className="px-6 py-2 flex items-center gap-2 bg-bg-1">
-              <span className="font-mono text-[12px] text-bg-9 flex-1 truncate" title={adset.name}>
+              <span className="text-[12px] text-bg-9 flex-1 truncate" title={adset.name}>
                 {adset.name}
               </span>
               <span className="text-[12px] text-bg-8">{adset.ad_count} ads</span>

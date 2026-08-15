@@ -37,7 +37,7 @@ export function Select({
       {label && (
         <label
           htmlFor={selectId}
-          className="text-[12px] uppercase tracking-[0.07em] text-[var(--color-bg-9)] font-mono"
+          className="text-[12px] uppercase tracking-[0.07em] text-[var(--color-bg-9)]"
         >
           {label}
         </label>

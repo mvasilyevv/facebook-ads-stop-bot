@@ -233,7 +233,7 @@ const RunRow: FC<RunRowProps> = ({ run, onRefresh }) => {
               {run.offer_code ?? "—"}
             </span>
             {run.account_id ? (
-              <span className="font-mono text-[12px] text-bg-8">act_{run.account_id}</span>
+              <span className="font-numeric text-[12px] text-bg-8">act_{run.account_id}</span>
             ) : null}
           </div>
           {run.status === "failed" ? (
@@ -417,7 +417,7 @@ function RunExpandedDetails({
             Созданные объекты
           </span>
           {metaIdGroups.map((group) => (
-            <div key={group.key} className="flex min-w-0 gap-2 font-mono text-[12px]">
+            <div key={group.key} className="flex min-w-0 gap-2 font-numeric text-[12px]">
               <span className="shrink-0 text-bg-8">
                 {group.label} · {group.ids.length}:
               </span>

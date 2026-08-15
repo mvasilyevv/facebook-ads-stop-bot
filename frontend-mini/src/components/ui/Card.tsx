@@ -37,7 +37,7 @@ export function Card({
       {(eyebrow || title || titleRight) && (
         <div className={cn("mb-3", (eyebrow || title) ? "" : "")}>
           {eyebrow && (
-            <p className="text-[12px] uppercase tracking-[0.08em] text-[var(--color-bg-9)] font-mono mb-1">
+            <p className="text-[12px] uppercase tracking-[0.08em] text-[var(--color-bg-9)] mb-1">
               {eyebrow}
             </p>
           )}
