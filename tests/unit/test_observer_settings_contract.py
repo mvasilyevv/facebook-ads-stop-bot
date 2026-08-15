@@ -23,13 +23,22 @@ def test_observer_settings_forbid_full_snapshot_put() -> None:
 
 
 @pytest.mark.asyncio
-async def test_legacy_scan_now_also_uses_command_service(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("state", "created", "expected_status"),
+    [("queued", True, 202), ("queued", False, 202), ("running", False, 200)],
+)
+async def test_legacy_scan_now_preserves_queued_command_lifecycle(
+    monkeypatch,
+    state: str,
+    created: bool,
+    expected_status: int,
+) -> None:
     enqueue = AsyncMock(
         return_value=SimpleNamespace(
             task_id=1842,
-            state="running",
+            state=state,
             correlation_id=uuid.UUID("00000000-0000-0000-0000-000000001842"),
-            created=False,
+            created=created,
         )
     )
     monkeypatch.setattr(
@@ -41,11 +50,14 @@ async def test_legacy_scan_now_also_uses_command_service(monkeypatch) -> None:
 
     result = await settings_observer.post_scan_now(object(), response)
 
-    assert response.status_code == 200
-    assert result.status == "running"
+    assert response.status_code == expected_status
+    assert result.status == state
     assert result.task_id == 1842
-    assert result.created is False
+    assert result.created is created
     enqueue.assert_awaited_once()
+    # 202 не может маскировать незавершённую команду под готовый scan-result.
+    if response.status_code == 202:
+        assert result.status == "queued"
     # Оба пути ведут в один CommandService, но метка в очереди обязана остаться
     # честной: ручной скан из настроек — не повтор после разлогина.
     assert enqueue.await_args.kwargs["reason"] == "operator_scan_now"

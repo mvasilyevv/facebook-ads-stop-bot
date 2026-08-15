@@ -15,6 +15,7 @@ from core.tasks.queue import (
     create_task,
     expire_overdue_tasks,
     mark_external_call_started,
+    mark_failed,
     mark_succeeded,
     reconcile_stuck_running,
     request_task_cancel,
@@ -95,6 +96,178 @@ async def test_concurrent_claims_are_unique_and_priority_ordered(
     assert {task.id for task in claimed if task is not None} == set(task_ids)
     assert {task.lease_owner for task in claimed if task is not None} == set(worker_ids)
     assert all(task.lease_token == 1 for task in claimed if task is not None)
+
+
+@pytest.mark.asyncio
+async def test_claim_order_is_priority_then_availability_creation_and_id(
+    pg_engine,
+    clean_safety_tasks,
+) -> None:
+    now = datetime.now(UTC)
+    task_ids: dict[str, int] = {}
+    for label in (
+        "stable-id-first",
+        "stable-id-second",
+        "created-first",
+        "available-first",
+        "priority-first",
+    ):
+        task_id = await create_task(
+            pg_engine,
+            task_type="meta_api_mutation",
+            idempotency_key=f"claim-order-{label}-{uuid.uuid4()}",
+            payload=_pause_payload(f"ad-{label}"),
+            requested_by="bot_auto_stop",
+        )
+        assert task_id is not None
+        task_ids[label] = task_id
+
+    common_available_at = now - timedelta(seconds=20)
+    common_created_at = now - timedelta(seconds=30)
+    schedule = {
+        "stable-id-first": (10, common_available_at, common_created_at),
+        "stable-id-second": (10, common_available_at, common_created_at),
+        "created-first": (10, common_available_at, now - timedelta(seconds=40)),
+        "available-first": (10, now - timedelta(seconds=30), now - timedelta(seconds=10)),
+        "priority-first": (20, now - timedelta(seconds=5), now - timedelta(seconds=5)),
+    }
+    async with pg_engine.begin() as conn:
+        for label, (priority, available_at, created_at) in schedule.items():
+            await conn.execute(
+                text(
+                    """
+                    UPDATE task_queue
+                    SET priority = :priority,
+                        available_at = :available_at,
+                        created_at = :created_at
+                    WHERE id = :task_id
+                    """
+                ),
+                {
+                    "task_id": task_ids[label],
+                    "priority": priority,
+                    "available_at": available_at,
+                    "created_at": created_at,
+                },
+            )
+
+    claimed_ids: list[int] = []
+    for _ in schedule:
+        claim = await claim_next_task(
+            pg_engine,
+            task_type="meta_api_mutation",
+            lanes=("money",),
+            worker_id=uuid.uuid4(),
+        )
+        assert claim.task is not None
+        claimed_ids.append(claim.task.id)
+
+    # Нестабильный tie-break может бессрочно отодвигать старую money-задачу.
+    assert claimed_ids == [
+        task_ids["priority-first"],
+        task_ids["available-first"],
+        task_ids["created-first"],
+        task_ids["stable-id-first"],
+        task_ids["stable-id-second"],
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["succeeded", "failed"])
+async def test_terminal_write_requires_matching_task_owner_and_current_token(
+    pg_engine,
+    clean_safety_tasks,
+    terminal_status: str,
+) -> None:
+    task_id = await create_task(
+        pg_engine,
+        task_type="tracker_event_process",
+        idempotency_key=f"terminal-fence-{uuid.uuid4()}",
+        payload={"event_id": "terminal-fence"},
+        requested_by="test",
+        lane="background",
+    )
+    assert task_id is not None
+    claim = await claim_next_task(
+        pg_engine,
+        task_type="tracker_event_process",
+        lanes=("background",),
+        worker_id=uuid.uuid4(),
+    )
+    assert claim.task is not None
+    task = claim.task
+
+    async with pg_engine.begin() as conn:
+        current_token = await conn.scalar(
+            text(
+                """
+                UPDATE task_queue
+                SET lease_token = lease_token + 1
+                WHERE id = :task_id
+                RETURNING lease_token
+                """
+            ),
+            {"task_id": task.id},
+        )
+    assert current_token == task.lease_token + 1
+
+    async def finalize(*, candidate_id: int, owner: uuid.UUID, token: int) -> bool:
+        if terminal_status == "succeeded":
+            return await mark_succeeded(
+                pg_engine,
+                task_id=candidate_id,
+                result={"outcome": "CONFIRMED"},
+                lease_owner=owner,
+                lease_token=token,
+            )
+        return await mark_failed(
+            pg_engine,
+            task_id=candidate_id,
+            error="terminal fence regression",
+            result={"outcome": "REJECTED"},
+            lease_owner=owner,
+            lease_token=token,
+        )
+
+    # Любая неполная fence-проверка позволяет zombie-воркеру скрыть реальный исход.
+    assert not await finalize(
+        candidate_id=task.id + 1_000_000,
+        owner=task.lease_owner,
+        token=current_token,
+    )
+    assert not await finalize(
+        candidate_id=task.id,
+        owner=uuid.uuid4(),
+        token=current_token,
+    )
+    assert not await finalize(
+        candidate_id=task.id,
+        owner=task.lease_owner,
+        token=task.lease_token,
+    )
+
+    async with pg_engine.connect() as conn:
+        before_exact_fence = (
+            await conn.execute(
+                text("SELECT status, result FROM task_queue WHERE id = :task_id"),
+                {"task_id": task.id},
+            )
+        ).one()
+    assert before_exact_fence.status == "running"
+    assert before_exact_fence.result is None
+
+    assert await finalize(
+        candidate_id=task.id,
+        owner=task.lease_owner,
+        token=current_token,
+    )
+    async with pg_engine.connect() as conn:
+        assert (
+            await conn.scalar(
+                text("SELECT status FROM task_queue WHERE id = :task_id"),
+                {"task_id": task.id},
+            )
+        ) == terminal_status
 
 
 @pytest.mark.asyncio
