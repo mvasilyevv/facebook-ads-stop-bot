@@ -53,6 +53,17 @@ def assess_vision_channel(
             "Профиль Vision не задан.",
             "Введите Profile ID и сохраните настройки.",
         )
+    # Подтверждённый браузерный канал старше любой облачной диагностики: эта
+    # проба сходила в живую сессию и выполнила настоящий запрос к Graph. Если
+    # пропустить её вперёд облака, недоступное облако объявит мёртвым канал,
+    # который прямо сейчас работает.
+    if browser_status == "READY":
+        return VisionChannelAssessment(
+            "READY",
+            "READY",
+            "Канал Vision жив: профиль и браузер подтверждены живым запросом.",
+            "Действий не требуется.",
+        )
     if cloud_state == "token_rejected":
         if not has_cloud_credentials:
             return VisionChannelAssessment(
