@@ -46,3 +46,6 @@ async def test_legacy_scan_now_also_uses_command_service(monkeypatch) -> None:
     assert result.task_id == 1842
     assert result.created is False
     enqueue.assert_awaited_once()
+    # Оба пути ведут в один CommandService, но метка в очереди обязана остаться
+    # честной: ручной скан из настроек — не повтор после разлогина.
+    assert enqueue.await_args.kwargs["reason"] == "operator_scan_now"

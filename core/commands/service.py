@@ -119,9 +119,15 @@ class CommandService:
         *,
         requested_by: str,
         idempotency_key: str,
+        reason: str = "operator_retry_scan",
         connection: AsyncConnection | None = None,
     ) -> CommandReceipt:
-        """Queue one interactive scan or return the already active scan."""
+        """Queue one interactive scan or return the already active scan.
+
+        ``reason`` — диагностическая метка в очереди. Ручной скан из настроек и
+        повтор после разлогина идут одним путём, но в задаче должны остаться
+        разными: иначе разбор очереди начинается с вопроса, чего это повтор.
+        """
         normalized_requested_by = requested_by.strip()
         normalized_idempotency_key = idempotency_key.strip()
         if not normalized_requested_by or len(normalized_requested_by) > 64:
@@ -189,7 +195,7 @@ class CommandService:
                 receipt = await enqueue_observer_scan(
                     self._engine,
                     requested_by=normalized_requested_by,
-                    reason="operator_retry_scan",
+                    reason=reason,
                     idempotency_key=normalized_idempotency_key,
                     lane="interactive",
                     priority=75,

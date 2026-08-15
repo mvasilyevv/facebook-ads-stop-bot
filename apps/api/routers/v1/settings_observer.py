@@ -464,6 +464,7 @@ async def post_scan_now(engine: DepEngine, response: Response) -> ScanNowRespons
     receipt = await CommandService(engine).enqueue_scan_retry(
         requested_by="operator_api",
         idempotency_key=observer_scan_idempotency_key("api", request_nonce),
+        reason="operator_scan_now",
     )
     response.status_code = (
         status.HTTP_202_ACCEPTED if receipt.state == "queued" else status.HTTP_200_OK
