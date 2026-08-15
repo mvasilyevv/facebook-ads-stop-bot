@@ -368,8 +368,15 @@ def test_release_requires_real_single_slot_rehearsal_before_production() -> None
     assert "release-inputs/release.json" in rehearsal
     assert "FB_AGENT_REHEARSAL_ACK: single-slot" in rehearsal
     assert "timeout-minutes: 30" in rehearsal
-    assert "fail-fast: false\n      max-parallel: 2" in rehearsal
+    # Провал одного шарда не должен прятать остальные — иначе один отчёт
+    # вместо пяти, и следующая причина всплывает только на следующем прогоне.
+    assert "fail-fast: false" in rehearsal
     assert rehearsal.count("- case: ") == 5
+    # Ни один шард не ждёт другого: у них нет общих ресурсов, а ожидание
+    # умножает длительность релиза на число волн.
+    parallel_limit = re.search(r"^      max-parallel: (\d+)$", rehearsal, re.MULTILINE)
+    assert parallel_limit is not None
+    assert int(parallel_limit.group(1)) >= rehearsal.count("- case: ")
     assert rehearsal.count("scenario: failpoints") == 4
     for index in range(4):
         assert (
