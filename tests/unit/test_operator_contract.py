@@ -21,6 +21,7 @@ from apps.api.routers.v1.operator import (
 from apps.api.routers.v1.schemas.operator import (
     ApiProblem,
     DataState,
+    OperatorAdCommandRequest,
     OperatorAttentionAction,
     OperatorAttentionData,
     OperatorCabinetLedgerRow,
@@ -1122,6 +1123,61 @@ def test_operator_money_commands_distinguish_queued_from_existing_lifecycle() ->
         "cancelled",
         "unknown",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["pause_ad", "activate_ad"])
+@pytest.mark.parametrize(
+    ("state", "created", "expected_status"),
+    [
+        ("queued", True, 202),
+        ("queued", False, 202),
+        ("running", False, 200),
+        ("confirmed", False, 200),
+    ],
+)
+async def test_operator_money_uses_202_only_for_unfinished_queued_action(
+    monkeypatch,
+    action: str,
+    state: str,
+    created: bool,
+    expected_status: int,
+) -> None:
+    correlation_id = "00000000-0000-0000-0000-000000001842"
+    enqueue = AsyncMock(
+        return_value=SimpleNamespace(
+            task_id=1842,
+            state=state,
+            created=created,
+            correlation_id=correlation_id,
+        )
+    )
+    monkeypatch.setattr(
+        operator_router,
+        "CommandService",
+        lambda _engine: SimpleNamespace(enqueue_ad_action=enqueue),
+    )
+    response = Response()
+
+    result = await operator_router._enqueue_operator_command(
+        action=action,
+        ad_id="230011223344",
+        engine=object(),
+        idempotency_key=f"{action}-request",
+        requested_by="owner:42",
+        response=response,
+        precondition=OperatorAdCommandRequest(
+            expected_delivery_status="ACTIVE",
+            expected_as_of=datetime(2026, 8, 15, 10, tzinfo=UTC),
+        ),
+    )
+
+    assert not isinstance(result, operator_router.JSONResponse)
+    assert response.status_code == expected_status
+    assert result.state == state
+    # Принятую команду нельзя показать как успех, пока Meta её не подтвердила.
+    if response.status_code == 202:
+        assert result.state == "queued"
 
 
 class _ListenerConnection:
