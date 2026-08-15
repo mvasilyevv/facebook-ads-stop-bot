@@ -2870,19 +2870,34 @@ def test_profile_survives_the_symlinks_xfce_creates_while_the_desktop_runs(
     _write(profile / VISION_PROFILE_MARKER, VISION_PROFILE_MARKER_CONTENT)
     _write(desktop / "icons.screen.0.rc", "[Desktop]\n", 0o600)
     os.symlink("icons.screen.0.rc", desktop / "icons.screen.latest.rc")
+    # Настоящий xfdesktop пишет цель в координатах контейнера, где профиль
+    # смонтирован как /config: с точки зрения хоста путь абсолютный, но ведёт
+    # внутрь того же профиля.
+    os.symlink(
+        "/config/.config/xfce4/desktop/icons.screen.0.rc",
+        desktop / "icons.screen0-1350x725.rc",
+    )
 
     receipt = _snapshot_live_profile(profile)
 
     assert receipt is not None
-    links = [entry for entry in receipt.entries if entry.kind == "symlink"]
-    assert [entry.relative for entry in links] == [
-        (".config", "xfce4", "desktop", "icons.screen.latest.rc")
+    links = sorted(entry.relative for entry in receipt.entries if entry.kind == "symlink")
+    assert links == [
+        (".config", "xfce4", "desktop", "icons.screen.latest.rc"),
+        (".config", "xfce4", "desktop", "icons.screen0-1350x725.rc"),
     ]
 
 
 @pytest.mark.parametrize(
     "target",
-    ["/etc/shadow", "../../../../etc/shadow", "../../../.."],
+    [
+        "/etc/shadow",
+        "../../../../etc/shadow",
+        "../../../..",
+        # Похоже на путь контейнера, но выходит за профиль.
+        "/config/../../etc/shadow",
+        "/configuration/secret",
+    ],
 )
 def test_profile_rejects_a_link_that_leaves_the_tree(tmp_path: Path, target: str) -> None:
     """Ссылка наружу остаётся небезопасной: цель читается, но не разыменовывается."""
