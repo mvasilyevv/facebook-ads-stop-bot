@@ -14,9 +14,14 @@ on:
 permissions:
   contents: read
 
+# Деплой запускается только вручную (см. условие job deploy), поэтому прогон от
+# push ничего не выкатывает — он лишь собирает образы и гоняет rehearsal. Такие
+# прогоны отменяют друг друга: серия коммитов подряд иначе выстраивает очередь
+# по полчаса, и свежий код ждёт за уже неактуальным. Ручной запуск живёт в
+# отдельной группе и не отменяется никогда: его отмена оборвала бы деплой.
 concurrency:
-  group: release-main
-  cancel-in-progress: false
+  group: release-main-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   verify:

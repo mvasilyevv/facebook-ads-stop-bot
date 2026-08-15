@@ -550,3 +550,18 @@ def test_runtime_exports_instrumented_application_traces_through_alloy() -> None
     ):
         assert package in dependencies
     assert "Telegram bot-token path segments" in readme
+
+
+def test_only_manual_release_deploys_so_push_runs_are_safe_to_cancel() -> None:
+    """Отмена устаревшего прогона безопасна ровно пока push ничего не выкатывает.
+
+    Прогоны от push отменяют друг друга: серия коммитов иначе строит очередь
+    по полчаса. Если deploy когда-нибудь начнёт срабатывать на push, эта
+    отмена начнёт обрывать выкатку на живой хост — тогда сначала меняется
+    concurrency, и только потом условие job.
+    """
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "github.event_name == 'workflow_dispatch'" in _job_if_expression(workflow, "deploy")
+    assert "group: release-main-${{ github.event_name }}" in workflow
+    assert "cancel-in-progress: ${{ github.event_name == 'push' }}" in workflow
