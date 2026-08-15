@@ -12,7 +12,12 @@ import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { toast } from "@/components/ui/Toast";
-import { useVisionSettings, useUpdateVisionSettings, useReconnectVision } from "@/lib/api/settings";
+import {
+  useVisionSettings,
+  useVisionProfiles,
+  useUpdateVisionSettings,
+  useReconnectVision,
+} from "@/lib/api/settings";
 
 export const VisionTab: FC = () => {
   const { data, isLoading, error, refetch } = useVisionSettings();
@@ -189,15 +194,7 @@ export const VisionTab: FC = () => {
             autoComplete="new-password"
             spellCheck={false}
           />
-          <Input
-            id="vision-profile"
-            label="Profile ID"
-            placeholder="Идентификатор профиля Vision"
-            value={profileId}
-            onChange={(e) => setProfileId(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
+          <VisionProfilePicker value={profileId} onChange={setProfileId} />
           <div className="border-t border-[var(--color-hairline)] pt-4">
             <p className="m-0 text-[13px] font-medium text-bg-10">Cloud-креды Vision</p>
             <p className="m-0 mt-1 text-[12px] leading-5 text-bg-8">
@@ -252,3 +249,84 @@ export const VisionTab: FC = () => {
     </div>
   );
 };
+
+/**
+ * Выбор профиля Vision по имени.
+ *
+ * Список читается из облака заново при каждом открытии: имена, статусы и сами
+ * идентификаторы живут там и меняются без нашего ведома. Поэтому профиль,
+ * который переименовали или пересоздали, виден сразу, а исчезнувший назван
+ * исчезнувшим — вместо него ничего не подставляется, это был бы чужой кабинет.
+ */
+function VisionProfilePicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const { data, isPending, isFetching, refetch } = useVisionProfiles();
+  const items = data?.items ?? [];
+  const chosen = value.trim();
+  const missing = Boolean(chosen) && data?.state === "ready" && !data.selected_present;
+
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-end justify-between gap-3">
+        <span className="text-[13px] text-bg-10">Профиль Vision</span>
+        <button
+          type="button"
+          className="min-h-9 text-[12px] text-bg-9 underline-offset-4 hover:text-bg-11 hover:underline disabled:opacity-60"
+          onClick={() => void refetch()}
+          disabled={isFetching}
+        >
+          {isFetching ? "Обновляем…" : "Обновить список"}
+        </button>
+      </div>
+
+      {isPending ? (
+        <Skeleton className="h-11 w-full" />
+      ) : (
+        <select
+          id="vision-profile"
+          aria-label="Профиль Vision"
+          className="min-h-11 w-full rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 px-3 text-[14px] text-bg-11"
+          value={chosen}
+          onChange={(event) => onChange(event.target.value)}
+          disabled={data?.state !== "ready"}
+        >
+          <option value="">Профиль не выбран</option>
+          {missing ? (
+            <option value={chosen}>{chosen} — в облаке не найден</option>
+          ) : null}
+          {items.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profileLabel(profile)}
+            </option>
+          ))}
+        </select>
+      )}
+
+      {data && data.state !== "ready" ? (
+        <p className="m-0 text-[12px] leading-5 text-bg-9">{data.message}</p>
+      ) : null}
+      {missing ? (
+        <p className="m-0 text-[12px] leading-5 text-warning">{data?.message}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Имя, статус и теги — то, по чему оператор узнаёт профиль в Vision. */
+function profileLabel(profile: {
+  name: string;
+  status?: string | null;
+  tags?: string[];
+  running?: boolean;
+}): string {
+  const parts = [profile.name];
+  if (profile.status) parts.push(profile.status);
+  if (profile.running) parts.push("запущен");
+  if (profile.tags?.length) parts.push(profile.tags.join(", "));
+  return parts.join(" · ");
+}

@@ -5,6 +5,7 @@ import { Badge, Button, EmptyState, Input, Skeleton } from "@/components/ui";
 import {
   useReconnectVision,
   useUpdateVisionSettings,
+  useVisionProfiles,
   useVisionSettings,
 } from "@/lib/api";
 import { haptic } from "@/lib/tg";
@@ -234,13 +235,10 @@ export function VisionSettings({ canEdit }: { canEdit: boolean }) {
             autoComplete="new-password"
             spellCheck={false}
           />
-          <Input
-            label="Profile ID"
+          <VisionProfilePicker
             value={profileId}
+            onChange={setProfileId}
             disabled={!canEdit}
-            onChange={(event) => setProfileId(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
           />
           <div className="border-t border-[var(--color-hairline)] pt-4">
             <p className="m-0 text-[13px] font-medium text-bg-10">
@@ -317,4 +315,87 @@ function StatusRow({
       <span className="shrink-0">{children}</span>
     </div>
   );
+}
+
+/**
+ * Выбор профиля Vision по имени.
+ *
+ * Список читается из облака заново при каждом открытии: имена, статусы и сами
+ * идентификаторы живут там и меняются без нашего ведома. Исчезнувший профиль
+ * назван исчезнувшим — вместо него ничего не подставляется, это был бы чужой
+ * кабинет.
+ */
+function VisionProfilePicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled: boolean;
+}) {
+  const { data, isPending, isFetching, refetch } = useVisionProfiles();
+  const items = data?.items ?? [];
+  const chosen = value.trim();
+  const missing =
+    Boolean(chosen) && data?.state === "ready" && !data.selected_present;
+
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-end justify-between gap-3">
+        <span className="text-[14px] text-bg-10">Профиль Vision</span>
+        <button
+          type="button"
+          className="min-h-11 text-[13px] text-bg-9 disabled:opacity-60"
+          onClick={() => void refetch()}
+          disabled={isFetching}
+        >
+          {isFetching ? "Обновляем…" : "Обновить список"}
+        </button>
+      </div>
+
+      {isPending ? (
+        <Skeleton className="h-11 w-full" />
+      ) : (
+        <select
+          aria-label="Профиль Vision"
+          className="min-h-11 w-full rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-1 px-3 text-[14px] text-bg-11"
+          value={chosen}
+          onChange={(event) => onChange(event.target.value)}
+          disabled={disabled || data?.state !== "ready"}
+        >
+          <option value="">Профиль не выбран</option>
+          {missing ? (
+            <option value={chosen}>{chosen} — в облаке не найден</option>
+          ) : null}
+          {items.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {visionProfileLabel(profile)}
+            </option>
+          ))}
+        </select>
+      )}
+
+      {data && data.state !== "ready" ? (
+        <p className="m-0 text-[13px] leading-5 text-bg-9">{data.message}</p>
+      ) : null}
+      {missing ? (
+        <p className="m-0 text-[13px] leading-5 text-warning">{data?.message}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Имя, статус и теги — то, по чему оператор узнаёт профиль в Vision. */
+function visionProfileLabel(profile: {
+  name: string;
+  status?: string | null;
+  tags?: string[];
+  running?: boolean;
+}): string {
+  const parts = [profile.name];
+  if (profile.status) parts.push(profile.status);
+  if (profile.running) parts.push("запущен");
+  if (profile.tags?.length) parts.push(profile.tags.join(", "));
+  return parts.join(" · ");
 }

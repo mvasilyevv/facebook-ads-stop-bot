@@ -21,6 +21,7 @@ const observerKey = ["get", "/api/settings/observer"] as const;
 const telegramKey = ["get", "/api/settings/telegram"] as const;
 const telegramRecipientsKey = ["get", "/api/settings/telegram/recipients"] as const;
 const visionKey = ["get", "/api/settings/vision"] as const;
+const visionProfilesKey = ["get", "/api/settings/vision/profiles"] as const;
 
 export const { useOperatorDisplayPreference, useUpdateOperatorDisplayPreference } =
   createOperatorDisplayPreferenceHooks(generatedApi);
@@ -237,13 +238,29 @@ export function useDeleteTelegramToken() {
 export function useVisionSettings() {
   return generatedApi.useQuery("get", "/api/settings/vision", {}, { staleTime: 20_000 });
 }
+/**
+ * Список профилей Vision. Не кэшируется: имена и сами идентификаторы живут в
+ * облаке и меняются там, поэтому список читается заново при каждом открытии.
+ */
+export function useVisionProfiles() {
+  return generatedApi.useQuery(
+    "get",
+    "/api/settings/vision/profiles",
+    {},
+    { staleTime: 0, gcTime: 0, refetchOnMount: "always" },
+  );
+}
 export function useUpdateVisionSettings() {
   const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: components["schemas"]["VisionSettingsUpdateRequest"]) =>
       dataOrThrow(generatedFetchApi.PUT("/api/settings/vision", { body })),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: visionKey }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: visionKey });
+      // Смена токена или папки меняет и видимый список профилей.
+      void qc.invalidateQueries({ queryKey: visionProfilesKey });
+    },
   });
 }
 export function useReconnectVision() {

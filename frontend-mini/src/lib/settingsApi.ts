@@ -30,6 +30,7 @@ const SETTINGS_KEYS = {
     "/api/settings/telegram/recipients/{recipient_id}/preferences",
   ] as const,
   vision: ["get", "/api/settings/vision"] as const,
+  visionProfiles: ["get", "/api/settings/vision/profiles"] as const,
 };
 
 export const {
@@ -299,14 +300,30 @@ export function useVisionSettings() {
   );
 }
 
+/**
+ * Список профилей Vision. Не кэшируется: имена и сами идентификаторы живут в
+ * облаке и меняются там, поэтому список читается заново при каждом открытии.
+ */
+export function useVisionProfiles() {
+  return tmaApi.useQuery(
+    "get",
+    "/api/settings/vision/profiles",
+    {},
+    { staleTime: 0, gcTime: 0, refetchOnMount: "always" },
+  );
+}
+
 export function useUpdateVisionSettings() {
   const qc = useQueryClient();
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: components["schemas"]["VisionSettingsUpdateRequest"]) =>
       dataOrThrow(tmaFetchApi.PUT("/api/settings/vision", { body })),
-    onSuccess: () =>
-      void qc.invalidateQueries({ queryKey: SETTINGS_KEYS.vision }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: SETTINGS_KEYS.vision });
+      // Смена токена или папки меняет и видимый список профилей.
+      void qc.invalidateQueries({ queryKey: SETTINGS_KEYS.visionProfiles });
+    },
   });
 }
 

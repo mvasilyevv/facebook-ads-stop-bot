@@ -57,6 +57,42 @@ class VisionSettingsUpdateRequest(BaseModel):
     folder_id: SecretStr | None = None
 
 
+class VisionProfileOption(BaseModel):
+    """Профиль облака так, как его видит оператор в списке."""
+
+    id: str
+    name: str
+    status: str | None = None
+    tags: list[str] = []
+    running: bool = False
+    last_run_at: str | None = None
+
+
+class VisionProfilesResponse(BaseModel):
+    """Живой список профилей папки.
+
+    Ответ никогда не кэшируется: список читается из облака на каждый запрос,
+    поэтому переименование или пересоздание профиля видно сразу. Если
+    настроенный профиль пропал из облака, `selected_present` становится
+    `false` — молча подставлять другой профиль нельзя, это чужой кабинет.
+    """
+
+    state: Literal["ready", "empty", "unavailable"] = "unavailable"
+    reason: Literal[
+        "READY",
+        "EMPTY",
+        "TOKEN_MISSING",
+        "TOKEN_REJECTED",
+        "FOLDER_NOT_CONFIGURED",
+        "FOLDER_NOT_FOUND",
+        "CLOUD_UNAVAILABLE",
+    ] = "CLOUD_UNAVAILABLE"
+    message: str = ""
+    items: list[VisionProfileOption] = []
+    selected_profile_id: str | None = None
+    selected_present: bool = False
+
+
 class VisionReconnectResponse(BaseModel):
     """Ответ на POST /vision/reconnect."""
 
