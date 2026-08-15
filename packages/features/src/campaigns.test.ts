@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  aggregateCampaignLaunchState,
   buildCampaignConfig,
   campaignWizardFromDraft,
   campaignWizardReducer,
@@ -13,12 +14,31 @@ import {
   type CampaignWizardState,
 } from "./campaigns";
 
+describe("aggregateCampaignLaunchState", () => {
+  it("не показывает общий успех при частичном результате", () => {
+    expect(aggregateCampaignLaunchState(["succeeded", "failed"])).toBe(
+      "partial",
+    );
+  });
+
+  it("UNKNOWN остаётся отдельным состоянием и не становится retry/success", () => {
+    expect(aggregateCampaignLaunchState(["unknown", "failed"])).toBe("unknown");
+  });
+
+  it("зелёный итог возможен только когда успешны все кабинеты", () => {
+    expect(aggregateCampaignLaunchState(["succeeded", "succeeded"])).toBe(
+      "succeeded",
+    );
+  });
+});
+
 function readyState(): CampaignWizardState {
   let state = createCampaignWizardState();
   state = campaignWizardReducer(state, {
     type: "patchIdentity",
     value: {
       act_id: "123",
+      ad_account_ids: ["123"],
       page_id: "456",
       pixel_id: "789",
       account_context_state: "ready",

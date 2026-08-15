@@ -67,7 +67,9 @@ async def clean_campaigns(pg_engine, tmp_path, monkeypatch):
                 )
             )
             await conn.execute(text("DELETE FROM offers WHERE code LIKE 'CTX_%'"))
-            await conn.execute(text("DELETE FROM meta_account_snapshot WHERE account_id = '123'"))
+            await conn.execute(
+                text("DELETE FROM meta_account_snapshot WHERE account_id IN ('123', '456')")
+            )
             if seed_account_context:
                 await conn.execute(
                     text(
@@ -138,6 +140,45 @@ def _flat_config() -> dict:
         "creo_root": "abc123",
         "url_tags": "sub2=MV",
     }
+
+
+async def _seed_multi_account_offer(pg_engine, *, seed_second_context: bool) -> str:
+    """Create an offer whose only admissible launch targets are 123 and 456."""
+
+    code = f"CTX_MULTI_{uuid.uuid4().hex[:8].upper()}"
+    async with pg_engine.begin() as conn:
+        offer_id = (
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO offers(code, name, is_active)
+                    VALUES (:code, 'Multi-account contract', TRUE)
+                    RETURNING id
+                    """
+                ),
+                {"code": code},
+            )
+        ).scalar_one()
+        await ad_account_catalog.replace_offer_accounts(
+            conn,
+            offer_id=offer_id,
+            account_ids=["123", "456"],
+        )
+        if seed_second_context:
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO meta_account_snapshot(
+                        account_id,
+                        timezone_name,
+                        currency,
+                        currency_observed_at
+                    )
+                    VALUES ('456', 'America/New_York', 'USD', clock_timestamp())
+                    """
+                )
+            )
+    return code
 
 
 # ─────────────────────────── validate (плоская форма) ───────────────────────────
@@ -424,6 +465,122 @@ async def test_launch_idempotent_same_key_one_run(pg_engine, fake_redis_client, 
     # Money-инвариант: ровно один run и одна задача — без дубля залива.
     assert runs == 1
     assert tasks == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_launch_keeps_success_when_sibling_preflight_fails(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    offer_code = await _seed_multi_account_offer(
+        pg_engine,
+        seed_second_context=False,
+    )
+    config = _flat_config()
+    config["offer_code"] = offer_code
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": config, "ad_account_ids": ["123", "456"]},
+        )
+
+    assert response.status_code == 202, response.text
+    receipt = response.json()
+    assert receipt["request_state"] == "partial"
+    by_account = {item["account_id"]: item for item in receipt["accounts"]}
+    assert by_account["123"]["status"] == "queued"
+    assert by_account["123"]["run_id"] is not None
+    assert by_account["456"]["status"] == "rejected"
+    assert by_account["456"]["run_id"] is None
+    assert await _campaign_write_counts(pg_engine) == (1, 1, 0, 1)
+
+
+@pytest.mark.asyncio
+async def test_multi_launch_replay_reuses_each_account_run_without_duplicates(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    offer_code = await _seed_multi_account_offer(
+        pg_engine,
+        seed_second_context=True,
+    )
+    config = _flat_config()
+    config["offer_code"] = offer_code
+    body = {"config": config, "ad_account_ids": ["123", "456"]}
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        first = await ac.post("/api/tools/campaigns/launch", json=body)
+        replay = await ac.post("/api/tools/campaigns/launch", json=body)
+
+    assert first.status_code == 202, first.text
+    assert replay.status_code == 202, replay.text
+    first_by_account = {item["account_id"]: item for item in first.json()["accounts"]}
+    replay_by_account = {item["account_id"]: item for item in replay.json()["accounts"]}
+    assert set(first_by_account) == {"123", "456"}
+    assert {account_id: item["run_id"] for account_id, item in first_by_account.items()} == {
+        account_id: item["run_id"] for account_id, item in replay_by_account.items()
+    }
+    assert all(item["replayed"] is True for item in replay_by_account.values())
+    assert await _campaign_write_counts(pg_engine) == (2, 2, 0, 1)
+
+
+@pytest.mark.asyncio
+async def test_multi_launch_unknown_replay_returns_same_run_without_new_task(
+    pg_engine,
+    fake_redis_client,
+    clean_campaigns,
+):
+    offer_code = await _seed_multi_account_offer(
+        pg_engine,
+        seed_second_context=False,
+    )
+    config = _flat_config()
+    config["offer_code"] = offer_code
+    body = {"config": config, "ad_account_ids": ["123"]}
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        first = await ac.post("/api/tools/campaigns/launch", json=body)
+        launched = first.json()["accounts"][0]
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    UPDATE task_queue
+                    SET status = 'failed',
+                        external_started_at = NOW(),
+                        completed_at = NOW(),
+                        result = '{"outcome":"UNKNOWN","reconcile_required":true}'::jsonb
+                    WHERE id = :task_id
+                    """
+                ),
+                {"task_id": launched["task_id"]},
+            )
+            await conn.execute(
+                text(
+                    """
+                    UPDATE campaign_run
+                    SET status = 'failed',
+                        progress = '{"stage":"failed","outcome":"UNKNOWN"}'::jsonb
+                    WHERE id = :run_id
+                    """
+                ),
+                {"run_id": uuid.UUID(launched["run_id"])},
+            )
+        replay = await ac.post("/api/tools/campaigns/launch", json=body)
+
+    assert first.status_code == 202, first.text
+    assert replay.status_code == 202, replay.text
+    replayed = replay.json()["accounts"][0]
+    assert replayed["run_id"] == launched["run_id"]
+    assert replayed["status"] == "failed"
+    assert replayed["replayed"] is True
+    assert await _campaign_write_counts(pg_engine) == (1, 1, 0, 1)
 
 
 # Второй источник количества концептов запрещён: только concept_refs определяет план.

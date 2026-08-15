@@ -18,6 +18,7 @@ import {
   type CampaignWizardStep,
   type ValidatePlan,
 } from "@fb/features/campaigns";
+import type { LaunchOut } from "@/lib/api/campaigns";
 
 export type WizardStep = CampaignWizardStep;
 export type StartMode = CampaignWizardStart["mode"];
@@ -36,7 +37,7 @@ export type DraftSyncState = "loading" | "idle" | "saving" | "saved" | "error" |
 
 export interface WizardRuntimeState {
   preview: WizardPreview;
-  runId: string | null;
+  launchReceipt: LaunchOut | null;
   draftRevision: number;
   draftUpdatedAt: string | null;
   draftVersion: number;
@@ -55,7 +56,7 @@ export interface WizardActions {
   setStructure: (value: Partial<WizardStructure>) => void;
   setCreatives: (value: Partial<WizardCreatives>) => void;
   setPreview: (value: Partial<WizardPreview>) => void;
-  setRunId: (id: string | null) => void;
+  setLaunchReceipt: (receipt: LaunchOut | null) => void;
   applyPreset: (preset: CampaignPreset) => void;
   hydrateDraft: (
     state: CampaignWizardState | null,
@@ -75,7 +76,7 @@ export type WizardStore = CampaignWizardState & WizardRuntimeState & WizardActio
 function runtimeDefaults(): WizardRuntimeState {
   return {
     preview: { plan: null },
-    runId: null,
+    launchReceipt: null,
     draftRevision: 0,
     draftUpdatedAt: null,
     draftVersion: 0,
@@ -137,7 +138,7 @@ export const useWizardStore = create<WizardStore>((set, get) => ({
     ),
   setCreatives: (value) => set((state) => changed(state, { type: "patchCreatives", value })),
   setPreview: (value) => set((state) => ({ preview: { ...state.preview, ...value } })),
-  setRunId: (runId) => set({ runId }),
+  setLaunchReceipt: (launchReceipt) => set({ launchReceipt }),
   applyPreset: (preset) =>
     set((state) => ({
       ...applyCampaignPreset(featureState(state), preset),
@@ -149,7 +150,7 @@ export const useWizardStore = create<WizardStore>((set, get) => ({
     set({
       ...(state ?? createCampaignWizardState()),
       preview: { plan: null },
-      runId: null,
+      launchReceipt: null,
       draftRevision: revision,
       draftUpdatedAt: updatedAt,
       draftVersion: 0,

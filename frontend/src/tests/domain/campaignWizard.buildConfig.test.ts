@@ -17,6 +17,7 @@ function seedStore(concepts: UploadedConcept[], campaigns: { key: string }[]) {
   const store = useWizardStore.getState();
   store.setIdentity({
     act_id: "act_123",
+    ad_account_ids: ["123"],
     page_id: "page_456",
     pixel_id: "pixel_789",
     account_context_state: "ready",

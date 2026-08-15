@@ -352,8 +352,9 @@ function WizardLayout() {
               presetId={store.start.preset_id}
               draftRevision={store.draftRevision || null}
               draftSyncState={store.draftSyncState}
-              runId={store.runId}
-              onRunId={(id) => store.setRunId(id)}
+              accountIds={store.identity.ad_account_ids ?? []}
+              launchReceipt={store.launchReceipt}
+              onLaunchReceipt={store.setLaunchReceipt}
               onDraftCleared={store.markDraftCleared}
               onFinish={store.reset}
             />

@@ -655,6 +655,7 @@ function RunCard({
             ) : null}
           </span>
           <span className="mt-1 block text-[12px] text-bg-8">
+            {run.account_id ? `act_${run.account_id} · ` : ""}
             {formatDate(run.created_at)}
           </span>
         </span>

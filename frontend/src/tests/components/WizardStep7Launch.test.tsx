@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   runDetail: null as Record<string, unknown> | null,
+  runDetails: {} as Record<string, Record<string, unknown>>,
 }));
 
 vi.mock("@/lib/api/campaigns", () => ({
@@ -17,6 +18,11 @@ vi.mock("@/lib/api/campaigns", () => ({
     data: mocks.runDetail,
     isLoading: false,
   }),
+  useRunDetails: (runIds: string[]) =>
+    runIds.map((runId) => ({
+      data: mocks.runDetails[runId] ?? mocks.runDetail,
+      isLoading: false,
+    })),
   RUN_STATUS_LABELS: {
     queued: "В очереди",
     uniquifying: "Уникализация",
@@ -30,7 +36,7 @@ vi.mock("@/lib/api/campaigns", () => ({
 }));
 
 import { WizardStep7Launch } from "@/components/domain/campaigns/WizardStep7Launch";
-import type { CampaignConfig } from "@/lib/api/campaigns";
+import type { CampaignConfig, LaunchOut } from "@/lib/api/campaigns";
 
 const CONFIG = {
   offer_code: "TEST",
@@ -60,10 +66,32 @@ const SUCCEEDED_RUN = {
   updated_at: "2026-07-13T20:01:00Z",
 };
 
+const SUCCEEDED_RECEIPT: LaunchOut = {
+  run_id: "1a6bb9a5-d83b-4652-b791-428a588a1be0",
+  task_id: 42,
+  status: "queued",
+  idempotency_key: "campaign:test",
+  draft_cleared: true,
+  request_state: "accepted",
+  accounts: [
+    {
+      account_id: "123",
+      run_id: "1a6bb9a5-d83b-4652-b791-428a588a1be0",
+      task_id: 42,
+      status: "queued",
+      idempotency_key: "campaign:test",
+      replayed: false,
+    },
+  ],
+};
+
 describe("WizardStep7Launch — успешный залив", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.runDetail = SUCCEEDED_RUN;
+    mocks.runDetails = {
+      "1a6bb9a5-d83b-4652-b791-428a588a1be0": SUCCEEDED_RUN,
+    };
   });
 
   it("показывает компактный итог, завершённый progress и прячет ID в детали", async () => {
@@ -74,8 +102,9 @@ describe("WizardStep7Launch — успешный залив", () => {
         config={CONFIG}
         draftRevision={4}
         draftSyncState="saved"
-        runId="1a6bb9a5-d83b-4652-b791-428a588a1be0"
-        onRunId={vi.fn()}
+        accountIds={["123"]}
+        launchReceipt={SUCCEEDED_RECEIPT}
+        onLaunchReceipt={vi.fn()}
         onDraftCleared={vi.fn()}
         onFinish={onFinish}
       />,
@@ -98,7 +127,7 @@ describe("WizardStep7Launch — успешный залив", () => {
     const adsManagerLink = screen.getByRole("link", { name: "Открыть в Ads Manager" });
     expect(adsManagerLink).toHaveAttribute("href", expect.stringContaining("campaign-1"));
 
-    await user.click(screen.getByRole("button", { name: "Создать новый залив" }));
+    await user.click(screen.getByRole("button", { name: "Завершить визард" }));
     expect(onFinish).toHaveBeenCalledOnce();
   });
 
@@ -128,14 +157,18 @@ describe("WizardStep7Launch — успешный залив", () => {
         resume: { available: false, reason: "external_boundary_crossed" },
       },
     };
+    mocks.runDetails = {
+      "1a6bb9a5-d83b-4652-b791-428a588a1be0": mocks.runDetail,
+    } as Record<string, Record<string, unknown>>;
 
     render(
       <WizardStep7Launch
         config={CONFIG}
         draftRevision={4}
         draftSyncState="saved"
-        runId="1a6bb9a5-d83b-4652-b791-428a588a1be0"
-        onRunId={vi.fn()}
+        accountIds={["123"]}
+        launchReceipt={SUCCEEDED_RECEIPT}
+        onLaunchReceipt={vi.fn()}
         onDraftCleared={vi.fn()}
         onFinish={vi.fn()}
       />,
@@ -154,5 +187,47 @@ describe("WizardStep7Launch — успешный залив", () => {
     expect(screen.getByText(/Meta могла принять часть изменений/)).toBeInTheDocument();
     expect(screen.queryByText(/partial_fail|partial_or_ack_lost|internal_trace/)).toBeNull();
     expect(screen.queryByText("8b8d0c93-15dc-46b4-8fe0-8da6bec3667f")).toBeNull();
+  });
+
+  it("не показывает общий зелёный статус при успехе только части кабинетов", () => {
+    mocks.runDetail = SUCCEEDED_RUN;
+    mocks.runDetails = { "run-123": SUCCEEDED_RUN };
+
+    render(
+      <WizardStep7Launch
+        config={CONFIG}
+        draftRevision={4}
+        draftSyncState="saved"
+        accountIds={["123", "456"]}
+        launchReceipt={{
+          status: "partial",
+          draft_cleared: true,
+          request_state: "partial",
+          accounts: [
+            {
+              account_id: "123",
+              run_id: "run-123",
+              task_id: 42,
+              status: "queued",
+              idempotency_key: "campaign:123",
+              replayed: false,
+            },
+            {
+              account_id: "456",
+              status: "rejected",
+              error: "Контекст кабинета не подтверждён",
+              replayed: false,
+            },
+          ],
+        }}
+        onLaunchReceipt={vi.fn()}
+        onDraftCleared={vi.fn()}
+        onFinish={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Частичный результат")).toBeInTheDocument();
+    expect(screen.getByText("Контекст кабинета не подтверждён")).toBeInTheDocument();
+    expect(screen.queryByText("Все кабинеты подтверждены")).toBeNull();
   });
 });

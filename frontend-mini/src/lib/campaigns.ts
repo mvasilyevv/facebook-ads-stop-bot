@@ -1,4 +1,9 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQueryClient,
+  type Query,
+} from "@tanstack/react-query";
 import type { components } from "@fb/shared/api/generated";
 import { dataOrThrow, noContentOrThrow } from "@fb/operator-api";
 
@@ -13,6 +18,7 @@ export type UploadConceptsOut = components["schemas"]["UploadConceptsOut"];
 export type ValidatePlan = components["schemas"]["ValidatePlanOut"];
 export type LaunchIn = components["schemas"]["LaunchIn"];
 export type LaunchOut = components["schemas"]["LaunchOut"];
+export type RunDetailOut = components["schemas"]["RunDetailOut"];
 
 export function useCampaignPresets() {
   return tmaApi.useQuery(
@@ -118,5 +124,25 @@ export function useLaunchCampaign() {
       void queryClient.invalidateQueries({
         queryKey: ["get", "/api/tools/campaigns/runs"],
       }),
+  });
+}
+
+export function useCampaignRunDetails(runIds: string[]) {
+  return useQueries({
+    queries: runIds.map((runId) => ({
+      queryKey: ["get", "/api/tools/campaigns/runs/{run_id}", runId],
+      queryFn: () =>
+        dataOrThrow(
+          tmaFetchApi.GET("/api/tools/campaigns/runs/{run_id}", {
+            params: { path: { run_id: runId } },
+          }),
+        ),
+      staleTime: 2_000,
+      refetchInterval: (query: Query<RunDetailOut>) =>
+        query.state.data &&
+        ["succeeded", "failed", "cancelled"].includes(query.state.data.status)
+          ? false
+          : 2_000,
+    })),
   });
 }

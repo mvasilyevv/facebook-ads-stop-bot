@@ -9,6 +9,10 @@
  */
 
 import { type FC, useState } from "react";
+import {
+  aggregateCampaignLaunchState,
+  type CampaignLaunchObservedState,
+} from "@fb/features/campaigns";
 import { campaignRunFailurePresentation, campaignRunRequiresManualReview } from "@fb/shared";
 import {
   Rocket,
@@ -20,6 +24,7 @@ import {
   Copy,
   Check,
   ShieldCheck,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { Button } from "@/components/ui/Button";
@@ -27,8 +32,10 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import {
   useLaunchCampaign,
   useRunDetail,
+  useRunDetails,
   RUN_STATUS_LABELS,
   type CampaignConfig,
+  type LaunchOut,
   type RunStatus,
 } from "@/lib/api/campaigns";
 import { CampaignRunManualReview } from "./CampaignRunManualReview";
@@ -40,8 +47,9 @@ interface WizardStep7LaunchProps {
   presetId?: string | null;
   draftRevision: number | null;
   draftSyncState: "loading" | "idle" | "saving" | "saved" | "error" | "conflict";
-  runId: string | null;
-  onRunId: (id: string) => void;
+  accountIds: string[];
+  launchReceipt: LaunchOut | null;
+  onLaunchReceipt: (receipt: LaunchOut) => void;
   onDraftCleared: () => void;
   /** Завершить визард (сброс к шагу 1). Кнопка «Готово» на успешном заливе. */
   onFinish: () => void;
@@ -66,8 +74,9 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
   presetId,
   draftRevision,
   draftSyncState,
-  runId,
-  onRunId,
+  accountIds,
+  launchReceipt,
+  onLaunchReceipt,
   onDraftCleared,
   onFinish,
 }) => {
@@ -75,11 +84,16 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
 
   const handleLaunch = () => {
     launchMut.mutate(
-      { config, preset_id: presetId ?? null, draft_revision: draftRevision },
+      {
+        config,
+        ad_account_ids: accountIds,
+        preset_id: presetId ?? null,
+        draft_revision: draftRevision,
+      },
       {
         onSuccess: (out) => {
           if (out.draft_cleared) onDraftCleared();
-          onRunId(out.run_id);
+          onLaunchReceipt(out);
         },
       },
     );
@@ -102,8 +116,8 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
         </p>
       </div>
 
-      {/* Кнопка запуска (до run_id) */}
-      {!runId && (
+      {/* Кнопка запуска (до покабинетного receipt) */}
+      {!launchReceipt && (
         <div className="border border-[var(--color-hairline)] rounded-[var(--radius-3)] p-6 bg-bg-1 text-center space-y-4">
           <div className="size-14 mx-auto rounded-full bg-accent/10 flex items-center justify-center">
             <Rocket size={24} className="text-accent" />
@@ -115,7 +129,7 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
             <div className="text-[12px] text-bg-8 mt-1">
               Оффер: <b>{config.offer_code}</b> · Дата:{" "}
               <b>{config.start_date || "следующий день кабинета"}</b> · Кампаний:{" "}
-              <b>{config.campaigns.length}</b>
+              <b>{config.campaigns.length}</b> · Кабинетов: <b>{accountIds.length}</b>
             </div>
           </div>
           {launchMut.isError && (
@@ -137,27 +151,117 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
             leftIcon={<Rocket size={16} />}
             onClick={handleLaunch}
             loading={launchMut.isPending}
-            disabled={!immutableDraftReady}
+            disabled={!immutableDraftReady || accountIds.length === 0}
           >
             Поставить в очередь
           </Button>
         </div>
       )}
 
-      {/* Прогресс (после run_id) */}
-      {runId && <RunProgress runId={runId} onFinish={onFinish} />}
+      {/* Прогресс (после покабинетного receipt) */}
+      {launchReceipt && <LaunchBatchProgress receipt={launchReceipt} onFinish={onFinish} />}
     </div>
   );
 };
+
+function LaunchBatchProgress({ receipt, onFinish }: { receipt: LaunchOut; onFinish: () => void }) {
+  const accounts = receipt.accounts ?? [];
+  const accepted = accounts.filter((account): account is typeof account & { run_id: string } =>
+    Boolean(account.run_id),
+  );
+  const details = useRunDetails(accepted.map((account) => account.run_id));
+  const detailByRunId = new Map(
+    accepted.map((account, index) => [account.run_id, details[index]?.data]),
+  );
+  const states: CampaignLaunchObservedState[] = accounts.map((account) => {
+    if (!account.run_id) return "rejected";
+    const detail = detailByRunId.get(account.run_id);
+    if (detail?.task?.state === "unknown") return "unknown";
+    return (detail?.status ?? account.status) as CampaignLaunchObservedState;
+  });
+  const aggregate = aggregateCampaignLaunchState(states);
+  const succeeded = states.filter((state) => state === "succeeded").length;
+  const presentation = {
+    working: {
+      title: "Запуски выполняются независимо",
+      detail: `${succeeded} из ${accounts.length} подтверждены; остальные ещё в работе или отклонены.`,
+      tone: "border-warning/35 bg-warning/10 text-warning",
+      icon: <Loader2 size={16} className="animate-spin" aria-hidden="true" />,
+    },
+    succeeded: {
+      title: "Все кабинеты подтверждены",
+      detail: `${accounts.length} из ${accounts.length} запусков завершены успешно.`,
+      tone: "border-success/35 bg-success/10 text-success",
+      icon: <CheckCircle size={16} aria-hidden="true" />,
+    },
+    partial: {
+      title: "Частичный результат",
+      detail: `${succeeded} из ${accounts.length} запусков успешны. Остальные требуют отдельной проверки.`,
+      tone: "border-warning/40 bg-warning/10 text-warning",
+      icon: <AlertTriangle size={16} aria-hidden="true" />,
+    },
+    failed: {
+      title: "Ни один запуск не подтверждён",
+      detail: "Ошибки показаны отдельно по каждому кабинету.",
+      tone: "border-danger/35 bg-danger/10 text-danger",
+      icon: <XCircle size={16} aria-hidden="true" />,
+    },
+    unknown: {
+      title: "Результат неизвестен",
+      detail: "Автоповтор запрещён. Сначала подтвердите отсутствие side effect в Meta.",
+      tone: "border-danger/35 bg-danger/10 text-danger",
+      icon: <AlertTriangle size={16} aria-hidden="true" />,
+    },
+  }[aggregate];
+
+  return (
+    <div className="space-y-4">
+      <div className={cn("rounded-[var(--radius-2)] border p-4", presentation.tone)} role="status">
+        <strong className="flex items-center gap-2 font-display text-[13px] uppercase tracking-wider">
+          {presentation.icon}
+          {presentation.title}
+        </strong>
+        <p className="mt-1 text-[12px] text-bg-10">{presentation.detail}</p>
+      </div>
+      {accounts.map((account) => (
+        <section
+          key={account.account_id}
+          className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-1 p-4"
+          aria-label={`Кабинет act_${account.account_id}`}
+        >
+          <div className="mb-3 flex items-center justify-between gap-3 border-b border-[var(--color-hairline)] pb-3">
+            <strong className="font-mono text-[13px] text-bg-11">act_{account.account_id}</strong>
+            <span className="text-[12px] text-bg-9">
+              {account.run_id ? "Отдельный run" : "Не поставлен в очередь"}
+            </span>
+          </div>
+          {account.run_id ? (
+            <RunProgress runId={account.run_id} onFinish={onFinish} showFinish={false} />
+          ) : (
+            <p role="alert" className="m-0 text-[13px] text-danger">
+              {account.error ?? "Сервер отклонил запуск кабинета"}
+            </p>
+          )}
+        </section>
+      ))}
+      {aggregate !== "working" ? (
+        <Button variant="secondary" size="lg" onClick={onFinish}>
+          Завершить визард
+        </Button>
+      ) : null}
+    </div>
+  );
+}
 
 // ─── RunProgress ──────────────────────────────────────────────────────────────
 
 interface RunProgressProps {
   runId: string;
   onFinish: () => void;
+  showFinish?: boolean;
 }
 
-function RunProgress({ runId, onFinish }: RunProgressProps) {
+function RunProgress({ runId, onFinish, showFinish = true }: RunProgressProps) {
   const { data: run, isLoading } = useRunDetail(runId);
 
   if (isLoading && !run) {
@@ -185,7 +289,12 @@ function RunProgress({ runId, onFinish }: RunProgressProps) {
       {/* Статус-шкала */}
       <ProgressBar status={status} stepIdx={stepIdx} />
 
-      {succeeded && <SuccessSummary ids={run.created_meta_ids ?? {}} onFinish={onFinish} />}
+      {succeeded && (
+        <SuccessSummary
+          ids={run.created_meta_ids ?? {}}
+          onFinish={showFinish ? onFinish : undefined}
+        />
+      )}
 
       {!succeeded && (
         <div
@@ -300,7 +409,13 @@ function normalizeMetaIds(value: unknown): string[] {
   return [];
 }
 
-function SuccessSummary({ ids, onFinish }: { ids: Record<string, unknown>; onFinish: () => void }) {
+function SuccessSummary({
+  ids,
+  onFinish,
+}: {
+  ids: Record<string, unknown>;
+  onFinish?: () => void;
+}) {
   const groups = META_GROUPS.map((group) => ({
     ...group,
     ids: normalizeMetaIds(ids[group.key]),
@@ -346,15 +461,17 @@ function SuccessSummary({ ids, onFinish }: { ids: Record<string, unknown>; onFin
         </div>
 
         <div className="mt-5 flex flex-col-reverse sm:flex-row sm:items-center gap-2.5">
-          <Button
-            variant="primary"
-            size="lg"
-            leftIcon={<CheckCircle size={15} />}
-            onClick={onFinish}
-            className="w-full sm:w-auto"
-          >
-            Создать новый залив
-          </Button>
+          {onFinish ? (
+            <Button
+              variant="primary"
+              size="lg"
+              leftIcon={<CheckCircle size={15} />}
+              onClick={onFinish}
+              className="w-full sm:w-auto"
+            >
+              Создать новый залив
+            </Button>
+          ) : null}
           {campaignIds.length > 0 && (
             <a
               href={adsManagerHref}

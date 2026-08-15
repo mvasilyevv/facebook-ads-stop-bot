@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
 import {
   DATA_STATE_DESCRIPTION,
@@ -20,6 +20,115 @@ import {
 export interface DataStateBadgeProps {
   state: DataState;
   compact?: boolean;
+}
+
+export interface ChoiceTagOption {
+  value: string;
+  label: string;
+}
+
+export interface ChoiceTagListInputProps {
+  label: string;
+  values: string[];
+  options: ChoiceTagOption[];
+  onChange: (values: string[]) => void;
+  placeholder?: string;
+  helpText?: string;
+  errorMessage?: string;
+  disabled?: boolean;
+  selectAllLabel?: string;
+}
+
+/** Multi-value field backed only by authoritative choices; no free-form tokens. */
+export function ChoiceTagListInput({
+  label,
+  values,
+  options,
+  onChange,
+  placeholder = "Добавить значение",
+  helpText,
+  errorMessage,
+  disabled = false,
+  selectAllLabel,
+}: ChoiceTagListInputProps) {
+  const id = useId();
+  const helpId = helpText ? `${id}-help` : undefined;
+  const errorId = errorMessage ? `${id}-error` : undefined;
+  const optionByValue = new Map(
+    options.map((option) => [option.value, option]),
+  );
+  const available = options.filter((option) => !values.includes(option.value));
+
+  return (
+    <div className="operator-choice-tags">
+      <div className="operator-choice-tags__label-row">
+        <label htmlFor={id}>{label}</label>
+        {selectAllLabel && available.length > 0 ? (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(options.map((option) => option.value))}
+          >
+            {selectAllLabel}
+          </button>
+        ) : null}
+      </div>
+      <div
+        className="operator-choice-tags__control"
+        data-invalid={errorMessage ? "true" : "false"}
+      >
+        <div className="operator-choice-tags__values" aria-live="polite">
+          {values.map((value, index) => (
+            <span className="operator-choice-tags__tag" key={value}>
+              <span>
+                {optionByValue.get(value)?.label ?? value}
+                {index === 0 && values.length > 1 ? " · основной" : ""}
+              </span>
+              <button
+                type="button"
+                disabled={disabled}
+                aria-label={`Убрать ${optionByValue.get(value)?.label ?? value}`}
+                onClick={() =>
+                  onChange(values.filter((item) => item !== value))
+                }
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+        <select
+          id={id}
+          value=""
+          disabled={disabled || available.length === 0}
+          aria-invalid={Boolean(errorMessage)}
+          aria-describedby={errorId ?? helpId}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value) onChange([...values, value]);
+          }}
+        >
+          <option value="">
+            {available.length > 0 ? placeholder : "Все выбраны"}
+          </option>
+          {available.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      {errorMessage ? (
+        <span id={errorId} className="operator-choice-tags__error" role="alert">
+          {errorMessage}
+        </span>
+      ) : helpText ? (
+        <span id={helpId} className="operator-choice-tags__help">
+          {helpText}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 export function DataStateBadge({

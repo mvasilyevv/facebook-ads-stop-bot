@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  aggregateCampaignLaunchState,
   buildCampaignConfig,
   nextCampaignKey,
   parseCampaignCountryInput,
@@ -7,8 +8,10 @@ import {
   type CampaignWizardCampaign,
   type CampaignWizardConcept,
   type CampaignWizardStep,
+  type CampaignLaunchObservedState,
 } from "@fb/features/campaigns";
 import { safeApiProblemMessage } from "@fb/operator-api";
+import { ChoiceTagListInput } from "@fb/operator-ui";
 import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
@@ -26,11 +29,13 @@ import { useOffers } from "@/lib/api";
 import {
   useCampaignAccountContext,
   useCampaignAccountPages,
+  useCampaignRunDetails,
   useCampaignPresets,
   useLaunchCampaign,
   useUploadCampaignConcepts,
   useValidateCampaignConfig,
 } from "@/lib/campaigns";
+import type { LaunchOut } from "@/lib/campaigns";
 import { cn } from "@/lib/cn";
 import { haptic } from "@/lib/tg";
 import { useCampaignWizardDraft } from "./useCampaignWizardDraft";
@@ -69,7 +74,7 @@ export function CampaignWizard() {
   const [pages, setPages] = useState<Array<{ id: string; name: string }>>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [problem, setProblem] = useState<string | null>(null);
-  const [queuedRunId, setQueuedRunId] = useState<string | null>(null);
+  const [launchReceipt, setLaunchReceipt] = useState<LaunchOut | null>(null);
 
   if (wizard.isHydrating) {
     return (
@@ -108,6 +113,10 @@ export function CampaignWizard() {
   const state = wizard.state;
   const selectedPreset =
     presets.data?.find((preset) => preset.id === state.start.preset_id) ?? null;
+  const selectedOffer = offers.data?.find(
+    (offer) => offer.code === state.identity.offer_code,
+  );
+  const offerAccounts = selectedOffer?.ad_account_ids?.filter(Boolean) ?? [];
   let config: ReturnType<typeof buildCampaignConfig> | null = null;
   if (state.currentStep >= 6) {
     try {
@@ -131,7 +140,8 @@ export function CampaignWizard() {
       value: {
         offer_code: code,
         pixel_id: offer?.pixel_id ?? "",
-        act_id: accounts.length === 1 ? accounts[0]! : state.identity.act_id,
+        ad_account_ids: accounts.length === 1 ? [accounts[0]!] : [],
+        act_id: accounts.length === 1 ? accounts[0]! : "",
         account_context_state: "unavailable",
         timezone_name: "",
         currency: "",
@@ -148,6 +158,37 @@ export function CampaignWizard() {
         },
       });
     }
+  }
+
+  function chooseAccounts(accountIds: string[]) {
+    const primary = accountIds[0] ?? "";
+    if (primary !== state.identity.act_id) setPages([]);
+    patchIdentity({
+      type: "patchIdentity",
+      value: {
+        ad_account_ids: accountIds,
+        act_id: primary,
+        page_id:
+          primary === state.identity.act_id ? state.identity.page_id : "",
+        account_context_state:
+          primary === state.identity.act_id
+            ? state.identity.account_context_state
+            : "unavailable",
+        timezone_name:
+          primary === state.identity.act_id ? state.identity.timezone_name : "",
+        currency:
+          primary === state.identity.act_id ? state.identity.currency : "",
+        currency_exponent:
+          primary === state.identity.act_id
+            ? state.identity.currency_exponent
+            : null,
+        account_context_observed_at:
+          primary === state.identity.act_id
+            ? state.identity.account_context_observed_at
+            : null,
+        account_context_issue: null,
+      },
+    });
   }
 
   async function loadAccountContext() {
@@ -305,11 +346,12 @@ export function CampaignWizard() {
     try {
       const receipt = await launch.mutateAsync({
         config,
+        ad_account_ids: state.identity.ad_account_ids ?? [],
         preset_id: state.start.preset_id ?? null,
         draft_revision: wizard.revision,
       });
       if (receipt.draft_cleared) wizard.markCleared();
-      setQueuedRunId(receipt.run_id);
+      setLaunchReceipt(receipt);
       haptic.notify("success");
     } catch (error) {
       setProblem(
@@ -451,25 +493,21 @@ export function CampaignWizard() {
                 ]}
                 onChange={(event) => chooseOffer(event.target.value)}
               />
-              <Input
-                label="Ad Account ID"
-                value={state.identity.act_id}
-                errorMessage={errors.act_id}
-                inputMode="numeric"
-                onChange={(event) =>
-                  patchIdentity({
-                    type: "patchIdentity",
-                    value: {
-                      act_id: event.target.value,
-                      page_id: "",
-                      account_context_state: "unavailable",
-                      timezone_name: "",
-                      currency: "",
-                      currency_exponent: null,
-                      account_context_observed_at: null,
-                    },
-                  })
+              <ChoiceTagListInput
+                label="Кабинеты оффера"
+                values={state.identity.ad_account_ids ?? []}
+                options={offerAccounts.map((accountId) => ({
+                  value: accountId,
+                  label: `act_${accountId}`,
+                }))}
+                onChange={chooseAccounts}
+                placeholder="Добавить кабинет оффера"
+                selectAllLabel={
+                  offerAccounts.length > 1 ? "Выбрать все" : undefined
                 }
+                errorMessage={errors.ad_account_ids ?? errors.act_id}
+                disabled={offerAccounts.length === 0}
+                helpText="По одному независимому run на кабинет. Первый используется для preview и списка страниц."
               />
               <Button
                 variant="secondary"
@@ -477,7 +515,7 @@ export function CampaignWizard() {
                 loading={context.isPending || pagesRequest.isPending}
                 onClick={() => void loadAccountContext()}
               >
-                Подтвердить кабинет
+                Подтвердить основной кабинет
               </Button>
               <ContextEvidence identity={state.identity} />
               {pages.length > 0 ? (
@@ -577,8 +615,9 @@ export function CampaignWizard() {
         {state.currentStep === 7 && config ? (
           <LaunchStep
             config={config}
+            accountIds={state.identity.ad_account_ids ?? []}
             draftReady={wizard.revision > 0 && wizard.syncState === "saved"}
-            queuedRunId={queuedRunId}
+            receipt={launchReceipt}
             loading={launch.isPending}
             onLaunch={() => void queueLaunch()}
           />
@@ -591,7 +630,7 @@ export function CampaignWizard() {
         </p>
       ) : null}
 
-      {!queuedRunId ? (
+      {!launchReceipt ? (
         <nav className="fixed inset-x-0 bottom-[calc(64px+var(--tg-content-safe-bottom))] z-30 border-t border-[var(--color-hairline)] bg-bg-0/95 px-[max(16px,var(--tg-content-safe-left))] py-3 backdrop-blur">
           <div className="mx-auto flex max-w-xl items-center justify-between gap-3">
             <Button
@@ -1214,28 +1253,99 @@ function Metric({ label, value }: { label: string; value: number }) {
 
 function LaunchStep({
   config,
+  accountIds,
   draftReady,
-  queuedRunId,
+  receipt,
   loading,
   onLaunch,
 }: {
   config: ReturnType<typeof buildCampaignConfig>;
+  accountIds: string[];
   draftReady: boolean;
-  queuedRunId: string | null;
+  receipt: LaunchOut | null;
   loading: boolean;
   onLaunch: () => void;
 }) {
-  if (queuedRunId) {
+  const accounts = receipt?.accounts ?? [];
+  const accepted = accounts.filter(
+    (account): account is typeof account & { run_id: string } =>
+      Boolean(account.run_id),
+  );
+  const detailQueries = useCampaignRunDetails(
+    accepted.map((account) => account.run_id),
+  );
+  const details = new Map(
+    accepted.map((account, index) => [
+      account.run_id,
+      detailQueries[index]?.data,
+    ]),
+  );
+  const observedStates: CampaignLaunchObservedState[] = accounts.map(
+    (account) => {
+      if (!account.run_id) return "rejected";
+      const detail = details.get(account.run_id);
+      if (detail?.task?.state === "unknown") return "unknown";
+      return (detail?.status ?? account.status) as CampaignLaunchObservedState;
+    },
+  );
+  const aggregate = aggregateCampaignLaunchState(observedStates);
+
+  if (receipt) {
+    const aggregateCopy = {
+      working: ["Запуски выполняются", "border-warning/35 text-warning"],
+      succeeded: [
+        "Все кабинеты подтверждены",
+        "border-success/35 text-success",
+      ],
+      partial: ["Частичный результат", "border-warning/40 text-warning"],
+      failed: ["Запуски не подтверждены", "border-danger/35 text-danger"],
+      unknown: ["Результат неизвестен", "border-danger/35 text-danger"],
+    }[aggregate];
     return (
       <Card
-        eyebrow="QUEUED"
-        title="Запуск принят в очередь"
-        className="border-warning/35"
+        eyebrow="ПО КАБИНЕТАМ"
+        title={aggregateCopy[0]}
+        className={aggregateCopy[1]}
       >
         <p role="status" className="text-[13px] leading-5 text-bg-9">
-          Это ещё не успех. Создание подтверждается только после статуса
-          «Готово» в журнале запусков.
+          Зелёный итог появится только после подтверждённого успеха всех
+          кабинетов.
         </p>
+        <div className="mt-4 space-y-2">
+          {accounts.map((account) => {
+            const detail = account.run_id ? details.get(account.run_id) : null;
+            const state = !account.run_id
+              ? "rejected"
+              : detail?.task?.state === "unknown"
+                ? "unknown"
+                : (detail?.status ?? account.status);
+            return (
+              <div
+                key={account.account_id}
+                className="border-y border-[var(--color-hairline)] px-1 py-3"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <strong className="font-mono text-[13px] text-bg-11">
+                    act_{account.account_id}
+                  </strong>
+                  <span className="text-[12px] text-bg-9">
+                    {launchStateLabel(state)}
+                  </span>
+                </div>
+                {account.error ? (
+                  <p role="alert" className="mt-1 text-[12px] text-danger">
+                    {account.error}
+                  </p>
+                ) : null}
+                {state === "unknown" ? (
+                  <p role="alert" className="mt-1 text-[12px] text-danger">
+                    Автоповтор запрещён до сверки Meta.
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
         <Link
           to="/campaigns"
           className="mt-4 flex min-h-11 items-center justify-center rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] px-4 text-[14px] text-bg-11"
@@ -1249,7 +1359,10 @@ function LaunchStep({
     <Card eyebrow="ШАГ 7 · ПОДТВЕРЖДЕНИЕ" title="Поставить в очередь">
       <dl className="space-y-2 text-[13px]">
         <Fact label="Оффер" value={config.offer_code} />
-        <Fact label="Кабинет" value={config.act_id} />
+        <Fact
+          label="Кабинеты"
+          value={accountIds.map((id) => `act_${id}`).join(", ")}
+        />
         <Fact label="Бюджет" value={`$${config.daily_budget} / день`} />
         <Fact label="Кампаний" value={String(config.campaigns.length)} />
         <Fact label="Статус объектов" value="PAUSED" />
@@ -1264,7 +1377,7 @@ function LaunchStep({
         fullWidth
         className="mt-5"
         loading={loading}
-        disabled={!draftReady}
+        disabled={!draftReady || accountIds.length === 0}
         onClick={onLaunch}
       >
         <ShieldCheck size={17} aria-hidden="true" />
@@ -1272,6 +1385,18 @@ function LaunchStep({
       </Button>
     </Card>
   );
+}
+
+function launchStateLabel(state: string): string {
+  if (state === "queued") return "В очереди";
+  if (state === "uniquifying") return "Уникализация";
+  if (state === "uploading") return "Загрузка";
+  if (state === "creating") return "Создание";
+  if (state === "succeeded") return "Готово";
+  if (state === "unknown") return "UNKNOWN · сверка";
+  if (state === "cancelled") return "Отменено";
+  if (state === "rejected") return "Отклонено до очереди";
+  return "Ошибка";
 }
 
 function Fact({ label, value }: { label: string; value: string }) {

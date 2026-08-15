@@ -27,6 +27,7 @@ class CampaignDraftStart(_DraftModel):
 
 class CampaignDraftIdentity(_DraftModel):
     act_id: str = Field(default="", max_length=64)
+    ad_account_ids: list[str] = Field(default_factory=list, max_length=20)
     page_id: str = Field(default="", max_length=64)
     pixel_id: str = Field(default="", max_length=64)
     account_context_state: Literal["ready", "stale", "unavailable"] = "unavailable"
@@ -37,6 +38,16 @@ class CampaignDraftIdentity(_DraftModel):
     account_context_issue: str | None = Field(default=None, max_length=96)
     offer_code: str = Field(default="", max_length=64)
     byer_tag: str = Field(default="", max_length=64)
+
+    @field_validator("ad_account_ids")
+    @classmethod
+    def validate_ad_account_ids(cls, values: list[str]) -> list[str]:
+        canonical = [value.removeprefix("act_") for value in values]
+        if len(canonical) != len(set(canonical)):
+            raise ValueError("ad_account_ids must be unique")
+        if any(re.fullmatch(r"[0-9]{1,32}", value) is None for value in canonical):
+            raise ValueError("ad_account_ids must contain numeric Meta account IDs")
+        return canonical
 
 
 class CampaignDraftGoal(_DraftModel):
