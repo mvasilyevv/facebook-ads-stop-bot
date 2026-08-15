@@ -99,7 +99,9 @@ def test_bootstrap_profile_accepts_a_valid_explicit_seed_when_canonical_is_absen
     assert not canonical.exists()
 
 
-@pytest.mark.parametrize("unsafe", ["missing-marker", "writable-file", "hard-link", "symlink"])
+@pytest.mark.parametrize(
+    "unsafe", ["missing-marker", "writable-file", "hard-link-from-outside", "symlink"]
+)
 def test_bootstrap_profile_rejects_unsafe_seed(tmp_path: Path, unsafe: str) -> None:
     canonical = tmp_path / "shared" / "vision-config"
     seed = _write_profile(tmp_path / "shared" / "desktop-profile-seed")
@@ -108,15 +110,25 @@ def test_bootstrap_profile_rejects_unsafe_seed(tmp_path: Path, unsafe: str) -> N
         (seed / VISION_PROFILE_MARKER).unlink()
     elif unsafe == "writable-file":
         preferences.chmod(0o620)
-    elif unsafe == "hard-link":
-        os.link(preferences, seed / "browser" / "Preferences-copy")
+    elif unsafe == "hard-link-from-outside":
+        # Опасна не множественность ссылок, а та, что ведёт наружу: через неё
+        # в профиль втягивается чужой файл. Вторая ссылка лежит вне дерева,
+        # поэтому число вхождений не сходится с числом ссылок.
+        outside = tmp_path / "outside-secret"
+        outside.write_bytes(b"secret\n")
+        outside.chmod(0o600)
+        os.link(outside, seed / "browser" / "borrowed")
     else:
         preferences.unlink()
         preferences.symlink_to("/etc/passwd")
 
-    # Ссылка наружу теперь называется своим именем — «unsafe link». Внутри
-    # дерева ссылка допустима (её оставляет XFCE), за его пределы — нет.
-    with pytest.raises(FbctlError, match="(marker is invalid|contains an unsafe (entry|link))"):
+    # Ссылка наружу теперь называется своим именем — «unsafe link» или
+    # «hard link from outside». Внутри дерева ссылка допустима: символическую
+    # оставляет XFCE, жёсткую — кэш WebKit.
+    with pytest.raises(
+        FbctlError,
+        match="(marker is invalid|contains an unsafe (entry|link)|hard link from outside)",
+    ):
         validate_bootstrap_vision_profile(
             canonical_profile=canonical,
             desktop_profile_seed=seed,
@@ -466,6 +478,31 @@ def test_profile_total_byte_cap_stops_at_the_remaining_aggregate_budget(
         )
 
     assert observed == 4
+
+
+def test_profile_keeps_hard_links_that_live_entirely_inside(tmp_path: Path) -> None:
+    """Кэш WebKit раскладывает один блоб двумя ссылками — обе внутри профиля.
+
+    Пока любая множественная ссылка считалась небезопасной, bootstrap падал
+    «contains an unsafe entry» после того, как браузером начинали пользоваться.
+    """
+    canonical = tmp_path / "shared" / "vision-config"
+    seed = _write_profile(tmp_path / "shared" / "desktop-profile-seed")
+    blob = seed / "browser" / "blob"
+    blob.write_bytes(b"cached\n")
+    blob.chmod(0o600)
+    os.link(blob, seed / "browser" / "record")
+
+    result = validate_bootstrap_vision_profile(
+        canonical_profile=canonical,
+        desktop_profile_seed=seed,
+        seed_required_uid=os.getuid(),
+        seed_required_gid=os.getgid(),
+        canonical_required_uid=os.getuid(),
+        canonical_required_gid=os.getgid(),
+    )
+
+    assert result.seed_to_copy == seed
 
 
 def test_profile_cap_fits_a_profile_that_holds_the_downloaded_browser() -> None:
