@@ -3577,3 +3577,41 @@ def test_port_probe_asks_the_same_way_the_runtime_binds() -> None:
         listener.close()
 
     assert _tcp_port_is_occupied("127.0.0.1", port) is False
+
+
+def test_rustdesk_channel_survives_the_source_schema(tmp_path) -> None:
+    """Переменные канала обязаны доезжать до стола, а не вырезаться схемой.
+
+    fbctl пропускает только объявленные ключи. Пока четырёх ключей RustDesk в
+    схеме не было, владелец задавал их в PROD_ENV_B64, publish молча их
+    выбрасывал, и канал не поднимался — без единой ошибки в логе.
+    """
+    from fbctl.config import SOURCE_ALLOWED_KEYS
+
+    for key in (
+        "DESKTOP_RUSTDESK_PASSWORD",
+        "DESKTOP_RUSTDESK_SERVER",
+        "DESKTOP_RUSTDESK_KEY",
+        "DESKTOP_RUSTDESK_BIND",
+    ):
+        assert key in SOURCE_ALLOWED_KEYS, f"{key} вырезается из source.env"
+
+
+def test_desktop_environment_carries_the_channel_when_it_is_configured() -> None:
+    """Стол получает секреты канала, но не наследует окружение приложения."""
+    from fbctl.config import DESKTOP_ENV_KEYS, DESKTOP_ENV_REQUIRED_KEYS
+
+    assert DESKTOP_ENV_REQUIRED_KEYS == (
+        "DESKTOP_KASM_SERVICE_USER",
+        "DESKTOP_KASM_SERVICE_PASSWORD",
+    )
+    # Канал необязателен: без него стол работает как раньше.
+    assert set(DESKTOP_ENV_KEYS) - set(DESKTOP_ENV_REQUIRED_KEYS) == {
+        "DESKTOP_RUSTDESK_PASSWORD",
+        "DESKTOP_RUSTDESK_SERVER",
+        "DESKTOP_RUSTDESK_KEY",
+    }
+    # База данных, Telegram и ключи приложения на стол не попадают.
+    assert not any(
+        key.startswith(("POSTGRES", "TELEGRAM", "ANTHROPIC", "API_KEY")) for key in DESKTOP_ENV_KEYS
+    )
