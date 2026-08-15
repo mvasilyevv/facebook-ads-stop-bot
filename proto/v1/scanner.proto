@@ -59,6 +59,10 @@ message RunScanCycleRequest {
   // browser-agent находит отдельную scan-page и сверяет act из GraphContext.
   // Пустое значение отклоняется до скана.
   string ad_account_id = 10;
+  // Presentation-only query видимой вкладки Ads Manager (без ведущего '?').
+  // Пусто → browser-agent использует прежний fallback env → встроенный default.
+  // На am_tabular column_fields и денежные метрики поле не влияет.
+  string am_columns_qs = 11;
 }
 
 message ScanCycleEvent {

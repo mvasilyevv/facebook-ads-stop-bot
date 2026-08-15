@@ -4808,6 +4808,56 @@
         }
       }
     },
+    "/api/settings/observer/ads-manager-columns": {
+      "patch": {
+        "tags": ["settings"],
+        "summary": "Patch Ads Manager Columns",
+        "description": "Меняет только presentation-колонки видимой вкладки Ads Manager.\n\nСервер принимает известные IDs и сам строит query. NULL/пустой список хранится\nкак NULL, чтобы browser-agent использовал прежний fallback env → default.",
+        "operationId": "patch_ads_manager_columns_api_settings_observer_ads_manager_columns_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsManagerColumnsPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverSettingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Canonical API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/settings/observer/campaigns/refresh": {
       "post": {
         "tags": ["settings"],
@@ -6200,6 +6250,44 @@
         "type": "object",
         "title": "AdTextIn",
         "description": "Текст объявления в форме фронта (mode none|text, primary)."
+      },
+      "AdsManagerColumnOption": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": ["id", "label"],
+        "title": "AdsManagerColumnOption",
+        "description": "Known presentation column exposed as a readable checkbox option."
+      },
+      "AdsManagerColumnsPatchRequest": {
+        "properties": {
+          "column_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Column Ids",
+            "description": "Известные колонки видимой вкладки Ads Manager. Пусто/null — использовать env BROWSER_AGENT_AM_COLUMNS_QS, затем встроенный default."
+          }
+        },
+        "type": "object",
+        "title": "AdsManagerColumnsPatchRequest",
+        "description": "Known presentation columns; null/empty resets runtime fallback."
       },
       "AdsetDuplicateBudget": {
         "properties": {
@@ -9578,10 +9666,34 @@
             },
             "type": "array",
             "title": "Campaign Ids"
+          },
+          "am_columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Am Columns"
+          },
+          "am_columns_use_default": {
+            "type": "boolean",
+            "title": "Am Columns Use Default"
+          },
+          "am_column_options": {
+            "items": {
+              "$ref": "#/components/schemas/AdsManagerColumnOption"
+            },
+            "type": "array",
+            "title": "Am Column Options"
           }
         },
         "type": "object",
-        "required": ["is_scanning_enabled", "default_interval_seconds"],
+        "required": [
+          "is_scanning_enabled",
+          "default_interval_seconds",
+          "am_columns",
+          "am_columns_use_default",
+          "am_column_options"
+        ],
         "title": "ObserverSettingsResponse",
         "description": "Текущая конфигурация observer без удалённых legacy-порогов."
       },

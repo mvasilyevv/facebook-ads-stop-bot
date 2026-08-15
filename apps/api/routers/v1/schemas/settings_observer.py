@@ -6,7 +6,16 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from core.observer.am_columns import normalize_am_columns
+
+
+class AdsManagerColumnOption(BaseModel):
+    """Known presentation column exposed as a readable checkbox option."""
+
+    id: str
+    label: str
 
 
 class ObserverSettingsResponse(BaseModel):
@@ -20,6 +29,12 @@ class ObserverSettingsResponse(BaseModel):
     owner_campaign_tag: str | None = None
     # Allowlist кампаний для am-режима (#3): фильтр am_tabular по campaign.id. Пусто — без фильтра.
     campaign_ids: list[str] = Field(default_factory=list)
+    # Presentation-only columns of the human-visible Ads Manager tab. When
+    # am_columns_use_default=true this is the built-in template shown by the UI;
+    # browser-agent may still resolve its legacy env override before that template.
+    am_columns: list[str]
+    am_columns_use_default: bool
+    am_column_options: list[AdsManagerColumnOption]
 
 
 class ObserverIntervalPatchRequest(BaseModel):
@@ -60,6 +75,24 @@ class CampaignAllowlistRequest(BaseModel):
         default_factory=list,
         description="Список campaign.id для наблюдения. Пусто — без фильтра по кампаниям.",
     )
+
+
+class AdsManagerColumnsPatchRequest(BaseModel):
+    """Known presentation columns; null/empty resets runtime fallback."""
+
+    column_ids: list[str] | None = Field(
+        default=None,
+        description=(
+            "Известные колонки видимой вкладки Ads Manager. Пусто/null — "
+            "использовать env BROWSER_AGENT_AM_COLUMNS_QS, затем встроенный default."
+        ),
+    )
+
+    @field_validator("column_ids")
+    @classmethod
+    def validate_column_ids(cls, value: list[str] | None) -> list[str] | None:
+        normalized = normalize_am_columns(value)
+        return list(normalized) if normalized is not None else None
 
 
 class ScanNowResponse(BaseModel):

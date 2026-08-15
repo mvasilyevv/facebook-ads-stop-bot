@@ -167,7 +167,8 @@ async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
                     SELECT
                         interval_seconds, is_scanning_enabled,
                         owner_campaign_tag,
-                        campaign_ids
+                        campaign_ids,
+                        am_columns_qs
                     FROM observer_config WHERE singleton_key = 'default'
                     """
                 )
@@ -180,6 +181,7 @@ async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
         "is_scanning_enabled": bool(row[1]),
         "owner_campaign_tag": row[2],
         "campaign_ids": list(row[3]) if row[3] else [],
+        "am_columns_qs": row[4],
     }
 
 

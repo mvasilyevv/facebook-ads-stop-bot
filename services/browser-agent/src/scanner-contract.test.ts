@@ -29,6 +29,18 @@ test('scanner wire contract exposes the fail-closed metrics revision', () => {
   assert.equal(revisionField?.number, 11);
   assert.equal(revisionField?.type, 'TYPE_UINT32');
 
+  const scanRequest = definition[
+    'fb_agent.scanner.v1.RunScanCycleRequest'
+  ] as protoLoader.MessageTypeDefinition;
+  const requestType = scanRequest.type as {
+    field: Array<{ name: string; number: number; type: string }>;
+  };
+  const columnsField = requestType.field.find(
+    (field) => field.name === 'am_columns_qs',
+  );
+  assert.equal(columnsField?.number, 11);
+  assert.equal(columnsField?.type, 'TYPE_STRING');
+
   const scannerService = definition[
     'fb_agent.scanner.v1.ScannerService'
   ] as unknown as {

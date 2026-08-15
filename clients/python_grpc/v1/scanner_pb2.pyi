@@ -33,7 +33,7 @@ class ListCampaignsResponse(_message.Message):
     def __init__(self, campaigns: _Optional[_Iterable[_Union[CampaignInfo, _Mapping]]] = ...) -> None: ...
 
 class RunScanCycleRequest(_message.Message):
-    __slots__ = ("session_id", "page_id", "max_scroll_passes", "do_refresh", "reset_scroll_first", "settle_delay_seconds", "campaign_ids", "owner_tag", "ad_account_id")
+    __slots__ = ("session_id", "page_id", "max_scroll_passes", "do_refresh", "reset_scroll_first", "settle_delay_seconds", "campaign_ids", "owner_tag", "ad_account_id", "am_columns_qs")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     PAGE_ID_FIELD_NUMBER: _ClassVar[int]
     MAX_SCROLL_PASSES_FIELD_NUMBER: _ClassVar[int]
@@ -43,6 +43,7 @@ class RunScanCycleRequest(_message.Message):
     CAMPAIGN_IDS_FIELD_NUMBER: _ClassVar[int]
     OWNER_TAG_FIELD_NUMBER: _ClassVar[int]
     AD_ACCOUNT_ID_FIELD_NUMBER: _ClassVar[int]
+    AM_COLUMNS_QS_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     page_id: str
     max_scroll_passes: int
@@ -52,7 +53,8 @@ class RunScanCycleRequest(_message.Message):
     campaign_ids: _containers.RepeatedScalarFieldContainer[str]
     owner_tag: str
     ad_account_id: str
-    def __init__(self, session_id: _Optional[str] = ..., page_id: _Optional[str] = ..., max_scroll_passes: _Optional[int] = ..., do_refresh: bool = ..., reset_scroll_first: bool = ..., settle_delay_seconds: _Optional[float] = ..., campaign_ids: _Optional[_Iterable[str]] = ..., owner_tag: _Optional[str] = ..., ad_account_id: _Optional[str] = ...) -> None: ...
+    am_columns_qs: str
+    def __init__(self, session_id: _Optional[str] = ..., page_id: _Optional[str] = ..., max_scroll_passes: _Optional[int] = ..., do_refresh: bool = ..., reset_scroll_first: bool = ..., settle_delay_seconds: _Optional[float] = ..., campaign_ids: _Optional[_Iterable[str]] = ..., owner_tag: _Optional[str] = ..., ad_account_id: _Optional[str] = ..., am_columns_qs: _Optional[str] = ...) -> None: ...
 
 class ScanCycleEvent(_message.Message):
     __slots__ = ("session_id", "progress", "complete", "error")

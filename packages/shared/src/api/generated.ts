@@ -1114,6 +1114,29 @@ export interface paths {
     patch: operations["patch_observer_campaigns_api_settings_observer_campaigns_patch"];
     trace?: never;
   };
+  "/api/settings/observer/ads-manager-columns": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Patch Ads Manager Columns
+     * @description Меняет только presentation-колонки видимой вкладки Ads Manager.
+     *
+     *     Сервер принимает известные IDs и сам строит query. NULL/пустой список хранится
+     *     как NULL, чтобы browser-agent использовал прежний fallback env → default.
+     */
+    patch: operations["patch_ads_manager_columns_api_settings_observer_ads_manager_columns_patch"];
+    trace?: never;
+  };
   "/api/settings/observer/campaigns/refresh": {
     parameters: {
       query?: never;
@@ -1746,6 +1769,27 @@ export interface components {
        * @default
        */
       primary: string;
+    };
+    /**
+     * AdsManagerColumnOption
+     * @description Known presentation column exposed as a readable checkbox option.
+     */
+    AdsManagerColumnOption: {
+      /** Id */
+      id: string;
+      /** Label */
+      label: string;
+    };
+    /**
+     * AdsManagerColumnsPatchRequest
+     * @description Known presentation columns; null/empty resets runtime fallback.
+     */
+    AdsManagerColumnsPatchRequest: {
+      /**
+       * Column Ids
+       * @description Известные колонки видимой вкладки Ads Manager. Пусто/null — использовать env BROWSER_AGENT_AM_COLUMNS_QS, затем встроенный default.
+       */
+      column_ids?: string[] | null;
     };
     /** AdsetDuplicateBudget */
     AdsetDuplicateBudget: {
@@ -3131,6 +3175,12 @@ export interface components {
       owner_campaign_tag?: string | null;
       /** Campaign Ids */
       campaign_ids?: string[];
+      /** Am Columns */
+      am_columns: string[];
+      /** Am Columns Use Default */
+      am_columns_use_default: boolean;
+      /** Am Column Options */
+      am_column_options: components["schemas"]["AdsManagerColumnOption"][];
     };
     /**
      * OfferCreateIn
@@ -8246,6 +8296,48 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": components["schemas"]["CampaignAllowlistRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ObserverSettingsResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  patch_ads_manager_columns_api_settings_observer_ads_manager_columns_patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AdsManagerColumnsPatchRequest"];
       };
     };
     responses: {

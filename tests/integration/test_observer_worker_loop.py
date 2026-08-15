@@ -74,6 +74,7 @@ class _FakeGate:
         self.calls = 0
         self.last_campaign_ids: list[str] | None = None
         self.last_owner_tag: str | None = None
+        self.last_am_columns_qs: str | None = None
         # Какие явно выбранные кабинеты были запрошены.
         self.account_ids: list[str] = []
 
@@ -85,10 +86,12 @@ class _FakeGate:
         ad_account_id: str,
         campaign_ids: list[str] | None = None,
         owner_tag: str | None = None,
+        am_columns_qs: str | None = None,
     ) -> ScanCycleOutput:
         self.calls += 1
         self.last_campaign_ids = campaign_ids
         self.last_owner_tag = owner_tag
+        self.last_am_columns_qs = am_columns_qs
         self.account_ids.append(ad_account_id)
         if isinstance(self._output, Exception):
             raise self._output
@@ -167,7 +170,8 @@ async def ensure_observer_config_enabled(pg_engine):
         await conn.execute(
             text(
                 "UPDATE observer_config SET interval_seconds = 90, "
-                "campaign_ids = ARRAY[]::text[], owner_campaign_tag = NULL "
+                "campaign_ids = ARRAY[]::text[], owner_campaign_tag = NULL, "
+                "am_columns_qs = NULL "
                 "WHERE singleton_key = 'default'"
             )
         )
@@ -178,6 +182,14 @@ async def ensure_observer_config_enabled(pg_engine):
 async def test_run_one_cycle_happy_path(
     pg_engine, ensure_observer_config_enabled, offer_cr2, monkeypatch
 ) -> None:
+    am_columns_qs = "columns=name%2Cspend&column_preset=999"
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE observer_config SET am_columns_qs = :value WHERE singleton_key = 'default'"
+            ),
+            {"value": am_columns_qs},
+        )
     gate = _FakeGate(
         ScanCycleOutput(
             rows=[_row()],
@@ -201,6 +213,7 @@ async def test_run_one_cycle_happy_path(
     summary = await run_one_cycle(pg_engine, gate=gate)
 
     assert gate.calls == 1
+    assert gate.last_am_columns_qs == am_columns_qs
     assert "cycle_ts" not in received_kwargs
     assert summary["outcome"] == "success"
     scan_id = summary["accounts"][0]["scan_id"]
@@ -510,6 +523,7 @@ class _MultiAccountGate:
         ad_account_id: str,
         campaign_ids: list[str] | None = None,
         owner_tag: str | None = None,
+        am_columns_qs: str | None = None,
     ) -> ScanCycleOutput:
         self.account_ids.append(ad_account_id)
         out = self._outputs[ad_account_id]

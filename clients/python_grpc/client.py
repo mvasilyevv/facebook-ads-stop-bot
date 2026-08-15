@@ -357,6 +357,7 @@ class BrowserAgentClient:
         settle_delay_seconds: float = 3.0,
         campaign_ids: list[str] | None = None,
         owner_tag: str | None = None,
+        am_columns_qs: str | None = None,
         timeout_seconds: float | None = None,
     ) -> AsyncIterator[ScanProgress | ScanResult]:
         """Запустить полный цикл сканирования (am_tabular — единственный источник).
@@ -368,6 +369,8 @@ class BrowserAgentClient:
             только свой скоуп, а не весь кабинет). None/"" → без резолва.
         ad_account_id: обязательный числовой ID кабинета; browser-agent открывает
             его отдельную scan-page и сверяет act из GraphContext.
+        am_columns_qs: presentation-only query видимой вкладки Ads Manager; пусто
+            сохраняет прежний fallback browser-agent env → встроенный default.
         """
         # Проверяем circuit-breaker до начала стриминга (включая переход OPEN → HALF_OPEN)
         try:
@@ -390,6 +393,7 @@ class BrowserAgentClient:
                 campaign_ids=campaign_ids or [],
                 owner_tag=owner_tag or "",
                 ad_account_id=account_id,
+                am_columns_qs=am_columns_qs or "",
             )
 
             stream = None

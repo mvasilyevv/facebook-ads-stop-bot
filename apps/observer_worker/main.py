@@ -154,12 +154,14 @@ class ScannerGate(Protocol):
         ad_account_id: str,
         campaign_ids: list[str] | None = None,
         owner_tag: str | None = None,
+        am_columns_qs: str | None = None,
     ) -> ScanCycleOutput:
         """Делает один scan-цикл (am_tabular) и возвращает строки + метаданные.
 
         campaign_ids — allowlist кампаний (#3). owner_tag — am-резолв campaign.id по тегу
         (тянуть сразу свой скоуп, не весь кабинет).
         ad_account_id — обязательный кабинет скана. Ошибка сканера → исключение.
+        am_columns_qs — presentation-only query видимой вкладки; на am_tabular не влияет.
         """
         ...
 
@@ -319,6 +321,7 @@ async def _run_account_scan(
                 campaign_ids=campaign_ids,
                 owner_tag=config.get("owner_campaign_tag"),
                 ad_account_id=ad_account_id,
+                am_columns_qs=config.get("am_columns_qs"),
             )
 
         scan_issues = list(scan_out.warnings or [])
@@ -1339,12 +1342,14 @@ async def _default_gate_factory(engine: AsyncEngine) -> ScannerGate:
             ad_account_id: str,
             campaign_ids: list[str] | None = None,
             owner_tag: str | None = None,
+            am_columns_qs: str | None = None,
         ) -> ScanCycleOutput:
             final_result: GrpcScanResult | None = None
             async for event in client.run_scan_cycle(
                 campaign_ids=campaign_ids or [],
                 owner_tag=owner_tag,
                 ad_account_id=ad_account_id,
+                am_columns_qs=am_columns_qs,
             ):
                 # ScanProgress нам пока не нужен — слушаем только финальный ScanResult
                 if isinstance(event, GrpcScanResult):

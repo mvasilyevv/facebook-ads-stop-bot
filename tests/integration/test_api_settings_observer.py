@@ -58,6 +58,54 @@ async def test_get_observer_settings_returns_defaults(
     assert "cpc_warning_percent" not in data
     assert "cpl_warning_percent" not in data
     assert "cpr_warning_percent" not in data
+    assert data["am_columns_use_default"] is True
+    assert data["am_columns"]
+    assert [option["id"] for option in data["am_column_options"]] == data["am_columns"]
+
+
+@pytest.mark.asyncio
+async def test_patch_ads_manager_columns_persists_and_resets_default(
+    pg_engine, fake_redis_client, clean_observer_config
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        custom = await ac.patch(
+            "/api/settings/observer/ads-manager-columns",
+            json={"column_ids": ["name", "spend", "cpc"]},
+        )
+        assert custom.status_code == 200
+        assert custom.json()["am_columns"] == ["name", "spend", "cpc"]
+        assert custom.json()["am_columns_use_default"] is False
+
+        loaded = await ac.get("/api/settings/observer")
+        assert loaded.json()["am_columns"] == ["name", "spend", "cpc"]
+
+        reset = await ac.patch(
+            "/api/settings/observer/ads-manager-columns",
+            json={"column_ids": []},
+        )
+        assert reset.status_code == 200
+        assert reset.json()["am_columns_use_default"] is True
+        assert reset.json()["am_columns"] != []
+
+    async with pg_engine.connect() as conn:
+        stored = await conn.scalar(
+            text("SELECT am_columns_qs FROM observer_config WHERE singleton_key = 'default'")
+        )
+    assert stored is None
+
+
+@pytest.mark.asyncio
+async def test_patch_ads_manager_columns_rejects_unknown_id(
+    pg_engine, fake_redis_client, clean_observer_config
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.patch(
+            "/api/settings/observer/ads-manager-columns",
+            json={"column_ids": ["name", "access_token=secret"]},
+        )
+    assert response.status_code == 422
 
 
 # PATCH /interval обновляет только интервал, последующий GET отражает изменение.
