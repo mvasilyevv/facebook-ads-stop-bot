@@ -25,6 +25,10 @@ VISION_RUNTIME_GID = 1000
 
 VISION_PROFILE_MARKER = ".fb-agent-vision-profile-v1"
 VISION_PROFILE_MARKER_CONTENT = b"fb-agent-vision-profile-v1\n"
+# Точка монтирования профиля внутри desktop-контейнера: ссылки, которые пишет
+# рабочий стол, записаны в этих координатах. Должна совпадать с целью тома
+# VISION_CONFIG_DIR в deploy/compose/docker-compose.desktop-agent.yml.
+CONTAINER_PROFILE_ROOT = "/config"
 MAX_PROFILE_ENTRIES = 10_000
 MAX_PROFILE_BYTES = 512 * 1024 * 1024
 MAX_PROFILE_DEPTH = 32
@@ -795,18 +799,28 @@ def _readlink_inside_tree(
 ) -> str:
     """Прочитать цель ссылки и убедиться, что она не выходит за дерево.
 
-    Ссылку не разыменовываем, поэтому проверяем сам текст цели: абсолютный путь
-    уводит наружу сразу, а относительный — если `..` поднимается выше корня
-    профиля. Ссылка на соседний файл внутри профиля безопасна и остаётся.
+    Ссылку не разыменовываем, поэтому судим по тексту цели. Профиль смонтирован
+    в контейнер как ``/config``, и рабочий стол пишет ссылки именно в этих
+    координатах: ``icons.screen.latest.rc`` указывает на
+    ``/config/.config/xfce4/desktop/…``. С точки зрения хоста путь абсолютный,
+    хотя ведёт внутрь того же профиля, поэтому такой префикс снимается и
+    остаток проверяется как относительный. Всё прочее — и абсолютные пути мимо
+    ``/config``, и относительные с выходом выше корня — небезопасно.
     """
     try:
         target = os.readlink(name, dir_fd=directory_fd)
     except OSError as exc:
         raise FbctlError(f"{label} contains an unsafe entry") from exc
-    if not target or target.startswith("/") or "\x00" in target:
+    if not target or "\x00" in target:
         raise FbctlError(f"{label} contains an unsafe link")
     # Глубина каталога, в котором лежит сама ссылка, считая от корня профиля.
     depth = len(relative) - 1
+    if target.startswith("/"):
+        if target != CONTAINER_PROFILE_ROOT and not target.startswith(f"{CONTAINER_PROFILE_ROOT}/"):
+            raise FbctlError(f"{label} contains an unsafe link")
+        target = target[len(CONTAINER_PROFILE_ROOT) :]
+        # Абсолютная цель отсчитывается от корня профиля, а не от места ссылки.
+        depth = 0
     for part in target.split("/"):
         if not part or part == ".":
             continue
