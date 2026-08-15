@@ -8,9 +8,14 @@ on:
 permissions:
   contents: read
 
+# Этот workflow вызывается из Release, и внутри вызова github.workflow — имя
+# ВЫЗЫВАЮЩЕГО. Без учёта события ручной релиз и прогон от push попадали в одну
+# группу, поэтому любой merge в main отменял идущую выкатку: Release объявляет
+# ручной запуск неотменяемым, а отменялся он здесь. Отмена после stop_runtime
+# оставила бы production остановленным.
 concurrency:
-  group: verify-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: verify-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   backend:
