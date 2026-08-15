@@ -265,8 +265,8 @@ async def redeem_desktop_ticket(
             presentation=grant.presentation,
             ttl=settings.desktop_access_session_ttl_seconds,
         )
-    except DesktopAccessError as exc:
-        return _desktop_error(str(exc))
+    except DesktopAccessError:
+        return _desktop_error("Ссылка рабочего стола недействительна или уже использована")
     response = RedirectResponse("/", status_code=303, headers=_NO_STORE)
     _set_desktop_cookie(response, token, settings.desktop_access_session_ttl_seconds)
     return response

@@ -419,7 +419,10 @@ async def preview_rule_thresholds(
             allow_zero=False,
         )
     except (UnsupportedCurrencyExponentError, InvalidCurrencyAmountError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail="CPA не соответствует точности выбранной валюты",
+        ) from exc
 
     from core.rules.types import (
         REGS_NO_DEP_STOP_COUNT,

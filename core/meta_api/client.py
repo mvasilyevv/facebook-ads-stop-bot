@@ -45,6 +45,7 @@ from core.meta_api.errors import (
     classify_graph_error,
 )
 from core.meta_api.identity import graph_ad_account_id, require_ad_account_id
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -2055,11 +2056,11 @@ class MetaApiClient:
                             "reason_code": reason_code,
                         },
                     )
-        except Exception:  # noqa: BLE001 - TTL remains the fail-closed backstop
+        except Exception as exc:  # noqa: BLE001 - TTL remains the fail-closed backstop
             logger.warning(
-                "failed to CAS-expire rejected browser readiness generation=%s",
+                "failed to CAS-expire rejected browser readiness generation=%s (%s)",
                 generation,
-                exc_info=True,
+                safe_exception_diagnostic(exc),
             )
 
     async def _controlled_presend_readiness_error(
@@ -2079,15 +2080,13 @@ class MetaApiClient:
         }.get(code)
         if reason_code is None:
             return None
-        details = (
-            exc.details() if hasattr(exc, "details") else str(exc)  # type: ignore[union-attr]
-        )
         await self._invalidate_claimed_browser_readiness(
             authority,
             reason_code=reason_code,
         )
         return BrowserReadinessRejectedError(
-            f"browser-agent rejected the controlled request before Meta dispatch: {details}",
+            "browser-agent rejected the controlled request before Meta dispatch "
+            f"(gRPC {code.name if code is not None else 'UNKNOWN'})",
             endpoint=endpoint,
         )
 
@@ -2181,8 +2180,10 @@ class MetaApiClient:
                 authority,
                 reason_code="exact_live_transport_rejected",
             )
+            code = exc.code() if hasattr(exc, "code") else None  # type: ignore[union-attr]
+            code_name = code.name if code is not None and hasattr(code, "name") else "UNKNOWN"
             raise BrowserReadinessRejectedError(
-                f"exact browser identity unavailable: {exc.details() if hasattr(exc, 'details') else exc}"
+                f"exact browser identity unavailable (gRPC {code_name})"
             ) from exc
 
         observed_contract_version = int(getattr(identity, "browser_contract_version", 0) or 0)
@@ -2656,13 +2657,13 @@ class MetaApiClient:
                 req,
                 timeout=timeout,
             )
-        except CircuitOpenError as exc:
+        except CircuitOpenError:
             return {
                 "healthy": False,
                 "current_url": "",
                 "token_present": False,
                 "token_length": 0,
-                "detail": f"circuit_open: {exc}",
+                "detail": "circuit_open",
                 "probe_performed": False,
                 "probe_ok": False,
                 "probe_status_code": 0,
@@ -2810,11 +2811,12 @@ class MetaApiClient:
                     reason_code="presend_circuit_open",
                 )
                 raise BrowserReadinessRejectedError(
-                    f"browser-agent rejected the controlled request before dispatch: {exc}",
+                    "browser-agent rejected the controlled request before dispatch "
+                    f"({safe_exception_diagnostic(exc)})",
                     endpoint=endpoint,
                 ) from exc
             raise SessionUnavailableError(
-                f"browser-agent недоступен: {exc}",
+                f"browser-agent недоступен ({safe_exception_diagnostic(exc)})",
                 endpoint=endpoint,
             ) from exc
         except grpc.RpcError as exc:  # type: ignore[misc]
@@ -2858,7 +2860,7 @@ class MetaApiClient:
             result = json.loads(resp.response_json) if resp.response_json else {}
         except json.JSONDecodeError as exc:
             raise AmbiguousResultError(
-                f"Невалидный JSON в ответе Meta: {exc}",
+                "Meta вернула ответ в неподдерживаемом JSON-формате",
                 endpoint=endpoint,
             ) from exc
         if authority is not None and authority.caller == "meta_api":
@@ -2973,21 +2975,21 @@ class MetaApiClient:
         - DEADLINE_EXCEEDED → таймаут
         """
         code = exc.code() if hasattr(exc, "code") else None  # type: ignore[union-attr]
-        details = exc.details() if hasattr(exc, "details") else str(exc)  # type: ignore[union-attr]
+        code_name = code.name if code is not None and hasattr(code, "name") else "UNKNOWN"
 
         if code == grpc.StatusCode.FAILED_PRECONDITION:
             return SessionUnavailableError(
-                f"Vision-сессия не готова: {details}",
+                f"Vision-сессия не готова (gRPC {code_name})",
                 endpoint=endpoint,
             )
         if code == grpc.StatusCode.UNIMPLEMENTED:
             return SessionUnavailableError(
-                f"browser semantic contract is incompatible: {details}",
+                f"browser semantic contract is incompatible (gRPC {code_name})",
                 endpoint=endpoint,
             )
         if code in (grpc.StatusCode.INVALID_ARGUMENT, grpc.StatusCode.PERMISSION_DENIED):
             return PermanentError(
-                f"browser operation authorization rejected: {details}",
+                f"browser operation authorization rejected (gRPC {code_name})",
                 endpoint=endpoint,
             )
         # Once ExecuteGraphCallV5 has been dispatched, transport termination is
@@ -2995,6 +2997,6 @@ class MetaApiClient:
         # handled before dispatch; FAILED_PRECONDITION and UNIMPLEMENTED are
         # explicit pre-send contracts. Every other gRPC failure remains ambiguous.
         return AmbiguousResultError(
-            f"gRPC response lost after dispatch ({code.name if code else code}): {details}",
+            f"gRPC response lost after dispatch ({code_name})",
             endpoint=endpoint,
         )

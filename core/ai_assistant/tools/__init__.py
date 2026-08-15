@@ -34,6 +34,7 @@ from core.ai_assistant.tools.base import (
     ToolHandler,
 )
 from core.ai_assistant.tools.registry import GLOBAL_REGISTRY, ToolRegistry
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +49,9 @@ async def execute_tool(
     Используется ChatSession для всех tool-use раундов.
     """
     logger.info(
-        "AI tool invocation: name=%s client_key=%s args=%s",
+        "AI tool invocation: name=%s arg_count=%d",
         name,
-        ctx.client_key,
-        args,
+        len(args),
     )
     try:
         result = await GLOBAL_REGISTRY.execute(name, args, ctx)
@@ -60,8 +60,8 @@ async def execute_tool(
     except ToolError:
         raise
     except Exception as exc:
-        logger.exception("AI tool %s упал", name)
-        raise ToolError(str(exc)) from exc
+        logger.error("AI tool %s упал (%s)", name, safe_exception_diagnostic(exc))
+        raise ToolError(f"Внутренняя ошибка tool '{name}'") from exc
 
 
 async def check_rate_limit(ctx: ToolContext, *, max_per_hour: int = 30) -> None:

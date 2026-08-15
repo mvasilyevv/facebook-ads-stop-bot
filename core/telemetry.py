@@ -15,18 +15,14 @@ from urllib.parse import urlsplit, urlunsplit
 from fastapi import FastAPI
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.grpc import (
-    GrpcAioInstrumentorClient,
-    GrpcAioInstrumentorServer,
-)
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.resources import DEPLOYMENT_ENVIRONMENT, SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
-from opentelemetry.trace import Span
+from opentelemetry.trace import Span, SpanKind, Status, StatusCode
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from core.safe_diagnostics import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +78,7 @@ def _httpx_request_hook(span: Span, request: object) -> None:
 def _server_request_hook(span: Span, scope: dict[str, object]) -> None:
     if not span.is_recording():
         return
-    path = str(scope.get("path") or "/")
+    path = redact_sensitive_text(scope.get("path") or "/")
     span.set_attribute("url.path", path)
     span.set_attribute("http.target", path)
     if scope.get("query_string"):
@@ -124,13 +120,6 @@ def initialize_telemetry() -> bool:
         )
     )
     trace.set_tracer_provider(provider)
-    HTTPXClientInstrumentor().instrument(
-        tracer_provider=provider,
-        request_hook=_httpx_request_hook,
-    )
-    SQLAlchemyInstrumentor().instrument(tracer_provider=provider)
-    GrpcAioInstrumentorClient().instrument(tracer_provider=provider)
-    GrpcAioInstrumentorServer().instrument(tracer_provider=provider)
     _provider = provider
     _configured = True
     atexit.register(shutdown_telemetry)
@@ -142,16 +131,50 @@ def initialize_telemetry() -> bool:
     return True
 
 
+class _SecretSafeTracingMiddleware:
+    """Create bounded HTTP spans without exception events, bodies or headers."""
+
+    def __init__(self, app: ASGIApp, *, tracer_provider: TracerProvider | None) -> None:
+        self.app = app
+        self.tracer = trace.get_tracer(__name__, tracer_provider=tracer_provider)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = str(scope.get("method") or "HTTP")[:16]
+        status_code: int | None = None
+
+        async def safe_send(message: Message) -> None:
+            nonlocal status_code
+            if message.get("type") == "http.response.start":
+                status_code = int(message.get("status") or 0)
+            await send(message)
+
+        with self.tracer.start_as_current_span(
+            f"HTTP {method}",
+            kind=SpanKind.SERVER,
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            _server_request_hook(span, scope)
+            try:
+                await self.app(scope, receive, safe_send)
+            except Exception as exc:  # noqa: BLE001 - status retains only the safe class name
+                span.set_status(Status(StatusCode.ERROR, f"error_type={type(exc).__name__}"))
+                raise
+            if status_code is not None:
+                span.set_attribute("http.response.status_code", status_code)
+                if status_code >= 500:
+                    span.set_status(Status(StatusCode.ERROR, f"HTTP {status_code}"))
+
+
 def instrument_fastapi(app: FastAPI) -> bool:
-    """Attach server spans after routers and middleware have been registered."""
+    """Attach secret-safe server spans after routers and middleware are registered."""
     if not _configured or getattr(app.state, "otel_instrumented", False):
         return False
-    FastAPIInstrumentor.instrument_app(
-        app,
-        tracer_provider=_provider,
-        excluded_urls="healthz,readyz,system-readyz,metrics",
-        server_request_hook=_server_request_hook,
-    )
+    app.add_middleware(_SecretSafeTracingMiddleware, tracer_provider=_provider)
     app.state.otel_instrumented = True
     return True
 

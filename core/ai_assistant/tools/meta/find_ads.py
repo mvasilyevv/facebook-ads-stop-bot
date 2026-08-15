@@ -7,7 +7,7 @@ import json
 from typing import Any, ClassVar
 
 from core.ai_assistant.tools.base import RiskLevel, ToolContext, ToolError
-from core.meta_api.errors import MetaApiError
+from core.meta_api.errors import MetaApiError, public_meta_error_message
 
 
 class FindAdsTool:
@@ -67,7 +67,7 @@ class FindAdsTool:
         try:
             limit = int(args.get("limit") or 25)
         except (TypeError, ValueError) as exc:
-            raise ToolError(f"limit должен быть целым: {exc}") from exc
+            raise ToolError("limit должен быть целым") from exc
         limit = max(1, min(limit, 100))
 
         filtering: list[dict[str, Any]] = []
@@ -93,7 +93,7 @@ class FindAdsTool:
                 ad_account_id=ad_account_id,
             )
         except MetaApiError as exc:
-            raise ToolError(f"Marketing API: {exc}") from exc
+            raise ToolError(public_meta_error_message(exc)) from exc
 
         data = response.get("data") or []
         if not data:

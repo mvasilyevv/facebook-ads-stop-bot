@@ -13,6 +13,7 @@ from core.ai_assistant.providers import (
     ProviderError,
 )
 from core.config import Settings, get_settings
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,10 @@ class AIClient:
                     messages=messages, system=system, tools=tools, max_tokens=max_tokens
                 )
             except ProviderError as exc:
-                logger.warning("AI primary (anthropic) failed: %s — пробую fallback", exc)
+                logger.warning(
+                    "AI primary (anthropic) failed (%s) — пробую fallback",
+                    safe_exception_diagnostic(exc),
+                )
                 last_err = exc
 
         if self._fallback is not None:
@@ -63,11 +67,16 @@ class AIClient:
                     messages=messages, system=system, tools=tools, max_tokens=max_tokens
                 )
             except ProviderError as exc:
-                logger.error("AI fallback (openai) failed: %s", exc)
+                logger.error(
+                    "AI fallback (openai) failed (%s)",
+                    safe_exception_diagnostic(exc),
+                )
                 last_err = exc
 
         if last_err is not None:
-            raise AIUnavailableError(f"AI недоступен: {last_err}") from last_err
+            raise AIUnavailableError(
+                "AI-провайдеры временно недоступны; повторите запрос позже"
+            ) from last_err
         raise AIUnavailableError("AI недоступен: ни один провайдер не настроен")
 
 

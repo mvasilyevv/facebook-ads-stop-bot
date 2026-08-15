@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 import pytest
@@ -235,51 +233,21 @@ async def test_gateway_uses_configured_origin_for_real_webhook_round_trip(
     token = "123456:do-not-log-this-token"
     methods: list[str] = []
 
-    class TelegramStubHandler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802 - stdlib handler contract
-            method = self.path.rsplit("/", 1)[-1]
-            methods.append(method)
-            content_length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(content_length) or b"{}")
-            if method == "setWebhook":
-                assert payload["url"] == "https://app.example.test/webhook"
-                result: object = True
-            elif method == "getWebhookInfo":
-                result = {"url": "https://app.example.test/webhook"}
-            else:  # pragma: no cover - failure makes the request test fail
-                self.send_error(404)
-                return
-            body = json.dumps({"ok": True, "result": result}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, _format: str, *_args: object) -> None:
-            return
-
-    server = ThreadingHTTPServer(("127.0.0.1", 18080), TelegramStubHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
     requested_urls: list[str] = []
 
-    class StubNetworkTransport(httpx.AsyncBaseTransport):
-        def __init__(self) -> None:
-            self._network = httpx.AsyncHTTPTransport()
-
-        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-            requested_urls.append(str(request.url))
-            local_request = httpx.Request(
-                request.method,
-                request.url.copy_with(host="127.0.0.1"),
-                headers=request.headers,
-                content=request.content,
-            )
-            return await self._network.handle_async_request(local_request)
-
-        async def aclose(self) -> None:
-            await self._network.aclose()
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        method = request.url.path.rsplit("/", 1)[-1]
+        methods.append(method)
+        payload = json.loads(request.content or b"{}")
+        if method == "setWebhook":
+            assert payload["url"] == "https://app.example.test/webhook"
+            result: object = True
+        elif method == "getWebhookInfo":
+            result = {"url": "https://app.example.test/webhook"}
+        else:  # pragma: no cover - failure makes the request test fail
+            return httpx.Response(404)
+        return httpx.Response(200, json={"ok": True, "result": result})
 
     settings = Settings(
         _env_file=None,
@@ -287,7 +255,7 @@ async def test_gateway_uses_configured_origin_for_real_webhook_round_trip(
         telegram_bot_api_origin="http://telegram-stub:18080",
     )
     monkeypatch.setattr("core.telegram.gateway.get_settings", lambda: settings)
-    client = httpx.AsyncClient(transport=StubNetworkTransport(), trust_env=False)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), trust_env=False)
     gateway = TelegramHTMLGateway(token, http_client=client)
     try:
         await gateway.set_webhook(
@@ -297,9 +265,6 @@ async def test_gateway_uses_configured_origin_for_real_webhook_round_trip(
         info = await gateway.get_webhook_info()
     finally:
         await client.aclose()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
 
     assert info == {"url": "https://app.example.test/webhook"}
     assert methods == ["setWebhook", "getWebhookInfo"]

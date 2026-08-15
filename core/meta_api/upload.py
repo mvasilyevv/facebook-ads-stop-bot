@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import time
 from pathlib import Path
 from typing import AsyncIterator, NoReturn
@@ -34,6 +35,7 @@ from core.meta_api.errors import (
     SessionUnavailableError,
 )
 from core.meta_api.identity import graph_ad_account_id, require_ad_account_id
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +339,9 @@ class MediaUploader:
                 raise
             except Exception as exc:  # noqa: BLE001 — статус-GET best-effort, не валит залив
                 logger.warning(
-                    "video %s: ошибка чтения статуса (продолжаю поллинг): %r", video_id, exc
+                    "video %s: ошибка чтения статуса (продолжаю поллинг): %s",
+                    video_id,
+                    safe_exception_diagnostic(exc),
                 )
 
             if video_status == "ready":
@@ -391,8 +395,8 @@ class MediaUploader:
             except BrowserReadinessRejectedError:
                 raise
             except Exception as exc:  # noqa: BLE001 — best-effort, поллим дальше
-                last = repr(exc)
-                logger.warning("get_video_thumbnail_url %s: %r", video_id, exc)
+                last = safe_exception_diagnostic(exc)
+                logger.warning("get_video_thumbnail_url %s failed (%s)", video_id, last)
             await asyncio.sleep(interval)
         logger.warning("видео %s: миниатюра не получена (%s)", video_id, last or "пусто")
         return ""
@@ -527,16 +531,16 @@ class MediaUploader:
     def _grpc_to_error(exc: grpc.RpcError, *, endpoint: str) -> MetaApiError:
         """Преобразовать gRPC-ошибку upload-вызова в доменную."""
         code = exc.code() if hasattr(exc, "code") else None  # type: ignore[union-attr]
-        details = exc.details() if hasattr(exc, "details") else str(exc)  # type: ignore[union-attr]
+        code_name = code.name if code is not None and hasattr(code, "name") else "UNKNOWN"
 
         if code == grpc.StatusCode.FAILED_PRECONDITION:
             return SessionUnavailableError(
-                f"Vision-сессия не готова к upload: {details}",
+                f"Vision-сессия не готова к upload (gRPC {code_name})",
                 endpoint=endpoint,
             )
         if code in (grpc.StatusCode.INVALID_ARGUMENT, grpc.StatusCode.PERMISSION_DENIED):
             return PermanentError(
-                f"browser operation authorization rejected: {details}",
+                f"browser operation authorization rejected (gRPC {code_name})",
                 endpoint=endpoint,
             )
         # After an upload RPC has been dispatched, a transport error is not
@@ -544,7 +548,7 @@ class MediaUploader:
         # contract preconditions are converted by
         # _controlled_presend_readiness_error before reaching this mapper.
         return AmbiguousResultError(
-            f"gRPC response lost after upload dispatch ({code.name if code else code}): {details}",
+            f"gRPC response lost after upload dispatch ({code_name})",
             endpoint=endpoint,
         )
 
@@ -558,8 +562,10 @@ class MediaUploader:
         Meta accepted the upload.
         """
         if message.startswith(("GRAPH_ERROR_", "INVALID_ARGUMENT")):
-            return PermanentError(message, endpoint=endpoint)
+            match = re.match(r"^(GRAPH_ERROR_-?[0-9]+|INVALID_ARGUMENT)\b", message)
+            code = match.group(1) if match is not None else "external_rejection"
+            return PermanentError(f"upload rejected ({code})", endpoint=endpoint)
         return AmbiguousResultError(
-            f"unstructured upload failure after dispatch: {message}",
+            "unstructured upload failure after dispatch",
             endpoint=endpoint,
         )

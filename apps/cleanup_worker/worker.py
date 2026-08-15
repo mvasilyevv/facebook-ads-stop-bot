@@ -28,6 +28,7 @@ from apps.cleanup_worker.storage import (
 )
 from core.auth.panel_access import cleanup_expired_panel_auth_records
 from core.metrics import record_cleanup_run
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -220,10 +221,14 @@ async def create_next_partition_if_missing(
                 if await _create_month_partition(engine, table, col, fr, to):
                     count_created += 1
             except Exception as exc:  # noqa: BLE001 — одна таблица не должна валить остальные
-                logger.exception(
-                    "create partition для %s [%s..%s) не удалось: %s", table, fr, to, exc
+                logger.error(
+                    "create partition для %s [%s..%s) не удалось (%s)",
+                    table,
+                    fr,
+                    to,
+                    safe_exception_diagnostic(exc),
                 )
-                failures.append(f"{table}[{fr},{to}): {exc}")
+                failures.append(f"{table}[{fr},{to}):{type(exc).__name__}")
         created[table] = count_created
     if failures and fail_on_error:
         raise RuntimeError("startup partition preparation failed: " + "; ".join(failures))
@@ -598,75 +603,96 @@ async def run_once(engine: AsyncEngine) -> dict[str, Any]:
     try:
         counts["partitions_created"] = await create_next_partition_if_missing(engine)
     except Exception as exc:
-        logger.exception("create_next_partition_if_missing failed: %s", exc)
-        counts["partitions_created_error"] = str(exc)
+        logger.error(
+            "create_next_partition_if_missing failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
+        counts["partitions_created_error"] = safe_exception_diagnostic(exc)
 
     try:
         counts["partitions_dropped"] = await drop_old_partitions(engine, policy)
     except Exception as exc:
-        logger.exception("drop_old_partitions failed: %s", exc)
-        counts["partitions_dropped_error"] = str(exc)
+        logger.error("drop_old_partitions failed (%s)", safe_exception_diagnostic(exc))
+        counts["partitions_dropped_error"] = safe_exception_diagnostic(exc)
 
     try:
         counts["task_queue_deleted"] = await delete_task_queue_completed(engine, policy)
     except Exception as exc:
-        logger.exception("delete_task_queue_completed failed: %s", exc)
-        counts["task_queue_deleted_error"] = str(exc)
+        logger.error(
+            "delete_task_queue_completed failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
+        counts["task_queue_deleted_error"] = safe_exception_diagnostic(exc)
 
     try:
         counts["adset_duplicate_previews_deleted"] = await delete_expired_adset_duplicate_previews(
             engine
         )
     except Exception as exc:
-        logger.exception("delete_expired_adset_duplicate_previews failed: %s", exc)
-        counts["adset_duplicate_previews_deleted_error"] = str(exc)
+        logger.error(
+            "delete_expired_adset_duplicate_previews failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
+        counts["adset_duplicate_previews_deleted_error"] = safe_exception_diagnostic(exc)
 
     try:
         counts["browser_operation_leases_deleted"] = await delete_expired_browser_operation_leases(
             engine
         )
     except Exception as exc:
-        logger.exception("delete_expired_browser_operation_leases failed: %s", exc)
-        counts["browser_operation_leases_deleted_error"] = str(exc)
+        logger.error(
+            "delete_expired_browser_operation_leases failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
+        counts["browser_operation_leases_deleted_error"] = safe_exception_diagnostic(exc)
 
     try:
         counts[
             "browser_operation_capabilities_deleted"
         ] = await delete_expired_browser_operation_capabilities(engine)
     except Exception as exc:
-        logger.exception(
-            "delete_expired_browser_operation_capabilities failed: %s",
-            exc,
+        logger.error(
+            "delete_expired_browser_operation_capabilities failed (%s)",
+            safe_exception_diagnostic(exc),
         )
-        counts["browser_operation_capabilities_deleted_error"] = str(exc)
+        counts["browser_operation_capabilities_deleted_error"] = safe_exception_diagnostic(exc)
 
     try:
         counts["telegram_invites_deleted"] = await delete_expired_invites(engine, policy)
     except Exception as exc:
-        logger.exception("delete_expired_invites failed: %s", exc)
-        counts["telegram_invites_deleted_error"] = str(exc)
+        logger.error("delete_expired_invites failed (%s)", safe_exception_diagnostic(exc))
+        counts["telegram_invites_deleted_error"] = safe_exception_diagnostic(exc)
 
     try:
         counts["operator_revision_events_deleted"] = await delete_old_operator_revision_events(
             engine, policy
         )
     except Exception as exc:
-        logger.exception("delete_old_operator_revision_events failed: %s", exc)
-        counts["operator_revision_events_deleted_error"] = str(exc)
+        logger.error(
+            "delete_old_operator_revision_events failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
+        counts["operator_revision_events_deleted_error"] = safe_exception_diagnostic(exc)
 
     try:
         counts[
             "notification_control_plane_deleted"
         ] = await delete_terminal_notification_control_plane(engine, policy)
     except Exception as exc:
-        logger.exception("delete_terminal_notification_control_plane failed: %s", exc)
-        counts["notification_control_plane_deleted_error"] = str(exc)
+        logger.error(
+            "delete_terminal_notification_control_plane failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
+        counts["notification_control_plane_deleted_error"] = safe_exception_diagnostic(exc)
 
     try:
         counts["panel_auth_expired_deleted"] = await cleanup_expired_panel_auth_records(engine)
     except Exception as exc:
-        logger.exception("cleanup_expired_panel_auth_records failed: %s", exc)
-        counts["panel_auth_expired_deleted_error"] = str(exc)
+        logger.error(
+            "cleanup_expired_panel_auth_records failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
+        counts["panel_auth_expired_deleted_error"] = safe_exception_diagnostic(exc)
 
     try:
         storage_snapshot = await collect_database_storage(engine)
@@ -680,7 +706,7 @@ async def run_once(engine: AsyncEngine) -> dict[str, Any]:
             now=observed_at,
         )
     except Exception as exc:
-        logger.exception("storage observation failed: %s", exc)
+        logger.error("storage observation failed (%s)", safe_exception_diagnostic(exc))
         counts["storage_observation_error"] = str(exc)
 
     finished_at = datetime.now(timezone.utc)
@@ -697,8 +723,8 @@ async def run_once(engine: AsyncEngine) -> dict[str, Any]:
             counts=counts,
         )
     except Exception as exc:
-        logger.exception("write_audit failed: %s", exc)
-        counts["write_audit_error"] = str(exc)
+        logger.error("write_audit failed (%s)", safe_exception_diagnostic(exc))
+        counts["write_audit_error"] = safe_exception_diagnostic(exc)
 
     error_count = _error_count(counts)
     success = error_count == 0

@@ -89,6 +89,7 @@ from core.meta_api.errors import (
 from core.meta_api.errors import (
     TokenInvalidError as MetaTokenInvalidError,
 )
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.telemetry import instrument_fastapi
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,10 @@ async def _build_meta_api_client() -> MetaApiClient | None:
         )
         return client
     except Exception as exc:  # noqa: BLE001 — API должен подняться даже без browser-agent
-        logger.warning("MetaApiClient не создан в API lifespan: %s", exc)
+        logger.warning(
+            "MetaApiClient не создан в API lifespan (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return None
 
 
@@ -155,12 +159,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             try:
                 await app.state.meta_api_client.close()
             except Exception as exc:
-                logger.warning("Ошибка закрытия MetaApiClient в lifespan: %s", exc)
+                logger.warning(
+                    "Ошибка закрытия MetaApiClient в lifespan (%s)",
+                    safe_exception_diagnostic(exc),
+                )
         if own_redis and getattr(app.state, "redis", None) is not None:
             try:
                 await app.state.redis.aclose()
             except Exception as exc:
-                logger.warning("Ошибка закрытия Redis в lifespan: %s", exc)
+                logger.warning(
+                    "Ошибка закрытия Redis в lifespan (%s)",
+                    safe_exception_diagnostic(exc),
+                )
 
 
 def create_app() -> FastAPI:

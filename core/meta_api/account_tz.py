@@ -22,6 +22,7 @@ from core.money import (
     currency_exponent,
     validated_currency_code,
 )
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.tasks.browser_fence import (
     BrowserFenceLeaseLost,
     BrowserOperationBlocked,
@@ -385,7 +386,11 @@ async def fetch_account_timezone(client: Any, account_id: str) -> str | None:
             ad_account_id=account,
         )
     except Exception as exc:  # noqa: BLE001 - refresh is outside the money path
-        logger.warning("account timezone fetch failed for act_%s: %s", account, exc)
+        logger.warning(
+            "account timezone fetch failed for act_%s (%s)",
+            account,
+            safe_exception_diagnostic(exc),
+        )
         return None
     return validated_timezone_name(response.get("timezone_name"))
 
@@ -404,7 +409,11 @@ async def fetch_account_context(client: Any, account_id: str) -> FetchedAccountC
             ad_account_id=account,
         )
     except Exception as exc:  # noqa: BLE001 - refresh is outside the money path
-        logger.warning("account context fetch failed for act_%s: %s", account, exc)
+        logger.warning(
+            "account context fetch failed for act_%s (%s)",
+            account,
+            safe_exception_diagnostic(exc),
+        )
         return FetchedAccountContext(timezone_name=None, currency=None)
     return FetchedAccountContext(
         timezone_name=validated_timezone_name(response.get("timezone_name")),
@@ -523,7 +532,10 @@ async def refresh_account_timezones(engine: AsyncEngine, client: Any) -> int:
     try:
         account_ids = await active_account_ids(engine)
     except Exception as exc:  # noqa: BLE001 - idle refresh never owns money decisions
-        logger.warning("account timezone cabinet list failed: %s", exc)
+        logger.warning(
+            "account timezone cabinet list failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return 0
     updated = 0
     for account_id in account_ids:
@@ -555,11 +567,11 @@ async def refresh_account_timezones(engine: AsyncEngine, client: Any) -> int:
                 "account context refresh discarded after fence loss for act_%s",
                 canonical_id,
             )
-        except Exception:  # noqa: BLE001 - preserve the last durable known evidence
+        except Exception as exc:  # noqa: BLE001 - preserve the last durable known evidence
             logger.warning(
-                "durable account context refresh failed for act_%s",
+                "durable account context refresh failed for act_%s (%s)",
                 canonical_id,
-                exc_info=True,
+                safe_exception_diagnostic(exc),
             )
     if updated:
         logger.info("durable cabinet timezones refreshed: %d", updated)

@@ -916,7 +916,7 @@ async def test_cabinet_snapshot_isolates_actions_and_attention_to_one_cabinet(
     ]
     incidents = [
         {
-            "id": f"incident-{account_id}",
+            "id": operator_router.uuid.UUID(int=int(account_id)),
             "severity": "warning",
             "status": "open",
             "title": f"Incident cabinet {account_id}",
@@ -999,7 +999,7 @@ async def test_cabinet_snapshot_isolates_actions_and_attention_to_one_cabinet(
     assert [item.account_id for item in snapshot.actions.data.items] == ["111"]
     assert snapshot.attention.data is not None
     assert {item.id for item in snapshot.attention.data.items} == {
-        "incident-111",
+        operator_router._public_incident_id(operator_router.uuid.UUID(int=111)),
         "task:1",
     }
     assert snapshot.attention.state == DataState.READY

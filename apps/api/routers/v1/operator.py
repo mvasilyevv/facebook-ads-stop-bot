@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -94,6 +95,8 @@ from core.operator.queries import (
     fetch_operator_revision,
     fetch_operator_scan_state,
 )
+from core.public_identifiers import parse_public_uuid, public_uuid
+from core.safe_diagnostics import redact_sensitive_text, safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/operator", tags=["operator"])
@@ -133,6 +136,29 @@ def _problem(*, status_code: int, code: str, message: str, correlation_id: str) 
         field_errors=None,
     )
     return JSONResponse(status_code=status_code, content=problem.model_dump(mode="json"))
+
+
+def _log_operator_failure(event: str, *, correlation_id: object, exc: BaseException) -> None:
+    logger.error(
+        "%s correlation_id=%s (%s)",
+        event,
+        correlation_id,
+        safe_exception_diagnostic(exc),
+    )
+
+
+def _new_correlation_id() -> str:
+    """Return an opaque request handle that is safe for logs and operator responses."""
+
+    return f"req_{secrets.token_urlsafe(16)}"
+
+
+def _public_incident_id(value: object) -> str:
+    return public_uuid(value, prefix="inc")
+
+
+def _public_request_id(value: object) -> str:
+    return public_uuid(value, prefix="req")
 
 
 def _age(now: datetime, value: datetime | None) -> int | None:
@@ -1282,20 +1308,34 @@ def _incident_attention_item(incident: dict[str, Any]) -> OperatorAttentionItem:
         if resource_type in {"account", "ad_account"}
         else "system"
     )
+    public_incident_id = _public_incident_id(incident["id"])
+    title = redact_sensitive_text(incident.get("title")).strip() or "Инцидент требует проверки"
+    summary = (
+        redact_sensitive_text(incident.get("summary") or incident.get("title")).strip()
+        or "Инцидент требует проверки"
+    )
     return OperatorAttentionItem(
-        id=str(incident["id"]),
+        id=public_incident_id,
         kind="incident",
         severity=incident["severity"],
-        title=str(incident["title"]),
-        summary=str(incident.get("summary") or incident["title"]),
+        title=title[:240],
+        summary=summary[:500],
         reason=str(incident.get("status") or "open"),
         occurred_at=incident["opened_at"],
         target=OperatorAttentionTarget(
             kind=kind,
-            id=str(incident.get("resource_id")) if incident.get("resource_id") else None,
-            label=str(incident.get("resource_label")) if incident.get("resource_label") else None,
+            id=(
+                redact_sensitive_text(incident.get("resource_id"))
+                if incident.get("resource_id")
+                else None
+            ),
+            label=(
+                redact_sensitive_text(incident.get("resource_label"))[:240]
+                if incident.get("resource_label")
+                else None
+            ),
         ),
-        action=OperatorAttentionAction(label="Открыть", href=f"/incidents/{incident['id']}"),
+        action=OperatorAttentionAction(label="Открыть", href=f"/incidents/{public_incident_id}"),
         recovery_action=(
             "retry_scan"
             if str(incident.get("incident_key") or "").startswith(LOGIN_REQUIRED_INCIDENT_PREFIX)
@@ -1319,12 +1359,12 @@ def _incident_public_reason(incident: dict[str, Any]) -> str | None:
     facts = facts_value if isinstance(facts_value, dict) else {}
     direct = facts.get("risk")
     if isinstance(direct, str) and direct.strip():
-        return direct.strip()[:240]
+        return redact_sensitive_text(direct).strip()[:240]
     card = facts.get("card")
     if isinstance(card, dict):
         nested = card.get("risk")
         if isinstance(nested, str) and nested.strip():
-            return nested.strip()[:240]
+            return redact_sensitive_text(nested).strip()[:240]
     return None
 
 
@@ -1345,10 +1385,11 @@ def _incident_item(
     )
     requires_usd_evidence = _incident_requires_usd_evidence(incident)
     money_copy_visible = not requires_usd_evidence or usd_scope_confirmed
-    raw_title = str(incident.get("title") or "").strip()
-    raw_summary = str(incident.get("summary") or "").strip()
+    raw_title = redact_sensitive_text(incident.get("title")).strip()
+    raw_summary = redact_sensitive_text(incident.get("summary")).strip()
+    public_incident_id = _public_incident_id(incident["id"])
     return OperatorIncidentItem(
-        id=str(incident["id"]),
+        id=public_incident_id,
         severity=incident["severity"],
         status=incident["status"],
         title=(
@@ -1366,10 +1407,18 @@ def _incident_item(
         account_id=(str(incident["ad_account_id"]) if incident.get("ad_account_id") else None),
         target=OperatorAttentionTarget(
             kind=kind,
-            id=str(incident.get("resource_id")) if incident.get("resource_id") else None,
-            label=(str(incident.get("resource_label")) if incident.get("resource_label") else None),
+            id=(
+                redact_sensitive_text(incident.get("resource_id"))
+                if incident.get("resource_id")
+                else None
+            ),
+            label=(
+                redact_sensitive_text(incident.get("resource_label"))[:240]
+                if incident.get("resource_label")
+                else None
+            ),
         ),
-        action=OperatorAttentionAction(label="Открыть", href=f"/incidents/{incident['id']}"),
+        action=OperatorAttentionAction(label="Открыть", href=f"/incidents/{public_incident_id}"),
         requires_usd_evidence=requires_usd_evidence,
     )
 
@@ -1396,14 +1445,22 @@ def _attention_section(
                 id=f"task:{action['id']}",
                 kind="action",
                 severity=severity,
-                title=action["title"],
-                summary=f"{action['public_id']} · {action['state']}",
-                reason=action.get("reason"),
+                title=redact_sensitive_text(action["title"])[:240],
+                summary=redact_sensitive_text(f"{action['public_id']} · {action['state']}")[:500],
+                reason=(
+                    redact_sensitive_text(action.get("reason"))[:240]
+                    if action.get("reason")
+                    else None
+                ),
                 occurred_at=action["updated_at"],
                 target=OperatorAttentionTarget(
                     kind="ad" if action["kind"] in {"pause", "activate"} else "system",
                     id=None,
-                    label=action.get("target_label"),
+                    label=(
+                        redact_sensitive_text(action.get("target_label"))[:240]
+                        if action.get("target_label")
+                        else None
+                    ),
                 ),
                 action=OperatorAttentionAction(label="Открыть", href=f"/actions/{action['id']}"),
                 recovery_action=None,
@@ -1561,14 +1618,14 @@ async def get_operator_events(
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> list[OperatorEventItem] | JSONResponse:
     """Return the bounded alert and terminal-action feed used by Analytics."""
-    correlation_id = str(uuid.uuid4())
+    correlation_id = _new_correlation_id()
     try:
         from_dt, to_dt = _operator_events_window(period, from_date, to_date)
-    except ValueError as exc:
+    except ValueError:
         return _problem(
             status_code=422,
             code="invalid_events_window",
-            message=str(exc),
+            message="Период журнала задан неверно",
             correlation_id=correlation_id,
         )
     try:
@@ -1636,7 +1693,7 @@ async def get_operator_snapshot(
     window: Literal["today", "24h", "7d", "30d"] = Query(default="today"),
     timezone: str | None = Query(default=None, min_length=1, max_length=64),
 ) -> OperatorSnapshot | JSONResponse:
-    correlation_id = str(uuid.uuid4())
+    correlation_id = _new_correlation_id()
     timezone_name = timezone or settings.app_timezone
     try:
         ZoneInfo(timezone_name)
@@ -1700,8 +1757,8 @@ async def get_operator_snapshot(
             account_task,
             currency_task,
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("operator snapshot failed correlation_id=%s", correlation_id)
+    except Exception as exc:  # noqa: BLE001
+        _log_operator_failure("operator snapshot failed", correlation_id=correlation_id, exc=exc)
         return _problem(
             status_code=503,
             code="operator_snapshot_unavailable",
@@ -1803,7 +1860,7 @@ async def get_operator_actions(
     state: list[str] = Query(default_factory=list),
 ) -> OperatorActionsResponse | JSONResponse:
     now = datetime.now(UTC)
-    correlation_id = str(uuid.uuid4())
+    correlation_id = _new_correlation_id()
     requested_account_id = canonical_account_id(account_id) if account_id else None
     if account_id is not None and not requested_account_id:
         return _problem(
@@ -1829,8 +1886,8 @@ async def get_operator_actions(
             resolve_cabinet_days(engine, account_ids=account_scope),
             resolve_account_currencies(engine, account_ids=account_scope),
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("operator actions failed correlation_id=%s", correlation_id)
+    except Exception as exc:  # noqa: BLE001
+        _log_operator_failure("operator actions failed", correlation_id=correlation_id, exc=exc)
         return _problem(
             status_code=503,
             code="operator_actions_unavailable",
@@ -1882,7 +1939,7 @@ async def get_operator_ads(
     page_size: int = Query(default=50, ge=10, le=200),
 ) -> OperatorAdsResponse | JSONResponse:
     now = datetime.now(UTC)
-    correlation_id = str(uuid.uuid4())
+    correlation_id = _new_correlation_id()
     try:
         from_dt, to_dt, _, _, cabinet_days = await _window(
             engine,
@@ -1925,8 +1982,8 @@ async def get_operator_ads(
             page_size=page_size,
             tracker_available=tracker_available,
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("operator ads failed correlation_id=%s", correlation_id)
+    except Exception as exc:  # noqa: BLE001
+        _log_operator_failure("operator ads failed", correlation_id=correlation_id, exc=exc)
         return _problem(
             status_code=503,
             code="operator_ads_unavailable",
@@ -2043,7 +2100,7 @@ async def _enqueue_operator_command(
     response: Response,
     precondition: OperatorAdCommandRequest,
 ) -> OperatorCommandResponse | JSONResponse:
-    correlation_id = str(uuid.uuid4())
+    correlation_id = _new_correlation_id()
     try:
         scoped_idempotency_key = principal_scoped_idempotency_key(
             principal=requested_by,
@@ -2078,11 +2135,11 @@ async def _enqueue_operator_command(
             message="Данные объявления изменились. Обновите карточку и повторите действие.",
             correlation_id=correlation_id,
         )
-    except ValueError as exc:
+    except ValueError:
         return _problem(
             status_code=422,
             code="invalid_command",
-            message=str(exc),
+            message="Параметры команды недействительны",
             correlation_id=correlation_id,
         )
     response.status_code = (
@@ -2093,7 +2150,7 @@ async def _enqueue_operator_command(
         public_id=f"#{receipt.task_id}",
         state=receipt.state,
         created=receipt.created,
-        correlation_id=str(receipt.correlation_id),
+        correlation_id=_public_request_id(receipt.correlation_id),
     )
 
 
@@ -2111,7 +2168,7 @@ async def retry_operator_scan(
     requested_by: str = Header(default="operator:web", alias="X-Operator-Principal", max_length=64),
 ) -> OperatorCommandResponse | JSONResponse:
     """Queue an interactive recovery scan; 202 never means scan success."""
-    correlation_id = str(uuid.uuid4())
+    correlation_id = _new_correlation_id()
     principal = getattr(request.state, "operator_principal", requested_by)
     try:
         scoped_idempotency_key = principal_scoped_idempotency_key(
@@ -2129,15 +2186,15 @@ async def retry_operator_scan(
             message="Idempotency-Key уже связан с другим действием",
             correlation_id=correlation_id,
         )
-    except ValueError as exc:
+    except ValueError:
         return _problem(
             status_code=422,
             code="invalid_command",
-            message=str(exc),
+            message="Параметры повторного скана недействительны",
             correlation_id=correlation_id,
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("operator retry scan failed correlation_id=%s", correlation_id)
+    except Exception as exc:  # noqa: BLE001
+        _log_operator_failure("operator retry scan failed", correlation_id=correlation_id, exc=exc)
         return _problem(
             status_code=503,
             code="scan_retry_unavailable",
@@ -2153,7 +2210,7 @@ async def retry_operator_scan(
         public_id=f"#{receipt.task_id}",
         state=receipt.state,
         created=receipt.created,
-        correlation_id=str(receipt.correlation_id),
+        correlation_id=_public_request_id(receipt.correlation_id),
     )
 
 
@@ -2228,7 +2285,7 @@ async def get_operator_incidents(
     """Return the complete incident journal with explicit cabinet evidence."""
 
     now = datetime.now(UTC)
-    correlation_id = str(uuid.uuid4())
+    correlation_id = _new_correlation_id()
     requested_account_id = canonical_account_id(account_id) if account_id else None
     if account_id is not None and (
         not requested_account_id
@@ -2255,8 +2312,8 @@ async def get_operator_incidents(
             resolve_cabinet_days(engine, account_ids=account_scope, now=now),
             resolve_account_currencies(engine, account_ids=account_scope, now=now),
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("operator incidents failed correlation_id=%s", correlation_id)
+    except Exception as exc:  # noqa: BLE001
+        _log_operator_failure("operator incidents failed", correlation_id=correlation_id, exc=exc)
         return _problem(
             status_code=503,
             code="operator_incidents_unavailable",
@@ -2306,18 +2363,28 @@ async def get_operator_incidents(
     responses=_PROBLEM_RESPONSES,
 )
 async def get_operator_incident(
-    incident_id: uuid.UUID,
+    incident_id: str,
     engine: DepEngine,
     settings: DepSettings,
 ) -> OperatorIncidentDetailResponse | JSONResponse:
-    correlation_id = str(uuid.uuid4())
+    correlation_id = _new_correlation_id()
+    try:
+        internal_incident_id = parse_public_uuid(incident_id, prefix="inc")
+    except ValueError:
+        return _problem(
+            status_code=404,
+            code="incident_not_found",
+            message="Инцидент не найден",
+            correlation_id=correlation_id,
+        )
     now = datetime.now(UTC)
     try:
-        incident = await fetch_operator_incident(engine, incident_id=incident_id)
-    except Exception:  # noqa: BLE001
-        logger.exception(
-            "operator incident detail failed correlation_id=%s",
-            correlation_id,
+        incident = await fetch_operator_incident(engine, incident_id=internal_incident_id)
+    except Exception as exc:  # noqa: BLE001
+        _log_operator_failure(
+            "operator incident detail failed",
+            correlation_id=correlation_id,
+            exc=exc,
         )
         return _problem(
             status_code=503,
@@ -2340,10 +2407,11 @@ async def get_operator_incident(
             resolve_cabinet_days(engine, account_ids=account_scope, now=now),
             resolve_account_currencies(engine, account_ids=account_scope, now=now),
         )
-    except Exception:  # noqa: BLE001
-        logger.exception(
-            "operator incident evidence failed correlation_id=%s",
-            correlation_id,
+    except Exception as exc:  # noqa: BLE001
+        _log_operator_failure(
+            "operator incident evidence failed",
+            correlation_id=correlation_id,
+            exc=exc,
         )
         return _problem(
             status_code=503,
@@ -2410,18 +2478,27 @@ async def get_operator_incident(
     responses=_PROBLEM_RESPONSES,
 )
 async def acknowledge_operator_incident(
-    incident_id: uuid.UUID,
+    incident_id: str,
     engine: DepEngine,
     request: Request,
     acknowledged_by: str = Header(
         default="operator:web", alias="X-Operator-Principal", max_length=128
     ),
 ) -> OperatorIncidentAckResponse | JSONResponse:
-    correlation_id = uuid.uuid4()
+    correlation_id = _new_correlation_id()
+    try:
+        internal_incident_id = parse_public_uuid(incident_id, prefix="inc")
+    except ValueError:
+        return _problem(
+            status_code=404,
+            code="incident_not_found",
+            message="Инцидент не найден",
+            correlation_id=correlation_id,
+        )
     try:
         acknowledgement = await acknowledge_incident(
             engine,
-            incident_id=incident_id,
+            incident_id=internal_incident_id,
             acknowledged_by=getattr(request.state, "operator_principal", acknowledged_by),
         )
     except IncidentNotFoundError:
@@ -2429,31 +2506,32 @@ async def acknowledge_operator_incident(
             status_code=404,
             code="incident_not_found",
             message="Инцидент не найден",
-            correlation_id=str(correlation_id),
+            correlation_id=correlation_id,
         )
     except IncidentNotAcknowledgeableError as exc:
         return _problem(
             status_code=409,
             code="incident_not_acknowledgeable",
             message=f"Инцидент уже находится в состоянии {exc.status}",
-            correlation_id=str(correlation_id),
+            correlation_id=correlation_id,
         )
-    except Exception:  # noqa: BLE001
-        logger.exception(
-            "operator incident ack failed correlation_id=%s",
-            correlation_id,
+    except Exception as exc:  # noqa: BLE001
+        _log_operator_failure(
+            "operator incident ack failed",
+            correlation_id=correlation_id,
+            exc=exc,
         )
         return _problem(
             status_code=503,
             code="incident_ack_unavailable",
             message="Подтверждение инцидента временно недоступно",
-            correlation_id=str(correlation_id),
+            correlation_id=correlation_id,
         )
     return OperatorIncidentAckResponse(
-        incident_id=str(incident_id),
+        incident_id=_public_incident_id(internal_incident_id),
         status="acknowledged",
         acknowledged_at=acknowledgement.acknowledged_at,
-        correlation_id=str(acknowledgement.correlation_id),
+        correlation_id=_public_request_id(acknowledgement.correlation_id),
     )
 
 

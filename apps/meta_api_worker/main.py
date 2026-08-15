@@ -102,6 +102,7 @@ from core.observer.enable_grace import (
     prepare_enable_grace,
 )
 from core.observer.queries import load_scanning_enabled
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.tasks.queue import (
     Task,
     defer_unknown_reconciliation,
@@ -578,12 +579,12 @@ async def _cross_external_mutation_boundary(
                     "reconcile_required": True,
                     "manual_review_required": True,
                     "phase": "recovery_checkpoint_invalid",
-                    "recovery_integrity_error": str(exc),
+                    "recovery_integrity_error": safe_exception_diagnostic(exc),
                 }
             applied = await mark_task_failed(
                 engine,
                 task_id=task.id,
-                error=f"duplicate plan integrity rejected: {exc}",
+                error=f"duplicate plan integrity rejected: {safe_exception_diagnostic(exc)}",
                 result=failure_result,
                 lease_owner=task.lease_owner,
                 lease_token=task.lease_token,
@@ -663,9 +664,9 @@ async def _execute_with_touch(
                 reason = "lease_renewal_cancelled"
             except Exception as exc:  # noqa: BLE001 — ownership is no longer proven
                 logger.warning(
-                    "meta_api: task id=%s lease renewal failed; cancelling external operation",
+                    "meta_api: task id=%s lease renewal failed; cancelling external operation (%s)",
                     task.id,
-                    exc_info=True,
+                    safe_exception_diagnostic(exc),
                 )
                 reason = f"lease_renewal_failed:{type(exc).__name__}"
         elif control_task in done:
@@ -675,9 +676,10 @@ async def _execute_with_touch(
                 reason = "control_monitor_cancelled"
             except Exception as exc:  # noqa: BLE001 — losing control is externally ambiguous
                 logger.warning(
-                    "meta_api: task id=%s control monitor failed; cancelling external operation",
+                    "meta_api: task id=%s control monitor failed; "
+                    "cancelling external operation (%s)",
                     task.id,
-                    exc_info=True,
+                    safe_exception_diagnostic(exc),
                 )
                 reason = f"control_monitor_failed:{type(exc).__name__}"
         else:
@@ -691,11 +693,11 @@ async def _execute_with_touch(
             await execution_task
         except asyncio.CancelledError:
             pass
-        except Exception:  # noqa: BLE001 — the outcome is UNKNOWN either way
+        except Exception as exc:  # noqa: BLE001 — the outcome is UNKNOWN either way
             logger.debug(
-                "meta_api: task id=%s external operation settled while being cancelled",
+                "meta_api: task id=%s external operation settled while being cancelled (%s)",
                 task.id,
-                exc_info=True,
+                safe_exception_diagnostic(exc),
             )
         raise AmbiguousResultError(
             f"external operation interrupted: {reason}",
@@ -765,16 +767,19 @@ async def _fail_irreversible(
     """
     logger.error(
         "meta_api: task id=%s kind=%s — необратимая mutation, ошибка (%s) возможно ПОСЛЕ "
-        "коммита Meta. НЕ ретраим (риск дубля кампании). ПРОВЕРЬ Meta вручную! err=%r",
+        "коммита Meta. НЕ ретраим (риск дубля кампании). ПРОВЕРЬ Meta вручную! err=%s",
         task.id,
         payload.mutation_kind,
         reason,
-        exc,
+        safe_exception_diagnostic(exc),
     )
     applied = await mark_task_failed(
         engine,
         task_id=task.id,
-        error=f"irreversible_no_retry ({reason}): проверь Meta вручную — возможен дубль: {exc!r}",
+        error=(
+            f"irreversible_no_retry ({reason}): проверь Meta вручную — "
+            f"возможен дубль; {safe_exception_diagnostic(exc)}"
+        ),
         result={
             "outcome": "UNKNOWN",
             "reconcile_required": True,
@@ -958,12 +963,12 @@ async def _recover_duplicate_task(
         invalid_result = {
             **checkpoint,
             "phase": "recovery_checkpoint_invalid",
-            "recovery_error": repr(exc),
+            "recovery_error": safe_exception_diagnostic(exc),
         }
         applied = await mark_task_failed(
             engine,
             task_id=task.id,
-            error=f"duplicate recovery checkpoint invalid: {exc!r}",
+            error=f"duplicate recovery checkpoint invalid: {safe_exception_diagnostic(exc)}",
             result=invalid_result,
             lease_owner=task.lease_owner,
             lease_token=task.lease_token,
@@ -1233,21 +1238,24 @@ async def _reconcile_unknown_status_action(
             engine,
             task=task,
             target_lock_key=str(payload.target_id),
-            error=f"status reconciliation browser readiness rejected: {exc!r}",
+            error=(
+                "status reconciliation browser readiness rejected: "
+                f"{safe_exception_diagnostic(exc)}"
+            ),
         )
         return True
     except (AmbiguousResultError, TemporaryError, SessionUnavailableError) as exc:
         await requeue_unknown_for_reconciliation(
             engine,
             task=task,
-            error=f"status reconciliation unavailable: {exc!r}",
+            error=f"status reconciliation unavailable: {safe_exception_diagnostic(exc)}",
         )
         return True
     except Exception as exc:  # noqa: BLE001 — result remains genuinely unknown
         await mark_task_failed(
             engine,
             task_id=task.id,
-            error=f"status reconciliation failed: {exc!r}",
+            error=f"status reconciliation failed: {safe_exception_diagnostic(exc)}",
             result={"outcome": "UNKNOWN", "reconcile_required": True},
             lease_owner=task.lease_owner,
             lease_token=task.lease_token,
@@ -1436,7 +1444,7 @@ async def _execute_and_finalize_mutation(
             )
         return
     if assessment.state == "rejected":
-        err = f"mutation_logical_fail: handler вернул провал без exception result={result!r}"
+        err = "mutation_logical_fail: handler вернул провал без exception"
         failure_result = {
             **result,
             "outcome": "REJECTED",
@@ -1458,10 +1466,10 @@ async def _execute_and_finalize_mutation(
         else:
             logger.error(
                 "meta_api: task id=%s kind=%s — логический провал mutation (без exception), "
-                "mark_failed. ПРОВЕРЬ вручную! result=%r",
+                "mark_failed. ПРОВЕРЬ вручную! result_keys=%s",
                 task.id,
                 payload.mutation_kind,
-                result,
+                sorted(result),
             )
         return
     result = {**result, "outcome": "CONFIRMED"}
@@ -1494,11 +1502,15 @@ async def process_one_task(
     try:
         payload = MetaMutationPayload.from_dict(task.payload)
     except (KeyError, ValueError) as exc:
-        logger.error("Невалидный payload в task id=%s: %s", task.id, exc)
+        logger.error(
+            "Невалидный payload в task id=%s (%s)",
+            task.id,
+            safe_exception_diagnostic(exc),
+        )
         applied = await mark_task_failed(
             engine,
             task_id=task.id,
-            error=f"invalid payload: {exc}",
+            error=f"invalid payload: {safe_exception_diagnostic(exc)}",
             result={"outcome": "REJECTED", "reason": "invalid_payload"},
             lease_owner=task.lease_owner,
             lease_token=task.lease_token,
@@ -1535,15 +1547,16 @@ async def process_one_task(
                 client=client,
             )
         except Exception as exc:  # noqa: BLE001 — keep UNKNOWN durable and retry read-only
-            logger.exception(
+            logger.error(
                 "meta_api: task id=%s reconciliation lifecycle failed; "
-                "deferring without another external write",
+                "deferring without another external write (%s)",
                 task.id,
+                safe_exception_diagnostic(exc),
             )
             await defer_unknown_reconciliation(
                 engine,
                 task=task,
-                error=f"reconciliation lifecycle failed: {exc!r}",
+                error=f"reconciliation lifecycle failed: {safe_exception_diagnostic(exc)}",
                 delay_seconds=5,
             )
             return
@@ -1661,7 +1674,7 @@ async def process_one_task(
         applied = await mark_task_failed(
             engine,
             task_id=task.id,
-            error=f"enable_grace_precondition: {exc}",
+            error=f"enable_grace_precondition: {safe_exception_diagnostic(exc)}",
             result={"outcome": "REJECTED", "reason": "enable_grace_precondition"},
             lease_owner=task.lease_owner,
             lease_token=task.lease_token,
@@ -1670,7 +1683,7 @@ async def process_one_task(
             logger.warning(
                 "meta_api: curator activation task id=%s rejected before external call: %s",
                 task.id,
-                exc,
+                safe_exception_diagnostic(exc),
             )
         return
 
@@ -1769,13 +1782,13 @@ async def process_one_task(
             await requeue_unknown_for_reconciliation(
                 engine,
                 task=task,
-                error=f"ambiguous external result: {exc!r}",
+                error=f"ambiguous external result: {safe_exception_diagnostic(exc)}",
             )
             return
         await mark_task_failed(
             engine,
             task_id=task.id,
-            error=f"ambiguous irreversible/non-status result: {exc!r}",
+            error=(f"ambiguous irreversible/non-status result: {safe_exception_diagnostic(exc)}"),
             result={
                 "outcome": "UNKNOWN",
                 "reconcile_required": True,
@@ -1800,7 +1813,7 @@ async def process_one_task(
         applied = await mark_task_failed(
             engine,
             task_id=task.id,
-            error=repr(exc),
+            error=safe_exception_diagnostic(exc),
             result=failure_result,
             lease_owner=task.lease_owner,
             lease_token=task.lease_token,
@@ -1812,7 +1825,11 @@ async def process_one_task(
                 task.id,
             )
         else:
-            logger.warning("meta_api: task id=%s → permanent fail: %s", task.id, exc)
+            logger.warning(
+                "meta_api: task id=%s → permanent fail (%s)",
+                task.id,
+                safe_exception_diagnostic(exc),
+            )
         return
     except _TEMPORARY_EXCEPTIONS as exc:
         # Необратимые kinds не ретраим: transient мог прилететь после коммита Meta → дубль.
@@ -1831,7 +1848,10 @@ async def process_one_task(
                 await requeue_unknown_for_reconciliation(
                     engine,
                     task=task,
-                    error=f"ambiguous temporary error after external boundary: {exc!r}",
+                    error=(
+                        "ambiguous temporary error after external boundary: "
+                        f"{safe_exception_diagnostic(exc)}"
+                    ),
                 )
                 # UNKNOWN changes the retry strategy, but it must not suppress the
                 # critical transport-health signal for an automatic money action.
@@ -1846,7 +1866,10 @@ async def process_one_task(
                 await mark_task_failed(
                     engine,
                     task_id=task.id,
-                    error=f"ambiguous temporary error after external boundary: {exc!r}",
+                    error=(
+                        "ambiguous temporary error after external boundary: "
+                        f"{safe_exception_diagnostic(exc)}"
+                    ),
                     result={
                         "outcome": "UNKNOWN",
                         "reconcile_required": True,
@@ -1867,7 +1890,7 @@ async def process_one_task(
                 engine,
                 task=task,
                 target_lock_key=str(payload.target_id),
-                error=repr(exc),
+                error=safe_exception_diagnostic(exc),
             )
             retried = pre_send_status == "retrying"
         elif known_not_committed:
@@ -1875,21 +1898,33 @@ async def process_one_task(
                 engine,
                 task=task,
                 target_lock_key=str(payload.target_id),
-                error=repr(exc),
+                error=safe_exception_diagnostic(exc),
             )
             retried = pre_send_status == "retrying"
         else:
             pre_send_status = None
-            retried = await requeue_task(engine, task=task, error=repr(exc))
+            retried = await requeue_task(
+                engine,
+                task=task,
+                error=safe_exception_diagnostic(exc),
+            )
         if retried:
-            logger.warning("meta_api: task id=%s → retrying (temporary): %s", task.id, exc)
+            logger.warning(
+                "meta_api: task id=%s → retrying (temporary; %s)",
+                task.id,
+                safe_exception_diagnostic(exc),
+            )
         elif pre_send_status == "cancelled":
             logger.info(
                 "meta_api: task id=%s cancelled after proven pre-send reject",
                 task.id,
             )
         else:
-            logger.error("meta_api: task id=%s → exhausted retries (temporary): %s", task.id, exc)
+            logger.error(
+                "meta_api: task id=%s → exhausted retries (temporary; %s)",
+                task.id,
+                safe_exception_diagnostic(exc),
+            )
         # Money-сигнал: auto-stop pause_ad не доходит до Meta из-за мёртвого Vision-канала.
         # Каждый signal достигает durable outbox; PostgreSQL подавляет дубли.
         if alert_ctx is not None and task.requested_by == _AUTO_STOP_REQUESTED_BY:
@@ -1908,7 +1943,7 @@ async def process_one_task(
             await requeue_unknown_for_reconciliation(
                 engine,
                 task=task,
-                error=f"ambiguous post-call value error: {exc!r}",
+                error=f"ambiguous post-call value error: {safe_exception_diagnostic(exc)}",
             )
             return
         # Необратимые kinds: ValueError мог прийти на постобработке УЖЕ успешного ответа
@@ -1919,12 +1954,15 @@ async def process_one_task(
         # Голый ValueError — скорее всего баг в коде или неожиданный Graph-ответ.
         # Не mark_failed (без retry потеряем задачу навсегда), а requeue с аномалия-логом.
         logger.error(
-            "meta_api: task id=%s неожиданный ValueError (возможно баг) — requeue: %s",
+            "meta_api: task id=%s неожиданный ValueError (возможно баг; %s)",
             task.id,
-            exc,
-            exc_info=True,
+            safe_exception_diagnostic(exc),
         )
-        retried = await requeue_task(engine, task=task, error=f"unexpected_value_error: {exc!r}")
+        retried = await requeue_task(
+            engine,
+            task=task,
+            error=f"unexpected_value_error: {safe_exception_diagnostic(exc)}",
+        )
         if retried:
             logger.warning("meta_api: task id=%s → retrying (unexpected ValueError)", task.id)
         else:
@@ -1943,13 +1981,17 @@ async def process_one_task(
                 await requeue_unknown_for_reconciliation(
                     engine,
                     task=task,
-                    error=f"ambiguous unclassified post-call error: {exc!r}",
+                    error=(
+                        f"ambiguous unclassified post-call error: {safe_exception_diagnostic(exc)}"
+                    ),
                 )
             else:
                 await mark_task_failed(
                     engine,
                     task_id=task.id,
-                    error=f"ambiguous unclassified post-call error: {exc!r}",
+                    error=(
+                        f"ambiguous unclassified post-call error: {safe_exception_diagnostic(exc)}"
+                    ),
                     result={
                         "outcome": "UNKNOWN",
                         "reconcile_required": True,
@@ -1966,11 +2008,23 @@ async def process_one_task(
         if payload.mutation_kind in _IRREVERSIBLE_KINDS:
             await _fail_irreversible(engine, task, payload, exc, reason="unknown")
             return
-        retried = await requeue_task(engine, task=task, error=repr(exc))
+        retried = await requeue_task(
+            engine,
+            task=task,
+            error=safe_exception_diagnostic(exc),
+        )
         if retried:
-            logger.warning("meta_api: task id=%s → retrying (unknown): %s", task.id, exc)
+            logger.warning(
+                "meta_api: task id=%s → retrying (unknown; %s)",
+                task.id,
+                safe_exception_diagnostic(exc),
+            )
         else:
-            logger.error("meta_api: task id=%s → final fail (unknown): %s", task.id, exc)
+            logger.error(
+                "meta_api: task id=%s → final fail (unknown; %s)",
+                task.id,
+                safe_exception_diagnostic(exc),
+            )
 
 
 # ====================== sub-loops ======================
@@ -1984,8 +2038,11 @@ async def metrics_loop(stop: asyncio.Event, engine: AsyncEngine | None = None) -
         if engine is not None:
             try:
                 await refresh_task_queue_metrics(engine)
-            except Exception:  # noqa: BLE001
-                logger.debug("task queue metric refresh failed", exc_info=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "task queue metric refresh failed (%s)",
+                    safe_exception_diagnostic(exc),
+                )
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
@@ -2011,8 +2068,11 @@ async def task_loop(
                 worker_id=_WORKER_INSTANCE_ID,
                 lease_seconds=_TASK_LEASE_SECONDS,
             )
-        except Exception:  # noqa: BLE001
-            logger.exception("ошибка readiness-gated claim")
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "ошибка readiness-gated claim (%s)",
+                safe_exception_diagnostic(exc),
+            )
             if wakeup is not None:
                 await wakeup.wait_for_work(stop)
             else:
@@ -2036,9 +2096,12 @@ async def task_loop(
                         _TIMEZONE_REFRESH_SECONDS if updated > 0 else _TIMEZONE_RETRY_SECONDS
                     )
                     next_timezone_refresh_at = loop_now + retry_after
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
                     next_timezone_refresh_at = loop_now + _TIMEZONE_RETRY_SECONDS
-                    logger.debug("durable account timezone refresh skipped", exc_info=True)
+                    logger.debug(
+                        "durable account timezone refresh skipped (%s)",
+                        safe_exception_diagnostic(exc),
+                    )
             # Money: this PostgreSQL scan and notification intent never depend on Redis.
             try:
                 from core.meta_api.autostop_alert import escalate_undelivered_autostop_pauses
@@ -2048,8 +2111,11 @@ async def task_loop(
                     requested_by=_AUTO_STOP_REQUESTED_BY,
                     stuck_after_seconds=_UNDELIVERED_AFTER_SEC,
                 )
-            except Exception:  # noqa: BLE001
-                logger.debug("undelivered-pause escalation пропущена", exc_info=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "undelivered-pause escalation пропущена (%s)",
+                    safe_exception_diagnostic(exc),
+                )
             if wakeup is not None:
                 await wakeup.wait_for_work(stop)
             else:
@@ -2123,7 +2189,10 @@ async def main_loop(database_url: str | None = None) -> None:
     finally:
         try:
             await meta_client.close()
-        except Exception:  # noqa: BLE001
-            logger.exception("meta_client.close() упал")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "meta_client.close() не завершён (%s)",
+                safe_exception_diagnostic(exc),
+            )
         await engine.dispose()
         logger.info("meta_api_worker остановлен")

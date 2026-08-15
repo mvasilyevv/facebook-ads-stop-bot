@@ -18,7 +18,10 @@ class CreativeFolderOpenError(ValueError):
 async def open_generated_folder(path: str, *, base_dir: Path | None = None) -> None:
     """Открывает только существующие папки внутри корня FB_Agent_Creo."""
     root = await asyncio.to_thread(lambda: (base_dir or default_creatives_root()).resolve())
-    target = await asyncio.to_thread(lambda: Path(path).expanduser().resolve())
+    supplied = await asyncio.to_thread(lambda: Path(path).expanduser())
+    target = await asyncio.to_thread(
+        lambda: (supplied if supplied.is_absolute() else root / supplied).resolve()
+    )
     target_exists = await asyncio.to_thread(target.exists)
     target_is_dir = await asyncio.to_thread(target.is_dir)
 

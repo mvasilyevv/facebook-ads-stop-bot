@@ -27,7 +27,9 @@ from core.meta_api.identity import require_ad_account_id
 from core.money import validated_currency_code
 from core.observer.cabinet_supervisor import CabinetLease
 from core.observer.state_machine import FsmTransition
+from core.public_identifiers import public_uuid
 from core.rules.labels import rule_label, rule_metric_label, rule_metric_unit
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.scanner.status import is_delivery_active, is_moderation_rejected
 from core.telegram.notifications import enqueue_notification_in_transaction
 from core.telegram.schemas import (
@@ -472,8 +474,8 @@ async def insert_metrics(
     except Exception as exc:
         logger.warning(
             "insert_metrics для ad_id=%s упал: %s — возможно нет партиции на месяц",
-            ad_id,
-            exc,
+            public_uuid(ad_id, prefix="ad"),
+            safe_exception_diagnostic(exc),
         )
         return False
 

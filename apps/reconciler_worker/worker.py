@@ -19,6 +19,7 @@ import os
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.meta_api.schemas import IRREVERSIBLE_MUTATION_KINDS
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.tasks.queue import expire_overdue_tasks as _canonical_expire_overdue_tasks
 from core.tasks.queue import (
     fail_stuck_campaign_create as _canonical_fail_stuck_campaign_create,
@@ -94,7 +95,7 @@ async def run_once(engine: AsyncEngine) -> dict[str, int]:
     try:
         counts["deadlines_expired"] = await expire_overdue(engine)
     except Exception as exc:
-        logger.exception("expire_overdue failed: %s", exc)
+        logger.error("expire_overdue failed (%s)", safe_exception_diagnostic(exc))
         counts["deadlines_expired"] = -1
 
     # ВАЖЕН ПОРЯДОК: checkpointed duplicate_adset_structure сначала переводим в
@@ -102,7 +103,10 @@ async def run_once(engine: AsyncEngine) -> dict[str, int]:
     try:
         counts["duplicate_recovery_scheduled"] = await prepare_duplicate_recovery(engine)
     except Exception as exc:
-        logger.exception("prepare_duplicate_recovery failed: %s", exc)
+        logger.error(
+            "prepare_duplicate_recovery failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
         counts["duplicate_recovery_scheduled"] = -1
 
     try:
@@ -110,19 +114,28 @@ async def run_once(engine: AsyncEngine) -> dict[str, int]:
             engine
         )
     except Exception as exc:
-        logger.exception("fail_duplicate_without_checkpoint failed: %s", exc)
+        logger.error(
+            "fail_duplicate_without_checkpoint failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
         counts["duplicate_without_checkpoint_failed"] = -1
 
     try:
         counts["campaign_create_failed"] = await fail_stuck_campaign_create(engine)
     except Exception as exc:
-        logger.exception("fail_stuck_campaign_create failed: %s", exc)
+        logger.error(
+            "fail_stuck_campaign_create failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
         counts["campaign_create_failed"] = -1
 
     try:
         counts["stuck_to_retrying"] = await reconcile_stuck_running(engine)
     except Exception as exc:
-        logger.exception("reconcile_stuck_running failed: %s", exc)
+        logger.error(
+            "reconcile_stuck_running failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
         counts["stuck_to_retrying"] = -1
 
     if any(v > 0 for v in counts.values()):

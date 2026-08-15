@@ -13,6 +13,8 @@ import secrets
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.safe_diagnostics import safe_exception_diagnostic
+
 logger = logging.getLogger(__name__)
 
 
@@ -132,27 +134,31 @@ async def compute_bot_username(
         if gateway is not None:
             try:
                 await gateway.close()
-            except Exception:
-                logger.debug("Не удалось закрыть Telegram gateway", exc_info=True)
+            except Exception as exc:
+                logger.debug(
+                    "Не удалось закрыть Telegram gateway (%s)",
+                    safe_exception_diagnostic(exc),
+                )
 
 
 def compute_auth_deep_link(
     bot_username: str | None,
     invite_code: str | None,
 ) -> str | None:
-    """Возвращает deep-link с реальным одноразовым invite-кодом.
+    """Возвращает безопасную ссылку на бота без invite-кода в URL.
 
-    Формат: https://t.me/{username}?start={invite_code}
+    Одноразовый invite-код возвращается отдельно как ``activation_command``.
+    Так он не остаётся в browser history, Referer и tracker URL.
 
     Args:
         bot_username: username бота без @, или None.
-        invite_code: активный неиспользованный invite-код, или None.
+        invite_code: активный invite-код; используется только как presence guard.
     """
     username = (bot_username or "").strip().removeprefix("@")
     code = (invite_code or "").strip()
     if not username or not code:
         return None
-    return f"https://t.me/{username}?start={code}"
+    return f"https://t.me/{username}"
 
 
 def compute_activation_command(invite_code: str | None) -> str | None:

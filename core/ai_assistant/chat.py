@@ -24,6 +24,7 @@ from core.ai_assistant.tools import (
     execute_tool,
 )
 from core.config import get_settings
+from core.safe_diagnostics import redact_sensitive_text
 
 if TYPE_CHECKING:  # pragma: no cover
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -31,6 +32,18 @@ if TYPE_CHECKING:  # pragma: no cover
     from core.meta_api.client import MetaApiClient
 
 logger = logging.getLogger(__name__)
+
+
+def _redact_trace_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _redact_trace_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_trace_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_trace_value(item) for item in value]
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
+    return value
 
 
 @dataclass
@@ -170,7 +183,7 @@ class ChatSession:
         try:
             await check_rate_limit(ctx, max_per_hour=settings.ai_rate_limit_per_hour)
         except ToolError as exc:
-            raise ChatRateLimitedError(str(exc)) from exc
+            raise ChatRateLimitedError("Лимит AI-инструментов исчерпан") from exc
 
         system = build_chat_system_prompt(skills=self._skills)
         tools = GLOBAL_REGISTRY.schemas() if self._allow_tools else None
@@ -202,7 +215,7 @@ class ChatSession:
 
             if not response.has_tool_uses:
                 return ChatResponse(
-                    answer=response.text or "(пустой ответ)",
+                    answer=redact_sensitive_text(response.text) or "(пустой ответ)",
                     tool_calls=traces,
                     provider=last_provider,
                     model=last_model,
@@ -217,14 +230,15 @@ class ChatSession:
             if not self._allow_tools:
                 logger.error(
                     "ChatSession(allow_tools=False): модель вернула %d tool_use — "
-                    "исполнение заблокировано hard-guard'ом (client_key=%s, tools=%s)",
+                    "исполнение заблокировано hard-guard'ом (tools=%s)",
                     len(response.tool_uses),
-                    client_key,
                     [tu.name for tu in response.tool_uses],
                 )
                 assistant_blocks = []
                 if response.text:
-                    assistant_blocks.append({"type": "text", "text": response.text})
+                    assistant_blocks.append(
+                        {"type": "text", "text": redact_sensitive_text(response.text)}
+                    )
                 for tu in response.tool_uses:
                     assistant_blocks.append(
                         {"type": "tool_use", "id": tu.id, "name": tu.name, "input": tu.input}
@@ -257,7 +271,9 @@ class ChatSession:
 
             assistant_blocks: list[dict[str, Any]] = []
             if response.text:
-                assistant_blocks.append({"type": "text", "text": response.text})
+                assistant_blocks.append(
+                    {"type": "text", "text": redact_sensitive_text(response.text)}
+                )
             for tu in response.tool_uses:
                 assistant_blocks.append(
                     {
@@ -279,7 +295,12 @@ class ChatSession:
                         "действия выполняются через Telegram-бота."
                     )
                     traces.append(
-                        ToolCallTrace(name=tu.name, args=dict(tu.input), result="", error=refusal)
+                        ToolCallTrace(
+                            name=tu.name,
+                            args=_redact_trace_value(dict(tu.input)),
+                            result="",
+                            error=refusal,
+                        )
                     )
                     tool_results.append(
                         {
@@ -292,18 +313,30 @@ class ChatSession:
                     continue
                 try:
                     result = await execute_tool(tu.name, tu.input, ctx)
-                    traces.append(ToolCallTrace(name=tu.name, args=dict(tu.input), result=result))
+                    safe_result = redact_sensitive_text(result)
+                    traces.append(
+                        ToolCallTrace(
+                            name=tu.name,
+                            args=_redact_trace_value(dict(tu.input)),
+                            result=safe_result,
+                        )
+                    )
                     tool_results.append(
                         {
                             "type": "tool_result",
                             "tool_use_id": tu.id,
-                            "content": [{"type": "text", "text": result}],
+                            "content": [{"type": "text", "text": safe_result}],
                         }
                     )
                 except ToolError as exc:
-                    err = str(exc)
+                    err = redact_sensitive_text(exc)
                     traces.append(
-                        ToolCallTrace(name=tu.name, args=dict(tu.input), result="", error=err)
+                        ToolCallTrace(
+                            name=tu.name,
+                            args=_redact_trace_value(dict(tu.input)),
+                            result="",
+                            error=err,
+                        )
                     )
                     tool_results.append(
                         {

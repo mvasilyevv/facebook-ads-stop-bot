@@ -53,7 +53,8 @@ async def test_ticket_and_session_are_bound_to_desktop_hostname(monkeypatch):
             f"/desktop-auth/redeem?ticket={wrong_host_ticket}", follow_redirects=False
         )
     assert wrong_host.status_code == 403
-    assert "другого hostname" in wrong_host.text
+    assert "Ссылка рабочего стола недействительна или уже использована" in wrong_host.text
+    assert "hostname" not in wrong_host.text
     assert replay.status_code == 403
 
     ticket, _ = await create_desktop_ticket(

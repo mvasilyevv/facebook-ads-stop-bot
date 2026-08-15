@@ -25,6 +25,7 @@ from core.adset_pro.schemas import PostbackEvent
 from core.metrics import ADSETPRO_POSTBACK_EVENTS
 from core.money import validated_currency_code
 from core.pubsub import CHANNEL_TRACKER_WAKEUP
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/postback", tags=["postback"])
@@ -146,8 +147,11 @@ async def _record(redis: Redis | None, outcome: str) -> None:
         return
     try:
         await redis.incr(f"fb_agent:tracker:{outcome}_events")
-    except Exception:
-        logger.debug("tracker technical counter unavailable", exc_info=True)
+    except Exception as exc:
+        logger.debug(
+            "tracker technical counter unavailable (%s)",
+            safe_exception_diagnostic(exc),
+        )
 
 
 async def _handle(
@@ -174,21 +178,20 @@ async def _handle(
                 CHANNEL_TRACKER_WAKEUP,
                 str(result.task_id or result.event_id or "event"),
             )
-        except Exception:
+        except Exception as exc:
             # Durable DB task remains the source of truth; the one-second DB poll
             # handles Redis outages without losing the event.
-            logger.debug("tracker wakeup publish unavailable", exc_info=True)
+            logger.debug(
+                "tracker wakeup publish unavailable (%s)",
+                safe_exception_diagnostic(exc),
+            )
     return JSONResponse(
         status_code=accepted_status,
         content={
             "received": True,
             "status": "duplicate" if result.is_duplicate else "accepted",
-            "click_id": event.click_id,
             "inserted": result.inserted,
             "is_duplicate": result.is_duplicate,
-            "event_id": result.event_id,
-            "task_id": result.task_id,
-            "attribution_status": result.attribution_status,
         },
     )
 

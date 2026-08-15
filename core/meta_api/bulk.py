@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.observer.queries import campaign_matches_owner
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -95,13 +96,17 @@ async def locked_status_targets(
                 if release_error is not None:
                     try:
                         await conn.invalidate()
-                    except Exception:
-                        logger.exception(
-                            "failed to invalidate cancelled reconciliation lock connection"
+                    except Exception as exc:
+                        logger.error(
+                            "failed to invalidate cancelled reconciliation lock connection (%s)",
+                            safe_exception_diagnostic(exc),
                         )
                 raise
-            except Exception:
-                logger.exception("failed to release status reconciliation locks")
+            except Exception as exc:
+                logger.error(
+                    "failed to release status reconciliation locks (%s)",
+                    safe_exception_diagnostic(exc),
+                )
                 await conn.invalidate()
 
 

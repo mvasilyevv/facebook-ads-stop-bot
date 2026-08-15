@@ -43,7 +43,7 @@ async def load_web_app_url(engine: AsyncEngine) -> str | None:
     if not isinstance(value, dict):
         return None
     url = value.get("url")
-    return url or None
+    return normalize_web_app_base(url if isinstance(url, str) else None)
 
 
 async def bootstrap_web_app_url_from_env(
@@ -71,22 +71,13 @@ async def bootstrap_web_app_url_from_env(
     if not cleaned:
         return False
 
-    try:
-        parsed = urlsplit(cleaned)
-        is_valid = (
-            parsed.scheme.lower() == "https"
-            and bool(parsed.hostname)
-            and parsed.username is None
-            and parsed.password is None
-        )
-    except ValueError:
-        is_valid = False
-    if not is_valid:
+    normalized = normalize_web_app_base(cleaned)
+    if normalized is None:
         # URL deliberately omitted: it can contain query credentials.
         logger.error("WEB_APP_URL bootstrap отклонён: требуется безопасный HTTPS URL")
         raise ValueError("WEB_APP_URL bootstrap requires a valid HTTPS URL")
 
-    payload = json.dumps({"url": cleaned})
+    payload = json.dumps({"url": normalized})
     async with engine.begin() as conn:
         inserted = (
             await conn.execute(
@@ -113,7 +104,10 @@ async def bootstrap_web_app_url_from_env(
 
 async def save_web_app_url(engine: AsyncEngine, url: str | None) -> None:
     """UPSERT web_app_url в system_config (ON CONFLICT по key). Пусто → null."""
-    cleaned = (url or "").strip() or None
+    raw = (url or "").strip()
+    cleaned = normalize_web_app_base(raw) if raw else None
+    if raw and cleaned is None:
+        raise ValueError("web_app_url must be an HTTPS URL without credentials or query")
     payload = json.dumps({"url": cleaned})
     async with engine.begin() as conn:
         await conn.execute(
@@ -138,7 +132,19 @@ def normalize_web_app_base(raw: str | None) -> str | None:
     if not raw:
         return None
     cleaned = raw.strip().rstrip("/")
-    if not cleaned.startswith("https://"):
+    try:
+        parsed = urlsplit(cleaned)
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or any(char.isspace() for char in cleaned)
+    ):
         return None
     return cleaned
 

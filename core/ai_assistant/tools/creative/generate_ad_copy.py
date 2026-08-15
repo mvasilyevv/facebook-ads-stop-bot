@@ -16,6 +16,7 @@ from typing import Any, ClassVar
 
 from core.ai_assistant.prompts import PromptNotFoundError, load_prompt
 from core.ai_assistant.tools.base import RiskLevel, ToolContext, ToolError
+from core.safe_diagnostics import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,7 @@ class GenerateAdCopyTool:
         try:
             system_prompt = load_prompt("ad_copy")
         except PromptNotFoundError as exc:
-            raise ToolError(f"system prompt 'ad_copy' не найден: {exc}") from exc
+            raise ToolError("System prompt for ad copy is unavailable") from exc
 
         # Параметры конкретного вызова — в user-сообщении (JSON)
         user_content = json.dumps(
@@ -154,7 +155,7 @@ class GenerateAdCopyTool:
                 max_tokens=2048,
             )
         except AIUnavailableError as exc:
-            raise ToolError(f"AI не настроен — {exc}") from exc
+            raise ToolError("AI-провайдер временно недоступен") from exc
 
         raw_text = response.text.strip()
 
@@ -162,7 +163,7 @@ class GenerateAdCopyTool:
         variants = _parse_json_variants(raw_text)
 
         # Форматируем вывод
-        return _format_variants(variants, offer_code, country)
+        return redact_sensitive_text(_format_variants(variants, offer_code, country))
 
 
 def _parse_json_variants(raw: str) -> list[dict[str, Any]]:

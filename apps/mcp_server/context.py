@@ -22,11 +22,13 @@ import os
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from core.ai_assistant.tools.base import ToolContext
 from core.db import WORKER_ENGINE_KWARGS
+from core.safe_diagnostics import safe_exception_diagnostic
 
 if TYPE_CHECKING:  # pragma: no cover - только аннотации
     from core.meta_api.client import MetaApiClient
@@ -89,7 +91,8 @@ async def _build_meta_api_client() -> "MetaApiClient | None":
         return client
     except Exception as exc:
         logger.warning(
-            "MetaApiClient не запустился (%s) — MCP продолжит работать без meta-tools", exc
+            "MetaApiClient не запустился — MCP продолжит работать без meta-tools (%s)",
+            safe_exception_diagnostic(exc),
         )
         return None
 
@@ -126,8 +129,11 @@ class MCPContextManager:
 
             self.redis_client = Redis.from_url(redis_url, decode_responses=True)
             logger.info("MCP context: Redis client инициализирован (%s)", _safe_dsn(redis_url))
-        except Exception:
-            logger.exception("Redis инициализация упала — продолжаем без rate-limit")
+        except Exception as exc:
+            logger.error(
+                "Redis инициализация упала — продолжаем без rate-limit (%s)",
+                safe_exception_diagnostic(exc),
+            )
             self.redis_client = None
 
         if self.enable_meta_api:
@@ -166,19 +172,17 @@ class MCPContextManager:
 
 
 def _safe_dsn(dsn: str) -> str:
-    """Скрыть пароль в DSN — для лога."""
+    """Return a DSN safe for logs: no credentials, query or fragment."""
+
     try:
-        if "@" not in dsn:
+        parsed = urlsplit(dsn)
+        if parsed.scheme == "sqlite" and not parsed.query and not parsed.fragment:
             return dsn
-        prefix, tail = dsn.split("@", 1)
-        if "://" not in prefix:
-            return dsn
-        scheme, creds = prefix.split("://", 1)
-        if ":" in creds:
-            user, _ = creds.split(":", 1)
-            return f"{scheme}://{user}:***@{tail}"
-        return dsn
-    except Exception:
+        if not parsed.scheme or not parsed.hostname:
+            return "<dsn>"
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        return urlunsplit((parsed.scheme, f"{parsed.hostname}{port}", parsed.path, "", ""))
+    except (TypeError, ValueError):
         return "<dsn>"
 
 

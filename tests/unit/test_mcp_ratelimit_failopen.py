@@ -13,7 +13,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from mcp import types
 
+import apps.mcp_server.main as mcp_main
 from apps.mcp_server.context import MCPContextManager
 from apps.mcp_server.main import build_server
 from core.ai_assistant.tools._ratelimit import _reset_memory_fallback_for_tests
@@ -157,3 +159,45 @@ async def test_call_tool_healthy_redis_not_rate_limited() -> None:
     responses = await _call(mgr, times=1)
     assert not _is_rate_limited(responses[0])
     fake_redis.pipeline.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_call_tool_redacts_success_payload_at_mcp_boundary(monkeypatch) -> None:
+    secret = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+    internal_uuid = "00000000-0000-4000-8000-000000000099"
+
+    async def _unsafe_result(_self, _ctx, _args):
+        return f"token={secret} {internal_uuid}"
+
+    monkeypatch.setattr(_EchoTool, "run", _unsafe_result)
+    response = (await _call(_ctx_manager(redis_client=None), times=1))[0]
+    root = getattr(response, "root", response)
+    text = root.content[0].text
+
+    assert secret not in text
+    assert internal_uuid not in text
+    assert "<redacted>" in text
+
+
+@pytest.mark.asyncio
+async def test_read_resource_redacts_payload_at_mcp_boundary(monkeypatch) -> None:
+    secret = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+    internal_uuid = "00000000-0000-4000-8000-000000000099"
+    monkeypatch.setattr(
+        mcp_main,
+        "read_resource_impl",
+        AsyncMock(return_value=f"token={secret} {internal_uuid}"),
+    )
+    server = build_server(_ctx_manager(redis_client=None))
+    handler = server.request_handlers[types.ReadResourceRequest]
+    request = types.ReadResourceRequest(
+        method="resources/read",
+        params=types.ReadResourceRequestParams(uri="fb-stop-bot://offers"),
+    )
+
+    response = await handler(request)
+    text = response.root.contents[0].text
+
+    assert secret not in text
+    assert internal_uuid not in text
+    assert "<redacted>" in text

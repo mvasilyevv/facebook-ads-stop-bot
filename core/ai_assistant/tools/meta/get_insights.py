@@ -11,7 +11,7 @@ from core.ai_assistant.tools.meta._currency import (
     fetch_account_currency,
     format_major_money,
 )
-from core.meta_api.errors import MetaApiError
+from core.meta_api.errors import MetaApiError, public_meta_error_message
 from core.meta_api.insights.fetcher import InsightsFetcher, sum_spend
 from core.meta_api.schemas import MetaInsightsRequest
 
@@ -89,7 +89,7 @@ class GetInsightsTool:
         try:
             limit = int(args.get("limit") or 25)
         except (TypeError, ValueError) as exc:
-            raise ToolError(f"limit должен быть целым: {exc}") from exc
+            raise ToolError("limit должен быть целым") from exc
         limit = max(1, min(limit, 100))
 
         ad_ids = [str(x) for x in (args.get("ad_ids") or []) if x]
@@ -120,7 +120,7 @@ class GetInsightsTool:
                 )
                 rows = await fetcher.fetch_for_request(req)
         except MetaApiError as exc:
-            raise ToolError(f"Marketing API: {exc}") from exc
+            raise ToolError(public_meta_error_message(exc)) from exc
 
         if not rows:
             return "Insights пуст — фильтры не дали результата."

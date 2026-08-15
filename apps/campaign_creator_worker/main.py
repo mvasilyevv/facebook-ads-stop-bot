@@ -70,6 +70,8 @@ from core.deadlines import bind_absolute_deadline
 from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import BrowserReadinessRejectedError
 from core.meta_api.upload import MediaUploader
+from core.public_identifiers import public_uuid
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.tasks.irreversible_control import (
     CreatorTaskControl,
     CreatorTaskControlAbort,
@@ -108,6 +110,13 @@ _PROCESS_OUTCOME_RECORDED: contextvars.ContextVar[bool] = contextvars.ContextVar
     "campaign_creator_process_outcome_recorded",
     default=False,
 )
+
+
+def _public_run_log_id(value: object) -> str:
+    try:
+        return public_uuid(value, prefix="run")
+    except (TypeError, ValueError):
+        return "run_invalid"
 
 
 def _begin_process_metrics() -> None:
@@ -310,11 +319,11 @@ async def _persist_partial_created_ids(
                 },
             )
         return (result.rowcount or 0) > 0
-    except Exception:  # noqa: BLE001 — best-effort, mark_failed важнее
+    except Exception as exc:  # noqa: BLE001 — best-effort, mark_failed важнее
         logger.warning(
-            "campaign_create: не удалось записать created_ids в task_queue.result (task=%s)",
+            "campaign_create: не удалось записать created_ids в task_queue.result (task=%s, %s)",
             task.id,
-            exc_info=True,
+            safe_exception_diagnostic(exc),
         )
         return False
 
@@ -492,11 +501,15 @@ async def process_one_task(
 
     run = await load_run(engine, str(run_id))
     if run is None:
-        logger.error("campaign_create: task id=%s run_id=%s не найден", task.id, run_id)
+        logger.error(
+            "campaign_create: task id=%s run=%s не найден",
+            task.id,
+            _public_run_log_id(run_id),
+        )
         await _safe_mark_failed(
             engine,
             task,
-            f"campaign_run {run_id} не найден",
+            "campaign_run не найден",
             result=_campaign_rejected_result(run_id=str(run_id), reason="run_not_found"),
         )
         return
@@ -507,7 +520,7 @@ async def process_one_task(
         logger.warning(
             "campaign_create: task id=%s run %s уже в терминале (%s) — пропускаю",
             task.id,
-            run_id,
+            _public_run_log_id(run_id),
             run.status,
         )
         if run.status == "succeeded":
@@ -543,7 +556,7 @@ async def process_one_task(
             "campaign_create: task id=%s run %s уже в работе/с созданными объектами "
             "(status=%s) — НЕ переисполняю (риск дубля кампании), помечаю failed",
             task.id,
-            run_id,
+            _public_run_log_id(run_id),
             run.status,
         )
         applied = await finalize_run_failed(
@@ -652,12 +665,16 @@ async def _execute_run(
         concepts_by_campaign = resolve_concepts_from_config(cfg)
         spec = build_campaign_spec(cfg)
     except Exception as exc:  # noqa: BLE001 — валидация конфига/концептов = permanent
-        logger.error("campaign_create: task id=%s конфиг невалиден: %r", task.id, exc)
+        logger.error(
+            "campaign_create: task id=%s конфиг невалиден (%s)",
+            task.id,
+            safe_exception_diagnostic(exc),
+        )
         await finalize_run_failed(
             engine,
             run_id,
             task=task,
-            error=f"invalid config: {exc!r}",
+            error=f"invalid config: {safe_exception_diagnostic(exc)}",
             task_result=_campaign_rejected_result(run_id=run_id, reason="invalid_config"),
         )
         return
@@ -688,7 +705,7 @@ async def _execute_run(
         logger.info(
             "campaign_create: task id=%s — run %s отменён до старта (cancel-гонка), пропуск без создания",
             task.id,
-            run_id,
+            _public_run_log_id(run_id),
         )
         await _safe_mark_failed(
             engine,
@@ -737,9 +754,11 @@ async def _execute_run(
                     meta_creative_id=creative_id,
                     run_id=run_id,
                 )
-        except Exception:  # noqa: BLE001 — best-effort аудит
+        except Exception as exc:  # noqa: BLE001 — best-effort аудит
             logger.warning(
-                "реестр креатива не записан: code=%s run=%s", code, run_id, exc_info=True
+                "реестр креатива не записан: code=%s (%s)",
+                code,
+                safe_exception_diagnostic(exc),
             )
 
     fenced_client = _FencedGraphClient(client, control)
@@ -824,7 +843,10 @@ async def _execute_run(
             engine,
             run_id,
             task=task,
-            error=f"partial_fail (step={exc.failed_step}): проверь Meta вручную: {exc!r}",
+            error=(
+                f"partial_fail (step={exc.failed_step}): проверь Meta вручную; "
+                f"{safe_exception_diagnostic(exc)}"
+            ),
             created_meta_ids=exc.created_ids,
             task_result=_campaign_unknown_result(
                 task,
@@ -878,7 +900,7 @@ async def _execute_run(
             released = await release_after_browser_readiness_rejection(
                 engine,
                 task=task,
-                error=repr(readiness_rejection),
+                error=safe_exception_diagnostic(readiness_rejection),
                 transactional_effect=reset_run_for_readiness,
             )
             if released == "retrying":
@@ -898,7 +920,9 @@ async def _execute_run(
                 engine,
                 run_id,
                 task=task,
-                error=f"ambiguous failure after external boundary: {exc!r}",
+                error=(
+                    f"ambiguous failure after external boundary: {safe_exception_diagnostic(exc)}"
+                ),
                 task_result=_campaign_unknown_result(
                     task, run_id=run_id, reason="external_result_ambiguous"
                 ),
@@ -921,7 +945,10 @@ async def _execute_run(
                     engine,
                     run_id,
                     task=task,
-                    error=f"transient exhausted before external call: {exc!r}",
+                    error=(
+                        "transient exhausted before external call: "
+                        f"{safe_exception_diagnostic(exc)}"
+                    ),
                     task_result=_campaign_rejected_result(
                         run_id=run_id, reason="pre_external_attempts_exhausted"
                     ),
@@ -937,7 +964,7 @@ async def _execute_run(
             retried = await requeue_for_retry(
                 engine,
                 task_id=task.id,
-                error=repr(exc),
+                error=safe_exception_diagnostic(exc),
                 attempt_count=task.attempt_count,
                 max_attempts=task.max_attempts,
                 lease_owner=task.lease_owner,
@@ -946,22 +973,28 @@ async def _execute_run(
             )
             if retried:
                 logger.warning(
-                    "campaign_create: task id=%s → retrying (transient): %r", task.id, exc
+                    "campaign_create: task id=%s → retrying (transient; %s)",
+                    task.id,
+                    safe_exception_diagnostic(exc),
                 )
             else:
                 logger.error(
-                    "campaign_create: task id=%s → исчерпаны попытки (transient): %r",
+                    "campaign_create: task id=%s → исчерпаны попытки (transient; %s)",
                     task.id,
-                    exc,
+                    safe_exception_diagnostic(exc),
                 )
             return
         # permanent: валидация/Meta permission/policy → run=failed, без retry.
-        logger.error("campaign_create: task id=%s → permanent fail: %r", task.id, exc)
+        logger.error(
+            "campaign_create: task id=%s → permanent fail (%s)",
+            task.id,
+            safe_exception_diagnostic(exc),
+        )
         await finalize_run_failed(
             engine,
             run_id,
             task=task,
-            error=f"permanent before external call: {exc!r}",
+            error=f"permanent before external call: {safe_exception_diagnostic(exc)}",
             task_result=_campaign_rejected_result(
                 run_id=run_id, reason="permanent_pre_external_failure"
             ),
@@ -984,7 +1017,11 @@ async def _execute_run(
             task.id,
         )
         return
-    logger.info("campaign_create: task id=%s succeeded (run %s)", task.id, run_id)
+    logger.info(
+        "campaign_create: task id=%s succeeded (run %s)",
+        task.id,
+        _public_run_log_id(run_id),
+    )
     _cleanup_upload_dir(cfg.creo_root)
 
 
@@ -1028,10 +1065,11 @@ def _cleanup_upload_dir(creo_root: str | None) -> None:
         if root not in target.parents:
             return  # путь вне корня загрузок — не наш, не трогаем
         shutil.rmtree(target, ignore_errors=True)
-        logger.info("campaign_create: upload-папка прогона очищена: %s", target)
-    except Exception:  # noqa: BLE001 — best-effort, не роняет обработку задачи
+        logger.info("campaign_create: upload-папка прогона очищена")
+    except Exception as exc:  # noqa: BLE001 — best-effort, не роняет обработку задачи
         logger.warning(
-            "campaign_create: не удалось очистить upload-папку %r", creo_root, exc_info=True
+            "campaign_create: не удалось очистить upload-папку (%s)",
+            safe_exception_diagnostic(exc),
         )
 
 
@@ -1119,8 +1157,11 @@ async def task_loop(
     while not stop.is_set():
         try:
             claim = await _claim(engine)
-        except Exception:  # noqa: BLE001
-            logger.exception("ошибка claim_campaign_task")
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "ошибка claim_campaign_task (%s)",
+                safe_exception_diagnostic(exc),
+            )
             await _sleep_or_stop(stop)
             continue
 
@@ -1143,10 +1184,11 @@ async def task_loop(
                 browser_readiness_generation=claim.browser_readiness_generation,
             ):
                 await process_one_task(engine, claim.task, client=client, uploader=uploader)
-        except Exception:  # noqa: BLE001 — неожиданная ошибка (напр. БД в фазе pre-execute гардов)
-            logger.exception(
-                "campaign_create: unexpected crash task id=%s — terminal UNKNOWN",
+        except Exception as exc:  # noqa: BLE001 — неожиданная ошибка (напр. БД в фазе pre-execute гардов)
+            logger.error(
+                "campaign_create: unexpected crash task id=%s — terminal UNKNOWN (%s)",
                 claim.task.id,
+                safe_exception_diagnostic(exc),
             )
             run_id = str((claim.task.payload or {}).get("run_id") or "")
             try:
@@ -1179,9 +1221,11 @@ async def task_loop(
                             "reason": "unexpected_worker_crash",
                         },
                     )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "campaign_create: UNKNOWN finalize also failed task=%s", claim.task.id
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "campaign_create: UNKNOWN finalize also failed task=%s (%s)",
+                    claim.task.id,
+                    safe_exception_diagnostic(exc),
                 )
             await _sleep_or_stop(stop)
 
@@ -1222,7 +1266,10 @@ async def main_loop(database_url: str | None = None) -> None:
     finally:
         try:
             await meta_client.close()
-        except Exception:  # noqa: BLE001
-            logger.exception("meta_client.close() упал")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "meta_client.close() не завершён (%s)",
+                safe_exception_diagnostic(exc),
+            )
         await engine.dispose()
         logger.info("campaign_creator_worker остановлен")

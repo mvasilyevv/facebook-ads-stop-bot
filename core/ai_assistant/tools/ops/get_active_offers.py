@@ -40,7 +40,7 @@ class GetActiveOffersTool:
         try:
             limit = int(args.get("limit") or 100)
         except (TypeError, ValueError) as exc:
-            raise ToolError(f"limit должен быть целым: {exc}") from exc
+            raise ToolError("limit должен быть целым") from exc
         limit = max(1, min(limit, 200))
 
         params: dict[str, Any] = {"lim": limit}

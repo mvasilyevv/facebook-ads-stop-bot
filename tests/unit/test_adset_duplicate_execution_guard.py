@@ -285,6 +285,7 @@ async def test_recovery_integrity_rejection_preserves_checkpoint_for_manual_inci
     assert failure["outcome"] == "UNKNOWN"
     assert failure["manual_review_required"] is True
     assert failure["phase"] == "recovery_checkpoint_invalid"
-    assert failure["recovery_integrity_error"] == "duplicate task has no durable receipt"
+    assert failure["recovery_integrity_error"] == "error_type=DuplicateExecutionReceiptError"
+    assert "durable receipt" not in failure["recovery_integrity_error"]
     assert task.external_started_at is not None
     client.execute_graph_call.assert_not_awaited()

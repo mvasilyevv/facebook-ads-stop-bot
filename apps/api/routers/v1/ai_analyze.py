@@ -27,6 +27,7 @@ from apps.api.routers.v1.schemas.ai import AIAnalyzeRequest, AIAnalyzeResponse
 from core.ai_assistant.chat import ChatMessage, ChatRateLimitedError, ChatSession
 from core.ai_assistant.client import AIUnavailableError, get_ai_client
 from core.ai_assistant.tools._ratelimit import RateLimitExceeded, check_and_increment
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +180,10 @@ async def ai_analyze(
                 cached["from_cache"] = True
                 return JSONResponse(content=cached)
         except Exception as exc:
-            logger.warning("Не удалось прочитать AI-кэш %s: %s", cache_key, exc)
+            logger.warning(
+                "Не удалось прочитать AI-кэш (%s)",
+                safe_exception_diagnostic(exc),
+            )
 
     # Строим промпт и запрашиваем AI
     prompt = _build_prompt(body.block_type, body.scope_key, body.client_data)
@@ -225,6 +229,9 @@ async def ai_analyze(
     try:
         await redis.set(cache_key, json.dumps(payload, ensure_ascii=False), ex=_CACHE_TTL)
     except Exception as exc:
-        logger.warning("Не удалось сохранить AI-анализ в кэш %s: %s", cache_key, exc)
+        logger.warning(
+            "Не удалось сохранить AI-анализ в кэш (%s)",
+            safe_exception_diagnostic(exc),
+        )
 
     return JSONResponse(content=payload)

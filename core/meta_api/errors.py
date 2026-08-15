@@ -202,9 +202,53 @@ def classify_graph_error(
         # permanent-fail (backstop для будущих негативных кодов помимо явных в _CODE_MAP).
         exc_cls = TemporaryError if (not code or code < 0) else PermanentError
     return exc_cls(
-        message or f"Graph API error code={code} subcode={subcode}",
+        f"Graph API error code={code} subcode={subcode}",
         code=code,
         subcode=subcode,
         endpoint=endpoint,
         fbtrace_id=fbtrace_id,
     )
+
+
+def public_meta_error_message(exc: BaseException) -> str:
+    """Return stable operator copy without Graph/gRPC response text."""
+
+    if isinstance(exc, LoginRequiredError):
+        return "Vision-профиль требует повторного входа"
+    if isinstance(exc, TokenInvalidError):
+        return "Сессия Vision недействительна"
+    if isinstance(exc, RateLimitedError):
+        return "Meta временно ограничила запросы"
+    if isinstance(exc, BrowserReadinessRejectedError):
+        return "Browser-agent отклонил запрос до отправки в Meta"
+    if isinstance(exc, SessionUnavailableError):
+        return "Vision-сессия временно недоступна"
+    if isinstance(exc, NotFoundError):
+        return "Объект Meta не найден"
+    if isinstance(exc, PermissionError):
+        return "Meta отклонила запрос из-за недостаточных прав"
+    if isinstance(exc, AmbiguousResultError):
+        return "Результат запроса к Meta не подтверждён; требуется сверка"
+    if isinstance(exc, TemporaryError):
+        return "Marketing API временно недоступен"
+    if isinstance(exc, PermanentError):
+        return "Meta отклонила запрос"
+    return "Marketing API недоступен"
+
+
+__all__ = [
+    "AmbiguousResultError",
+    "BrowserReadinessRejectedError",
+    "LoginRequiredError",
+    "MetaApiError",
+    "MutationValidationError",
+    "NotFoundError",
+    "PermanentError",
+    "PermissionError",
+    "RateLimitedError",
+    "SessionUnavailableError",
+    "TemporaryError",
+    "TokenInvalidError",
+    "classify_graph_error",
+    "public_meta_error_message",
+]

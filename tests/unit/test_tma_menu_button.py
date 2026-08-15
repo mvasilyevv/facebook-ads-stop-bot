@@ -66,8 +66,9 @@ async def test_sets_menu_button_when_configured(monkeypatch) -> None:
     assert ok is True
     assert client.set_chat_menu_button.await_count == 2
     default_call, private_call = client.set_chat_menu_button.await_args_list
-    assert default_call.kwargs == {"web_app_url": url}
-    assert private_call.kwargs == {"web_app_url": url, "chat_id": 123}
+    normalized_url = "https://fresh.trycloudflare.com/tma"
+    assert default_call.kwargs == {"web_app_url": normalized_url}
+    assert private_call.kwargs == {"web_app_url": normalized_url, "chat_id": 123}
     client.close.assert_awaited_once()
 
 
@@ -171,6 +172,4 @@ async def test_authority_is_refenced_before_each_scope(monkeypatch) -> None:
     ok = await st._sync_bot_menu_button(object(), "https://operator.example/tma/")
 
     assert ok is False
-    client.set_chat_menu_button.assert_awaited_once_with(
-        web_app_url="https://operator.example/tma/"
-    )
+    client.set_chat_menu_button.assert_awaited_once_with(web_app_url="https://operator.example/tma")

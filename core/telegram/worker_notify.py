@@ -19,6 +19,7 @@ from typing import Literal
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from core.safe_diagnostics import redact_sensitive_text, safe_exception_diagnostic
 from core.telegram.notifications import (
     enqueue_notification,
     enqueue_notification_in_rolling_window,
@@ -123,8 +124,12 @@ async def _notify(
                 spec,
                 window_seconds=dedupe_ttl_seconds,
             )
-    except Exception:
-        logger.exception("worker notification enqueue failed: %s", normalized_event_type)
+    except Exception as exc:
+        logger.error(
+            "worker notification enqueue failed: %s (%s)",
+            normalized_event_type,
+            safe_exception_diagnostic(exc),
+        )
         return False
     return result.delivery_count > 0 or not result.was_created
 
@@ -398,8 +403,12 @@ async def notify_recurring_incident(
                 resource_type=resource_type,
                 resource_id=resource_id,
             )
-    except Exception:
-        logger.exception("recurring incident enqueue failed: %s", key)
+    except Exception as exc:
+        logger.error(
+            "recurring incident enqueue failed: %s (%s)",
+            redact_sensitive_text(key),
+            safe_exception_diagnostic(exc),
+        )
         return False
 
 
@@ -478,8 +487,12 @@ async def resolve_recurring_incident(
                 audience=audience,
                 summary=summary,
             )
-    except Exception:
-        logger.exception("recurring incident resolve failed: %s", incident_key)
+    except Exception as exc:
+        logger.error(
+            "recurring incident resolve failed: %s (%s)",
+            redact_sensitive_text(incident_key),
+            safe_exception_diagnostic(exc),
+        )
         return False
 
 

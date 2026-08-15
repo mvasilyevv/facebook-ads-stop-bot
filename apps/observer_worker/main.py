@@ -78,6 +78,7 @@ from core.observer.scan_tasks import (
     enqueue_scheduled_observer_scan,
     run_with_observer_scan_control,
 )
+from core.safe_diagnostics import redact_sensitive_text, safe_exception_diagnostic
 from core.scanner.identity import find_incomplete_scan_row_ids
 from core.scanner.models import (
     SCANNER_METRICS_CONTRACT_REVISION,
@@ -441,7 +442,10 @@ async def _run_account_scan(
                     "outbox_events": cycle_result.alerts_warning + cycle_result.alerts_stop
                 }
     except CabinetTimezoneUnknownError as exc:
-        logger.critical("observer cabinet timezone is unknown: %s", exc)
+        logger.critical(
+            "observer cabinet timezone is unknown (%s)",
+            safe_exception_diagnostic(exc),
+        )
         outcome = "error"
         error_msg = "cabinet_timezone_unknown"
         await notify_recurring_incident(
@@ -451,7 +455,7 @@ async def _run_account_scan(
             event_type="observer_cabinet_timezone_unknown",
             severity="critical",
             title="Авто-стоп остановлен: неизвестен часовой пояс кабинета",
-            summary=f"Кабинет {ad_account_id} · Facebook не отдал часовой пояс",
+            summary="Facebook не отдал часовой пояс рекламного кабинета",
             risk="Не понять, где граница суток, а значит и дневные пороги",
             lines=[
                 "Открой кабинет в Ads Manager, чтобы бот обновил его данные",
@@ -461,7 +465,10 @@ async def _run_account_scan(
             resource_id=ad_account_id,
         )
     except CabinetCurrencyUnknownError as exc:
-        logger.critical("observer cabinet currency is unknown: %s", exc)
+        logger.critical(
+            "observer cabinet currency is unknown (%s)",
+            safe_exception_diagnostic(exc),
+        )
         outcome = "error"
         error_msg = "cabinet_currency_unknown"
         await notify_recurring_incident(
@@ -471,7 +478,7 @@ async def _run_account_scan(
             event_type="observer_cabinet_currency_unknown",
             severity="critical",
             title="Авто-стоп остановлен: неизвестна валюта кабинета",
-            summary=f"Кабинет {ad_account_id} · Facebook не подтвердил валюту",
+            summary="Facebook не подтвердил валюту рекламного кабинета",
             risk="Сумму без валюты нельзя сравнить с порогом",
             lines=[
                 "Открой кабинет в Ads Manager, чтобы бот обновил его данные",
@@ -481,9 +488,10 @@ async def _run_account_scan(
             resource_id=ad_account_id,
         )
     except Exception as exc:
-        logger.exception("scan cycle crashed (кабинет=%s): %s", ad_account_id or "-", exc)
+        diagnostic = safe_exception_diagnostic(exc)
+        logger.error("scan cycle crashed (кабинет=%s; %s)", ad_account_id or "-", diagnostic)
         outcome = "error"
-        error_msg = f"{type(exc).__name__}: {exc}"
+        error_msg = f"scan_cycle_failed:{type(exc).__name__}"
 
     duration_ms = int((time.monotonic() - started_monotonic) * 1000)
     await _finish_scan_run(
@@ -677,8 +685,11 @@ async def _prepare_workspace(
         with bind_absolute_deadline(prepare_deadline_at):
             async with asyncio.timeout(prepare_deadline_seconds):
                 results = await gate.open_cabinet_tabs(accounts)
-    except Exception:
-        logger.exception("observer: фаза подготовки — open_cabinet_tabs упал")
+    except Exception as exc:
+        logger.error(
+            "observer: фаза подготовки — open_cabinet_tabs упал (%s)",
+            safe_exception_diagnostic(exc),
+        )
         # The per-cabinet scan will retry its role page, but browser blindness
         # must be visible immediately instead of waiting for a failure streak.
 
@@ -876,10 +887,11 @@ async def _maybe_alert_degraded(
     last_error: str | None,
 ) -> bool:
     """Persist a degraded-scan incident; PostgreSQL collapses repeated ticks."""
+    error_code = redact_sensitive_text(last_error or "unknown")
     logger.error(
-        "ALERT (observer degraded): failures=%s error=%r",
+        "ALERT (observer degraded): failures=%s error_code=%s",
         consecutive_failures,
-        last_error,
+        error_code,
     )
 
     sent = await notify_recurring_incident(
@@ -957,8 +969,11 @@ async def _wait_for_durable_scan(
     while not shutdown_event.is_set():
         try:
             task = await claim_observer_scan(engine, worker_id=worker_id)
-        except Exception:
-            logger.exception("observer: failed to poll durable scan queue")
+        except Exception as exc:
+            logger.error(
+                "observer: failed to poll durable scan queue (%s)",
+                safe_exception_diagnostic(exc),
+            )
             task = None
         if task is not None:
             return task
@@ -1018,10 +1033,14 @@ async def _run_claimed_observer_scan(
         logger.critical("observer scan task %s lost its lease; finalization refused", task.id)
         return {"outcome": "error", "task_id": task.id, "error": "lease_lost"}
     except Exception as exc:
-        logger.exception("observer scan task %s crashed", task.id)
+        logger.error(
+            "observer scan task %s crashed (%s)",
+            task.id,
+            safe_exception_diagnostic(exc),
+        )
         finalized = await mark_failed(
             engine,
-            error=f"{type(exc).__name__}: {exc}",
+            error=f"scan_task_failed:{type(exc).__name__}",
             result={"outcome": "REJECTED", "reason": "scan_crashed"},
             **fence,
         )
@@ -1126,8 +1145,11 @@ async def main_loop(
                         engine,
                         worker_id=_OBSERVER_INSTANCE_ID,
                     )
-                except Exception:
-                    logger.exception("observer: failed to claim durable scan task")
+                except Exception as exc:
+                    logger.error(
+                        "observer: failed to claim durable scan task (%s)",
+                        safe_exception_diagnostic(exc),
+                    )
 
             if pending_scan_task is None:
                 try:
@@ -1136,8 +1158,11 @@ async def main_loop(
                         engine,
                         worker_id=_OBSERVER_INSTANCE_ID,
                     )
-                except Exception:
-                    logger.exception("observer: failed to publish/claim scheduled scan")
+                except Exception as exc:
+                    logger.error(
+                        "observer: failed to publish/claim scheduled scan (%s)",
+                        safe_exception_diagnostic(exc),
+                    )
 
             if pending_scan_task is None:
                 pending_scan_task = await _wait_for_durable_scan(
@@ -1164,7 +1189,10 @@ async def main_loop(
                 if gate is None:
                     gate = await gate_factory()
             except Exception as exc:
-                logger.exception("observer: could not create the canonical scanner gate")
+                logger.error(
+                    "observer: could not create the canonical scanner gate (%s)",
+                    safe_exception_diagnostic(exc),
+                )
                 finalized = await mark_failed(
                     engine,
                     task_id=claimed_task.id,
@@ -1212,7 +1240,10 @@ async def main_loop(
                 # штатного пути). Теперь такой краш тоже засчитывается в тот же счётчик
                 # consecutive_scan_failures — иначе воркер мог биться в этой ветке часами
                 # с живым процессом, но без единого operator-visible инцидента.
-                logger.exception("claimed observer scan crashed — пересоздаю gate")
+                logger.error(
+                    "claimed observer scan crashed — пересоздаю gate (%s)",
+                    safe_exception_diagnostic(exc),
+                )
                 await _close_scanner_gate(gate)
                 gate = None
                 state.consecutive_scan_failures += 1
@@ -1220,7 +1251,7 @@ async def main_loop(
                     await _maybe_alert_degraded(
                         engine,
                         consecutive_failures=state.consecutive_scan_failures,
-                        last_error=f"{type(exc).__name__}: {exc}",
+                        last_error=f"scan_cycle_failed:{type(exc).__name__}",
                     )
                 await asyncio.sleep(10.0)
                 continue
@@ -1239,8 +1270,11 @@ async def main_loop(
                     engine,
                     worker_id=_OBSERVER_INSTANCE_ID,
                 )
-            except Exception:
-                logger.exception("observer: failed to reconcile durable scan queue")
+            except Exception as exc:
+                logger.error(
+                    "observer: failed to reconcile durable scan queue (%s)",
+                    safe_exception_diagnostic(exc),
+                )
                 pending_scan_task = None
             if pending_scan_task is not None:
                 continue
@@ -1273,10 +1307,13 @@ async def main_loop(
                         ad_account_ids=scanned_account_ids,
                         next_scan_at=datetime.now(timezone.utc) + timedelta(seconds=sleep_for),
                     )
-                except Exception:
+                except Exception as exc:
                     # This is an operator projection, not scheduling authority:
                     # the durable queue remains authoritative and must continue.
-                    logger.exception("observer: failed to publish cabinet next_scan_at")
+                    logger.error(
+                        "observer: failed to publish cabinet next_scan_at (%s)",
+                        safe_exception_diagnostic(exc),
+                    )
             logger.info(
                 "observer: режим=%s период=%.0fс (база=%.0f, цикл=%.1f, sleep=%.1f)",
                 scan_mode,

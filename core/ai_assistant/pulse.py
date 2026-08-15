@@ -25,6 +25,7 @@ from core.ai_assistant.prompts import PromptNotFoundError, load_skill
 from core.ai_assistant.text import html_to_plain_text
 from core.config import get_settings
 from core.rules.labels import RULE_LABELS, rule_label
+from core.safe_diagnostics import redact_sensitive_text, safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -229,12 +230,18 @@ async def build_pulse(
             ),
             timeout=float(settings.ai_timeout_seconds),
         )
-        ai_text = (response.text or "").strip()
+        ai_text = redact_sensitive_text(response.text).strip()
     except (TimeoutError, asyncio.TimeoutError, AIUnavailableError) as exc:
-        logger.warning("pulse: AI недоступен (%s) — детерминированный фолбэк", exc)
+        logger.warning(
+            "pulse: AI недоступен (%s) — детерминированный фолбэк",
+            safe_exception_diagnostic(exc),
+        )
         return _fallback_text(signals, html=html)
-    except Exception:  # noqa: BLE001
-        logger.warning("pulse: ошибка провайдера — детерминированный фолбэк", exc_info=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "pulse: ошибка провайдера — детерминированный фолбэк (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return _fallback_text(signals, html=html)
 
     if not html:

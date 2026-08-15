@@ -141,7 +141,7 @@ async def test_empty_data(monkeypatch):
 @pytest.mark.asyncio
 async def test_adsetpro_error_wrapped(monkeypatch):
     _patch_client(monkeypatch, _FakeClient(raise_exc=AdsetProError("503 boom")))
-    with pytest.raises(ToolError, match="AdSet.pro недоступен"):
+    with pytest.raises(ToolError, match="AdSet.pro временно недоступен"):
         await GetTrackerStatsTool().run(_ctx(), {"days": 1})
 
 

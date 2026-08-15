@@ -12,6 +12,7 @@ browser-agent детектит redirect на login.php/checkpoint, HTML вмес
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
@@ -93,6 +94,38 @@ class _FakeGate:
 
     async def open_cabinet_tabs(self, ad_account_ids):
         return []
+
+
+class _FailingGate:
+    async def run_one_scan(self, **_kwargs) -> ScanCycleOutput:
+        raise RuntimeError(
+            "access_token=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef "
+            "00000000-0000-4000-8000-000000000099"
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_account_scan_persists_and_logs_only_bounded_error_code(
+    _stub_scan_db,
+    caplog,
+) -> None:
+    caplog.set_level(logging.ERROR)
+
+    summary = await ow._run_account_scan(
+        object(),
+        gate=_FailingGate(),
+        config={"campaign_ids": ["c1"], "owner_campaign_tag": "MV"},
+        ad_account_id="act_5",
+    )
+
+    assert summary["outcome"] == "error"
+    assert summary["error"] == "scan_cycle_failed:RuntimeError"
+    assert ow._finish_scan_run.await_args.kwargs["error_message"] == (
+        "scan_cycle_failed:RuntimeError"
+    )
+    assert "access_token" not in caplog.text
+    assert "00000000-0000-4000-8000-000000000099" not in caplog.text
+    assert "Traceback" not in caplog.text
 
 
 # login_required-скан → outcome='error' (НЕ 'empty') + deduped алерт вызван

@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.telegram import format as fmt
 from core.telegram.action_tokens import is_claimed_action_recovery
 from core.telegram.handlers._send import send_text
@@ -153,8 +154,11 @@ async def handle_update(
     if not text_raw.startswith("/"):
         try:
             recipient = await find_recipient(engine, chat_id=chat_id, telegram_user_id=user_id)
-        except Exception:  # noqa: BLE001
-            logger.exception("free-text DM: find_recipient упал — игнорирую сообщение")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "free-text DM: recipient lookup failed (%s)",
+                safe_exception_diagnostic(exc),
+            )
             return
         if not recipient or not recipient.is_owner():
             return

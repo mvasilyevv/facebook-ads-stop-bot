@@ -13,6 +13,7 @@ from typing import Any, ClassVar
 
 from core.ai_assistant.prompts import PromptNotFoundError, load_prompt
 from core.ai_assistant.tools.base import RiskLevel, ToolContext, ToolError
+from core.safe_diagnostics import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ class AnalyzeCreativeTool:
         try:
             system_prompt = load_prompt("competitor_extraction")
         except PromptNotFoundError as exc:
-            raise ToolError(f"system prompt 'competitor_extraction' не найден: {exc}") from exc
+            raise ToolError("System prompt for creative analysis is unavailable") from exc
 
         # Параметры — в user-сообщении (JSON)
         user_content = json.dumps(
@@ -84,8 +85,8 @@ class AnalyzeCreativeTool:
         )
 
         logger.info(
-            "analyze_creative: primary_text=%s...",
-            primary_text[:50],
+            "analyze_creative: text_length=%d",
+            len(primary_text),
         )
 
         # Вызываем LLM
@@ -96,13 +97,13 @@ class AnalyzeCreativeTool:
                 max_tokens=1024,
             )
         except AIUnavailableError as exc:
-            raise ToolError(f"AI не настроен — {exc}") from exc
+            raise ToolError("AI-провайдер временно недоступен") from exc
 
         raw_text = response.text.strip()
 
         # Извлекаем и форматируем JSON-анализ
         analysis = _parse_json_analysis(raw_text)
-        return _format_analysis(analysis, primary_text)
+        return redact_sensitive_text(_format_analysis(analysis, primary_text))
 
 
 def _parse_json_analysis(raw: str) -> dict[str, Any]:

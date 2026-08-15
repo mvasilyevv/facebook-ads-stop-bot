@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.config import get_settings
 from core.db import make_worker_engine
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.telegram.action_tokens import mint_action_token
 from core.telegram.command_replies import (
     ClaimedTelegramCommandReply,
@@ -265,8 +266,12 @@ async def process_one_delivery(
             claim.delivery_id,
         )
         return True
-    except Exception:
-        logger.exception("notification render preparation failed delivery=%s", claim.delivery_id)
+    except Exception as exc:
+        logger.error(
+            "notification render preparation failed delivery=%s (%s)",
+            claim.delivery_id,
+            safe_exception_diagnostic(exc),
+        )
         error = TelegramGatewayError(
             method="prepareNotification",
             kind=TelegramFailureKind.TRANSIENT,
@@ -448,8 +453,11 @@ async def run_worker(*, engine: AsyncEngine | None = None) -> None:
                         # The authoritative token or its enabled state may have
                         # changed with the generation we just finalized.
                         next_config_refresh = 0.0
-                except Exception:  # noqa: BLE001 - durable row remains claimable
-                    logger.exception("durable Telegram webhook configuration pass failed")
+                except Exception as exc:  # noqa: BLE001 - durable row remains claimable
+                    logger.error(
+                        "durable Telegram webhook configuration pass failed (%s)",
+                        safe_exception_diagnostic(exc),
+                    )
                 next_webhook_configuration = now + 0.5
             if gateway is None or now >= next_config_refresh:
                 config = await load_telegram_config(engine)
@@ -488,8 +496,11 @@ async def run_worker(*, engine: AsyncEngine | None = None) -> None:
             if now >= next_metrics_refresh:
                 try:
                     await refresh_notification_metrics(engine)
-                except Exception:  # noqa: BLE001 - exporter failure must not halt delivery
-                    logger.exception("notification metric refresh failed")
+                except Exception as exc:  # noqa: BLE001 - exporter failure must not halt delivery
+                    logger.error(
+                        "notification metric refresh failed (%s)",
+                        safe_exception_diagnostic(exc),
+                    )
                 next_metrics_refresh = now + 15.0
             if gateway is None or not auth_ready or active_generation <= 0:
                 try:

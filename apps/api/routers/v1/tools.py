@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import date
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.params import File, Form
@@ -50,6 +51,7 @@ from core.creatives.service import (
     CreativeValidationError,
     uniquify_creatives,
 )
+from core.safe_diagnostics import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,14 @@ router = APIRouter(tags=["tools"])
 
 # Максимальный суммарный размер загружаемых файлов: 200 МБ
 _MAX_TOTAL_BYTES = 200 * 1024 * 1024
+
+
+def _public_creative_path(*parts: str) -> str:
+    """Build a UI path from safe basenames, never from the server filesystem root."""
+
+    return "/".join(
+        redact_sensitive_text(Path(part).name) for part in parts if part and Path(part).name
+    )
 
 
 def require_dev_tools(settings: DepSettings) -> None:
@@ -121,7 +131,7 @@ async def creative_uniquify(
     duration_ms = int((time.monotonic() - t0) * 1000)
 
     return CreativeUniquifyResponse(
-        output_dir=result.iteration_dir,
+        output_dir=_public_creative_path(result.iteration_name),
         iteration_name=result.iteration_name,
         files_created=len(result.files),
         creative_count=result.creative_count,
@@ -169,13 +179,13 @@ async def get_campaign_creative_folders() -> list[CampaignFolderItem]:
     return [
         CampaignFolderItem(
             name=s.name,
-            path=s.path,
+            path=_public_creative_path(s.name),
             adset_count=s.adset_count,
             creative_count=s.creative_count,
             media_type=s.media_type,
             updated_at=s.updated_at,
             is_valid=s.is_valid,
-            validation_error=s.validation_error,
+            validation_error=("Папка не прошла валидацию" if s.validation_error else ""),
         )
         for s in summaries
     ]
@@ -229,7 +239,7 @@ async def build_campaign_plan(
         offer_code=plan.offer_code,
         offer_country_name=plan.offer_country_name,
         creative_folder_name=plan.creative_folder_name,
-        creative_folder_path=plan.creative_folder_path,
+        creative_folder_path=_public_creative_path(plan.creative_folder_name),
         conversion_event=plan.conversion_event,
         cabinet_id=plan.cabinet_id,
         sub2=plan.sub2,
@@ -239,13 +249,17 @@ async def build_campaign_plan(
         adsets=[
             {
                 "name": adset.name,
-                "folder_path": adset.folder_path,
+                "folder_path": _public_creative_path(plan.creative_folder_name, adset.name),
                 "ads": [
                     {
                         "name": ad.name,
                         "media_file_name": ad.media_file_name,
                         "media_search_name": ad.media_search_name,
-                        "media_path": ad.media_path,
+                        "media_path": _public_creative_path(
+                            plan.creative_folder_name,
+                            adset.name,
+                            ad.media_file_name,
+                        ),
                         "media_type": ad.media_type,
                         "url_params": ad.url_params,
                     }
