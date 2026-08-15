@@ -371,7 +371,10 @@ function UploadsView({
   );
   return (
     <div className="flex flex-col gap-5">
-      {data ? (
+      {/* Карточка появляется, только когда ей есть что сказать. Пока окно
+          полное, она сообщала «всё в порядке» — то же самое, что и значок
+          состояния рядом, и занимала первый экран под это. */}
+      {data && completeness !== "ready" ? (
         <div className="flex flex-col gap-3 rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <div className="font-display text-[14px] font-semibold text-bg-11">
@@ -429,8 +432,8 @@ function UploadsView({
             title={period === "today" ? "Факт / база / stop" : "Экономика периода"}
             meta={
               period === "today"
-                ? "LIVE · почасовая шкала"
-                : "Budget delta не моделируется задним числом"
+                ? "Сейчас · почасовая шкала"
+                : "Расхождение с базой задним числом не считается"
             }
           />
           {period === "today" ? (

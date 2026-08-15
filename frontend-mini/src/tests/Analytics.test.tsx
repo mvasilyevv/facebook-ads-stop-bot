@@ -302,7 +302,7 @@ describe("mobile performance analytics", () => {
       .closest("section");
     expect(daypartSection).not.toBeNull();
     const disclosure = within(daypartSection as HTMLElement).getByText(
-      "Данные графика",
+      "Показать данные таблицей",
     );
     const details = disclosure.closest("details");
     expect(details).not.toBeNull();

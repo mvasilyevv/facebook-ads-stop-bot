@@ -91,3 +91,14 @@ describe("RemoteDesktopPage", () => {
     expect(replace).not.toHaveBeenCalled();
   });
 });
+
+describe("экран рабочего стола не повторяет сам себя", () => {
+  it("называет удалённую машину один раз, а не трижды", () => {
+    render(<Route.component />);
+
+    // Раньше «Vision Desktop» стояло в шапке карточки, крупно в центре и в
+    // подписи — оператор трижды читал одно и то же вместо полезного.
+    expect(screen.queryAllByText("Vision Desktop")).toHaveLength(0);
+    expect(screen.getByRole("heading", { name: "Подключение к рабочему столу" })).toBeInTheDocument();
+  });
+});

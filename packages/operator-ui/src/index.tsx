@@ -371,7 +371,9 @@ export function AccessibleChartFrame({
         {chart}
       </div>
       <details className="operator-chart-table">
-        <summary>Данные графика</summary>
+        {/* Заголовок обязан говорить, что за ним что-то раскроется: свёрнутая
+            «Данные графика» читалась как пустая секция. */}
+        <summary>Показать данные таблицей</summary>
         <div className="operator-chart-table-scroll">{table}</div>
       </details>
     </figure>
