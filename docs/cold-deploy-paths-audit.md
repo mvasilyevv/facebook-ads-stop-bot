@@ -45,6 +45,9 @@ rehearsal.
 | 25 | Первый source содержит Kasm password длиннее допустимого tool limit: `fbctl/config.py:641-644` | До первого container такого runtime evidence нет; hot использует уже сохранённый пароль | Новый red/green `test_fresh_source_rejects_kasm_password_above_tool_limit` и boundary `...accepts...at_tool_limit` | сломано, исправлено |
 | 26 | После смены network name monitoring agent ещё не создан/сидит в старой сети: `DEPLOYMENT.md:60-70`, `deploy/monitoring/docker-compose.agent.yml:54-92`, `fbctl/bundle.py:32-43` | Cold/rename требует отдельного `compose up`; hot fbctl вообще не владеет monitoring lifecycle | Rehearsal не включает monitoring. Документированная команда требует файлы, которых нет в self-contained control bundle и на checkout-free host | сломано |
 | 27 | Bootstrap оборван между preflight, pull, resources, infra, migrate, adoption, runtime config, Vision config, Caddy или consume-inputs: `fbctl/controller.py:1399-1493` | Retry обязан сохранить durable identity, убрать temp/candidate и продолжить; hot bootstrap обычно больше не вызывается | Расширенный `test_bootstrap_retry_reuses_durable_identity_after_mutation_failure` плюс отдельные resource/candidate/Caddy partial tests | покрыто unit |
+| 28 | Первый запуск central monitoring: нет project network, шести data volumes, containers, `.env.monitoring` и webhook token: `deploy/monitoring/docker-compose.monitoring.yml:21-195`, `deploy/monitoring/README.md:30-43` | Cold operator вручную создаёт env/token, а Compose создаёт internal network/volumes/containers; hot переиспользует persisted volumes | Ни `fbctl`, ни `single_slot`, ни unit-тест не исполняют этот release; есть только Compose/config static gates | не покрыто |
+| 29 | Первый single-host monitoring overlay: нет `browser_agent_metrics_data`, central services ещё не присоединены к external platform network: `deploy/monitoring/docker-compose.local-app.yml:4-40` | Cold Compose создаёт metrics volume и подключает Prometheus/Alloy к уже созданной `fb_agent_platform`; hot сохраняет volume/network attachments | Rehearsal не запускает central monitoring или overlay | не покрыто |
+| 30 | Нет host Docker daemon config: `deploy/daemon.json:1-7` | Cold provisioning должен установить/merge/restart daemon; hot Docker уже запущен с policy | Файл не входит в bundle, нигде не вызывается и не описан; Compose services имеют собственные logging limits, поэтому это orphan provisioning asset, а не доказанный runtime fix | не покрыто |
 
 ## Подтверждённые дефекты
 
@@ -94,6 +97,9 @@ rehearsal.
 - `fbctl/bundle.py:32-43` не включает ни этот Compose-файл, ни
   `deploy/monitoring/alloy/agent.alloy`, который bind-mount'ится в
   `docker-compose.agent.yml:67-70`.
+- Central runbook аналогично начинает с несуществующего в новой topology
+  `/opt/fb-agent/current/deploy/monitoring` (`deploy/monitoring/README.md:30-43`)
+  и тоже не имеет отдельного shipped monitoring artifact.
 - На практике команда либо сразу не найдёт Compose-файл, либо при ручной копии
   одного YAML не получит Alloy config/env. Первый bootstrap/deploy при этом
   останется green, а telemetry будет отсутствовать — ровно failure mode,
@@ -152,9 +158,11 @@ control bundle либо выпускать и размещать отдельн�
 3. Crash между adoption commit и receipt re-check. Есть DB integration на
    idempotence, но нет bootstrap failpoint; в этой задаче integration можно было
    только собрать (`--collect-only`).
-4. Monitoring agent cold start/recreation. Он отсутствует в control bundle и
-   вне ownership `fbctl`, поэтому текущая rehearsal физически до него не
-   дотягивается.
+4. Central monitoring, single-host overlay и application-host agent cold
+   start/recreation. Они отсутствуют в control bundle и вне ownership `fbctl`,
+   поэтому текущая rehearsal физически до них не дотягивается.
+5. `deploy/daemon.json` не имеет install/merge/restart path и теста. Нужно либо
+   удалить orphan asset, либо определить отдельный host-provisioning contract.
 
 ## Проверки этой ветки
 
