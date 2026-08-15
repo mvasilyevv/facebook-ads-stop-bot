@@ -59,6 +59,11 @@ RUN apt-get update \
     && groupmod --new-name vision ubuntu \
     && test "$(id -u vision)" = "1000" \
     && test "$(id -g vision)" = "1000" \
+    # KasmVNC читает ssl-cert-snakeoil под этим пользователем. Без группы
+    # ssl-cert ключ недоступен, а сервер сообщает об этом как об отсутствии
+    # файла и уходит в цикл перезапусков.
+    && usermod --append --groups ssl-cert vision \
+    && gosu vision test -r /etc/ssl/private/ssl-cert-snakeoil.key \
     && locale-gen en_US.UTF-8 ru_RU.UTF-8 \
     && rm -f /tmp/kasmvncserver.deb /tmp/vision.deb \
     && rm -rf /var/lib/apt/lists/*

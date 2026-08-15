@@ -165,3 +165,7 @@ def test_entrypoint_installs_managed_config_into_the_mounted_profile() -> None:
     # Сервер ищет пользователей только в ${HOME}/.kasmpasswd, поэтому ссылка
     # обязательна; сам пароль остаётся в /run и на диск профиля не попадает.
     assert 'ln -sfn "${password_file}" "${config_home}/.kasmpasswd"' in entrypoint
+    # Ключ snakeoil закрыт группой ssl-cert: без членства сервер сообщает об
+    # отказе в доступе как об отсутствии файла и не стартует.
+    dockerfile = (WEBTOP / "Dockerfile").read_text(encoding="utf-8")
+    assert "usermod --append --groups ssl-cert vision" in dockerfile
