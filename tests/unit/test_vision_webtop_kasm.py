@@ -158,3 +158,7 @@ def test_entrypoint_installs_managed_config_into_the_mounted_profile() -> None:
     # Путь к файлу паролей задаёт именно управляемый конфиг.
     assert "kasm_password_file: /run/kasmvnc/.kasmpasswd" in config
     assert "readonly password_file=/run/kasmvnc/.kasmpasswd" in entrypoint
+    # Конфиг теперь действительно применяется, поэтому его значения обязаны
+    # быть валидными: log_dest: stdout эта сборка отвергает при разборе.
+    assert "log_dest: logfile" in config
+    assert "log_dest: stdout" not in config

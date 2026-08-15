@@ -39,7 +39,9 @@ runtime_configuration:
 
 logging:
   log_writer_name: all
-  log_dest: stdout
+  # stdout эта сборка KasmVNC не принимает и падает на разборе конфига.
+  # Лог уходит в профиль, который смонтирован с хоста и доступен оператору.
+  log_dest: logfile
   level: 30
 
 data_loss_prevention:
