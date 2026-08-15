@@ -91,8 +91,16 @@ def test_first_party_client_keeps_local_scaling_clipboard_and_reconnect_contract
     assert "const MAX_CLIPBOARD_BYTES = 256 * 1024" in client
     assert '"text/plain"' in client
     assert 'UI.forceSetting("reconnect", true)' in client
-    assert 'UI.forceSetting("reconnect_delay", 1000)' in client
+    assert 'UI.forceSetting("reconnect_delay", 250)' in client
     assert 'UI.forceSetting("translate_shortcuts", true)' in client
+    # Плановый обрыв прокси не должен выглядеть аварией, но настоящая
+    # неудача обязана дойти до оператора со второй попытки.
+    assert "installQuietReconnect()" in client
+    assert 'if (failures === 1) return original("Переподключаемся…", "warn", time)' in client
+    assert "return original(text, statusType, time)" in client
+    # Рабочий стол вписывается в окно: 1366x768 не меняются, и при 100%
+    # часть экрана уезжала за край.
+    assert 'let screenMode = "scale"' in client
     assert "Literal Linux" in client
     assert "get localScale()" in patcher
     assert "set localScale(scale)" in patcher

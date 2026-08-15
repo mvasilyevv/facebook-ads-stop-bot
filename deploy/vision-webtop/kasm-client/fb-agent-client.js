@@ -86,9 +86,32 @@ function installClipboardLimit() {
   textarea.addEventListener("change", enforce, { capture: true });
 }
 
-function installToolbar(presentation) {
+function installQuietReconnect() {
+  if (typeof UI.showStatus !== "function") return;
+  const original = UI.showStatus.bind(UI);
+  let failures = 0;
+  UI.showStatus = (text, statusType, time) => {
+    if (statusType !== "error") {
+      failures = 0;
+      return original(text, statusType, time);
+    }
+    failures += 1;
+    // Прокси пересогласовывает доступ и закрывает поток по расписанию: первый
+    // обрыв после рабочей сессии — плановый, клиент вернётся сам через четверть
+    // секунды. Красная плашка на нём означала бы аварию, которой нет. Если
+    // переподключиться не удалось, следующий текст проходит как есть.
+    if (failures === 1) return original("Переподключаемся…", "warn", time);
+    return original(text, statusType, time);
+  };
+}
+
+function installToolbar() {
   let interactionMode = "cursor";
-  let screenMode = presentation === "mobile" ? "scale" : "off";
+  // Рабочий стол отдаётся фиксированными 1366x768 и менять разрешение не умеет.
+  // При 100% окно браузера почти всегда меньше — панель XFCE и часть окна Vision
+  // уезжали за край, со скроллом вместо целого экрана. Вписываем по умолчанию,
+  // 100% остаётся переключателем в «Экране».
+  let screenMode = "scale";
   let pinchDistance = 0;
   let pinchScale = 1;
   let appliedRfb = null;
@@ -142,8 +165,9 @@ function installToolbar(presentation) {
 
   applyResizeMode(screenMode);
   UI.forceSetting("reconnect", true);
-  UI.forceSetting("reconnect_delay", 1000);
+  UI.forceSetting("reconnect_delay", 250);
   UI.forceSetting("translate_shortcuts", true);
+  installQuietReconnect();
 
   screen.addEventListener("click", () => {
     options.hidden = !options.hidden;
@@ -254,7 +278,7 @@ window.addEventListener("load", async () => {
     const presentation = await loadProfile();
     document.documentElement.dataset.fbDesktopPresentation = presentation;
     installClipboardLimit();
-    installToolbar(presentation);
+    installToolbar();
   } catch {
     failClosed();
   }

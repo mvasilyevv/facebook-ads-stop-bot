@@ -16,9 +16,13 @@ def test_public_desktop_is_cookie_authenticated_kasm_only() -> None:
     public_desktop = desktop.split("desktop.adpulse.su {", maxsplit=1)[1].split(
         "http://desktop.localhost:8099", maxsplit=1
     )[0]
-    assert "stream_timeout 1m" in public_desktop
+    # Публичный поток обязан иметь верхнюю границу жизни: без неё отзыв
+    # доступа не догонит уже открытую вкладку никогда. 1m делал рабочий стол
+    # непригодным, break-glass-профиль 30m сюда не относится.
+    assert "stream_timeout 15m" in public_desktop
     assert "stream_timeout 30m" not in public_desktop
-    assert "owner revoke is enforced on reconnect within 60s" in public_desktop
+    assert "stream_timeout 0" not in public_desktop
+    assert "Cookie-сессия" in public_desktop
     assert "uri /desktop-auth/verify" in app
     assert "header_up -Remote-User" in app
     assert "header_up -Authorization" in app
