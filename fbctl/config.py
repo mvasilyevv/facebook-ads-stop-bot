@@ -127,6 +127,16 @@ REQUIRED_SOURCE_KEYS = (
 )
 # Explicit operator-owned source contract.  Compose/runtime-only fields are
 # deliberately absent so a stale host export cannot silently alter production.
+# Стол получает ровно эти ключи и ничего сверх: он не должен наследовать
+# окружение приложения — ни базу, ни Telegram, ни ключи API.
+DESKTOP_ENV_REQUIRED_KEYS = ("DESKTOP_KASM_SERVICE_USER", "DESKTOP_KASM_SERVICE_PASSWORD")
+DESKTOP_ENV_OPTIONAL_KEYS = (
+    "DESKTOP_RUSTDESK_PASSWORD",
+    "DESKTOP_RUSTDESK_SERVER",
+    "DESKTOP_RUSTDESK_KEY",
+)
+DESKTOP_ENV_KEYS = (*DESKTOP_ENV_REQUIRED_KEYS, *DESKTOP_ENV_OPTIONAL_KEYS)
+
 SOURCE_ALLOWED_KEYS = frozenset(
     """
     FB_AGENT_BOOTSTRAP_CLUSTER_ID POSTGRES_DB POSTGRES_PASSWORD POSTGRES_USER
@@ -136,6 +146,8 @@ SOURCE_ALLOWED_KEYS = frozenset(
     ADSETPRO_MCP_KEY ADSETPRO_BASE_URL ADSETPRO_TIMEOUT_SECONDS
     ADSETPRO_POSTBACK_SECRET DESKTOP_OWNER_TELEGRAM_USER_ID
     DESKTOP_KASM_SERVICE_USER DESKTOP_KASM_SERVICE_PASSWORD
+    DESKTOP_RUSTDESK_PASSWORD DESKTOP_RUSTDESK_SERVER DESKTOP_RUSTDESK_KEY
+    DESKTOP_RUSTDESK_BIND
     BROWSER_MAINTENANCE_CAPABILITY_SECRET
     BROWSER_OPERATION_CAPABILITY_SECRET_AUTOPAUSE
     BROWSER_OPERATION_CAPABILITY_SECRET_META_API
@@ -200,6 +212,7 @@ RUNTIME_KEYS = frozenset(
         "VISION_BOOTSTRAP_ENV_FILE",
         "VISION_CONFIG_DIR",
         "DESKTOP_RUSTDESK_DATA_DIR",
+        "DESKTOP_RUSTDESK_BIND",
         "DESKTOP_READINESS_DIR",
         "BROWSER_AUTHORITY_CONSUME_URL",
         "BROWSER_MAINTENANCE_CONSUME_URL",
@@ -350,10 +363,16 @@ def prepare_candidate(
         app_values.pop(key, None)
     # Vision gets exactly the credentials it needs.  It must never inherit the
     # API/database/Telegram/AI environment used by application containers.
-    desktop_values = {
-        key: source_values[key]
-        for key in ("DESKTOP_KASM_SERVICE_USER", "DESKTOP_KASM_SERVICE_PASSWORD")
-    }
+    desktop_values = {key: source_values[key] for key in DESKTOP_ENV_REQUIRED_KEYS}
+    # Канал RustDesk необязателен: без него стол работает как раньше. Пустое
+    # значение — это «канал не нужен», и класть его в окружение незачем.
+    desktop_values.update(
+        {
+            key: source_values[key]
+            for key in DESKTOP_ENV_OPTIONAL_KEYS
+            if (source_values.get(key) or "").strip()
+        }
+    )
     app_values.update(
         {
             "FRONTEND_ORIGIN": PUBLIC_URL,
@@ -422,6 +441,9 @@ def prepare_candidate(
         # Ключи брокера RustDesk обязаны пережить пересоздание контейнера: после
         # смены ключа клиенты перестают ему верить и требуют перенастройки.
         "DESKTOP_RUSTDESK_DATA_DIR": os.fspath(layout.shared / "rustdesk-server"),
+        # Адрес, на котором брокер виден клиентам. По умолчанию петля: наружу
+        # или в приватную сеть его выставляет владелец.
+        "DESKTOP_RUSTDESK_BIND": source_values.get("DESKTOP_RUSTDESK_BIND") or "127.0.0.1",
         "DESKTOP_READINESS_DIR": os.fspath(layout.shared / "desktop-readiness"),
         "BROWSER_AUTHORITY_CONSUME_URL": app_values["BROWSER_AUTHORITY_CONSUME_URL"],
         "BROWSER_MAINTENANCE_CONSUME_URL": app_values["BROWSER_MAINTENANCE_CONSUME_URL"],
@@ -475,14 +497,10 @@ def load_active(root: Path, *, docker_config: Path | None = None) -> RuntimeConf
         if not IMAGE_DIGEST.fullmatch(values[key]):
             raise FbctlError(f"active runtime image is not immutable: {key}")
     app_values = parse_dotenv(app_env, required=("API_KEY",))
-    desktop_values = parse_dotenv(
-        desktop_env,
-        required=("DESKTOP_KASM_SERVICE_USER", "DESKTOP_KASM_SERVICE_PASSWORD"),
-    )
-    if set(desktop_values) != {
-        "DESKTOP_KASM_SERVICE_USER",
-        "DESKTOP_KASM_SERVICE_PASSWORD",
-    }:
+    desktop_values = parse_dotenv(desktop_env, required=DESKTOP_ENV_REQUIRED_KEYS)
+    if not set(desktop_values).issubset(DESKTOP_ENV_KEYS) or not set(
+        DESKTOP_ENV_REQUIRED_KEYS
+    ).issubset(desktop_values):
         raise FbctlError("active desktop environment does not match the exact key contract")
     return RuntimeConfig(layout, values, app_values, desktop_values, docker_config)
 
