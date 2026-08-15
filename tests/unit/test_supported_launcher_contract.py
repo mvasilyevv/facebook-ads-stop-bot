@@ -85,7 +85,15 @@ def test_money_workers_exist_only_in_production_compose() -> None:
         "services"
     ]
     assert "browser-agent" not in local_services
-    assert set(desktop_services) == {"vision-webtop", "browser-agent"}
+    # Брокер RustDesk живёт в том же проекте, но денег не касается: он только
+    # сводит нативного клиента со столом вместо публичных серверов rustdesk.com.
+    assert set(desktop_services) == {
+        "vision-webtop",
+        "browser-agent",
+        "rustdesk-id",
+        "rustdesk-relay",
+    }
+    assert money_services.isdisjoint(desktop_services)
     assert (
         production_services["autopause_worker"]["environment"]["META_API_WORKER_LANES"] == "money"
     )

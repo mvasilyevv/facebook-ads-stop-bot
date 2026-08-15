@@ -28,14 +28,14 @@ cleanup() {
   local status=$?
   local child=""
   trap - EXIT INT TERM
-  for child in "${fit_pid:-}" "${vision_pid:-}" "${desktop_pid:-}"; do
+  for child in "${rustdesk_pid:-}" "${fit_pid:-}" "${vision_pid:-}" "${desktop_pid:-}"; do
     if [[ -n "${child}" ]]; then
       kill -TERM "${child}" 2>/dev/null || true
     fi
   done
   gosu "${runtime_user}" env HOME="${config_home}" kasmvncserver "${display}" -kill \
     >/dev/null 2>&1 || true
-  for child in "${fit_pid:-}" "${vision_pid:-}" "${desktop_pid:-}"; do
+  for child in "${rustdesk_pid:-}" "${fit_pid:-}" "${vision_pid:-}" "${desktop_pid:-}"; do
     if [[ -n "${child}" ]]; then
       wait "${child}" 2>/dev/null || true
     fi
@@ -145,6 +145,80 @@ vision_pid=$!
 
 gosu "${runtime_user}" env DISPLAY="${display}" /usr/local/bin/vision-window-fit.sh &
 fit_pid=$!
+
+# Нативный канал к тому же столу. Нужен ради буфера обмена: в браузере на
+# iPhone он не работает и не может — WebKit требует свежего жеста, а жест
+# протухает раньше, чем VNC-клиент сходит на сервер и вернётся.
+#
+# Пустой пароль означает «канал не нужен». Открытый наружу порт не должен
+# появляться сам по себе, поэтому включает его владелец, задав пароль.
+rustdesk_password=${DESKTOP_RUSTDESK_PASSWORD:-}
+if [[ -n "${rustdesk_password}" ]]; then
+  if ((${#rustdesk_password} < 16)); then
+    printf 'DESKTOP_RUSTDESK_PASSWORD must contain at least 16 characters\n' >&2
+    exit 64
+  fi
+
+  # Без своего брокера канал не поднимается вовсе. По умолчанию клиент
+  # регистрируется на публичных серверах rustdesk.com — проверено на живом
+  # контейнере, они видны в его логах. Для машины с открытым кабинетом чужой
+  # посредник в схеме лишний, и «как получится» здесь не вариант.
+  require_env DESKTOP_RUSTDESK_SERVER
+  require_env DESKTOP_RUSTDESK_KEY
+
+  # Стол у нас настоящий, с framebuffer, поэтому headless-режим RustDesk с его
+  # известными болячками не включаем: захватывать есть что.
+  rustdesk_env=(
+    DISPLAY="${display}" HOME="${config_home}"
+    XDG_CONFIG_HOME="${config_home}/.config" XDG_CACHE_HOME="${config_home}/.cache"
+  )
+
+  # Конфиг раскладываем сами, а не через `rustdesk --option`: на живом
+  # контейнере опция до файла не доехала, а запущенный клиент перезаписал файл
+  # своим состоянием. Файл под нашим контролем — состояние предсказуемо.
+  readonly rustdesk_config_dir="${config_home}/.config/rustdesk"
+  install -d -o "${requested_uid}" -g "${requested_gid}" -m 0700 "${rustdesk_config_dir}"
+  install -o "${requested_uid}" -g "${requested_gid}" -m 0600 /dev/null \
+    "${rustdesk_config_dir}/RustDesk2.toml"
+  cat >"${rustdesk_config_dir}/RustDesk2.toml" <<RUSTDESK_CONFIG
+rendezvous_server = '${DESKTOP_RUSTDESK_SERVER}'
+nat_type = 0
+serial = 0
+
+[options]
+custom-rendezvous-server = '${DESKTOP_RUSTDESK_SERVER}'
+relay-server = '${DESKTOP_RUSTDESK_SERVER}'
+key = '${DESKTOP_RUSTDESK_KEY}'
+verification-method = 'use-permanent-password'
+RUSTDESK_CONFIG
+  chown "${requested_uid}:${requested_gid}" "${rustdesk_config_dir}/RustDesk2.toml"
+
+  gosu "${runtime_user}" env "${rustdesk_env[@]}" rustdesk --password "${rustdesk_password}" \
+    >/dev/null 2>&1 || true
+
+  rustdesk_supervisor() {
+    # Второй канал — дополнение, а не опора. Если он упадёт, оператор не должен
+    # потерять рабочий стол вместе с открытым кабинетом: поднимаем на месте.
+    #
+    # Нужны оба процесса: сервис принимает подключения, а основной клиент
+    # держит сессию и показывает оператору ID прямо на столе.
+    local service_pid=""
+    local client_pid=""
+    while true; do
+      gosu "${runtime_user}" env "${rustdesk_env[@]}" rustdesk --service &
+      service_pid=$!
+      sleep 5
+      gosu "${runtime_user}" env "${rustdesk_env[@]}" rustdesk &
+      client_pid=$!
+      wait -n "${service_pid}" "${client_pid}" 2>/dev/null || true
+      kill -TERM "${service_pid}" "${client_pid}" 2>/dev/null || true
+      wait "${service_pid}" "${client_pid}" 2>/dev/null || true
+      sleep 5
+    done
+  }
+  rustdesk_supervisor &
+  rustdesk_pid=$!
+fi
 
 while true; do
   if ! kill -0 "${desktop_pid}" 2>/dev/null; then

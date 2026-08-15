@@ -40,6 +40,14 @@ ARG VISION_DEB_SHA256=b0040ba8feac569d86b4b6a1ab9269837c8b0a2d2c5a26657b591395f4
 # версии и сверяем контрольную сумму, как KasmVNC и Vision.
 ARG FIREFOX_VERSION=140.13.0esr
 ARG FIREFOX_SHA256=866d7e5f94abe93132e02a0db72da32b6e133905fcbea6afa417a96d496021da
+# Нативный канал к тому же столу. Браузерный буфер обмена на iPhone не
+# чинится: WebKit требует свежего жеста и считает его протухшим после любого
+# await, а VNC-клиент между жестом и буфером ходит на сервер. RustDesk отдаёт
+# системный буфер и нормальные жесты, потому что он не в браузере.
+# Не ниже 1.4.6: в ней закрыты три уязвимости высокой критичности, задевавшие
+# всё до 1.4.5 включительно.
+ARG RUSTDESK_VERSION=1.4.6
+ARG RUSTDESK_SHA256=0da46d7a7b252282ded5323f74319a10c1fa7271001d3b297b3def415c8c8f04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:1 \
@@ -87,6 +95,11 @@ RUN apt-get update \
     && echo "${VISION_DEB_SHA256}  /tmp/vision.deb" | sha256sum --check --strict \
     && apt-get install -y --no-install-recommends /tmp/vision.deb \
     && test "$(dpkg-query -W -f='${Version}' vision)" = "${VISION_VERSION}" \
+    && curl --fail --location --retry 4 --output /tmp/rustdesk.deb \
+      "https://github.com/rustdesk/rustdesk/releases/download/${RUSTDESK_VERSION}/rustdesk-${RUSTDESK_VERSION}-x86_64.deb" \
+    && echo "${RUSTDESK_SHA256}  /tmp/rustdesk.deb" | sha256sum --check --strict \
+    && apt-get install -y --no-install-recommends /tmp/rustdesk.deb \
+    && test -x /usr/bin/rustdesk \
     && test "$(getent passwd 1000 | cut -d: -f1)" = "ubuntu" \
     && test "$(getent group 1000 | cut -d: -f1)" = "ubuntu" \
     && usermod --login vision --home /config --shell /bin/bash ubuntu \
@@ -99,7 +112,7 @@ RUN apt-get update \
     && usermod --append --groups ssl-cert vision \
     && gosu vision test -r /etc/ssl/private/ssl-cert-snakeoil.key \
     && locale-gen en_US.UTF-8 ru_RU.UTF-8 \
-    && rm -f /tmp/kasmvncserver.deb /tmp/vision.deb \
+    && rm -f /tmp/kasmvncserver.deb /tmp/vision.deb /tmp/rustdesk.deb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=kasm-client-builder /src/kasmweb/dist/ /usr/share/kasmvnc/www/

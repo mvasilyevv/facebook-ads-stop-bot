@@ -15,7 +15,12 @@ def test_desktop_is_one_digest_pinned_runtime_plane() -> None:
     source = COMPOSE.read_text(encoding="utf-8")
     document = yaml.safe_load(source)
 
-    assert tuple(document["services"]) == ("vision-webtop", "browser-agent")
+    assert tuple(document["services"]) == (
+        "vision-webtop",
+        "browser-agent",
+        "rustdesk-id",
+        "rustdesk-relay",
+    )
     assert "DESKTOP_WEBTOP_IMAGE:?" in source
     assert "DESKTOP_HTTPS_PORT:?" in source
     assert "VISION_CONFIG_DIR:?" in source
@@ -312,3 +317,74 @@ def test_entrypoint_installs_managed_config_into_the_mounted_profile() -> None:
     # отказе в доступе как об отсутствии файла и не стартует.
     dockerfile = (WEBTOP / "Dockerfile").read_text(encoding="utf-8")
     assert "usermod --append --groups ssl-cert vision" in dockerfile
+
+
+def test_rustdesk_is_a_pinned_optional_second_channel() -> None:
+    """Нативный канал к столу: буфер обмена на телефоне браузером не решается.
+
+    В Safari на iPhone чтение буфера требует свежего жеста, а WebKit считает
+    жест протухшим после любого await — VNC-клиенту, который ходит на сервер,
+    его не хватает. Поэтому рядом с браузером живёт нативный протокол.
+    """
+    dockerfile = (WEBTOP / "Dockerfile").read_text(encoding="utf-8")
+    notices = (WEBTOP / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+
+    # Версия не ниже 1.4.6: в ней закрыты три уязвимости высокой критичности,
+    # задевавшие всё до 1.4.5 включительно.
+    assert "RUSTDESK_VERSION=1.4.6" in dockerfile
+    assert "0da46d7a7b252282ded5323f74319a10c1fa7271001d3b297b3def415c8c8f04" in dockerfile
+    assert '"${RUSTDESK_SHA256}  /tmp/rustdesk.deb" | sha256sum --check --strict' in dockerfile
+    assert "RustDesk 1.4.6" in notices
+
+
+def test_rustdesk_stays_closed_until_the_owner_sets_a_password() -> None:
+    """Открытый наружу порт без пароля — не то, что должно появиться само."""
+    entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
+    compose = COMPOSE.read_text(encoding="utf-8")
+
+    assert "DESKTOP_RUSTDESK_PASSWORD" in entrypoint
+    # Пустой пароль означает «канал не нужен», а не «канал без пароля».
+    assert "rustdesk_password=${DESKTOP_RUSTDESK_PASSWORD:-}" in entrypoint
+    assert "((${#rustdesk_password} < 16))" in entrypoint
+    # Наружу смотрит только брокер, и то по адресу, который задаёт владелец.
+    assert "${DESKTOP_RUSTDESK_BIND:-127.0.0.1}" in compose
+    assert "DESKTOP_RUSTDESK_SERVER" in entrypoint
+    assert "DESKTOP_RUSTDESK_KEY" in entrypoint
+
+
+def test_rustdesk_uses_the_live_display_and_never_takes_the_desktop_down() -> None:
+    entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
+
+    # Стол у нас настоящий, с framebuffer: headless-режим RustDesk с его
+    # известными болячками нам не нужен и не включается.
+    assert "allow-linux-headless" not in entrypoint
+    assert "custom-rendezvous-server" in entrypoint
+    # Второй канал — дополнение. Его падение не должно ронять рабочий стол
+    # оператора вместе с открытым кабинетом.
+    assert "rustdesk_supervisor" in entrypoint
+
+
+def test_rustdesk_never_falls_back_to_the_public_broker() -> None:
+    """Чужой брокер для машины с открытым кабинетом — не запасной вариант.
+
+    По умолчанию RustDesk регистрируется на rs-*.rustdesk.com. Проверено на
+    живом контейнере: в логах клиента появляется публичный сервер. Поэтому
+    канал поднимается только вместе со своим брокером, а не «как получится».
+    """
+    entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
+    compose = COMPOSE.read_text(encoding="utf-8")
+    document = yaml.safe_load(compose)
+
+    code = "\n".join(line for line in entrypoint.splitlines() if not line.lstrip().startswith("#"))
+    assert "rustdesk.com" not in code
+    # Без адреса своего брокера и его ключа канал не поднимается вовсе.
+    assert "require_env DESKTOP_RUSTDESK_SERVER" in entrypoint
+    assert "require_env DESKTOP_RUSTDESK_KEY" in entrypoint
+
+    broker = document["services"]["rustdesk-id"]
+    relay = document["services"]["rustdesk-relay"]
+    assert "21116" in " ".join(map(str, broker["ports"]))
+    assert "21117" in " ".join(map(str, relay["ports"]))
+    # Ключи брокера переживают пересоздание контейнера, иначе клиенты
+    # перестанут ему верить после каждого деплоя.
+    assert broker["volumes"]

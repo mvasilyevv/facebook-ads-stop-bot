@@ -85,6 +85,55 @@ services:
       com.fb-agent.metrics.address: vision-webtop
       com.fb-agent.metrics.port: "9464"
 
+  # Собственный брокер RustDesk. Нужен, чтобы нативный канал к столу не ходил
+  # через публичные серверы rustdesk.com: проверено на живом контейнере —
+  # клиент по умолчанию регистрируется именно там. Для машины с открытым
+  # кабинетом чужой посредник в схеме лишний, даже при сквозном шифровании.
+  #
+  # Наружу смотрит только брокер и только по адресу, который задал владелец.
+  # Сам рабочий стол портов в интернет не открывает.
+  rustdesk-id:
+    image: ${DESKTOP_RUSTDESK_SERVER_IMAGE:-rustdesk/rustdesk-server:1.1.14}
+    command: hbbs
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${DESKTOP_RUSTDESK_BIND:-127.0.0.1}:21115:21115"
+      - "${DESKTOP_RUSTDESK_BIND:-127.0.0.1}:21116:21116"
+      - "${DESKTOP_RUSTDESK_BIND:-127.0.0.1}:21116:21116/udp"
+    volumes:
+      # Пара ключей брокера обязана пережить пересоздание контейнера: после
+      # смены ключа все клиенты перестают ему верить и требуют перенастройки.
+      - ${DESKTOP_RUSTDESK_DATA_DIR:?set DESKTOP_RUSTDESK_DATA_DIR}:/root
+    networks:
+      platform:
+        aliases: [rustdesk-id]
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      <<: *desktop-labels
+      com.fb-agent.service: rustdesk-id
+
+  rustdesk-relay:
+    image: ${DESKTOP_RUSTDESK_SERVER_IMAGE:-rustdesk/rustdesk-server:1.1.14}
+    command: hbbr
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${DESKTOP_RUSTDESK_BIND:-127.0.0.1}:21117:21117"
+    volumes:
+      - ${DESKTOP_RUSTDESK_DATA_DIR:?set DESKTOP_RUSTDESK_DATA_DIR}:/root
+    networks:
+      platform:
+        aliases: [rustdesk-relay]
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      <<: *desktop-labels
+      com.fb-agent.service: rustdesk-relay
+
 networks:
   platform:
     name: ${PLATFORM_NETWORK:?set PLATFORM_NETWORK}
