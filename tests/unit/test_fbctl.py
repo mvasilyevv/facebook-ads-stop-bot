@@ -2720,11 +2720,12 @@ class _VisionConnection:
     def __init__(self, row=None):
         self.row = row
         self.statements: list[str] = []
+        self.parameters: list[dict[str, object] | None] = []
 
     async def execute(self, statement, parameters=None):
-        del parameters
         rendered = str(statement)
         self.statements.append(rendered)
+        self.parameters.append(parameters)
         if "SELECT x_token_encrypted" in rendered:
             return _VisionResult(self.row)
         return _VisionResult(None)
@@ -2758,23 +2759,49 @@ def test_vision_bootstrap_creates_once_and_rejects_mismatch(monkeypatch) -> None
     )
     created = _VisionEngine()
     outcome = __import__("asyncio").run(
-        module.bootstrap_vision_config(created, x_token="token", profile_id="profile-1")
+        module.bootstrap_vision_config(
+            created,
+            x_token="token",
+            profile_id="profile-1",
+            folder_id="folder-1",
+        )
     )
     assert outcome == "created"
     assert any("INSERT INTO vision_config" in sql for sql in created.connection.statements)
+    assert created.connection.parameters[-1]["folder"] == "encrypted:folder-1"
 
-    exact = _VisionEngine(("encrypted:token", "profile-1"))
+    exact = _VisionEngine(("encrypted:token", "profile-1", "encrypted:folder-1"))
     assert (
         __import__("asyncio").run(
             module.bootstrap_vision_config(exact, x_token="token", profile_id="profile-1")
         )
         == "verified"
     )
-    conflict = _VisionEngine(("encrypted:other", "profile-1"))
+    conflict = _VisionEngine(("encrypted:other", "profile-1", None))
     with pytest.raises(RuntimeError, match="conflicts"):
         __import__("asyncio").run(
             module.bootstrap_vision_config(conflict, x_token="token", profile_id="profile-1")
         )
+
+
+def test_vision_bootstrap_imports_legacy_folder_only_when_db_is_empty(monkeypatch) -> None:
+    module = _vision_bootstrap_module()
+    monkeypatch.setattr(module, "encrypt", lambda value: f"encrypted:{value}")
+    monkeypatch.setattr(module, "decrypt", lambda value: value.removeprefix("encrypted:"))
+
+    legacy = _VisionEngine(("encrypted:token", "profile-1", None))
+    outcome = __import__("asyncio").run(
+        module.bootstrap_vision_config(
+            legacy,
+            x_token="token",
+            profile_id="profile-1",
+            folder_id="legacy-folder",
+        )
+    )
+
+    assert outcome == "updated"
+    assert "updated_at = GREATEST" in legacy.connection.statements[-1]
+    assert legacy.connection.parameters[-1] == {"folder": "encrypted:legacy-folder"}
 
 
 def test_nested_vision_profile_is_normalized_for_runtime_uid(tmp_path: Path, monkeypatch) -> None:

@@ -5250,7 +5250,7 @@
       "put": {
         "tags": ["settings", "settings"],
         "summary": "Put Vision Settings",
-        "description": "Обновляет x_token / profile_id в VisionConfig singleton.\n\nЕсли x_token передан — шифрует и сохраняет.\nЕсли profile_id передан — обновляет.\nЕсли строки ещё нет — создаёт с server-defaults.",
+        "description": "Обновляет token/profile и cloud-креды в VisionConfig singleton.\n\nЕсли x_token передан — шифрует и сохраняет.\nЕсли profile_id или cloud-поле передано — обновляет только это поле.\nПустое cloud-поле удаляет сохранённое значение; отсутствие поля его не меняет.\nЕсли строки ещё нет — создаёт с server-defaults.",
         "operationId": "put_vision_settings_api_settings_vision_put",
         "requestBody": {
           "content": {
@@ -14160,6 +14160,31 @@
             "title": "Has Token",
             "default": false
           },
+          "has_cloud_credentials": {
+            "type": "boolean",
+            "title": "Has Cloud Credentials",
+            "default": false
+          },
+          "has_cloud_username": {
+            "type": "boolean",
+            "title": "Has Cloud Username",
+            "default": false
+          },
+          "has_cloud_password": {
+            "type": "boolean",
+            "title": "Has Cloud Password",
+            "default": false
+          },
+          "has_team_id": {
+            "type": "boolean",
+            "title": "Has Team Id",
+            "default": false
+          },
+          "has_folder_id": {
+            "type": "boolean",
+            "title": "Has Folder Id",
+            "default": false
+          },
           "profile_id": {
             "anyOf": [
               {
@@ -14280,12 +14305,64 @@
               }
             ],
             "title": "Profile Id"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          },
+          "team_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Id"
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "VisionSettingsUpdateRequest",
-        "description": "Тело PUT /settings/vision — обновить x_token / profile_id."
+        "description": "Тело PUT /settings/vision — обновить токен, профиль и cloud-креды."
       }
     }
   }

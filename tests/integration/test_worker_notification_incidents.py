@@ -238,6 +238,47 @@ async def test_recurring_incident_uses_one_generation_and_editable_slot(
 
 
 @pytest.mark.asyncio
+async def test_identical_warning_incident_repeat_keeps_one_card(
+    pg_engine,
+    clean_worker_incidents,
+) -> None:
+    key = f"test:vision-token-refresh:{uuid.uuid4()}"
+    kwargs = {
+        "incident_key": key,
+        "audience": "all",
+        "event_type": "vision_token_refresh_failed",
+        "severity": "warning",
+        "title": "Не удалось обновить токен Vision",
+        "summary": "Текущий токен пока действует.",
+        "resource_type": "vision",
+        "resource_id": "token_refresh",
+    }
+
+    assert await notify_recurring_incident(pg_engine, **kwargs)
+    assert await notify_recurring_incident(pg_engine, **kwargs)
+
+    async with pg_engine.connect() as conn:
+        counts = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT
+                      COUNT(DISTINCT incident.id) AS incidents,
+                      COUNT(DISTINCT event.id) AS events
+                    FROM incidents AS incident
+                    JOIN notification_events AS event ON event.incident_id = incident.id
+                    WHERE incident.incident_key = :key
+                    """
+                ),
+                {"key": key},
+            )
+        ).one()
+
+    assert counts.incidents == 1
+    assert counts.events == 1
+
+
+@pytest.mark.asyncio
 async def test_reopened_incident_gets_next_generation(
     pg_engine,
     clean_worker_incidents,

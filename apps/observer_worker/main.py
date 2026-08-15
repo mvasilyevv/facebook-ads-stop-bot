@@ -1325,7 +1325,7 @@ async def _default_gate_factory(engine: AsyncEngine) -> ScannerGate:
             vision_x_token=vision.x_token,
             vision_api_url=s.vision_api_url,
             vision_profile_id=vision.profile_id,
-            vision_folder_id=os.environ.get("VISION_FOLDER_ID") or None,
+            vision_folder_id=vision.folder_id,
         )
     )
     await client.start()

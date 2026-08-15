@@ -3,7 +3,7 @@
 
 Endpoints под /api (благодаря auto-discovery с prefix="/api"):
 - GET  /settings/vision   — VisionConfig + direct browser-agent gRPC probe
-- PUT  /settings/vision   — обновить x_token / profile_id
+- PUT  /settings/vision   — обновить token/profile и cloud-креды
 - POST /vision/reconnect  — gRPC ReconnectBrowser к browser-agent
 """
 
@@ -60,6 +60,10 @@ class _VisionSnapshot:
     x_token_encrypted: str | None = field(repr=False)
     profile_id: str | None
     updated_at: datetime
+    username_encrypted: str | None = field(default=None, repr=False)
+    password_encrypted: str | None = field(default=None, repr=False)
+    team_id_encrypted: str | None = field(default=None, repr=False)
+    folder_id_encrypted: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -97,9 +101,26 @@ def _snapshot(config: VisionConfig | None) -> _VisionSnapshot | None:
         return None
     return _VisionSnapshot(
         x_token_encrypted=config.x_token_encrypted,
+        username_encrypted=config.username_encrypted,
+        password_encrypted=config.password_encrypted,
+        team_id_encrypted=config.team_id_encrypted,
+        folder_id_encrypted=config.folder_id_encrypted,
         profile_id=config.profile_id,
         updated_at=config.updated_at,
     )
+
+
+def _refresh_state(snapshot: _VisionSnapshot | None) -> dict[str, bool]:
+    """Expose operator state without ever returning encrypted or plaintext secrets."""
+    has_username = bool(snapshot and (snapshot.username_encrypted or "").strip())
+    has_password = bool(snapshot and (snapshot.password_encrypted or "").strip())
+    return {
+        "has_cloud_credentials": has_username and has_password,
+        "has_cloud_username": has_username,
+        "has_cloud_password": has_password,
+        "has_team_id": bool(snapshot and (snapshot.team_id_encrypted or "").strip()),
+        "has_folder_id": bool(snapshot and (snapshot.folder_id_encrypted or "").strip()),
+    }
 
 
 async def _load_config(session: AsyncSession) -> VisionConfig | None:
@@ -291,6 +312,7 @@ async def get_vision_settings(
 
     return VisionSettingsResponse(
         has_token=bool(snap and (snap.x_token_encrypted or "").strip()),
+        **_refresh_state(snap),
         profile_id=profile_id,
         configuration_revision=snap.updated_at.isoformat() if snap else None,
         channel_status=probe.status,  # type: ignore[arg-type]
@@ -311,10 +333,11 @@ async def put_vision_settings(
     engine: DepEngine,
     meta_api_client: DepMetaApiClient,
 ) -> VisionSettingsResponse:
-    """Обновляет x_token / profile_id в VisionConfig singleton.
+    """Обновляет token/profile и cloud-креды в VisionConfig singleton.
 
     Если x_token передан — шифрует и сохраняет.
-    Если profile_id передан — обновляет.
+    Если profile_id или cloud-поле передано — обновляет только это поле.
+    Пустое cloud-поле удаляет сохранённое значение; отсутствие поля его не меняет.
     Если строки ещё нет — создаёт с server-defaults.
     """
     from core.crypto import encrypt
@@ -333,6 +356,23 @@ async def put_vision_settings(
                 config.x_token_encrypted = encrypt(body.x_token) if body.x_token else ""
             if body.profile_id is not None:
                 config.profile_id = body.profile_id
+            refresh_material_changed = False
+            for request_field, model_field in (
+                ("username", "username_encrypted"),
+                ("password", "password_encrypted"),
+                ("team_id", "team_id_encrypted"),
+                ("folder_id", "folder_id_encrypted"),
+            ):
+                secret = getattr(body, request_field)
+                if secret is None:
+                    continue
+                plaintext = secret.get_secret_value()
+                setattr(config, model_field, encrypt(plaintext) if plaintext else None)
+                refresh_material_changed = True
+            if refresh_material_changed:
+                # Исправленные креды должны разрешить следующую суточную попытку,
+                # а не ждать старого throttle-marker.
+                config.token_refresh_attempted_at = None
             await session.flush()
             await session.refresh(config)
             result = _snapshot(config)
@@ -341,7 +381,7 @@ async def put_vision_settings(
             await session.commit()
             return result
 
-    requires_exclusive_fence = body.x_token is not None or body.profile_id is not None
+    requires_exclusive_fence = bool(body.model_fields_set)
     try:
         if requires_exclusive_fence:
             async with BrowserExclusiveMaintenance(
@@ -385,6 +425,7 @@ async def put_vision_settings(
 
     return VisionSettingsResponse(
         has_token=bool(snap and (snap.x_token_encrypted or "").strip()),
+        **_refresh_state(snap),
         profile_id=profile_id_val,
         configuration_revision=snap.updated_at.isoformat() if snap else None,
         channel_status=probe.status,  # type: ignore[arg-type]
@@ -417,8 +458,8 @@ async def _browser_agent_client(
             vision_api_url=api_url,
             vision_profile_id=runtime.profile_id,
             # Без folder_id остановленный профиль отсутствует в /list, и reconnect
-            # не может вызвать Vision /start, хотя все идентификаторы есть в .env.
-            vision_folder_id=os.environ.get("VISION_FOLDER_ID") or None,
+            # не может вызвать Vision /start. Каноническое значение живёт в БД.
+            vision_folder_id=runtime.folder_id,
             # grpc_host/port из env — иначе в Docker api пойдёт на localhost:50051
             # (browser-agent на хосте). Зеркало фикса observer (main.py).
             grpc_host=os.environ.get("BROWSER_AGENT_HOST", "localhost"),

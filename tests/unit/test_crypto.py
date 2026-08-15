@@ -194,11 +194,12 @@ async def test_rotate_encryption_key_success_writes_all(monkeypatch) -> None:
 
     tg_token = fernet_old.encrypt(b"tg-bot-token").decode()
     vis_token = fernet_old.encrypt(b"vision-x-token").decode()
+    vis_username = fernet_old.encrypt(b"vision-user").decode()
 
     conn = _FakeConn(
         {
             "telegram_config": [(1, tg_token)],
-            "vision_config": [(1, vis_token)],
+            "vision_config": [(1, vis_token, vis_username, None, None, None)],
             "adsetpro_credentials": [],
         }
     )
@@ -206,6 +207,7 @@ async def test_rotate_encryption_key_success_writes_all(monkeypatch) -> None:
 
     rotated = await crypto.rotate_encryption_key(old_key, new_key)
 
+    # Счётчик — строки, а не отдельные Fernet-поля: одна строка в каждой таблице.
     assert rotated == 2
     # UPDATE выполнился по обеим таблицам с расшифровываемыми полями.
     assert any("telegram_config" in u for u in conn.updates)
