@@ -468,6 +468,19 @@ def test_profile_total_byte_cap_stops_at_the_remaining_aggregate_budget(
     assert observed == 4
 
 
+def test_profile_cap_fits_a_profile_that_holds_the_downloaded_browser() -> None:
+    """Предел обязан вмещать профиль, которым пользовались.
+
+    Vision докачивает в профиль собственную сборку браузера: на боевом хосте
+    это 672 МиБ при 698 МиБ всего профиля. Прежние 512 МиБ подходили только
+    нетронутому профилю, поэтому bootstrap падал «exceeds safe bounds» ровно
+    после того, как рабочим столом начинали пользоваться.
+    """
+    observed_browser_build = 672 * 1024 * 1024
+
+    assert vision_profile.MAX_PROFILE_BYTES >= 2 * observed_browser_build
+
+
 def test_profile_depth_cap_rejects_nested_content(tmp_path: Path, monkeypatch) -> None:
     canonical = tmp_path / "shared" / "vision-config"
     seed = _write_profile(tmp_path / "shared" / "desktop-profile-seed")

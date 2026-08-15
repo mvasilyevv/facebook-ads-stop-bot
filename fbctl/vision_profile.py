@@ -30,7 +30,12 @@ VISION_PROFILE_MARKER_CONTENT = b"fb-agent-vision-profile-v1\n"
 # VISION_CONFIG_DIR в deploy/compose/docker-compose.desktop-agent.yml.
 CONTAINER_PROFILE_ROOT = "/config"
 MAX_PROFILE_ENTRIES = 10_000
-MAX_PROFILE_BYTES = 512 * 1024 * 1024
+# Профиль хранит не только настройки: Vision докачивает в него собственную
+# сборку браузера при первом запуске. На боевом хосте это 672 МиБ из 698 МиБ
+# всего профиля, поэтому прежние 512 МиБ подходили только профилю, которым ни
+# разу не пользовались. Предел остаётся: он ограничивает объём работы проверки,
+# а не подтверждает содержимое.
+MAX_PROFILE_BYTES = 4 * 1024 * 1024 * 1024
 MAX_PROFILE_DEPTH = 32
 
 _DIRECTORY_FLAGS = (
