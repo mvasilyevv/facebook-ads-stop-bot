@@ -8,6 +8,7 @@ import json
 import os
 import re
 import socket
+import stat
 import subprocess
 import time
 from contextlib import asynccontextmanager
@@ -24,6 +25,7 @@ from core.adoption.bundle import (
     canonical_bundle_json,
 )
 from fbctl import __main__ as fbctl_main
+from fbctl import bundle as fbctl_bundle
 from fbctl import controller as fbctl_controller
 from fbctl import operations as fbctl_operations
 from fbctl.adoption import MAX_ADOPTION_BUNDLE_BYTES, verify_adoption_bundle_owner
@@ -1131,6 +1133,66 @@ def test_bootstrap_creates_only_the_new_managed_resource_names(tmp_path: Path) -
     ]
 
 
+def test_bootstrap_retry_creates_only_resources_missing_after_interruption(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+        rehearsal=True,
+    )
+    cluster_id = config.values["FB_AGENT_BOOTSTRAP_CLUSTER_ID"]
+
+    def labels(purpose: str) -> dict[str, str]:
+        return {
+            "com.fb-agent.managed": "true",
+            "com.fb-agent.cluster-id": cluster_id,
+            "com.fb-agent.purpose": purpose,
+        }
+
+    runner = DockerInventoryRunner(
+        {
+            ("network", "fb_agent_platform"): labels("platform"),
+            ("volume", "fb_agent_infra_pgdata"): labels("infra"),
+        }
+    )
+    controller = ProductionController(runner=runner)
+
+    controller._ensure_bootstrap_resources(config)  # noqa: SLF001
+
+    created = [
+        command[-1]
+        for step, command in runner.commands
+        if step == "bootstrap_resources" and "create" in command
+    ]
+    assert created == [
+        "fb_agent_infra_redisdata",
+        "fb_agent_app_campaign_uploads",
+    ]
+
+
+def test_interrupted_candidate_materialization_is_replaced_before_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "package"
+    resources = package / "resources"
+    for relative in (*RESOURCE_FILES, "release.json", "artifact-manifest.json"):
+        _write(resources / relative, f"fixture:{relative}\n")
+    candidate = tmp_path / "candidate"
+    _write(candidate / "partial-from-interrupted-run", "stale\n")
+    monkeypatch.setattr(fbctl_bundle.importlib.resources, "files", lambda _package: package)
+    monkeypatch.setattr(fbctl_bundle, "embedded_release", _release)
+
+    release = fbctl_bundle.materialize_candidate(candidate)
+
+    assert release == _release()
+    assert not (candidate / "partial-from-interrupted-run").exists()
+    assert all((candidate / relative).is_file() for relative in RESOURCE_FILES)
+
+
 def test_bundle_is_deterministic_and_runnable(tmp_path: Path) -> None:
     first = tmp_path / "first.pyz"
     second = tmp_path / "second.pyz"
@@ -2007,6 +2069,149 @@ def test_explicit_caddy_pair_wins_when_reuse_fallback_is_enabled(
     }
 
 
+def test_fresh_caddy_provisioning_creates_every_host_file_and_is_repeatable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_path = Path
+    mapped_paths = {
+        "/etc/caddy/Caddyfile": tmp_path / "etc/caddy/Caddyfile",
+        "/etc/fb-agent/caddy.env": tmp_path / "etc/fb-agent/caddy.env",
+        "/etc/caddy/sites-enabled": tmp_path / "etc/caddy/sites-enabled",
+        "/etc/systemd/system/caddy.service.d": (tmp_path / "etc/systemd/system/caddy.service.d"),
+        "/var/log/caddy": tmp_path / "var/log/caddy",
+    }
+
+    def mapped_path(value: object) -> Path:
+        rendered = os.fspath(value)
+        return mapped_paths.get(rendered, real_path(rendered))
+
+    monkeypatch.setattr(fbctl_controller, "Path", mapped_path)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        fbctl_controller.pwd,
+        "getpwnam",
+        lambda name: SimpleNamespace(pw_uid=os.getuid()) if name == "caddy" else None,
+    )
+    monkeypatch.setattr(
+        fbctl_controller.grp,
+        "getgrnam",
+        lambda name: SimpleNamespace(gr_gid=os.getgid()) if name == "caddy" else None,
+    )
+    resources = tmp_path / "resources"
+    _materialize(resources)
+    source_values = canonicalize_source(parse_dotenv(_source_env(tmp_path)), incumbent={})
+    bootstrap_values = {
+        "PANEL_BASIC_AUTH_USER": "owner",
+        "PANEL_BASIC_AUTH_HASH": "$2b$12$" + "a" * 53,
+    }
+    runner = FakeRunner()
+
+    fbctl_controller._provision_caddy(  # noqa: SLF001 - exact cold host seam
+        resources,
+        source_values,
+        bootstrap_values,
+        runner,
+    )
+    first_files = {
+        path: path.read_bytes()
+        for path in (
+            mapped_paths["/etc/caddy/Caddyfile"],
+            mapped_paths["/etc/fb-agent/caddy.env"],
+            mapped_paths["/etc/caddy/sites-enabled"] / "app.adpulse.su.caddy",
+            mapped_paths["/etc/caddy/sites-enabled"] / "desktop.adpulse.su.caddy",
+            mapped_paths["/etc/systemd/system/caddy.service.d"] / "fb-agent-env.conf",
+        )
+    }
+    # Model a process death after only part of the host state became durable.
+    for path in (
+        mapped_paths["/etc/fb-agent/caddy.env"],
+        mapped_paths["/etc/caddy/sites-enabled"] / "desktop.adpulse.su.caddy",
+        mapped_paths["/etc/systemd/system/caddy.service.d"] / "fb-agent-env.conf",
+        mapped_paths["/var/log/caddy"] / "fb-agent-desktop-access.log",
+    ):
+        path.unlink()
+
+    fbctl_controller._provision_caddy(  # noqa: SLF001 - cold/hot parity
+        resources,
+        source_values,
+        bootstrap_values,
+        runner,
+    )
+
+    assert first_files == {path: path.read_bytes() for path in first_files}
+    assert first_files[mapped_paths["/etc/caddy/Caddyfile"]] == (
+        b"import /etc/caddy/sites-enabled/*.caddy\n"
+    )
+    for name in ("fb-agent-access.log", "fb-agent-desktop-access.log"):
+        log = mapped_paths["/var/log/caddy"] / name
+        assert log.is_file()
+        assert stat.S_IMODE(log.stat().st_mode) == 0o600
+    assert [command for step, command in runner.commands if step == "bootstrap"] == [
+        ("systemctl", "daemon-reload"),
+        (
+            "caddy",
+            "validate",
+            "--config",
+            os.fspath(mapped_paths["/etc/caddy/Caddyfile"]),
+            "--adapter",
+            "caddyfile",
+            "--envfile",
+            os.fspath(mapped_paths["/etc/fb-agent/caddy.env"]),
+        ),
+        ("systemctl", "reload", "caddy"),
+    ] * 2
+
+
+def test_first_bootstrap_creates_host_tree_and_copies_external_profile_seed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    # Production uses /opt/fb-agent: the fixed parent exists, the managed root
+    # itself does not.
+    root = tmp_path / "fb-agent"
+    source = _source_env(tmp_path)
+    with source.open("a", encoding="utf-8") as handle:
+        handle.write("VISION_X_TOKEN=vision-secret\nVISION_PROFILE_ID=profile-1\n")
+    source.chmod(0o600)
+    seed = _write_managed_vision_profile(tmp_path / "external-seed")
+    monkeypatch.setattr(fbctl_controller, "materialize_candidate", _materialize)
+    for method in (
+        "_preflight",
+        "_pull",
+        "_ensure_bootstrap_resources",
+        "_start_infra",
+        "_migrate",
+        "_bootstrap_adoption",
+        "_bootstrap_runtime_config",
+        "_bootstrap_vision_config",
+    ):
+        monkeypatch.setattr(ProductionController, method, lambda *_args, **_kwargs: None)
+
+    result = bootstrap_host(
+        runner=FakeRunner(),
+        root=root,
+        source_env=source,
+        adoption_bundle=None,
+        desktop_profile_seed=seed,
+        docker_config=None,
+        rehearsal=True,
+    )
+
+    canonical = parse_dotenv(root / "shared" / "source.env")
+    assert result["status"] == "READY"
+    assert result["profile_seed_cleanup"] == "removed"
+    assert stat.S_IMODE(root.stat().st_mode) == 0o755
+    assert stat.S_IMODE((root / "shared").stat().st_mode) == 0o700
+    assert stat.S_IMODE((root / "shared" / "deploy.lock").stat().st_mode) == 0o600
+    assert re.fullmatch(r"[0-9a-f]{32}", canonical["FB_AGENT_BOOTSTRAP_CLUSTER_ID"])
+    assert len(canonical["POSTGRES_PASSWORD"]) >= 16
+    assert len(canonical["DESKTOP_KASM_SERVICE_PASSWORD"]) >= 32
+    assert (root / "shared" / "vision-config" / VISION_PROFILE_MARKER).is_file()
+    assert not seed.exists()
+
+
 def test_bootstrap_refuses_non_root_before_durable_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2366,7 +2571,21 @@ def test_post_commit_cleanup_failure_never_invalidates_committed_runtime(tmp_pat
     assert old_payload.is_dir()
 
 
-@pytest.mark.parametrize("failure_stage", ("resources", "migrate", "adoption"))
+@pytest.mark.parametrize(
+    "failure_stage",
+    (
+        "preflight",
+        "pull",
+        "resources",
+        "infra",
+        "migrate",
+        "adoption",
+        "runtime_config",
+        "vision_config",
+        "caddy",
+        "consume_inputs",
+    ),
+)
 def test_bootstrap_retry_reuses_durable_identity_after_mutation_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2413,6 +2632,13 @@ def test_bootstrap_retry_reuses_durable_identity_after_mutation_failure(
 
     for method, stage in stages.items():
         monkeypatch.setattr(ProductionController, method, stage_action(stage))
+    monkeypatch.setattr(fbctl_controller, "_provision_caddy", stage_action("caddy"))
+    monkeypatch.setattr(
+        fbctl_controller,
+        "_consume_bootstrap_inputs",
+        stage_action("consume_inputs"),
+    )
+    rehearsal = failure_stage not in {"caddy", "consume_inputs"}
 
     with pytest.raises(FbctlError, match=f"injected bootstrap {failure_stage}"):
         bootstrap_host(
@@ -2422,7 +2648,7 @@ def test_bootstrap_retry_reuses_durable_identity_after_mutation_failure(
             adoption_bundle=None,
             desktop_profile_seed=None,
             docker_config=None,
-            rehearsal=True,
+            rehearsal=rehearsal,
         )
 
     persisted = parse_dotenv(root / "shared" / "source.env")
@@ -2442,7 +2668,7 @@ def test_bootstrap_retry_reuses_durable_identity_after_mutation_failure(
         adoption_bundle=None,
         desktop_profile_seed=None,
         docker_config=None,
-        rehearsal=True,
+        rehearsal=rehearsal,
     )
     retried = parse_dotenv(root / "shared" / "source.env")
     assert retried == persisted

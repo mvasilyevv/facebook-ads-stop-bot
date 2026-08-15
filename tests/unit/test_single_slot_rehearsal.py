@@ -14,6 +14,9 @@ from core.adoption.bundle import parse_adoption_bundle_json
 from tests.rehearsal import single_slot
 from tests.rehearsal.single_slot import (
     RehearsalError,
+    _assert_managed_containers_absent,
+    _assert_managed_resources_absent,
+    _assert_release_images_absent,
     _assert_tree_ownership,
     _partition_failpoints,
     _rehearsal_failpoints,
@@ -93,6 +96,92 @@ def test_rehearsal_requires_root_and_absolute_existing_docker_config(
     monkeypatch.setenv("DOCKER_CONFIG", str(docker_config))
     with pytest.raises(RehearsalError, match="existing config.json"):
         _require_ci_acknowledgement()
+
+
+def test_rehearsal_proves_managed_docker_resources_are_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(arguments: list[str], **kwargs):
+        calls.append(arguments)
+        assert kwargs == {"capture": True}
+        return subprocess.CompletedProcess(arguments, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(single_slot, "_run", fake_run)
+
+    _assert_managed_resources_absent()
+
+    assert calls == [
+        [
+            "docker",
+            resource_type,
+            "ls",
+            "--filter",
+            f"name=^{name}$",
+            "--format",
+            "{{.Name}}",
+        ]
+        for resource_type, name in (
+            ("network", single_slot.PLATFORM_NETWORK),
+            *(("volume", volume) for volume in single_slot.MANAGED_VOLUMES),
+        )
+    ]
+
+
+def test_rehearsal_rejects_preexisting_managed_docker_resource(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(arguments: list[str], **_kwargs):
+        name = arguments[4].removeprefix("name=^").removesuffix("$")
+        stdout = f"{name}\n" if name == single_slot.PLATFORM_NETWORK else ""
+        return subprocess.CompletedProcess(arguments, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(single_slot, "_run", fake_run)
+
+    with pytest.raises(RehearsalError, match=f"network:{single_slot.PLATFORM_NETWORK}"):
+        _assert_managed_resources_absent()
+
+
+def test_rehearsal_proves_managed_containers_and_release_images_are_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = "registry.example/fb-agent@sha256:" + "a" * 64
+    outputs = iter(("", "unrelated.example/image@sha256:" + "b" * 64 + "\n"))
+
+    def fake_run(arguments: list[str], **kwargs):
+        assert kwargs == {"capture": True}
+        return subprocess.CompletedProcess(arguments, 0, stdout=next(outputs), stderr="")
+
+    monkeypatch.setattr(single_slot, "_run", fake_run)
+
+    _assert_managed_containers_absent()
+    _assert_release_images_absent({"APP_IMAGE": image})
+
+
+@pytest.mark.parametrize("kind", ["container", "image"])
+def test_rehearsal_rejects_preexisting_managed_container_or_release_image(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    image = "registry.example/fb-agent@sha256:" + "a" * 64
+    output = "deadbeef\n" if kind == "container" else f"{image}\n"
+    monkeypatch.setattr(
+        single_slot,
+        "_run",
+        lambda arguments, **_kwargs: subprocess.CompletedProcess(
+            arguments,
+            0,
+            stdout=output,
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(RehearsalError, match=f"pre-existing .*{kind}"):
+        if kind == "container":
+            _assert_managed_containers_absent()
+        else:
+            _assert_release_images_absent({"APP_IMAGE": image})
 
 
 def test_rehearsal_profile_seed_is_nested_private_and_ownership_is_recursive(tmp_path) -> None:

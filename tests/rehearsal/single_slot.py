@@ -92,6 +92,67 @@ def _require_ci_acknowledgement() -> None:
         raise RehearsalError("DOCKER_CONFIG must contain an existing config.json")
 
 
+def _assert_managed_resources_absent() -> None:
+    present: list[str] = []
+    resources = (
+        ("network", PLATFORM_NETWORK),
+        *(("volume", volume) for volume in MANAGED_VOLUMES),
+    )
+    for resource_type, name in resources:
+        result = _run(
+            [
+                "docker",
+                resource_type,
+                "ls",
+                "--filter",
+                f"name=^{re.escape(name)}$",
+                "--format",
+                "{{.Name}}",
+            ],
+            capture=True,
+        )
+        if name in result.stdout.splitlines():
+            present.append(f"{resource_type}:{name}")
+    if present:
+        raise RehearsalError(
+            "cold-start rehearsal found pre-existing managed resources: " + ", ".join(present)
+        )
+
+
+def _assert_managed_containers_absent() -> None:
+    result = _run(
+        [
+            "docker",
+            "container",
+            "ls",
+            "--all",
+            "--filter",
+            "label=com.fb-agent.managed=true",
+            "--format",
+            "{{.ID}}",
+        ],
+        capture=True,
+    )
+    containers = result.stdout.split()
+    if containers:
+        raise RehearsalError(
+            "cold-start rehearsal found pre-existing managed containers: " + ", ".join(containers)
+        )
+
+
+def _assert_release_images_absent(images: dict[str, Any]) -> None:
+    result = _run(
+        ["docker", "image", "ls", "--digests", "--format", "{{.Repository}}@{{.Digest}}"],
+        capture=True,
+    )
+    local = set(result.stdout.splitlines())
+    present = sorted(set(images.values()) & local)
+    if present:
+        raise RehearsalError(
+            "cold-start rehearsal found pre-existing release images: " + ", ".join(present)
+        )
+
+
 def _load_release(path: Path) -> dict[str, Any]:
     try:
         release = json.loads(path.read_text(encoding="utf-8"))
@@ -678,6 +739,9 @@ def rehearse(
     telegram = f"fb-agent-rehearsal-telegram-{run_id}"
     if root.exists():
         raise RehearsalError(f"rehearsal root already exists: {root}")
+    _assert_managed_resources_absent()
+    _assert_managed_containers_absent()
+    _assert_release_images_absent(release["images"])
     root.mkdir(mode=0o755)
     try:
         _run(
