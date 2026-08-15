@@ -60,6 +60,29 @@ def test_immutable_image_pins_kasmvnc_vision_and_first_party_client() -> None:
     assert "Firefox 140.13.0esr" in notices
 
 
+def test_desktop_resizes_but_the_vision_window_stays_fixed() -> None:
+    """Стол тянется за окном оператора, окно кабинета — нет.
+
+    Раньше и то и другое было прибито к 1366x768: на большом мониторе рабочая
+    область показывалась растянутой картинкой. Развязываем, но окно Vision
+    оставляем фиксированным — размер видимой области входит в отпечаток
+    кабинета, и его скачки от сессии к сессии профилю не на пользу.
+    """
+    config = (WEBTOP / "kasmvnc.yaml").read_text(encoding="utf-8")
+    window_fit = (WEBTOP / "vision-window-fit.sh").read_text(encoding="utf-8")
+
+    assert "allow_resize: true" in config
+    assert "readonly vision_width=1366" in window_fit
+    assert "readonly vision_height=768" in window_fit
+    # Точный размер задаётся только развёрнутому окну.
+    assert "remove,maximized_vert,maximized_horz" in window_fit
+    assert '-e "0,${offset_x},${offset_y},${vision_width},${vision_height}"' in window_fit
+    # На экране меньше окна разворачиваем во весь стол: иначе часть окна
+    # недостижима, а это случай телефона.
+    assert "((screen_width >= vision_width))" in window_fit
+    assert "add,maximized_vert,maximized_horz" in window_fit
+
+
 def test_desktop_is_a_full_environment_not_a_single_app_kiosk() -> None:
     """Стол обязан оставаться полноценным окружением.
 
@@ -123,8 +146,12 @@ def test_single_runtime_owns_display_one_and_health() -> None:
     assert 'DISPLAY="${display}"' in entrypoint
     assert "/usr/bin/Vision" in entrypoint
     assert "pgrep -x Vision" in healthcheck
-    assert "1366x768" in healthcheck
-    assert "allow_resize: false" in config
+    # Проверка здоровья не привязана к конкретному размеру: стол тянется за
+    # окном оператора, и требование ровно 1366x768 объявило бы здоровый десктоп
+    # больным при первом же изменении размера.
+    assert "dimensions:[[:space:]]+[1-9][0-9]{2,4}x[1-9][0-9]{2,4}" in healthcheck
+    assert "dimensions:[[:space:]]+1366x768" not in healthcheck
+    assert "allow_resize: true" in config
     assert "max_frame_rate: 30" in config
     assert "require_ssl: false" in config
     assert "kasmxproxy" not in entrypoint
