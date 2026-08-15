@@ -61,7 +61,11 @@ from fbctl.operations import doctor, restart
 from fbctl.probes import parse_worker_db_poll_success, parse_worker_heartbeat
 from fbctl.publish import publish
 from fbctl.runner import CommandResult
-from fbctl.vision_profile import VISION_PROFILE_MARKER, VISION_PROFILE_MARKER_CONTENT
+from fbctl.vision_profile import (
+    VISION_PROFILE_MARKER,
+    VISION_PROFILE_MARKER_CONTENT,
+    snapshot_profile_tree,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE = "registry.example/fb-agent@sha256:" + "a" * 64
@@ -2838,6 +2842,59 @@ def test_nested_vision_profile_is_normalized_for_runtime_uid(tmp_path: Path, mon
         nested / "Preferences",
     }
     assert all(item[1:] == (1000, 1000, False) for item in ownership)
+
+
+def _snapshot_live_profile(profile: Path):
+    return snapshot_profile_tree(
+        profile,
+        label="managed Vision configuration",
+        required_uid=os.getuid(),
+        required_gid=os.getgid(),
+    )
+
+
+def test_profile_survives_the_symlinks_xfce_creates_while_the_desktop_runs(
+    tmp_path: Path,
+) -> None:
+    """Рабочий стол оставляет в профиле свои ссылки — это не повод падать.
+
+    xfdesktop держит icons.screen.latest.rc ссылкой на файл текущего экрана.
+    Пока проверка отвергала любую ссылку, bootstrap проходил ровно один раз —
+    на нетронутом профиле, а после первого же запуска десктопа падал с
+    «contains an unsafe entry».
+    """
+    profile = tmp_path / "vision-config"
+    desktop = profile / ".config" / "xfce4" / "desktop"
+    desktop.mkdir(parents=True, mode=0o700)
+    profile.chmod(0o700)
+    _write(profile / VISION_PROFILE_MARKER, VISION_PROFILE_MARKER_CONTENT)
+    _write(desktop / "icons.screen.0.rc", "[Desktop]\n", 0o600)
+    os.symlink("icons.screen.0.rc", desktop / "icons.screen.latest.rc")
+
+    receipt = _snapshot_live_profile(profile)
+
+    assert receipt is not None
+    links = [entry for entry in receipt.entries if entry.kind == "symlink"]
+    assert [entry.relative for entry in links] == [
+        (".config", "xfce4", "desktop", "icons.screen.latest.rc")
+    ]
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["/etc/shadow", "../../../../etc/shadow", "../../../.."],
+)
+def test_profile_rejects_a_link_that_leaves_the_tree(tmp_path: Path, target: str) -> None:
+    """Ссылка наружу остаётся небезопасной: цель читается, но не разыменовывается."""
+    profile = tmp_path / "vision-config"
+    nested = profile / ".config" / "xfce4"
+    nested.mkdir(parents=True, mode=0o700)
+    profile.chmod(0o700)
+    _write(profile / VISION_PROFILE_MARKER, VISION_PROFILE_MARKER_CONTENT)
+    os.symlink(target, nested / "escape.rc")
+
+    with pytest.raises(FbctlError, match="unsafe link"):
+        _snapshot_live_profile(profile)
 
 
 def test_managed_port_owners_match_the_service_that_publishes_them() -> None:

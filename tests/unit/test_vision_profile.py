@@ -114,7 +114,9 @@ def test_bootstrap_profile_rejects_unsafe_seed(tmp_path: Path, unsafe: str) -> N
         preferences.unlink()
         preferences.symlink_to("/etc/passwd")
 
-    with pytest.raises(FbctlError, match="(marker is invalid|contains an unsafe entry)"):
+    # Ссылка наружу теперь называется своим именем — «unsafe link». Внутри
+    # дерева ссылка допустима (её оставляет XFCE), за его пределы — нет.
+    with pytest.raises(FbctlError, match="(marker is invalid|contains an unsafe (entry|link))"):
         validate_bootstrap_vision_profile(
             canonical_profile=canonical,
             desktop_profile_seed=seed,
