@@ -146,15 +146,15 @@
   color: var(--color-bg-9);
   line-height: 1.45;
 }
+/* Остальные проблемы — ровня первой, а не её подпункты: отступ списка
+ * читался как вложенность и путал, что от чего зависит. */
 .operator-state-notice-issues {
   display: grid;
   gap: 8px;
   margin: 10px 0 0;
-  padding: 10px 0 0 18px;
+  padding: 10px 0 0;
   border-top: 1px solid var(--color-hairline);
-}
-.operator-state-notice-issues li {
-  padding-left: 2px;
+  list-style: none;
 }
 .operator-state-notice-issues strong,
 .operator-state-notice-issues span {
@@ -197,13 +197,6 @@
   margin: 7px 0 0;
   color: var(--color-bg-9);
   font-size: 14px;
-}
-.operator-section-kicker {
-  color: var(--color-bg-9);
-  font-family: var(--font-display);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 .operator-section-meta {
   display: flex;

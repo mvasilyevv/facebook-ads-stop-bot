@@ -305,7 +305,6 @@ export function OperatorSectionFrame<T>({
     >
       <header className="operator-section-header">
         <div>
-          <div className="operator-section-kicker">Операторский снимок</div>
           <h2 id={slug(title)}>{title}</h2>
           {description ? <p>{description}</p> : null}
         </div>
