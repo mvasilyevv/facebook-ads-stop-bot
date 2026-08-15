@@ -199,6 +199,7 @@ RUNTIME_KEYS = frozenset(
         "ADOPTION_BUNDLE_FILE",
         "VISION_BOOTSTRAP_ENV_FILE",
         "VISION_CONFIG_DIR",
+        "DESKTOP_RUSTDESK_DATA_DIR",
         "DESKTOP_READINESS_DIR",
         "BROWSER_AUTHORITY_CONSUME_URL",
         "BROWSER_MAINTENANCE_CONSUME_URL",
@@ -383,6 +384,12 @@ def prepare_candidate(
         vision_bootstrap_path = layout.base / "secrets" / "vision-bootstrap.env"
         atomic_write(vision_bootstrap_path, render_dotenv(vision_bootstrap), mode=0o600)
     require_directory(layout.shared / "vision-config")
+    # Каталог ключей брокера RustDesk создаём сами: в отличие от профиля Vision
+    # его никто не приносит извне, а без него брокер сгенерирует новую пару
+    # ключей при каждом пересоздании контейнера и клиенты перестанут ему верить.
+    rustdesk_data = layout.shared / "rustdesk-server"
+    rustdesk_data.mkdir(parents=True, exist_ok=True, mode=0o700)
+    require_directory(rustdesk_data)
 
     values = {
         "RUNTIME_ENV_SCHEMA": RUNTIME_SCHEMA,
@@ -412,6 +419,9 @@ def prepare_candidate(
             os.fspath(vision_bootstrap_path) if vision_bootstrap_path is not None else "/dev/null"
         ),
         "VISION_CONFIG_DIR": os.fspath(layout.shared / "vision-config"),
+        # Ключи брокера RustDesk обязаны пережить пересоздание контейнера: после
+        # смены ключа клиенты перестают ему верить и требуют перенастройки.
+        "DESKTOP_RUSTDESK_DATA_DIR": os.fspath(layout.shared / "rustdesk-server"),
         "DESKTOP_READINESS_DIR": os.fspath(layout.shared / "desktop-readiness"),
         "BROWSER_AUTHORITY_CONSUME_URL": app_values["BROWSER_AUTHORITY_CONSUME_URL"],
         "BROWSER_MAINTENANCE_CONSUME_URL": app_values["BROWSER_MAINTENANCE_CONSUME_URL"],
@@ -450,6 +460,7 @@ def load_active(root: Path, *, docker_config: Path | None = None) -> RuntimeConf
         / "browser-campaign-creator.env",
         "BROWSER_AUTHORITY_ENV_FILE": layout.base / "secrets" / "browser-authority.env",
         "VISION_CONFIG_DIR": layout.shared / "vision-config",
+        "DESKTOP_RUSTDESK_DATA_DIR": layout.shared / "rustdesk-server",
         "DESKTOP_READINESS_DIR": layout.shared / "desktop-readiness",
     }
     for key, expected_path in expected_paths.items():
