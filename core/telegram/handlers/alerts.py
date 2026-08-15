@@ -27,6 +27,7 @@ from core.incidents.service import (
     IncidentNotFoundError,
     acknowledge_incident,
 )
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.telegram.action_tokens import (
     ActionTokenClaim,
     claim_action_token,
@@ -369,11 +370,11 @@ async def handle_action_callback(
         )
         await _answer(client, cq_id, "Действие больше недоступно")
         return
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "opaque Telegram action is ambiguous before task attachment (kind=%s)",
+            "opaque Telegram action is ambiguous before task attachment (kind=%s, %s)",
             mutation_kind,
-            exc_info=True,
+            safe_exception_diagnostic(exc),
         )
         # Keep the token claim retryable under the same callback query id. The
         # durable inbox will replay this update and CommandService reconciles by
@@ -385,8 +386,11 @@ async def handle_action_callback(
             from core.observer.writers import mark_alert_state_claimed
 
             await mark_alert_state_claimed(engine, fb_ad_id=claim.target_id)
-        except Exception:
-            logger.warning("failed to mark alert claimed after Telegram task", exc_info=True)
+        except Exception as exc:
+            logger.warning(
+                "failed to mark alert claimed after Telegram task (%s)",
+                safe_exception_diagnostic(exc),
+            )
     label = "отключение" if mutation_kind == "pause_ad" else "включение"
     await _answer(client, cq_id, f"Задача на {label} принята (#{task_id})")
 
@@ -577,11 +581,14 @@ async def _handle_incident_ack_action(
         )
         await _answer(client, cq_id, "Инцидент уже изменился или закрыт")
         return
-    except Exception:
+    except Exception as exc:
         # The incident transition and its event are transactional.  Keeping the
         # capability claimed under the same callback id lets the durable inbox
         # safely retry an ambiguous response.
-        logger.warning("Telegram incident acknowledgement is ambiguous", exc_info=True)
+        logger.warning(
+            "Telegram incident acknowledgement is ambiguous (%s)",
+            safe_exception_diagnostic(exc),
+        )
         raise
 
     await _answer(client, cq_id, "Инцидент принят")

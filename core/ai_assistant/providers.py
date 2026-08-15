@@ -106,12 +106,12 @@ class AnthropicProvider:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(url, headers=headers, json=body)
         except httpx.HTTPError as exc:
-            raise ProviderError(f"anthropic: сетевая ошибка ({type(exc).__name__}): {exc}") from exc
+            raise ProviderError(f"anthropic: сетевая ошибка ({type(exc).__name__})") from exc
 
         if resp.status_code >= 500 or resp.status_code in (429,):
-            raise ProviderError(f"anthropic: HTTP {resp.status_code}: {resp.text[:200]}")
+            raise ProviderError(f"anthropic: HTTP {resp.status_code}")
         if resp.status_code >= 400:
-            raise ProviderError(f"anthropic: HTTP {resp.status_code}: {resp.text[:200]}")
+            raise ProviderError(f"anthropic: HTTP {resp.status_code}")
 
         data = _decode_response_json(resp, provider=self.name)
         content = data.get("content")
@@ -217,10 +217,10 @@ class OpenAIProvider:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(url, headers=headers, json=body)
         except httpx.HTTPError as exc:
-            raise ProviderError(f"openai: сетевая ошибка ({type(exc).__name__}): {exc}") from exc
+            raise ProviderError(f"openai: сетевая ошибка ({type(exc).__name__})") from exc
 
         if resp.status_code >= 400:
-            raise ProviderError(f"openai: HTTP {resp.status_code}: {resp.text[:200]}")
+            raise ProviderError(f"openai: HTTP {resp.status_code}")
 
         data = _decode_response_json(resp, provider=self.name)
         choices = data.get("choices") or []

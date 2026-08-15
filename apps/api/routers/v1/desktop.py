@@ -24,6 +24,7 @@ from core.auth.desktop_access import (
     create_desktop_ticket,
 )
 from core.config import reveal_secret
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/desktop", tags=["desktop"])
@@ -127,7 +128,10 @@ async def launch_desktop(
         )
         url = build_desktop_launch_url(public_origin, ticket)
     except DesktopAccessError as exc:
-        logger.error("Desktop launch ticket could not be created: %s", exc)
+        logger.error(
+            "Desktop launch ticket could not be created (%s)",
+            safe_exception_diagnostic(exc),
+        )
         raise HTTPException(status_code=503, detail="Рабочий стол временно недоступен") from exc
     return DesktopLaunchResponse(
         url=url,

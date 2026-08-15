@@ -36,6 +36,7 @@ from core.telegram.service import find_recipient_by_telegram_user_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["panel-auth"])
+_PANEL_TICKET_COOKIE = "__Host-adpulse_panel_ticket_v1"
 
 _NO_STORE = {
     "Cache-Control": "no-store",
@@ -121,6 +122,28 @@ def _clear_session_cookie(response: Response) -> None:
         secure=True,
         httponly=True,
         samesite="lax",
+    )
+
+
+def _set_ticket_cookie(response: Response, ticket: str, max_age: int) -> None:
+    response.set_cookie(
+        _PANEL_TICKET_COOKIE,
+        ticket,
+        max_age=max_age,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        path="/",
+    )
+
+
+def _clear_ticket_cookie(response: Response) -> None:
+    response.delete_cookie(
+        _PANEL_TICKET_COOKIE,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
     )
 
 
@@ -213,8 +236,8 @@ async def telegram_start(
             return_to=return_to,
         )
         await save_oidc_attempt(engine, state, attempt, settings.panel_auth_state_ttl_seconds)
-    except PanelAuthError as exc:
-        return _auth_error(str(exc), status_code=503)
+    except PanelAuthError:
+        return _auth_error("Telegram Login временно недоступен", status_code=503)
     return RedirectResponse(url, status_code=303, headers=_NO_STORE)
 
 
@@ -269,21 +292,20 @@ async def telegram_callback(
             return_to=attempt.return_to,
             ttl=settings.panel_auth_ticket_ttl_seconds,
         )
-    except PanelAuthError as exc:
-        return _auth_error(str(exc), status_code=403)
-    return RedirectResponse(
-        "/auth/redeem?" + urlencode({"ticket": ticket}),
-        status_code=303,
-        headers=_NO_STORE,
-    )
+    except PanelAuthError:
+        return _auth_error("Telegram Login не подтверждён", status_code=403)
+    response = RedirectResponse("/auth/redeem", status_code=303, headers=_NO_STORE)
+    _set_ticket_cookie(response, ticket, settings.panel_auth_ticket_ttl_seconds)
+    return response
 
 
 @router.get("/redeem", include_in_schema=False)
 async def redeem(
+    request: Request,
     engine: DepEngine,
     settings: DepSettings,
-    ticket: str = Query(default=""),
 ) -> Response:
+    ticket = request.cookies.get(_PANEL_TICKET_COOKIE, "")
     try:
         grant = await consume_panel_ticket(engine, ticket)
         recipient = await find_recipient_by_telegram_user_id(
@@ -298,9 +320,15 @@ async def redeem(
             source=grant.source,
             ttl=settings.panel_auth_session_ttl_seconds,
         )
-    except PanelAuthError as exc:
-        return _auth_error(str(exc), status_code=403)
+    except PanelAuthError:
+        response = _auth_error(
+            "Ссылка входа недействительна или уже использована",
+            status_code=403,
+        )
+        _clear_ticket_cookie(response)
+        return response
     response = RedirectResponse(grant.return_to, status_code=303, headers=_NO_STORE)
+    _clear_ticket_cookie(response)
     _set_session_cookie(response, token, settings.panel_auth_session_ttl_seconds)
     return response
 

@@ -31,6 +31,7 @@ from core.adset_duplicates.service import (
 )
 from core.meta_api.audit import AuditedMetaApiClient
 from core.meta_api.ownership import check_ad_ownership, load_owner_tag
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.tasks.browser_fence import (
     BrowserFenceLeaseLost,
     BrowserOperationBlocked,
@@ -91,7 +92,10 @@ async def _load_meta_context(
     except AdsetDuplicateError:
         raise
     except Exception as exc:
-        logger.warning("adset duplicate: Meta hierarchy/metadata недоступны", exc_info=True)
+        logger.warning(
+            "adset duplicate: Meta hierarchy/metadata недоступны (%s)",
+            safe_exception_diagnostic(exc),
+        )
         raise AdsetDuplicateError(
             "Не удалось получить hierarchy/currency/timezone рекламного кабинета",
             status_code=503,
@@ -121,7 +125,7 @@ async def preview_adset_duplicate(
         )
         if not ownership.allowed:
             raise AdsetDuplicateError(
-                f"Исходное объявление вне owner-scope: {ownership.reason}",
+                "Исходное объявление вне доступного owner-scope",
                 status_code=403,
             )
         source, account = await _load_meta_context(engine, source)
@@ -147,7 +151,10 @@ async def preview_adset_duplicate(
     except AdsetDuplicateError as exc:
         raise _http_error(exc) from exc
     except Exception as exc:
-        logger.exception("adset duplicate preview failed")
+        logger.error(
+            "adset duplicate preview failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
         raise HTTPException(status_code=503, detail="Не удалось сохранить preview") from exc
     return AdsetDuplicatePreviewOut.model_validate(public_preview)
 
@@ -169,7 +176,10 @@ async def launch_adset_duplicate(
     except AdsetDuplicateError as exc:
         raise _http_error(exc) from exc
     except Exception as exc:
-        logger.exception("adset duplicate task creation failed")
+        logger.error(
+            "adset duplicate task creation failed (%s)",
+            safe_exception_diagnostic(exc),
+        )
         raise HTTPException(status_code=503, detail="Не удалось создать задачу") from exc
 
     task = await get_duplicate_task(engine, task_id, principal=principal)

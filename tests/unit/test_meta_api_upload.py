@@ -174,8 +174,9 @@ async def test_upload_image_permanent_error_on_graph_failure() -> None:
     client = _make_client(stub_response_upload_image=response)
     uploader = MediaUploader(client)
 
-    with pytest.raises(PermanentError, match="insufficient permissions"):
+    with pytest.raises(PermanentError, match=r"upload rejected \(GRAPH_ERROR_200\)") as exc_info:
         await uploader.upload_image("act_123", b"data")
+    assert "insufficient permissions" not in str(exc_info.value)
 
 
 # ok=True without the committed object identity cannot be safely retried.
@@ -464,8 +465,9 @@ async def test_upload_video_permanent_error(tmp_path: Path) -> None:
     _bind_operation_authorization(client)
 
     uploader = MediaUploader(client)
-    with pytest.raises(PermanentError, match="invalid video format"):
+    with pytest.raises(PermanentError, match=r"upload rejected \(GRAPH_ERROR_400\)") as exc_info:
         await uploader.upload_video("act_999", video_file)
+    assert "invalid video format" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

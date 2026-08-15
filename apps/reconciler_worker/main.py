@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from apps.reconciler_worker.worker import run_once
 from core.db import WORKER_ENGINE_KWARGS
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.tasks.queue import refresh_task_queue_metrics
 from core.worker_metrics import mark_worker_heartbeat, start_worker_metrics_server
 
@@ -30,8 +31,11 @@ async def metrics_loop(stop: asyncio.Event, engine=None) -> None:
         if engine is not None:
             try:
                 await refresh_task_queue_metrics(engine)
-            except Exception:  # noqa: BLE001
-                logger.exception("reconciler metrics: failed to refresh queue metrics")
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "reconciler metrics: failed to refresh queue metrics (%s)",
+                    safe_exception_diagnostic(exc),
+                )
         try:
             await asyncio.wait_for(stop.wait(), timeout=_METRICS_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
@@ -61,7 +65,10 @@ async def main_loop(database_url: str) -> None:
             try:
                 await run_once(engine)
             except Exception as exc:
-                logger.exception("run_once упал: %s", exc)
+                logger.error(
+                    "run_once упал (%s)",
+                    safe_exception_diagnostic(exc),
+                )
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=_INTERVAL_SEC)
                 break

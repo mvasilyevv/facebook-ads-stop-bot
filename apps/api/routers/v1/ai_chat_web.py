@@ -35,6 +35,7 @@ from core.ai_assistant.pulse import build_pulse
 from core.ai_assistant.text import html_to_plain_text
 from core.ai_assistant.tools._ratelimit import RateLimitExceeded, check_and_increment
 from core.ai_assistant.tools.base import RiskLevel
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +73,12 @@ async def _read_cached_pulse(redis, cache_key: str, *, log_errors: bool = True) 
         if not cached_raw:
             return None
         return AIPulseResponse.model_validate(json.loads(cached_raw)).model_dump()
-    except Exception:  # noqa: BLE001 — кэш не должен ронять endpoint
+    except Exception as exc:  # noqa: BLE001 — кэш не должен ронять endpoint
         if log_errors:
-            logger.warning("ai_pulse: не смог прочитать кэш %s", cache_key, exc_info=True)
+            logger.warning(
+                "ai_pulse: не смог прочитать кэш (%s)",
+                safe_exception_diagnostic(exc),
+            )
         return None
 
 
@@ -151,10 +155,16 @@ async def ai_chat(
             client_key=f"web:{client_key}",
             requested_by=f"web:{client_key}",
         )
-    except ChatRateLimitedError as exc:
-        return JSONResponse(status_code=429, content={"detail": str(exc)})
-    except AIUnavailableError as exc:
-        return JSONResponse(status_code=503, content={"detail": str(exc)})
+    except ChatRateLimitedError:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Превышен лимит запросов AI-чата; повторите позже"},
+        )
+    except AIUnavailableError:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "AI-чат временно недоступен; повторите позже"},
+        )
 
     model_label = response.model or (
         settings.anthropic_model if settings.anthropic_api_key else settings.openai_model
@@ -205,12 +215,12 @@ async def ai_pulse(
         redis_available = True
         try:
             acquired = bool(await redis.set(lock_key, "1", nx=True, ex=_PULSE_LOCK_TTL))
-        except Exception:  # noqa: BLE001 — без Redis глобальный hourly cap недоказуем
+        except Exception as exc:  # noqa: BLE001 — без Redis глобальный hourly cap недоказуем
             redis_available = False
             acquired = False
             logger.warning(
-                "ai_pulse: Redis-lock недоступен — fail-closed без AI-вызова",
-                exc_info=True,
+                "ai_pulse: Redis-lock недоступен — fail-closed без AI-вызова (%s)",
+                safe_exception_diagnostic(exc),
             )
 
         if not redis_available:
@@ -247,7 +257,10 @@ async def ai_pulse(
 
         try:
             await redis.set(cache_key, json.dumps(payload, ensure_ascii=False), ex=_PULSE_CACHE_TTL)
-        except Exception:  # noqa: BLE001
-            logger.warning("ai_pulse: не смог сохранить кэш %s", cache_key, exc_info=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "ai_pulse: не смог сохранить кэш (%s)",
+                safe_exception_diagnostic(exc),
+            )
 
         return JSONResponse(content=payload)

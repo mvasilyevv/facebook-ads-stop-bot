@@ -155,5 +155,9 @@ async def test_unknown_kid_forces_exactly_one_jwks_refresh(monkeypatch):
             follow_redirects=False,
         )
     assert callback.status_code == 303
+    assert callback.headers["location"] == "/auth/redeem"
+    assert urlsplit(callback.headers["location"]).query == ""
+    assert "ticket" not in callback.headers["location"]
+    assert "httponly" in callback.headers["set-cookie"].lower()
     assert refreshes == [False, True]
     assert verification_calls == 2

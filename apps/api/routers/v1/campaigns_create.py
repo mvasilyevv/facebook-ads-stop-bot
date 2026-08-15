@@ -47,7 +47,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from apps.api.deps import DepEngine
-from apps.api.middleware.api_problem import api_problem_payload
+from apps.api.middleware.api_problem import api_problem_payload, request_correlation_id
 from apps.api.routers.v1.schemas.campaigns_create import (
     AdsetPlanOut,
     CampaignPlanOut,
@@ -858,7 +858,10 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
                 conn,
                 revision=body.draft_revision,
             )
-            logger.info("campaign launch idempotent: run_id=%s ikey=%s", existing.id, ikey)
+            logger.info(
+                "campaign launch idempotent: task_id=%s",
+                int(task_row.id) if task_row else None,
+            )
             return LaunchOut(
                 run_id=existing.id,
                 task_id=int(task_row.id) if task_row else None,
@@ -929,7 +932,7 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
             revision=body.draft_revision,
         )
 
-    logger.info("campaign launch: run_id=%s task_id=%s ikey=%s", run_id, task_id, ikey)
+    logger.info("campaign launch queued: task_id=%s", task_id)
     return LaunchOut(
         run_id=run_id,
         task_id=task_id,
@@ -949,7 +952,7 @@ def _campaign_problem(
     code: str,
     message: str,
 ) -> JSONResponse:
-    correlation_id = str(getattr(request.state, "request_id", None) or uuid.uuid4())
+    correlation_id = request_correlation_id(request.scope)
     return JSONResponse(
         status_code=status_code,
         content=api_problem_payload(
@@ -1273,12 +1276,12 @@ async def _run_control_command(
             code=exc.reason,
             message=f"Команда {action} недоступна: {exc.reason}",
         )
-    except ValueError as exc:
+    except ValueError:
         return _campaign_problem(
             request,
             status_code=422,
             code="invalid_campaign_run_command",
-            message=str(exc),
+            message=f"Команда {action} недоступна для текущего состояния запуска",
         )
 
     response.status_code = (

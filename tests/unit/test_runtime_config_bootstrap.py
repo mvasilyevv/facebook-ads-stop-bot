@@ -198,17 +198,18 @@ async def test_adset_bootstrap_encryption_error_does_not_expose_input(
 
 @pytest.mark.asyncio
 async def test_web_app_url_bootstrap_writes_once_and_existing_tombstone_wins() -> None:
-    url = "https://app.example.test/tma/?source=bootstrap"
+    url = "https://app.example.test/tma/"
+    normalized_url = "https://app.example.test/tma"
     engine = _Engine()
     settings = SimpleNamespace(web_app_url=url)
 
     assert await web_app_url.bootstrap_web_app_url_from_env(engine, settings=settings) is True
     first_payload = json.loads(str(engine.web_parameters["value"]))
-    assert first_payload == {"url": url}
+    assert first_payload == {"url": normalized_url}
 
     assert await web_app_url.bootstrap_web_app_url_from_env(engine, settings=settings) is False
     assert engine.web_insert_attempts == 1
-    assert json.loads(str(engine.web_parameters["value"])) == {"url": url}
+    assert json.loads(str(engine.web_parameters["value"])) == {"url": normalized_url}
 
 
 @pytest.mark.asyncio

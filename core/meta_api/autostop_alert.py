@@ -29,6 +29,7 @@ from core.money import (
     require_exact_currency_amount,
     validated_currency_code,
 )
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.telegram.worker_notify import (
     notify_recurring_incident,
     notify_recurring_incident_in_transaction,
@@ -74,7 +75,11 @@ async def maybe_alert_autostop_channel_down(
     if not is_channel_down_error(exc):
         return False
 
-    logger.error("autostop_alert CRITICAL: %s (ad=%s)", str(exc), fb_ad_id)
+    logger.error(
+        "autostop_alert CRITICAL (%s; ad=%s)",
+        safe_exception_diagnostic(exc),
+        fb_ad_id,
+    )
 
     try:
         return await notify_recurring_incident(
@@ -96,8 +101,11 @@ async def maybe_alert_autostop_channel_down(
             resource_type="meta_channel",
             resource_id="auto_stop",
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("autostop_alert: durable CRITICAL event не создан")
+    except Exception as notify_exc:  # noqa: BLE001
+        logger.error(
+            "autostop_alert: durable CRITICAL event не создан (%s)",
+            safe_exception_diagnostic(notify_exc),
+        )
         return False
 
 
@@ -216,8 +224,11 @@ async def escalate_undelivered_autostop_pauses(
             requested_by=requested_by,
             stuck_after_seconds=stuck_after_seconds,
         )
-    except Exception:  # noqa: BLE001
-        logger.exception("escalate_undelivered: ошибка выборки застрявших pause_ad")
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "escalate_undelivered: ошибка выборки застрявших pause_ad (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return 0
 
     if not candidate_ids:
@@ -296,10 +307,10 @@ async def escalate_undelivered_autostop_pauses(
                 spend_text = _confirmed_spend_text(row.spend, row.currency)
                 is_terminal = str(row.status or "").lower() in {"failed", "cancelled"}
                 logger.error(
-                    "escalate_undelivered: pause_ad застрял %sмин (ad=%s), error=%r",
+                    "escalate_undelivered: pause_ad застрял %sмин (ad=%s), state=%s",
                     minutes,
                     fb_ad_id,
-                    row.last_error,
+                    "terminal_failure" if is_terminal else "delivery_stalled",
                 )
                 ad_label = str(row.ad_name) if row.ad_name else fb_ad_id
                 spend_part = (
@@ -347,6 +358,9 @@ async def escalate_undelivered_autostop_pauses(
                     resource_id=fb_ad_id,
                 )
                 accepted += int(was_accepted)
-        except Exception:  # noqa: BLE001
-            logger.exception("escalate_undelivered: не удалось отправить per-ad алерт")
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "escalate_undelivered: не удалось отправить per-ad алерт (%s)",
+                safe_exception_diagnostic(exc),
+            )
     return accepted

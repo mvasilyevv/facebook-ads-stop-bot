@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from apps.api.deps import get_engine, get_redis
 from core.observer.accounts import resolve_scan_account_ids
 from core.operator.queries import fetch_operator_scan_state
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,10 @@ async def system_readyz(
             expected_accounts = await resolve_scan_account_ids(engine)
             stale_money_tasks, expired_money_tasks = await _load_money_task_failures(engine)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("system-readyz: durable evidence unavailable: %s", exc)
+            logger.warning(
+                "system-readyz: durable evidence unavailable (%s)",
+                safe_exception_diagnostic(exc),
+            )
             blockers.append("control_plane_evidence_unavailable")
         else:
             scanning_enabled = scan.get("enabled")
@@ -277,7 +281,10 @@ async def _check_postgres(engine: AsyncEngine) -> bool:
             await conn.execute(text("SELECT 1"))
         return True
     except Exception as exc:
-        logger.warning("readyz: Postgres недоступен: %s", exc)
+        logger.warning(
+            "readyz: Postgres недоступен (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return False
 
 
@@ -287,7 +294,10 @@ async def _check_redis(redis: Redis) -> bool:
         await redis.ping()
         return True
     except Exception as exc:
-        logger.warning("readyz: Redis недоступен: %s", exc)
+        logger.warning(
+            "readyz: Redis недоступен (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return False
 
 

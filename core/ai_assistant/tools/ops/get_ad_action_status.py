@@ -39,12 +39,12 @@ class GetAdActionStatusTool:
         try:
             hours = int(args.get("hours") or 24)
         except (TypeError, ValueError) as exc:
-            raise ToolError(f"hours должен быть целым: {exc}") from exc
+            raise ToolError("hours должен быть целым") from exc
         hours = max(1, min(hours, 168))
 
         action = str(args.get("action") or "both").strip().lower()
         if action not in {"pause", "activate", "both"}:
-            raise ToolError(f"action должен быть pause/activate/both, получено: {action!r}")
+            raise ToolError("action должен быть pause/activate/both")
 
         params: dict[str, Any] = {"hrs": hours}
         action_filter = ""

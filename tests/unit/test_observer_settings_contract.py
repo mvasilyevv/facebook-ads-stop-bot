@@ -54,6 +54,8 @@ async def test_legacy_scan_now_preserves_queued_command_lifecycle(
     assert response.status_code == expected_status
     assert result.status == state
     assert result.task_id == 1842
+    assert result.correlation_id.startswith("req_")
+    assert "00000000-0000-0000-0000-000000001842" not in result.correlation_id
     assert result.created is created
     enqueue.assert_awaited_once()
     # 202 не может маскировать незавершённую команду под готовый scan-result.

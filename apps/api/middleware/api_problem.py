@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
+import secrets
 from http import HTTPStatus
 from typing import Any
 
@@ -13,7 +13,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from apps.api.schemas.problem import ApiProblem
 
 _REQUEST_ID_HEADER = b"x-request-id"
-_SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_SAFE_REQUEST_ID = re.compile(r"^req_[A-Za-z0-9_-]{8,64}$")
 _PROBLEM_FIELDS = frozenset({"code", "message", "correlation_id", "field_errors"})
 # Readiness and metrics endpoints are machine-readable probe protocols, not
 # product API responses. Their non-2xx bodies intentionally carry blockers and
@@ -77,7 +77,7 @@ def request_correlation_id(scope: Scope) -> str:
             return header_value
         break
 
-    generated = uuid.uuid4().hex
+    generated = f"req_{secrets.token_urlsafe(16)}"
     state["request_id"] = generated
     return generated
 

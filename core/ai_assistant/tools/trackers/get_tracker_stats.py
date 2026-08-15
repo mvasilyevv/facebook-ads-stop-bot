@@ -223,7 +223,7 @@ class GetTrackerStatsTool:
             async with client:
                 payload = await client.call_mcp_tool("query_stats", mcp_args)
         except AdsetProError as exc:
-            raise ToolError(f"AdSet.pro недоступен: {exc}") from exc
+            raise ToolError("AdSet.pro временно недоступен") from exc
 
         rows = payload.get("data")
         if not isinstance(rows, list) or not rows:
@@ -240,7 +240,7 @@ class GetTrackerStatsTool:
             try:
                 since, until = date.fromisoformat(s), date.fromisoformat(u)
             except ValueError as exc:
-                raise ToolError(f"since/until должны быть в формате YYYY-MM-DD: {exc}") from exc
+                raise ToolError("since/until должны быть в формате YYYY-MM-DD") from exc
             if since > until:
                 raise ToolError(f"since ({since}) позже until ({until})")
             return since, until

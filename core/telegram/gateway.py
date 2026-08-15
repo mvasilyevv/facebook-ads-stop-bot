@@ -14,11 +14,13 @@ import logging
 import re
 from enum import StrEnum
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import SecretStr
 
 from core.config import get_settings
+from core.safe_diagnostics import redact_sensitive_text
 
 _MESSAGE_LIMIT = 4096
 _SECRET_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
@@ -29,11 +31,50 @@ _NAVIGATION_CAPABILITY_RE = re.compile(
 
 
 def _redact_capability_patterns(value: object) -> str:
-    description = str(value or "")
+    description = redact_sensitive_text(value)
     description = _ACTION_CAPABILITY_RE.sub("a:<redacted>", description)
     return _NAVIGATION_CAPABILITY_RE.sub(
         lambda match: f"{match.group('prefix')}<redacted>",
         description,
+    )
+
+
+def _sanitize_reply_markup(value: object) -> object:
+    """Redact visible button labels without changing opaque callback capabilities."""
+
+    if isinstance(value, dict):
+        return {
+            key: (
+                redact_sensitive_text(item).strip()[:64] or "Действие"
+                if key == "text" and isinstance(item, str)
+                else _sanitize_reply_markup(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_reply_markup(item) for item in value]
+    return value
+
+
+def _is_safe_public_https_url(value: str, *, allow_opaque_navigation: bool = False) -> bool:
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or any(char.isspace() for char in value)
+    ):
+        return False
+    if not parsed.query:
+        return True
+    return bool(
+        allow_opaque_navigation
+        and re.fullmatch(r"(?:nav|startapp)=[A-Za-z0-9_-]{22}", parsed.query)
     )
 
 
@@ -258,15 +299,16 @@ class TelegramHTMLGateway:
     ) -> dict[str, Any]:
         if parse_mode not in (None, "HTML"):
             raise ValueError("The target Telegram gateway supports HTML only")
-        if not text or len(text) > _MESSAGE_LIMIT:
+        safe_text = redact_sensitive_text(text)
+        if not safe_text or len(safe_text) > _MESSAGE_LIMIT:
             raise ValueError("Telegram message text must contain 1..4096 characters")
         payload: dict[str, Any] = {
             "chat_id": chat_id,
-            "text": text,
+            "text": safe_text,
             "parse_mode": "HTML",
         }
         if reply_markup is not None:
-            payload["reply_markup"] = reply_markup
+            payload["reply_markup"] = _sanitize_reply_markup(reply_markup)
         if reply_to_message_id is not None:
             payload["reply_parameters"] = {
                 "message_id": reply_to_message_id,
@@ -296,16 +338,17 @@ class TelegramHTMLGateway:
     ) -> None:
         if message_id <= 0:
             raise ValueError("message_id must be positive")
-        if not text or len(text) > _MESSAGE_LIMIT:
+        safe_text = redact_sensitive_text(text)
+        if not safe_text or len(safe_text) > _MESSAGE_LIMIT:
             raise ValueError("Telegram message text must contain 1..4096 characters")
         payload: dict[str, Any] = {
             "chat_id": chat_id,
             "message_id": message_id,
-            "text": text,
+            "text": safe_text,
             "parse_mode": "HTML",
         }
         if reply_markup is not None:
-            payload["reply_markup"] = reply_markup
+            payload["reply_markup"] = _sanitize_reply_markup(reply_markup)
         await self._post("editMessageText", payload)
 
     async def answer_callback_query(self, callback_query_id: str, text: str = "") -> None:
@@ -313,7 +356,7 @@ class TelegramHTMLGateway:
             raise ValueError("callback_query_id is required")
         payload: dict[str, Any] = {"callback_query_id": callback_query_id}
         if text:
-            payload["text"] = text[:200]
+            payload["text"] = redact_sensitive_text(text)[:200]
         await self._post("answerCallbackQuery", payload)
 
     async def edit_message_reply_markup(
@@ -351,12 +394,12 @@ class TelegramHTMLGateway:
         chat_id: int | None = None,
     ) -> None:
         """Set the Mini App menu button through the single sanitized gateway."""
-        if not web_app_url.startswith("https://"):
-            raise ValueError("web_app_url must be HTTPS")
+        if not _is_safe_public_https_url(web_app_url, allow_opaque_navigation=True):
+            raise ValueError("web_app_url must be safe HTTPS without credentials or secret query")
         payload: dict[str, Any] = {
             "menu_button": {
                 "type": "web_app",
-                "text": button_text,
+                "text": redact_sensitive_text(button_text).strip()[:64] or "Открыть",
                 "web_app": {"url": web_app_url},
             }
         }
@@ -371,8 +414,8 @@ class TelegramHTMLGateway:
         secret_token: str | SecretStr,
         drop_pending_updates: bool = False,
     ) -> None:
-        if not url.startswith("https://"):
-            raise ValueError("Telegram webhook URL must use HTTPS")
+        if not _is_safe_public_https_url(url):
+            raise ValueError("Telegram webhook URL must be HTTPS without credentials or query")
         secret = (
             secret_token.get_secret_value()
             if isinstance(secret_token, SecretStr)

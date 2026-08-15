@@ -156,7 +156,7 @@ def calculate_budget(
             currency_exponent=currency_exponent,
         )
     except ValueError as exc:
-        raise AdsetDuplicateError(str(exc)) from exc
+        raise AdsetDuplicateError("Дневной бюджет не соответствует валюте кабинета") from exc
     units = campaign_count if budget_level == "CBO" else total_adsets
     total_amount = unit_amount * units
     return (
@@ -1073,6 +1073,25 @@ def serialize_duplicate_task(task: DuplicateTask) -> dict[str, Any]:
     )
     recovery_requested = result.get("recovery_requested") is True
 
+    public_error: str | None = None
+    if task.status in {"failed", "cancelled"}:
+        outcome = str(result.get("outcome") or "").upper()
+        if outcome == "UNKNOWN" or result.get("reconcile_required") is True:
+            public_error = (
+                "Результат дублирования не подтверждён. Проверьте созданные объекты "
+                "в Meta перед повтором."
+            )
+        elif result.get("checkpoint_type") == "duplicate_adset_structure":
+            public_error = (
+                "Дублирование остановлено. Созданные объекты оставлены PAUSED; проверьте их в Meta."
+            )
+        elif task.status == "cancelled":
+            public_error = "Дублирование отменено до подтверждения результата."
+        else:
+            public_error = (
+                "Дублирование завершилось ошибкой. Проверьте состояние в Meta перед повтором."
+            )
+
     def checkpoint_progress(*, default_message: str) -> dict[str, Any]:
         return {
             "phase": checkpoint_phase or "running",
@@ -1136,7 +1155,7 @@ def serialize_duplicate_task(task: DuplicateTask) -> dict[str, Any]:
         "status": task.status,
         "progress": progress,
         "created_meta_ids": created_meta_ids,
-        "error": task.last_error,
+        "error": public_error,
     }
 
 

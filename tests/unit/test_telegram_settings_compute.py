@@ -203,7 +203,9 @@ def test_compute_auth_deep_link_with_username() -> None:
     from core.telegram.settings_compute import compute_auth_deep_link
 
     result = compute_auth_deep_link("@mybot", "OWNER123")
-    assert result == "https://t.me/mybot?start=OWNER123"
+    assert result == "https://t.me/mybot"
+    assert "OWNER123" not in result
+    assert "?" not in result
 
 
 # Пустая строка как username — возвращает None
@@ -222,7 +224,7 @@ def test_compute_auth_deep_link_without_invite() -> None:
 # --- compute_activation_command ---
 
 
-# Команда содержит тот же invite-код, что и deep-link
+# Invite-код передаётся только в команде, не в URL.
 def test_compute_activation_command_with_invite() -> None:
     from core.telegram.settings_compute import compute_activation_command
 

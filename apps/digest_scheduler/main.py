@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from core.ai_assistant.pulse import collect_pulse_signals
 from core.config import get_settings
 from core.db import WORKER_ENGINE_KWARGS
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.telegram.digest_builder import build_digest
 from core.telegram.notifications import enqueue_notification
 from core.telegram.schemas import NotificationCardFacts, NotificationEventSpec
@@ -301,8 +302,11 @@ async def tick_loop(
             )
             if status not in ("out_of_window", "already_sent"):
                 logger.info("digest tick status=%s", status)
-        except Exception:
-            logger.exception("Ошибка в digest tick")
+        except Exception as exc:
+            logger.error(
+                "Ошибка в digest tick (%s)",
+                safe_exception_diagnostic(exc),
+            )
         try:
             pulse_status = await run_pulse_tick(
                 engine=engine,
@@ -310,8 +314,11 @@ async def tick_loop(
             )
             if pulse_status not in ("disabled", "no_slot", "already_sent"):
                 logger.info("pulse tick status=%s", pulse_status)
-        except Exception:
-            logger.exception("Ошибка в pulse tick")
+        except Exception as exc:
+            logger.error(
+                "Ошибка в pulse tick (%s)",
+                safe_exception_diagnostic(exc),
+            )
         try:
             await asyncio.wait_for(stop.wait(), timeout=CHECK_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
@@ -333,9 +340,12 @@ async def _supervised(
             await factory()
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "цикл %s упал — перезапуск через %sс", name, LOOP_RESTART_DELAY_SECONDS
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "цикл %s упал — перезапуск через %sс (%s)",
+                name,
+                LOOP_RESTART_DELAY_SECONDS,
+                safe_exception_diagnostic(exc),
             )
             try:
                 await asyncio.wait_for(stop.wait(), timeout=LOOP_RESTART_DELAY_SECONDS)

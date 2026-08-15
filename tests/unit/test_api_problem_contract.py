@@ -67,12 +67,12 @@ def test_http_exception_preserves_status_headers_and_public_4xx_message() -> Non
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.get(
             "/__test__/conflict",
-            headers={"X-Request-Id": "request.trace-123"},
+            headers={"X-Request-Id": "req_request-trace-123"},
         )
 
     payload = _assert_problem(response, status=409, code="conflict")
     assert payload["message"] == "Состояние изменилось"
-    assert payload["correlation_id"] == "request.trace-123"
+    assert payload["correlation_id"] == "req_request-trace-123"
     assert payload["field_errors"] is None
     assert response.headers["retry-after"] == "7"
 
@@ -85,7 +85,24 @@ def test_not_found_uses_the_same_contract_and_generated_correlation_id() -> None
 
     payload = _assert_problem(response, status=404, code="not_found")
     assert payload["message"] == "Not Found"
-    assert len(payload["correlation_id"]) == 32
+    assert payload["correlation_id"].startswith("req_")
+    assert len(payload["correlation_id"]) == 26
+
+
+def test_raw_uuid_request_id_is_not_reflected_to_response() -> None:
+    app = create_app()
+    raw_uuid = "00000000-0000-4000-8000-000000000099"
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(
+            "/__test__/missing",
+            headers={"X-Request-Id": raw_uuid},
+        )
+
+    payload = _assert_problem(response, status=404, code="not_found")
+    assert payload["correlation_id"].startswith("req_")
+    assert raw_uuid not in response.text
+    assert response.headers["x-request-id"] != raw_uuid
 
 
 def test_validation_error_has_field_errors_without_echoing_input() -> None:

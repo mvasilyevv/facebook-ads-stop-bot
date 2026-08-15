@@ -56,11 +56,12 @@ def test_default_fields_none_before_enter() -> None:
     assert mgr.meta_api_client is None
 
 
-# _safe_dsn должен маскировать пароль, оставляя user видимым.
+# _safe_dsn не должен оставлять в логах credentials и query secrets.
 def test_safe_dsn_masks_password() -> None:
-    masked = _safe_dsn("postgresql+asyncpg://user:secret@localhost:5432/db")
+    masked = _safe_dsn("postgresql+asyncpg://user:secret@localhost:5432/db?sslkey=private-key")
     assert "secret" not in masked
-    assert "user" in masked
+    assert "private-key" not in masked
+    assert "user" not in masked
     assert "localhost" in masked
 
 

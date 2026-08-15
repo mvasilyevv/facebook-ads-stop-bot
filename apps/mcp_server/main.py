@@ -37,6 +37,7 @@ from core.ai_assistant.tools import (
     execute_tool,
 )
 from core.ai_assistant.tools._ratelimit import _DEFAULT_MAX_PER_HOUR, _check_memory_fallback
+from core.safe_diagnostics import redact_sensitive_text, safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -103,20 +104,25 @@ def build_server(ctx_mgr: MCPContextManager) -> Server:
                     client_key=tool_ctx.client_key,
                     max_per_hour=_RATE_LIMIT_PER_HOUR,
                 )
-        except RateLimitExceeded as exc:
-            logger.warning("MCP rate-limit: %s", exc)
-            return [types.TextContent(type="text", text=f"⏱ {exc}")]
+        except RateLimitExceeded:
+            logger.warning("MCP rate-limit exceeded")
+            return [types.TextContent(type="text", text="⏱ Лимит вызовов исчерпан")]
 
         try:
             result_text = await execute_tool(name, arguments, tool_ctx)
         except ToolError as exc:
-            logger.info("Tool %s вернул ToolError: %s", name, exc)
-            return [types.TextContent(type="text", text=f"Tool error: {exc}")]
+            public_error = redact_sensitive_text(exc)
+            logger.info("Tool %s вернул контролируемую ошибку", name)
+            return [types.TextContent(type="text", text=f"Tool error: {public_error}")]
         except Exception as exc:
-            logger.exception("Tool %s упал необработанной ошибкой", name)
-            return [types.TextContent(type="text", text=f"Внутренняя ошибка tool '{name}': {exc}")]
+            logger.error(
+                "Tool %s упал необработанной ошибкой (%s)",
+                name,
+                safe_exception_diagnostic(exc),
+            )
+            return [types.TextContent(type="text", text=f"Внутренняя ошибка tool '{name}'")]
 
-        return [types.TextContent(type="text", text=result_text)]
+        return [types.TextContent(type="text", text=redact_sensitive_text(result_text))]
 
     @app.list_resources()
     async def list_resources() -> list[types.Resource]:
@@ -125,7 +131,7 @@ def build_server(ctx_mgr: MCPContextManager) -> Server:
     @app.read_resource()
     async def read_resource(uri: Any) -> str:
         # mcp передаёт AnyUrl — приводим к str для удобства dispatcher'а.
-        return await read_resource_impl(str(uri), ctx_mgr)
+        return redact_sensitive_text(await read_resource_impl(str(uri), ctx_mgr))
 
     return app
 

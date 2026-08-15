@@ -88,6 +88,25 @@ async def test_allow_tools_false_does_not_send_tool_schemas(monkeypatch) -> None
     assert stub_client.calls[0]["tools"] is None
 
 
+@pytest.mark.asyncio
+async def test_final_provider_text_is_redacted_before_operator_response(monkeypatch) -> None:
+    monkeypatch.setattr(chat_module, "get_settings", _fake_settings)
+    secret = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+    raw_uuid = "00000000-0000-4000-8000-000000000099"
+    stub_client = _StubAIClient(
+        [AIResponse(text=f"provider echoed token={secret} object={raw_uuid}", tool_uses=[])]
+    )
+    monkeypatch.setattr(chat_module, "get_ai_client", lambda settings: stub_client)
+
+    response = await ChatSession(allow_tools=False).ask(
+        [ChatMessage(role="user", content="Привет")]
+    )
+
+    assert secret not in response.answer
+    assert raw_uuid not in response.answer
+    assert "<redacted>" in response.answer
+
+
 # allow_tools=True (дефолт) — обычный tool_use исполняется как раньше, регрессии нет.
 @pytest.mark.asyncio
 async def test_allow_tools_true_executes_tool_use_normally(monkeypatch) -> None:
@@ -110,3 +129,41 @@ async def test_allow_tools_true_executes_tool_use_normally(monkeypatch) -> None:
 
     execute_tool_mock.assert_called_once()
     assert response.answer == "Вот алерты."
+
+
+@pytest.mark.asyncio
+async def test_tool_trace_redacts_model_args_and_tool_result(monkeypatch) -> None:
+    monkeypatch.setattr(chat_module, "get_settings", _fake_settings)
+    secret = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+    raw_uuid = "00000000-0000-4000-8000-000000000099"
+    stub_client = _StubAIClient(
+        [
+            AIResponse(
+                text="",
+                tool_uses=[
+                    ToolUse(
+                        id="tu_1",
+                        name="get_recent_alerts",
+                        input={"filter": f"token={secret} {raw_uuid}"},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            AIResponse(text="Готово.", tool_uses=[]),
+        ]
+    )
+    monkeypatch.setattr(chat_module, "get_ai_client", lambda settings: stub_client)
+    monkeypatch.setattr(
+        chat_module,
+        "execute_tool",
+        AsyncMock(return_value=f"tool result token={secret} {raw_uuid}"),
+    )
+
+    response = await ChatSession(allow_tools=True).ask(
+        [ChatMessage(role="user", content="Покажи алерты")]
+    )
+    serialized_trace = repr(response.tool_calls)
+
+    assert secret not in serialized_trace
+    assert raw_uuid not in serialized_trace
+    assert "<redacted>" in serialized_trace

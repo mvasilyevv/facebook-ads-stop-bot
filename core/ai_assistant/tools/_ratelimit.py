@@ -19,6 +19,8 @@ import time
 from collections import defaultdict
 from typing import Any
 
+from core.safe_diagnostics import safe_exception_diagnostic
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TTL_SECONDS = 3600
@@ -100,9 +102,8 @@ async def check_and_increment(
         current = incr_result
     except Exception as exc:
         logger.warning(
-            "rate-limit redis недоступен (%s), переключаюсь на in-memory cap для %s",
-            exc,
-            client_key,
+            "rate-limit redis недоступен (%s), переключаюсь на in-memory cap",
+            safe_exception_diagnostic(exc),
         )
         return await _check_memory_fallback(client_key)
 

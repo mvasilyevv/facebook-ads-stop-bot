@@ -16,8 +16,9 @@ from typing import AsyncContextManager, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.telegram.service import load_active_recipients
-from core.telegram.web_app_url import load_web_app_url
+from core.telegram.web_app_url import load_web_app_url, normalize_web_app_base
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +43,7 @@ async def resolve_menu_button_url(
     if raw is None:
         raw = await load_web_app_url(engine)
 
-    cleaned = (raw or "").strip()
-    if not cleaned.startswith("https://"):
-        return None
-    return cleaned
+    return normalize_web_app_base(raw)
 
 
 async def sync_menu_buttons(
@@ -67,8 +65,11 @@ async def sync_menu_buttons(
     """
     try:
         url = await resolve_menu_button_url(engine, explicit_url=explicit_url)
-    except Exception:
-        logger.warning("menu button: не удалось разрешить Web App URL", exc_info=True)
+    except Exception as exc:
+        logger.warning(
+            "menu button: Web App URL недоступен (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return False
     if url is None:
         logger.info("menu button: Web App URL не настроен — синхронизация пропущена")
@@ -101,7 +102,10 @@ async def sync_menu_buttons(
             logger.warning("menu button: общий deadline синхронизации исчерпан")
             return None
         except Exception as exc:
-            logger.warning("menu button: Telegram scope update failed", exc_info=True)
+            logger.warning(
+                "menu button: Telegram scope update failed (%s)",
+                safe_exception_diagnostic(exc),
+            )
             if on_gateway_error is not None and not await on_gateway_error(chat_id, exc):
                 return None
             return False
@@ -117,8 +121,11 @@ async def sync_menu_buttons(
         try:
             recipients = await load_active_recipients(engine)
             resolved_chat_ids = [recipient.chat_id for recipient in recipients]
-        except Exception:
-            logger.warning("menu button: не удалось загрузить recipients", exc_info=True)
+        except Exception as exc:
+            logger.warning(
+                "menu button: recipients недоступны (%s)",
+                safe_exception_diagnostic(exc),
+            )
             return False
     else:
         resolved_chat_ids = [int(chat_id) for chat_id in chat_ids]

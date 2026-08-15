@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from core.deadlines import bind_absolute_deadline
 from core.meta_api.identity import require_ad_account_id
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -343,17 +344,19 @@ class CabinetSupervisor:
                                 await release_cabinet_lease(self._engine, lease)
                             except Exception as exc:  # noqa: BLE001 - isolate actors
                                 cleanup_errors.append(f"lease:{type(exc).__name__}")
-                                logger.exception(
-                                    "cabinet actor lease cleanup failed account=%s",
+                                logger.error(
+                                    "cabinet actor lease cleanup failed account=%s (%s)",
                                     account_id,
+                                    safe_exception_diagnostic(exc),
                                 )
                         try:
                             await self._release_actor_lock(lock_conn, lock_key)
                         except Exception as exc:  # noqa: BLE001 - connection loss releases lock
                             cleanup_errors.append(f"lock:{type(exc).__name__}")
-                            logger.exception(
-                                "cabinet actor advisory-lock cleanup failed account=%s",
+                            logger.error(
+                                "cabinet actor advisory-lock cleanup failed account=%s (%s)",
                                 account_id,
+                                safe_exception_diagnostic(exc),
                             )
                         if cleanup_errors:
                             previous = results[index] or {"ad_account_id": account_id}

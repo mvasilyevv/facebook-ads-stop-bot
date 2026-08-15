@@ -45,13 +45,13 @@ class GetRecentAlertsTool:
             hours = int(args.get("hours") or 24)
             limit = int(args.get("limit") or 50)
         except (TypeError, ValueError) as exc:
-            raise ToolError(f"hours/limit должны быть целыми: {exc}") from exc
+            raise ToolError("hours/limit должны быть целыми") from exc
         hours = max(1, min(hours, 168))
         limit = max(1, min(limit, 200))
         stage_arg = args.get("stage")
         stage = str(stage_arg).strip().lower() if stage_arg else None
         if stage and stage not in ("warning", "stop"):
-            raise ToolError(f"stage должен быть 'warning' или 'stop', получено: {stage!r}")
+            raise ToolError("stage должен быть 'warning' или 'stop'")
 
         sql = (
             "SELECT ae.stage, ae.matched_rule_codes, ae.created_at, "

@@ -21,6 +21,7 @@ from apps.cleanup_worker.storage import (
 )
 from apps.cleanup_worker.worker import create_next_partition_if_missing, run_once
 from core.db import WORKER_ENGINE_KWARGS
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.worker_metrics import mark_worker_db_poll_success, mark_worker_heartbeat
 
 logger = logging.getLogger("cleanup_worker")
@@ -156,7 +157,10 @@ async def main_loop(database_url: str) -> None:
             try:
                 await _run_cleanup(engine)
             except Exception as exc:
-                logger.exception("run_once упал: %s", exc)
+                logger.error(
+                    "run_once упал (%s)",
+                    safe_exception_diagnostic(exc),
+                )
                 # Не падаем — спим до следующего запланированного прогона
     finally:
         stop_event.set()

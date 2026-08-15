@@ -35,6 +35,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.syntx.analysis import (
     DEFAULT_ANALYSIS_POOL,
     AnalysisResult,
@@ -59,6 +60,7 @@ from core.syntx.models import (
     GenResult,
     UploadedRef,
 )
+from core.telemetry import sanitized_http_url
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +141,11 @@ class SyntxClient:
                 "syntx auth_token протухает через %.1f дн — обнови localStorage.auth_token", days
             )
         elif days is not None:
-            logger.info("SyntxClient запущен: %s (токен ~%.0f дн)", self._base_url, days)
+            logger.info(
+                "SyntxClient запущен: %s (токен ~%.0f дн)",
+                sanitized_http_url(self._base_url),
+                days,
+            )
 
     async def close(self) -> None:
         if self._http is not None and not self._external_client:
@@ -394,7 +400,12 @@ class SyntxClient:
                     label, ai_name, model_type, raw=raw, parsed=parse_analysis_json(raw)
                 )
             except SyntxError as exc:
-                return AnalysisResult(label, ai_name, model_type, error=str(exc))
+                return AnalysisResult(
+                    label,
+                    ai_name,
+                    model_type,
+                    error=f"Syntx analysis failed ({safe_exception_diagnostic(exc)})",
+                )
             finally:
                 if cleanup and chat_uuid:
                     await self.delete_chat(chat_uuid)
@@ -707,7 +718,8 @@ class SyntxClient:
                 )
             except httpx.TransportError as exc:
                 raise TemporaryError(
-                    f"сетевая ошибка {method} {full}: {exc}", endpoint=path
+                    f"сетевая ошибка {method} {path} ({type(exc).__name__})",
+                    endpoint=path,
                 ) from exc
             return self._parse(resp, path=path)
 
@@ -731,7 +743,7 @@ class SyntxClient:
             body = resp.text[:500]
             raise classify_http_error(
                 resp.status_code,
-                f"syntx {resp.status_code} на {path}: {body}",
+                f"syntx HTTP {resp.status_code} на {path}",
                 endpoint=path,
                 response_body=body,
             )
@@ -741,7 +753,7 @@ class SyntxClient:
             return resp.json()
         except ValueError as exc:
             raise TemporaryError(
-                f"невалидный JSON в ответе {path}: {exc}",
+                f"syntx вернул невалидный JSON на {path}",
                 status_code=resp.status_code,
                 endpoint=path,
                 response_body=resp.text[:500],

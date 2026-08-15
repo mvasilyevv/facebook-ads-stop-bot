@@ -18,6 +18,7 @@ from typing import Any, Literal, TypedDict
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.safe_diagnostics import redact_sensitive_text
 from core.telegram.gateway import (
     TelegramFailureKind,
     TelegramGatewayError,
@@ -108,7 +109,8 @@ class DurableTelegramUpdateClient:
             raise ValueError("chat_id must be an integer") from exc
         if normalized_chat_id == 0:
             raise ValueError("chat_id must be non-zero")
-        if not text or len(text) > 4096:
+        safe_text = redact_sensitive_text(text)
+        if not safe_text or len(safe_text) > 4096:
             raise ValueError("Telegram reply must contain 1..4096 characters")
         if parse_mode not in (None, "HTML"):
             raise ValueError("Durable Telegram replies support HTML only")
@@ -118,7 +120,7 @@ class DurableTelegramUpdateClient:
             QueuedTelegramCommandReply(
                 ordinal=len(self._replies),
                 chat_id=normalized_chat_id,
-                text=text,
+                text=safe_text,
                 parse_mode=parse_mode,
                 reply_to_message_id=(
                     int(reply_to_message_id) if reply_to_message_id is not None else None

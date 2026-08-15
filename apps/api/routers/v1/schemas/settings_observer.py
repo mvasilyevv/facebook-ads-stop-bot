@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -100,7 +99,7 @@ class ScanNowResponse(BaseModel):
 
     status: Literal["queued", "running", "confirmed", "failed", "cancelled", "unknown"]
     task_id: int
-    correlation_id: uuid.UUID
+    correlation_id: str
     created: bool
 
 

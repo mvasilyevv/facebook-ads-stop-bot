@@ -47,6 +47,8 @@ from core.adset_pro.schemas import (
     StatsQueryResponse,
 )
 from core.config import get_settings
+from core.safe_diagnostics import safe_exception_diagnostic
+from core.telemetry import sanitized_http_url
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +137,7 @@ class AdsetProClient:
                 timeout=self._timeout_seconds,
                 headers=_build_headers(self._api_key),
             )
-            logger.info("AdsetProClient запущен: %s", self._base_url)
+            logger.info("AdsetProClient запущен: %s", sanitized_http_url(self._base_url))
 
     async def close(self) -> None:
         if self._http is not None and not self._external_client:
@@ -172,7 +174,10 @@ class AdsetProClient:
         try:
             resp = await self._http.post(_MCP_PATH, json=rpc_body)
         except httpx.HTTPError as exc:
-            logger.debug("AdsetProClient health_check: сетевая ошибка %s", exc)
+            logger.debug(
+                "AdsetProClient health_check: сетевая ошибка (%s)",
+                safe_exception_diagnostic(exc),
+            )
             return False
         if not (200 <= resp.status_code < 300):
             return False
@@ -309,7 +314,7 @@ class AdsetProClient:
         """Разобрать HTTP-ответ MCP. Не-2xx → AdsetProError; JSON-RPC error → тоже."""
         if not (200 <= resp.status_code < 300):
             body = resp.text[:500]
-            message = f"AdSet.pro MCP {resp.status_code} на tool={tool_name}: {body}"
+            message = f"AdSet.pro MCP HTTP {resp.status_code} на tool={tool_name}"
             raise classify_http_error(
                 resp.status_code,
                 message,
@@ -328,7 +333,7 @@ class AdsetProClient:
             data = resp.json()
         except ValueError as exc:
             raise TemporaryError(
-                f"Невалидный JSON в ответе MCP: {exc}",
+                "AdSet.pro MCP вернул невалидный JSON",
                 status_code=resp.status_code,
                 endpoint=_MCP_PATH,
                 response_body=resp.text[:500],
@@ -343,9 +348,10 @@ class AdsetProClient:
 
         if "error" in data:
             err = data["error"]
-            err_msg = err.get("message") if isinstance(err, dict) else str(err)
+            err_code = err.get("code") if isinstance(err, dict) else None
+            code_suffix = f" code={err_code}" if isinstance(err_code, int) else ""
             raise AdsetProError(
-                f"AdSet.pro MCP error на tool={tool_name}: {err_msg}",
+                f"AdSet.pro MCP error на tool={tool_name}{code_suffix}",
                 status_code=resp.status_code,
                 endpoint=_MCP_PATH,
                 response_body=resp.text[:500],
@@ -373,8 +379,8 @@ class AdsetProClient:
         if any(
             k in low for k in ("scope", "authenticat", "permission", "not allowed", "forbidden")
         ):
-            raise AuthError(msg, endpoint=_MCP_PATH)
-        raise AdsetProError(msg, endpoint=_MCP_PATH)
+            raise AuthError("AdSet.pro отклонил credentials или scope", endpoint=_MCP_PATH)
+        raise AdsetProError(f"AdSet.pro tool {tool_name} завершился ошибкой", endpoint=_MCP_PATH)
 
     @staticmethod
     def _extract_tool_result(

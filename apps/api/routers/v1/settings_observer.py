@@ -43,6 +43,8 @@ from core.observer.am_columns import (
 )
 from core.observer.queries import campaign_matches_owner
 from core.observer.scan_tasks import observer_scan_idempotency_key
+from core.public_identifiers import public_uuid
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.tasks.browser_fence import (
     BrowserExclusiveMaintenance,
     BrowserFenceLeaseLost,
@@ -425,7 +427,10 @@ async def _refresh_observer_campaigns_unfenced(
     except Exception as exc:
         # LOW (аудит 02.07): голый Exception — не показываем str(exc) клиенту (может
         # нести внутренние детали), полная ошибка уходит в лог.
-        logger.exception("Ошибка резолва кампаний через browser-agent")
+        logger.error(
+            "Ошибка резолва кампаний через browser-agent (%s)",
+            safe_exception_diagnostic(exc),
+        )
         raise HTTPException(
             status_code=503, detail="Ошибка резолва кампаний — подробности в логе сервера"
         ) from exc
@@ -504,6 +509,6 @@ async def post_scan_now(engine: DepEngine, response: Response) -> ScanNowRespons
     return ScanNowResponse(
         status=receipt.state,
         task_id=receipt.task_id,
-        correlation_id=receipt.correlation_id,
+        correlation_id=public_uuid(receipt.correlation_id, prefix="req"),
         created=receipt.created,
     )

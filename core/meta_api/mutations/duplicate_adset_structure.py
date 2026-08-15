@@ -40,6 +40,7 @@ from core.meta_api.client import (
 from core.meta_api.identity import graph_ad_account_id
 from core.meta_api.mutations.base import MutationValidationError, require_numeric_id, success_result
 from core.meta_api.schemas import MetaMutationPayload
+from core.safe_diagnostics import redact_sensitive_text, safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,16 @@ class DuplicateAdsetStructurePartialError(Exception):
         self.created_ids = {key: list(value) for key, value in created_ids.items()}
         self.failed_steps = list(failed_steps)
         self.cleanup_failures = list(cleanup_failures or [])
+
+
+class DuplicateStructureInvariantError(RuntimeError):
+    """Controlled local invariant failure whose redacted reason is operator-useful."""
+
+
+def _safe_failure_reason(exc: BaseException) -> str:
+    if isinstance(exc, (DuplicateStructureInvariantError, MutationValidationError)):
+        return redact_sensitive_text(exc).strip()[:500]
+    return safe_exception_diagnostic(exc)
 
 
 @dataclass(frozen=True)
@@ -298,10 +309,14 @@ class DuplicateAdsetStructureHandler:
                     created=created,
                     cleanup_failures=cleanup_failures,
                 )
-            except Exception:  # noqa: BLE001 — cancellation must still propagate
-                logger.exception("failed to persist duplicate cancellation cleanup checkpoint")
+            except Exception as exc:  # noqa: BLE001 — cancellation must still propagate
+                logger.error(
+                    "failed to persist duplicate cancellation cleanup checkpoint (%s)",
+                    safe_exception_diagnostic(exc),
+                )
             raise
         except Exception as exc:
+            failure_reason = _safe_failure_reason(exc)
             cleanup_failures = await self._pause_created(client, payload, created)
             try:
                 await self._emit_progress(
@@ -311,18 +326,23 @@ class DuplicateAdsetStructureHandler:
                     created=created,
                     cleanup_failures=cleanup_failures,
                 )
-            except Exception:  # noqa: BLE001 — preserve the original mutation failure
-                logger.exception("failed to persist duplicate failure cleanup checkpoint")
-            logger.exception(
-                "duplicate_adset_structure failed at %s; created=%s cleanup_failures=%s",
+            except Exception as checkpoint_exc:  # noqa: BLE001 — preserve original failure
+                logger.error(
+                    "failed to persist duplicate failure cleanup checkpoint (%s)",
+                    safe_exception_diagnostic(checkpoint_exc),
+                )
+            logger.error(
+                "duplicate_adset_structure failed at %s; created_count=%s "
+                "cleanup_failure_count=%s (%s)",
                 current_step,
-                created,
-                cleanup_failures,
+                sum(len(values) for values in created.values()),
+                len(cleanup_failures),
+                safe_exception_diagnostic(exc),
             )
             raise DuplicateAdsetStructurePartialError(
-                f"duplicate_adset_structure: failure at {current_step}: {exc}",
+                f"duplicate_adset_structure: failure at {current_step}; {failure_reason}",
                 created_ids=created,
-                failed_steps=[{"step": current_step, "error": repr(exc)}],
+                failed_steps=[{"step": current_step, "error": failure_reason}],
                 cleanup_failures=cleanup_failures,
             ) from exc
 
@@ -838,11 +858,11 @@ class DuplicateAdsetStructureHandler:
         expected_adsets = plan.campaign_count * plan.adsets_per_campaign
         expected_ads = expected_adsets * len(plan.selected_ad_ids)
         if len(created["campaigns"]) != plan.campaign_count:
-            raise RuntimeError("campaign count mismatch")
+            raise DuplicateStructureInvariantError("campaign count mismatch")
         if len(created["adsets"]) != expected_adsets:
-            raise RuntimeError("ad set count mismatch")
+            raise DuplicateStructureInvariantError("ad set count mismatch")
         if len(created["ads"]) != expected_ads:
-            raise RuntimeError("ad count mismatch")
+            raise DuplicateStructureInvariantError("ad count mismatch")
 
         for campaign_id in created["campaigns"]:
             row = await client.execute_graph_call(
@@ -872,7 +892,9 @@ class DuplicateAdsetStructureHandler:
             self._require_object_id(row, adset_id, "created adset")
             self._require_paused(row, f"adset {adset_id}")
             if str(row.get("campaign_id") or "") != campaign_id:
-                raise RuntimeError(f"adset {adset_id}: target campaign mismatch")
+                raise DuplicateStructureInvariantError(
+                    f"adset {adset_id}: target campaign mismatch"
+                )
             if plan.budget_level == "ABO":
                 self._require_budget(
                     row,
@@ -880,14 +902,18 @@ class DuplicateAdsetStructureHandler:
                     f"adset {adset_id}",
                 )
                 if self._as_int(row.get("lifetime_budget"), default=0) != 0:
-                    raise RuntimeError(f"adset {adset_id}: ABO target retained lifetime_budget")
+                    raise DuplicateStructureInvariantError(
+                        f"adset {adset_id}: ABO target retained lifetime_budget"
+                    )
             elif any(
                 self._as_int(row.get(field), default=0) != 0
                 for field in ("daily_budget", "lifetime_budget")
             ):
-                raise RuntimeError(f"adset {adset_id}: CBO target retained an ad-set budget")
+                raise DuplicateStructureInvariantError(
+                    f"adset {adset_id}: CBO target retained an ad-set budget"
+                )
             if self._parse_graph_time(row.get("start_time")) != plan.start_at:
-                raise RuntimeError(f"adset {adset_id}: start_time mismatch")
+                raise DuplicateStructureInvariantError(f"adset {adset_id}: start_time mismatch")
 
             ads_response = await client.execute_graph_call(
                 ad_account_id=payload.ad_account_id,
@@ -897,19 +923,23 @@ class DuplicateAdsetStructureHandler:
             )
             rows = ads_response.get("data") if isinstance(ads_response, dict) else None
             if not isinstance(rows, list):
-                raise RuntimeError(f"adset {adset_id}: invalid ads verification response")
+                raise DuplicateStructureInvariantError(
+                    f"adset {adset_id}: invalid ads verification response"
+                )
             expected = {ad_id: source.creative_id for ad_id, source in target_ads[adset_id]}
             actual: dict[str, str] = {}
             for ad_row in rows:
                 if not isinstance(ad_row, dict):
-                    raise RuntimeError(f"adset {adset_id}: invalid ad verification row")
+                    raise DuplicateStructureInvariantError(
+                        f"adset {adset_id}: invalid ad verification row"
+                    )
                 ad_id = str(ad_row.get("id") or "")
                 creative = ad_row.get("creative")
                 creative_id = str(creative.get("id") or "") if isinstance(creative, dict) else ""
                 actual[ad_id] = creative_id
                 self._require_paused(ad_row, f"ad {ad_id}")
             if actual != expected:
-                raise RuntimeError(
+                raise DuplicateStructureInvariantError(
                     f"adset {adset_id}: selected ad count/creative mismatch "
                     f"expected={expected!r} actual={actual!r}"
                 )
@@ -937,7 +967,12 @@ class DuplicateAdsetStructureHandler:
                     self._require_object_id(row, object_id, f"cleanup object {object_id}")
                     self._require_paused(row, f"cleanup object {object_id}")
                 except Exception as exc:  # best effort: continue pausing the rest
-                    failures.append({"id": object_id, "error": repr(exc)})
+                    failures.append(
+                        {
+                            "id": object_id,
+                            "error": safe_exception_diagnostic(exc),
+                        }
+                    )
         return failures
 
     @staticmethod
@@ -963,11 +998,13 @@ class DuplicateAdsetStructureHandler:
             "ad": "id",
         }[object_type]
         if not isinstance(response, dict) or set(response) != {key}:
-            raise RuntimeError(f"{object_type} creation response schema is not exact: {response!r}")
+            raise DuplicateStructureInvariantError(
+                f"{object_type} creation response schema is not exact"
+            )
         value = response.get(key)
         if not isinstance(value, str) or not value.isdigit() or int(value) <= 0:
-            raise RuntimeError(
-                f"{object_type} creation response has no positive string id: {response!r}"
+            raise DuplicateStructureInvariantError(
+                f"{object_type} creation response has no positive string id"
             )
         return value
 
@@ -987,14 +1024,14 @@ class DuplicateAdsetStructureHandler:
         }
         created_ids = {created_id for object_ids in created.values() for created_id in object_ids}
         if object_id in source_ids or object_id in created_ids:
-            raise RuntimeError(
+            raise DuplicateStructureInvariantError(
                 f"{object_type} creation response id collides with source or created provenance"
             )
 
     @staticmethod
     def _require_write_success(response: dict[str, Any], step: str) -> None:
         if not isinstance(response, dict) or response.get("success") is not True:
-            raise RuntimeError(f"{step}: Graph write returned failure: {response!r}")
+            raise DuplicateStructureInvariantError(f"{step}: Graph write returned failure")
 
     @staticmethod
     def _require_object_id(row: dict[str, Any], expected: str, label: str) -> None:
@@ -1016,12 +1053,14 @@ class DuplicateAdsetStructureHandler:
         # spend as soon as that parent is enabled.
         status = str(row.get("status") or "").upper()
         if status != "PAUSED":
-            raise RuntimeError(f"{label}: expected PAUSED, got {status or 'missing'}")
+            raise DuplicateStructureInvariantError(
+                f"{label}: expected PAUSED, got {status or 'missing'}"
+            )
 
     @classmethod
     def _require_budget(cls, row: dict[str, Any], expected: int, label: str) -> None:
         if cls._as_int(row.get("daily_budget"), default=-1) != expected:
-            raise RuntimeError(f"{label}: daily_budget mismatch")
+            raise DuplicateStructureInvariantError(f"{label}: daily_budget mismatch")
 
     @staticmethod
     def _as_int(value: Any, *, default: int) -> int:

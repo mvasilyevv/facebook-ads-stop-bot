@@ -60,6 +60,7 @@ from core.observer.writers import (
 )
 from core.rules.evaluator import evaluate_stop_rules
 from core.rules.types import RuleContext, RuleEvaluation
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.scanner.models import ScannedAdRow
 
 logger = logging.getLogger(__name__)
@@ -372,9 +373,10 @@ async def process_scan_rows(
                 cabinet_lease=cabinet_lease,
             )
         except Exception as exc:
-            logger.exception(
-                "observer: ошибка обработки fb_ad_id=%s, продолжаю остальные",
+            logger.error(
+                "observer: ошибка обработки fb_ad_id=%s, продолжаю остальные (%s)",
                 row.fb_ad_id,
+                safe_exception_diagnostic(exc),
             )
             result.row_errors.append(f"{row.fb_ad_id}:{type(exc).__name__}")
 

@@ -28,6 +28,7 @@ from core.metrics import (
 )
 from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
 from core.pubsub import CHANNEL_TRACKER_WAKEUP
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.worker_metrics import mark_worker_heartbeat
 
 logger = logging.getLogger("tracker_reconciliation_worker")
@@ -64,8 +65,11 @@ async def wakeup_listener(redis_client, stop: asyncio.Event, wakeup: asyncio.Eve
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message is not None:
                 wakeup.set()
-    except Exception:  # noqa: BLE001
-        logger.warning("tracker wakeup listener unavailable; using DB polling", exc_info=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "tracker wakeup listener unavailable; using DB polling (%s)",
+            safe_exception_diagnostic(exc),
+        )
     finally:
         try:
             await pubsub.unsubscribe(CHANNEL_TRACKER_WAKEUP)
@@ -89,15 +93,19 @@ async def drain_event_tasks(
                 claim=claim,
             )
         except TrackerLeaseLostError:
-            logger.warning(
-                "tracker event task %s lost lease fence; stale worker stops",
-                task_id,
-                exc_info=True,
-            )
+            logger.warning("tracker event task %s lost lease fence; stale worker stops", task_id)
             continue
         except Exception as exc:  # noqa: BLE001
-            logger.exception("tracker event task %s failed", task_id)
-            await mark_task_retry(engine, claim=claim, error=str(exc))
+            logger.error(
+                "tracker event task %s failed (%s)",
+                task_id,
+                safe_exception_diagnostic(exc),
+            )
+            await mark_task_retry(
+                engine,
+                claim=claim,
+                error=safe_exception_diagnostic(exc),
+            )
             continue
 
         if result.received_at:
@@ -114,10 +122,11 @@ async def drain_event_tasks(
                         str(task_id),
                     ),
                 )
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "tracker event task %s could not enqueue durable observer scan",
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "tracker event task %s could not enqueue durable observer scan (%s)",
                     task_id,
+                    safe_exception_diagnostic(exc),
                 )
     await _refresh_queue_metrics(engine)
     return len(claims)
@@ -142,8 +151,11 @@ async def _refresh_queue_metrics(engine: AsyncEngine) -> None:
             ).one()
         TRACKER_EVENT_BACKLOG.set(int(row[0] or 0))
         TRACKER_UNMATCHED_EVENTS.set(int(row[1] or 0))
-    except Exception:  # noqa: BLE001
-        logger.debug("tracker queue gauges unavailable", exc_info=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "tracker queue gauges unavailable (%s)",
+            safe_exception_diagnostic(exc),
+        )
 
 
 async def main_loop(database_url: str) -> None:
@@ -173,8 +185,11 @@ async def main_loop(database_url: str) -> None:
                 await drain_event_tasks(
                     engine,
                 )
-            except Exception:  # noqa: BLE001
-                logger.exception("tracker durable queue drain failed")
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "tracker durable queue drain failed (%s)",
+                    safe_exception_diagnostic(exc),
+                )
 
             monotonic_now = loop.time()
             if monotonic_now >= next_reconcile:
@@ -188,8 +203,11 @@ async def main_loop(database_url: str) -> None:
                         provider_result.drift_before,
                         provider_result.drift_after,
                     )
-                except Exception:  # noqa: BLE001
-                    logger.exception("tracker reconciliation failed")
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "tracker reconciliation failed (%s)",
+                        safe_exception_diagnostic(exc),
+                    )
                 next_reconcile = monotonic_now + _RECONCILIATION_INTERVAL_SECONDS
 
             wakeup.clear()

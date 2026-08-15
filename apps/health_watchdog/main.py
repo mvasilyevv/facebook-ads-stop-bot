@@ -54,6 +54,7 @@ from core.meta_api.shadow_spend import (
 from core.models.settings.vision_config import VisionConfig
 from core.observer.login_required import notify_login_required_incident
 from core.observer.scan_tasks import enqueue_observer_scan, observer_scan_idempotency_key
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.tasks.browser_fence import (
     BrowserFenceLeaseLost,
     BrowserOperationBlocked,
@@ -345,10 +346,11 @@ async def _activate_shadow_burst(
                 f"{account_id}:{sample.ts.isoformat()}",
             ),
         )
-    except Exception:  # noqa: BLE001
-        logger.exception(
-            "shadow: durable observer scan was not enqueued for act_%s",
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "shadow: durable observer scan was not enqueued for act_%s (%s)",
             account_id,
+            safe_exception_diagnostic(exc),
         )
 
 
@@ -493,8 +495,11 @@ async def check_autostop_channel(
     try:
         stuck = await query_stuck_pause_tasks(engine, minutes=stuck_after_minutes)
         desynced = await query_desynced_stop_ads(engine, minutes=desync_after_minutes)
-    except Exception:  # noqa: BLE001
-        logger.exception("ошибка проверки канала авто-стопа")
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "ошибка проверки канала авто-стопа (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return False
 
     if not stuck and not desynced:
@@ -506,8 +511,7 @@ async def check_autostop_channel(
         return False
 
     logger.error("канал авто-стопа деградировал: stuck=%d desync=%d", len(stuck), len(desynced))
-    targets = [task.target_id for task in stuck[:2]]
-    targets.extend(ad.fb_ad_id for ad in desynced[: 2 - len(targets)])
+    affected_count = len({*(task.target_id for task in stuck), *(ad.fb_ad_id for ad in desynced)})
     return await _enqueue_critical_notification(
         incident_key=AUTOSTOP_BACKLOG_INCIDENT_KEY,
         engine=engine,
@@ -519,8 +523,7 @@ async def check_autostop_channel(
         ),
         risk="Объявления могут продолжать тратить бюджет",
         lines=[
-            # Имени объявления в этих выборках нет — показываем ID как есть.
-            *(f"Объявление {target}" for target in targets),
+            f"Затронуто объявлений: {affected_count}",
             "Проверь Vision-профиль и отключи эти объявления вручную",
         ],
         resource_type="meta_channel",
@@ -547,8 +550,11 @@ async def check_meta_api_channel(
 
         obs_config = await load_observer_config(engine)
         scanning_on = bool(obs_config and obs_config.get("is_scanning_enabled"))
-    except Exception:  # noqa: BLE001
-        logger.exception("meta probe: observer_config недоступен — probe пропущен")
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "meta probe: observer_config недоступен — probe пропущен (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return False
 
     if not scanning_on:
@@ -580,10 +586,13 @@ async def check_meta_api_channel(
         logger.warning("meta probe: browser-operation fence lost — probe discarded")
         return False
     except Exception as exc:  # noqa: BLE001
-        logger.exception("meta probe: check_health бросил исключение")
+        logger.error(
+            "meta probe: check_health завершился ошибкой (%s)",
+            safe_exception_diagnostic(exc),
+        )
         probe = {
             "healthy": False,
-            "detail": f"probe_exception: {exc}",
+            "detail": f"probe_exception:{type(exc).__name__}",
             "probe_performed": False,
             "probe_ok": False,
             "probe_status_code": 0,
@@ -1052,7 +1061,11 @@ async def _check_shadow_for_account(
         )
         return False
     except Exception as exc:  # noqa: BLE001
-        logger.warning("shadow: биллинг act_%s не получен: %s", account_id, exc)
+        logger.warning(
+            "shadow: биллинг act_%s не получен (%s)",
+            account_id,
+            safe_exception_diagnostic(exc),
+        )
         return False
     if billing_minor is None:
         logger.warning("shadow: биллинг act_%s пуст (нет amount_spent)", account_id)
@@ -1071,7 +1084,11 @@ async def _check_shadow_for_account(
             currency=currency,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("shadow: пер-адная отчётность act_%s не посчитана: %s", account_id, exc)
+        logger.warning(
+            "shadow: пер-адная отчётность act_%s не посчитана (%s)",
+            account_id,
+            safe_exception_diagnostic(exc),
+        )
         return False
 
     # (в) durable evidence. Если commit/read не удался, исключение поднимется к
@@ -1219,8 +1236,12 @@ async def check_shadow_spend(
                 now=now,
             )
             alerted = alerted or sent
-        except Exception:  # noqa: BLE001
-            logger.exception("shadow: тик кабинета act_%s упал", account_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "shadow: тик кабинета act_%s упал (%s)",
+                account_id,
+                safe_exception_diagnostic(exc),
+            )
     return alerted
 
 
@@ -1284,8 +1305,11 @@ async def check_loop(
     while not stop.is_set():
         try:
             await run_one_check(engine=engine)
-        except Exception:  # noqa: BLE001
-            logger.exception("ошибка в цикле проверок")
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "ошибка в цикле проверок (%s)",
+                safe_exception_diagnostic(exc),
+            )
         try:
             await asyncio.wait_for(stop.wait(), timeout=CHECK_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
@@ -1313,8 +1337,11 @@ async def meta_probe_loop(
     while not stop.is_set():
         try:
             await check_meta_api_channel(meta_client, engine=engine)
-        except Exception:  # noqa: BLE001
-            logger.exception("ошибка в meta_probe_loop")
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "ошибка в meta_probe_loop (%s)",
+                safe_exception_diagnostic(exc),
+            )
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
@@ -1344,8 +1371,11 @@ async def shadow_spend_loop(
     while not stop.is_set():
         try:
             await check_shadow_spend(meta_client, engine=engine)
-        except Exception:  # noqa: BLE001
-            logger.exception("ошибка в shadow_spend_loop")
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "ошибка в shadow_spend_loop (%s)",
+                safe_exception_diagnostic(exc),
+            )
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except asyncio.TimeoutError:
@@ -1404,9 +1434,12 @@ async def _supervised(
             await factory()
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "цикл %s упал — перезапуск через %sс", name, LOOP_RESTART_DELAY_SECONDS
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "цикл %s упал — перезапуск через %sс (%s)",
+                name,
+                LOOP_RESTART_DELAY_SECONDS,
+                safe_exception_diagnostic(exc),
             )
             try:
                 await asyncio.wait_for(stop.wait(), timeout=LOOP_RESTART_DELAY_SECONDS)
@@ -1513,7 +1546,10 @@ async def main_loop(database_url: str | None = None) -> None:
     finally:
         try:
             await meta_client.close()
-        except Exception:  # noqa: BLE001
-            logger.exception("ошибка закрытия MetaApiClient")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "ошибка закрытия MetaApiClient (%s)",
+                safe_exception_diagnostic(exc),
+            )
         await engine.dispose()
         logger.info("health_watchdog остановлен")

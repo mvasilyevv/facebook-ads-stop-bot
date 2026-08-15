@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -28,6 +29,7 @@ from apps.api.routers.v1.schemas.settings_vision import (
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
 from core.meta_api.client import BROWSER_CONTRACT_VERSION
 from core.models.settings.vision_config import VisionConfig
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.tasks.browser_fence import (
     BrowserExclusiveMaintenance,
     BrowserFenceLeaseLost,
@@ -40,6 +42,18 @@ from core.tasks.browser_fence import (
 from core.vision_runtime import VisionConfigurationError, load_vision_runtime_config
 
 logger = logging.getLogger(__name__)
+
+_PUBLIC_VISION_CONFIGURATION_MESSAGES = frozenset(
+    {
+        "Vision is not configured in PostgreSQL",
+        "Vision token is not configured in PostgreSQL",
+        "Vision profile is not configured in PostgreSQL",
+        "Vision token cannot be decrypted",
+        "Vision token is empty",
+        "Vision folder cannot be decrypted",
+    }
+)
+_SAFE_PROBE_CODE = re.compile(r"^(?:meta_error:-?\d+|http_\d{3})$")
 
 # Роутер для /settings/vision
 _settings_router = APIRouter(prefix="/settings/vision", tags=["settings"])
@@ -93,6 +107,28 @@ def _is_restartable_probe_failure(detail: str) -> bool:
             "network unavailable",
         )
     )
+
+
+def _public_vision_configuration_message(exc: VisionConfigurationError) -> str:
+    message = str(exc)
+    if message in _PUBLIC_VISION_CONFIGURATION_MESSAGES:
+        return message
+    return "Vision configuration is unavailable"
+
+
+def _public_probe_failure_message(result: dict[str, object]) -> str:
+    raw_code = str(result.get("probe_detail") or "").strip().casefold()
+    known = {
+        "probe_network_down": "Graph probe could not reach Meta",
+        "probe_token_invalid": "Vision token was rejected by Meta",
+        "login_required": "Vision profile requires login",
+        "not_performed": "Graph probe was not performed",
+    }
+    if raw_code in known:
+        return known[raw_code]
+    if _SAFE_PROBE_CODE.fullmatch(raw_code):
+        return f"Graph probe failed ({raw_code})"
+    return "Graph probe failed"
 
 
 def _snapshot(config: VisionConfig | None) -> _VisionSnapshot | None:
@@ -200,11 +236,13 @@ async def _probe_browser_channel(
     elif not probe_performed:
         message = "browser-agent did not perform the required Graph probe"
     elif not probe_ok:
-        message = str(result.get("probe_detail") or result.get("detail") or "Graph probe failed")
-        maintenance_recovery_allowed = _is_restartable_probe_failure(message)
+        raw_detail = str(result.get("probe_detail") or result.get("detail") or "")
+        message = _public_probe_failure_message(result)
+        maintenance_recovery_allowed = _is_restartable_probe_failure(raw_detail)
     elif not bool(result.get("healthy")):
-        message = str(result.get("detail") or "browser session is not ready")
-        maintenance_recovery_allowed = _is_restartable_probe_failure(message)
+        raw_detail = str(result.get("detail") or "")
+        message = "browser session is not ready"
+        maintenance_recovery_allowed = _is_restartable_probe_failure(raw_detail)
     else:
         return _BrowserChannelProbe(
             "READY",
@@ -294,7 +332,12 @@ async def get_vision_settings(
     try:
         runtime = await load_vision_runtime_config(engine)
     except VisionConfigurationError as exc:
-        probe = _BrowserChannelProbe("UNAVAILABLE", str(exc), None, False)
+        probe = _BrowserChannelProbe(
+            "UNAVAILABLE",
+            _public_vision_configuration_message(exc),
+            None,
+            False,
+        )
     else:
         probe = await _fenced_settings_probe(
             engine,
@@ -320,8 +363,8 @@ async def get_vision_settings(
         required_browser_contract_version=BROWSER_CONTRACT_VERSION,
         browser_contract_version=probe.browser_contract_version,
         browser_contract_compatible=probe.browser_contract_compatible,
-        browser_session_id=probe.browser_session_id,
-        live_profile_id=probe.live_profile_id,
+        browser_session_id=None,
+        live_profile_id=None,
         graph_probe_performed=probe.graph_probe_performed,
         graph_probe_ok=probe.graph_probe_ok,
     )
@@ -411,7 +454,12 @@ async def put_vision_settings(
     try:
         runtime = await load_vision_runtime_config(engine)
     except VisionConfigurationError as exc:
-        probe = _BrowserChannelProbe("UNAVAILABLE", str(exc), None, False)
+        probe = _BrowserChannelProbe(
+            "UNAVAILABLE",
+            _public_vision_configuration_message(exc),
+            None,
+            False,
+        )
     else:
         probe = await _fenced_settings_probe(
             engine,
@@ -433,8 +481,8 @@ async def put_vision_settings(
         required_browser_contract_version=BROWSER_CONTRACT_VERSION,
         browser_contract_version=probe.browser_contract_version,
         browser_contract_compatible=probe.browser_contract_compatible,
-        browser_session_id=probe.browser_session_id,
-        live_profile_id=probe.live_profile_id,
+        browser_session_id=None,
+        live_profile_id=None,
         graph_probe_performed=probe.graph_probe_performed,
         graph_probe_ok=probe.graph_probe_ok,
     )
@@ -545,7 +593,10 @@ async def post_vision_reconnect(
     except Exception as exc:
         # LOW (аудит 02.07): голый Exception может нести внутренние детали (пути,
         # креды в traceback) — клиенту генерик-текст, диагностика в лог.
-        logger.exception("Ошибка переподключения к browser-agent")
+        logger.error(
+            "Ошибка переподключения к browser-agent (%s)",
+            safe_exception_diagnostic(exc),
+        )
         raise HTTPException(
             status_code=503,
             detail="Ошибка переподключения к browser-agent — подробности в логе сервера",

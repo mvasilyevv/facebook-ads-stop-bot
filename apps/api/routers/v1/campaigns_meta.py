@@ -48,6 +48,7 @@ from core.meta_api.errors import (
 from core.meta_api.errors import (
     PermissionError as MetaPermissionError,
 )
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.tasks.browser_fence import (
     BrowserFenceLeaseLost,
     BrowserOperationBlocked,
@@ -223,7 +224,11 @@ async def get_ad_account_pages(
     except TemporaryError as exc:
         # Транзиентный сбой канала Vision (browser-agent code -2 "Failed to fetch") —
         # канал недоступен, не «кабинет битый». Честный 503.
-        logger.warning("ad-account-pages: канал Vision недоступен act_%s: %s", numeric, exc)
+        logger.warning(
+            "ad-account-pages: канал Vision недоступен act_%s (%s)",
+            numeric,
+            safe_exception_diagnostic(exc),
+        )
         raise HTTPException(status_code=503, detail="browser-agent / Vision недоступны") from exc
     except (NotFoundError, MetaPermissionError, PermanentError) as exc:
         # Доменная ошибка Meta: кабинет не найден / нет прав / постоянный отказ.

@@ -17,6 +17,7 @@ from typing import Any, Literal
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.public_identifiers import public_uuid
 from core.rules.labels import rule_label
 from core.scanner.status import (
     DELIVERY_ATTENTION_STATUSES,
@@ -122,7 +123,7 @@ def _task_item(row: Any) -> dict[str, Any]:
         "updated_at": row.updated_at,
         "requested_by": str(row.requested_by) if row.requested_by else None,
         "reason": task_action_reason(state),
-        "correlation_id": str(row.correlation_id),
+        "correlation_id": public_uuid(row.correlation_id, prefix="req"),
         "account_id": (
             str(payload.get("account_id") or payload.get("ad_account_id"))
             if payload.get("account_id") or payload.get("ad_account_id")

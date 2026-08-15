@@ -42,6 +42,7 @@ from core.campaign_builder.uniquify import (
     uniquify_concepts,
 )
 from core.meta_api.errors import BrowserReadinessRejectedError, TemporaryError
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -231,8 +232,11 @@ async def _emit(cb: ProgressCb | None, state: _ProgressState) -> None:
         return
     try:
         await cb(state.snapshot())
-    except Exception:  # noqa: BLE001 — прогресс не должен ронять money-залив
-        logger.warning("execute: прогресс-колбэк упал (игнорирую)", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — прогресс не должен ронять money-залив
+        logger.warning(
+            "execute: прогресс-колбэк упал (игнорирую; %s)",
+            safe_exception_diagnostic(exc),
+        )
 
 
 # ====================== извлечение id ======================

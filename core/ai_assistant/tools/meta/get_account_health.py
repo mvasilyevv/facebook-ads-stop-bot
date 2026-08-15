@@ -16,7 +16,7 @@ from core.ai_assistant.tools.meta._currency import (
     format_major_money,
     format_minor_money,
 )
-from core.meta_api.errors import MetaApiError
+from core.meta_api.errors import MetaApiError, public_meta_error_message
 from core.meta_api.insights.fetcher import InsightsFetcher
 
 # Marketing API account_status enum
@@ -62,7 +62,7 @@ class GetAccountHealthTool:
             try:
                 response = await client.list_ad_accounts()
             except MetaApiError as exc:
-                raise ToolError(f"Marketing API: {exc}") from exc
+                raise ToolError(public_meta_error_message(exc)) from exc
             accounts = response.get("data") or []
             if not accounts:
                 return "У текущей сессии нет доступных ad accounts."
@@ -93,7 +93,7 @@ class GetAccountHealthTool:
                 ad_account_id=ad_account_id,
             )
         except MetaApiError as exc:
-            raise ToolError(f"Marketing API: {exc}") from exc
+            raise ToolError(public_meta_error_message(exc)) from exc
 
         fetcher = InsightsFetcher(client)
         try:
@@ -101,7 +101,7 @@ class GetAccountHealthTool:
                 ad_account_id=ad_account_id, date_preset="today"
             )
         except MetaApiError as exc:
-            raise ToolError(f"Marketing API (insights): {exc}") from exc
+            raise ToolError(public_meta_error_message(exc)) from exc
 
         status = _ACCOUNT_STATUS.get(int(account.get("account_status") or 0), "UNKNOWN")
         disable_reason = account.get("disable_reason")

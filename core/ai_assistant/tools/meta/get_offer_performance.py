@@ -19,7 +19,7 @@ from core.ai_assistant.tools.meta._currency import (
     fetch_account_currency,
     format_major_money,
 )
-from core.meta_api.errors import MetaApiError
+from core.meta_api.errors import MetaApiError, public_meta_error_message
 from core.meta_api.insights.fetcher import InsightsFetcher
 from core.meta_api.schemas import MetaInsightsRequest
 
@@ -90,7 +90,7 @@ class GetOfferPerformanceTool:
         try:
             rows = await fetcher.fetch_for_request(req)
         except MetaApiError as exc:
-            raise ToolError(f"Marketing API: {exc}") from exc
+            raise ToolError(public_meta_error_message(exc)) from exc
 
         if not rows:
             return f"Нет insights по офферу {offer_code} за {date_preset}."

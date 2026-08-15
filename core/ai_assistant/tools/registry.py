@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from core.ai_assistant.tools.base import RiskLevel, ToolContext, ToolError, ToolHandler
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +85,12 @@ class ToolRegistry:
         except ToolError:
             raise
         except Exception as exc:
-            logger.exception("Tool '%s' упал с непредвиденной ошибкой", name)
-            raise ToolError(f"Внутренняя ошибка tool '{name}': {exc}") from exc
+            logger.error(
+                "Tool '%s' упал с непредвиденной ошибкой (%s)",
+                name,
+                safe_exception_diagnostic(exc),
+            )
+            raise ToolError(f"Внутренняя ошибка tool '{name}'") from exc
 
 
 GLOBAL_REGISTRY = ToolRegistry()

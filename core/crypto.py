@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 
+from core.safe_diagnostics import safe_exception_diagnostic
+
 try:
     from cryptography.fernet import Fernet, InvalidToken  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover - зависит от окружения
@@ -83,7 +85,7 @@ def verify_encryption_key(key: str, verify_token: str) -> None:
             "КРИТИЧЕСКАЯ ОШИБКА: ENCRYPTION_KEY не совпадает с ENCRYPTION_KEY_VERIFY. "
             "Все зашифрованные токены в БД недоступны. "
             "Причина: %s",
-            exc,
+            safe_exception_diagnostic(exc),
         )
         raise RuntimeError(
             "ENCRYPTION_KEY не прошёл верификацию — ключ изменён или повреждён"

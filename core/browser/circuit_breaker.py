@@ -17,6 +17,7 @@ from enum import Enum, auto
 from typing import TypeVar
 
 from core.metrics import record_vision_failure
+from core.safe_diagnostics import safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +205,7 @@ class AsyncCircuitBreaker:
             logger.warning(
                 "Circuit-breaker «%s»: HALF_OPEN → OPEN (пробный запрос провалился: %s).",
                 self.name,
-                exc,
+                safe_exception_diagnostic(exc),
             )
             return
 
@@ -215,7 +216,7 @@ class AsyncCircuitBreaker:
             self.name,
             self._failure_count,
             self.failure_threshold,
-            exc,
+            safe_exception_diagnostic(exc),
         )
         if self._failure_count >= self.failure_threshold:
             self._state = CircuitState.OPEN
@@ -226,7 +227,7 @@ class AsyncCircuitBreaker:
                 self.name,
                 self._failure_count,
                 self.recovery_timeout,
-                exc,
+                safe_exception_diagnostic(exc),
             )
             # Фиксируем переход в OPEN как фейл Vision API
             record_vision_failure()

@@ -42,6 +42,8 @@ from apps.api.routers.v1.schemas.settings_telegram import (
 from core.models.settings.telegram_config import TelegramConfig
 from core.models.telegram.invite import TelegramInvite
 from core.models.telegram.recipient import TelegramRecipient
+from core.public_identifiers import public_uuid
+from core.safe_diagnostics import safe_exception_diagnostic
 from core.telegram.menu_button import sync_menu_buttons
 from core.telegram.notifications import (
     retire_disabled_recipient_notifications_in_transaction,
@@ -55,12 +57,17 @@ from core.telegram.settings_compute import (
     compute_bot_username,
     compute_is_authorized,
 )
-from core.telegram.web_app_url import load_web_app_url, save_web_app_url
+from core.telegram.web_app_url import (
+    load_web_app_url,
+    normalize_web_app_base,
+    save_web_app_url,
+)
 from core.telegram.webhook_configuration import (
     disable_token_and_schedule_webhook_deletion,
     resolve_webhook_target,
     store_rotated_token_and_schedule_webhook,
 )
+from core.telemetry import sanitized_http_url
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +75,36 @@ router = APIRouter(prefix="/settings/telegram", tags=["settings"])
 
 # TTL invite-кода — 24 часа.
 _INVITE_TTL_HOURS = 24
+
+
+def _public_telegram_diagnostic_message(value: object) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    normalized = raw.casefold()
+    exact = {
+        "stored telegram bot token is empty": "Telegram-бот не настроен",
+        "webhook url or secret is not configured": "Webhook URL или secret не настроены",
+        "runtime webhook target differs from the claimed generation": (
+            "Webhook target изменился во время настройки"
+        ),
+        "telegram reported a different webhook url": "Telegram подтвердил другой webhook URL",
+    }
+    if normalized in exact:
+        return exact[normalized]
+    if "unauthorized" in normalized or "401" in normalized:
+        return "Telegram отклонил bot token"
+    if "forbidden" in normalized or "403" in normalized:
+        return "Telegram запретил операцию для этого получателя"
+    if "certificate" in normalized or "tls" in normalized or "ssl" in normalized:
+        return "Telegram не смог проверить TLS-сертификат webhook"
+    if "timeout" in normalized or "timed out" in normalized:
+        return "Telegram не дождался ответа webhook"
+    if any(marker in normalized for marker in ("connection", "connect", "dns", "resolve")):
+        return "Telegram не смог подключиться к webhook"
+    if "429" in normalized or "rate" in normalized:
+        return "Telegram временно ограничил частоту запросов"
+    return "Telegram integration reported an error"
 
 
 # ---------------------------------------------------------------------------
@@ -250,8 +287,11 @@ async def _sync_bot_menu_button(engine: AsyncEngine, web_app_url: str) -> bool:
 
     try:
         cfg = await load_telegram_config(engine)
-    except Exception:
-        logger.warning("menu button: не удалось прочитать telegram_config", exc_info=True)
+    except Exception as exc:
+        logger.warning(
+            "menu button: telegram_config недоступен (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return False
     if cfg is None or not cfg.bot_token:
         logger.info("menu button: бот не настроен — пропускаю установку")
@@ -334,8 +374,11 @@ async def _sync_bot_menu_button(engine: AsyncEngine, web_app_url: str) -> bool:
             return False
         logger.info("menu button обновлён")
         return True
-    except Exception:
-        logger.warning("menu button: не удалось установить", exc_info=True)
+    except Exception as exc:
+        logger.warning(
+            "menu button: синхронизация не завершена (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return False
     finally:
         try:
@@ -376,18 +419,24 @@ async def put_telegram_web_app_url(
     Непустой URL обязан быть HTTPS (требование Telegram Mini Apps) → иначе 422.
     """
     cleaned = (body.web_app_url or "").strip()
-    if cleaned and not cleaned.lower().startswith("https://"):
-        raise HTTPException(status_code=422, detail="Web App URL должен начинаться с https://")
+    normalized = normalize_web_app_base(cleaned) if cleaned else None
+    if cleaned and normalized is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Web App URL должен быть HTTPS без логина, query-параметров и fragment",
+        )
 
-    await save_web_app_url(engine, cleaned or None)
+    await save_web_app_url(engine, normalized)
 
     # Свежий URL → сразу прописываем Menu Button боту. Quick-tunnel меняется при
     # каждом запуске; без этого кнопка в Telegram остаётся на мёртвом старом туннеле
     # (set_chat_menu_button больше нигде не вызывается). Результат явно входит
     # в response как synced/incomplete.
     menu_sync_state = None
-    if cleaned:
-        menu_sync_state = "synced" if await _sync_bot_menu_button(engine, cleaned) else "incomplete"
+    if normalized:
+        menu_sync_state = (
+            "synced" if await _sync_bot_menu_button(engine, normalized) else "incomplete"
+        )
 
     async with AsyncSession(engine) as session:
         config = await _load_config(session)
@@ -892,17 +941,25 @@ async def get_telegram_notification_diagnostics(
         webhook_state=effective_webhook_state,
         webhook_generation=int(summary.webhook_generation or 0),
         webhook_applied_generation=summary.webhook_applied_generation,
-        webhook_desired_url=summary.webhook_desired_url,
-        webhook_remote_url=summary.webhook_remote_url,
+        webhook_desired_url=(
+            sanitized_http_url(summary.webhook_desired_url) if summary.webhook_desired_url else None
+        ),
+        webhook_remote_url=(
+            sanitized_http_url(summary.webhook_remote_url) if summary.webhook_remote_url else None
+        ),
         webhook_remote_url_matches=webhook_remote_url_matches,
         webhook_secret_digest_present=bool(summary.webhook_secret_digest_present),
         webhook_remote_pending_update_count=(summary.webhook_remote_pending_update_count),
         webhook_remote_last_error_at=summary.webhook_remote_last_error_at,
-        webhook_remote_last_error_message=(summary.webhook_remote_last_error_message),
+        webhook_remote_last_error_message=_public_telegram_diagnostic_message(
+            summary.webhook_remote_last_error_message
+        ),
         webhook_checked_at=summary.webhook_checked_at,
         webhook_configured_at=summary.webhook_configured_at,
         webhook_last_error_code=summary.webhook_last_error_code,
-        webhook_last_error_detail=summary.webhook_last_error_detail,
+        webhook_last_error_detail=_public_telegram_diagnostic_message(
+            summary.webhook_last_error_detail
+        ),
         gateway_state=gateway_state,
         outbox_state=outbox_state,
         last_webhook_update_at=summary.last_webhook_update_at,
@@ -919,7 +976,7 @@ async def get_telegram_notification_diagnostics(
                 state=str(row.state),
                 error_code=str(row.last_error_code),
                 updated_at=row.updated_at,
-                correlation_id=str(row.correlation_id),
+                correlation_id=public_uuid(row.correlation_id, prefix="req"),
             )
             for row in error_rows
         ],

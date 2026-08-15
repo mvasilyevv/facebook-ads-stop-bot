@@ -11,6 +11,7 @@ from pathlib import Path
 from core.ai_assistant.client import AIUnavailableError, get_ai_client
 from core.ai_assistant.prompts import SYSTEM_PROMPT_DIAGNOSTICS
 from core.config import get_settings
+from core.safe_diagnostics import redact_sensitive_text, safe_exception_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +85,11 @@ async def diagnose_alert(
     log_excerpt = _read_log_tail(actual_log, settings.ai_max_log_lines)
     if len(log_excerpt) > 8000:
         log_excerpt = log_excerpt[-8000:]
+    log_excerpt = redact_sensitive_text(log_excerpt)
 
     user_text = (
-        f"alert_key: {alert_key}\n"
-        f"context: {context or '(нет)'}\n"
+        f"alert_key: {redact_sensitive_text(alert_key)}\n"
+        f"context: {redact_sensitive_text(context) or '(нет)'}\n"
         f"log_file: {actual_log}\n"
         f"log_excerpt (последние строки):\n```\n{log_excerpt or '(лог пуст или недоступен)'}\n```"
     )
@@ -102,13 +104,16 @@ async def diagnose_alert(
             timeout=timeout_seconds or float(settings.ai_timeout_seconds),
         )
     except (TimeoutError, asyncio.TimeoutError):
-        logger.warning("AI diagnose: timeout для %s", alert_key)
+        logger.warning("AI diagnose: timeout для %s", redact_sensitive_text(alert_key))
         return None
     except AIUnavailableError as exc:
-        logger.warning("AI diagnose: недоступен — %s", exc)
+        logger.warning(
+            "AI diagnose: недоступен (%s)",
+            safe_exception_diagnostic(exc),
+        )
         return None
 
-    text = (result.text or "").strip()
+    text = redact_sensitive_text(result.text).strip()
     if not text:
         return None
 
