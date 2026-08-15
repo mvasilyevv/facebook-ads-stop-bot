@@ -32,7 +32,7 @@ function SettingsPage() {
 
   return (
     <>
-      <PageHeader eyebrowNum="05" eyebrow="СИСТЕМА · КОНФИГУРАЦИЯ" title="Настройки" />
+      <PageHeader eyebrowNum="04" eyebrow="СИСТЕМА · НАСТРОЙКИ" title="Настройки" />
 
       <Tabs
         value={tab}

@@ -90,7 +90,7 @@ function RemoteDesktopPage() {
     <>
       <PageHeader
         eyebrowNum="04"
-        eyebrow="SYSTEM · REMOTE"
+        eyebrow="СИСТЕМА · РАБОЧИЙ СТОЛ"
         title="Рабочий стол"
         subtitle={
           <>

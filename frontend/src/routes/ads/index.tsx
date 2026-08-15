@@ -22,10 +22,14 @@ import { Eyebrow } from "@/components/data/Eyebrow";
 import { Button } from "@/components/ui/Button";
 import { Drawer } from "@/components/ui/Drawer";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
+import {
+  OperatorPageBoundary,
+  OperatorUnavailableState,
+} from "@/components/layout/OperatorPageBoundary";
 import { OperatorAdCards, OperatorAdsTable } from "@/features/operator/OperatorAds";
 import { operatorProblemMessage, useOperatorAds, useOperatorSnapshot } from "@/lib/api/operator";
+import { formatRussianCount } from "@/lib/utils/russianCount";
 
 const SEVERITIES: Array<{ value: OperatorSeverity | ""; label: string }> = [
   { value: "", label: "Все состояния" },
@@ -105,11 +109,19 @@ function AdsPage() {
 
   if (query.isError && !payload) {
     return (
-      <ErrorState
-        title="Объявления недоступны"
-        error={operatorProblemMessage(query.error)}
-        onRetry={() => void query.refetch()}
-      />
+      <OperatorPageBoundary
+        eyebrowNum="02"
+        eyebrow="РЕКЛАМА · ОБЪЯВЛЕНИЯ"
+        title="Объявления"
+        subtitle="Серверный каталог, фильтры и команды"
+      >
+        <OperatorUnavailableState
+          title="Объявления недоступны"
+          resource="каталог объявлений"
+          details={operatorProblemMessage(query.error)}
+          onRetry={() => void query.refetch()}
+        />
+      </OperatorPageBoundary>
     );
   }
 
@@ -122,14 +134,15 @@ function AdsPage() {
             Объявления
           </h1>
           <p className="mt-2 max-w-2xl text-[16px] text-bg-9">
-            Серверные поиск, фильтрация и сортировка. Любая команда получает отдельный lifecycle.
+            Серверные поиск, фильтрация и сортировка. Для каждой команды отдельно видны постановка,
+            выполнение и подтверждение.
           </p>
         </div>
         <div className="flex items-center gap-3">
           {displayState ? <DataStateBadge state={displayState} /> : null}
           <span className="font-numeric text-[14px] text-bg-9">
             {payload && hasConfirmedCount
-              ? `${payload.total.toLocaleString("ru-RU")} строк`
+              ? formatRussianCount(payload.total, "строка", "строки", "строк")
               : payload
                 ? "— строк"
                 : "Загрузка…"}

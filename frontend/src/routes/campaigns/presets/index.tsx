@@ -68,7 +68,7 @@ function CampaignPresetsPage() {
   return (
     <>
       <PageHeader
-        eyebrowNum="05"
+        eyebrowNum="02"
         eyebrow="РЕКЛАМА · ШАБЛОНЫ"
         title="Пресеты кампаний"
         subtitle="Копируют повторяемые параметры в визард и не меняют уже созданные кампании"

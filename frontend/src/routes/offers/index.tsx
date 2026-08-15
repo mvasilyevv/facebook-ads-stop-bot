@@ -28,7 +28,7 @@ import { PageHeader, HeaderSep } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { FilterPill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ErrorState } from "@/components/ui/ErrorState";
+import { OperatorUnavailableState } from "@/components/layout/OperatorPageBoundary";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
@@ -96,7 +96,12 @@ function OffersPage() {
     return (
       <div>
         <OffersHeader count={null} />
-        <ErrorState error={error} onRetry={() => void refetch()} />
+        <OperatorUnavailableState
+          title="Офферы недоступны"
+          resource="каталог офферов"
+          details={error instanceof Error ? error.message : undefined}
+          onRetry={() => void refetch()}
+        />
       </div>
     );
   }
@@ -291,7 +296,7 @@ function OffersHeader({ count, action }: { count: number | null; action?: React.
   return (
     <PageHeader
       eyebrowNum="02"
-      eyebrow="CATALOG · ОФФЕРЫ"
+      eyebrow="РЕКЛАМА · ОФФЕРЫ"
       title="Офферы"
       action={action}
       subtitle={

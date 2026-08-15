@@ -47,8 +47,8 @@ export function CampaignRunManualReview({ createdMetaIds }: CampaignRunManualRev
         </div>
       ) : (
         <p className="mt-3 rounded-[var(--radius-2)] bg-bg-2 px-3 py-2 text-[12px] leading-5 text-bg-9">
-          Подтверждённых Meta ID нет. Это не доказывает, что объект не был создан: ответ мог
-          потеряться после внешнего вызова.
+          Подтверждённых идентификаторов в Meta нет. Это не доказывает, что объект не был создан:
+          ответ мог потеряться после внешнего вызова.
         </p>
       )}
 

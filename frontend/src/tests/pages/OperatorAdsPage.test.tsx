@@ -647,6 +647,15 @@ describe("typed operator ads page", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Каталог недоступен");
   });
 
+  it("keeps the list heading visible when the catalog is unavailable", () => {
+    setQuery(undefined, { error: new Error("Каталог недоступен") });
+
+    renderPage();
+
+    expect(screen.getByRole("heading", { name: "Объявления" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
   it("offers one-step recovery from an empty filtered result", async () => {
     routeSearch = { q: "missing", severity: "critical", page: 3 };
     setQuery(response([]));

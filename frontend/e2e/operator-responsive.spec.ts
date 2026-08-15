@@ -127,7 +127,7 @@ test("attention CTA lands on a real typed ad detail", async ({ page }) => {
 
   await expect(page).toHaveURL(/\/ads\/ad-1$/);
   await expect(page.getByRole("heading", { name: "GH_CR2 · Основное объявление" })).toBeVisible();
-  await expect(page.getByText("Meta ID ad-1")).toBeVisible();
+  await expect(page.getByText("Идентификатор объявления в Meta: ad-1")).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,

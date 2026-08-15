@@ -30,7 +30,9 @@ export function ErrorState({
   // нейтральный текст вместо дампа: заголовок уже сказал, что сломалось.
   const message =
     typeof error === "string" && error.trim()
-      ? error
+      ? error.trim() === String(title).trim()
+        ? "Повторите попытку, чтобы получить актуальные данные."
+        : error
       : error
         ? "Подробности недоступны. Повторите попытку."
         : null;

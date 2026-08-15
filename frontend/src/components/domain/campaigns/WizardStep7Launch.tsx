@@ -39,6 +39,7 @@ import {
   type RunStatus,
 } from "@/lib/api/campaigns";
 import { CampaignRunManualReview } from "./CampaignRunManualReview";
+import { formatRussianCount, russianCountIsOne } from "@/lib/utils/russianCount";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -190,13 +191,13 @@ function LaunchBatchProgress({ receipt, onFinish }: { receipt: LaunchOut; onFini
     },
     succeeded: {
       title: "Все кабинеты подтверждены",
-      detail: `${accounts.length} из ${accounts.length} запусков завершены успешно.`,
+      detail: `${formatRussianCount(accounts.length, "запуск", "запуска", "запусков")} из ${formatRussianCount(accounts.length, "запуска", "запусков", "запусков")} завершен${russianCountIsOne(accounts.length) ? "" : "ы"} успешно.`,
       tone: "border-success/35 bg-success/10 text-success",
       icon: <CheckCircle size={16} aria-hidden="true" />,
     },
     partial: {
       title: "Частичный результат",
-      detail: `${succeeded} из ${accounts.length} запусков успешны. Остальные требуют отдельной проверки.`,
+      detail: `${formatRussianCount(succeeded, "запуск", "запуска", "запусков")} из ${formatRussianCount(accounts.length, "запуска", "запусков", "запусков")} успешн${russianCountIsOne(succeeded) ? "ен" : "ы"}. Остальные требуют отдельной проверки.`,
       tone: "border-warning/40 bg-warning/10 text-warning",
       icon: <AlertTriangle size={16} aria-hidden="true" />,
     },

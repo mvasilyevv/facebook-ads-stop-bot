@@ -48,8 +48,8 @@ describe("DisplayTab server preference", () => {
   it("writes the IANA timezone to the shared server preference", () => {
     render(<DisplayTab />);
 
-    expect(screen.getByText(/Сохранённый timezone: Europe\/Kaliningrad/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("IANA timezone"), {
+    expect(screen.getByText(/Сохранённый часовой пояс: Europe\/Kaliningrad/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Часовой пояс"), {
       target: { value: "Europe/London" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -75,7 +75,7 @@ describe("DisplayTab server preference", () => {
   it("leaves semantic IANA validation to the backend authority", () => {
     render(<DisplayTab />);
 
-    fireEvent.change(screen.getByLabelText("IANA timezone"), {
+    fireEvent.change(screen.getByLabelText("Часовой пояс"), {
       target: { value: "Mars/Olympus" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -96,7 +96,7 @@ describe("DisplayTab server preference", () => {
     render(<DisplayTab />);
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Не удалось загрузить timezone отображения",
+      "Не удалось загрузить часовой пояс отображения",
     );
     expect(screen.queryByText(/traceback|postgres|00000000-/i)).not.toBeInTheDocument();
   });

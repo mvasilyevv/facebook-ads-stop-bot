@@ -14,9 +14,14 @@ import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 
 import { ActionList } from "@/features/operator/OperatorDashboard";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Drawer } from "@/components/ui/Drawer";
-import { ErrorState } from "@/components/ui/ErrorState";
+import {
+  OperatorListSkeleton,
+  OperatorPageBoundary,
+  OperatorUnavailableState,
+} from "@/components/layout/OperatorPageBoundary";
 import {
   operatorProblemMessage,
   useOperatorActions,
@@ -67,30 +72,31 @@ function ActionsPage() {
 
   if (query.isError && !query.data) {
     return (
-      <ErrorState
-        title="Действия недоступны"
-        error={operatorProblemMessage(query.error)}
-        onRetry={() => void query.refetch()}
-      />
+      <OperatorPageBoundary
+        eyebrowNum="01"
+        eyebrow="ОПЕРАЦИИ · ДЕЙСТВИЯ"
+        title="Действия"
+        subtitle="Очередь, выполнение и подтверждённый результат"
+      >
+        <OperatorUnavailableState
+          title="Действия недоступны"
+          resource="историю действий"
+          details={operatorProblemMessage(query.error)}
+          onRetry={() => void query.refetch()}
+        />
+      </OperatorPageBoundary>
     );
   }
 
   return (
     <div className="mx-auto max-w-5xl">
-      <header className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <div className="font-display text-[12px] uppercase tracking-[.08em] text-bg-8">
-            Операторский контур
-          </div>
-          <h1 className="m-0 mt-2 font-display text-[clamp(28px,4vw,42px)] font-medium text-bg-11">
-            Действия
-          </h1>
-          <p className="mt-2 text-[16px] text-bg-9">
-            Lifecycle от постановки в очередь до подтверждённого результата.
-          </p>
-        </div>
-        <DataStateBadge state={dataState} />
-      </header>
+      <PageHeader
+        eyebrowNum="01"
+        eyebrow="ОПЕРАЦИИ · ДЕЙСТВИЯ"
+        title="Действия"
+        subtitle="Очередь, выполнение и подтверждённый результат"
+        action={<DataStateBadge state={dataState} />}
+      />
 
       <div className="mb-4 md:hidden">
         <Button
@@ -110,7 +116,7 @@ function ActionsPage() {
           open={filtersOpen}
           onOpenChange={setFiltersOpen}
           title="Фильтры действий"
-          description="Кабинет и состояние lifecycle"
+          description="Кабинет и состояние действия"
           width={480}
           returnFocusRef={filterTriggerRef}
         >
@@ -128,15 +134,13 @@ function ActionsPage() {
       <section className="rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5">
         <h2 className="m-0 font-display text-[20px] text-bg-11">Очередь и история</h2>
         <p className="mt-1 text-[14px] text-bg-9">
-          Unknown означает проверку фактического результата, а не успешное завершение.
+          Неизвестный результат означает проверку фактического результата, а не успешное завершение.
         </p>
         {dataState !== "ready" && !query.isPending ? (
           <DataStateNotice state={dataState} issues={projection?.issues ?? []} />
         ) : null}
         {query.isPending && !items.length ? (
-          <div role="status" className="py-12 text-center text-[16px] text-bg-9">
-            Загрузка действий…
-          </div>
+          <OperatorListSkeleton label="Загрузка действий" />
         ) : (
           <ActionList items={items} />
         )}

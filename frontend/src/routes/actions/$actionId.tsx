@@ -20,7 +20,11 @@ import type { OperatorActionItem } from "@fb/shared/operator/contracts";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
-import { ErrorState } from "@/components/ui/ErrorState";
+import {
+  OperatorCardSkeleton,
+  OperatorPageBoundary,
+  OperatorUnavailableState,
+} from "@/components/layout/OperatorPageBoundary";
 import { operatorProblemMessage, useOperatorAction } from "@/lib/api/operator";
 
 export const Route = createFileRoute("/actions/$actionId")({ component: ActionDetailPage });
@@ -39,26 +43,47 @@ function ActionDetailPage() {
 
   if (actionQuery.isError && !projection) {
     return (
-      <ErrorState
-        title="Действие недоступно"
-        error={operatorProblemMessage(actionQuery.error)}
-        onRetry={() => void actionQuery.refetch()}
-      />
+      <OperatorPageBoundary
+        eyebrowNum="01"
+        eyebrow="ОПЕРАЦИИ · ДЕЙСТВИЯ"
+        title="Действие"
+        navigation={<ActionBreadcrumb />}
+      >
+        <OperatorUnavailableState
+          title="Действие недоступно"
+          resource="действие"
+          details={operatorProblemMessage(actionQuery.error)}
+          onRetry={() => void actionQuery.refetch()}
+        />
+      </OperatorPageBoundary>
     );
   }
   if (actionQuery.isPending && !projection) {
     return (
-      <div role="status" className="py-16 text-center text-[16px] text-bg-9">
-        Загрузка действия…
-      </div>
+      <OperatorPageBoundary
+        eyebrowNum="01"
+        eyebrow="ОПЕРАЦИИ · ДЕЙСТВИЯ"
+        title="Действие"
+        navigation={<ActionBreadcrumb />}
+      >
+        <OperatorCardSkeleton label="Загрузка действия" />
+      </OperatorPageBoundary>
     );
   }
   if (!action) {
     return (
-      <ErrorState
-        title="Действие не найдено"
-        error={`Задача #${actionId} отсутствует или недоступна.`}
-      />
+      <OperatorPageBoundary
+        eyebrowNum="01"
+        eyebrow="ОПЕРАЦИИ · ДЕЙСТВИЯ"
+        title="Действие"
+        navigation={<ActionBreadcrumb />}
+      >
+        <OperatorUnavailableState
+          title="Действие не найдено"
+          resource="действие"
+          details={`Задача #${actionId} отсутствует или недоступна.`}
+        />
+      </OperatorPageBoundary>
     );
   }
   const recovery = operatorActionRecovery(action.state, action.target_id);
@@ -102,7 +127,7 @@ function ActionDetailPage() {
       </header>
 
       <section className="mt-5 rounded-[var(--radius-3)] border border-[var(--color-hairline)] bg-bg-1 p-5 sm:p-6">
-        <h2 className="m-0 font-display text-[20px] text-bg-11">Lifecycle</h2>
+        <h2 className="m-0 font-display text-[20px] text-bg-11">Жизненный цикл</h2>
         <LifecycleRail state={action.state} />
         <dl className="mt-6 grid gap-px overflow-hidden rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-[var(--color-hairline)] sm:grid-cols-2">
           <Detail
@@ -158,6 +183,17 @@ function ActionDetailPage() {
         </div>
       </section>
     </article>
+  );
+}
+
+function ActionBreadcrumb() {
+  return (
+    <Link
+      to="/actions"
+      className="inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] px-2 text-[14px] font-semibold text-bg-9 hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-accent"
+    >
+      <ArrowLeft size={16} aria-hidden="true" /> Все действия
+    </Link>
   );
 }
 

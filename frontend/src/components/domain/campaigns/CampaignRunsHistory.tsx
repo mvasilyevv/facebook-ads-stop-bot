@@ -38,7 +38,7 @@ import { Badge, type BadgeVariant } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ErrorState } from "@/components/ui/ErrorState";
+import { OperatorUnavailableState } from "@/components/layout/OperatorPageBoundary";
 import { Select } from "@/components/ui/Select";
 import { toast } from "@/components/ui/Toast";
 import {
@@ -51,6 +51,7 @@ import {
   type RunStatus,
 } from "@/lib/api/campaigns";
 import { CampaignRunManualReview } from "./CampaignRunManualReview";
+import { formatRussianCount } from "@/lib/utils/russianCount";
 
 // ─── Цвета статуса ────────────────────────────────────────────────────────────
 
@@ -108,7 +109,14 @@ export const CampaignRunsHistory: FC = () => {
   }
 
   if (isError) {
-    return <ErrorState error={error} onRetry={() => void refetch()} />;
+    return (
+      <OperatorUnavailableState
+        title="История запусков недоступна"
+        resource="историю запусков"
+        details={error instanceof Error ? error.message : undefined}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   return (
@@ -127,7 +135,9 @@ export const CampaignRunsHistory: FC = () => {
             />
           </div>
           <span className="shrink-0 text-[12px] text-bg-8">
-            {total > 0 ? `${total} запусков` : "нет запусков"}
+            {total > 0
+              ? formatRussianCount(total, "запуск", "запуска", "запусков")
+              : "нет запусков"}
           </span>
         </div>
         <Button
@@ -288,7 +298,12 @@ function RunExpandedDetails({
   if (query.isError) {
     return (
       <div className="mx-4 mb-3 mt-1">
-        <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+        <OperatorUnavailableState
+          title="Детали запуска недоступны"
+          resource="детали запуска"
+          details={query.error instanceof Error ? query.error.message : undefined}
+          onRetry={() => void query.refetch()}
+        />
       </div>
     );
   }

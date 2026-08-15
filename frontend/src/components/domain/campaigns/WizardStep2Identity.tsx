@@ -26,6 +26,7 @@ import { useAdAccountContext, useAdAccountPages } from "@/lib/api/campaigns";
 import { useOffers } from "@/lib/api/offers";
 import type { Offer } from "@fb/shared";
 import type { WizardGoal, WizardIdentity } from "@/stores/campaignWizard";
+import { formatRussianCount } from "@/lib/utils/russianCount";
 
 interface WizardStep2IdentityProps {
   values: WizardIdentity;
@@ -321,7 +322,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
                 </>
               ) : (
                 <span className="text-bg-9">
-                  Выберите кабинет оффера — timezone и валюта подтянутся из снимка Meta
+                  Выберите кабинет оффера — часовой пояс и валюта подтянутся из снимка Meta
                 </span>
               )}
             </div>
@@ -343,7 +344,12 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
             </span>
             <span className="mt-2 block">
               {(values.ad_account_ids ?? []).length > 0
-                ? `${values.ad_account_ids?.length ?? 0} отдельных запусков`
+                ? formatRussianCount(
+                    values.ad_account_ids?.length ?? 0,
+                    "отдельный запуск",
+                    "отдельных запуска",
+                    "отдельных запусков",
+                  )
                 : "Кабинеты ещё не выбраны"}
             </span>
           </div>

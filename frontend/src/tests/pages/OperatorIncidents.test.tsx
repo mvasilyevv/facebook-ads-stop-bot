@@ -140,6 +140,22 @@ describe("operator incident journal", () => {
     expect(screen.queryByText("Данные актуальны")).not.toBeInTheDocument();
   });
 
+  it("keeps the journal heading visible when incidents are unavailable", () => {
+    useOperatorIncidents.mockReturnValue({
+      data: undefined,
+      isError: true,
+      isPending: false,
+      isFetching: false,
+      error: new Error("Журнал инцидентов недоступен"),
+      refetch,
+    });
+
+    render(<IncidentsPage />);
+
+    expect(screen.getByRole("heading", { name: "Инциденты" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
   it("acknowledges an open incident in one tap and refreshes the journal", async () => {
     render(<IncidentsPage />);
 

@@ -121,7 +121,7 @@ describe("analytics route fail-closed state", () => {
 
     render(<AnalyticsPage />);
 
-    expect(screen.getByText(/Данные не показаны в другом timezone/i)).toBeInTheDocument();
+    expect(screen.getByText(/Данные не показаны в другом часовом поясе/i)).toBeInTheDocument();
     expect(
       screen.getByText("Откройте настройки отображения или повторите запрос"),
     ).toBeInTheDocument();
