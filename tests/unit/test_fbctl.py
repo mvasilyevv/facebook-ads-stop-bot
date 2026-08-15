@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import socket
 import subprocess
 import time
 from contextlib import asynccontextmanager
@@ -51,6 +52,7 @@ from fbctl.controller import (
     DeployOptions,
     ProductionController,
     _normalize_profile_tree,
+    _tcp_port_is_occupied,
     bootstrap_host,
 )
 from fbctl.errors import FbctlError
@@ -2907,3 +2909,35 @@ def test_preflight_waits_out_a_socket_the_kernel_has_not_released(tmp_path: Path
 
     postgres_probe = ("127.0.0.1", int(config.values["POSTGRES_HOST_PORT"]))
     assert probe.calls.count(postgres_probe) > 1
+
+
+def test_port_probe_asks_the_same_way_the_runtime_binds() -> None:
+    """Проба обязана спрашивать порт так же, как его занимает Docker.
+
+    Docker публикует порты с SO_REUSEADDR. Без него догорающий сокет в
+    TIME_WAIT читается как занятый порт, хотя runtime занял бы его без
+    помех: гейт оказывается строже реальности и валит деплой сразу после
+    остановки контейнеров. Активный слушатель при этом обязан остаться
+    виден — ради него гейт и существует.
+    """
+    scout = socket.socket()
+    scout.bind(("127.0.0.1", 0))
+    port = scout.getsockname()[1]
+    scout.close()
+
+    assert _tcp_port_is_occupied("127.0.0.1", port) is False
+
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", port))
+    listener.listen(1)
+    try:
+        assert _tcp_port_is_occupied("127.0.0.1", port) is True
+        client = socket.create_connection(("127.0.0.1", port))
+        accepted, _peer = listener.accept()
+        client.close()
+        accepted.close()
+    finally:
+        listener.close()
+
+    assert _tcp_port_is_occupied("127.0.0.1", port) is False

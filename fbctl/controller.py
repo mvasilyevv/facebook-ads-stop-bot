@@ -160,6 +160,11 @@ REHEARSAL_FAILPOINTS = (
 def _tcp_port_is_occupied(host: str, port: int) -> bool:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            # Docker публикует порты с SO_REUSEADDR, поэтому и проба обязана
+            # спрашивать так же. Без него догорающий сокет в TIME_WAIT читается
+            # как занятый порт, хотя runtime занял бы его без помех — гейт
+            # получается строже реальности и валит деплой на ровном месте.
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((host, port))
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
