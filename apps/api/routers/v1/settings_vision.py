@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from apps.api.deps import DepEngine, DepMetaApiClient, DepSettings
 from apps.api.routers.v1.schemas.settings_vision import (
     VisionEnsureCdpResponse,
+    VisionProfileOption,
+    VisionProfilesResponse,
     VisionReconnectResponse,
     VisionSettingsResponse,
     VisionSettingsUpdateRequest,
@@ -42,6 +44,7 @@ from core.vision.channel import (
     assess_vision_channel,
 )
 from core.vision.cloud_probe import probe_vision_cloud
+from core.vision.cloud_profiles import list_vision_profiles
 from core.vision_runtime import VisionConfigurationError, load_vision_runtime_config
 
 logger = logging.getLogger(__name__)
@@ -160,6 +163,7 @@ async def _diagnose_vision_channel(
                     settings.vision_cloud_url,  # type: ignore[attr-defined]
                     token=runtime.x_token,
                     profile_id=runtime.profile_id,
+                    folder_id=runtime.folder_id or "",
                 )
             ).state
         except Exception as exc:  # noqa: BLE001 - diagnostics must fail closed
@@ -381,6 +385,112 @@ async def get_vision_settings(
         live_profile_id=probe.live_profile_id,
         graph_probe_performed=probe.graph_probe_performed,
         graph_probe_ok=probe.graph_probe_ok,
+    )
+
+
+_PROFILES_UNAVAILABLE: dict[str, str] = {
+    "TOKEN_MISSING": "Токен Vision не задан, поэтому список профилей недоступен.",
+    "FOLDER_NOT_CONFIGURED": (
+        "Папка Vision не задана, а профили перечисляются только внутри папки."
+    ),
+    "TOKEN_REJECTED": "Облако Vision отвергло токен, список профилей получить не удалось.",
+    "FOLDER_NOT_FOUND": "Облако Vision не знает такой папки. Проверьте Folder ID.",
+    "CLOUD_UNAVAILABLE": (
+        "Облако Vision не ответило. Список профилей покажем, когда связь вернётся."
+    ),
+}
+
+
+@_settings_router.get("/profiles", response_model=VisionProfilesResponse)
+async def get_vision_profiles(
+    engine: DepEngine,
+    settings: DepSettings,
+) -> VisionProfilesResponse:
+    """Живой список профилей настроенной папки Vision.
+
+    Читается из облака на каждый запрос и не кэшируется: имена, статусы и сами
+    идентификаторы меняются на стороне Vision, и оператор должен видеть их
+    такими, какие они сейчас. Ответ не содержит токена.
+    """
+
+    async with AsyncSession(engine) as session:
+        snapshot = _snapshot(await _load_config(session))
+
+    selected = ((snapshot.profile_id or "").strip() or None) if snapshot else None
+
+    def unavailable(reason: str) -> VisionProfilesResponse:
+        return VisionProfilesResponse(
+            state="unavailable",
+            reason=reason,  # type: ignore[arg-type]
+            message=_PROFILES_UNAVAILABLE[reason],
+            selected_profile_id=selected,
+            selected_present=False,
+        )
+
+    if not (snapshot and (snapshot.x_token_encrypted or "").strip()):
+        return unavailable("TOKEN_MISSING")
+    if not (snapshot.folder_id_encrypted or "").strip():
+        return unavailable("FOLDER_NOT_CONFIGURED")
+
+    try:
+        runtime = await load_vision_runtime_config(engine)
+    except VisionConfigurationError:
+        return unavailable("TOKEN_MISSING")
+    if not (runtime.folder_id or "").strip():
+        return unavailable("FOLDER_NOT_CONFIGURED")
+
+    try:
+        profiles = await list_vision_profiles(
+            settings.vision_cloud_url,  # type: ignore[attr-defined]
+            token=runtime.x_token,
+            folder_id=runtime.folder_id or "",
+        )
+    except Exception as exc:  # noqa: BLE001 - список не должен ронять настройки
+        logger.warning("Vision profile listing failed: error_type=%s", type(exc).__name__)
+        return unavailable("CLOUD_UNAVAILABLE")
+
+    if profiles.state == "token_rejected":
+        return unavailable("TOKEN_REJECTED")
+    if profiles.state == "folder_not_found":
+        return unavailable("FOLDER_NOT_FOUND")
+    if profiles.state != "ready":
+        return unavailable("CLOUD_UNAVAILABLE")
+
+    items = [
+        VisionProfileOption(
+            id=profile.id,
+            name=profile.name,
+            status=profile.status,
+            tags=list(profile.tags),
+            running=profile.running,
+            last_run_at=profile.last_run_at,
+        )
+        for profile in profiles.items
+    ]
+
+    if not items:
+        return VisionProfilesResponse(
+            state="empty",
+            reason="EMPTY",
+            message="В папке Vision нет ни одного профиля.",
+            selected_profile_id=selected,
+            selected_present=False,
+        )
+
+    present = any(item.id == selected for item in items) if selected else False
+    return VisionProfilesResponse(
+        state="ready",
+        reason="READY",
+        # Подставлять другой профиль вместо исчезнувшего нельзя: это чужой
+        # кабинет и чужие деньги. Оператор выбирает заново сам.
+        message=(
+            "Настроенный профиль исчез из облака: его переименовали, пересоздали или удалили."
+            if selected and not present
+            else ""
+        ),
+        items=items,
+        selected_profile_id=selected,
+        selected_present=present,
     )
 
 

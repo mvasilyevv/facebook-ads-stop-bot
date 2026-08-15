@@ -1399,6 +1399,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/settings/vision/profiles": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Vision Profiles
+     * @description Живой список профилей настроенной папки Vision.
+     *
+     *     Читается из облака на каждый запрос и не кэшируется: имена, статусы и сами
+     *     идентификаторы меняются на стороне Vision, и оператор должен видеть их
+     *     такими, какие они сейчас. Ответ не содержит токена.
+     */
+    get: operations["get_vision_profiles_api_settings_vision_profiles_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/vision/reconnect": {
     parameters: {
       query?: never;
@@ -4931,6 +4955,77 @@ export interface components {
        * @default
        */
       message: string;
+    };
+    /**
+     * VisionProfileOption
+     * @description Профиль облака так, как его видит оператор в списке.
+     */
+    VisionProfileOption: {
+      /** Id */
+      id: string;
+      /** Name */
+      name: string;
+      /** Status */
+      status?: string | null;
+      /**
+       * Tags
+       * @default []
+       */
+      tags: string[];
+      /**
+       * Running
+       * @default false
+       */
+      running: boolean;
+      /** Last Run At */
+      last_run_at?: string | null;
+    };
+    /**
+     * VisionProfilesResponse
+     * @description Живой список профилей папки.
+     *
+     *     Ответ никогда не кэшируется: список читается из облака на каждый запрос,
+     *     поэтому переименование или пересоздание профиля видно сразу. Если
+     *     настроенный профиль пропал из облака, `selected_present` становится
+     *     `false` — молча подставлять другой профиль нельзя, это чужой кабинет.
+     */
+    VisionProfilesResponse: {
+      /**
+       * State
+       * @default unavailable
+       * @enum {string}
+       */
+      state: "ready" | "empty" | "unavailable";
+      /**
+       * Reason
+       * @default CLOUD_UNAVAILABLE
+       * @enum {string}
+       */
+      reason:
+        | "READY"
+        | "EMPTY"
+        | "TOKEN_MISSING"
+        | "TOKEN_REJECTED"
+        | "FOLDER_NOT_CONFIGURED"
+        | "FOLDER_NOT_FOUND"
+        | "CLOUD_UNAVAILABLE";
+      /**
+       * Message
+       * @default
+       */
+      message: string;
+      /**
+       * Items
+       * @default []
+       */
+      items: components["schemas"]["VisionProfileOption"][];
+      /** Selected Profile Id */
+      selected_profile_id?: string | null;
+      /**
+       * Selected Present
+       * @default false
+       */
+      selected_present: boolean;
     };
     /**
      * VisionReconnectResponse
@@ -8936,6 +9031,35 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_vision_profiles_api_settings_vision_profiles_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VisionProfilesResponse"];
         };
       };
       /** @description Canonical API error */

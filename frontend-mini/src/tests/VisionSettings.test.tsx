@@ -23,6 +23,21 @@ vi.mock("@/lib/api", () => ({
     error: null,
     refetch: vi.fn(),
   }),
+  useVisionProfiles: () => ({
+    data: {
+      state: "ready",
+      reason: "READY",
+      message: "",
+      items: [
+        { id: "profile-1", name: "Desk 10", status: null, tags: [], running: false },
+      ],
+      selected_profile_id: "profile-1",
+      selected_present: true,
+    },
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  }),
   useUpdateVisionSettings: () => ({
     mutateAsync: updateVision,
     isPending: false,

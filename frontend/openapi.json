@@ -5490,6 +5490,36 @@
         }
       }
     },
+    "/api/settings/vision/profiles": {
+      "get": {
+        "tags": ["settings", "settings"],
+        "summary": "Get Vision Profiles",
+        "description": "Живой список профилей настроенной папки Vision.\n\nЧитается из облака на каждый запрос и не кэшируется: имена, статусы и сами\nидентификаторы меняются на стороне Vision, и оператор должен видеть их\nтакими, какие они сейчас. Ответ не содержит токена.",
+        "operationId": "get_vision_profiles_api_settings_vision_profiles_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionProfilesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Canonical API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/vision/reconnect": {
       "post": {
         "tags": ["settings", "settings"],
@@ -14531,6 +14561,113 @@
         "type": "object",
         "title": "VisionEnsureCdpResponse",
         "description": "Ответ на POST /vision/ensure-cdp для platform desktop healer.\n\nКонтракт: ok|status|action|message. Эндпоинт никогда не падает 5xx; при\nнедоступности browser-agent возвращает ok=false с пояснением."
+      },
+      "VisionProfileOption": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags",
+            "default": []
+          },
+          "running": {
+            "type": "boolean",
+            "title": "Running",
+            "default": false
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          }
+        },
+        "type": "object",
+        "required": ["id", "name"],
+        "title": "VisionProfileOption",
+        "description": "Профиль облака так, как его видит оператор в списке."
+      },
+      "VisionProfilesResponse": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": ["ready", "empty", "unavailable"],
+            "title": "State",
+            "default": "unavailable"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "READY",
+              "EMPTY",
+              "TOKEN_MISSING",
+              "TOKEN_REJECTED",
+              "FOLDER_NOT_CONFIGURED",
+              "FOLDER_NOT_FOUND",
+              "CLOUD_UNAVAILABLE"
+            ],
+            "title": "Reason",
+            "default": "CLOUD_UNAVAILABLE"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": ""
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VisionProfileOption"
+            },
+            "type": "array",
+            "title": "Items",
+            "default": []
+          },
+          "selected_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Profile Id"
+          },
+          "selected_present": {
+            "type": "boolean",
+            "title": "Selected Present",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "VisionProfilesResponse",
+        "description": "Живой список профилей папки.\n\nОтвет никогда не кэшируется: список читается из облака на каждый запрос,\nпоэтому переименование или пересоздание профиля видно сразу. Если\nнастроенный профиль пропал из облака, `selected_present` становится\n`false` — молча подставлять другой профиль нельзя, это чужой кабинет."
       },
       "VisionReconnectResponse": {
         "properties": {
