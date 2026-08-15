@@ -82,6 +82,13 @@ printf '%s\n%s\n' \
   | gosu "${runtime_user}" kasmvncpasswd \
       -u "${DESKTOP_KASM_SERVICE_USER}" -w "${password_file}"
 
+# Сервер ищет пользователей в ${HOME}/.kasmpasswd и путь из конфига для этого
+# не использует — без ссылки он стартует с «No users configured». Сам пароль
+# остаётся в /run и на диск не попадает: в профиле лежит сессия Facebook,
+# добавлять туда ещё и служебный пароль незачем.
+ln -sfn "${password_file}" "${config_home}/.kasmpasswd"
+chown -h "${requested_uid}:${requested_gid}" "${config_home}/.kasmpasswd"
+
 if DISPLAY="${display}" xdpyinfo >/dev/null 2>&1; then
   printf 'Display %s is already served by another process\n' "${display}" >&2
   exit 1

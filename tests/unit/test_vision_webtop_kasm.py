@@ -162,3 +162,6 @@ def test_entrypoint_installs_managed_config_into_the_mounted_profile() -> None:
     # быть валидными: log_dest: stdout эта сборка отвергает при разборе.
     assert "log_dest: logfile" in config
     assert "log_dest: stdout" not in config
+    # Сервер ищет пользователей только в ${HOME}/.kasmpasswd, поэтому ссылка
+    # обязательна; сам пароль остаётся в /run и на диск профиля не попадает.
+    assert 'ln -sfn "${password_file}" "${config_home}/.kasmpasswd"' in entrypoint
