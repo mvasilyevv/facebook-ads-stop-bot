@@ -162,4 +162,6 @@ message ScannedAdRow {
   string adset_budget_remaining = 32;   // budget_remaining адсета
   string adset_learning_stage = 33;     // learning_stage_info.status (LEARNING/LEARNING_LIMITED/"")
   string adset_id = 34;                 // канонический Meta adset.id из Graph ads edge
+  // Причина отклонения из ad_review_feedback/issues_info. Отсутствие означает unknown.
+  optional string moderation_reason = 35;
 }

@@ -8,6 +8,7 @@ import { formatDecimalValue, formatSpend } from "@fb/shared/format/number";
 import {
   confirmedOperatorCurrency,
   formatOperatorCount,
+  operatorDeliveryLabel,
 } from "@fb/shared/operator/adsViewModel";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import {
@@ -212,7 +213,7 @@ export function MiniAdDetail({ fbAdId }: { fbAdId: string }) {
           <dl className="mt-4 grid gap-3">
             <Field
               label="Доставка"
-              value={ad.delivery_status ?? "Не подтверждено"}
+              value={operatorDeliveryLabel(ad.delivery_status)}
             />
             <Field label="Кампания" value={ad.campaign_name} />
             <Field label="Адсет" value={ad.adset_name} />

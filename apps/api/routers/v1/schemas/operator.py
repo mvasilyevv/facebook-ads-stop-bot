@@ -336,7 +336,13 @@ class OperatorAdRow(BaseModel):
     adset_id: str
     adset_name: str
     account_id: str | None
-    delivery_status: str | None
+    delivery_status: str | None = Field(
+        description=(
+            "Точный нормализованный Meta effective_status (например ACTIVE, "
+            "DISAPPROVED, WITH_ISSUES, PENDING_REVIEW, ADSET_PAUSED или "
+            "CAMPAIGN_PAUSED); null означает, что статус не подтверждён."
+        )
+    )
     data_state: DataState
     severity: OperatorSeverity
     as_of: datetime | None

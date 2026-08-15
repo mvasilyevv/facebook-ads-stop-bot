@@ -15,6 +15,7 @@ function completeRow(overrides: Partial<ScannedAdRow> = {}): ScannedAdRow {
     adset_name: 'KE broad',
     ad_name: 'Creative 1',
     delivery_status: 'ACTIVE',
+    moderation_reason: null,
     spend: '1.00',
     budget: '',
     reach: 1,

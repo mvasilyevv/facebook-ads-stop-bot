@@ -126,6 +126,7 @@ class MetaApiAdRow:
     frequency: Decimal | None
     actions: dict[str, int] = field(default_factory=dict)
     observed_at: datetime | None = None
+    moderation_reason: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

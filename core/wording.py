@@ -135,8 +135,15 @@ def action_label_ru(kind: str) -> str:
 # Статус доставки объявления в Meta: оператор читает «включено», а не ACTIVE.
 _DELIVERY_STATUS_LABELS: dict[str, str] = {
     "ACTIVE": "включённое",
+    "WITH_ISSUES": "включённое с замечаниями",
     "PAUSED": "выключенное",
     "OFF": "выключенное",
+    "ADSET_PAUSED": "выключенное адсетом",
+    "CAMPAIGN_PAUSED": "выключенное кампанией",
+    "PENDING_REVIEW": "ожидающее модерации",
+    "IN_REVIEW": "ожидающее модерации",
+    "DISAPPROVED": "отклонённое",
+    "NOT_DELIVERING": "не доставляющееся",
     "DELETED": "удалённое",
     "ARCHIVED": "архивное",
 }

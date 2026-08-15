@@ -7,6 +7,7 @@ from datetime import date
 from decimal import Decimal
 
 from core.meta_api.adapters import (
+    extract_moderation_reason,
     flatten_actions,
     merge_insights_and_ad,
     meta_api_ad_row_to_scanned_row,
@@ -85,6 +86,9 @@ def test_merge_insights_and_ad() -> None:
         "effective_status": "ACTIVE",
         "campaign": {"id": "cmp_1", "name": "DRC_CR2 | KE"},
         "adset": {"id": "as_1", "name": "EQ_KE"},
+        "ad_review_feedback": {
+            "global": {"Personal attributes": "Creative implies personal attributes."}
+        },
     }
     api_row = merge_insights_and_ad(ad=ad, insights=insights, ad_account_id="act_42")
     assert api_row.fb_ad_id == "ad_1"
@@ -92,6 +96,9 @@ def test_merge_insights_and_ad() -> None:
     assert api_row.campaign_name == "DRC_CR2 | KE"
     assert api_row.adset_name == "EQ_KE"
     assert api_row.effective_status == "ACTIVE"
+    assert api_row.moderation_reason == (
+        "Personal attributes: Creative implies personal attributes."
+    )
     assert api_row.spend == Decimal("10.00")
 
 
@@ -121,7 +128,7 @@ def test_meta_api_ad_row_to_scanned_row_basic() -> None:
     assert scanned.fb_ad_id == "ad_1"
     assert scanned.campaign_id == "cmp"
     assert scanned.adset_id == "as"
-    assert scanned.delivery_status == "Active"  # маппинг ACTIVE → Active
+    assert scanned.delivery_status == "ACTIVE"
     assert scanned.spend == Decimal("20")
     assert scanned.leads == 4
     assert scanned.cost_per_lead == Decimal("5")  # 20 / 4
@@ -158,4 +165,36 @@ def test_to_scanned_row_no_zero_division() -> None:
     assert scanned.cost_per_lead is None
     assert scanned.cost_per_registration is None
     assert scanned.cost_per_landing_page_view is None
-    assert scanned.delivery_status == "Paused"
+    assert scanned.delivery_status == "PAUSED"
+
+
+def test_extract_moderation_reason_is_unknown_without_meta_evidence() -> None:
+    assert extract_moderation_reason({"effective_status": "DISAPPROVED"}) is None
+
+
+def test_moderation_reason_reaches_scanned_row() -> None:
+    api = MetaApiAdRow(
+        fb_ad_id="ad_3",
+        fb_campaign_id="cmp",
+        fb_adset_id="as",
+        ad_account_id="act_1",
+        name="Rejected creative",
+        campaign_name="Campaign",
+        adset_name="Adset",
+        effective_status="DISAPPROVED",
+        configured_status="ACTIVE",
+        spend=Decimal("0"),
+        impressions=0,
+        clicks=0,
+        cpc=None,
+        ctr=None,
+        cpm=None,
+        reach=0,
+        frequency=None,
+        moderation_reason="Policy: misleading claims",
+    )
+
+    scanned = meta_api_ad_row_to_scanned_row(api)
+
+    assert scanned.delivery_status == "DISAPPROVED"
+    assert scanned.moderation_reason == "Policy: misleading claims"

@@ -86,5 +86,8 @@ def test_action_labels_are_human() -> None:
 
 def test_delivery_status_is_human() -> None:
     assert delivery_status_ru("ACTIVE") == "включённое"
+    assert delivery_status_ru("DISAPPROVED") == "отклонённое"
+    assert delivery_status_ru("WITH_ISSUES") == "включённое с замечаниями"
+    assert delivery_status_ru("CAMPAIGN_PAUSED") == "выключенное кампанией"
     assert delivery_status_ru("paused") == "выключенное"
     assert delivery_status_ru("SOMETHING_NEW") == "SOMETHING_NEW"

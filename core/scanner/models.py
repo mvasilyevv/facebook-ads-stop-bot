@@ -22,6 +22,8 @@ class ScannedAdRow:
     ad_name: str
     delivery_status: str
     spend: Decimal
+    # Meta может не вернуть ad_review_feedback/issues_info: это unknown, не пустая причина.
+    moderation_reason: str | None = None
     budget: str = ""
     # Meta campaign.id/adset.id из Graph. Пустое/нечисловое значение делает весь скан partial.
     campaign_id: str = ""

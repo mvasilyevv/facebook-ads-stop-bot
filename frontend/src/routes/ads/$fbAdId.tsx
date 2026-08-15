@@ -3,7 +3,11 @@ import { ArrowLeft } from "lucide-react";
 
 import { formatZonedDateTime, timezoneEvidenceLabel } from "@fb/shared/format/time";
 import { formatDecimalValue, formatSpend } from "@fb/shared/format/number";
-import { confirmedOperatorCurrency, formatOperatorCount } from "@fb/shared/operator/adsViewModel";
+import {
+  confirmedOperatorCurrency,
+  formatOperatorCount,
+  operatorDeliveryLabel,
+} from "@fb/shared/operator/adsViewModel";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import { adsForRealtimeState, severityForDataState } from "@fb/shared/operator/viewModel";
 import { DataStateBadge, DataStateNotice, StopProximityReadout } from "@fb/operator-ui";
@@ -158,7 +162,7 @@ function AdDetailRoute() {
             Контекст
           </h2>
           <dl className="mt-5 grid gap-4 text-[14px]">
-            <Field label="Доставка" value={ad.delivery_status ?? "Не подтверждено"} />
+            <Field label="Доставка" value={operatorDeliveryLabel(ad.delivery_status)} />
             <Field label="Кампания" value={ad.campaign_name} />
             <Field label="Адсет" value={ad.adset_name} />
             <Field label="Кабинет" value={ad.account_id ?? "Не указан"} />

@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseAmTabular, mergeAmRows, parseLightList, lightNextCursor } from './am-parser.js';
+import {
+  extractModerationReason,
+  parseAmTabular,
+  mergeAmRows,
+  parseLightList,
+  lightNextCursor,
+} from './am-parser.js';
 import { buildScannedRow, buildScannedRows, mapEffectiveStatus } from './am-join.js';
 
 // Заголовки per-ad ответа am_tabular — точная копия боевой структуры (level=ad).
@@ -254,13 +260,13 @@ test('buildScannedRows: батч + meta по ad_id', () => {
 // mapEffectiveStatus: коды FB → стабильные delivery_status (без зависимости от локали).
 test('mapEffectiveStatus: коды статусов', () => {
   assert.equal(mapEffectiveStatus('ACTIVE'), 'ACTIVE');
-  assert.equal(mapEffectiveStatus('PAUSED'), 'OFF');
-  assert.equal(mapEffectiveStatus('ADSET_PAUSED'), 'OFF');
-  assert.equal(mapEffectiveStatus('CAMPAIGN_PAUSED'), 'OFF');
-  assert.equal(mapEffectiveStatus('ARCHIVED'), 'OFF');
-  assert.equal(mapEffectiveStatus('PENDING_REVIEW'), 'IN_REVIEW');
-  assert.equal(mapEffectiveStatus('DISAPPROVED'), 'NOT_DELIVERING');
-  assert.equal(mapEffectiveStatus('WITH_ISSUES'), 'NOT_DELIVERING');
+  assert.equal(mapEffectiveStatus('PAUSED'), 'PAUSED');
+  assert.equal(mapEffectiveStatus('ADSET_PAUSED'), 'ADSET_PAUSED');
+  assert.equal(mapEffectiveStatus('CAMPAIGN_PAUSED'), 'CAMPAIGN_PAUSED');
+  assert.equal(mapEffectiveStatus('ARCHIVED'), 'ARCHIVED');
+  assert.equal(mapEffectiveStatus('PENDING_REVIEW'), 'PENDING_REVIEW');
+  assert.equal(mapEffectiveStatus('DISAPPROVED'), 'DISAPPROVED');
+  assert.equal(mapEffectiveStatus('WITH_ISSUES'), 'WITH_ISSUES');
   assert.equal(mapEffectiveStatus(''), 'UNKNOWN');
   assert.equal(mapEffectiveStatus(undefined), 'UNKNOWN');
 });
@@ -292,6 +298,34 @@ test('parseLightList: id-only и расширенный', () => {
 
   assert.deepEqual(parseLightList(null), []);
   assert.deepEqual(parseLightList({ data: 'x' }), []);
+});
+
+test('parseLightList: причина отклонения остаётся nullable и приходит из Meta', () => {
+  const [rejected, unknown] = parseLightList({
+    data: [
+      {
+        id: '111',
+        effective_status: 'DISAPPROVED',
+        ad_review_feedback: {
+          global: {
+            'Personal attributes': 'Ads must not imply personal attributes.',
+          },
+        },
+        issues_info: [
+          {
+            error_summary: 'Policy issue',
+            error_message: 'Creative must be corrected',
+          },
+        ],
+      },
+      { id: '222', effective_status: 'DISAPPROVED' },
+    ],
+  });
+
+  assert.match(rejected.moderationReason ?? '', /Personal attributes/);
+  assert.match(rejected.moderationReason ?? '', /Creative must be corrected/);
+  assert.equal(unknown.moderationReason, undefined);
+  assert.equal(extractModerationReason({ ad_review_feedback: null }), undefined);
 });
 
 // parseLightList: новые поля крео/пиксель/budget_remaining/learning читаются у ад'ов и адсетов.

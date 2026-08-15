@@ -219,9 +219,15 @@ def test_should_reopen_disabled(state, delivery, expected):
         ("warning_sent", "OFF", True),  # и из warning тоже
         ("stop_sent", "off", True),  # регистр не важен
         ("stop_sent", " OFF ", True),  # с пробелами
+        ("stop_sent", "PAUSED", True),
+        ("stop_sent", "ADSET_PAUSED", True),
+        ("stop_sent", "CAMPAIGN_PAUSED", True),
+        ("stop_sent", "ARCHIVED", True),
         ("stop_sent", "ACTIVE", False),  # крутит — НЕ трогаем (pause ретраится)
         ("stop_sent", "IN_REVIEW", False),  # модерация — может вернуться в ACTIVE
-        ("stop_sent", "NOT_DELIVERING", False),  # disapproved/issues — не наш стоп
+        ("stop_sent", "DISAPPROVED", False),  # модерация — не наш стоп
+        ("stop_sent", "WITH_ISSUES", False),  # крутится с замечаниями
+        ("stop_sent", "NOT_DELIVERING", False),
         ("stop_sent", "PROCESSING", False),  # переходный
         ("stop_sent", "UNKNOWN", False),
         ("stop_sent", None, False),
@@ -232,5 +238,5 @@ def test_should_reopen_disabled(state, delivery, expected):
     ],
 )
 def test_should_sync_disabled(state, delivery, expected):
-    """sync→disabled только для warning_sent/stop_sent с delivery=OFF (любой регистр)."""
+    """sync→disabled только для warning_sent/stop_sent с disabled delivery."""
     assert should_sync_disabled(state, delivery) is expected

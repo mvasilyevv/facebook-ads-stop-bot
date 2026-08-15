@@ -33,6 +33,7 @@ from core.money import (
     validated_currency_code,
 )
 from core.observer.cabinet_supervisor import CabinetLease
+from core.scanner.status import is_delivery_activatable
 
 
 class EnableGraceUnsafeError(ValueError):
@@ -185,7 +186,7 @@ async def prepare_enable_grace(
     if row is None:
         raise EnableGraceUnsafeError("ad is absent from the requested cabinet")
     if require_disabled and (
-        str(row.delivery_status or "").strip().upper() != "OFF"
+        not is_delivery_activatable(row.delivery_status)
         or str(row.alert_state or "").strip().lower() != "disabled"
     ):
         raise EnableGraceUnsafeError("ad is no longer confirmed OFF and disabled")

@@ -77,6 +77,7 @@ export interface ScannedAdRow {
   adset_name: string;
   ad_name: string;
   delivery_status: string;
+  moderation_reason: string | null;
   spend: string;
   budget: string;
   reach: number;

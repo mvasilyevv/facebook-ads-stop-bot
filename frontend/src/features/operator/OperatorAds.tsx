@@ -21,11 +21,10 @@ import {
   classifyOperatorDelivery,
   formatOperatorCount,
   operatorActiveActionLabel,
+  operatorDeliveryLabel,
+  operatorDeliverySeverity,
 } from "@fb/shared/operator/adsViewModel";
-import {
-  operatorActionStateReason,
-  operatorCommandTone,
-} from "@fb/shared/operator/actionLabels";
+import { operatorActionStateReason, operatorCommandTone } from "@fb/shared/operator/actionLabels";
 import { formatSpend } from "@fb/shared/format/number";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
 import { ACTION_STATE_LABEL, severityForDataState } from "@fb/shared/operator/viewModel";
@@ -111,6 +110,9 @@ export function OperatorAdsTable({
                     severity={severityForDataState(ad.severity, ad.data_state)}
                   />
                   <DataStateBadge state={ad.data_state} compact />
+                  <span className={`text-[12px] ${deliveryStatusTextClass(ad.delivery_status)}`}>
+                    {operatorDeliveryLabel(ad.delivery_status)}
+                  </span>
                 </div>
               </td>
               <td className="max-w-[240px] px-3 py-3 align-top">
@@ -162,6 +164,9 @@ export function OperatorAdCards({
             </div>
             <OperatorSeverityBadge severity={severityForDataState(ad.severity, ad.data_state)} />
           </div>
+          <p className={`mt-2 text-[13px] ${deliveryStatusTextClass(ad.delivery_status)}`}>
+            {operatorDeliveryLabel(ad.delivery_status)}
+          </p>
           <div className="mt-4 border-t border-[var(--color-hairline)] pt-3">
             <span className="text-[12px] text-bg-8">До стопа</span>
             <div className="mt-1.5">
@@ -243,6 +248,32 @@ export function AdCommandButtons({
         }`}
       >
         Обновите данные перед действием
+      </span>
+    );
+  }
+
+  if (delivery === "rejected") {
+    return (
+      <span
+        role="status"
+        className={`text-[12px] font-semibold text-danger ${
+          fullWidth ? "block w-full min-w-0 whitespace-normal break-words text-left" : ""
+        }`}
+      >
+        Исправьте объявление или запросите повторную проверку в Ads Manager
+      </span>
+    );
+  }
+
+  if (delivery === "pending" || delivery === "parent_paused" || delivery === "terminal") {
+    return (
+      <span
+        role="status"
+        className={`text-[12px] text-warning ${
+          fullWidth ? "block w-full min-w-0 whitespace-normal break-words text-left" : ""
+        }`}
+      >
+        {operatorDeliveryLabel(ad.delivery_status)} · действие доступно в Ads Manager
       </span>
     );
   }
@@ -351,6 +382,13 @@ export function AdCommandButtons({
       />
     </>
   );
+}
+
+function deliveryStatusTextClass(value: string | null): string {
+  const severity = operatorDeliverySeverity(value);
+  if (severity === "critical") return "font-semibold text-danger";
+  if (severity === "warning") return "font-semibold text-warning";
+  return "text-bg-8";
 }
 
 function operatorCommandProblemMessage(error: unknown): string {

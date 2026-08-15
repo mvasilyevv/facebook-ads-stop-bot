@@ -18,6 +18,11 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.rules.labels import rule_label
+from core.scanner.status import (
+    DELIVERY_ATTENTION_STATUSES,
+    DELIVERY_REJECTED_STATUSES,
+    normalized_delivery_status,
+)
 from core.tasks.channel import disable_channel_sql, enable_channel_sql, target_id_sql
 
 
@@ -652,6 +657,28 @@ def _operator_rule_context(
     }
 
 
+def _operator_ad_severity(
+    *,
+    delivery_status: str | None,
+    alert_state: str | None,
+    data_state: str,
+) -> str:
+    normalized_alert = (alert_state or "").strip().lower()
+    normalized_delivery = normalized_delivery_status(delivery_status)
+    if (
+        normalized_alert in {"stop_sent", "disabled"}
+        or normalized_delivery in DELIVERY_REJECTED_STATUSES
+    ):
+        return "critical"
+    if normalized_alert == "warning_sent" or normalized_delivery in DELIVERY_ATTENTION_STATUSES:
+        return "warning"
+    return "unknown" if data_state != "ready" else "ok"
+
+
+def _delivery_statuses_sql(values: frozenset[str]) -> str:
+    return ", ".join(f"'{value}'" for value in sorted(values))
+
+
 async def fetch_operator_ads(
     engine: AsyncEngine,
     *,
@@ -703,8 +730,12 @@ async def fetch_operator_ads(
             )
         )
     severity_expr = (
-        "CASE WHEN alert.alert_state IN ('stop_sent','disabled') THEN 'critical' "
-        "WHEN alert.alert_state = 'warning_sent' THEN 'warning' "
+        "CASE WHEN alert.alert_state IN ('stop_sent','disabled') "
+        f"OR UPPER(COALESCE(a.delivery_status, '')) IN "
+        f"({_delivery_statuses_sql(DELIVERY_REJECTED_STATUSES)}) THEN 'critical' "
+        "WHEN alert.alert_state = 'warning_sent' "
+        f"OR UPPER(COALESCE(a.delivery_status, '')) IN "
+        f"({_delivery_statuses_sql(DELIVERY_ATTENTION_STATUSES)}) THEN 'warning' "
         "WHEN m.cycle_ts IS NULL OR m.cycle_ts < :stale_before "
         "OR m.spend IS NULL OR m.impressions IS NULL OR m.clicks IS NULL "
         "THEN 'unknown' "
@@ -877,16 +908,10 @@ async def fetch_operator_ads(
             data_state = "partial"
         else:
             data_state = "ready"
-        row_severity = (
-            "critical"
-            if row.alert_state in {"stop_sent", "disabled"}
-            else (
-                "warning"
-                if row.alert_state == "warning_sent"
-                else "unknown"
-                if data_state != "ready"
-                else "ok"
-            )
+        row_severity = _operator_ad_severity(
+            delivery_status=row.delivery_status,
+            alert_state=row.alert_state,
+            data_state=data_state,
         )
         registrations = int(row.registrations or 0) if tracker_available else None
         ftds = int(row.ftds or 0) if tracker_available else None
