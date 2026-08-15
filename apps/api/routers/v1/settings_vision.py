@@ -689,7 +689,23 @@ async def post_vision_reconnect(
             engine,
             operation_kind="vision_reconnect",
         ) as fence:
-            await _reconnect_browser(engine, settings)
+            try:
+                await _reconnect_browser(engine, settings)
+            except Exception:
+                # Профиль, запущенный из окна Vision, живёт без CDP-порта:
+                # browser-agent видит его в /list и не может подключиться.
+                # Обычный reconnect такое состояние не чинит — он умеет только
+                # переподключаться, а профиль нужно перезапустить. Интерфейс при
+                # этом советует нажать именно эту кнопку, и она падала в 503.
+                #
+                # Аренда уже наша и работа слита, поэтому один принудительный
+                # перезапуск здесь безопасен: чужих операций в этот момент нет.
+                logger.info("Vision reconnect requires a profile restart; recovering under lease")
+                await _recover_browser_profile_under_maintenance(
+                    engine,
+                    settings,
+                    maintenance_owner=fence.owner,
+                )
             await fence.assert_held()
     except BrowserOperationBlocked as exc:
         raise HTTPException(
