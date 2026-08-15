@@ -374,9 +374,15 @@ function WizardLayout() {
           ) : null}
 
           <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-20 -mx-3 mt-8 flex items-center justify-between border-t border-[var(--color-hairline)] bg-bg-0/95 px-3 py-3 backdrop-blur md:static md:mx-0 md:bg-transparent md:px-0 md:py-5 md:backdrop-blur-none">
-            <Button variant="secondary" onClick={store.goPrev} disabled={store.currentStep === 1}>
-              ← Назад
-            </Button>
+            {/* На первом шаге возвращаться некуда: неактивная кнопка только
+                занимала место и предлагала действие, которого нет. */}
+            {store.currentStep > 1 ? (
+              <Button variant="secondary" onClick={store.goPrev}>
+                ← Назад
+              </Button>
+            ) : (
+              <span />
+            )}
             {store.currentStep < 7 ? (
               <Button variant="primary" onClick={validateAndNext}>
                 {store.currentStep === 6 ? "Подтвердить план" : "Далее →"}

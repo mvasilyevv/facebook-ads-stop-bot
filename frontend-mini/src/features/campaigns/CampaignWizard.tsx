@@ -1254,7 +1254,7 @@ function PreviewStep({
 function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div>
-      <strong className="block font-mono text-[20px] text-bg-11">{value}</strong>
+      <strong className="block font-numeric text-[20px] text-bg-11">{value}</strong>
       <span className="text-[12px] uppercase text-bg-8">{label}</span>
     </div>
   );
@@ -1334,7 +1334,7 @@ function LaunchStep({
                 className="border-y border-[var(--color-hairline)] px-1 py-3"
               >
                 <div className="flex items-center justify-between gap-3">
-                  <strong className="font-mono text-[13px] text-bg-11">
+                  <strong className="font-numeric text-[13px] text-bg-11">
                     act_{account.account_id}
                   </strong>
                   <span className="text-[12px] text-bg-9">

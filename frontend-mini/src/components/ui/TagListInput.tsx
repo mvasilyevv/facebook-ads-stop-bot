@@ -74,7 +74,7 @@ export function TagListInput({
         {values.map((value) => (
           <span
             key={value}
-            className="inline-flex min-h-9 items-center gap-1 rounded-[var(--radius-1)] bg-bg-4 pl-2 font-mono text-[12px] text-bg-11"
+            className="inline-flex min-h-9 items-center gap-1 rounded-[var(--radius-1)] bg-bg-4 pl-2 text-[12px] text-bg-11"
           >
             {value}
             <button

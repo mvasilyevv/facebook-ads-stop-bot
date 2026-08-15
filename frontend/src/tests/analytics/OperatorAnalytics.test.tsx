@@ -127,7 +127,7 @@ describe("operator analytics semantics", () => {
 
     expect(screen.getByText("Расход, база и stop-граница")).toBeInTheDocument();
     expect(screen.getByText("Часовой пояс: UTC")).toBeInTheDocument();
-    expect(screen.getByText("Данные графика")).toBeInTheDocument();
+    expect(screen.getByText("Показать данные таблицей")).toBeInTheDocument();
     expect(
       screen.getByRole("table", {
         name: "Почасовой расход, база, stop и доступность источников",

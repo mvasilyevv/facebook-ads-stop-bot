@@ -64,7 +64,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
         <p className="text-[13px] text-[var(--color-bg-9)] font-body">
           {error ?? "Откройте приложение через Telegram-бота."}
         </p>
-        <p className="text-[12px] text-[var(--color-bg-8)] font-mono mt-2">
+        <p className="text-[12px] text-[var(--color-bg-8)] mt-2">
           Получите invite у владельца бота.
         </p>
       </div>

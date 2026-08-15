@@ -60,7 +60,7 @@ test("operator snapshot stays action-first and responsive", async ({ page }, tes
 
   await spendChart
     .locator("xpath=ancestor::figure")
-    .getByText("Данные графика", { exact: true })
+    .getByText("Показать данные таблицей", { exact: true })
     .click();
   await expect(
     page.getByRole("table", {

@@ -106,8 +106,8 @@ function RemoteDesktopPage() {
               <MonitorUp size={17} strokeWidth={1.6} aria-hidden="true" />
             </span>
             <div className="min-w-0">
-              <p className="font-display text-[13px] text-bg-11">Vision Desktop</p>
-              <p className="truncate font-mono text-[12px] text-bg-8">Единый защищённый контур</p>
+              <p className="font-display text-[13px] text-bg-11">Vision Server</p>
+              <p className="truncate text-[12px] text-bg-8">Единый защищённый контур</p>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5 font-display text-[12px] uppercase tracking-[0.08em] text-success">
@@ -116,22 +116,15 @@ function RemoteDesktopPage() {
           </div>
         </div>
 
-        <div className="relative flex min-h-[360px] items-center justify-center overflow-hidden px-5 py-10 sm:min-h-[420px] sm:px-10 sm:py-12">
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 opacity-35"
-            style={{
-              backgroundImage:
-                "linear-gradient(var(--color-hairline) 1px, transparent 1px), linear-gradient(90deg, var(--color-hairline) 1px, transparent 1px)",
-              backgroundSize: "32px 32px",
-            }}
-          />
-          <div className="relative max-w-[520px] text-center">
+        {/* Сетчатый фон убран: он ничего не означал, а на экране, где всё
+            остальное значит хоть что-то, украшение читается как индикатор. */}
+        <div className="flex min-h-[360px] items-center justify-center px-5 py-10 sm:min-h-[420px] sm:px-10 sm:py-12">
+          <div className="max-w-[520px] text-center">
             <span className="mx-auto flex size-14 items-center justify-center rounded-[var(--radius-3)] border border-[var(--color-hairline-strong)] bg-bg-2 text-accent">
               <MonitorUp size={27} strokeWidth={1.45} aria-hidden="true" />
             </span>
             <h2 className="mt-5 font-display text-[20px] font-medium text-bg-11 sm:text-[22px]">
-              Vision Desktop
+              Подключение к рабочему столу
             </h2>
 
             {launching ? (

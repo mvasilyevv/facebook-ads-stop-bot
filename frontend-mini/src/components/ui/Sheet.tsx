@@ -89,7 +89,7 @@ export function Sheet({
           {(eyebrow || title) && (
             <div className="shrink-0 px-4 pb-4 border-b border-[var(--color-hairline)]">
               {eyebrow && (
-                <p className="text-[12px] uppercase tracking-[0.08em] text-[var(--color-bg-9)] font-mono mb-1">
+                <p className="text-[12px] uppercase tracking-[0.08em] text-[var(--color-bg-9)] mb-1">
                   {eyebrow}
                 </p>
               )}
