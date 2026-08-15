@@ -1039,6 +1039,102 @@ async def test_campaign_creator_accepts_exact_current_builder_bodies(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "targeting_patch",
+    [
+        {"genders": [2]},
+        {"genders": [1, 2]},
+        {"publisher_platforms": ["facebook"]},
+        {"publisher_platforms": ["facebook", "instagram"]},
+        {"genders": [1], "publisher_platforms": ["instagram", "messenger"]},
+    ],
+)
+async def test_campaign_creator_may_narrow_gender_and_placements(
+    monkeypatch: pytest.MonkeyPatch,
+    targeting_patch: dict[str, object],
+) -> None:
+    """Сужение аудитории, выбранное в визарде, доезжает до Meta.
+
+    Кампания создаётся раньше adset'а, поэтому отказ на этом шаге оставил бы
+    в кабинете осиротевшую PAUSED-кампанию вместо чистого отказа до отправки.
+    """
+
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    client, _engine = _campaign_client()
+    body = adset_body(_builder_config(budget_level="campaign"), "Ad set")
+    body["campaign_id"] = "101"
+    body["targeting"].update(targeting_patch)
+
+    with client.operation_authority(
+        caller="campaign_creator",
+        task_id=1842,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        client._remember_campaign_created_object_id(
+            endpoint="/act_123/campaigns",
+            object_id="101",
+            ad_account_id="123",
+        )
+        authorization = await _prepare_campaign_graph(
+            client,
+            method="POST",
+            endpoint="/act_123/adsets",
+            body=body,
+        )
+
+    assert authorization["authorized_caller"] == "campaign_creator"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "targeting_patch",
+    [
+        {"genders": []},
+        {"genders": [0]},
+        {"genders": [1, 1]},
+        {"genders": [True]},
+        {"genders": "male"},
+        {"publisher_platforms": []},
+        {"publisher_platforms": ["threads"]},
+        {"publisher_platforms": ["facebook", "facebook"]},
+    ],
+)
+async def test_campaign_creator_rejects_unsupported_gender_and_placements(
+    monkeypatch: pytest.MonkeyPatch,
+    targeting_patch: dict[str, object],
+) -> None:
+    """Набор значений закрыт: мусор отвергается до отправки, а не Meta-ошибкой."""
+
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    client, _engine = _campaign_client()
+    body = adset_body(_builder_config(budget_level="campaign"), "Ad set")
+    body["campaign_id"] = "101"
+    body["targeting"].update(targeting_patch)
+
+    with client.operation_authority(
+        caller="campaign_creator",
+        task_id=1842,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        client._remember_campaign_created_object_id(
+            endpoint="/act_123/campaigns",
+            object_id="101",
+            ad_account_id="123",
+        )
+        with pytest.raises(PermanentError, match="targeting (genders|publisher_platforms)"):
+            await _prepare_campaign_graph(
+                client,
+                method="POST",
+                endpoint="/act_123/adsets",
+                body=body,
+            )
+
+
+@pytest.mark.asyncio
 async def test_campaign_create_ack_records_task_local_object_provenance() -> None:
     breaker = MagicMock()
     breaker.call = AsyncMock(

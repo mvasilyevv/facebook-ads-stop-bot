@@ -616,7 +616,6 @@ export function CampaignWizard() {
           <CreativesStep
             concepts={state.creatives.concepts}
             campaigns={state.structure.campaigns}
-            copies={state.creatives.copies_per_concept}
             error={errors.creatives}
             uploading={upload.isPending}
             onUpload={uploadFiles}
@@ -876,12 +875,20 @@ function GoalStep({
               })
             }
           />
+          {/* При Advantage+ билдер форсит 65 (Meta иначе отвергает adset) —
+              показываем то, что реально уедет, а не выбор под замену. */}
           <Input
             label="Возраст до"
             type="number"
             min={18}
             max={65}
-            value={state.goal.age_max}
+            disabled={state.goal.advantage_audience}
+            value={state.goal.advantage_audience ? 65 : state.goal.age_max}
+            helpText={
+              state.goal.advantage_audience
+                ? "Advantage+ сам расширяет аудиторию"
+                : undefined
+            }
             onChange={(event) =>
               patch({
                 type: "patchGoal",
@@ -916,7 +923,8 @@ function GoalStep({
         <Input
           label="Шаблон нейминга"
           value={state.goal.naming_template}
-          placeholder="{date} | {country} | {byer}"
+          placeholder="{byer} | {offer} | adset.pro | {date}"
+          helpText="Подставляются {byer}, {offer}, {type}, {date} — остальное уедет буквально"
           onChange={(event) =>
             patch({
               type: "patchGoal",
@@ -927,7 +935,8 @@ function GoalStep({
         <Input
           label="URL tags"
           value={state.goal.url_tags_template}
-          placeholder="utm_source=facebook&utm_campaign={campaign_key}"
+          placeholder="sub2=mv&sub5={{campaign.name}}"
+          helpText="Строка уедет буквально: подставляет только Meta ({{campaign.name}}). sub8={{ad.id}} сервер добавит сам"
           onChange={(event) =>
             patch({
               type: "patchGoal",
@@ -1109,7 +1118,6 @@ function StructureStep({
 function CreativesStep({
   concepts,
   campaigns,
-  copies,
   error,
   uploading,
   onUpload,
@@ -1117,14 +1125,12 @@ function CreativesStep({
 }: {
   concepts: CampaignWizardConcept[];
   campaigns: CampaignWizardCampaign[];
-  copies: number | null;
   error?: string;
   uploading: boolean;
   onUpload: (files: File[]) => Promise<void>;
-  onChange: (value: {
-    concepts?: CampaignWizardConcept[];
-    copies_per_concept?: number | null;
-  }) => void;
+  // Число копий на концепт задавать нечем: раскладка всегда равна числу adset'ов
+  // кампании, поле в форме ничего не меняло. Оно показано в превью как следствие.
+  onChange: (value: { concepts?: CampaignWizardConcept[] }) => void;
 }) {
   return (
     <Card eyebrow="ШАГ 5 · КРЕАТИВЫ" title="Файлы и распределение">
@@ -1140,19 +1146,6 @@ function CreativesStep({
           onChange={(event) => void onUpload(Array.from(event.target.files ?? []))}
         />
       </label>
-      <Input
-        className="mt-4"
-        label="Копий на концепт"
-        type="number"
-        min={1}
-        max={100}
-        value={copies ?? ""}
-        onChange={(event) =>
-          onChange({
-            copies_per_concept: event.target.value ? Number(event.target.value) : null,
-          })
-        }
-      />
       <div className="mt-4 space-y-3">
         {concepts.map((concept) => (
           <div
