@@ -16,3 +16,4 @@ export { Switch } from "./Switch";
 export { Input } from "./Input";
 export { Select } from "./Select";
 export { Slider } from "./Slider";
+export { TagListInput } from "./TagListInput";

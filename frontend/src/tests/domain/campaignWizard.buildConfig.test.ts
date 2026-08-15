@@ -210,17 +210,20 @@ describe("buildConfig — concept_refs из назначения", () => {
   });
 });
 
-describe("buildConfig — url_tags отсутствует в конфиге", () => {
+describe("buildConfig — редактируемые url_tags", () => {
   beforeEach(() => {
     useWizardStore.getState().reset();
   });
 
-  it("buildConfig не включает поле url_tags (вычисляется бэком по SOP)", () => {
-    // url_tags не должен редактироваться пользователем — бэк генерирует его сам.
+  it("пустой шаблон передаёт null, а введённый — точное значение", () => {
     seedStore([assignedConcept("camp1")], [{ key: "camp1" }]);
-    const config = useWizardStore.getState().buildConfig();
-    // url_tags должен быть undefined или отсутствовать (не редактируется пользователем)
-    expect((config as unknown as Record<string, unknown>)["url_tags"]).toBeUndefined();
+    expect(useWizardStore.getState().buildConfig().url_tags).toBeNull();
+
+    useWizardStore.getState().setGoal({
+      url_tags_template: "utm_source=manual",
+    });
+
+    expect(useWizardStore.getState().buildConfig().url_tags).toBe("utm_source=manual");
   });
 });
 

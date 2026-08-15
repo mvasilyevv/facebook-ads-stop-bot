@@ -209,7 +209,7 @@ function formatDraftTime(value: string): string {
 
 function WizardLayout() {
   const store = useWizardStore();
-  const { data: presets, isError, refetch } = usePresets();
+  const { data: presets } = usePresets();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const selectedPreset = presets?.find((preset) => preset.id === store.start.preset_id) ?? null;
 
@@ -237,20 +237,10 @@ function WizardLayout() {
   let configError: string | null = null;
   if (store.currentStep >= 6) {
     try {
-      config = store.buildConfig(selectedPreset);
+      config = store.buildConfig();
     } catch {
       configError = "Конфигурация неполна. Вернитесь к отмеченному шагу и проверьте данные.";
     }
-  }
-
-  if (isError) {
-    return (
-      <ErrorState
-        title="Пресеты кампаний недоступны"
-        error="Обновите данные и повторите. Если проблема сохранится, откройте диагностику API."
-        onRetry={() => void refetch()}
-      />
-    );
   }
 
   return (
@@ -322,6 +312,7 @@ function WizardLayout() {
               currency={store.identity.currency || null}
               currencyExponent={store.identity.currency_exponent}
               errors={errors}
+              appliedPresetName={selectedPreset?.name ?? null}
             />
           ) : null}
           {store.currentStep === 4 ? (

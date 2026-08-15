@@ -5,8 +5,10 @@
  * - При выборе "из пресета" — выпадающий список пресетов
  */
 
+import { campaignPresetsDataState } from "@fb/features/campaigns";
+import { Link } from "@tanstack/react-router";
 import { type FC } from "react";
-import { Plus, Layers } from "lucide-react";
+import { Layers, Plus, RefreshCw, Settings2 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { usePresets } from "@/lib/api/campaigns";
 import type { StartMode } from "@/stores/campaignWizard";
@@ -30,15 +32,24 @@ const OPTIONS: { mode: StartMode; icon: FC<{ size: number }>; label: string; des
     mode: "preset",
     icon: Layers,
     label: "Из пресета",
-    desc: "Загрузить сохранённый пресет (кабинет, пиксель, оффер, атрибуция).",
+    desc: "Подставить аудиторию, бюджет, нейминг и URL tags — затем при необходимости изменить.",
   },
 ];
 
 export const WizardStep1Start: FC<WizardStep1StartProps> = ({ mode, presetId, onChange }) => {
-  const { data: presets, isLoading: presetsLoading } = usePresets();
+  const presetsQuery = usePresets();
+  const presets = presetsQuery.data ?? [];
+  const dataState = campaignPresetsDataState({
+    isPending: presetsQuery.isPending,
+    isError: presetsQuery.isError,
+    count: presets.length,
+  });
+  const selectedPreset = presets.find((preset) => preset.id === presetId) ?? null;
 
-  const presetOptions =
-    presets?.map((p) => ({ value: p.id, label: `${p.name} (${p.offer_code ?? "—"})` })) ?? [];
+  const presetOptions = presets.map((preset) => ({
+    value: preset.id,
+    label: preset.daily_budget ? preset.name : `${preset.name} · требует заполнения`,
+  }));
 
   return (
     <div className="space-y-6">
@@ -97,16 +108,43 @@ export const WizardStep1Start: FC<WizardStep1StartProps> = ({ mode, presetId, on
 
       {/* Дополнительный выбор при preset */}
       {mode === "preset" && (
-        <div className="space-y-2">
-          <div className="text-[12px] font-display tracking-wider uppercase text-bg-8">
-            Выберите пресет
+        <div className="space-y-3" data-state={dataState}>
+          <div className="flex min-h-11 items-center justify-between gap-3">
+            <div className="text-[12px] font-display tracking-wider uppercase text-bg-8">
+              Выберите пресет
+            </div>
+            <Link
+              to="/campaigns/presets"
+              className="inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] px-3 text-[13px] text-bg-10 hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <Settings2 size={15} aria-hidden="true" />
+              Управление
+            </Link>
           </div>
-          {presetsLoading ? (
-            <Skeleton className="h-8 w-full" />
-          ) : presetOptions.length === 0 ? (
-            <p className="text-[13px] text-bg-8">
-              Пресетов нет. Создайте первый пресет на шаге 2 после завершения залива.
-            </p>
+          {dataState === "stale" ? (
+            <Skeleton className="h-11 w-full" />
+          ) : dataState === "unavailable" ? (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-3 border-y border-danger/35 py-3 text-[13px] text-danger"
+            >
+              <span>Пресеты сейчас недоступны. Новый залив можно заполнить вручную.</span>
+              <button
+                type="button"
+                aria-label="Повторить загрузку пресетов"
+                onClick={() => void presetsQuery.refetch()}
+                className="flex size-11 shrink-0 items-center justify-center rounded-[var(--radius-2)] border border-danger/40"
+              >
+                <RefreshCw size={15} aria-hidden="true" />
+              </button>
+            </div>
+          ) : dataState === "empty" ? (
+            <div role="status" className="border-y border-[var(--color-hairline)] py-4">
+              <p className="text-[13px] text-bg-10">Сохранённых пресетов пока нет.</p>
+              <p className="mt-1 text-[12px] text-bg-8">
+                Создайте первый шаблон с гео, бюджетом и неймингом.
+              </p>
+            </div>
           ) : (
             <Select
               options={presetOptions}
@@ -115,8 +153,52 @@ export const WizardStep1Start: FC<WizardStep1StartProps> = ({ mode, presetId, on
               onChange={(e) => onChange({ mode: "preset", preset_id: e.target.value || null })}
             />
           )}
+          {selectedPreset ? (
+            <div className="border-l-2 border-accent pl-4" role="status">
+              <p className="font-display text-[13px] font-medium text-bg-11">
+                Подставлено из «{selectedPreset.name}»
+              </p>
+              <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-[12px] sm:grid-cols-3">
+                <PresetFact label="Гео" value={selectedPreset.countries.join(" · ")} />
+                <PresetFact
+                  label="Возраст"
+                  value={`${selectedPreset.age_min}–${selectedPreset.age_max}`}
+                />
+                <PresetFact
+                  label="Бюджет"
+                  value={
+                    selectedPreset.daily_budget
+                      ? `$${selectedPreset.daily_budget} · ${selectedPreset.budget_level === "campaign" ? "CBO" : "ABO"}`
+                      : "Нужно заполнить"
+                  }
+                />
+                <PresetFact
+                  label="Пол"
+                  value={selectedPreset.genders.length ? selectedPreset.genders.join(" · ") : "Все"}
+                />
+                <PresetFact
+                  label="Плейсменты"
+                  value={
+                    selectedPreset.placements.length
+                      ? selectedPreset.placements.join(" · ")
+                      : "Авто"
+                  }
+                />
+                <PresetFact label="Событие" value="Purchase · зафиксировано" />
+              </dl>
+            </div>
+          ) : null}
         </div>
       )}
     </div>
   );
 };
+
+function PresetFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-bg-8">{label}</dt>
+      <dd className="mt-0.5 break-words text-bg-10">{value || "—"}</dd>
+    </div>
+  );
+}

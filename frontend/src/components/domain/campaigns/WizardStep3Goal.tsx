@@ -11,13 +11,18 @@
  */
 
 import { type FC } from "react";
-import { validateCampaignGoal } from "@fb/features/campaigns";
+import {
+  CAMPAIGN_GENDER_OPTIONS,
+  CAMPAIGN_PLACEMENT_OPTIONS,
+  validateCampaignGoal,
+} from "@fb/features/campaigns";
 import { CALL_TO_ACTIONS } from "@fb/shared";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Switch } from "@/components/ui/Switch";
 import { CountryMultiSelect } from "@/components/ui/CountryMultiSelect";
 import type { WizardGoal } from "@/stores/campaignWizard";
+import { CampaignTagPicker } from "./CampaignTagPicker";
 
 interface WizardStep3GoalProps {
   values: WizardGoal;
@@ -25,6 +30,7 @@ interface WizardStep3GoalProps {
   currency: string | null;
   currencyExponent: number | null;
   errors?: Partial<Record<keyof WizardGoal, string>>;
+  appliedPresetName?: string | null;
 }
 
 const BUDGET_LEVEL_OPTIONS = [
@@ -58,6 +64,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
   currency,
   currencyExponent,
   errors = {},
+  appliedPresetName,
 }) => {
   const currencyLabel = currency || "валюта не подтверждена";
   const precisionLabel =
@@ -80,6 +87,16 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
           Укажите цель, бюджет, таргет, атрибуцию и трекинговую ссылку.
         </p>
       </div>
+
+      {appliedPresetName ? (
+        <div
+          role="status"
+          className="border-y border-accent/30 bg-accent-bg/40 px-4 py-3 text-[13px] text-bg-10"
+        >
+          Пресет «{appliedPresetName}» подставил отмеченные параметры. Все поля ниже можно изменить
+          для этого запуска.
+        </div>
+      ) : null}
 
       {/* Цель оптимизации — зашита по SOP, read-only (без выбора) */}
       <section>
@@ -157,7 +174,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
             <Input
               label="Возраст от"
               type="number"
-              min={13}
+              min={18}
               max={65}
               value={String(values.age_min)}
               onChange={(e) => onChange({ age_min: Number(e.target.value) })}
@@ -165,7 +182,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
             <Input
               label="Возраст до"
               type="number"
-              min={13}
+              min={18}
               max={65}
               value={String(values.age_max)}
               onChange={(e) => onChange({ age_max: Number(e.target.value) })}
@@ -178,6 +195,22 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
                 visualLabel="Advantage+"
               />
             </div>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <CampaignTagPicker
+              label="Пол"
+              values={values.genders}
+              options={CAMPAIGN_GENDER_OPTIONS}
+              emptyLabel="Все полы"
+              onChange={(genders) => onChange({ genders })}
+            />
+            <CampaignTagPicker
+              label="Плейсменты"
+              values={values.placements}
+              options={CAMPAIGN_PLACEMENT_OPTIONS}
+              emptyLabel="Автоматические плейсменты Meta"
+              onChange={(placements) => onChange({ placements })}
+            />
           </div>
         </div>
       </section>
@@ -230,16 +263,21 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
             helpText="Трекинг-ссылка из AdSet.pro"
           />
         </div>
-        <div className="mt-4">
-          {/* url_tags и text_optimizations (OPT_OUT) вычисляются/зашиты бэком по SOP — редактирование убрано */}
-          <div className="flex flex-col gap-1">
-            <div className="text-[12px] font-display tracking-wider uppercase text-bg-9">
-              URL Tags
-            </div>
-            <div className="text-[12px] text-bg-8 italic">
-              Трекинг по SOP — бэк вычисляет автоматически
-            </div>
-          </div>
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Input
+            label="Шаблон нейминга"
+            placeholder="{byer} | {offer} | adset.pro | {date}"
+            value={values.naming_template}
+            onChange={(event) => onChange({ naming_template: event.target.value })}
+            helpText="Пусто — стандартный шаблон. Доступны {byer}, {offer}, {date}."
+          />
+          <Input
+            label="URL Tags"
+            placeholder="sub2={byer}&sub5={{campaign.name}}"
+            value={values.url_tags_template}
+            onChange={(event) => onChange({ url_tags_template: event.target.value })}
+            helpText="Пусто — SOP-теги. sub8={{ad.id}} сервер добавит автоматически."
+          />
         </div>
         {/* Ad text */}
         <div className="mt-4">

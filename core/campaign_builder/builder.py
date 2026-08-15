@@ -120,6 +120,10 @@ def adset_body(cfg: CampaignConfig, name: str) -> dict:
         "start_time": cfg.start_time,
         "status": CREATED_OBJECT_STATUS,
     }
+    if cfg.targeting.genders:
+        body["targeting"]["genders"] = cfg.targeting.gender_ids()
+    if cfg.targeting.placements:
+        body["targeting"]["publisher_platforms"] = cfg.targeting.placements
     if cfg.budget.level == "adset":  # ABO: бюджет+стратегия+cap на адсете
         body["daily_budget"] = cfg.budget.daily_minor_units
         body["bid_strategy"] = cfg.budget.bid_strategy

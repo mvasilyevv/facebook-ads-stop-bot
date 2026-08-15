@@ -66,8 +66,14 @@ class CampaignDraftGoal(_DraftModel):
     age_min: int = Field(default=21, ge=18, le=65, strict=True)
     age_max: int = Field(default=65, ge=18, le=65, strict=True)
     advantage_audience: bool = True
+    genders: list[Literal["male", "female"]] = Field(default_factory=list, max_length=2)
+    placements: list[Literal["facebook", "instagram", "messenger", "audience_network"]] = Field(
+        default_factory=list, max_length=4
+    )
     click_through_days: Literal[1, 7, 28] = 1
     view_through_days: Literal[1, 7, 28] = 1
+    naming_template: str = Field(default="", max_length=512)
+    url_tags_template: str = Field(default="", max_length=1024)
     ad_text_mode: Literal["none", "text"] = "none"
     ad_text_primary: str = Field(default="", max_length=5000)
 
@@ -78,6 +84,13 @@ class CampaignDraftGoal(_DraftModel):
             raise ValueError("countries must be unique")
         if any(re.fullmatch(r"[A-Z]{2}", value) is None for value in values):
             raise ValueError("countries must contain uppercase ISO-2 codes")
+        return values
+
+    @field_validator("genders", "placements")
+    @classmethod
+    def validate_unique_tags(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("multi-value targeting fields must be unique")
         return values
 
     @model_validator(mode="after")

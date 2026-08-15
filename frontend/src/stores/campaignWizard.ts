@@ -68,7 +68,7 @@ export interface WizardActions {
   markDraftError: (kind: "error" | "conflict") => void;
   markDraftCleared: () => void;
   reset: () => void;
-  buildConfig: (preset?: CampaignPreset | null) => CampaignConfig;
+  buildConfig: () => CampaignConfig;
 }
 
 export type WizardStore = CampaignWizardState & WizardRuntimeState & WizardActions;
@@ -181,7 +181,7 @@ export const useWizardStore = create<WizardStore>((set, get) => ({
       draftSyncState: "saved",
       draftHydrated: true,
     }),
-  buildConfig: (preset) => buildCampaignConfig(featureState(get()), preset),
+  buildConfig: () => buildCampaignConfig(featureState(get())),
 }));
 
 export function getWizardFeatureState(): CampaignWizardState {

@@ -2,15 +2,21 @@ import { describe, expect, it } from "vitest";
 
 import {
   aggregateCampaignLaunchState,
+  applyCampaignPreset,
   buildCampaignConfig,
+  campaignPresetPayload,
+  campaignPresetsDataState,
   campaignWizardFromDraft,
   campaignWizardReducer,
   campaignWizardToDraft,
   createCampaignWizardState,
+  createCampaignPresetDraft,
   nextCampaignKey,
   parseCampaignCountryInput,
+  validateCampaignPresetDraft,
   validateCampaignStep,
   type CampaignWizardConcept,
+  type CampaignPreset,
   type CampaignWizardState,
 } from "./campaigns";
 
@@ -99,9 +105,7 @@ describe("campaign feature model", () => {
       currency: "",
       account_context_state: "stale",
     };
-    expect(validateCampaignStep(state, 2)).toHaveProperty(
-      "account_context_state",
-    );
+    expect(validateCampaignStep(state, 2)).toHaveProperty("account_context_state");
     expect(() => buildCampaignConfig(state)).toThrow("USD-контекст");
   });
 
@@ -111,6 +115,22 @@ describe("campaign feature model", () => {
     expect(draft).not.toHaveProperty("runId");
     expect(JSON.stringify(draft)).not.toMatch(/secret|token|task_id/);
     expect(campaignWizardFromDraft(draft)).toEqual(readyState());
+  });
+
+  it("hydrates drafts saved before targeting preset fields existed", () => {
+    const draft = campaignWizardToDraft(readyState());
+    const legacyGoal = draft.goal as unknown as Record<string, unknown>;
+    delete legacyGoal.genders;
+    delete legacyGoal.placements;
+    delete legacyGoal.naming_template;
+    delete legacyGoal.url_tags_template;
+
+    expect(campaignWizardFromDraft(draft).goal).toMatchObject({
+      genders: [],
+      placements: [],
+      naming_template: "",
+      url_tags_template: "",
+    });
   });
 
   it("validates every transition through one shared step policy", () => {
@@ -139,5 +159,72 @@ describe("campaign feature model", () => {
       countries: ["US", "CA"],
       invalid: ["BAD"],
     });
+  });
+
+  it("copies a preset into editable goal fields without replacing run identity", () => {
+    const state = readyState();
+    const preset: CampaignPreset = {
+      id: "preset-1",
+      name: "GH scale",
+      countries: ["GH"],
+      age_min: 25,
+      age_max: 54,
+      genders: ["female"],
+      placements: ["facebook", "instagram"],
+      custom_event_type: "PURCHASE",
+      budget_level: "adset",
+      daily_budget: "350.00",
+      naming_template: "{byer} | {offer} | SCALE | {date}",
+      url_tags_template: "sub2={byer}",
+      created_at: "2026-08-15T10:00:00Z",
+      updated_at: "2026-08-15T10:00:00Z",
+    };
+
+    const applied = applyCampaignPreset(state, preset);
+    applied.goal.daily_budget = "400.00";
+
+    expect(applied.identity).toEqual(state.identity);
+    expect(applied.goal).toMatchObject({
+      countries: ["GH"],
+      genders: ["female"],
+      placements: ["facebook", "instagram"],
+      budget_level: "adset",
+      daily_budget: "400.00",
+      custom_event_type: "PURCHASE",
+    });
+    expect(buildCampaignConfig(applied)).toMatchObject({
+      daily_budget: "400.00",
+      genders: ["female"],
+      placements: ["facebook", "instagram"],
+      naming_template: preset.naming_template,
+      url_tags: preset.url_tags_template,
+    });
+  });
+
+  it("builds a create payload from current wizard values", () => {
+    const draft = createCampaignPresetDraft(readyState());
+    draft.name = " Scale ";
+
+    expect(campaignPresetPayload(draft)).toMatchObject({
+      name: "Scale",
+      countries: ["BR"],
+      custom_event_type: "PURCHASE",
+      daily_budget: "200.00",
+    });
+  });
+
+  it("rejects invalid preset money before calling the API", () => {
+    const draft = createCampaignPresetDraft(readyState());
+    draft.name = "Scale";
+    draft.daily_budget = "100000.01";
+
+    expect(validateCampaignPresetDraft(draft).daily_budget).toMatch(/Максимум/);
+  });
+
+  it("keeps empty and unavailable preset collections distinct", () => {
+    expect(campaignPresetsDataState({ isPending: false, isError: false, count: 0 })).toBe("empty");
+    expect(campaignPresetsDataState({ isPending: false, isError: true, count: 0 })).toBe(
+      "unavailable",
+    );
   });
 });

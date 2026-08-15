@@ -9,11 +9,11 @@ import { dataOrThrow, noContentOrThrow } from "@fb/operator-api";
 
 import { tmaApi, tmaFetchApi } from "./auth";
 
-export type CampaignDraftDocument =
-  components["schemas"]["CampaignDraftDocument"];
+export type CampaignDraftDocument = components["schemas"]["CampaignDraftDocument"];
 export type CampaignDraftPutIn = components["schemas"]["CampaignDraftPutIn"];
 export type CampaignConfig = components["schemas"]["CampaignConfigIn"];
 export type CampaignPreset = components["schemas"]["PresetOut"];
+export type CampaignPresetInput = components["schemas"]["PresetIn"];
 export type UploadConceptsOut = components["schemas"]["UploadConceptsOut"];
 export type ValidatePlan = components["schemas"]["ValidatePlanOut"];
 export type LaunchIn = components["schemas"]["LaunchIn"];
@@ -21,21 +21,54 @@ export type LaunchOut = components["schemas"]["LaunchOut"];
 export type RunDetailOut = components["schemas"]["RunDetailOut"];
 
 export function useCampaignPresets() {
-  return tmaApi.useQuery(
-    "get",
-    "/api/tools/campaigns/presets",
-    {},
-    { staleTime: 30_000 },
-  );
+  return tmaApi.useQuery("get", "/api/tools/campaigns/presets", {}, { staleTime: 30_000 });
+}
+
+function invalidateCampaignPresets(queryClient: ReturnType<typeof useQueryClient>) {
+  return () =>
+    void queryClient.invalidateQueries({
+      queryKey: ["get", "/api/tools/campaigns/presets"],
+    });
+}
+
+export function useCreateCampaignPreset() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CampaignPresetInput) =>
+      dataOrThrow(tmaFetchApi.POST("/api/tools/campaigns/presets", { body })),
+    onSuccess: invalidateCampaignPresets(queryClient),
+  });
+}
+
+export function useUpdateCampaignPreset(presetId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CampaignPresetInput) =>
+      dataOrThrow(
+        tmaFetchApi.PUT("/api/tools/campaigns/presets/{preset_id}", {
+          params: { path: { preset_id: presetId } },
+          body,
+        }),
+      ),
+    onSuccess: invalidateCampaignPresets(queryClient),
+  });
+}
+
+export function useDeleteCampaignPreset() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (presetId: string) =>
+      noContentOrThrow(
+        tmaFetchApi.DELETE("/api/tools/campaigns/presets/{preset_id}", {
+          params: { path: { preset_id: presetId } },
+        }),
+      ),
+    onSuccess: invalidateCampaignPresets(queryClient),
+  });
 }
 
 export function useCampaignDraft() {
-  return tmaApi.useQuery(
-    "get",
-    "/api/tools/campaigns/draft",
-    {},
-    { staleTime: 0, retry: false },
-  );
+  return tmaApi.useQuery("get", "/api/tools/campaigns/draft", {}, { staleTime: 0, retry: false });
 }
 
 export function useSaveCampaignDraft() {
@@ -96,22 +129,15 @@ export async function uploadCampaignConcepts(
 
 export function useUploadCampaignConcepts() {
   return useMutation({
-    mutationFn: ({
-      files,
-      uploadId,
-    }: {
-      files: File[];
-      uploadId?: string | null;
-    }) => uploadCampaignConcepts(files, uploadId),
+    mutationFn: ({ files, uploadId }: { files: File[]; uploadId?: string | null }) =>
+      uploadCampaignConcepts(files, uploadId),
   });
 }
 
 export function useValidateCampaignConfig() {
   return useMutation({
     mutationFn: (config: CampaignConfig) =>
-      dataOrThrow(
-        tmaFetchApi.POST("/api/tools/campaigns/validate", { body: { config } }),
-      ),
+      dataOrThrow(tmaFetchApi.POST("/api/tools/campaigns/validate", { body: { config } })),
   });
 }
 
