@@ -87,6 +87,10 @@ function OperatorIncidentsPage() {
     });
   }
 
+  function resetFilters() {
+    void navigate({ search: {}, replace: true });
+  }
+
   async function acknowledgeIncident(item: OperatorIncidentItem) {
     setActionError(null);
     setAcknowledgingId(item.id);
@@ -207,7 +211,18 @@ function OperatorIncidentsPage() {
         ) : displayState === "empty" ? (
           <EmptyState
             title="Инцидентов не найдено"
-            description="Сервер подтвердил пустой результат. Измените фильтры или дождитесь нового сигнала."
+            description={
+              activeFilterCount
+                ? "Сервер подтвердил пустой результат для выбранных условий."
+                : "Сервер подтвердил, что новых инцидентов нет."
+            }
+            action={
+              activeFilterCount ? (
+                <Button variant="secondary" onClick={resetFilters}>
+                  Сбросить фильтры
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           <EmptyState

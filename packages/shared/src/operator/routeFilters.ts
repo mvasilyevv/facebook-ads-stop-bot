@@ -9,9 +9,9 @@ export type OperatorAdsSort = NonNullable<OperatorAdsQuery["sort"]>;
 export type OperatorAdsDirection = NonNullable<OperatorAdsQuery["direction"]>;
 
 /**
- * Близость к стопу — сортировка уровня маршрута: `/api/operator/ads` её не
- * принимает, поэтому порядок считает клиент по уже полученной странице.
- * Значение живёт в URL наравне с серверными сортировками.
+ * В URL сохраняем человекочитаемое имя сортировки по близости к стопу, а в
+ * `/api/operator/ads` передаём серверный ключ `percent_to_stop`. Так риск
+ * считается по всей выборке, а не только по загруженной странице.
  */
 export const OPERATOR_ADS_STOP_PROXIMITY_SORT = "stop_proximity";
 
@@ -75,7 +75,9 @@ export function operatorAdsQuerySort(
   // Близость к стопу считает БД: клиентское ранжирование видело только текущую
   // страницу, а самое опасное объявление могло лежать на следующей. В URL
   // остаётся читаемое stop_proximity, серверу уходит его ключ сортировки.
-  if (sort === OPERATOR_ADS_STOP_PROXIMITY_SORT) {
+  // Пустой URL — рабочий вход байера, поэтому он также начинает с риска ухода
+  // денег, а не с технического времени обновления строки.
+  if (sort === undefined || sort === OPERATOR_ADS_STOP_PROXIMITY_SORT) {
     return "percent_to_stop";
   }
   return sort && AD_SORTS.has(sort as OperatorAdsSort)

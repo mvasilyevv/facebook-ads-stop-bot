@@ -96,7 +96,9 @@ function AdsPage() {
     Number(Boolean(search.q)) +
     Number(Boolean(search.account_id)) +
     Number(Boolean(search.severity)) +
-    Number(Boolean(search.sort && search.sort !== "updated")) +
+    Number(
+      Boolean(search.sort && search.sort !== OPERATOR_ADS_STOP_PROXIMITY_SORT),
+    ) +
     Number(Boolean(search.direction && search.direction !== "desc"));
 
   useEffect(() => setDraftSearch(search.q ?? ""), [search.q]);
@@ -113,6 +115,12 @@ function AdsPage() {
     event.preventDefault();
     patchSearch({ q: draftSearch.trim() || undefined, page: undefined });
     setFiltersOpen(false);
+  }
+
+  function resetFilters() {
+    setDraftSearch("");
+    haptic.selection();
+    void navigate({ search: {}, replace: true });
   }
 
   return (
@@ -172,7 +180,6 @@ function AdsPage() {
         </div>
       ) : null}
 
-
       <section className="grid gap-3 px-4 pt-4" aria-label="Объявления">
         {query.isError && !payload ? (
           <ErrorState
@@ -196,7 +203,16 @@ function AdsPage() {
         ) : confirmedEmpty ? (
           <EmptyState
             title="Объявлений не найдено"
-            description="Сервер подтвердил пустой результат. Измените фильтр или поиск."
+            description={
+              activeFilterCount
+                ? "Сервер подтвердил пустой результат для выбранных условий."
+                : "Сервер подтвердил, что в каталоге пока нет объявлений."
+            }
+            action={
+              activeFilterCount
+                ? { label: "Сбросить фильтры", onClick: resetFilters }
+                : undefined
+            }
           />
         ) : (
           <EmptyState
@@ -301,7 +317,7 @@ function AdsFilterFields({
       </FilterSelect>
       <FilterSelect
         label="Сортировка"
-        value={search.sort ?? "updated"}
+        value={search.sort ?? OPERATOR_ADS_STOP_PROXIMITY_SORT}
         onChange={(value) =>
           onChange({ sort: value as OperatorAdsRouteSort, page: undefined })
         }

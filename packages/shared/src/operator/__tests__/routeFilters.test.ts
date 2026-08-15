@@ -66,7 +66,7 @@ describe("operator route filters", () => {
     // самое опасное объявление может лежать на следующей.
     expect(operatorAdsQuerySort("stop_proximity")).toBe("percent_to_stop");
     expect(operatorAdsQuerySort("spend")).toBe("spend");
-    expect(operatorAdsQuerySort(undefined)).toBe("updated");
+    expect(operatorAdsQuerySort(undefined)).toBe("percent_to_stop");
     expect(isClientRankedAdsSort("stop_proximity")).toBe(false);
     expect(isClientRankedAdsSort("spend")).toBe(false);
   });

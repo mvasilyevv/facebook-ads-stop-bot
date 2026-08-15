@@ -53,11 +53,11 @@ function OfferRulesPage() {
   async function handleSave() {
     await updateMutation.mutateAsync(rulesValuesToPayload(values));
     toast.success("Правила сохранены");
-    void navigate({ to: "/" });
+    void navigate({ to: "/offers" });
   }
 
   function handleBack() {
-    void navigate({ to: "/" });
+    void navigate({ to: "/offers" });
   }
 
   return (

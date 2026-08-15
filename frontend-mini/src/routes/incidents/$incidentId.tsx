@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { ArrowRight } from "lucide-react";
 
 import { formatZonedDateTime } from "@fb/shared/format/time";
 import type { OperatorSeverity } from "@fb/shared/operator/contracts";
@@ -20,6 +21,11 @@ import {
   useOperatorIncident,
 } from "@/lib/operatorApi";
 import { MiniSeverityBadge } from "@/features/operator/OperatorAds";
+import {
+  parseTmaAttentionHref,
+  storeResolvedNavigation,
+} from "@/lib/transientNavigation";
+import { haptic, tgAlert } from "@/lib/tg";
 
 export const Route = createFileRoute("/incidents/$incidentId")({
   component: MiniIncidentDetailRoute,
@@ -31,12 +37,30 @@ function MiniIncidentDetailRoute() {
 }
 
 export function MiniIncidentDetail({ incidentId }: { incidentId: string }) {
+  const navigate = useNavigate();
   const incidentQuery = useOperatorIncident(incidentId);
   const acknowledge = useAcknowledgeOperatorIncident();
   const realtimeStatus = useOperatorRealtimeStatus();
   const [actionError, setActionError] = useState<string | null>(null);
   const detail = incidentQuery.data;
   const incident = detail?.incident;
+
+  const openIncidentAction = async () => {
+    const destination = incident
+      ? parseTmaAttentionHref(incident.action.href)
+      : null;
+    if (!destination) {
+      tgAlert("Ссылка действия недоступна.");
+      return;
+    }
+    haptic.selection();
+    if (destination.kind === "target") {
+      storeResolvedNavigation(destination.target);
+      await navigate({ to: "/open" });
+      return;
+    }
+    await navigate({ to: destination.to });
+  };
 
   if (incidentQuery.isPending)
     return (
@@ -140,6 +164,15 @@ export function MiniIncidentDetail({ incidentId }: { incidentId: string }) {
           Часовой пояс кабинета не подтверждён; время показано как оценочное.
         </p>
       ) : null}
+      <Button
+        variant="secondary"
+        fullWidth
+        className="mt-4 min-h-11"
+        onClick={() => void openIncidentAction()}
+      >
+        {incident.action.label}
+        <ArrowRight size={16} aria-hidden="true" />
+      </Button>
       {actionError ? (
         <p
           role="alert"

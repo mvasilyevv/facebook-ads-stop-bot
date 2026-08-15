@@ -154,4 +154,27 @@ describe("operator incident journal", () => {
     });
     expect(refetch).toHaveBeenCalledTimes(1);
   });
+
+  it("offers one-step recovery from an empty filtered journal", () => {
+    useOperatorIncidents.mockReturnValue({
+      data: {
+        ...payload(),
+        state: "empty",
+        issues: [],
+        scope: makeOperatorScopeEvidence(),
+        items: [],
+        total: 0,
+        pages: 0,
+      },
+      isError: false,
+      isPending: false,
+      isFetching: false,
+      refetch,
+    });
+
+    render(<IncidentsPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Сбросить фильтры" }));
+
+    expect(navigate).toHaveBeenCalledWith({ search: {}, replace: true });
+  });
 });

@@ -24,6 +24,7 @@ import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
 import { confirmedOperatorCurrency } from "@fb/shared/operator/adsViewModel";
 import { describeStopProximity } from "@fb/shared/operator/stopProximity";
+import { OPERATOR_ADS_STOP_PROXIMITY_SORT } from "@fb/shared/operator/routeFilters";
 import { operatorActionStateReason } from "@fb/shared/operator/actionLabels";
 import {
   completeOperatorCommandIntent,
@@ -450,6 +451,7 @@ function MiniApproachingStopLedger({
   currency: string | null;
   timezone: string | null;
 }) {
+  const total = section.data ? section.data.items.length : null;
   const items = section.data?.items.slice(0, 5) ?? [];
   return (
     <MiniLedgerSection
@@ -459,7 +461,9 @@ function MiniApproachingStopLedger({
       detail={
         section.state === "empty"
           ? "никто не подходит"
-          : `${items.length} ${pluralAd(items.length)}`
+          : total === null
+            ? "—"
+            : `${total} ${pluralAd(total)}`
       }
       section={section}
       timezone={timezone}
@@ -494,6 +498,16 @@ function MiniApproachingStopLedger({
           ))}
         </ol>
       )}
+      {total ? (
+        <Link
+          to="/ads"
+          search={{ sort: OPERATOR_ADS_STOP_PROXIMITY_SORT, direction: "desc" }}
+          className="mini-ledger__inline-action mx-4 min-h-11"
+        >
+          Все объявления по близости к стопу
+          <ArrowRight size={14} aria-hidden="true" />
+        </Link>
+      ) : null}
     </MiniLedgerSection>
   );
 }

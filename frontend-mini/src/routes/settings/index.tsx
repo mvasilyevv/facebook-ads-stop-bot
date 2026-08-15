@@ -86,25 +86,35 @@ function SettingsPage() {
 
   const observerStatus = observerQuery.isError
     ? { label: "Недоступен", variant: "warning" as const }
-    : observerQuery.data?.is_scanning_enabled
-      ? { label: "Сканирует", variant: "neutral" as const }
-      : { label: "Остановлен", variant: "warning" as const };
+    : observerQuery.isLoading || !observerQuery.data
+      ? { label: "Загрузка…", variant: "neutral" as const }
+      : observerQuery.data?.is_scanning_enabled
+        ? { label: "Сканирует", variant: "neutral" as const }
+        : { label: "Остановлен", variant: "warning" as const };
   const telegramStatus = telegramQuery.isError
     ? { label: "Недоступен", variant: "warning" as const }
-    : telegramQuery.data?.is_authorized
-      ? diagnosticsQuery.data?.outbox_state === "degraded"
-        ? { label: "Деградация", variant: "failed" as const }
-        : { label: "Настроен", variant: "neutral" as const }
-      : { label: "Не настроен", variant: "warning" as const };
+    : telegramQuery.isLoading || !telegramQuery.data
+      ? { label: "Загрузка…", variant: "neutral" as const }
+      : telegramQuery.data?.is_authorized
+        ? diagnosticsQuery.isLoading
+          ? { label: "Проверяем…", variant: "neutral" as const }
+          : diagnosticsQuery.isError
+            ? { label: "Диагностика недоступна", variant: "warning" as const }
+            : diagnosticsQuery.data?.outbox_state === "degraded"
+              ? { label: "Деградация", variant: "failed" as const }
+              : { label: "Настроен", variant: "neutral" as const }
+        : { label: "Не настроен", variant: "warning" as const };
   const visionStatus = visionQuery.isError
     ? { label: "Недоступен", variant: "warning" as const }
-    : visionQuery.data?.channel_status === "READY"
-      ? { label: "Готов", variant: "neutral" as const }
-      : visionQuery.data?.channel_status === "DEGRADED"
-        ? { label: "Деградация", variant: "warning" as const }
-        : visionQuery.data?.channel_status === "UNAVAILABLE"
-          ? { label: "Недоступен", variant: "warning" as const }
-          : { label: "Не подтверждён", variant: "neutral" as const };
+    : visionQuery.isLoading || !visionQuery.data
+      ? { label: "Загрузка…", variant: "neutral" as const }
+      : visionQuery.data?.channel_status === "READY"
+        ? { label: "Готов", variant: "neutral" as const }
+        : visionQuery.data?.channel_status === "DEGRADED"
+          ? { label: "Деградация", variant: "warning" as const }
+          : visionQuery.data?.channel_status === "UNAVAILABLE"
+            ? { label: "Недоступен", variant: "warning" as const }
+            : { label: "Не подтверждён", variant: "neutral" as const };
 
   return (
     <div className="flex min-h-full flex-col pb-[max(96px,var(--tg-content-safe-bottom,0px),env(safe-area-inset-bottom))]">

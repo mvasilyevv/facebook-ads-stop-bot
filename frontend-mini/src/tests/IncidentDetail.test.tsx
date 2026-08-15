@@ -20,6 +20,11 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigate,
 }));
 
+vi.mock("@/lib/tg", () => ({
+  haptic: { selection: vi.fn(), impact: vi.fn(), notify: vi.fn() },
+  tgAlert: vi.fn(),
+}));
+
 vi.mock("@/lib/operatorApi", () => ({
   useOperatorIncident: (...args: unknown[]) => useOperatorIncident(...args),
   useAcknowledgeOperatorIncident: () => ({
@@ -31,6 +36,10 @@ vi.mock("@/lib/operatorApi", () => ({
 }));
 
 import { Route } from "@/routes/incidents/$incidentId";
+import {
+  clearResolvedNavigation,
+  readResolvedNavigation,
+} from "@/lib/transientNavigation";
 
 const IncidentDetail = (Route as unknown as { component: ComponentType })
   .component;
@@ -38,6 +47,7 @@ const IncidentDetail = (Route as unknown as { component: ComponentType })
 describe("TMA typed incident detail", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearResolvedNavigation();
     acknowledgeMutate.mockResolvedValue({});
     useOperatorIncident.mockReturnValue({
       data: {
@@ -80,6 +90,31 @@ describe("TMA typed incident detail", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByText("Завершён с ошибкой")).toBeInTheDocument();
+  });
+
+  it("opens the server-provided target without exposing its id in the TMA URL", () => {
+    const current = useOperatorIncident();
+    useOperatorIncident.mockReturnValue({
+      ...current,
+      data: {
+        ...current.data,
+        incident: {
+          ...current.data.incident,
+          target: { kind: "ad", id: "ad-51", label: "Объявление CR2" },
+          action: { label: "Открыть объявление", href: "/ads/ad-51" },
+        },
+      },
+    });
+
+    render(<IncidentDetail />);
+    fireEvent.click(screen.getByRole("button", { name: "Открыть объявление" }));
+
+    expect(readResolvedNavigation()).toEqual({
+      target_kind: "ad",
+      target_id: "ad-51",
+    });
+    expect(navigate).toHaveBeenCalledWith({ to: "/open" });
+    expect(window.location.href).not.toContain("ad-51");
   });
 
   it("shows partial evidence and its concrete issue", () => {

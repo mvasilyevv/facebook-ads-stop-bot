@@ -177,6 +177,27 @@ describe("TMA settings route", () => {
     expect(mockUseOperatorDisplayPreference).toHaveBeenCalledWith(false);
   });
 
+  it("does not turn loading integration state into stopped or unconfigured", () => {
+    mockUseObserverSettings.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      error: null,
+    });
+    mockUseTelegramSettings.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      error: null,
+    });
+
+    render(<SettingsPage />);
+
+    expect(screen.getAllByText("Загрузка…").length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText("Остановлен")).not.toBeInTheDocument();
+    expect(screen.queryByText("Не настроен")).not.toBeInTheDocument();
+  });
+
   it("keeps primary navigation and settings controls at least 44px", () => {
     render(<SettingsPage />);
     for (const label of [

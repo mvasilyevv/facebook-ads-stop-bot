@@ -57,6 +57,13 @@ describe("web route architecture", () => {
     expect(campaignsRoute).not.toContain("CabinetAutostart");
   });
 
+  it("returns the standalone offer-rules route to the offer catalog", () => {
+    const offerRulesRoute = readFileSync(join(srcDir, "routes/offers/$id.tsx"), "utf8");
+
+    expect(offerRulesRoute).toContain('navigate({ to: "/offers" })');
+    expect(offerRulesRoute).not.toContain('navigate({ to: "/" })');
+  });
+
   it("uses canonical operator events and observer exclusions only", () => {
     const operatorClient = readFileSync(join(srcDir, "lib/api/operator.ts"), "utf8");
     const settingsClient = readFileSync(join(srcDir, "lib/api/settings.ts"), "utf8");
