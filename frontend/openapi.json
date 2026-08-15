@@ -1561,7 +1561,7 @@
       "post": {
         "tags": ["campaigns"],
         "summary": "Launch Campaign",
-        "description": "Создать campaign_run(queued) + task_queue(campaign_create) в одной транзакции.\n\nMoney-safety: idempotency_key (по конфигу) общий для run и задачи. Повторный\nlaunch того же конфига → находим существующий run, ничего не дублируем (202-shape).\nВоркер по run_id грузит CampaignRun и исполняет залив.",
+        "description": "Fan out one operator request into independent cabinet-scoped runs.\n\nEach accepted cabinet still uses the existing atomic ``campaign_run + task``\ntransaction. An explicit multi-account request is restricted to\n``offer_ad_accounts`` and converts per-cabinet preflight failures into\nper-cabinet receipts instead of rolling back successful siblings.",
         "operationId": "launch_campaign_api_tools_campaigns_launch_post",
         "requestBody": {
           "content": {
@@ -8808,6 +8808,14 @@
             "title": "Act Id",
             "default": ""
           },
+          "ad_account_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Ad Account Ids"
+          },
           "page_id": {
             "type": "string",
             "maxLength": 64,
@@ -9553,10 +9561,91 @@
         "required": ["id", "name"],
         "title": "DuplicateSourceEntity"
       },
+      "LaunchAccountOut": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "Account Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": ["account_id", "status"],
+        "title": "LaunchAccountOut",
+        "description": "Результат постановки одного кабинета, не скрывающий соседние ошибки."
+      },
       "LaunchIn": {
         "properties": {
           "config": {
             "$ref": "#/components/schemas/CampaignConfigIn"
+          },
+          "ad_account_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 20,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ad Account Ids"
           },
           "preset_id": {
             "anyOf": [
@@ -9591,7 +9680,14 @@
       "LaunchOut": {
         "properties": {
           "run_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Run Id"
           },
           "task_id": {
@@ -9610,19 +9706,39 @@
             "title": "Status"
           },
           "idempotency_key": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Idempotency Key"
           },
           "draft_cleared": {
             "type": "boolean",
             "title": "Draft Cleared",
             "default": false
+          },
+          "request_state": {
+            "type": "string",
+            "enum": ["accepted", "partial", "rejected"],
+            "title": "Request State",
+            "default": "accepted"
+          },
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/LaunchAccountOut"
+            },
+            "type": "array",
+            "title": "Accounts"
           }
         },
         "type": "object",
-        "required": ["run_id", "task_id", "status", "idempotency_key"],
+        "required": ["status"],
         "title": "LaunchOut",
-        "description": "Ответ запуска: id созданного run + id задачи."
+        "description": "Один operator request с независимым receipt по каждому кабинету."
       },
       "ObserverIntervalPatchRequest": {
         "properties": {
@@ -13188,6 +13304,17 @@
               }
             ],
             "title": "Offer Code"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
           },
           "idempotency_key": {
             "anyOf": [

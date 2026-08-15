@@ -1,5 +1,11 @@
 /** Generated OpenAPI API layer for the campaign creator. */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type Query,
+} from "@tanstack/react-query";
 import type { CampaignWizardCampaign } from "@fb/features/campaigns";
 import type { components } from "@fb/shared/api/generated";
 import { GeneratedApiError, dataOrThrow, noContentOrThrow } from "@fb/operator-api";
@@ -195,6 +201,25 @@ export function useRunDetail(runId: string | null) {
     { params: { path: { run_id: runId ?? "" } } },
     { enabled: !!runId, staleTime: 5_000 },
   );
+}
+
+export function useRunDetails(runIds: string[]) {
+  return useQueries({
+    queries: runIds.map((runId) => ({
+      queryKey: ["get", "/api/tools/campaigns/runs/{run_id}", runId],
+      queryFn: () =>
+        dataOrThrow(
+          generatedFetchApi.GET("/api/tools/campaigns/runs/{run_id}", {
+            params: { path: { run_id: runId } },
+          }),
+        ),
+      staleTime: 2_000,
+      refetchInterval: (query: Query<RunDetailOut>) =>
+        query.state.data && ["succeeded", "failed", "cancelled"].includes(query.state.data.status)
+          ? false
+          : 2_000,
+    })),
+  });
 }
 export function useAbortCampaignRun() {
   return generatedApi.useMutation("post", "/api/tools/campaigns/runs/{run_id}/abort");

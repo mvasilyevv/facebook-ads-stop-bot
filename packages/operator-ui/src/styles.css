@@ -385,3 +385,106 @@
     background: CanvasText;
   }
 }
+
+.operator-choice-tags {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.operator-choice-tags__label-row {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.operator-choice-tags__label-row label {
+  color: var(--color-bg-9);
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.operator-choice-tags__label-row button {
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  padding: 0 4px;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.operator-choice-tags__control {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--color-hairline-strong);
+  border-radius: var(--radius-2);
+  background: var(--color-bg-2);
+  padding: 8px;
+}
+
+.operator-choice-tags__control:focus-within {
+  border-color: var(--color-accent);
+}
+
+.operator-choice-tags__control[data-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.operator-choice-tags__values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.operator-choice-tags__tag {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-1);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  padding-left: 10px;
+  color: var(--color-bg-11);
+  font-family: var(--font-display);
+  font-size: 12px;
+}
+
+.operator-choice-tags__tag button {
+  width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--color-bg-9);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.operator-choice-tags__control select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-1);
+  background: var(--color-bg-1);
+  padding: 0 10px;
+  color: var(--color-bg-11);
+  font: inherit;
+  font-size: 14px;
+}
+
+.operator-choice-tags__help,
+.operator-choice-tags__error {
+  color: var(--color-bg-9);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.operator-choice-tags__error {
+  color: var(--color-danger);
+}

@@ -14,6 +14,7 @@ export interface CampaignWizardStart {
 
 export interface CampaignWizardIdentity {
   act_id: string;
+  ad_account_ids: string[];
   page_id: string;
   pixel_id: string;
   account_context_state: "ready" | "stale" | "unavailable";
@@ -103,6 +104,7 @@ export type CampaignWizardAction =
 
 const DEFAULT_IDENTITY: CampaignWizardIdentity = {
   act_id: "",
+  ad_account_ids: [],
   page_id: "",
   pixel_id: "",
   account_context_state: "unavailable",
@@ -141,7 +143,7 @@ export function createCampaignWizardState(): CampaignWizardState {
   return {
     currentStep: 1,
     start: { mode: "new" },
-    identity: { ...DEFAULT_IDENTITY },
+    identity: { ...DEFAULT_IDENTITY, ad_account_ids: [] },
     goal: { ...DEFAULT_GOAL, countries: [] },
     structure: { campaigns: [] },
     creatives: { upload_id: null, concepts: [], copies_per_concept: null },
@@ -185,6 +187,7 @@ export function applyCampaignPreset(
     identity: {
       ...DEFAULT_IDENTITY,
       act_id: preset.act_id,
+      ad_account_ids: [preset.act_id],
       page_id: preset.page_id,
       pixel_id: preset.pixel_id,
       offer_code: preset.offer_code ?? "",
@@ -213,7 +216,10 @@ export function campaignWizardToDraft(
   return {
     current_step: state.currentStep,
     start: { ...state.start },
-    identity: { ...state.identity },
+    identity: {
+      ...state.identity,
+      ad_account_ids: [...(state.identity.ad_account_ids ?? [])],
+    },
     goal: { ...state.goal, countries: [...state.goal.countries] },
     structure: {
       campaigns: state.structure.campaigns.map((campaign) => ({ ...campaign })),
@@ -257,10 +263,20 @@ function cloneCampaignWizardState(
 function campaignWizardFromWireWithoutRecursion(
   draft: CampaignDraftWireState,
 ): CampaignWizardState {
+  const draftAccounts = draft.identity.ad_account_ids ?? [];
+  const selectedAccounts =
+    draftAccounts.length > 0
+      ? draftAccounts
+      : draft.identity.act_id
+        ? [draft.identity.act_id]
+        : [];
   return {
     currentStep: draft.current_step,
     start: { ...draft.start },
-    identity: { ...draft.identity },
+    identity: {
+      ...draft.identity,
+      ad_account_ids: [...selectedAccounts],
+    },
     goal: { ...draft.goal, countries: [...draft.goal.countries] },
     structure: {
       campaigns: draft.structure.campaigns.map((campaign) => ({ ...campaign })),
@@ -279,7 +295,10 @@ export function validateCampaignIdentity(
   values: CampaignWizardIdentity,
 ): Partial<Record<keyof CampaignWizardIdentity, string>> {
   const errors: Partial<Record<keyof CampaignWizardIdentity, string>> = {};
-  if (!values.act_id.trim()) errors.act_id = "Обязательное поле";
+  if ((values.ad_account_ids ?? []).length === 0) {
+    errors.ad_account_ids = "Выберите хотя бы один кабинет оффера";
+  }
+  if (!values.act_id.trim()) errors.act_id = "Не выбран основной кабинет";
   if (!values.page_id.trim()) errors.page_id = "Обязательное поле";
   if (!values.pixel_id.trim()) errors.pixel_id = "Обязательное поле";
   if (!values.offer_code.trim()) errors.offer_code = "Обязательное поле";
@@ -454,7 +473,7 @@ export function buildCampaignConfig(
   }
 
   const config: CampaignConfig = {
-    act_id: state.identity.act_id,
+    act_id: state.identity.ad_account_ids?.[0] ?? state.identity.act_id,
     page_id: state.identity.page_id,
     pixel_id: state.identity.pixel_id,
     offer_code: state.identity.offer_code,
@@ -488,4 +507,38 @@ export function buildCampaignConfig(
   };
   if (preset?.url_tags_template) config.url_tags = preset.url_tags_template;
   return config;
+}
+
+export type CampaignLaunchObservedState =
+  | "queued"
+  | "uniquifying"
+  | "uploading"
+  | "creating"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "rejected"
+  | "unknown";
+
+export type CampaignLaunchAggregateState =
+  | "working"
+  | "succeeded"
+  | "partial"
+  | "failed"
+  | "unknown";
+
+/** Green is possible only when every selected cabinet is confirmed succeeded. */
+export function aggregateCampaignLaunchState(
+  states: CampaignLaunchObservedState[],
+): CampaignLaunchAggregateState {
+  if (states.length === 0) return "working";
+  const working = states.some((state) =>
+    ["queued", "uniquifying", "uploading", "creating"].includes(state),
+  );
+  if (working) return "working";
+  const succeeded = states.filter((state) => state === "succeeded").length;
+  if (succeeded === states.length) return "succeeded";
+  if (succeeded > 0) return "partial";
+  if (states.includes("unknown")) return "unknown";
+  return "failed";
 }

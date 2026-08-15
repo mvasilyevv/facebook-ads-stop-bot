@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from core.campaign_builder.config import (
     Account,
@@ -28,6 +28,7 @@ from core.campaign_builder.config import (
     CampaignConfig,
     Targeting,
 )
+from core.meta_api.identity import require_ad_account_id
 
 # ────────────────────────────── flat config (контракт фронта) ──────────────────────────────
 
@@ -389,10 +390,20 @@ class LaunchIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     config: CampaignConfigIn
+    # Когда поле задано, каждый кабинет обязан существовать в offer_ad_accounts.
+    # Отсутствие поля сохраняет совместимость со старым single-account клиентом.
+    ad_account_ids: list[str] | None = Field(default=None, min_length=1, max_length=20)
     preset_id: str | None = None
     # Exact server draft used for this preview.  The launch transaction clears
     # only this revision after the immutable run and task are durable.
     draft_revision: int | None = Field(default=None, ge=1, strict=True)
+
+    @field_validator("ad_account_ids")
+    @classmethod
+    def canonicalize_ad_account_ids(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        return list(dict.fromkeys(require_ad_account_id(value) for value in values))
 
     def domain_config(
         self,
@@ -411,14 +422,30 @@ class LaunchIn(BaseModel):
         )
 
 
-class LaunchOut(BaseModel):
-    """Ответ запуска: id созданного run + id задачи."""
+class LaunchAccountOut(BaseModel):
+    """Результат постановки одного кабинета, не скрывающий соседние ошибки."""
 
-    run_id: str
-    task_id: int | None
+    account_id: str
+    run_id: str | None = None
+    task_id: int | None = None
     status: str
-    idempotency_key: str
+    idempotency_key: str | None = None
+    error: str | None = None
+    replayed: bool = False
+
+
+class LaunchOut(BaseModel):
+    """Один operator request с независимым receipt по каждому кабинету."""
+
+    # Legacy single-account fields remain populated for old clients. Multi-account
+    # consumers use ``accounts`` and never infer an aggregate success from run_id.
+    run_id: str | None = None
+    task_id: int | None = None
+    status: str
+    idempotency_key: str | None = None
     draft_cleared: bool = False
+    request_state: Literal["accepted", "partial", "rejected"] = "accepted"
+    accounts: list[LaunchAccountOut] = Field(default_factory=list)
 
 
 # ────────────────────────────── runs ──────────────────────────────
@@ -466,6 +493,7 @@ class RunSummaryOut(BaseModel):
     preset_id: str | None
     status: CampaignRunStatus
     offer_code: str | None
+    account_id: str | None = None
     idempotency_key: str | None
     created_at: str
     updated_at: str

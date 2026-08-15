@@ -28,8 +28,10 @@ import os
 import re
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Generic, Literal, TypeVar
 
 from fastapi import (
     APIRouter,
@@ -51,6 +53,7 @@ from apps.api.middleware.api_problem import api_problem_payload
 from apps.api.routers.v1.schemas.campaigns_create import (
     AdsetPlanOut,
     CampaignPlanOut,
+    LaunchAccountOut,
     LaunchIn,
     LaunchOut,
     PresetIn,
@@ -111,6 +114,33 @@ router = APIRouter(tags=["campaigns"])
 
 # task_type воркера-исполнителя (контракт со стримом campaign_creator_worker).
 CAMPAIGN_TASK_TYPE = "campaign_create"
+
+_LaunchValue = TypeVar("_LaunchValue")
+
+
+@dataclass(frozen=True, slots=True)
+class _AccountLaunchAttempt(Generic[_LaunchValue]):
+    account_id: str
+    value: _LaunchValue | None = None
+    error: Exception | None = None
+
+
+async def _run_account_launches_independently(
+    account_ids: tuple[str, ...],
+    launch_one: Callable[[str], Awaitable[_LaunchValue]],
+) -> list[_AccountLaunchAttempt[_LaunchValue]]:
+    """Execute every unique cabinet even when an earlier cabinet is rejected."""
+
+    attempts: list[_AccountLaunchAttempt[_LaunchValue]] = []
+    for account_id in dict.fromkeys(account_ids):
+        try:
+            value = await launch_one(account_id)
+        except Exception as exc:  # noqa: BLE001 - isolation is the fan-out contract
+            attempts.append(_AccountLaunchAttempt(account_id=account_id, error=exc))
+            continue
+        attempts.append(_AccountLaunchAttempt(account_id=account_id, value=value))
+    return attempts
+
 
 _RUN_COMMAND_PROBLEM_RESPONSES = {
     200: {
@@ -775,21 +805,24 @@ async def validate_config(body: ValidateIn, engine: DepEngine) -> ValidatePlanOu
 # ─────────────────────────────── launch ────────────────────────────────
 
 
-@router.post(
-    "/tools/campaigns/launch",
-    response_model=LaunchOut,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
-    """Создать campaign_run(queued) + task_queue(campaign_create) в одной транзакции.
+async def _launch_one_campaign(
+    body: LaunchIn,
+    engine: DepEngine,
+    *,
+    account_id: str,
+) -> LaunchAccountOut:
+    """Create or replay exactly one cabinet-scoped run and worker task."""
 
-    Money-safety: idempotency_key (по конфигу) общий для run и задачи. Повторный
-    launch того же конфига → находим существующий run, ничего не дублируем (202-shape).
-    Воркер по run_id грузит CampaignRun и исполняет залив.
-    """
+    account_body = body.model_copy(
+        update={
+            "config": body.config.model_copy(update={"act_id": account_id}),
+            "ad_account_ids": None,
+            "draft_revision": None,
+        }
+    )
     # Нормализуем канонический плоский вход в доменный CampaignConfig.
     try:
-        config = await _campaign_config_from_request(body, engine)
+        config = await _campaign_config_from_request(account_body, engine)
     except HTTPException:
         raise
     except ValueError as exc:
@@ -809,9 +842,9 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
     ]
 
     preset_uuid: uuid.UUID | None = None
-    if body.preset_id:
+    if account_body.preset_id:
         try:
-            preset_uuid = uuid.UUID(body.preset_id)
+            preset_uuid = uuid.UUID(account_body.preset_id)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="preset_id не UUID") from exc
 
@@ -845,6 +878,8 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
                     {"ik": ikey},
                 )
             ).first()
+            if existing is None:
+                raise RuntimeError("campaign run idempotency conflict without durable run")
             task_row = (
                 await conn.execute(
                     text(
@@ -854,17 +889,14 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
                     {"ik": ikey, "tt": CAMPAIGN_TASK_TYPE},
                 )
             ).first()
-            draft_cleared = await campaign_drafts.clear_if_revision(
-                conn,
-                revision=body.draft_revision,
-            )
             logger.info("campaign launch idempotent: run_id=%s ikey=%s", existing.id, ikey)
-            return LaunchOut(
+            return LaunchAccountOut(
+                account_id=config.account.act_num,
                 run_id=existing.id,
                 task_id=int(task_row.id) if task_row else None,
                 status=existing.status,
                 idempotency_key=ikey,
-                draft_cleared=draft_cleared,
+                replayed=True,
             )
 
         run_id = run_row.id
@@ -921,21 +953,129 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
             ).first()
             task_id = int(existing_task.id) if existing_task else None
 
-        # A queued response is not Meta success.  It is nevertheless safe to
-        # clear this exact revision now: campaign_run contains the immutable
-        # canonical config and the worker task is committed in this transaction.
-        draft_cleared = await campaign_drafts.clear_if_revision(
-            conn,
-            revision=body.draft_revision,
-        )
-
     logger.info("campaign launch: run_id=%s task_id=%s ikey=%s", run_id, task_id, ikey)
-    return LaunchOut(
+    return LaunchAccountOut(
+        account_id=config.account.act_num,
         run_id=run_id,
         task_id=task_id,
         status="queued",
         idempotency_key=ikey,
+    )
+
+
+async def _configured_offer_accounts(engine: DepEngine, *, offer_code: str) -> set[str] | None:
+    """Load the only allowed source set for an explicit multi-account request."""
+
+    async with engine.connect() as conn:
+        offer_id = await conn.scalar(
+            text("SELECT id FROM offers WHERE code = :offer_code LIMIT 1"),
+            {"offer_code": offer_code},
+        )
+        if offer_id is None:
+            return None
+        grouped = await ad_account_catalog.list_by_offer(conn, offer_ids=(offer_id,))
+    return set(grouped.get(offer_id, []))
+
+
+def _account_launch_error(account_id: str, exc: Exception) -> LaunchAccountOut:
+    if isinstance(exc, HTTPException) and isinstance(exc.detail, str):
+        detail = exc.detail
+    elif isinstance(exc, ValueError):
+        detail = str(exc)
+    else:
+        logger.error(
+            "campaign launch failed before enqueue for account=%s error_type=%s",
+            account_id,
+            type(exc).__name__,
+        )
+        detail = "Запуск кабинета не поставлен в очередь"
+    return LaunchAccountOut(account_id=account_id, status="rejected", error=detail)
+
+
+async def _clear_launch_draft(
+    engine: DepEngine,
+    *,
+    revision: int | None,
+) -> bool:
+    if revision is None:
+        return False
+    async with engine.begin() as conn:
+        return await campaign_drafts.clear_if_revision(conn, revision=revision)
+
+
+@router.post(
+    "/tools/campaigns/launch",
+    response_model=LaunchOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
+    """Fan out one operator request into independent cabinet-scoped runs.
+
+    Each accepted cabinet still uses the existing atomic ``campaign_run + task``
+    transaction. An explicit multi-account request is restricted to
+    ``offer_ad_accounts`` and converts per-cabinet preflight failures into
+    per-cabinet receipts instead of rolling back successful siblings.
+    """
+
+    # Old clients retain the original fail-fast single-account contract. New
+    # clients always send ad_account_ids sourced from the selected catalog offer.
+    if body.ad_account_ids is None:
+        receipt = await _launch_one_campaign(body, engine, account_id=body.config.act_id)
+        draft_cleared = await _clear_launch_draft(engine, revision=body.draft_revision)
+        return LaunchOut(
+            run_id=receipt.run_id,
+            task_id=receipt.task_id,
+            status=receipt.status,
+            idempotency_key=receipt.idempotency_key,
+            draft_cleared=draft_cleared,
+            request_state="accepted",
+            accounts=[receipt],
+        )
+
+    configured_accounts = await _configured_offer_accounts(
+        engine,
+        offer_code=body.config.offer_code,
+    )
+
+    async def launch_selected(account_id: str) -> LaunchAccountOut:
+        if configured_accounts is None:
+            raise ValueError("Оффер не найден в каталоге")
+        if account_id not in configured_accounts:
+            raise ValueError("Кабинет не привязан к офферу")
+        return await _launch_one_campaign(body, engine, account_id=account_id)
+
+    attempts = await _run_account_launches_independently(
+        tuple(body.ad_account_ids),
+        launch_selected,
+    )
+    accounts = [
+        attempt.value
+        if attempt.error is None and attempt.value is not None
+        else _account_launch_error(attempt.account_id, attempt.error or RuntimeError())
+        for attempt in attempts
+    ]
+    accepted = [account for account in accounts if account.run_id is not None]
+    request_state: Literal["accepted", "partial", "rejected"]
+    if len(accepted) == len(accounts):
+        request_state = "accepted"
+    elif accepted:
+        request_state = "partial"
+    else:
+        request_state = "rejected"
+
+    draft_cleared = await _clear_launch_draft(
+        engine,
+        revision=body.draft_revision if accepted else None,
+    )
+    only = accounts[0] if len(accounts) == 1 else None
+    return LaunchOut(
+        run_id=only.run_id if only else None,
+        task_id=only.task_id if only else None,
+        status=only.status if only else request_state,
+        idempotency_key=only.idempotency_key if only else None,
         draft_cleared=draft_cleared,
+        request_state=request_state,
+        accounts=accounts,
     )
 
 
@@ -1064,6 +1204,7 @@ async def list_runs(
     query = f"""
         SELECT id::text AS id, preset_id::text AS preset_id, status,
                config->>'offer_code' AS offer_code,
+               config#>>'{{account,act_id}}' AS account_id,
                idempotency_key,
                created_at::text AS created_at, updated_at::text AS updated_at
         FROM campaign_run

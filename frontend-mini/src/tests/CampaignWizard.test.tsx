@@ -1,11 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { CampaignWizardState } from "@fb/features/campaigns";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
   launch: vi.fn(),
   validate: vi.fn(),
+  runDetails: {} as Record<string, Record<string, unknown>>,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -39,6 +40,8 @@ vi.mock("@/lib/campaigns", () => ({
     isPending: false,
   }),
   useLaunchCampaign: () => ({ mutateAsync: api.launch, isPending: false }),
+  useCampaignRunDetails: (runIds: string[]) =>
+    runIds.map((runId) => ({ data: api.runDetails[runId], isLoading: false })),
 }));
 
 vi.mock("@/features/campaigns/useCampaignWizardDraft", async () => {
@@ -50,6 +53,7 @@ vi.mock("@/features/campaigns/useCampaignWizardDraft", async () => {
         ...feature.createCampaignWizardState(),
         identity: {
           act_id: "act_123",
+          ad_account_ids: ["123"],
           page_id: "page_1",
           pixel_id: "pixel_1",
           account_context_state: "ready" as const,
@@ -129,6 +133,11 @@ const PLAN = {
 };
 
 describe("TMA campaign creator", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.runDetails = {};
+  });
+
   it("passes all seven action-first steps and keeps queued distinct from success", async () => {
     const user = userEvent.setup();
     api.validate.mockResolvedValue(PLAN);
@@ -138,7 +147,19 @@ describe("TMA campaign creator", () => {
       status: "queued",
       idempotency_key: "campaign:test",
       draft_cleared: true,
+      request_state: "accepted",
+      accounts: [
+        {
+          account_id: "123",
+          run_id: "run-1",
+          task_id: 1842,
+          status: "queued",
+          idempotency_key: "campaign:test",
+          replayed: false,
+        },
+      ],
     });
+    api.runDetails = { "run-1": { status: "queued" } };
     render(<CampaignWizard />);
 
     for (const expectedStep of [2, 3, 4, 5, 6]) {
@@ -157,10 +178,10 @@ describe("TMA campaign creator", () => {
     await user.click(
       screen.getByRole("button", { name: /Подтвердить и поставить в очередь/ }),
     );
-    expect(await screen.findByText("Запуск принят в очередь")).toBeVisible();
-    expect(screen.getByText(/Это ещё не успех/)).toBeVisible();
+    expect(await screen.findByText("Запуски выполняются")).toBeVisible();
+    expect(screen.getByText(/Зелёный итог появится только/)).toBeVisible();
     expect(api.launch).toHaveBeenCalledWith(
-      expect.objectContaining({ draft_revision: 3 }),
+      expect.objectContaining({ draft_revision: 3, ad_account_ids: ["123"] }),
     );
   });
 
@@ -170,5 +191,45 @@ describe("TMA campaign creator", () => {
       container.querySelectorAll(".min-h-11").length,
     ).toBeGreaterThanOrEqual(7);
     expect(screen.queryByText(/desktop-first|доступно на desktop/i)).toBeNull();
+  });
+
+  it("показывает частичный результат отдельно от общего успеха", async () => {
+    const user = userEvent.setup();
+    api.validate.mockResolvedValue(PLAN);
+    api.launch.mockResolvedValue({
+      status: "partial",
+      draft_cleared: true,
+      request_state: "partial",
+      accounts: [
+        {
+          account_id: "123",
+          run_id: "run-1",
+          task_id: 1842,
+          status: "queued",
+          idempotency_key: "campaign:123",
+          replayed: false,
+        },
+        {
+          account_id: "456",
+          status: "rejected",
+          error: "Контекст кабинета не подтверждён",
+          replayed: false,
+        },
+      ],
+    });
+    api.runDetails = { "run-1": { status: "succeeded" } };
+    render(<CampaignWizard />);
+
+    for (let step = 2; step <= 6; step += 1) {
+      await user.click(screen.getByRole("button", { name: /Далее/ }));
+    }
+    await user.click(screen.getByRole("button", { name: /Подтвердить план/ }));
+    await user.click(
+      screen.getByRole("button", { name: /Подтвердить и поставить в очередь/ }),
+    );
+
+    expect(await screen.findByText("Частичный результат")).toBeVisible();
+    expect(screen.getByText("Контекст кабинета не подтверждён")).toBeVisible();
+    expect(screen.queryByText("Все кабинеты подтверждены")).toBeNull();
   });
 });

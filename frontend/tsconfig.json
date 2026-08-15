@@ -4,6 +4,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
+      "@fb/features": ["../packages/features/src/index.ts"],
+      "@fb/features/*": ["../packages/features/src/*"],
       "@fb/operator-api": ["../packages/operator-api/src/index.ts"],
       "@fb/operator-ui": ["../packages/operator-ui/src/index.tsx"],
       "@fb/shared": ["../packages/shared/src/index.ts"],

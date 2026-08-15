@@ -488,11 +488,12 @@ export interface paths {
     put?: never;
     /**
      * Launch Campaign
-     * @description Создать campaign_run(queued) + task_queue(campaign_create) в одной транзакции.
+     * @description Fan out one operator request into independent cabinet-scoped runs.
      *
-     *     Money-safety: idempotency_key (по конфигу) общий для run и задачи. Повторный
-     *     launch того же конфига → находим существующий run, ничего не дублируем (202-shape).
-     *     Воркер по run_id грузит CampaignRun и исполняет залив.
+     *     Each accepted cabinet still uses the existing atomic ``campaign_run + task``
+     *     transaction. An explicit multi-account request is restricted to
+     *     ``offer_ad_accounts`` and converts per-cabinet preflight failures into
+     *     per-cabinet receipts instead of rolling back successful siblings.
      */
     post: operations["launch_campaign_api_tools_campaigns_launch_post"];
     delete?: never;
@@ -2721,6 +2722,8 @@ export interface components {
        * @default
        */
       act_id: string;
+      /** Ad Account Ids */
+      ad_account_ids?: string[];
       /**
        * Page Id
        * @default
@@ -3120,6 +3123,29 @@ export interface components {
       name: string;
     };
     /**
+     * LaunchAccountOut
+     * @description Результат постановки одного кабинета, не скрывающий соседние ошибки.
+     */
+    LaunchAccountOut: {
+      /** Account Id */
+      account_id: string;
+      /** Run Id */
+      run_id?: string | null;
+      /** Task Id */
+      task_id?: number | null;
+      /** Status */
+      status: string;
+      /** Idempotency Key */
+      idempotency_key?: string | null;
+      /** Error */
+      error?: string | null;
+      /**
+       * Replayed
+       * @default false
+       */
+      replayed: boolean;
+    };
+    /**
      * LaunchIn
      * @description Запрос запуска залива: конфиг + опц. ссылка на пресет/upload.
      *
@@ -3127,6 +3153,8 @@ export interface components {
      */
     LaunchIn: {
       config: components["schemas"]["CampaignConfigIn"];
+      /** Ad Account Ids */
+      ad_account_ids?: string[] | null;
       /** Preset Id */
       preset_id?: string | null;
       /** Draft Revision */
@@ -3134,22 +3162,30 @@ export interface components {
     };
     /**
      * LaunchOut
-     * @description Ответ запуска: id созданного run + id задачи.
+     * @description Один operator request с независимым receipt по каждому кабинету.
      */
     LaunchOut: {
       /** Run Id */
-      run_id: string;
+      run_id?: string | null;
       /** Task Id */
-      task_id: number | null;
+      task_id?: number | null;
       /** Status */
       status: string;
       /** Idempotency Key */
-      idempotency_key: string;
+      idempotency_key?: string | null;
       /**
        * Draft Cleared
        * @default false
        */
       draft_cleared: boolean;
+      /**
+       * Request State
+       * @default accepted
+       * @enum {string}
+       */
+      request_state: "accepted" | "partial" | "rejected";
+      /** Accounts */
+      accounts?: components["schemas"]["LaunchAccountOut"][];
     };
     /**
      * ObserverIntervalPatchRequest
@@ -4344,6 +4380,8 @@ export interface components {
         | "cancelled";
       /** Offer Code */
       offer_code: string | null;
+      /** Account Id */
+      account_id?: string | null;
       /** Idempotency Key */
       idempotency_key: string | null;
       /** Created At */

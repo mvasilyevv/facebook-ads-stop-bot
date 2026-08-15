@@ -1,13 +1,13 @@
 /**
  * Шаг 2 — Идентичность + Оффер.
  *
- * Поля: act_id, page_id, pixel_id, offer_code, byer_tag.
+ * Поля: ad_account_ids, page_id, pixel_id, offer_code, byer_tag.
  * Если шаг 1 был "preset" — поля предзаполнены из пресета.
  *
  * Дерайв из оффера: при выборе offer_code, совпавшего с оффером из useOffers,
- * подставляем act_id (1 кабинет → авто, >1 → Select выбора, 0 → ручной ввод),
- * pixel_id и goal.countries. Все поля редактируемы. Страница НЕ свойство оффера —
- * выбирается из дропдауна страниц кабинета.
+ * кабинеты выбираются только из offer_ad_accounts, pixel_id и goal.countries
+ * дерайвятся из оффера. Первый выбранный кабинет используется для preview/page
+ * context; launch повторно валидирует каждый кабинет независимо.
  *
  * IANA timezone, currency и точность денег приходят только из свежего durable
  * account snapshot. Клиент не может их редактировать или подменить.
@@ -18,6 +18,7 @@
 
 import { useEffect, useRef, useState, type FC } from "react";
 import { validateCampaignIdentity } from "@fb/features/campaigns";
+import { ChoiceTagListInput } from "@fb/operator-ui";
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
@@ -46,12 +47,14 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
   const offersQuery = useOffers();
   // Подтянутые страницы кабинета → дропдаун выбора page_id. Пусто/ошибка → ручной ввод.
   const [pages, setPages] = useState<{ id: string; name: string }[]>([]);
-  // Кабинеты выбранного оффера при дерайве (>1 → Select выбора кабинета).
-  const [offerAccounts, setOfferAccounts] = useState<string[]>([]);
   // Durable context read is cheap; pages still use the live read channel.
   const lastFetchedAct = useRef<string | null>(null);
 
   const offers: Offer[] = offersQuery.data ?? [];
+  const selectedOffer = offers.find((offer) => offer.code === values.offer_code);
+  const offerAccounts = (selectedOffer?.ad_account_ids ?? []).filter(
+    (accountId) => accountId.trim().length > 0,
+  );
 
   const prefillOfferCpa = (currency: string, offerCode: string) => {
     if (!onGoalChange) return;
@@ -122,27 +125,30 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [values.act_id]);
 
-  const fetchAccountMeta = () => fetchAccountMetaFor(values.act_id);
-
-  // Дерайв из выбранного оффера: act_id (1 авто / >1 Select / 0 ручной),
-  // pixel_id, goal.countries. Все поля редактируемы. Страница — не свойство оффера.
+  // Дерайв из выбранного оффера: authoritative accounts, pixel_id, goal.countries.
   const deriveFromOffer = (code: string) => {
     const offer = offers.find((o) => o.code === code);
     if (!offer) {
-      // Свободный ввод кода без совпадения — оффер-дерайв не применяем,
-      // ручной выбор кабинета убираем.
-      setOfferAccounts([]);
+      onChange({ ad_account_ids: [], act_id: "" });
       return;
     }
     const accounts = (offer.ad_account_ids ?? []).filter((a) => a.trim().length > 0);
-    setOfferAccounts(accounts);
-    // 1 кабинет → подставляем сразу; >1 → ждём выбор в Select; 0 → ручной ввод.
+    // Один кабинет выбирается сразу; несколько требуют явного multi-select.
     const soleAccount = accounts.length === 1 ? accounts[0] : null;
 
-    const patch: Partial<WizardIdentity> = {};
+    const patch: Partial<WizardIdentity> = {
+      ad_account_ids: soleAccount ? [soleAccount] : [],
+      act_id: soleAccount ?? "",
+      page_id: "",
+      account_context_state: "unavailable",
+      timezone_name: "",
+      currency: "",
+      currency_exponent: null,
+      account_context_observed_at: null,
+      account_context_issue: null,
+    };
     if (offer.pixel_id) patch.pixel_id = offer.pixel_id;
-    if (soleAccount) patch.act_id = soleAccount;
-    if (Object.keys(patch).length > 0) onChange(patch);
+    onChange(patch);
 
     // Гео оффера → префилл countries в шаге «Параметры» (редактируемо).
     if (onGoalChange && offer.countries && offer.countries.length > 0) {
@@ -161,11 +167,16 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
     if (soleAccount) fetchAccountMetaFor(soleAccount);
   };
 
-  // Выбор кабинета из Select (оффер с >1 кабинетом). act_id меняется → TZ перефетчится.
-  const handleAccountSelect = (actId: string) => {
+  const handleAccountsChange = (accountIds: string[]) => {
+    const actId = accountIds[0] ?? "";
+    if (actId === values.act_id) {
+      onChange({ ad_account_ids: accountIds });
+      return;
+    }
     lastFetchedAct.current = null;
     setPages([]);
     onChange({
+      ad_account_ids: accountIds,
       act_id: actId,
       page_id: "",
       account_context_state: "unavailable",
@@ -175,10 +186,9 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
       account_context_observed_at: null,
       account_context_issue: null,
     });
-    fetchAccountMetaFor(actId);
+    if (actId) fetchAccountMetaFor(actId);
   };
 
-  const selectedOffer = offers.find((offer) => offer.code === values.offer_code);
   const offerCurrency = selectedOffer?.currency?.trim().toUpperCase() ?? "";
   const offerCurrencyMismatch =
     values.account_context_state === "ready" &&
@@ -246,44 +256,23 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
         <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-3">
           РЕКЛАМНЫЙ КАБИНЕТ
         </div>
-        {/* Оффер с несколькими кабинетами — выбор кабинета залива (без фан-аута). */}
-        {offerAccounts.length > 1 && (
-          <div className="mb-4">
-            <Select
-              label="Кабинет оффера"
-              placeholder="Выберите кабинет"
-              options={offerAccounts.map((a) => ({ value: a, label: a }))}
-              value={offerAccounts.includes(values.act_id) ? values.act_id : ""}
-              onChange={(e) => handleAccountSelect(e.target.value)}
-            />
-            <p className="text-[12px] text-bg-8 mt-1.5">
-              У оффера несколько кабинетов — выберите, на какой заливать.
-            </p>
-          </div>
-        )}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Input
-            label="Ad Account ID"
-            placeholder="act_123456789"
-            value={values.act_id}
-            onChange={(e) => {
-              lastFetchedAct.current = null;
-              setPages([]);
-              onChange({
-                act_id: e.target.value,
-                page_id: "",
-                account_context_state: "unavailable",
-                timezone_name: "",
-                currency: "",
-                currency_exponent: null,
-                account_context_observed_at: null,
-                account_context_issue: null,
-              });
-            }}
-            onBlur={fetchAccountMeta}
-            errorMessage={errors.act_id}
-            helpText="Числовой ID с префиксом act_ или без"
+        <div className="mb-4">
+          <ChoiceTagListInput
+            label="Кабинеты оффера"
+            values={values.ad_account_ids ?? []}
+            options={offerAccounts.map((accountId) => ({
+              value: accountId,
+              label: `act_${accountId}`,
+            }))}
+            onChange={handleAccountsChange}
+            placeholder="Добавить кабинет оффера"
+            selectAllLabel={offerAccounts.length > 1 ? "Выбрать все" : undefined}
+            errorMessage={errors.ad_account_ids ?? errors.act_id}
+            disabled={offerAccounts.length === 0}
+            helpText="Каждый выбранный кабинет получит отдельный run; первый используется для preview и списка страниц."
           />
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <label className="text-[12px] font-display tracking-wider uppercase text-bg-9">
               Контекст кабинета
@@ -332,7 +321,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
                 </>
               ) : (
                 <span className="text-bg-9">
-                  Укажите Ad Account ID — timezone и валюта подтянутся из снимка Meta
+                  Выберите кабинет оффера — timezone и валюта подтянутся из снимка Meta
                 </span>
               )}
             </div>
@@ -347,6 +336,16 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
                 {values.currency}
               </span>
             )}
+          </div>
+          <div className="min-h-20 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 px-3 py-2.5 text-[13px] text-bg-9">
+            <span className="block font-display text-[12px] uppercase tracking-wider text-bg-8">
+              Единица работы
+            </span>
+            <span className="mt-2 block">
+              {(values.ad_account_ids ?? []).length > 0
+                ? `${values.ad_account_ids?.length ?? 0} отдельных запусков`
+                : "Кабинеты ещё не выбраны"}
+            </span>
           </div>
         </div>
       </div>

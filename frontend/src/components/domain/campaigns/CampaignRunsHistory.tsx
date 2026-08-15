@@ -222,6 +222,9 @@ const RunRow: FC<RunRowProps> = ({ run, onRefresh }) => {
             <span className="font-medium text-[13px] text-bg-11 truncate">
               {run.offer_code ?? "—"}
             </span>
+            {run.account_id ? (
+              <span className="font-mono text-[12px] text-bg-8">act_{run.account_id}</span>
+            ) : null}
           </div>
           {run.status === "failed" ? (
             <div className="ml-[50px] truncate text-[12px] text-danger" role="alert">

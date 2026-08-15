@@ -120,6 +120,18 @@ vi.mock("@/lib/api/campaigns", () => ({
       task_id: 42,
       status: "queued",
       idempotency_key: "campaign:GH_CR2:2026-06-23:abc123",
+      draft_cleared: true,
+      request_state: "accepted",
+      accounts: [
+        {
+          account_id: "123",
+          run_id: "run-abc",
+          task_id: 42,
+          status: "queued",
+          idempotency_key: "campaign:GH_CR2:2026-06-23:abc123",
+          replayed: false,
+        },
+      ],
     }),
     isPending: false,
     isError: false,
@@ -173,6 +185,7 @@ vi.mock("@/lib/api/campaigns", () => ({
     error: null,
     refetch: vi.fn(),
   }),
+  useRunDetails: () => [],
   useAbortCampaignRun: () => ({
     mutateAsync: vi.fn(),
     isPending: false,
@@ -279,6 +292,18 @@ vi.mock("@/lib/api/offers", () => ({
         cpa_threshold: "5.00",
         currency: "USD",
       },
+      {
+        id: "offer-2",
+        code: "GH_MULTI",
+        name: "Multi GH",
+        vertical: "gambling",
+        is_active: true,
+        pixel_id: "px777",
+        ad_account_ids: ["111222", "333444"],
+        countries: ["gh"],
+        cpa_threshold: "4.00",
+        currency: "USD",
+      },
     ],
     isLoading: false,
     isError: false,
@@ -330,6 +355,7 @@ function wrap(ui: ReactElement) {
 
 const DEFAULT_IDENTITY: WizardIdentity = {
   act_id: "act_123",
+  ad_account_ids: ["123"],
   page_id: "456",
   pixel_id: "789",
   account_context_state: "ready",
@@ -403,6 +429,7 @@ describe("validateIdentity", () => {
   it("пустые поля → ошибки для act_id, page_id, pixel_id, offer_code", () => {
     const empty: WizardIdentity = {
       act_id: "",
+      ad_account_ids: [],
       page_id: "",
       pixel_id: "",
       account_context_state: "unavailable",
@@ -445,7 +472,7 @@ describe("WizardStep2Identity render", () => {
   // Поля заполнены из values
   it("отображает переданные значения", () => {
     render(wrap(<WizardStep2Identity values={DEFAULT_IDENTITY} onChange={vi.fn()} />));
-    expect(screen.getByDisplayValue("act_123")).toBeInTheDocument();
+    expect(screen.getByText("123")).toBeInTheDocument();
     expect(screen.getByDisplayValue("GH_CR2")).toBeInTheDocument();
   });
 
@@ -463,16 +490,13 @@ describe("WizardStep2Identity render", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Обязательное поле");
   });
 
-  // После blur по Ad Account ID страницы подтянулись → page_id рендерится дропдаупом
+  // После выбора основного кабинета страницы подтянулись → page_id рендерится дропдаупом
   // с опцией "{name} — {id}" (а не свободным Input).
   it("страницы подтянулись → рендерится Select с опцией страницы", async () => {
-    const user = userEvent.setup();
     render(wrap(<WizardStep2Identity values={DEFAULT_IDENTITY} onChange={vi.fn()} />));
-    // blur по Ad Account ID запускает фетч страниц (мок зовёт onSuccess синхронно).
-    const actInput = screen.getByDisplayValue("act_123");
-    await user.click(actInput);
-    await user.tab();
-    expect(screen.getByRole("option", { name: "Acme Page — 111" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: "Acme Page — 111" })).toBeInTheDocument(),
+    );
   });
 
   // Дерайв: выбор кода оффера, совпавшего с каталогом, подставляет act_id (1 кабинет),
@@ -487,6 +511,7 @@ describe("WizardStep2Identity render", () => {
       const [identity, setIdentity] = useState<WizardIdentity>({
         ...DEFAULT_IDENTITY,
         act_id: "",
+        ad_account_ids: [],
         pixel_id: "",
         offer_code: "",
       });
@@ -506,9 +531,39 @@ describe("WizardStep2Identity render", () => {
 
     // act_id (1 кабинет → авто) + pixel_id из оффера осели в identity.
     expect(lastIdentity.act_id).toBe("111222");
+    expect(lastIdentity.ad_account_ids).toEqual(["111222"]);
     expect(lastIdentity.pixel_id).toBe("px555");
     // countries (ISO-2 upper) ушли в goal.
     expect(onGoalChange).toHaveBeenCalledWith(expect.objectContaining({ countries: ["BR", "DE"] }));
+  });
+
+  it("выбирает несколько кабинетов только из привязки оффера", async () => {
+    const user = userEvent.setup();
+    let lastIdentity: WizardIdentity = {
+      ...DEFAULT_IDENTITY,
+      act_id: "",
+      ad_account_ids: [],
+      offer_code: "",
+    };
+
+    function Harness() {
+      const [identity, setIdentity] = useState<WizardIdentity>(lastIdentity);
+      lastIdentity = identity;
+      return (
+        <WizardStep2Identity
+          values={identity}
+          onChange={(value) => setIdentity((previous) => ({ ...previous, ...value }))}
+        />
+      );
+    }
+
+    render(wrap(<Harness />));
+    await user.type(screen.getByPlaceholderText("GH_CR2"), "GH_MULTI");
+    await user.click(screen.getByRole("button", { name: "Выбрать все" }));
+
+    expect(lastIdentity.ad_account_ids).toEqual(["111222", "333444"]);
+    expect(lastIdentity.act_id).toBe("111222");
+    expect(screen.queryByPlaceholderText(/через запятую/i)).toBeNull();
   });
 });
 
@@ -1247,7 +1302,7 @@ describe("useWizardStore", () => {
       store.setPreview({ plan: null });
     });
     const config = useWizardStore.getState().buildConfig();
-    expect(config.act_id).toBe("act_123");
+    expect(config.act_id).toBe("123");
     expect(config.offer_code).toBe("GH_CR2");
     expect(config).not.toHaveProperty("launch_state");
     expect(config.campaigns).toHaveLength(1);

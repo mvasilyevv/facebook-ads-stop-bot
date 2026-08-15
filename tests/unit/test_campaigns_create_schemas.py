@@ -266,6 +266,15 @@ def test_launch_in_accepts_flat_config() -> None:
     assert dom.account.act == "act_123"
 
 
+def test_launch_in_canonicalizes_and_deduplicates_selected_offer_accounts() -> None:
+    body = LaunchIn(
+        config=_flat_config_dict(),
+        ad_account_ids=["act_222", "111", "222"],
+    )
+
+    assert body.ad_account_ids == ["222", "111"]
+
+
 # Второй источник количества концептов запрещён контрактом.
 def test_launch_in_rejects_concept_counts_override() -> None:
     with pytest.raises(ValidationError):
