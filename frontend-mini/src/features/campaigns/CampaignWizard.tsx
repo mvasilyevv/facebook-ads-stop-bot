@@ -1326,10 +1326,6 @@ function LaunchStep({
         <p role="status" className="text-[13px] leading-5 text-bg-9">
           Зелёный итог появится только после подтверждённого успеха всех
           кабинетов.
-      <Card eyebrow="QUEUED" title="Запуск принят в очередь" className="border-warning/35">
-        <p role="status" className="text-[13px] leading-5 text-bg-9">
-          Это ещё не успех. Создание подтверждается только после статуса «Готово» в журнале
-          запусков.
         </p>
         <div className="mt-4 space-y-2">
           {accounts.map((account) => {

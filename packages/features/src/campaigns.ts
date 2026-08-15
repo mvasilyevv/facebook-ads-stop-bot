@@ -570,6 +570,7 @@ export function aggregateCampaignLaunchState(
   if (succeeded > 0) return "partial";
   if (states.includes("unknown")) return "unknown";
   return "failed";
+}
 
 export interface CampaignPresetDraft {
   name: string;
