@@ -48,10 +48,12 @@ from fbctl.controller import (
     LEGACY_DOCKER_RESOURCES,
     MANAGED_HOST_PORT_SERVICES,
     REHEARSAL_FAILPOINTS,
+    RETIRED_SYSTEMD_UNITS,
     WORKERS,
     DeployOptions,
     ProductionController,
     _normalize_profile_tree,
+    _retire_legacy_systemd_units,
     _tcp_port_is_occupied,
     bootstrap_host,
 )
@@ -275,6 +277,102 @@ class FakeRunner:
         if check and result.returncode:
             raise FbctlError("fake command failed", step=step)
         return result
+
+
+def test_legacy_systemd_retirement_is_exact_and_preserves_backup_units(
+    tmp_path: Path,
+) -> None:
+    unit_dir = tmp_path / "systemd"
+    backup_units = ("fb-agent-backup.service", "fb-agent-backup.timer")
+    for unit in (*RETIRED_SYSTEMD_UNITS, *backup_units):
+        _write(unit_dir / unit, "legacy\n", 0o644)
+    runner = FakeRunner()
+
+    retired = _retire_legacy_systemd_units(runner, unit_dir=unit_dir)
+
+    assert retired == list(RETIRED_SYSTEMD_UNITS)
+    assert runner.commands == [
+        (
+            "bootstrap",
+            ("systemctl", "disable", "--now", "fb-agent-healthcheck.timer"),
+        ),
+        (
+            "bootstrap",
+            ("systemctl", "disable", "--now", "vision-token-refresh.timer"),
+        ),
+        ("bootstrap", ("systemctl", "disable", "--now", "fb-agent.service")),
+        (
+            "bootstrap",
+            ("systemctl", "disable", "--now", "fb-agent-release-reconcile.service"),
+        ),
+        ("bootstrap", ("systemctl", "stop", "fb-agent-healthcheck.service")),
+        ("bootstrap", ("systemctl", "stop", "vision-token-refresh.service")),
+        ("bootstrap", ("systemctl", "daemon-reload")),
+    ]
+    assert not any((unit_dir / unit).exists() for unit in RETIRED_SYSTEMD_UNITS)
+    assert all((unit_dir / unit).is_file() for unit in backup_units)
+    assert not (unit_dir / fbctl_controller.RETIRED_SYSTEMD_RELOAD_MARKER).exists()
+
+
+def test_legacy_systemd_retirement_is_a_clean_host_noop(tmp_path: Path) -> None:
+    runner = FakeRunner()
+
+    assert _retire_legacy_systemd_units(runner, unit_dir=tmp_path / "systemd") == []
+    assert runner.commands == []
+
+
+def test_legacy_systemd_retirement_keeps_files_when_systemctl_fails(tmp_path: Path) -> None:
+    unit_dir = tmp_path / "systemd"
+    for unit in RETIRED_SYSTEMD_UNITS:
+        _write(unit_dir / unit, "legacy\n", 0o644)
+
+    class FailingRunner:
+        def run(self, _command, **_kwargs):
+            raise FbctlError("systemctl failed", step="bootstrap")
+
+    with pytest.raises(FbctlError, match="systemctl failed"):
+        _retire_legacy_systemd_units(FailingRunner(), unit_dir=unit_dir)
+
+    assert all((unit_dir / unit).is_file() for unit in RETIRED_SYSTEMD_UNITS)
+
+
+def test_legacy_systemd_retirement_retries_reload_after_files_were_removed(
+    tmp_path: Path,
+) -> None:
+    unit_dir = tmp_path / "systemd"
+    for unit in RETIRED_SYSTEMD_UNITS:
+        _write(unit_dir / unit, "legacy\n", 0o644)
+
+    class ReloadFailingRunner(FakeRunner):
+        def run(self, command, **kwargs):
+            argv = tuple(os.fspath(part) for part in command)
+            if argv == ("systemctl", "daemon-reload"):
+                self.commands.append((kwargs["step"], argv))
+                raise FbctlError("daemon-reload failed", step=kwargs["step"])
+            return super().run(command, **kwargs)
+
+    marker = unit_dir / fbctl_controller.RETIRED_SYSTEMD_RELOAD_MARKER
+    with pytest.raises(FbctlError, match="daemon-reload failed"):
+        _retire_legacy_systemd_units(ReloadFailingRunner(), unit_dir=unit_dir)
+
+    assert not any((unit_dir / unit).exists() for unit in RETIRED_SYSTEMD_UNITS)
+    assert marker.is_file()
+
+    retry_runner = FakeRunner()
+    assert _retire_legacy_systemd_units(retry_runner, unit_dir=unit_dir) == []
+    assert retry_runner.commands == [("bootstrap", ("systemctl", "daemon-reload"))]
+    assert not marker.exists()
+
+
+def test_legacy_systemd_retirement_rejects_unsafe_exact_path(tmp_path: Path) -> None:
+    unit_dir = tmp_path / "systemd"
+    (unit_dir / RETIRED_SYSTEMD_UNITS[0]).mkdir(parents=True)
+    runner = FakeRunner()
+
+    with pytest.raises(FbctlError, match="legacy systemd unit path is unsafe"):
+        _retire_legacy_systemd_units(runner, unit_dir=unit_dir)
+
+    assert runner.commands == []
 
 
 class DockerInventoryRunner(FakeRunner):
@@ -2216,6 +2314,45 @@ def test_deploy_orders_webhook_before_workers_and_promotes_after_all_evidence(
     assert completed.index("verify_worker_heartbeats") < completed.index("verify_system_ready")
     deploy_state = json.loads((root / "runtime" / "deploy-state.json").read_text(encoding="utf-8"))
     assert deploy_state["completed_steps"] == [*REHEARSAL_FAILPOINTS, "promote"]
+
+
+def test_real_deploy_retires_legacy_systemd_after_pull_before_runtime_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _root(tmp_path)
+    log: list[str] = []
+    retirement_steps: list[str] = []
+
+    def retire(_runner, *, step: str) -> list[str]:
+        retirement_steps.append(step)
+        return []
+
+    monkeypatch.setattr(fbctl_controller, "_retire_legacy_systemd_units", retire)
+    monkeypatch.setattr(
+        ProductionController,
+        "_require_caddy_credentials",
+        lambda *_args: None,
+    )
+    controller = ProductionController(
+        runner=FakeRunner(),
+        probes=FakeProbes(),
+        materialize=_materialize,
+        now=time.time,
+        sleep=lambda _seconds: None,
+        log=log.append,
+    )
+
+    assert controller.deploy(DeployOptions(root=root)).status == "READY"
+
+    completed = [
+        message.removeprefix("[fbctl] step=").removesuffix(" completed")
+        for message in log
+        if message.startswith("[fbctl] step=") and message.endswith(" completed")
+    ]
+    assert retirement_steps == ["retire_legacy_systemd"]
+    assert completed.index("pull") < completed.index("retire_legacy_systemd")
+    assert completed.index("retire_legacy_systemd") < completed.index("stop_runtime")
 
 
 def test_post_migration_failpoint_keeps_incumbent_runtime_and_fences_workers(
