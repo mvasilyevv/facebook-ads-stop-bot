@@ -342,9 +342,9 @@
   text-underline-offset: 4px;
 }
 
+/* Имя кабинета — название, а не измеренная величина: основной шрифт. */
 .ledger-cabinet__identity strong {
   overflow: hidden;
-  font-family: var(--font-numeric);
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -448,13 +448,13 @@
   border-top-color: var(--color-bg-7);
 }
 
+/* «не подтверждено» — состояние словами, поэтому основной шрифт. */
 .ledger-scale__unknown {
   position: absolute;
   top: 18px;
   right: 0;
   left: 0;
   color: var(--color-bg-8);
-  font-family: var(--font-numeric);
   font-size: 12px;
   text-align: center;
 }
@@ -554,10 +554,10 @@
   gap: 12px;
 }
 
+/* Названия объекта и действия — текст для чтения, не величина. */
 .ledger-attention-item__target,
 .ledger-action-item__title {
   color: var(--color-bg-11);
-  font-family: var(--font-numeric);
   font-size: 14px;
   font-weight: 600;
 }
@@ -638,7 +638,6 @@
   gap: 5px 12px;
   margin-top: 8px;
   color: var(--color-bg-8);
-  font-family: var(--font-numeric);
   font-size: 12px;
 }
 
@@ -657,10 +656,14 @@
   position: absolute;
   inset: 0;
   animation: fbBarSweep 1.2s var(--ease-out) infinite;
-  background: repeating-linear-gradient(
+  /* Сплошная бегущая заливка, а не штрихи: штрихи читались как декоративный
+     пунктир под действием, хотя означают «работа идёт прямо сейчас». */
+  background: linear-gradient(
     90deg,
-    var(--color-warning) 0 8px,
-    transparent 8px 16px
+    transparent 0,
+    var(--color-warning) 35%,
+    var(--color-warning) 65%,
+    transparent 100%
   );
   content: "";
 }

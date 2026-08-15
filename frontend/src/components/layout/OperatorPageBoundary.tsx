@@ -6,8 +6,8 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils/cn";
 
 interface OperatorPageBoundaryProps {
-  eyebrowNum?: string;
-  eyebrow: string;
+  /** Уточнение к разделу; сам раздел и его номер задаёт маршрут. */
+  detail?: string;
   title: string;
   subtitle?: ReactNode;
   navigation?: ReactNode;
@@ -17,8 +17,7 @@ interface OperatorPageBoundaryProps {
 
 /** Единая шапка для состояний, в которых данных ещё нет или они недоступны. */
 export function OperatorPageBoundary({
-  eyebrowNum,
-  eyebrow,
+  detail,
   title,
   subtitle,
   navigation,
@@ -28,7 +27,7 @@ export function OperatorPageBoundary({
   return (
     <div className={cn("min-w-0", className)}>
       {navigation ? <div className="mb-5">{navigation}</div> : null}
-      <PageHeader eyebrowNum={eyebrowNum} eyebrow={eyebrow} title={title} subtitle={subtitle} />
+      <PageHeader detail={detail} title={title} subtitle={subtitle} />
       {children}
     </div>
   );

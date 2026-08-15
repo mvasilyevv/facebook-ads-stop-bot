@@ -18,7 +18,7 @@ import { adsForRealtimeState } from "@fb/shared/operator/viewModel";
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
-import { Eyebrow } from "@/components/data/Eyebrow";
+import { SectionEyebrow } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Drawer } from "@/components/ui/Drawer";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -110,8 +110,6 @@ function AdsPage() {
   if (query.isError && !payload) {
     return (
       <OperatorPageBoundary
-        eyebrowNum="02"
-        eyebrow="РЕКЛАМА · ОБЪЯВЛЕНИЯ"
         title="Объявления"
         subtitle="Серверный каталог, фильтры и команды"
       >
@@ -129,7 +127,7 @@ function AdsPage() {
     <div className="mx-auto max-w-[1440px]">
       <header className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <Eyebrow num="04">УПРАВЛЕНИЕ · ОБЪЯВЛЕНИЯ</Eyebrow>
+          <SectionEyebrow />
           <h1 className="m-0 mt-2 font-display text-[clamp(30px,4vw,44px)] font-medium text-bg-11">
             Объявления
           </h1>

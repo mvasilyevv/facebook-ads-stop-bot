@@ -73,8 +73,6 @@ function ActionsPage() {
   if (query.isError && !query.data) {
     return (
       <OperatorPageBoundary
-        eyebrowNum="01"
-        eyebrow="ОПЕРАЦИИ · ДЕЙСТВИЯ"
         title="Действия"
         subtitle="Очередь, выполнение и подтверждённый результат"
       >
@@ -91,8 +89,6 @@ function ActionsPage() {
   return (
     <div className="mx-auto max-w-5xl">
       <PageHeader
-        eyebrowNum="01"
-        eyebrow="ОПЕРАЦИИ · ДЕЙСТВИЯ"
         title="Действия"
         subtitle="Очередь, выполнение и подтверждённый результат"
         action={<DataStateBadge state={dataState} />}

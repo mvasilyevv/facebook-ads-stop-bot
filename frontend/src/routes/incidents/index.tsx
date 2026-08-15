@@ -115,8 +115,6 @@ function OperatorIncidentsPage() {
   if (incidents.isError && !payload) {
     return (
       <OperatorPageBoundary
-        eyebrowNum="01"
-        eyebrow="ОПЕРАЦИИ · ИНЦИДЕНТЫ"
         title="Инциденты"
         subtitle="Полный журнал, статусы и подтверждения получения"
       >

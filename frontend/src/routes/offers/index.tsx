@@ -295,8 +295,6 @@ export function OfferDeactivateManager({
 function OffersHeader({ count, action }: { count: number | null; action?: React.ReactNode }) {
   return (
     <PageHeader
-      eyebrowNum="02"
-      eyebrow="РЕКЛАМА · ОФФЕРЫ"
       title="Офферы"
       action={action}
       subtitle={

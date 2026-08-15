@@ -54,8 +54,6 @@ export function CampaignCreatePage() {
     return (
       <>
         <PageHeader
-          eyebrowNum="02"
-          eyebrow="РЕКЛАМА · СОЗДАНИЕ КАМПАНИЙ"
           title="Создание кампаний"
         />
         <div aria-busy="true" aria-label="Восстановление черновика" className="space-y-4">
@@ -71,8 +69,6 @@ export function CampaignCreatePage() {
     return (
       <>
         <PageHeader
-          eyebrowNum="02"
-          eyebrow="РЕКЛАМА · СОЗДАНИЕ КАМПАНИЙ"
           title="Создание кампаний"
         />
         <ErrorState
@@ -87,8 +83,6 @@ export function CampaignCreatePage() {
   return (
     <>
       <PageHeader
-        eyebrowNum="02"
-        eyebrow="РЕКЛАМА · СОЗДАНИЕ КАМПАНИЙ"
         title="Создание кампаний"
         action={
           activeTab === "wizard" ? (
