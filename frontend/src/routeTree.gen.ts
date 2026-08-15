@@ -24,6 +24,7 @@ import { Route as IncidentsIncidentIdRouteImport } from './routes/incidents/$inc
 import { Route as CabinetsCabinetIdRouteImport } from './routes/cabinets/$cabinetId'
 import { Route as AdsFbAdIdRouteImport } from './routes/ads/$fbAdId'
 import { Route as ActionsActionIdRouteImport } from './routes/actions/$actionId'
+import { Route as CampaignsPresetsIndexRouteImport } from './routes/campaigns/presets/index'
 import { Route as CampaignsCreateIndexRouteImport } from './routes/campaigns/create/index'
 
 const IndexRoute = IndexRouteImport.update({
@@ -101,6 +102,11 @@ const ActionsActionIdRoute = ActionsActionIdRouteImport.update({
   path: '/actions/$actionId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CampaignsPresetsIndexRoute = CampaignsPresetsIndexRouteImport.update({
+  id: '/campaigns/presets/',
+  path: '/campaigns/presets/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CampaignsCreateIndexRoute = CampaignsCreateIndexRouteImport.update({
   id: '/campaigns/create/',
   path: '/campaigns/create/',
@@ -124,6 +130,7 @@ export interface FileRoutesByFullPath {
   '/remote-desktop/': typeof RemoteDesktopIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/campaigns/create/': typeof CampaignsCreateIndexRoute
+  '/campaigns/presets/': typeof CampaignsPresetsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -142,6 +149,7 @@ export interface FileRoutesByTo {
   '/remote-desktop': typeof RemoteDesktopIndexRoute
   '/settings': typeof SettingsIndexRoute
   '/campaigns/create': typeof CampaignsCreateIndexRoute
+  '/campaigns/presets': typeof CampaignsPresetsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -161,6 +169,7 @@ export interface FileRoutesById {
   '/remote-desktop/': typeof RemoteDesktopIndexRoute
   '/settings/': typeof SettingsIndexRoute
   '/campaigns/create/': typeof CampaignsCreateIndexRoute
+  '/campaigns/presets/': typeof CampaignsPresetsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -181,6 +190,7 @@ export interface FileRouteTypes {
     | '/remote-desktop/'
     | '/settings/'
     | '/campaigns/create/'
+    | '/campaigns/presets/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -199,6 +209,7 @@ export interface FileRouteTypes {
     | '/remote-desktop'
     | '/settings'
     | '/campaigns/create'
+    | '/campaigns/presets'
   id:
     | '__root__'
     | '/'
@@ -217,6 +228,7 @@ export interface FileRouteTypes {
     | '/remote-desktop/'
     | '/settings/'
     | '/campaigns/create/'
+    | '/campaigns/presets/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -236,6 +248,7 @@ export interface RootRouteChildren {
   RemoteDesktopIndexRoute: typeof RemoteDesktopIndexRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
   CampaignsCreateIndexRoute: typeof CampaignsCreateIndexRoute
+  CampaignsPresetsIndexRoute: typeof CampaignsPresetsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -345,6 +358,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ActionsActionIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/campaigns/presets/': {
+      id: '/campaigns/presets/'
+      path: '/campaigns/presets'
+      fullPath: '/campaigns/presets/'
+      preLoaderRoute: typeof CampaignsPresetsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/campaigns/create/': {
       id: '/campaigns/create/'
       path: '/campaigns/create'
@@ -372,6 +392,7 @@ const rootRouteChildren: RootRouteChildren = {
   RemoteDesktopIndexRoute: RemoteDesktopIndexRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   CampaignsCreateIndexRoute: CampaignsCreateIndexRoute,
+  CampaignsPresetsIndexRoute: CampaignsPresetsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

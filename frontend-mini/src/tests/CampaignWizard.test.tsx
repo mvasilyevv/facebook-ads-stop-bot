@@ -11,18 +11,11 @@ const api = vi.hoisted(() => ({
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const React = await import("react");
-  const actual =
-    await importOriginal<typeof import("@tanstack/react-router")>();
+  const actual = await importOriginal<typeof import("@tanstack/react-router")>();
   return {
     ...actual,
-    Link: ({
-      to,
-      children,
-      ...props
-    }: {
-      to: string;
-      children: React.ReactNode;
-    }) => React.createElement("a", { href: to, ...props }, children),
+    Link: ({ to, children, ...props }: { to: string; children: React.ReactNode }) =>
+      React.createElement("a", { href: to, ...props }, children),
   };
 });
 
@@ -31,7 +24,13 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("@/lib/campaigns", () => ({
-  useCampaignPresets: () => ({ data: [], isPending: false }),
+  useCampaignPresets: () => ({
+    data: [],
+    isPending: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
   useCampaignAccountContext: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useCampaignAccountPages: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUploadCampaignConcepts: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -93,9 +92,7 @@ vi.mock("@/features/campaigns/useCampaignWizardDraft", async () => {
         state,
         plan,
         setPlan,
-        dispatch: (
-          action: Parameters<typeof feature.campaignWizardReducer>[1],
-        ) => {
+        dispatch: (action: Parameters<typeof feature.campaignWizardReducer>[1]) => {
           setState((current) => feature.campaignWizardReducer(current, action));
           setPlan(null);
         },
@@ -187,9 +184,7 @@ describe("TMA campaign creator", () => {
 
   it("keeps every interactive step and sticky action at least 44px", () => {
     const { container } = render(<CampaignWizard />);
-    expect(
-      container.querySelectorAll(".min-h-11").length,
-    ).toBeGreaterThanOrEqual(7);
+    expect(container.querySelectorAll(".min-h-11").length).toBeGreaterThanOrEqual(7);
     expect(screen.queryByText(/desktop-first|доступно на desktop/i)).toBeNull();
   });
 

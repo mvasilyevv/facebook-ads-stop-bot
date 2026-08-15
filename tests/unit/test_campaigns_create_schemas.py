@@ -47,6 +47,8 @@ def _flat_config_dict() -> dict:
         "age_min": 18,
         "age_max": 65,
         "advantage_audience": True,
+        "genders": ["female"],
+        "placements": ["facebook", "instagram"],
         "click_through_days": 1,
         "view_through_days": 1,
         "ad_text": {"mode": "text", "primary": "играй"},
@@ -107,21 +109,60 @@ def _to_domain(
     )
 
 
-# PresetIn принимает SOP-дефолты и не требует опциональных полей.
+# PresetIn хранит только повторяемые поля визарда, а Purchase зафиксирован типом.
 def test_preset_in_defaults() -> None:
-    p = PresetIn(name="GH base", act_id="act_1", page_id="100", pixel_id="200")
-    assert p.objective == "OUTCOME_SALES"
-    assert p.optimization_goal == "OFFSITE_CONVERSIONS"
+    p = PresetIn(name=" GH base ", countries=["gh"], daily_budget="200.00")
+    assert p.name == "GH base"
+    assert p.countries == ["GH"]
     assert p.custom_event_type == "PURCHASE"
-    assert p.special_ad_categories == ["NONE"]
-    assert p.cta == "PLAY_GAME"
-    assert p.click_through_days == 1
+    assert p.budget_level == "campaign"
+    assert p.genders == []
+    assert p.placements == []
 
 
 # Пустое имя пресета отклоняется на валидации.
 def test_preset_in_rejects_empty_name() -> None:
     with pytest.raises(ValidationError):
-        PresetIn(name="", act_id="act_1", page_id="100", pixel_id="200")
+        PresetIn(name=" ", countries=["GH"], daily_budget="200.00")
+
+
+@pytest.mark.parametrize("event", ["Purchase", "LEAD", ""])
+def test_preset_in_rejects_non_purchase_event(event: str) -> None:
+    with pytest.raises(ValidationError):
+        PresetIn(
+            name="GH base",
+            countries=["GH"],
+            daily_budget="200.00",
+            custom_event_type=event,
+        )
+
+
+def test_preset_in_rejects_run_specific_identity_fields() -> None:
+    with pytest.raises(ValidationError):
+        PresetIn(
+            name="GH base",
+            countries=["GH"],
+            daily_budget="200.00",
+            act_id="act_123",
+        )
+
+
+def test_preset_in_rejects_zero_budget_and_invalid_multivalue_fields() -> None:
+    with pytest.raises(ValidationError):
+        PresetIn(name="GH base", countries=["GH"], daily_budget="0.00")
+    with pytest.raises(ValidationError):
+        PresetIn(
+            name="GH base",
+            countries=["GH"],
+            daily_budget="200.00",
+            genders=["female", "female"],
+        )
+
+    with pytest.raises(ValidationError):
+        PresetIn(name="GH base", countries=["GH"], daily_budget="1.001")
+
+    with pytest.raises(ValidationError):
+        PresetIn(name="GH base", countries=["GH"], daily_budget="100000.01")
 
 
 # ValidateIn принимает только канонический плоский контракт.
@@ -129,6 +170,8 @@ def test_validate_in_wraps_config() -> None:
     body = ValidateIn(config=_flat_config_dict())
     assert body.config.offer_code == "GH_CR"
     assert _to_domain(body).targeting.geo_countries() == ["DE", "AQ"]
+    assert _to_domain(body).targeting.genders == ["female"]
+    assert _to_domain(body).targeting.placements == ["facebook", "instagram"]
 
 
 # LaunchIn пробрасывает невалидный бюджет в доменную money-валидацию.
@@ -226,6 +269,9 @@ def test_flat_config_to_domain_mapping() -> None:
     assert dom.budget.level == "campaign"
     # targeting: countries + авто-AQ по SOP.
     assert dom.targeting.geo_countries() == ["DE", "AQ"]
+    assert dom.targeting.genders == ["female"]
+    assert dom.targeting.placements == ["facebook", "instagram"]
+    assert dom.url_tags_template == "sub2=MV"
     assert dom.targeting.age_max == 65
     # attribution.
     assert dom.attribution.click_through_days == 1
@@ -244,6 +290,15 @@ def test_flat_config_to_domain_mapping() -> None:
     # creo_root проброшен (upload_id).
     assert dom.creo_root == "abc123"
     assert dom.url_tags_template == "sub2=MV"
+
+
+def test_flat_config_applies_editable_campaign_naming_template() -> None:
+    config = _flat_config_dict()
+    config["naming_template"] = "{byer} | {offer} | SCALE | {date}"
+
+    dom = _to_domain(CampaignConfigIn.model_validate(config))
+
+    assert dom.campaigns[0].name == "{byer} | {offer} | SCALE | {date}"
 
 
 # ValidateIn принимает плоскую форму фронта; concept_refs остаются единственным

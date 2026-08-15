@@ -62,28 +62,24 @@ vi.mock("@/lib/api/campaigns", () => ({
       {
         id: "preset-1",
         name: "Test Preset",
-        act_id: "act_123",
-        page_id: "p456",
-        pixel_id: "px789",
-        offer_code: "GH_CR2",
-        byer_tag: "MV",
-        objective: "OUTCOME_SALES",
-        optimization_goal: "OFFSITE_CONVERSIONS",
+        countries: ["GH"],
+        age_min: 21,
+        age_max: 65,
+        genders: [],
+        placements: [],
         custom_event_type: "PURCHASE",
-        special_ad_categories: ["NONE"],
-        cta: "PLAY_GAME",
-        text_optimizations: "OPT_OUT",
-        click_through_days: 1,
-        view_through_days: 1,
+        budget_level: "campaign",
+        daily_budget: "200.00",
         url_tags_template: null,
         naming_template: null,
-        extra: {},
         created_at: "2026-06-01T00:00:00Z",
         updated_at: "2026-06-01T00:00:00Z",
       },
     ],
-    isLoading: false,
+    isPending: false,
     isError: false,
+    error: null,
+    refetch: vi.fn(),
   }),
   useValidateConfig: () => ({
     mutate: vi.fn(),
@@ -384,8 +380,12 @@ const DEFAULT_GOAL: WizardGoal = {
   age_min: 21,
   age_max: 65,
   advantage_audience: true,
+  genders: [],
+  placements: [],
   click_through_days: 1,
   view_through_days: 1,
+  naming_template: "",
+  url_tags_template: "",
   ad_text_mode: "none",
   ad_text_primary: "",
 };
@@ -411,7 +411,7 @@ describe("WizardStep1Start", () => {
   // При mode=preset отображается список пресетов
   it("mode=preset показывает select с пресетом", () => {
     render(wrap(<WizardStep1Start mode="preset" onChange={vi.fn()} />));
-    expect(screen.getByText("Test Preset (GH_CR2)")).toBeInTheDocument();
+    expect(screen.getByText("Test Preset")).toBeInTheDocument();
   });
 
   // По умолчанию активна карточка "Новый залив" (aria-pressed=true)
@@ -1133,22 +1133,16 @@ describe("CampaignCreatePage responsive policy", () => {
 const PRESET_WITH_URL_TAGS: PresetOut = {
   id: "p1",
   name: "Test",
-  act_id: "act_999",
-  page_id: "pg1",
-  pixel_id: "px1",
-  offer_code: "TEST_OFF",
-  byer_tag: "AB",
-  objective: "OUTCOME_SALES",
-  optimization_goal: "OFFSITE_CONVERSIONS",
+  countries: ["US", "CA"],
+  age_min: 25,
+  age_max: 55,
+  genders: ["female"],
+  placements: ["facebook", "instagram"],
   custom_event_type: "PURCHASE",
-  special_ad_categories: ["NONE"],
-  cta: "PLAY_GAME",
-  text_optimizations: "OPT_OUT",
-  click_through_days: 1,
-  view_through_days: 1,
+  budget_level: "campaign",
+  daily_budget: "250.00",
   url_tags_template: "sub2={{ad.id}}",
-  naming_template: null,
-  extra: {},
+  naming_template: "{byer} | {date}",
   created_at: "2026-06-01T00:00:00Z",
   updated_at: "2026-06-01T00:00:00Z",
 };
@@ -1217,52 +1211,33 @@ describe("useWizardStore", () => {
     expect(window.localStorage.getItem("fb-agent-campaign-draft")).toBeNull();
   });
 
-  // applyPreset заполняет identity из пресета
-  it("applyPreset заполняет identity из пресета", () => {
+  it("applyPreset копирует только повторяемые поля и сохраняет identity", () => {
     act(seedBuildableDraft);
     act(() => useWizardStore.getState().applyPreset(PRESET_WITH_URL_TAGS));
-    const { identity } = useWizardStore.getState();
-    expect(identity.act_id).toBe("act_999");
-    expect(identity.offer_code).toBe("TEST_OFF");
-    expect(identity.account_context_state).toBe("unavailable");
-    act(() =>
-      useWizardStore.getState().setIdentity({
-        account_context_state: "ready",
-        timezone_name: "Europe/Paris",
-        currency: "USD",
-        currency_exponent: 2,
-        account_context_observed_at: "2026-07-29T08:30:00Z",
-      }),
-    );
-    expect(useWizardStore.getState().buildConfig(PRESET_WITH_URL_TAGS).url_tags).toBe(
-      "sub2={{ad.id}}",
-    );
+    const { identity, goal } = useWizardStore.getState();
+    expect(identity).toEqual(DEFAULT_IDENTITY);
+    expect(goal.countries).toEqual(["US", "CA"]);
+    expect(goal.genders).toEqual(["female"]);
+    expect(goal.placements).toEqual(["facebook", "instagram"]);
+    expect(goal.daily_budget).toBe("250.00");
+    expect(useWizardStore.getState().buildConfig().url_tags).toBe("sub2={{ad.id}}");
   });
 
-  it("не переносит url_tags пресета после переключения в новый режим", () => {
+  it("после применения позволяет изменить подставленные значения", () => {
     act(seedBuildableDraft);
     act(() => useWizardStore.getState().applyPreset(PRESET_WITH_URL_TAGS));
     act(() =>
-      useWizardStore.getState().setIdentity({
-        account_context_state: "ready",
-        timezone_name: "Europe/Paris",
-        currency: "USD",
-        currency_exponent: 2,
-        account_context_observed_at: "2026-07-29T08:30:00Z",
-      }),
-    );
-    expect(useWizardStore.getState().buildConfig(PRESET_WITH_URL_TAGS).url_tags).toBe(
-      "sub2={{ad.id}}",
-    );
-
-    act(() =>
-      useWizardStore.getState().setStart({
-        mode: "new",
-        preset_id: null,
+      useWizardStore.getState().setGoal({
+        countries: ["BR"],
+        daily_budget: "300.00",
+        url_tags_template: "utm_source=manual",
       }),
     );
 
-    expect(useWizardStore.getState().buildConfig(null).url_tags).toBeUndefined();
+    const config = useWizardStore.getState().buildConfig();
+    expect(config.countries).toEqual(["BR"]);
+    expect(config.daily_budget).toBe("300.00");
+    expect(config.url_tags).toBe("utm_source=manual");
   });
 
   // reset сбрасывает store в initial state

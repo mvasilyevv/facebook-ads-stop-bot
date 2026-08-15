@@ -8347,6 +8347,7 @@
           },
           "custom_event_type": {
             "type": "string",
+            "const": "PURCHASE",
             "title": "Custom Event Type",
             "default": "PURCHASE"
           },
@@ -8442,6 +8443,22 @@
             "type": "boolean",
             "title": "Advantage Audience",
             "default": true
+          },
+          "genders": {
+            "items": {
+              "type": "string",
+              "enum": ["male", "female"]
+            },
+            "type": "array",
+            "title": "Genders"
+          },
+          "placements": {
+            "items": {
+              "type": "string",
+              "enum": ["facebook", "instagram", "messenger", "audience_network"]
+            },
+            "type": "array",
+            "title": "Placements"
           },
           "click_through_days": {
             "type": "integer",
@@ -8771,6 +8788,24 @@
             "title": "Advantage Audience",
             "default": true
           },
+          "genders": {
+            "items": {
+              "type": "string",
+              "enum": ["male", "female"]
+            },
+            "type": "array",
+            "maxItems": 2,
+            "title": "Genders"
+          },
+          "placements": {
+            "items": {
+              "type": "string",
+              "enum": ["facebook", "instagram", "messenger", "audience_network"]
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Placements"
+          },
           "click_through_days": {
             "type": "integer",
             "enum": [1, 7, 28],
@@ -8782,6 +8817,18 @@
             "enum": [1, 7, 28],
             "title": "View Through Days",
             "default": 1
+          },
+          "naming_template": {
+            "type": "string",
+            "maxLength": 512,
+            "title": "Naming Template",
+            "default": ""
+          },
+          "url_tags_template": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Url Tags Template",
+            "default": ""
           },
           "ad_text_mode": {
             "type": "string",
@@ -12686,89 +12733,64 @@
             "minLength": 1,
             "title": "Name"
           },
-          "act_id": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Act Id"
-          },
-          "page_id": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Page Id"
-          },
-          "pixel_id": {
-            "type": "string",
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Pixel Id"
-          },
-          "offer_code": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Offer Code"
-          },
-          "byer_tag": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Byer Tag"
-          },
-          "objective": {
-            "type": "string",
-            "title": "Objective",
-            "default": "OUTCOME_SALES"
-          },
-          "optimization_goal": {
-            "type": "string",
-            "title": "Optimization Goal",
-            "default": "OFFSITE_CONVERSIONS"
-          },
-          "custom_event_type": {
-            "type": "string",
-            "title": "Custom Event Type",
-            "default": "PURCHASE"
-          },
-          "special_ad_categories": {
+          "countries": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Special Ad Categories"
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Countries"
           },
-          "cta": {
-            "type": "string",
-            "title": "Cta",
-            "default": "PLAY_GAME"
-          },
-          "text_optimizations": {
-            "type": "string",
-            "title": "Text Optimizations",
-            "default": "OPT_OUT"
-          },
-          "click_through_days": {
+          "age_min": {
             "type": "integer",
-            "title": "Click Through Days",
-            "default": 1
+            "maximum": 65.0,
+            "minimum": 18.0,
+            "title": "Age Min",
+            "default": 21
           },
-          "view_through_days": {
+          "age_max": {
             "type": "integer",
-            "title": "View Through Days",
-            "default": 1
+            "maximum": 65.0,
+            "minimum": 18.0,
+            "title": "Age Max",
+            "default": 65
+          },
+          "genders": {
+            "items": {
+              "type": "string",
+              "enum": ["male", "female"]
+            },
+            "type": "array",
+            "maxItems": 2,
+            "title": "Genders"
+          },
+          "placements": {
+            "items": {
+              "type": "string",
+              "enum": ["facebook", "instagram", "messenger", "audience_network"]
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Placements"
+          },
+          "custom_event_type": {
+            "type": "string",
+            "const": "PURCHASE",
+            "title": "Custom Event Type",
+            "default": "PURCHASE"
+          },
+          "budget_level": {
+            "type": "string",
+            "enum": ["campaign", "adset"],
+            "title": "Budget Level",
+            "default": "campaign"
+          },
+          "daily_budget": {
+            "type": "string",
+            "maxLength": 32,
+            "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+            "title": "Daily Budget"
           },
           "url_tags_template": {
             "anyOf": [
@@ -12793,17 +12815,13 @@
               }
             ],
             "title": "Naming Template"
-          },
-          "extra": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Extra"
           }
         },
+        "additionalProperties": false,
         "type": "object",
-        "required": ["name", "act_id", "page_id", "pixel_id"],
+        "required": ["name", "countries", "daily_budget"],
         "title": "PresetIn",
-        "description": "Тело создания/обновления пресета (стабильный конфиг залива)."
+        "description": "Копируемый снимок повторяемых полей визарда."
       },
       "PresetOut": {
         "properties": {
@@ -12815,74 +12833,57 @@
             "type": "string",
             "title": "Name"
           },
-          "act_id": {
-            "type": "string",
-            "title": "Act Id"
-          },
-          "page_id": {
-            "type": "string",
-            "title": "Page Id"
-          },
-          "pixel_id": {
-            "type": "string",
-            "title": "Pixel Id"
-          },
-          "offer_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Offer Code"
-          },
-          "byer_tag": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Byer Tag"
-          },
-          "objective": {
-            "type": "string",
-            "title": "Objective"
-          },
-          "optimization_goal": {
-            "type": "string",
-            "title": "Optimization Goal"
-          },
-          "custom_event_type": {
-            "type": "string",
-            "title": "Custom Event Type"
-          },
-          "special_ad_categories": {
+          "countries": {
             "items": {
               "type": "string"
             },
             "type": "array",
-            "title": "Special Ad Categories"
+            "title": "Countries"
           },
-          "cta": {
-            "type": "string",
-            "title": "Cta"
-          },
-          "text_optimizations": {
-            "type": "string",
-            "title": "Text Optimizations"
-          },
-          "click_through_days": {
+          "age_min": {
             "type": "integer",
-            "title": "Click Through Days"
+            "title": "Age Min"
           },
-          "view_through_days": {
+          "age_max": {
             "type": "integer",
-            "title": "View Through Days"
+            "title": "Age Max"
+          },
+          "genders": {
+            "items": {
+              "type": "string",
+              "enum": ["male", "female"]
+            },
+            "type": "array",
+            "title": "Genders"
+          },
+          "placements": {
+            "items": {
+              "type": "string",
+              "enum": ["facebook", "instagram", "messenger", "audience_network"]
+            },
+            "type": "array",
+            "title": "Placements"
+          },
+          "custom_event_type": {
+            "type": "string",
+            "const": "PURCHASE",
+            "title": "Custom Event Type"
+          },
+          "budget_level": {
+            "type": "string",
+            "enum": ["campaign", "adset"],
+            "title": "Budget Level"
+          },
+          "daily_budget": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Budget"
           },
           "url_tags_template": {
             "anyOf": [
@@ -12906,11 +12907,6 @@
             ],
             "title": "Naming Template"
           },
-          "extra": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Extra"
-          },
           "created_at": {
             "type": "string",
             "title": "Created At"
@@ -12924,22 +12920,16 @@
         "required": [
           "id",
           "name",
-          "act_id",
-          "page_id",
-          "pixel_id",
-          "offer_code",
-          "byer_tag",
-          "objective",
-          "optimization_goal",
+          "countries",
+          "age_min",
+          "age_max",
+          "genders",
+          "placements",
           "custom_event_type",
-          "special_ad_categories",
-          "cta",
-          "text_optimizations",
-          "click_through_days",
-          "view_through_days",
+          "budget_level",
+          "daily_budget",
           "url_tags_template",
           "naming_template",
-          "extra",
           "created_at",
           "updated_at"
         ],

@@ -2494,8 +2494,9 @@ export interface components {
       /**
        * Custom Event Type
        * @default PURCHASE
+       * @constant
        */
-      custom_event_type: string;
+      custom_event_type: "PURCHASE";
       /** Special Ad Categories */
       special_ad_categories?: string[];
       /** Destination Link */
@@ -2544,6 +2545,10 @@ export interface components {
        * @default true
        */
       advantage_audience: boolean;
+      /** Genders */
+      genders?: ("male" | "female")[];
+      /** Placements */
+      placements?: ("facebook" | "instagram" | "messenger" | "audience_network")[];
       /**
        * Click Through Days
        * @default 1
@@ -2691,6 +2696,10 @@ export interface components {
        * @default true
        */
       advantage_audience: boolean;
+      /** Genders */
+      genders?: ("male" | "female")[];
+      /** Placements */
+      placements?: ("facebook" | "instagram" | "messenger" | "audience_network")[];
       /**
        * Click Through Days
        * @default 1
@@ -2703,6 +2712,16 @@ export interface components {
        * @enum {integer}
        */
       view_through_days: 1 | 7 | 28;
+      /**
+       * Naming Template
+       * @default
+       */
+      naming_template: string;
+      /**
+       * Url Tags Template
+       * @default
+       */
+      url_tags_template: string;
       /**
        * Ad Text Mode
        * @default none
@@ -4093,66 +4112,45 @@ export interface components {
     };
     /**
      * PresetIn
-     * @description Тело создания/обновления пресета (стабильный конфиг залива).
+     * @description Копируемый снимок повторяемых полей визарда.
      */
     PresetIn: {
       /** Name */
       name: string;
-      /** Act Id */
-      act_id: string;
-      /** Page Id */
-      page_id: string;
-      /** Pixel Id */
-      pixel_id: string;
-      /** Offer Code */
-      offer_code?: string | null;
-      /** Byer Tag */
-      byer_tag?: string | null;
+      /** Countries */
+      countries: string[];
       /**
-       * Objective
-       * @default OUTCOME_SALES
+       * Age Min
+       * @default 21
        */
-      objective: string;
+      age_min: number;
       /**
-       * Optimization Goal
-       * @default OFFSITE_CONVERSIONS
+       * Age Max
+       * @default 65
        */
-      optimization_goal: string;
+      age_max: number;
+      /** Genders */
+      genders?: ("male" | "female")[];
+      /** Placements */
+      placements?: ("facebook" | "instagram" | "messenger" | "audience_network")[];
       /**
        * Custom Event Type
        * @default PURCHASE
+       * @constant
        */
-      custom_event_type: string;
-      /** Special Ad Categories */
-      special_ad_categories?: string[];
+      custom_event_type: "PURCHASE";
       /**
-       * Cta
-       * @default PLAY_GAME
+       * Budget Level
+       * @default campaign
+       * @enum {string}
        */
-      cta: string;
-      /**
-       * Text Optimizations
-       * @default OPT_OUT
-       */
-      text_optimizations: string;
-      /**
-       * Click Through Days
-       * @default 1
-       */
-      click_through_days: number;
-      /**
-       * View Through Days
-       * @default 1
-       */
-      view_through_days: number;
+      budget_level: "campaign" | "adset";
+      /** Daily Budget */
+      daily_budget: string;
       /** Url Tags Template */
       url_tags_template?: string | null;
       /** Naming Template */
       naming_template?: string | null;
-      /** Extra */
-      extra?: {
-        [key: string]: unknown;
-      };
     };
     /**
      * PresetOut
@@ -4163,40 +4161,32 @@ export interface components {
       id: string;
       /** Name */
       name: string;
-      /** Act Id */
-      act_id: string;
-      /** Page Id */
-      page_id: string;
-      /** Pixel Id */
-      pixel_id: string;
-      /** Offer Code */
-      offer_code: string | null;
-      /** Byer Tag */
-      byer_tag: string | null;
-      /** Objective */
-      objective: string;
-      /** Optimization Goal */
-      optimization_goal: string;
-      /** Custom Event Type */
-      custom_event_type: string;
-      /** Special Ad Categories */
-      special_ad_categories: string[];
-      /** Cta */
-      cta: string;
-      /** Text Optimizations */
-      text_optimizations: string;
-      /** Click Through Days */
-      click_through_days: number;
-      /** View Through Days */
-      view_through_days: number;
+      /** Countries */
+      countries: string[];
+      /** Age Min */
+      age_min: number;
+      /** Age Max */
+      age_max: number;
+      /** Genders */
+      genders: ("male" | "female")[];
+      /** Placements */
+      placements: ("facebook" | "instagram" | "messenger" | "audience_network")[];
+      /**
+       * Custom Event Type
+       * @constant
+       */
+      custom_event_type: "PURCHASE";
+      /**
+       * Budget Level
+       * @enum {string}
+       */
+      budget_level: "campaign" | "adset";
+      /** Daily Budget */
+      daily_budget: string | null;
       /** Url Tags Template */
       url_tags_template: string | null;
       /** Naming Template */
       naming_template: string | null;
-      /** Extra */
-      extra: {
-        [key: string]: unknown;
-      };
       /** Created At */
       created_at: string;
       /** Updated At */

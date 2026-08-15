@@ -45,6 +45,7 @@ from core.models.telegram.recipient import TelegramRecipient
 from migrations.baseline_contract import (
     CATALOG_ARTIFACTS_SQL,
     DATABASE_EXTENSION_LAYOUT_SQL,
+    HEAD_ARTIFACT_HASHES,
     PUBLIC_PARTITION_LAYOUT_SQL,
     PUBLIC_STANDALONE_CATALOG_OBJECTS_SQL,
     assert_catalog_artifacts,
@@ -364,7 +365,8 @@ class NormalizedTargetRepository:
                 raise AdoptionTargetPreflightError("target migration head mismatch")
 
             assert_catalog_artifacts(
-                (await self._conn.execute(text(CATALOG_ARTIFACTS_SQL))).mappings()
+                (await self._conn.execute(text(CATALOG_ARTIFACTS_SQL))).mappings(),
+                expected=HEAD_ARTIFACT_HASHES,
             )
             validate_database_extension_layout(
                 (await self._conn.execute(text(DATABASE_EXTENSION_LAYOUT_SQL))).mappings(),

@@ -37,6 +37,9 @@ MAX_LIFETIME_BUDGET = Decimal("1000000")
 
 # Стратегии ставок, которым обязателен bid_amount.
 _CAPPED_BID_STRATEGIES = frozenset({"COST_CAP", "LOWEST_COST_WITH_BID_CAP", "TARGET_COST"})
+CAMPAIGN_GENDERS = frozenset({"male", "female"})
+CAMPAIGN_PLACEMENTS = frozenset({"facebook", "instagram", "messenger", "audience_network"})
+_META_GENDER_IDS = {"male": 1, "female": 2}
 
 
 class Account(BaseModel):
@@ -153,6 +156,22 @@ class Targeting(BaseModel):
     age_max: int = 65
     location_types: list[str] = Field(default_factory=lambda: ["home", "recent"])
     advantage_audience: bool = True
+    # Пустой список сохраняет Meta automatic placements / all genders.
+    genders: list[str] = Field(default_factory=list)
+    placements: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_repeated_targeting(self) -> Targeting:
+        if self.age_min > self.age_max:
+            raise ValueError("targeting.age_min must not exceed targeting.age_max")
+        if len(self.genders) != len(set(self.genders)) or not set(self.genders) <= CAMPAIGN_GENDERS:
+            raise ValueError("targeting.genders contains an unsupported or duplicate value")
+        if (
+            len(self.placements) != len(set(self.placements))
+            or not set(self.placements) <= CAMPAIGN_PLACEMENTS
+        ):
+            raise ValueError("targeting.placements contains an unsupported or duplicate value")
+        return self
 
     def geo_countries(self) -> list[str]:
         """Список стран с авто-AQ (без дубля)."""
@@ -160,6 +179,10 @@ class Targeting(BaseModel):
         if self.add_antarctica and "AQ" not in countries:
             countries.append("AQ")
         return countries
+
+    def gender_ids(self) -> list[int]:
+        """Meta targeting gender ids; empty means all genders."""
+        return [_META_GENDER_IDS[value] for value in self.genders]
 
 
 class Attribution(BaseModel):

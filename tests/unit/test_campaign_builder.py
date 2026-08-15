@@ -444,6 +444,28 @@ def test_spec_adset_body_targeting():
     assert body["start_time"] == "2026-06-18T00:00:00-04:00"
 
 
+def test_spec_adset_body_maps_explicit_gender_and_placements() -> None:
+    cfg = _config(
+        targeting=Targeting(
+            countries=["GH"],
+            genders=["female", "male"],
+            placements=["facebook", "instagram"],
+        )
+    )
+
+    targeting = build_campaign_spec(cfg).campaigns[0].adsets[0].body["targeting"]
+
+    assert targeting["genders"] == [2, 1]
+    assert targeting["publisher_platforms"] == ["facebook", "instagram"]
+
+
+def test_spec_adset_body_omits_automatic_gender_and_placements() -> None:
+    targeting = build_campaign_spec(_config()).campaigns[0].adsets[0].body["targeting"]
+
+    assert "genders" not in targeting
+    assert "publisher_platforms" not in targeting
+
+
 # Advantage+ Audience форсит age_max=65 (age_max<65 + advantage → Invalid parameter 1870189).
 def test_spec_adset_age_max_forced_65_under_advantage():
     cfg = _config(

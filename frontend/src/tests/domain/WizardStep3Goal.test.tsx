@@ -20,8 +20,12 @@ const BASE_VALUES: WizardGoal = {
   age_min: 21,
   age_max: 65,
   advantage_audience: true,
+  genders: [],
+  placements: [],
   click_through_days: 1,
   view_through_days: 1,
+  naming_template: "",
+  url_tags_template: "",
   ad_text_mode: "none",
   ad_text_primary: "",
 };
@@ -47,12 +51,12 @@ describe("WizardStep3Goal — currency-aware major units", () => {
   });
 });
 
-describe("WizardStep3Goal — url_tags input удалён", () => {
-  it("показывает SOP-подсказку без редактируемого sub2-поля", () => {
+describe("WizardStep3Goal — редактируемые поля пресета", () => {
+  it("показывает URL tags и нейминг как обычные поля", () => {
     renderGoal();
 
-    expect(document.querySelector('input[placeholder*="sub2"]')).toBeNull();
-    expect(screen.getByText(/трекинг по SOP|вычисляет автоматически/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("URL Tags")).toBeEnabled();
+    expect(screen.getByLabelText("Шаблон нейминга")).toBeEnabled();
   });
 });
 

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
   aggregateCampaignLaunchState,
+  CAMPAIGN_GENDER_OPTIONS,
+  CAMPAIGN_PLACEMENT_OPTIONS,
   buildCampaignConfig,
+  campaignPresetsDataState,
   nextCampaignKey,
-  parseCampaignCountryInput,
   validateCampaignStep,
   type CampaignWizardCampaign,
   type CampaignWizardConcept,
@@ -19,12 +21,14 @@ import {
   ChevronLeft,
   ChevronRight,
   FileUp,
+  Layers3,
   Plus,
+  RefreshCw,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
 
-import { Button, Card, Input, Select, Skeleton } from "@/components/ui";
+import { Button, Card, Input, Select, Skeleton, TagListInput } from "@/components/ui";
 import { useOffers } from "@/lib/api";
 import {
   useCampaignAccountContext,
@@ -38,6 +42,7 @@ import {
 import type { LaunchOut } from "@/lib/campaigns";
 import { cn } from "@/lib/cn";
 import { haptic } from "@/lib/tg";
+import { CampaignTagPicker } from "./CampaignTagPicker";
 import { useCampaignWizardDraft } from "./useCampaignWizardDraft";
 
 const STEP_LABELS = [
@@ -78,11 +83,7 @@ export function CampaignWizard() {
 
   if (wizard.isHydrating) {
     return (
-      <div
-        className="space-y-3 px-4 py-5"
-        aria-busy="true"
-        aria-label="Восстановление черновика"
-      >
+      <div className="space-y-3 px-4 py-5" aria-busy="true" aria-label="Восстановление черновика">
         <Skeleton className="h-11 w-full" />
         <Skeleton className="h-64 w-full" />
       </div>
@@ -94,8 +95,7 @@ export function CampaignWizard() {
       <div className="px-4 py-6">
         <Card className="border-danger/35">
           <p role="alert" className="text-[14px] leading-5 text-danger">
-            Серверный черновик недоступен. Создание заблокировано, чтобы не
-            потерять конфигурацию.
+            Серверный черновик недоступен. Создание заблокировано, чтобы не потерять конфигурацию.
           </p>
           <Button
             variant="secondary"
@@ -117,18 +117,21 @@ export function CampaignWizard() {
     (offer) => offer.code === state.identity.offer_code,
   );
   const offerAccounts = selectedOffer?.ad_account_ids?.filter(Boolean) ?? [];
+  const presetsState = campaignPresetsDataState({
+    isPending: presets.isPending,
+    isError: presets.isError,
+    count: presets.data?.length ?? 0,
+  });
   let config: ReturnType<typeof buildCampaignConfig> | null = null;
   if (state.currentStep >= 6) {
     try {
-      config = buildCampaignConfig(state, selectedPreset);
+      config = buildCampaignConfig(state);
     } catch {
       config = null;
     }
   }
 
-  function patchIdentity(
-    value: Parameters<typeof wizard.dispatch>[0] & { type: "patchIdentity" },
-  ) {
+  function patchIdentity(value: Parameters<typeof wizard.dispatch>[0] & { type: "patchIdentity" }) {
     wizard.dispatch(value);
   }
 
@@ -227,9 +230,7 @@ export function CampaignWizard() {
     }
     const evidence = contextResult.value;
     const readyUsd =
-      evidence.state === "ready" &&
-      evidence.currency === "USD" &&
-      evidence.currency_exponent === 2;
+      evidence.state === "ready" && evidence.currency === "USD" && evidence.currency_exponent === 2;
     patchIdentity({
       type: "patchIdentity",
       value: {
@@ -249,9 +250,7 @@ export function CampaignWizard() {
         value: { start_date: evidence.next_start_date },
       });
     }
-    const offer = offers.data?.find(
-      (candidate) => candidate.code === state.identity.offer_code,
-    );
+    const offer = offers.data?.find((candidate) => candidate.code === state.identity.offer_code);
     if (readyUsd && offer?.currency === "USD" && offer.cpa_threshold) {
       wizard.dispatch({
         type: "patchGoal",
@@ -290,14 +289,9 @@ export function CampaignWizard() {
         uploadId: state.creatives.upload_id,
       });
       const previousAssignments = new Map(
-        state.creatives.concepts.map((concept) => [
-          concept.ref,
-          concept.campaign_keys,
-        ]),
+        state.creatives.concepts.map((concept) => [concept.ref, concept.campaign_keys]),
       );
-      const allCampaigns = state.structure.campaigns.map(
-        (campaign) => campaign.key,
-      );
+      const allCampaigns = state.structure.campaigns.map((campaign) => campaign.key);
       wizard.dispatch({
         type: "patchCreatives",
         value: {
@@ -310,12 +304,7 @@ export function CampaignWizard() {
       });
       haptic.notify("success");
     } catch (error) {
-      setProblem(
-        safeApiProblemMessage(
-          error,
-          "Файлы не загружены. Проверьте формат и повторите.",
-        ),
-      );
+      setProblem(safeApiProblemMessage(error, "Файлы не загружены. Проверьте формат и повторите."));
       haptic.notify("error");
     }
   }
@@ -331,10 +320,7 @@ export function CampaignWizard() {
       haptic.notify("success");
     } catch (error) {
       setProblem(
-        safeApiProblemMessage(
-          error,
-          "План не подтверждён. Проверьте кабинет и повторите.",
-        ),
+        safeApiProblemMessage(error, "План не подтверждён. Проверьте кабинет и повторите."),
       );
       haptic.notify("error");
     }
@@ -355,10 +341,7 @@ export function CampaignWizard() {
       haptic.notify("success");
     } catch (error) {
       setProblem(
-        safeApiProblemMessage(
-          error,
-          "Запуск не поставлен в очередь. Обновите план и повторите.",
-        ),
+        safeApiProblemMessage(error, "Запуск не поставлен в очередь. Обновите план и повторите."),
       );
       haptic.notify("error");
     }
@@ -366,16 +349,9 @@ export function CampaignWizard() {
 
   return (
     <div className="min-w-0 px-4 pb-[max(120px,var(--tg-content-safe-bottom),env(safe-area-inset-bottom))] pt-4">
-      <DraftStatus
-        state={wizard.syncState}
-        updatedAt={wizard.updatedAt}
-        onReload={wizard.reload}
-      />
+      <DraftStatus state={wizard.syncState} updatedAt={wizard.updatedAt} onReload={wizard.reload} />
 
-      <ol
-        className="-mx-4 mb-5 flex gap-1 overflow-x-auto px-4 pb-2"
-        aria-label="Шаги создания"
-      >
+      <ol className="-mx-4 mb-5 flex gap-1 overflow-x-auto px-4 pb-2" aria-label="Шаги создания">
         {STEP_LABELS.map((label, index) => {
           const step = (index + 1) as CampaignWizardStep;
           const active = state.currentStep === step;
@@ -386,10 +362,7 @@ export function CampaignWizard() {
                 type="button"
                 aria-current={active ? "step" : undefined}
                 disabled={step > state.currentStep}
-                onClick={() =>
-                  step <= state.currentStep &&
-                  wizard.dispatch({ type: "goTo", step })
-                }
+                onClick={() => step <= state.currentStep && wizard.dispatch({ type: "goTo", step })}
                 className={cn(
                   "flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] border px-3 text-[12px] transition-colors disabled:opacity-40",
                   active
@@ -399,9 +372,7 @@ export function CampaignWizard() {
                       : "border-[var(--color-hairline)] text-bg-8",
                 )}
               >
-                <span aria-hidden="true">
-                  {done ? <Check size={13} /> : step}
-                </span>
+                <span aria-hidden="true">{done ? <Check size={13} /> : step}</span>
                 {label}
               </button>
             </li>
@@ -418,9 +389,7 @@ export function CampaignWizard() {
         </p>
       ) : null}
 
-      <section
-        aria-label={`Шаг ${state.currentStep}: ${STEP_LABELS[state.currentStep - 1]}`}
-      >
+      <section aria-label={`Шаг ${state.currentStep}: ${STEP_LABELS[state.currentStep - 1]}`}>
         {state.currentStep === 1 ? (
           <Card eyebrow="ШАГ 1 · СТАРТ" title="Как создать кампанию">
             <div className="grid gap-3">
@@ -446,33 +415,84 @@ export function CampaignWizard() {
                     {mode === "new" ? "Новая конфигурация" : "Из пресета"}
                   </strong>
                   <span className="mt-1 block text-[12px]">
-                    {mode === "new"
-                      ? "Заполнить параметры с нуля"
-                      : "Взять проверенные defaults"}
+                    {mode === "new" ? "Заполнить параметры с нуля" : "Взять проверенные defaults"}
                   </span>
                 </button>
               ))}
             </div>
             {state.start.mode === "preset" ? (
-              <Select
-                label="Пресет"
-                className="mt-4"
-                value={state.start.preset_id ?? ""}
-                errorMessage={errors.preset_id}
-                options={[
-                  { value: "", label: "Выберите пресет" },
-                  ...(presets.data ?? []).map((preset) => ({
-                    value: preset.id,
-                    label: preset.name,
-                  })),
-                ]}
-                onChange={(event) => {
-                  const preset = presets.data?.find(
-                    (item) => item.id === event.target.value,
-                  );
-                  if (preset) wizard.applyPreset(preset);
-                }}
-              />
+              <div className="mt-4 space-y-3" data-state={presetsState}>
+                {presetsState === "stale" ? (
+                  <Skeleton className="h-12 w-full" />
+                ) : presetsState === "unavailable" ? (
+                  <div
+                    role="alert"
+                    className="rounded-[var(--radius-2)] border border-warning/35 bg-warning/10 p-3 text-[13px] leading-5 text-bg-10"
+                  >
+                    <p>Пресеты сейчас недоступны. Кампанию можно заполнить вручную.</p>
+                    <Button
+                      variant="secondary"
+                      fullWidth
+                      className="mt-3"
+                      onClick={() => void presets.refetch()}
+                    >
+                      <RefreshCw size={15} aria-hidden="true" />
+                      Повторить загрузку
+                    </Button>
+                  </div>
+                ) : presetsState === "empty" ? (
+                  <div className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 p-3 text-[13px] leading-5 text-bg-9">
+                    <p className="flex items-center gap-2 font-semibold text-bg-11">
+                      <Layers3 size={16} aria-hidden="true" />
+                      Пресетов пока нет
+                    </p>
+                    <p className="mt-1">Создайте первый или продолжите без шаблона.</p>
+                    <Link
+                      to="/campaigns/presets"
+                      className="mt-3 inline-flex min-h-11 items-center text-accent"
+                    >
+                      Управлять пресетами
+                    </Link>
+                  </div>
+                ) : (
+                  <Select
+                    label="Пресет"
+                    value={state.start.preset_id ?? ""}
+                    errorMessage={errors.preset_id}
+                    options={[
+                      { value: "", label: "Выберите пресет" },
+                      ...(presets.data ?? []).map((preset) => ({
+                        value: preset.id,
+                        label: preset.name,
+                      })),
+                    ]}
+                    onChange={(event) => {
+                      const preset = presets.data?.find((item) => item.id === event.target.value);
+                      if (preset) wizard.applyPreset(preset);
+                    }}
+                  />
+                )}
+                {selectedPreset ? (
+                  <div className="rounded-[var(--radius-2)] border border-accent/30 bg-accent/5 p-3 text-[12px] leading-5 text-bg-9">
+                    <strong className="block text-[13px] text-bg-11">
+                      Подставлено из «{selectedPreset.name}»
+                    </strong>
+                    {selectedPreset.countries.join(" · ")} · {selectedPreset.age_min}–
+                    {selectedPreset.age_max} · ${selectedPreset.daily_budget ?? "—"} · Purchase
+                    <span className="mt-1 block text-accent">
+                      Все подставленные поля можно изменить на шаге «Параметры».
+                    </span>
+                  </div>
+                ) : null}
+                {presetsState !== "empty" ? (
+                  <Link
+                    to="/campaigns/presets"
+                    className="inline-flex min-h-11 items-center text-[13px] text-accent"
+                  >
+                    Управлять пресетами
+                  </Link>
+                ) : null}
+              </div>
             ) : null}
           </Card>
         ) : null}
@@ -576,16 +596,19 @@ export function CampaignWizard() {
         ) : null}
 
         {state.currentStep === 3 ? (
-          <GoalStep state={state} errors={errors} dispatch={wizard.dispatch} />
+          <GoalStep
+            state={state}
+            errors={errors}
+            dispatch={wizard.dispatch}
+            appliedPresetName={selectedPreset?.name ?? null}
+          />
         ) : null}
 
         {state.currentStep === 4 ? (
           <StructureStep
             campaigns={state.structure.campaigns}
             error={errors.structure}
-            onChange={(campaigns) =>
-              wizard.dispatch({ type: "setCampaigns", campaigns })
-            }
+            onChange={(campaigns) => wizard.dispatch({ type: "setCampaigns", campaigns })}
           />
         ) : null}
 
@@ -597,9 +620,7 @@ export function CampaignWizard() {
             error={errors.creatives}
             uploading={upload.isPending}
             onUpload={uploadFiles}
-            onChange={(value) =>
-              wizard.dispatch({ type: "patchCreatives", value })
-            }
+            onChange={(value) => wizard.dispatch({ type: "patchCreatives", value })}
           />
         ) : null}
 
@@ -639,10 +660,7 @@ export function CampaignWizard() {
               onClick={() =>
                 wizard.dispatch({
                   type: "goTo",
-                  step: Math.max(
-                    1,
-                    state.currentStep - 1,
-                  ) as CampaignWizardStep,
+                  step: Math.max(1, state.currentStep - 1) as CampaignWizardStep,
                 })
               }
             >
@@ -678,19 +696,10 @@ function DraftStatus({
         className="mb-4 rounded-[var(--radius-2)] border border-warning/40 bg-warning/10 p-3"
       >
         <p className="flex items-start gap-2 text-[13px] leading-5 text-bg-10">
-          <AlertTriangle
-            size={16}
-            className="mt-0.5 shrink-0 text-warning"
-            aria-hidden="true"
-          />
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
           Черновик изменён в другой вкладке.
         </p>
-        <Button
-          variant="secondary"
-          fullWidth
-          className="mt-3"
-          onClick={() => void onReload()}
-        >
+        <Button variant="secondary" fullWidth className="mt-3" onClick={() => void onReload()}>
           Загрузить серверную версию
         </Button>
       </div>
@@ -707,10 +716,7 @@ function DraftStatus({
   return (
     <p
       role={state === "error" ? "alert" : "status"}
-      className={cn(
-        "mb-4 text-[12px]",
-        state === "error" ? "text-warning" : "text-bg-8",
-      )}
+      className={cn("mb-4 text-[12px]", state === "error" ? "text-warning" : "text-bg-8")}
     >
       {label}
     </p>
@@ -722,8 +728,7 @@ function ContextEvidence({
 }: {
   identity: ReturnType<typeof useCampaignWizardDraft>["state"]["identity"];
 }) {
-  const ready =
-    identity.account_context_state === "ready" && identity.currency === "USD";
+  const ready = identity.account_context_state === "ready" && identity.currency === "USD";
   return (
     <div
       role="status"
@@ -753,37 +758,28 @@ function GoalStep({
   state,
   errors,
   dispatch,
+  appliedPresetName,
 }: {
   state: ReturnType<typeof useCampaignWizardDraft>["state"];
   errors: Record<string, string>;
   dispatch: ReturnType<typeof useCampaignWizardDraft>["dispatch"];
+  appliedPresetName: string | null;
 }) {
-  const patch = (
-    value: Parameters<typeof dispatch>[0] & { type: "patchGoal" },
-  ) => dispatch(value);
-  const [countriesRaw, setCountriesRaw] = useState(
-    state.goal.countries.join(", "),
-  );
-  const [countryError, setCountryError] = useState<string | null>(null);
-  useEffect(() => {
-    setCountriesRaw(state.goal.countries.join(", "));
-  }, [state.goal.countries]);
-
-  const commitCountries = () => {
-    const parsed = parseCampaignCountryInput(countriesRaw);
-    if (parsed.invalid.length > 0) {
-      setCountryError(`Некорректные коды: ${parsed.invalid.join(", ")}`);
-      return;
-    }
-    setCountryError(null);
-    patch({ type: "patchGoal", value: { countries: parsed.countries } });
-  };
+  const patch = (value: Parameters<typeof dispatch>[0] & { type: "patchGoal" }) => dispatch(value);
   return (
     <Card eyebrow="ШАГ 3 · ПАРАМЕТРЫ" title="Бюджет, цель и аудитория">
       <div className="space-y-4">
+        {appliedPresetName ? (
+          <div
+            role="status"
+            className="rounded-[var(--radius-2)] border border-accent/30 bg-accent/5 p-3 text-[13px] leading-5 text-bg-9"
+          >
+            Значения из «{appliedPresetName}» уже подставлены. Проверьте и измените любые из них
+            перед запуском.
+          </div>
+        ) : null}
         <div className="rounded-[var(--radius-2)] border border-accent/25 bg-accent/5 p-3 text-[13px] text-bg-9">
-          Все денежные значения — только USD. Campaign, ad set и ad будут
-          созданы PAUSED.
+          Все денежные значения — только USD. Campaign, ad set и ad будут созданы PAUSED.
         </div>
         <Input
           label="Дневной бюджет, USD"
@@ -821,13 +817,16 @@ function GoalStep({
             })
           }
         />
-        <Input
+        <TagListInput
           label="Страны, ISO-2"
-          value={countriesRaw}
-          errorMessage={countryError ?? errors.countries}
-          placeholder="US, CA"
-          onChange={(event) => setCountriesRaw(event.target.value)}
-          onBlur={commitCountries}
+          values={state.goal.countries}
+          errorMessage={errors.countries}
+          placeholder="Введите US и нажмите Enter"
+          normalize={(value) => value.toUpperCase()}
+          validate={(value) =>
+            /^[A-Z]{2}$/.test(value) ? null : `Некорректный ISO-2 код: ${value}`
+          }
+          onChange={(countries) => patch({ type: "patchGoal", value: { countries } })}
         />
         <Input
           label="Дата старта"
@@ -852,8 +851,7 @@ function GoalStep({
             patch({
               type: "patchGoal",
               value: {
-                budget_level:
-                  event.target.value === "adset" ? "adset" : "campaign",
+                budget_level: event.target.value === "adset" ? "adset" : "campaign",
               },
             })
           }
@@ -862,9 +860,7 @@ function GoalStep({
           label="CTA"
           value={state.goal.cta}
           options={CTA_OPTIONS}
-          onChange={(event) =>
-            patch({ type: "patchGoal", value: { cta: event.target.value } })
-          }
+          onChange={(event) => patch({ type: "patchGoal", value: { cta: event.target.value } })}
         />
         <div className="grid grid-cols-2 gap-3">
           <Input
@@ -894,6 +890,51 @@ function GoalStep({
             }
           />
         </div>
+        <CampaignTagPicker
+          label="Пол"
+          values={state.goal.genders}
+          options={CAMPAIGN_GENDER_OPTIONS}
+          emptyLabel="Все полы"
+          onChange={(genders) => patch({ type: "patchGoal", value: { genders } })}
+        />
+        <CampaignTagPicker
+          label="Плейсменты"
+          values={state.goal.placements}
+          options={CAMPAIGN_PLACEMENT_OPTIONS}
+          emptyLabel="Автоматические плейсменты Meta"
+          onChange={(placements) => patch({ type: "patchGoal", value: { placements } })}
+        />
+        <div className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 p-3">
+          <p className="text-[12px] uppercase tracking-[0.08em] text-bg-9">
+            Событие оптимизации пикселя
+          </p>
+          <strong className="mt-1 block text-[14px] text-bg-11">Purchase</strong>
+          <p className="mt-1 text-[12px] leading-5 text-bg-8">
+            Зафиксировано правилом проекта и не меняется пресетом.
+          </p>
+        </div>
+        <Input
+          label="Шаблон нейминга"
+          value={state.goal.naming_template}
+          placeholder="{date} | {country} | {byer}"
+          onChange={(event) =>
+            patch({
+              type: "patchGoal",
+              value: { naming_template: event.target.value },
+            })
+          }
+        />
+        <Input
+          label="URL tags"
+          value={state.goal.url_tags_template}
+          placeholder="utm_source=facebook&utm_campaign={campaign_key}"
+          onChange={(event) =>
+            patch({
+              type: "patchGoal",
+              value: { url_tags_template: event.target.value },
+            })
+          }
+        />
         <div className="grid grid-cols-2 gap-3">
           <Select
             label="Click-through"
@@ -995,10 +1036,7 @@ function StructureStep({
                       itemIndex === index
                         ? {
                             ...item,
-                            key: event.target.value.replace(
-                              /[^A-Za-z0-9_-]/g,
-                              "",
-                            ),
+                            key: event.target.value.replace(/[^A-Za-z0-9_-]/g, ""),
                           }
                         : item,
                     ),
@@ -1011,9 +1049,7 @@ function StructureStep({
                 onChange={(event) =>
                   onChange(
                     campaigns.map((item, itemIndex) =>
-                      itemIndex === index
-                        ? { ...item, label: event.target.value || null }
-                        : item,
+                      itemIndex === index ? { ...item, label: event.target.value || null } : item,
                     ),
                   )
                 }
@@ -1032,10 +1068,7 @@ function StructureStep({
                         itemIndex === index
                           ? {
                               ...item,
-                              adset_count: Math.max(
-                                1,
-                                Number(event.target.value) || 1,
-                              ),
+                              adset_count: Math.max(1, Number(event.target.value) || 1),
                             }
                           : item,
                       ),
@@ -1045,11 +1078,7 @@ function StructureStep({
                 <Button
                   variant="ghost"
                   aria-label={`Удалить ${campaign.key}`}
-                  onClick={() =>
-                    onChange(
-                      campaigns.filter((_, itemIndex) => itemIndex !== index),
-                    )
-                  }
+                  onClick={() => onChange(campaigns.filter((_, itemIndex) => itemIndex !== index))}
                 >
                   <Trash2 size={17} aria-hidden="true" />
                 </Button>
@@ -1066,10 +1095,7 @@ function StructureStep({
           variant="secondary"
           fullWidth
           onClick={() =>
-            onChange([
-              ...campaigns,
-              { key: nextCampaignKey(campaigns), adset_count: 3 },
-            ])
+            onChange([...campaigns, { key: nextCampaignKey(campaigns), adset_count: 3 }])
           }
         >
           <Plus size={16} aria-hidden="true" />
@@ -1111,9 +1137,7 @@ function CreativesStep({
           accept="image/*,video/*"
           className="sr-only"
           disabled={uploading}
-          onChange={(event) =>
-            void onUpload(Array.from(event.target.files ?? []))
-          }
+          onChange={(event) => void onUpload(Array.from(event.target.files ?? []))}
         />
       </label>
       <Input
@@ -1125,9 +1149,7 @@ function CreativesStep({
         value={copies ?? ""}
         onChange={(event) =>
           onChange({
-            copies_per_concept: event.target.value
-              ? Number(event.target.value)
-              : null,
+            copies_per_concept: event.target.value ? Number(event.target.value) : null,
           })
         }
       />
@@ -1137,9 +1159,7 @@ function CreativesStep({
             key={concept.ref}
             className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] p-3"
           >
-            <p className="break-all text-[13px] font-medium text-bg-11">
-              {concept.original_name}
-            </p>
+            <p className="break-all text-[13px] font-medium text-bg-11">{concept.original_name}</p>
             <div className="mt-2 grid gap-1">
               {campaigns.map((campaign) => {
                 const checked = concept.campaign_keys.includes(campaign.key);
@@ -1160,9 +1180,7 @@ function CreativesStep({
                               : {
                                   ...item,
                                   campaign_keys: checked
-                                    ? item.campaign_keys.filter(
-                                        (key) => key !== campaign.key,
-                                      )
+                                    ? item.campaign_keys.filter((key) => key !== campaign.key)
                                     : [...item.campaign_keys, campaign.key],
                                 },
                           ),
@@ -1208,8 +1226,8 @@ function PreviewStep({
   return (
     <Card eyebrow="ШАГ 6 · ПРЕВЬЮ" title="Неизменяемый план">
       <p className="text-[13px] leading-5 text-bg-9">
-        Сервер проверит нейминг, снимок кабинета и точное число объектов. Ничего
-        в Meta на этом шаге не создаётся.
+        Сервер проверит нейминг, снимок кабинета и точное число объектов. Ничего в Meta на этом шаге
+        не создаётся.
       </p>
       <Button
         fullWidth
@@ -1243,9 +1261,7 @@ function PreviewStep({
 function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div>
-      <strong className="block font-mono text-[20px] text-bg-11">
-        {value}
-      </strong>
+      <strong className="block font-mono text-[20px] text-bg-11">{value}</strong>
       <span className="text-[12px] uppercase text-bg-8">{label}</span>
     </div>
   );

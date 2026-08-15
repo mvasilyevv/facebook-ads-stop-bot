@@ -358,7 +358,9 @@ class _DirtyFreshTargetConnection:
 async def test_target_preflight_rejects_any_existing_application_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(adoption_repository, "assert_catalog_artifacts", lambda _rows: None)
+    monkeypatch.setattr(
+        adoption_repository, "assert_catalog_artifacts", lambda _rows, **_kwargs: None
+    )
     monkeypatch.setattr(
         adoption_repository,
         "validate_database_extension_layout",

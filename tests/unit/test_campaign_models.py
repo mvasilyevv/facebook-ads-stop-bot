@@ -37,12 +37,7 @@ def test_campaign_draft_is_singleton_bounded_and_revisioned() -> None:
 
 # CampaignPreset конструируется, name обязателен, jsonb/числовые дефолты заданы на уровне сервера.
 def test_preset_construct_and_server_defaults() -> None:
-    preset = CampaignPreset(
-        name="GH_CR default",
-        act_id="act_123",
-        page_id="111",
-        pixel_id="222",
-    )
+    preset = CampaignPreset(name="GH_CR default", daily_budget="200.00")
     assert preset.name == "GH_CR default"
     # Серверные дефолты применяются при INSERT, в Python-объекте до flush — None.
     # Проверяем, что server_default объявлен в колонках (money/SOP-дефолты).
@@ -55,6 +50,14 @@ def test_preset_construct_and_server_defaults() -> None:
     assert cols["text_optimizations"].server_default is not None
     assert cols["click_through_days"].server_default is not None
     assert cols["view_through_days"].server_default is not None
+    assert cols["countries"].server_default is not None
+    assert cols["genders"].server_default is not None
+    assert cols["placements"].server_default is not None
+    assert cols["budget_level"].server_default is not None
+    assert cols["daily_budget"].nullable is True
+    assert cols["act_id"].nullable is True
+    assert cols["page_id"].nullable is True
+    assert cols["pixel_id"].nullable is True
 
 
 # name пресета уникален (на пресет — стабильный переиспользуемый конфиг).
@@ -80,6 +83,7 @@ def test_run_preset_fk_nullable() -> None:
     assert len(col.foreign_keys) == 1
     fk = next(iter(col.foreign_keys))
     assert fk.column.table.name == "campaign_preset"
+    assert fk.ondelete == "SET NULL"
 
 
 # status имеет server_default 'queued' (свежесозданный run всегда в очереди).

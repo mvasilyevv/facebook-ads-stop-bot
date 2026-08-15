@@ -7,8 +7,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from migrations.baseline_contract import (
-    BASELINE_ARTIFACT_HASHES,
     CATALOG_ARTIFACTS_SQL,
+    HEAD_ARTIFACT_HASHES,
     assert_catalog_artifacts,
 )
 from migrations.revision_guard import load_project_revision_chain
@@ -17,8 +17,10 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _assert_exact_contract(connection: AsyncConnection) -> None:
+    # База проверяется на голове, поэтому ожидание — baseline плюс
+    # артефакты, объявленные последующими ревизиями.
     rows = (await connection.execute(text(CATALOG_ARTIFACTS_SQL))).mappings()
-    assert_catalog_artifacts(rows)
+    assert_catalog_artifacts(rows, expected=HEAD_ARTIFACT_HASHES)
 
 
 async def test_fresh_postgresql_baseline_has_exact_catalog_contract(
@@ -29,8 +31,8 @@ async def test_fresh_postgresql_baseline_has_exact_catalog_contract(
         rows = list((await connection.execute(text(CATALOG_ARTIFACTS_SQL))).mappings())
 
     assert revision == load_project_revision_chain().head
-    assert len(rows) == len(BASELINE_ARTIFACT_HASHES)
-    assert_catalog_artifacts(rows)
+    assert len(rows) == len(HEAD_ARTIFACT_HASHES)
+    assert_catalog_artifacts(rows, expected=HEAD_ARTIFACT_HASHES)
 
 
 @pytest.mark.parametrize(

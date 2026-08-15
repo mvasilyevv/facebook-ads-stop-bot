@@ -1,8 +1,36 @@
 import type { components } from "@fb/shared/api/generated";
+import type { DataState } from "@fb/shared";
 
 export type CampaignConfig = components["schemas"]["CampaignConfigIn"];
 export type CampaignPreset = components["schemas"]["PresetOut"];
+export type CampaignPresetInput = components["schemas"]["PresetIn"];
 export type ValidatePlan = components["schemas"]["ValidatePlanOut"];
+export type CampaignGender = "male" | "female";
+export type CampaignPlacement = "facebook" | "instagram" | "messenger" | "audience_network";
+
+export const CAMPAIGN_GENDER_OPTIONS: ReadonlyArray<{
+  value: CampaignGender;
+  label: string;
+}> = [
+  { value: "female", label: "Женщины" },
+  { value: "male", label: "Мужчины" },
+];
+
+export const CAMPAIGN_PLACEMENT_OPTIONS: ReadonlyArray<{
+  value: CampaignPlacement;
+  label: string;
+}> = [
+  { value: "facebook", label: "Facebook" },
+  { value: "instagram", label: "Instagram" },
+  { value: "messenger", label: "Messenger" },
+  { value: "audience_network", label: "Audience Network" },
+];
+
+export function toggleCampaignTag<T extends string>(values: T[], value: T): T[] {
+  return values.includes(value)
+    ? values.filter((candidate) => candidate !== value)
+    : [...values, value];
+}
 
 export type CampaignWizardStep = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 export type CampaignStartMode = "new" | "preset";
@@ -43,8 +71,12 @@ export interface CampaignWizardGoal {
   age_min: number;
   age_max: number;
   advantage_audience: boolean;
+  genders: CampaignGender[];
+  placements: CampaignPlacement[];
   click_through_days: 1 | 7 | 28;
   view_through_days: 1 | 7 | 28;
+  naming_template: string;
+  url_tags_template: string;
   ad_text_mode: "none" | "text";
   ad_text_primary: string;
 }
@@ -133,8 +165,12 @@ const DEFAULT_GOAL: CampaignWizardGoal = {
   age_min: 21,
   age_max: 65,
   advantage_audience: true,
+  genders: [],
+  placements: [],
   click_through_days: 1,
   view_through_days: 1,
+  naming_template: "",
+  url_tags_template: "",
   ad_text_mode: "none",
   ad_text_primary: "",
 };
@@ -144,7 +180,7 @@ export function createCampaignWizardState(): CampaignWizardState {
     currentStep: 1,
     start: { mode: "new" },
     identity: { ...DEFAULT_IDENTITY, ad_account_ids: [] },
-    goal: { ...DEFAULT_GOAL, countries: [] },
+    goal: { ...DEFAULT_GOAL, countries: [], genders: [], placements: [] },
     structure: { campaigns: [] },
     creatives: { upload_id: null, concepts: [], copies_per_concept: null },
   };
@@ -184,35 +220,29 @@ export function applyCampaignPreset(
   return {
     ...state,
     start: { mode: "preset", preset_id: preset.id },
-    identity: {
-      ...DEFAULT_IDENTITY,
-      act_id: preset.act_id,
-      ad_account_ids: [preset.act_id],
-      page_id: preset.page_id,
-      pixel_id: preset.pixel_id,
-      offer_code: preset.offer_code ?? "",
-      byer_tag: preset.byer_tag ?? "",
-    },
+    // Кабинеты, оффер и подтверждённый account context принадлежат запуску:
+    // шаблон их не подменяет, иначе выбор кабинетов слетал бы при применении.
+    identity: state.identity,
     goal: {
       ...state.goal,
       objective: "OUTCOME_SALES",
       optimization_goal: "OFFSITE_CONVERSIONS",
       custom_event_type: "PURCHASE",
-      cta: preset.cta,
       text_optimizations: "OPT_OUT",
-      click_through_days: asAttributionDays(preset.click_through_days),
-      view_through_days: asAttributionDays(preset.view_through_days),
+      countries: [...preset.countries],
+      age_min: preset.age_min,
+      age_max: preset.age_max,
+      genders: [...preset.genders],
+      placements: [...preset.placements],
+      budget_level: preset.budget_level,
+      daily_budget: preset.daily_budget ?? state.goal.daily_budget,
+      naming_template: preset.naming_template ?? "",
+      url_tags_template: preset.url_tags_template ?? "",
     },
   };
 }
 
-function asAttributionDays(value: number): 1 | 7 | 28 {
-  return value === 7 || value === 28 ? value : 1;
-}
-
-export function campaignWizardToDraft(
-  state: CampaignWizardState,
-): CampaignDraftWireState {
+export function campaignWizardToDraft(state: CampaignWizardState): CampaignDraftWireState {
   return {
     current_step: state.currentStep,
     start: { ...state.start },
@@ -220,7 +250,12 @@ export function campaignWizardToDraft(
       ...state.identity,
       ad_account_ids: [...(state.identity.ad_account_ids ?? [])],
     },
-    goal: { ...state.goal, countries: [...state.goal.countries] },
+    goal: {
+      ...state.goal,
+      countries: [...state.goal.countries],
+      genders: [...state.goal.genders],
+      placements: [...state.goal.placements],
+    },
     structure: {
       campaigns: state.structure.campaigns.map((campaign) => ({ ...campaign })),
     },
@@ -234,9 +269,7 @@ export function campaignWizardToDraft(
   };
 }
 
-export function campaignWizardFromDraft(
-  draft: CampaignDraftWireState,
-): CampaignWizardState {
+export function campaignWizardFromDraft(draft: CampaignDraftWireState): CampaignWizardState {
   return cloneCampaignWizardState({
     currentStep: draft.current_step,
     start: draft.start,
@@ -247,9 +280,7 @@ export function campaignWizardFromDraft(
   });
 }
 
-function cloneCampaignWizardState(
-  state: CampaignWizardState,
-): CampaignWizardState {
+function cloneCampaignWizardState(state: CampaignWizardState): CampaignWizardState {
   return campaignWizardFromWireWithoutRecursion({
     current_step: state.currentStep,
     start: state.start,
@@ -270,6 +301,14 @@ function campaignWizardFromWireWithoutRecursion(
       : draft.identity.act_id
         ? [draft.identity.act_id]
         : [];
+  // Черновики, созданные до появления таргета шаблонов, этих ключей не имеют.
+  // Поднимаем их к тем же явным значениям, что и у нового визарда.
+  const goal = draft.goal as CampaignWizardGoal & {
+    genders?: CampaignGender[];
+    placements?: CampaignPlacement[];
+    naming_template?: string;
+    url_tags_template?: string;
+  };
   return {
     currentStep: draft.current_step,
     start: { ...draft.start },
@@ -277,7 +316,14 @@ function campaignWizardFromWireWithoutRecursion(
       ...draft.identity,
       ad_account_ids: [...selectedAccounts],
     },
-    goal: { ...draft.goal, countries: [...draft.goal.countries] },
+    goal: {
+      ...goal,
+      countries: [...goal.countries],
+      genders: [...(goal.genders ?? [])],
+      placements: [...(goal.placements ?? [])],
+      naming_template: goal.naming_template ?? "",
+      url_tags_template: goal.url_tags_template ?? "",
+    },
     structure: {
       campaigns: draft.structure.campaigns.map((campaign) => ({ ...campaign })),
     },
@@ -309,8 +355,7 @@ export function validateCampaignIdentity(
     values.currency_exponent !== 2 ||
     !values.account_context_observed_at
   ) {
-    errors.account_context_state =
-      "Нужен свежий подтверждённый USD-снимок кабинета";
+    errors.account_context_state = "Нужен свежий подтверждённый USD-снимок кабинета";
   }
   return errors;
 }
@@ -323,8 +368,7 @@ function validateMajorAmount(
 ): string | null {
   const { exponent, label, maxWhole } = options;
   if (!value) return `Укажите ${label}`;
-  if (!MAJOR_AMOUNT_PATTERN.test(value))
-    return "Используйте положительное число с точкой";
+  if (!MAJOR_AMOUNT_PATTERN.test(value)) return "Используйте положительное число с точкой";
   if (!/[1-9]/.test(value)) return `${label} должен быть больше нуля`;
   if (exponent !== 2) return "Сначала подтвердите USD-контекст кабинета";
   const [wholePart, fraction = ""] = value.split(".");
@@ -336,8 +380,7 @@ function validateMajorAmount(
     const wholeUnits = BigInt(whole);
     const aboveCap =
       wholeUnits > maxWhole ||
-      (wholeUnits === maxWhole &&
-        fraction.slice(0, exponent).replaceAll("0", "") !== "");
+      (wholeUnits === maxWhole && fraction.slice(0, exponent).replaceAll("0", "") !== "");
     if (aboveCap) return `Максимум ${maxWhole.toLocaleString("ru-RU")} в день`;
   }
   return null;
@@ -348,8 +391,7 @@ export function validateCampaignGoal(
   currencyExponent: number | null,
 ): Partial<Record<keyof CampaignWizardGoal, string>> {
   const errors: Partial<Record<keyof CampaignWizardGoal, string>> = {};
-  if (!values.destination_link.trim())
-    errors.destination_link = "Укажите трекинг-ссылку";
+  if (!values.destination_link.trim()) errors.destination_link = "Укажите трекинг-ссылку";
   const budgetError = validateMajorAmount(values.daily_budget, {
     exponent: currencyExponent,
     label: "дневной бюджет",
@@ -361,24 +403,22 @@ export function validateCampaignGoal(
     label: "целевой CPA",
   });
   if (bidError) errors.bid_amount = bidError;
-  if (values.countries.length === 0)
-    errors.countries = "Укажите хотя бы одну страну";
+  if (values.countries.length === 0) errors.countries = "Укажите хотя бы одну страну";
+  if (values.age_min < 18 || values.age_max > 65 || values.age_min > values.age_max) {
+    errors.age_min = "Возраст должен быть в диапазоне 18–65 без пересечения";
+  }
   if (values.start_date && !/^\d{4}-\d{2}-\d{2}$/.test(values.start_date)) {
     errors.start_date = "Некорректная дата";
   }
   return errors;
 }
 
-export function validateCampaignStructure(
-  campaigns: CampaignWizardCampaign[],
-): string | null {
+export function validateCampaignStructure(campaigns: CampaignWizardCampaign[]): string | null {
   if (campaigns.length === 0) return "Добавьте хотя бы одну кампанию";
   if (campaigns.some((campaign) => campaign.adset_count < 1)) {
     return "Число adset'ов должно быть ≥ 1";
   }
-  if (
-    new Set(campaigns.map((campaign) => campaign.key)).size !== campaigns.length
-  ) {
+  if (new Set(campaigns.map((campaign) => campaign.key)).size !== campaigns.length) {
     return "Ключи кампаний должны быть уникальными";
   }
   return null;
@@ -399,18 +439,14 @@ export function parseCampaignCountryInput(raw: string): {
     .split(/[\s,;]+/)
     .map((token) => token.trim().toUpperCase())
     .filter(Boolean);
-  const invalid = [
-    ...new Set(tokens.filter((token) => !/^[A-Z]{2}$/.test(token))),
-  ];
+  const invalid = [...new Set(tokens.filter((token) => !/^[A-Z]{2}$/.test(token)))];
   return {
     countries: [...new Set(tokens.filter((token) => /^[A-Z]{2}$/.test(token)))],
     invalid,
   };
 }
 
-export function validateCampaignCreatives(
-  values: CampaignWizardCreatives,
-): string | null {
+export function validateCampaignCreatives(values: CampaignWizardCreatives): string | null {
   if (values.concepts.length === 0) return "Загрузите хотя бы один концепт";
   if (!values.upload_id) return "Концепты не загружены на сервер";
   return null;
@@ -423,13 +459,12 @@ export function validateCampaignStep(
   if (step === 1 && state.start.mode === "preset" && !state.start.preset_id) {
     return { preset_id: "Выберите пресет" };
   }
-  if (step === 2)
-    return validateCampaignIdentity(state.identity) as Record<string, string>;
+  if (step === 2) return validateCampaignIdentity(state.identity) as Record<string, string>;
   if (step === 3) {
-    return validateCampaignGoal(
-      state.goal,
-      state.identity.currency_exponent,
-    ) as Record<string, string>;
+    return validateCampaignGoal(state.goal, state.identity.currency_exponent) as Record<
+      string,
+      string
+    >;
   }
   if (step === 4) {
     const error = validateCampaignStructure(state.structure.campaigns);
@@ -442,12 +477,8 @@ export function validateCampaignStep(
   return {};
 }
 
-export function buildCampaignConfig(
-  state: CampaignWizardState,
-  preset?: CampaignPreset | null,
-): CampaignConfig {
-  if (!state.creatives.upload_id)
-    throw new Error("Сначала загрузите и распределите креативы");
+export function buildCampaignConfig(state: CampaignWizardState): CampaignConfig {
+  if (!state.creatives.upload_id) throw new Error("Сначала загрузите и распределите креативы");
   if (
     state.identity.account_context_state !== "ready" ||
     state.identity.currency !== "USD" ||
@@ -463,13 +494,9 @@ export function buildCampaignConfig(
       .map((concept) => concept.ref),
   }));
   if (campaigns.length === 0) throw new Error("Добавьте хотя бы одну кампанию");
-  const emptyCampaign = campaigns.find(
-    (campaign) => campaign.concept_refs.length === 0,
-  );
+  const emptyCampaign = campaigns.find((campaign) => campaign.concept_refs.length === 0);
   if (emptyCampaign) {
-    throw new Error(
-      `Для кампании ${emptyCampaign.key} не назначен ни один креатив`,
-    );
+    throw new Error(`Для кампании ${emptyCampaign.key} не назначен ни один креатив`);
   }
 
   const config: CampaignConfig = {
@@ -488,8 +515,7 @@ export function buildCampaignConfig(
     start_date: state.goal.start_date || null,
     ad_text: {
       mode: state.goal.ad_text_mode,
-      primary:
-        state.goal.ad_text_mode === "text" ? state.goal.ad_text_primary : "",
+      primary: state.goal.ad_text_mode === "text" ? state.goal.ad_text_primary : "",
     },
     budget_level: state.goal.budget_level,
     daily_budget: state.goal.daily_budget,
@@ -499,13 +525,16 @@ export function buildCampaignConfig(
     age_min: state.goal.age_min,
     age_max: state.goal.age_max,
     advantage_audience: state.goal.advantage_audience,
+    genders: state.goal.genders,
+    placements: state.goal.placements,
     click_through_days: state.goal.click_through_days,
     view_through_days: state.goal.view_through_days,
+    naming_template: state.goal.naming_template || null,
+    url_tags: state.goal.url_tags_template || null,
     campaigns,
     copies_per_concept: state.creatives.copies_per_concept ?? undefined,
     creo_root: state.creatives.upload_id,
   };
-  if (preset?.url_tags_template) config.url_tags = preset.url_tags_template;
   return config;
 }
 
@@ -541,4 +570,106 @@ export function aggregateCampaignLaunchState(
   if (succeeded > 0) return "partial";
   if (states.includes("unknown")) return "unknown";
   return "failed";
+}
+
+export interface CampaignPresetDraft {
+  name: string;
+  countries: string[];
+  age_min: number;
+  age_max: number;
+  genders: CampaignGender[];
+  placements: CampaignPlacement[];
+  custom_event_type: "PURCHASE";
+  budget_level: "campaign" | "adset";
+  daily_budget: string;
+  naming_template: string;
+  url_tags_template: string;
+}
+
+export function createCampaignPresetDraft(
+  source?: CampaignPreset | CampaignWizardState,
+): CampaignPresetDraft {
+  if (source && "currentStep" in source) {
+    return {
+      name: "",
+      countries: [...source.goal.countries],
+      age_min: source.goal.age_min,
+      age_max: source.goal.age_max,
+      genders: [...source.goal.genders],
+      placements: [...source.goal.placements],
+      custom_event_type: "PURCHASE",
+      budget_level: source.goal.budget_level,
+      daily_budget: source.goal.daily_budget,
+      naming_template: source.goal.naming_template,
+      url_tags_template: source.goal.url_tags_template,
+    };
+  }
+  if (source) {
+    return {
+      name: source.name,
+      countries: [...source.countries],
+      age_min: source.age_min,
+      age_max: source.age_max,
+      genders: [...source.genders],
+      placements: [...source.placements],
+      custom_event_type: "PURCHASE",
+      budget_level: source.budget_level,
+      daily_budget: source.daily_budget ?? "",
+      naming_template: source.naming_template ?? "",
+      url_tags_template: source.url_tags_template ?? "",
+    };
+  }
+  return {
+    name: "",
+    countries: [],
+    age_min: 21,
+    age_max: 65,
+    genders: [],
+    placements: [],
+    custom_event_type: "PURCHASE",
+    budget_level: "campaign",
+    daily_budget: "",
+    naming_template: "",
+    url_tags_template: "",
+  };
+}
+
+export function validateCampaignPresetDraft(
+  draft: CampaignPresetDraft,
+): Partial<Record<keyof CampaignPresetDraft, string>> {
+  const errors: Partial<Record<keyof CampaignPresetDraft, string>> = {};
+  if (!draft.name.trim()) errors.name = "Укажите название пресета";
+  if (draft.countries.length === 0) errors.countries = "Добавьте хотя бы одну страну";
+  if (draft.age_min < 18 || draft.age_max > 65 || draft.age_min > draft.age_max) {
+    errors.age_min = "Возраст должен быть в диапазоне 18–65";
+  }
+  const budgetError = validateMajorAmount(draft.daily_budget, {
+    exponent: 2,
+    label: "дневной бюджет",
+    maxWhole: 100_000n,
+  });
+  if (budgetError) errors.daily_budget = budgetError;
+  return errors;
+}
+
+export function campaignPresetPayload(draft: CampaignPresetDraft): CampaignPresetInput {
+  return {
+    ...draft,
+    name: draft.name.trim(),
+    countries: [...draft.countries],
+    genders: [...draft.genders],
+    placements: [...draft.placements],
+    naming_template: draft.naming_template.trim() || null,
+    url_tags_template: draft.url_tags_template.trim() || null,
+  };
+}
+
+export function campaignPresetsDataState(input: {
+  isPending: boolean;
+  isError: boolean;
+  count: number;
+}): DataState {
+  if (input.isError) return "unavailable";
+  if (input.isPending) return "stale";
+  return input.count === 0 ? "empty" : "ready";
 }

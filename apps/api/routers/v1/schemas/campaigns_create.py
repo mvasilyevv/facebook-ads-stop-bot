@@ -13,12 +13,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from core.campaign_builder.config import (
+    CAMPAIGN_GENDERS,
+    CAMPAIGN_PLACEMENTS,
+    MAX_DAILY_BUDGET,
     Account,
     AdsetConfig,
     AdText,
@@ -28,6 +32,7 @@ from core.campaign_builder.config import (
     CampaignConfig,
     Targeting,
 )
+from core.campaign_builder.money import normalize_major_amount
 from core.meta_api.identity import require_ad_account_id
 
 # ────────────────────────────── flat config (контракт фронта) ──────────────────────────────
@@ -79,7 +84,7 @@ class CampaignConfigIn(BaseModel):
     byer_tag: str | None = None
     objective: str = "OUTCOME_SALES"
     optimization_goal: str = "OFFSITE_CONVERSIONS"
-    custom_event_type: str = "PURCHASE"
+    custom_event_type: Literal["PURCHASE"] = "PURCHASE"
     special_ad_categories: list[str] = Field(default_factory=lambda: ["NONE"])
     destination_link: str
     cta: str = "PLAY_GAME"
@@ -111,6 +116,10 @@ class CampaignConfigIn(BaseModel):
     age_min: int = 21
     age_max: int = 65
     advantage_audience: bool = True
+    genders: list[Literal["male", "female"]] = Field(default_factory=list)
+    placements: list[Literal["facebook", "instagram", "messenger", "audience_network"]] = Field(
+        default_factory=list
+    )
 
     # атрибуция
     click_through_days: int = 1
@@ -125,6 +134,29 @@ class CampaignConfigIn(BaseModel):
     # `sub8={{ad.id}}`, если его нет.
     url_tags: str | None = None
     naming_template: str | None = None
+
+    @field_validator("countries")
+    @classmethod
+    def validate_countries(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip().upper() for value in values]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("countries must be unique")
+        if any(len(value) != 2 or not value.isalpha() for value in normalized):
+            raise ValueError("countries must contain ISO-2 codes")
+        return normalized
+
+    @field_validator("genders", "placements")
+    @classmethod
+    def validate_unique_tags(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("multi-value targeting fields must be unique")
+        return values
+
+    @model_validator(mode="after")
+    def validate_age_range(self) -> CampaignConfigIn:
+        if self.age_min > self.age_max:
+            raise ValueError("age_min must not exceed age_max")
+        return self
 
     def _ad_text_domain(self) -> AdText:
         """Конверсия текста: фронтовый mode 'text' → доменный 'full'."""
@@ -142,6 +174,11 @@ class CampaignConfigIn(BaseModel):
         ставим стабильные плейсхолдеры из key концепта.
         """
         blocks: list[CampaignBlock] = []
+        campaign_name_template = (
+            self.naming_template.strip()
+            if self.naming_template and self.naming_template.strip()
+            else "{byer} | {offer} | adset.pro | {date}"
+        )
         for camp in self.campaigns:
             user_label = (camp.label or "").strip()
             suffix = f" | {user_label}" if user_label else ""
@@ -156,7 +193,7 @@ class CampaignConfigIn(BaseModel):
             blocks.append(
                 CampaignBlock(
                     key=camp.key,
-                    name=f"{{byer}} | {{offer}} | adset.pro | {{date}}{suffix}",
+                    name=f"{campaign_name_template}{suffix}",
                     adsets=adsets,
                     # ЕДИНЫЙ источник концептов: имена файлов из upload-ответа, назначенные
                     # фронтом на эту кампанию. Воркер резолвит {creo_root}/{ref} по каждому —
@@ -222,6 +259,8 @@ class CampaignConfigIn(BaseModel):
                 age_min=self.age_min,
                 age_max=self.age_max,
                 advantage_audience=self.advantage_audience,
+                genders=self.genders,
+                placements=self.placements,
             ),
             "attribution": Attribution(
                 click_through_days=self.click_through_days,
@@ -244,25 +283,70 @@ class CampaignConfigIn(BaseModel):
 
 
 class PresetIn(BaseModel):
-    """Тело создания/обновления пресета (стабильный конфиг залива)."""
+    """Копируемый снимок повторяемых полей визарда."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255)
-    act_id: str = Field(min_length=1, max_length=64)
-    page_id: str = Field(min_length=1, max_length=64)
-    pixel_id: str = Field(min_length=1, max_length=64)
-    offer_code: str | None = Field(default=None, max_length=64)
-    byer_tag: str | None = Field(default=None, max_length=64)
-    objective: str = "OUTCOME_SALES"
-    optimization_goal: str = "OFFSITE_CONVERSIONS"
-    custom_event_type: str = "PURCHASE"
-    special_ad_categories: list[str] = Field(default_factory=lambda: ["NONE"])
-    cta: str = "PLAY_GAME"
-    text_optimizations: str = "OPT_OUT"
-    click_through_days: int = 1
-    view_through_days: int = 1
+    countries: list[str] = Field(min_length=1, max_length=50)
+    age_min: int = Field(default=21, ge=18, le=65, strict=True)
+    age_max: int = Field(default=65, ge=18, le=65, strict=True)
+    genders: list[Literal["male", "female"]] = Field(default_factory=list, max_length=2)
+    placements: list[Literal["facebook", "instagram", "messenger", "audience_network"]] = Field(
+        default_factory=list, max_length=4
+    )
+    custom_event_type: Literal["PURCHASE"] = "PURCHASE"
+    budget_level: Literal["campaign", "adset"] = "campaign"
+    daily_budget: str = Field(
+        strict=True,
+        pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
+        max_length=32,
+    )
     url_tags_template: str | None = Field(default=None, max_length=1024)
     naming_template: str | None = Field(default=None, max_length=512)
-    extra: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("name must not be blank")
+        return normalized
+
+    @field_validator("countries")
+    @classmethod
+    def validate_countries(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip().upper() for value in values]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("countries must be unique")
+        if any(len(value) != 2 or not value.isalpha() for value in normalized):
+            raise ValueError("countries must contain ISO-2 codes")
+        return normalized
+
+    @field_validator("genders", "placements")
+    @classmethod
+    def validate_unique_tags(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("multi-value preset fields must be unique")
+        return values
+
+    @field_validator("daily_budget")
+    @classmethod
+    def validate_positive_budget(cls, value: str) -> str:
+        normalized = normalize_major_amount(value, currency="USD")
+        if Decimal(normalized) > MAX_DAILY_BUDGET:
+            raise ValueError(f"daily_budget exceeds the {MAX_DAILY_BUDGET} USD hard cap")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_age_range(self) -> PresetIn:
+        if self.age_min > self.age_max:
+            raise ValueError("age_min must not exceed age_max")
+        if not set(self.genders) <= CAMPAIGN_GENDERS:
+            raise ValueError("unsupported gender")
+        if not set(self.placements) <= CAMPAIGN_PLACEMENTS:
+            raise ValueError("unsupported placement")
+        return self
 
 
 class PresetOut(BaseModel):
@@ -272,22 +356,17 @@ class PresetOut(BaseModel):
 
     id: str
     name: str
-    act_id: str
-    page_id: str
-    pixel_id: str
-    offer_code: str | None
-    byer_tag: str | None
-    objective: str
-    optimization_goal: str
-    custom_event_type: str
-    special_ad_categories: list[str]
-    cta: str
-    text_optimizations: str
-    click_through_days: int
-    view_through_days: int
+    countries: list[str]
+    age_min: int
+    age_max: int
+    genders: list[Literal["male", "female"]]
+    placements: list[Literal["facebook", "instagram", "messenger", "audience_network"]]
+    custom_event_type: Literal["PURCHASE"]
+    budget_level: Literal["campaign", "adset"]
+    # NULL only identifies a legacy row that must be edited before it is reusable.
+    daily_budget: str | None
     url_tags_template: str | None
     naming_template: str | None
-    extra: dict[str, Any]
     created_at: str
     updated_at: str
 

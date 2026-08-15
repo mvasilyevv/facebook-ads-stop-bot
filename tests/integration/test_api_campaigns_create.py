@@ -104,7 +104,19 @@ def _valid_config() -> dict:
 
 
 def _preset_body(name: str = "GH base") -> dict:
-    return {"name": name, "act_id": "act_1", "page_id": "100", "pixel_id": "200"}
+    return {
+        "name": name,
+        "countries": ["GH"],
+        "age_min": 21,
+        "age_max": 55,
+        "genders": ["female"],
+        "placements": ["facebook", "instagram"],
+        "custom_event_type": "PURCHASE",
+        "budget_level": "campaign",
+        "daily_budget": "200.00",
+        "naming_template": "{byer} | {offer} | SCALE | {date}",
+        "url_tags_template": "sub2={byer}",
+    }
 
 
 # ─────────────────────────── presets CRUD ───────────────────────────
@@ -120,7 +132,7 @@ async def test_list_presets_empty(pg_engine, fake_redis_client, clean_campaigns)
     assert resp.json() == []
 
 
-# Создание пресета применяет SOP-дефолты и возвращает id.
+# Создание пресета возвращает ровно копируемый snapshot и id.
 @pytest.mark.asyncio
 async def test_create_preset_applies_defaults(pg_engine, fake_redis_client, clean_campaigns):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
@@ -128,9 +140,12 @@ async def test_create_preset_applies_defaults(pg_engine, fake_redis_client, clea
         resp = await ac.post("/api/tools/campaigns/presets", json=_preset_body())
     assert resp.status_code == 201
     data = resp.json()
-    assert data["objective"] == "OUTCOME_SALES"
     assert data["custom_event_type"] == "PURCHASE"
-    assert data["special_ad_categories"] == ["NONE"]
+    assert data["countries"] == ["GH"]
+    assert data["genders"] == ["female"]
+    assert data["placements"] == ["facebook", "instagram"]
+    assert data["daily_budget"] == "200.00"
+    assert "act_id" not in data
     assert uuid.UUID(data["id"])
 
 
@@ -151,10 +166,10 @@ async def test_update_preset(pg_engine, fake_redis_client, clean_campaigns):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         created = (await ac.post("/api/tools/campaigns/presets", json=_preset_body())).json()
         body = _preset_body()
-        body["cta"] = "DOWNLOAD"
+        body["daily_budget"] = "350.00"
         resp = await ac.put(f"/api/tools/campaigns/presets/{created['id']}", json=body)
         assert resp.status_code == 200
-        assert resp.json()["cta"] == "DOWNLOAD"
+        assert resp.json()["daily_budget"] == "350.00"
 
         missing = await ac.put(f"/api/tools/campaigns/presets/{uuid.uuid4()}", json=body)
         assert missing.status_code == 404
@@ -170,6 +185,54 @@ async def test_delete_preset(pg_engine, fake_redis_client, clean_campaigns):
         assert resp.status_code == 204
         again = await ac.delete(f"/api/tools/campaigns/presets/{created['id']}")
         assert again.status_code == 404
+
+
+# Run хранит самостоятельный config snapshot. Удаление зануляет только аудит-ссылку,
+# а stale-визард с уже скопированными полями всё ещё может запуститься.
+@pytest.mark.asyncio
+async def test_delete_preset_preserves_run_snapshot_and_stale_launch(
+    pg_engine, fake_redis_client, clean_campaigns
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        preset = (await ac.post("/api/tools/campaigns/presets", json=_preset_body())).json()
+        first = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": _valid_config(), "preset_id": preset["id"]},
+        )
+        assert first.status_code == 202
+
+        deleted = await ac.delete(f"/api/tools/campaigns/presets/{preset['id']}")
+        assert deleted.status_code == 204
+
+        stale_config = _valid_config()
+        stale_config["start_date"] = "2099-07-02"
+        second = await ac.post(
+            "/api/tools/campaigns/launch",
+            json={"config": stale_config, "preset_id": preset["id"]},
+        )
+        assert second.status_code == 202
+
+    async with pg_engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT preset_id, config FROM campaign_run "
+                    "WHERE id IN (:first_id, :second_id) ORDER BY created_at"
+                ),
+                {
+                    "first_id": uuid.UUID(first.json()["run_id"]),
+                    "second_id": uuid.UUID(second.json()["run_id"]),
+                },
+            )
+        ).fetchall()
+
+    assert len(rows) == 2
+    assert all(row.preset_id is None for row in rows)
+    # В БД лежит канонический доменный снимок, а не плоское тело запроса:
+    # значения запуска обязаны пережить удаление шаблона.
+    assert rows[0].config["targeting"]["countries"] == ["DE"]
+    assert rows[0].config["budget"]["daily_amount"] == "50.00"
 
 
 # ─────────────────────────── validate ───────────────────────────

@@ -160,7 +160,7 @@ async def test_fresh_target_guard_accepts_exact_installed_head(
     monkeypatch.setattr(
         MODULE,
         "assert_catalog_artifacts",
-        lambda rows: checked_rows.extend(rows),
+        lambda rows, **_kwargs: checked_rows.extend(rows),
     )
 
     await MODULE.validate_migration_target(connection)
@@ -253,7 +253,7 @@ async def test_installed_head_rejects_late_standalone_public_type(
         revisions=[HEAD_REVISION],
         catalog_objects=[("type", "legacy_state", "enum")],
     )
-    monkeypatch.setattr(MODULE, "assert_catalog_artifacts", lambda _rows: None)
+    monkeypatch.setattr(MODULE, "assert_catalog_artifacts", lambda _rows, **_kwargs: None)
 
     with pytest.raises(ValueError, match="standalone.*legacy_state"):
         await MODULE.validate_migration_target(connection)
@@ -283,7 +283,7 @@ async def test_fresh_target_guard_rejects_catalog_artifact_drift(
         revisions=[HEAD_REVISION],
     )
 
-    def _reject(_rows: object) -> None:
+    def _reject(_rows: object, **_kwargs: object) -> None:
         raise RuntimeError(
             "safety-first baseline catalog artifact drift: "
             "missing view:public.operator_revision_state"

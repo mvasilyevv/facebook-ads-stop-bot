@@ -445,11 +445,10 @@ async def delete_campaign_draft(
 
 
 _PRESET_COLUMNS = """
-    id::text AS id, name, act_id, page_id, pixel_id,
-    offer_code, byer_tag, objective, optimization_goal, custom_event_type,
-    special_ad_categories, cta, text_optimizations,
-    click_through_days, view_through_days, url_tags_template, naming_template,
-    extra, created_at::text AS created_at, updated_at::text AS updated_at
+    id::text AS id, name, countries, age_min, age_max, genders, placements,
+    custom_event_type, budget_level, daily_budget,
+    url_tags_template, naming_template,
+    created_at::text AS created_at, updated_at::text AS updated_at
 """
 
 
@@ -475,8 +474,9 @@ async def list_presets(engine: DepEngine) -> list[PresetOut]:
 async def create_preset(body: PresetIn, engine: DepEngine) -> PresetOut:
     """Создать пресет. 409 при дубле имени (UNIQUE name)."""
     params = body.model_dump()
-    params["special_ad_categories"] = json.dumps(params["special_ad_categories"])
-    params["extra"] = json.dumps(params["extra"])
+    params["countries"] = json.dumps(params["countries"])
+    params["genders"] = json.dumps(params["genders"])
+    params["placements"] = json.dumps(params["placements"])
     async with engine.begin() as conn:
         dup = (
             await conn.execute(
@@ -491,17 +491,14 @@ async def create_preset(body: PresetIn, engine: DepEngine) -> PresetOut:
                 text(
                     """
                     INSERT INTO campaign_preset
-                        (name, act_id, page_id, pixel_id, offer_code, byer_tag,
-                         objective, optimization_goal, custom_event_type,
-                         special_ad_categories, cta, text_optimizations,
-                         click_through_days, view_through_days,
-                         url_tags_template, naming_template, extra)
+                        (name, countries, age_min, age_max, genders, placements,
+                         custom_event_type, budget_level, daily_budget,
+                         url_tags_template, naming_template)
                     VALUES
-                        (:name, :act_id, :page_id, :pixel_id, :offer_code, :byer_tag,
-                         :objective, :optimization_goal, :custom_event_type,
-                         CAST(:special_ad_categories AS JSONB), :cta, :text_optimizations,
-                         :click_through_days, :view_through_days,
-                         :url_tags_template, :naming_template, CAST(:extra AS JSONB))
+                        (:name, CAST(:countries AS JSONB), :age_min, :age_max,
+                         CAST(:genders AS JSONB), CAST(:placements AS JSONB),
+                         :custom_event_type, :budget_level, :daily_budget,
+                         :url_tags_template, :naming_template)
                     RETURNING """
                     + _PRESET_COLUMNS
                 ),
@@ -520,8 +517,9 @@ async def update_preset(preset_id: str, body: PresetIn, engine: DepEngine) -> Pr
         raise HTTPException(status_code=422, detail="preset_id не UUID") from exc
 
     params = body.model_dump()
-    params["special_ad_categories"] = json.dumps(params["special_ad_categories"])
-    params["extra"] = json.dumps(params["extra"])
+    params["countries"] = json.dumps(params["countries"])
+    params["genders"] = json.dumps(params["genders"])
+    params["placements"] = json.dumps(params["placements"])
     params["pid"] = pid
 
     async with engine.begin() as conn:
@@ -548,15 +546,14 @@ async def update_preset(preset_id: str, body: PresetIn, engine: DepEngine) -> Pr
                 text(
                     """
                     UPDATE campaign_preset SET
-                        name=:name, act_id=:act_id, page_id=:page_id, pixel_id=:pixel_id,
-                        offer_code=:offer_code, byer_tag=:byer_tag,
-                        objective=:objective, optimization_goal=:optimization_goal,
+                        name=:name,
+                        countries=CAST(:countries AS JSONB), age_min=:age_min, age_max=:age_max,
+                        genders=CAST(:genders AS JSONB),
+                        placements=CAST(:placements AS JSONB),
                         custom_event_type=:custom_event_type,
-                        special_ad_categories=CAST(:special_ad_categories AS JSONB),
-                        cta=:cta, text_optimizations=:text_optimizations,
-                        click_through_days=:click_through_days, view_through_days=:view_through_days,
+                        budget_level=:budget_level, daily_budget=:daily_budget,
                         url_tags_template=:url_tags_template, naming_template=:naming_template,
-                        extra=CAST(:extra AS JSONB), updated_at=NOW()
+                        updated_at=NOW()
                     WHERE id=:pid
                     RETURNING """
                     + _PRESET_COLUMNS
@@ -849,6 +846,22 @@ async def _launch_one_campaign(
             raise HTTPException(status_code=422, detail="preset_id не UUID") from exc
 
     async with engine.begin() as conn:
+        # Preset is provenance only. Its values are already copied into config;
+        # deleting it between apply and launch must not invalidate that snapshot.
+        if preset_uuid is not None:
+            preset_exists = (
+                await conn.execute(
+                    # Lock the provenance row through run INSERT. A concurrent
+                    # DELETE then waits and applies ON DELETE SET NULL after
+                    # commit instead of racing the FK check.
+                    text(
+                        "SELECT 1 FROM campaign_preset WHERE id = :preset_id LIMIT 1 FOR KEY SHARE"
+                    ),
+                    {"preset_id": preset_uuid},
+                )
+            ).first()
+            if preset_exists is None:
+                preset_uuid = None
         # Идемпотентность money-safe (HIGH-4): INSERT ... ON CONFLICT DO NOTHING вместо
         # read-then-insert. Два параллельных launch с одним ключом → один создаёт run,
         # второй ловит конфликт (RETURNING пуст) и возвращает СУЩЕСТВУЮЩИЙ run — без
