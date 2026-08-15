@@ -16,6 +16,7 @@ import shutil
 import socket
 import stat
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -101,6 +102,11 @@ WORKERS: dict[str, str] = {
     "campaign_creator": "campaign_creator",
 }
 CADDY_ENV_PATH = Path("/etc/fb-agent/caddy.env")
+MANAGED_CADDY_SITE_FILES = (
+    "app.adpulse.su.caddy",
+    "desktop.adpulse.su.caddy",
+)
+CADDY_IMPORT_LINE = "import /etc/caddy/sites-enabled/*.caddy"
 APP_SERVICES = frozenset({"api", "frontend", "mini-app", *WORKERS})
 DESKTOP_SERVICES = frozenset({"vision-webtop", "browser-agent"})
 RESTART_SERVICES = APP_SERVICES | DESKTOP_SERVICES
@@ -303,6 +309,7 @@ class ProductionController:
                 rehearsal=options.rehearsal,
             )
             warnings: list[str] = []
+            caddy_change: _CaddyChange | None = None
             try:
                 self._step("preflight", options, lambda: self._preflight(config, options))
                 self._step("pull", options, lambda: self._pull(config))
@@ -358,11 +365,20 @@ class ProductionController:
                     lambda: self._verify_system_ready(config),
                 )
                 if not options.rehearsal:
+                    caddy_change = self._step(
+                        "sync_caddy",
+                        options,
+                        lambda: self._sync_caddy(config),
+                    )
                     self._step("public_smoke", options, lambda: self._public_smoke(config))
                 self._step("before_promote", options, lambda: None)
                 self._promote(config, warnings)
             except BaseException:
-                self._failure_cleanup(config)
+                try:
+                    self._failure_cleanup(config)
+                finally:
+                    if caddy_change is not None:
+                        caddy_change.rollback(self.runner, step="sync_caddy_rollback")
                 raise
             status = "DEGRADED" if warnings else "READY"
             return DeployResult(config.layout.release_id, status, warnings)
@@ -438,20 +454,31 @@ class ProductionController:
         )
 
     def _require_caddy_credentials(self, config: RuntimeConfig) -> None:
-        caddy_env = require_private_file(Path("/etc/fb-agent/caddy.env"))
-        actual = parse_dotenv(
-            caddy_env,
-            required=(
-                "PANEL_BASIC_AUTH_USER",
-                "PANEL_BASIC_AUTH_HASH",
-                "API_KEY",
-                "DESKTOP_KASM_SERVICE_AUTH_B64",
-            ),
+        panel = _load_caddy_panel_credentials()
+        _sync_caddy_values({**config.app_values, **config.desktop_values}, panel)
+
+    def _sync_caddy(self, config: RuntimeConfig) -> _CaddyChange | None:
+        panel = _load_caddy_panel_credentials()
+        return _reconcile_caddy(
+            config.layout.base,
+            {**config.app_values, **config.desktop_values},
+            panel,
+            self.runner,
+            step="sync_caddy",
         )
-        expected = dict(actual)
-        _sync_caddy_values({**config.app_values, **config.desktop_values}, expected)
-        if expected != actual:
-            raise FbctlError("Caddy credentials do not match canonical source configuration")
+
+    def _require_caddy_host_config(self, config: RuntimeConfig) -> None:
+        panel = _load_caddy_panel_credentials()
+        expected = _expected_caddy_files(
+            config.layout.base,
+            {**config.app_values, **config.desktop_values},
+            panel,
+        )
+        drifted = [
+            os.fspath(path) for path, target in expected.items() if not target.matches_host()
+        ]
+        if drifted:
+            raise FbctlError("managed Caddy host configuration drift: " + ", ".join(drifted))
 
     def _pull(self, config: RuntimeConfig) -> None:
         environment = self._environment(config)
@@ -1637,6 +1664,390 @@ def _sync_caddy_values(source: dict[str, str], target: dict[str, str]) -> None:
     ).decode("ascii")
 
 
+def _validate_caddy_panel_credentials(values: Mapping[str, str]) -> None:
+    panel_user = values.get("PANEL_BASIC_AUTH_USER", "")
+    panel_hash = values.get("PANEL_BASIC_AUTH_HASH", "")
+    if not re.fullmatch(r"[A-Za-z0-9._@-]{1,64}", panel_user) or not re.fullmatch(
+        r"\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}", panel_hash
+    ):
+        raise FbctlError("Caddy panel credentials are invalid")
+
+
+def _caddy_env_path() -> Path:
+    return Path("/etc/fb-agent/caddy.env")
+
+
+def _load_caddy_panel_credentials() -> dict[str, str]:
+    caddy_env = require_private_file(_caddy_env_path())
+    if caddy_env.stat().st_uid != os.geteuid():
+        raise FbctlError("Caddy credentials must be owned by the deployment user")
+    values = parse_dotenv(
+        caddy_env,
+        required=("PANEL_BASIC_AUTH_USER", "PANEL_BASIC_AUTH_HASH"),
+    )
+    _validate_caddy_panel_credentials(values)
+    return {key: values[key] for key in BOOTSTRAP_CADDY_KEYS}
+
+
+@dataclass(frozen=True)
+class _ManagedCaddyFile:
+    path: Path
+    payload: bytes
+    mode: int
+
+    def matches_host(self) -> bool:
+        try:
+            metadata = self.path.lstat()
+            return (
+                stat.S_ISREG(metadata.st_mode)
+                and not stat.S_ISLNK(metadata.st_mode)
+                and metadata.st_uid == os.geteuid()
+                and stat.S_IMODE(metadata.st_mode) == self.mode
+                and self.path.read_bytes() == self.payload
+            )
+        except OSError:
+            return False
+
+
+@dataclass(frozen=True)
+class _HostFileSnapshot:
+    path: Path
+    payload: bytes | None
+    mode: int | None
+    uid: int | None
+    gid: int | None
+
+    @classmethod
+    def capture(cls, path: Path) -> _HostFileSnapshot:
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            return cls(path, None, None, None, None)
+        except OSError as exc:
+            raise FbctlError(f"managed Caddy host file is unreadable: {path}") from exc
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise FbctlError(f"managed Caddy host file is unsafe: {path}")
+        try:
+            payload = path.read_bytes()
+        except OSError as exc:
+            raise FbctlError(f"managed Caddy host file is unreadable: {path}") from exc
+        return cls(
+            path,
+            payload,
+            stat.S_IMODE(metadata.st_mode),
+            metadata.st_uid,
+            metadata.st_gid,
+        )
+
+    def is_current(self) -> bool:
+        try:
+            metadata = self.path.lstat()
+        except FileNotFoundError:
+            return self.payload is None
+        except OSError:
+            return False
+        if self.payload is None:
+            return False
+        try:
+            payload = self.path.read_bytes()
+        except OSError:
+            return False
+        return (
+            stat.S_ISREG(metadata.st_mode)
+            and not stat.S_ISLNK(metadata.st_mode)
+            and payload == self.payload
+            and stat.S_IMODE(metadata.st_mode) == self.mode
+            and metadata.st_uid == self.uid
+            and metadata.st_gid == self.gid
+        )
+
+    def restore(self) -> None:
+        if self.payload is None:
+            self.path.unlink(missing_ok=True)
+            return
+        assert self.mode is not None
+        assert self.uid is not None
+        assert self.gid is not None
+        atomic_write(self.path, self.payload, mode=self.mode)
+        os.chown(self.path, self.uid, self.gid)
+
+
+@dataclass(frozen=True)
+class _CaddyChange:
+    snapshots: tuple[_HostFileSnapshot, ...]
+
+    def rollback(self, runner: CommandRunner, *, step: str) -> None:
+        _rollback_caddy(
+            self.snapshots,
+            runner,
+            step=step,
+            daemon_reload_attempted=True,
+            caddy_reload_attempted=True,
+        )
+
+
+def _require_caddy_directory(path: Path, *, mode: int | None = None) -> None:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise FbctlError(f"Caddy host directory is missing or unsafe: {path}") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise FbctlError(f"Caddy host directory is missing or unsafe: {path}")
+    if mode is not None and stat.S_IMODE(metadata.st_mode) != mode:
+        os.chmod(path, mode)
+
+
+def _ensure_caddy_directory(path: Path, *, mode: int) -> None:
+    try:
+        path.mkdir(parents=True, exist_ok=True, mode=mode)
+    except OSError as exc:
+        raise FbctlError(f"Caddy host directory cannot be created safely: {path}") from exc
+    _require_caddy_directory(path, mode=mode)
+
+
+def _render_caddyfile_payload(caddy_file: Path) -> bytes:
+    snapshot = _HostFileSnapshot.capture(caddy_file)
+    if snapshot.payload is None:
+        return f"{CADDY_IMPORT_LINE}\n".encode("utf-8")
+    try:
+        content = snapshot.payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise FbctlError("canonical Caddyfile is not valid UTF-8") from exc
+    import_lines = [
+        line.strip()
+        for line in content.splitlines()
+        if line.strip().startswith("import ") and "/etc/caddy/sites-enabled" in line
+    ]
+    if (
+        any(line != CADDY_IMPORT_LINE for line in import_lines)
+        or import_lines.count(CADDY_IMPORT_LINE) > 1
+    ):
+        raise FbctlError("Caddyfile contains a conflicting FB Agent site import")
+    if import_lines:
+        return snapshot.payload
+    return (content.rstrip() + f"\n\n{CADDY_IMPORT_LINE}\n").encode("utf-8")
+
+
+def _read_caddy_resource(resources: Path, relative: str) -> bytes:
+    source = resources / relative
+    try:
+        metadata = source.lstat()
+    except OSError as exc:
+        raise FbctlError(f"managed Caddy bundle file is missing: {relative}") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise FbctlError(f"managed Caddy bundle file is unsafe: {relative}")
+    try:
+        return source.read_bytes()
+    except OSError as exc:
+        raise FbctlError(f"managed Caddy bundle file is unreadable: {relative}") from exc
+
+
+def _expected_caddy_files(
+    resources: Path,
+    source_values: dict[str, str],
+    panel_values: dict[str, str],
+) -> dict[Path, _ManagedCaddyFile]:
+    _validate_caddy_panel_credentials(panel_values)
+    target_values = {key: panel_values[key] for key in BOOTSTRAP_CADDY_KEYS}
+    _sync_caddy_values(source_values, target_values)
+    caddy_file = Path("/etc/caddy/Caddyfile")
+    caddy_env = _caddy_env_path()
+    sites = Path("/etc/caddy/sites-enabled")
+    dropins = Path("/etc/systemd/system/caddy.service.d")
+    targets = (
+        _ManagedCaddyFile(caddy_env, render_dotenv(target_values), 0o600),
+        *(
+            _ManagedCaddyFile(
+                sites / name,
+                _read_caddy_resource(resources, f"deploy/caddy/{name}"),
+                0o644,
+            )
+            for name in MANAGED_CADDY_SITE_FILES
+        ),
+        _ManagedCaddyFile(
+            dropins / "fb-agent-env.conf",
+            _read_caddy_resource(resources, "deploy/systemd/caddy-fb-agent-env.conf"),
+            0o644,
+        ),
+        _ManagedCaddyFile(caddy_file, _render_caddyfile_payload(caddy_file), 0o644),
+    )
+    return {target.path: target for target in targets}
+
+
+def _prepare_caddy_host_paths() -> None:
+    caddy_file = Path("/etc/caddy/Caddyfile")
+    _ensure_caddy_directory(caddy_file.parent, mode=0o755)
+    _ensure_caddy_directory(_caddy_env_path().parent, mode=0o700)
+    _ensure_caddy_directory(Path("/etc/caddy/sites-enabled"), mode=0o755)
+    _ensure_caddy_directory(Path("/etc/systemd/system/caddy.service.d"), mode=0o755)
+    log_dir = Path("/var/log/caddy")
+    _ensure_caddy_directory(log_dir, mode=0o755)
+    try:
+        caddy_identity = pwd.getpwnam("caddy")
+        caddy_group = grp.getgrnam("caddy")
+    except KeyError as exc:
+        raise FbctlError("Caddy system user is missing") from exc
+    for name in ("fb-agent-access.log", "fb-agent-desktop-access.log"):
+        path = log_dir / name
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            path.touch(mode=0o600)
+            metadata = path.lstat()
+        except OSError as exc:
+            raise FbctlError(f"Caddy log path is unsafe: {path}") from exc
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise FbctlError(f"Caddy log path is unsafe: {path}")
+        os.chmod(path, 0o600)
+        os.chown(path, caddy_identity.pw_uid, caddy_group.gr_gid)
+
+
+def _validate_staged_caddy(
+    resources: Path,
+    expected: Mapping[Path, _ManagedCaddyFile],
+    runner: CommandRunner,
+    *,
+    step: str,
+) -> None:
+    caddy_parent = Path("/etc/caddy/Caddyfile").parent
+    with tempfile.TemporaryDirectory(prefix=".fb-agent-caddy-", dir=caddy_parent) as temporary:
+        stage = Path(temporary)
+        sites = stage / "sites-enabled"
+        sites.mkdir(mode=0o700)
+        host_sites = Path("/etc/caddy/sites-enabled")
+        for name in MANAGED_CADDY_SITE_FILES:
+            target = expected[host_sites / name]
+            atomic_write(sites / name, target.payload, mode=0o600)
+        validation = _read_caddy_resource(resources, "deploy/caddy/Caddyfile.validation")
+        try:
+            validation_text = validation.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise FbctlError("Caddy validation template is not valid UTF-8") from exc
+        if validation_text.splitlines().count(CADDY_IMPORT_LINE) != 1:
+            raise FbctlError("Caddy validation template has an invalid managed import")
+        staged_import = f"import {sites}/*.caddy"
+        atomic_write(
+            stage / "Caddyfile",
+            validation_text.replace(CADDY_IMPORT_LINE, staged_import).encode("utf-8"),
+            mode=0o600,
+        )
+        atomic_write(
+            stage / "caddy.env",
+            expected[_caddy_env_path()].payload,
+            mode=0o600,
+        )
+        runner.run(
+            (
+                "caddy",
+                "validate",
+                "--config",
+                stage / "Caddyfile",
+                "--adapter",
+                "caddyfile",
+                "--envfile",
+                stage / "caddy.env",
+            ),
+            step=step,
+        )
+
+
+def _rollback_caddy(
+    snapshots: Sequence[_HostFileSnapshot],
+    runner: CommandRunner,
+    *,
+    step: str,
+    daemon_reload_attempted: bool,
+    caddy_reload_attempted: bool,
+) -> None:
+    errors: list[str] = []
+    for snapshot in reversed(snapshots):
+        try:
+            snapshot.restore()
+        except OSError as exc:
+            errors.append(f"restore {snapshot.path}: {type(exc).__name__}")
+    if daemon_reload_attempted or caddy_reload_attempted:
+        try:
+            result = runner.run(
+                ("systemctl", "daemon-reload"),
+                step=step,
+                check=False,
+            )
+            if result.returncode:
+                errors.append("systemctl daemon-reload")
+        except Exception as exc:  # pragma: no cover - defensive runner boundary
+            errors.append(f"systemctl daemon-reload: {type(exc).__name__}")
+    if caddy_reload_attempted:
+        try:
+            result = runner.run(
+                ("systemctl", "reload", "caddy"),
+                step=step,
+                check=False,
+            )
+            if result.returncode:
+                errors.append("systemctl reload caddy")
+        except Exception as exc:  # pragma: no cover - defensive runner boundary
+            errors.append(f"systemctl reload caddy: {type(exc).__name__}")
+    if errors:
+        raise FbctlError("Caddy rollback failed: " + "; ".join(errors))
+
+
+def _reconcile_caddy(
+    resources: Path,
+    source_values: dict[str, str],
+    panel_values: dict[str, str],
+    runner: CommandRunner,
+    *,
+    step: str,
+    force_reload: bool = False,
+) -> _CaddyChange | None:
+    _prepare_caddy_host_paths()
+    expected = _expected_caddy_files(resources, source_values, panel_values)
+    drifted = [target for target in expected.values() if not target.matches_host()]
+    if not drifted and not force_reload:
+        return None
+    snapshots = [_HostFileSnapshot.capture(path) for path in expected]
+    _validate_staged_caddy(resources, expected, runner, step=step)
+    daemon_reload_attempted = False
+    caddy_reload_attempted = False
+    mutation_started = False
+    try:
+        for snapshot in snapshots:
+            if not snapshot.is_current():
+                raise FbctlError(f"managed Caddy host file changed during deploy: {snapshot.path}")
+        for target in drifted:
+            mutation_started = True
+            atomic_write(target.path, target.payload, mode=target.mode)
+        caddy_file = Path("/etc/caddy/Caddyfile")
+        runner.run(
+            (
+                "caddy",
+                "validate",
+                "--config",
+                caddy_file,
+                "--adapter",
+                "caddyfile",
+                "--envfile",
+                _caddy_env_path(),
+            ),
+            step=step,
+        )
+        daemon_reload_attempted = True
+        runner.run(("systemctl", "daemon-reload"), step=step)
+        caddy_reload_attempted = True
+        runner.run(("systemctl", "reload", "caddy"), step=step)
+    except BaseException:
+        if mutation_started:
+            _rollback_caddy(
+                snapshots,
+                runner,
+                step=step,
+                daemon_reload_attempted=daemon_reload_attempted,
+                caddy_reload_attempted=caddy_reload_attempted,
+            )
+        raise
+    return _CaddyChange(tuple(snapshots)) if mutation_started else None
+
+
 def _provision_caddy(
     resources: Path,
     source_values: dict[str, str],
@@ -1645,81 +2056,14 @@ def _provision_caddy(
 ) -> None:
     if os.geteuid() != 0:
         raise FbctlError("Caddy provisioning must run as root")
-    caddy_file = Path("/etc/caddy/Caddyfile")
-    caddy_env = Path("/etc/fb-agent/caddy.env")
-    panel_user = bootstrap_values.get("PANEL_BASIC_AUTH_USER", "")
-    panel_hash = bootstrap_values.get("PANEL_BASIC_AUTH_HASH", "")
-    if not re.fullmatch(r"[A-Za-z0-9._@-]{1,64}", panel_user) or not re.fullmatch(
-        r"\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}", panel_hash
-    ):
-        raise FbctlError("Caddy panel credentials are invalid")
-    if caddy_file.is_symlink() or (caddy_file.exists() and not caddy_file.is_file()):
-        raise FbctlError("canonical Caddyfile is unsafe")
-    import_line = "import /etc/caddy/sites-enabled/*.caddy"
-    if caddy_file.is_file():
-        caddy_content = caddy_file.read_text(encoding="utf-8")
-        import_lines = [
-            line.strip()
-            for line in caddy_content.splitlines()
-            if line.strip().startswith("import ") and "/etc/caddy/sites-enabled" in line
-        ]
-        if any(line != import_line for line in import_lines) or import_lines.count(import_line) > 1:
-            raise FbctlError("Caddyfile contains a conflicting FB Agent site import")
-        next_caddy_content = (
-            caddy_content if import_lines else caddy_content.rstrip() + f"\n\n{import_line}\n"
-        )
-    else:
-        next_caddy_content = f"{import_line}\n"
-    try:
-        caddy_identity = pwd.getpwnam("caddy")
-        caddy_group = grp.getgrnam("caddy")
-    except KeyError as exc:
-        raise FbctlError("Caddy system user is missing") from exc
-    target_values = {
-        "PANEL_BASIC_AUTH_USER": panel_user,
-        "PANEL_BASIC_AUTH_HASH": panel_hash,
-    }
-    _sync_caddy_values(source_values, target_values)
-    caddy_env.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    atomic_write(caddy_env, render_dotenv(target_values), mode=0o600)
-    sites = Path("/etc/caddy/sites-enabled")
-    dropins = Path("/etc/systemd/system/caddy.service.d")
-    log_dir = Path("/var/log/caddy")
-    sites.mkdir(parents=True, exist_ok=True, mode=0o755)
-    dropins.mkdir(parents=True, exist_ok=True, mode=0o755)
-    log_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
-    for name in ("app.adpulse.su.caddy", "desktop.adpulse.su.caddy"):
-        source = resources / "deploy" / "caddy" / name
-        atomic_write(sites / name, source.read_bytes(), mode=0o644)
-    atomic_write(
-        dropins / "fb-agent-env.conf",
-        (resources / "deploy/systemd/caddy-fb-agent-env.conf").read_bytes(),
-        mode=0o644,
-    )
-    for name in ("fb-agent-access.log", "fb-agent-desktop-access.log"):
-        path = log_dir / name
-        if path.is_symlink():
-            raise FbctlError(f"Caddy log path is unsafe: {path}")
-        path.touch(mode=0o600, exist_ok=True)
-        os.chmod(path, 0o600)
-        os.chown(path, caddy_identity.pw_uid, caddy_group.gr_gid)
-    if not caddy_file.is_file() or caddy_file.read_text(encoding="utf-8") != next_caddy_content:
-        atomic_write(caddy_file, next_caddy_content.encode("utf-8"), mode=0o644)
-    runner.run(("systemctl", "daemon-reload"), step="bootstrap")
-    runner.run(
-        (
-            "caddy",
-            "validate",
-            "--config",
-            caddy_file,
-            "--adapter",
-            "caddyfile",
-            "--envfile",
-            caddy_env,
-        ),
+    _reconcile_caddy(
+        resources,
+        source_values,
+        bootstrap_values,
+        runner,
         step="bootstrap",
+        force_reload=True,
     )
-    runner.run(("systemctl", "reload", "caddy"), step="bootstrap")
 
 
 def _retire_legacy_systemd_units(

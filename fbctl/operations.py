@@ -136,7 +136,7 @@ def doctor(
             )
             checks["compose_inventory"] = "ready"
             controller = ProductionController(runner=runner)
-            controller._require_caddy_credentials(config)  # noqa: SLF001
+            controller._require_caddy_host_config(config)  # noqa: SLF001
             runner.run(
                 (
                     "caddy",
