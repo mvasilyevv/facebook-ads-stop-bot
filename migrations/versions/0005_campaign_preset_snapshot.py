@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0004_campaign_preset_snapshot"
-down_revision = "0003_tighten_retention_policy"
+revision = "0005_campaign_preset_snapshot"
+down_revision = "0004_vision_token_self_heal"
 branch_labels = None
 depends_on = None
 
