@@ -555,11 +555,16 @@ async def test_multi_launch_unknown_replay_returns_same_run_without_new_task(
                     SET status = 'failed',
                         external_started_at = NOW(),
                         completed_at = NOW(),
-                        result = '{"outcome":"UNKNOWN","reconcile_required":true}'::jsonb
+                        -- JSON передаётся параметром: в литерале ":true" без
+                        -- пробела SQLAlchemy видит bind-параметр и падает.
+                        result = CAST(:result AS jsonb)
                     WHERE id = :task_id
                     """
                 ),
-                {"task_id": launched["task_id"]},
+                {
+                    "task_id": launched["task_id"],
+                    "result": '{"outcome":"UNKNOWN","reconcile_required":true}',
+                },
             )
             await conn.execute(
                 text(
