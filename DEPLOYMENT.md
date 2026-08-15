@@ -35,23 +35,32 @@ sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz deploy
 Обычный `deploy` не принимает adoption bundle или desktop seed и не изменяет
 host provisioning.
 
-## Ресурсы прежнего bootstrap
+## Ресурсы после первого production bootstrap
 
-Volumes и network прежнего неудавшегося bootstrap остаются на host нетронутыми
-и с новым контуром больше не конфликтуют — имена разведены. `fbctl` сообщает об
-их наличии только как об информации. После приёмки production оператор удаляет
-их вручную:
+После первого боевого bootstrap очищенный host не содержит ресурсов прежних
+попыток: удалены network и volumes `fb_agent_safety_first_*`, четвёртый набор с
+префиксом `current_*`, volume Guacamole и прежние images. Это зафиксированное
+состояние host, а не действие `fbctl`: control bundle не удаляет legacy-ресурсы
+и не доказывает отсутствие произвольных images.
 
-- network `fb_agent_safety_first_platform`;
-- volume `fb_agent_safety_first_pgdata`;
-- volume `fb_agent_safety_first_redisdata`;
-- volume `fb_agent_safety_first_campaign_uploads`.
+Имена текущего контура с прежними наборами не пересекаются:
 
-**Контейнеры прежнего контура — отдельный случай.** Если PostgreSQL и Redis того
-bootstrap всё ещё запущены, они держат host-порты `5433` и `6380`, и новый
-runtime их не займёт. Preflight обнаруживает это до остановки текущего runtime и
-называет контейнер вместе с готовой командой. Остановить их нужно вручную, до
-`bootstrap`; volumes и network при этом не трогаются:
+- network `fb_agent_platform`;
+- volumes `fb_agent_infra_pgdata`, `fb_agent_infra_redisdata` и
+  `fb_agent_app_campaign_uploads`;
+- Compose-проекты `fb_agent_infra`, `fb_agent_app`, `fb_agent_desktop` и
+  `fb_agent_monitoring`.
+
+`fbctl` по-прежнему только информационно проверяет четыре точных имени
+`fb_agent_safety_first_*`. Если они появятся снова, он сообщит о них и оставит
+нетронутыми. Ресурсы `current_*`, Guacamole и legacy images в этот detector не
+входят: их отсутствие подтверждается inventory host, а не `fbctl`.
+
+**Контейнеры прежнего контура — отдельный случай.** Даже при разведённых именах
+запущенный PostgreSQL или Redis может удерживать host-порты `5433` и `6380`.
+Preflight обнаруживает это до первой мутации, называет контейнер и печатает
+готовую команду. Остановить его нужно вручную; volumes и network `fbctl` не
+трогает:
 
 ```bash
 sudo docker stop <container>
@@ -69,17 +78,9 @@ sudo docker stop <container>
 docker compose -p fb_agent_monitoring -f deploy/monitoring/docker-compose.agent.yml up -d
 ```
 
-На новом host bootstrap вызывается с явными локальными путями к подготовленным
-секретам и конфигурации; manifest уже вложен в control bundle и не передаётся
-в `deploy` отдельным аргументом:
-
-```bash
-sudo python3 -B /path/to/reviewed/fbctl.pyz bootstrap \
-  --source-env /opt/fb-agent/shared/source.env \
-  --adoption-bundle /opt/fb-agent/shared/adoption-bundle-v1.json \
-  --desktop-profile-seed /opt/fb-agent/shared/desktop-profile-seed
-sudo python3 -B /path/to/reviewed/fbctl.pyz deploy --enable-scanning
-```
+Подготовка чистого host и точная последовательность команд описаны в разделе
+«Первый запуск на чистом host». Manifest уже вложен в control bundle и не
+передаётся в `deploy` отдельным аргументом.
 
 Для единственного проверенного перехода со старого host identity Release
 workflow до сборки images отправляет маленький deterministic preflight bundle и
@@ -148,31 +149,156 @@ manifest, executable modes, четыре Compose-файла, Caddy, digest-only 
 browser capability isolation, порты и свободное место. Проверка не меняет
 active configuration и не останавливает runtime.
 
-## First release
+## Контракт каталога PostgreSQL
 
-До однократного `bootstrap` в `/opt/fb-agent/shared` должны существовать:
+Frozen baseline создаёт и сразу проверяет собственную поверхность каталога:
+extensions, functions, triggers, view и `CHECK`-ограничения перечислены в
+`BASELINE_ARTIFACT_HASHES`. Проверка нужна, чтобы частичная, подменённая или
+дополненная схема не получила корректный Alembic revision только за счёт stamp.
 
-- `source.env` с production-конфигурацией;
-- browser capability env-файлы mode `0600`;
-- `adoption-bundle-v1.json` mode `0600`;
-- `desktop-profile-seed` с проверенным Vision profile.
+Ревизии после baseline объявляют свои артефакты отдельно, в
+`POST_BASELINE_ARTIFACT_HASHES`. На голове база сверяется с суммой обоих
+наборов — `HEAD_ARTIFACT_HASHES`. Разделение обязательно: один общий манифест
+одновременно описывал бы и состояние сразу после baseline, и состояние на
+голове, а это взаимоисключающие вещи.
 
-После успешного bootstrap поле `profile_seed_cleanup` должно быть `removed` (или
-`not_applicable`, если seed уже был штатно удалён). Значение
-`preserved_changed_or_quarantined` означает, что receipt не совпал: каталог не
-удаляется вслепую, а возможный `.fbctl-profile-cleanup-*` остаётся в `shared/`
-для ручной проверки.
-Каталог `.fbctl-profile-cleanup-unbound-*` аналогично сохраняется, если
-bootstrap не смог безопасно открыть только что созданный staging-каталог; его
-нужно проверить вручную после устранения filesystem-ошибки.
+Отсюда правило для новой ревизии, добавляющей function, trigger, view или
+`CHECK`: её артефакты нужно внести в `POST_BASELINE_ARTIFACT_HASHES`, иначе
+migration завершится с `catalog artifact drift: unexpected ...`. Это не повод
+удалять объект вручную или stamp-ить БД — молча принимать незаявленные объекты
+контракт не должен.
 
-Только для описанной identity migration может дополнительно существовать
-`/opt/fb-agent/shared/.env` mode `0600`, принадлежащий root. Это не второй
-конфигурационный источник routine runtime.
+## Первый запуск на чистом host
 
-Adoption import переносит allowlisted конфигурацию один раз и записывает receipt
-в той же транзакции PostgreSQL. После успешного bootstrap bundle и seed с host
-удаляются. История, runtime state и secrets не импортируются.
+### 1. Подготовить `shared`
+
+`/opt/fb-agent` должен быть обычным root-owned каталогом mode `0755`, а
+`/opt/fb-agent/shared` — обычным root-owned каталогом mode `0700`. Ограничение
+закрывает подмену входов между preflight и их повторной проверкой под deploy
+lock.
+
+На чистой БД положить в `shared`:
+
+- `source.env` — полный production source, root-owned regular file mode `0600`
+  со `st_nlink == 1`, то есть без hard-link aliases;
+- `adoption-bundle-v1.json` — проверенный adoption bundle с теми же требованиями
+  к owner, типу inode, mode и `st_nlink`;
+- `desktop-profile-seed` — одобренное дерево Vision, целиком `root:root`, с
+  корнем mode `0700`.
+
+Отдельные browser capability env-файлы в `shared` не нужны: `fbctl` выводит их
+из `source.env` в release-specific candidate. Только для описанной выше identity
+migration допускается root-owned regular file `shared/.env` mode `0600`; routine
+runtime его источником не считает.
+
+В `desktop-profile-seed` разрешены только каталоги и обычные файлы. Симлинки,
+sockets, FIFO, devices и hard-linked файлы отвергаются как `unsafe entry`; все
+элементы принадлежат `root:root`, не имеют group/world write, а корневой marker
+`.fb-agent-vision-profile-v1` имеет mode `0600` и содержит строку
+`fb-agent-vision-profile-v1` с завершающим LF. Это не даёт профилю вывести
+чтение/копирование за проверенное дерево или заменить inode после snapshot.
+
+Если `shared/vision-config` уже существует после неуспешной попытки, он
+авторитетнее seed и обязан принадлежать runtime-пользователю `1000:1000`; его
+корень имеет mode `0700`, а дерево — те же ограничения по типам записей и
+write-битам. Bootstrap не скрывает повреждённый canonical profile переходом на
+seed. При первом успешном копировании `fbctl` сам создаёт canonical profile,
+назначает `1000:1000`, каталоги `0700` и файлы `0600`.
+
+Безопасная подготовка чистого host выглядит так:
+
+```bash
+sudo install -d -o root -g root -m 0755 /opt/fb-agent
+sudo install -d -o root -g root -m 0700 /opt/fb-agent/shared
+sudo install -o root -g root -m 0600 /path/to/prepared-source.env \
+  /opt/fb-agent/shared/source.env
+sudo install -o root -g root -m 0600 /path/to/reviewed-adoption-bundle-v1.json \
+  /opt/fb-agent/shared/adoption-bundle-v1.json
+sudo cp -a -- /path/to/approved-desktop-profile-seed \
+  /opt/fb-agent/shared/desktop-profile-seed
+sudo chown -R root:root /opt/fb-agent/shared/desktop-profile-seed
+sudo find /opt/fb-agent/shared/desktop-profile-seed -type d -exec chmod 0700 {} +
+sudo find /opt/fb-agent/shared/desktop-profile-seed -type f -exec chmod 0600 {} +
+```
+
+До запуска проверить, что следующие команды ничего не печатают:
+
+```bash
+sudo find /opt/fb-agent/shared/desktop-profile-seed ! -type d ! -type f -print
+sudo find /opt/fb-agent/shared/desktop-profile-seed -type f -links +1 -print
+```
+
+### 2. Проверить source и Caddy
+
+`bootstrap-source-check` валидирует dotenv, allowlist ключей и bootstrap-only
+Vision/Caddy значения, но не смотрит filesystem, Docker, БД или Caddyfile:
+
+```bash
+sudo python3 -B /path/to/reviewed/fbctl.pyz bootstrap-source-check --stdin \
+  --project-known-legacy-source < /opt/fb-agent/shared/source.env
+```
+
+Для чистого source поле `dropped_keys` в результате должно быть пустым. Если
+оно не пусто, не продолжать чистый bootstrap: либо убрать legacy-ключи из
+source, либо использовать отдельно одобренный migration-переход.
+
+В `/etc/caddy/Caddyfile` среди строк, импортирующих
+`/etc/caddy/sites-enabled`, допустима только одна точная форма:
+
+```caddyfile
+import /etc/caddy/sites-enabled/*.caddy
+```
+
+Если такого импорта нет, bootstrap добавит его. Дубль или более широкий glob,
+например `import /etc/caddy/sites-enabled/*`, считается конфликтом и
+останавливает bootstrap. Суффикс `.caddy` ограничивает загрузку drop-in файлами
+с ожидаемым расширением, а не любым файлом каталога.
+
+Release `bootstrap-remote-preflight` дополнительно читает фиксированные
+root-owned inputs и Vision profile без записи на host. Сам `bootstrap` повторно
+проверяет identity и профиль под lock, затем до первой мутации проверяет все
+published host-порты. Caddyfile проверяется позже, при provisioning Caddy.
+
+### 3. Выполнить bootstrap и deploy
+
+На чистом host с полной identity в `source.env` migration-флаги не нужны:
+
+```bash
+sudo python3 -B /path/to/reviewed/fbctl.pyz bootstrap \
+  --source-env /opt/fb-agent/shared/source.env \
+  --adoption-bundle /opt/fb-agent/shared/adoption-bundle-v1.json \
+  --desktop-profile-seed /opt/fb-agent/shared/desktop-profile-seed
+sudo python3 -B /path/to/reviewed/fbctl.pyz deploy --enable-scanning
+sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz doctor
+sudo python3 -B /opt/fb-agent/runtime/fbctl.pyz status
+```
+
+После bootstrap поле `profile_seed_cleanup` должно быть `removed` либо
+`not_applicable`, если seed уже был штатно удалён. Adoption import переносит
+allowlisted конфигурацию и записывает receipt в той же транзакции PostgreSQL;
+после полного успеха bundle и seed удаляются. История, runtime state и secrets
+не импортируются.
+
+### 4. Разобрать отказ
+
+| Сообщение | Что делать |
+| --- | --- |
+| `owned directory with mode 700` или `not a private single-owner file` | Вернуть `shared` owner `root:root` и mode `0700`; фиксированные файлы сделать обычными single-link файлами `root:root` mode `0600`. Не заменять их симлинками. |
+| `desktop profile seed ... unsafe entry` | Удалить из seed симлинки и non-file/non-directory записи, разорвать hard links, вернуть всему дереву `root:root` и убрать group/world write. Затем повторить ту же команду: этот отказ происходит до мутаций. |
+| `managed Vision configuration ... unsafe entry` или `invalid ownership` | Исправлять `shared/vision-config`, а не seed: canonical profile уже выбран и должен принадлежать `1000:1000`. Не удалять его вслепую после частично успешного bootstrap. |
+| `marker is invalid` | Вернуть одобренный profile seed с каноническим marker; не создавать пустой профиль ради прохождения gate. |
+| `Caddyfile contains a conflicting FB Agent site import` | Заменить все imports `sites-enabled` одной точной строкой с `*.caddy` и повторить bootstrap. До этого места infra/БД уже могли быть подготовлены; повтор рассчитан на canonical retry. |
+| `Host TCP port collision` | Выполнить напечатанную `sudo docker stop <container>` либо освободить названный host-порт у внешнего процесса. Volumes не удалять. |
+| `adoption bundle owner contract is invalid` или `clean database bootstrap requires an adoption bundle` | Подать заново проверенный bundle, в котором единственный owner совпадает с `DESKTOP_OWNER_TELEGRAM_USER_ID`; не править receipt или БД вручную. |
+| `source environment contains unsupported keys`, partial OIDC pair или owner mismatch | Снова прогнать `bootstrap-source-check`. `--project-known-legacy-source` и `--migrate-existing-bootstrap-identity` включать только для документированного migration-перехода; `--reuse-existing-caddy-credentials` нужен отдельно, если Caddy-пары нет в source. Половины OIDC-пары не смешивать. |
+| `safety-first baseline catalog artifact drift: unexpected ...` | Остановить выпуск. Это несовместимость release manifest и migration, а не состояние, которое чинится на host; не удалять constraint и не stamp-ить Alembic. |
+
+`preserved_changed_or_quarantined` в `profile_seed_cleanup` означает, что
+receipt seed не совпал: каталог не удаляется вслепую, а возможный
+`.fbctl-profile-cleanup-*` остаётся в `shared` для ручной проверки. Каталог
+`.fbctl-profile-cleanup-unbound-*` сохраняется, если bootstrap не смог безопасно
+открыть только что созданный staging-каталог; после устранения filesystem-ошибки
+его также проверяют вручную.
 
 ## Operations
 
