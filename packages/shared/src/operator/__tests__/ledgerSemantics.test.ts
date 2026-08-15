@@ -4,6 +4,7 @@ import { makeOperatorSnapshot } from "../testFixture";
 import {
   formatOperatorDateTime,
   formatOperatorFreshness,
+  collapseOperatorAttentionItems,
   operatorAttentionCopy,
   operatorCabinetTimezone,
   operatorLedgerTimezone,
@@ -124,4 +125,36 @@ describe("operator ledger semantics", () => {
       reason: null,
     });
   });
+
+  it("collapses signals an operator cannot tell apart, but keeps severities separate", () => {
+    const base = makeOperatorSnapshot().attention.data!.items[0]!;
+    const source = (id: string, severity: "critical" | "unknown") => ({
+      ...base,
+      id,
+      kind: "source" as const,
+      severity,
+      title: `worker_telemetry ${id}`,
+      summary: `internal.${id}`,
+      reason: null,
+    });
+
+    const collapsed = collapseOperatorAttentionItems(
+      [
+        source("a", "critical"),
+        source("b", "unknown"),
+        source("c", "unknown"),
+      ],
+      true,
+    );
+
+    // Тексты источников детерминированы, поэтому b и c для оператора
+    // неразличимы и занимают одну строку. Критичное не сливается с
+    // неподтверждённым: это разная срочность.
+    expect(collapsed.map((entry) => entry.count)).toEqual([1, 2]);
+    expect(collapsed.map((entry) => entry.item.severity)).toEqual([
+      "critical",
+      "unknown",
+    ]);
+  });
+
 });

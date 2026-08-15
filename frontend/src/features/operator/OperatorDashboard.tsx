@@ -28,6 +28,7 @@ import {
   formatOperatorScaleTick as formatScaleTick,
   formatOperatorUsd as formatUsd,
   isActiveOperatorAction as isActiveAction,
+  collapseOperatorAttentionItems,
   operatorAttentionCopy,
   operatorCabinetTimezone,
   operatorLedgerTimezone,
@@ -493,7 +494,10 @@ function AttentionLedger({
   // Счётчик считается по полному списку, а не по первым пяти карточкам.
   // Без подтверждённых данных выводим «—»: ноль означал бы «причин нет».
   const total = section.data ? section.data.items.length : null;
-  const items = section.data?.items.slice(0, 5) ?? [];
+  const items = collapseOperatorAttentionItems(
+    section.data?.items ?? [],
+    usdScopeConfirmed,
+  ).slice(0, 5);
   return (
     <section
       className="ledger-section ledger-section--attention"
@@ -514,10 +518,11 @@ function AttentionLedger({
         <LedgerEmpty text="Активных сигналов нет." />
       ) : (
         <ol className="ledger-attention-list">
-          {items.map((item) => (
+          {items.map(({ item, count }) => (
             <AttentionLedgerItem
               key={item.id}
               item={item}
+              count={count}
               timezone={timezone}
               usdScopeConfirmed={usdScopeConfirmed}
             />
@@ -534,10 +539,12 @@ function AttentionLedger({
 
 function AttentionLedgerItem({
   item,
+  count,
   timezone,
   usdScopeConfirmed,
 }: {
   item: OperatorAttentionItem;
+  count: number;
   timezone: string | null;
   usdScopeConfirmed: boolean;
 }) {
@@ -555,7 +562,14 @@ function AttentionLedgerItem({
           {SEVERITY_LABEL[item.severity]}
         </span>
       </div>
-      <h3>{copy.title}</h3>
+      <h3>
+        {copy.title}
+        {count > 1 ? (
+          <span className="ledger-attention-item__count" data-numeric>
+            {count}
+          </span>
+        ) : null}
+      </h3>
       {copy.summary ? <p>{copy.summary}</p> : null}
       {copy.reason ? <p>Причина: {copy.reason}</p> : null}
       {item.action && href === "/system/sources" ? (
@@ -791,9 +805,8 @@ function LedgerSectionHeader<T>({
         <span>{detail}</span>
       </div>
       <div className="ledger-section__meta">
-        <span>{section.sources.map(sourceLabel).join(" + ")}</span>
-        <span>
-          as_of{" "}
+        <span>{section.sources.map(sourceLabel).join(" · ")}</span>
+        <span data-numeric>
           {section.as_of
             ? formatDateTime(section.as_of, timezone)
             : freshnessLabel(section.freshness_seconds)}

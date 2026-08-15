@@ -139,27 +139,6 @@
   background: var(--color-bg-0);
 }
 
-.ledger-section::before,
-.ledger-section::after {
-  position: absolute;
-  left: 0;
-  width: 10px;
-  height: 10px;
-  border-left: 1px solid var(--color-accent);
-  content: "";
-  pointer-events: none;
-}
-
-.ledger-section::before {
-  top: -1px;
-  border-top: 1px solid var(--color-accent);
-}
-
-.ledger-section::after {
-  bottom: -1px;
-  border-bottom: 1px solid var(--color-accent);
-}
-
 .ledger-section--portfolio {
   grid-area: portfolio;
 }
@@ -207,18 +186,21 @@
 
 .ledger-section__title span,
 .ledger-section__meta {
-  color: var(--color-bg-8);
-  font-family: var(--font-numeric);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.ledger-section__meta {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 5px 12px;
+  color: var(--color-bg-8);
+  font-size: 12px;
   text-align: right;
+}
+
+/* Моноширинный оставлен только измеримым значениям: список источников —
+ * обычная фраза, и набор её кодом превращал шапку секции в дамп. */
+.ledger-section__meta time,
+.ledger-section__meta [data-numeric] {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
 }
 
 .ledger-section__empty {
@@ -887,4 +869,17 @@
   .ledger-action-item__progress::after {
     background: CanvasText;
   }
+}
+
+/* Счётчик схлопнутых сигналов: сколько раз повторилась та же проблема. */
+.ledger-attention-item__count {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  color: var(--color-bg-9);
+  font-family: var(--font-numeric);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
 }

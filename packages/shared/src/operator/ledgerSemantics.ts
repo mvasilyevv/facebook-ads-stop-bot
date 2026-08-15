@@ -124,3 +124,44 @@ export function operatorLedgerTimezone(
   if (!cabinetId) return snapshot.meta.timezone;
   return operatorCabinetTimezone(snapshot, cabinetId);
 }
+
+export interface CollapsedAttentionItem {
+  item: OperatorAttentionItem;
+  count: number;
+}
+
+/** Свести сигналы, неотличимые для оператора, в одну строку со счётчиком.
+ *
+ * Тексты источников и команд намеренно детерминированы, чтобы внутренности
+ * бэкенда не попадали на экран. Побочный эффект — несколько разных проблем
+ * выглядят одной фразой, повторённой подряд: три одинаковых карточки не
+ * сообщают больше, чем одна, но занимают весь первый экран. Различие по
+ * severity сохраняется: критичное и неподтверждённое не сливаются.
+ */
+export function collapseOperatorAttentionItems(
+  items: OperatorAttentionItem[],
+  usdScopeConfirmed: boolean,
+): CollapsedAttentionItem[] {
+  const collapsed: CollapsedAttentionItem[] = [];
+  const seen = new Map<string, CollapsedAttentionItem>();
+  for (const item of items) {
+    const copy = operatorAttentionCopy(item, usdScopeConfirmed);
+    const key = [
+      item.severity,
+      item.kind,
+      copy.title,
+      copy.summary ?? "",
+      copy.reason ?? "",
+      item.action?.label ?? "",
+    ].join(" ");
+    const known = seen.get(key);
+    if (known) {
+      known.count += 1;
+      continue;
+    }
+    const entry: CollapsedAttentionItem = { item, count: 1 };
+    seen.set(key, entry);
+    collapsed.push(entry);
+  }
+  return collapsed;
+}
