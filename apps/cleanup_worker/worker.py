@@ -706,7 +706,7 @@ async def run_once(engine: AsyncEngine) -> dict[str, Any]:
             now=observed_at,
         )
     except Exception as exc:
-        logger.exception("storage observation failed: %s", exc)
+        logger.error("storage observation failed (%s)", safe_exception_diagnostic(exc))
         counts["storage_observation_error"] = str(exc)
 
     finished_at = datetime.now(timezone.utc)

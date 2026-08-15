@@ -48,7 +48,7 @@ async def metrics_loop(stop: asyncio.Event, engine) -> None:
                 )
                 mark_worker_db_poll_success(WORKER_NAME)
             except Exception as exc:
-                logger.exception("cleanup freshness check failed: %s", exc)
+                logger.error("cleanup freshness check failed (%s)", safe_exception_diagnostic(exc))
             try:
                 min_free_bytes, min_free_ratio = disk_thresholds_from_env()
                 await publish_disk_health(
@@ -58,7 +58,7 @@ async def metrics_loop(stop: asyncio.Event, engine) -> None:
                     min_free_ratio=min_free_ratio,
                 )
             except Exception as exc:
-                logger.exception("database disk check failed: %s", exc)
+                logger.error("database disk check failed (%s)", safe_exception_diagnostic(exc))
                 accepted = await publish_disk_check_unavailable(engine)
                 if not accepted:
                     logger.warning("disk check incident was not accepted by durable plane")
