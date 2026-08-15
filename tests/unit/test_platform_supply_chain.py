@@ -572,3 +572,20 @@ def test_only_manual_release_deploys_so_push_runs_are_safe_to_cancel() -> None:
     assert "github.event_name == 'workflow_dispatch'" in _job_if_expression(workflow, "deploy")
     assert "group: release-main-${{ github.event_name }}" in workflow
     assert "cancel-in-progress: ${{ github.event_name == 'push' }}" in workflow
+
+
+def test_called_verify_cannot_cancel_a_manual_release() -> None:
+    """Неотменяемость ручного релиза обязана держаться и в вызываемом workflow.
+
+    Release объявляет ручной запуск неотменяемым, но verify вызывается внутри
+    него, и там github.workflow — имя вызывающего. Пока событие не входило в
+    группу, ручная выкатка и прогон от push делили одну группу: любой merge в
+    main отменял идущий релиз, а отмена после stop_runtime оставила бы
+    production остановленным.
+    """
+    verify = (ROOT / ".github/workflows/verify.yml").read_text(encoding="utf-8")
+
+    assert (
+        "group: verify-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}" in verify
+    )
+    assert "cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}" in verify
