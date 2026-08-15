@@ -526,6 +526,34 @@ def _capture_open_tree(
                     entries.append(_entry_receipt(child_relative, "file", after, payload_hash))
                 finally:
                     os.close(child_fd)
+            elif stat.S_ISLNK(metadata.st_mode):
+                # XFCE держит внутри профиля свои ссылки (например
+                # .config/xfce4/desktop/icons.screen.latest.rc на текущий экран).
+                # Отвергать их значило бы, что любой bootstrap после первого
+                # запуска рабочего стола падает. Ссылку не разыменовываем: в
+                # чек записывается сама цель, и она обязана остаться внутри дерева.
+                _validate_entry_metadata(
+                    metadata,
+                    label=label,
+                    relative=child_relative,
+                    required_uid=required_uid,
+                    required_gid=required_gid,
+                    root=False,
+                )
+                target = _readlink_inside_tree(
+                    directory_fd,
+                    name,
+                    relative=child_relative,
+                    label=label,
+                )
+                entries.append(
+                    _entry_receipt(
+                        child_relative,
+                        "symlink",
+                        metadata,
+                        hashlib.sha256(target.encode("utf-8")).hexdigest(),
+                    )
+                )
             else:
                 raise FbctlError(f"{label} contains an unsafe entry")
             if len(entries) > MAX_PROFILE_ENTRIES:
@@ -601,6 +629,10 @@ def _copy_open_tree(
                         os.close(destination_child)
                 finally:
                     os.close(source_child)
+            elif child.kind == "symlink":
+                # Seed приходит из репозитория и ссылок содержать не должен;
+                # копировать их сюда — значит переносить чужую цель вслепую.
+                raise FbctlError("desktop profile seed must not contain symlinks")
             else:
                 source_child = _open_child_file(src_fd, name, receipt.label)
                 destination_child: int | None = None
@@ -754,6 +786,39 @@ def _open_child_file(parent_fd: int, name: str, label: str) -> int:
         raise FbctlError(f"{label} contains an unsafe entry") from exc
 
 
+def _readlink_inside_tree(
+    directory_fd: int,
+    name: str,
+    *,
+    relative: tuple[str, ...],
+    label: str,
+) -> str:
+    """Прочитать цель ссылки и убедиться, что она не выходит за дерево.
+
+    Ссылку не разыменовываем, поэтому проверяем сам текст цели: абсолютный путь
+    уводит наружу сразу, а относительный — если `..` поднимается выше корня
+    профиля. Ссылка на соседний файл внутри профиля безопасна и остаётся.
+    """
+    try:
+        target = os.readlink(name, dir_fd=directory_fd)
+    except OSError as exc:
+        raise FbctlError(f"{label} contains an unsafe entry") from exc
+    if not target or target.startswith("/") or "\x00" in target:
+        raise FbctlError(f"{label} contains an unsafe link")
+    # Глубина каталога, в котором лежит сама ссылка, считая от корня профиля.
+    depth = len(relative) - 1
+    for part in target.split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            depth -= 1
+            if depth < 0:
+                raise FbctlError(f"{label} contains an unsafe link")
+        else:
+            depth += 1
+    return target
+
+
 def _validate_entry_metadata(
     metadata: os.stat_result,
     *,
@@ -763,14 +828,21 @@ def _validate_entry_metadata(
     required_gid: int,
     root: bool,
 ) -> None:
-    if not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
+    if not (
+        stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+    ):
         raise FbctlError(f"{label} contains an unsafe entry")
     mode = stat.S_IMODE(metadata.st_mode)
     if metadata.st_uid != required_uid or metadata.st_gid != required_gid:
         raise FbctlError(f"{label} has invalid ownership")
     if root and (not stat.S_ISDIR(metadata.st_mode) or mode != 0o700):
         raise FbctlError(f"{label} is missing or unsafe")
-    if mode & 0o022:
+    # Права символической ссылки на Linux ничего не значат и всегда 0777,
+    # поэтому проверка на world-writable к ней неприменима. Безопасность
+    # ссылки определяется её целью — см. _readlink_inside_tree.
+    if not stat.S_ISLNK(metadata.st_mode) and mode & 0o022:
         raise FbctlError(f"{label} contains an unsafe entry")
     if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1:
         raise FbctlError(f"{label} contains an unsafe entry")
@@ -820,6 +892,8 @@ def _entry_matches(
             and stat.S_ISDIR(metadata.st_mode)
             or receipt.kind == "file"
             and stat.S_ISREG(metadata.st_mode)
+            or receipt.kind == "symlink"
+            and stat.S_ISLNK(metadata.st_mode)
         )
     )
     return basic and (allow_root_rename or metadata.st_ctime_ns == receipt.changed_ns)
