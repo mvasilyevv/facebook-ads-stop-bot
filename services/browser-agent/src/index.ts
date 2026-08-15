@@ -457,7 +457,12 @@ async function runScanCycle(call: any) {
     // browser connection is still live. This does not change the Vision
     // profile lifecycle. A dead browser/CDP fails closed and is handled only
     // by the exclusive maintenance path.
-    const fallbackUrl = reconstructAdsManagerUrl(req.session_id, actId);
+    const amColumnsQs = String(req.am_columns_qs || "");
+    const fallbackUrl = reconstructAdsManagerUrl(
+      req.session_id,
+      actId,
+      amColumnsQs,
+    );
     // --- am_tabular режим (active replication): метрики из graph-канала UI, без DOM/скролла. ---
     // am_tabular — живой REST → данные ВСЕГДА актуальны, reload для данных НЕ нужен. Токен сниффим
     // один раз (acquireGraphContext кэширует по session_id); reload бывает только при cache-miss
@@ -478,6 +483,7 @@ async function runScanCycle(call: any) {
         const page = await sessionManager.ensureScanPage(session, {
           fallbackUrl,
           actId,
+          amColumnsQs,
           signal: abortController.signal,
         });
         let acquired = await acquireGraphContext(page, req.session_id, {

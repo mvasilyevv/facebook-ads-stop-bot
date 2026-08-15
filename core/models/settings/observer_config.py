@@ -12,7 +12,7 @@ from core.models.base import Base, SingletonMixin, Timestamp, UUIDPrimaryKey
 class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
     """Единственная строка с параметрами observer.
 
-    Обновляется через API PUT /settings/observer.
+    Обновляется через field-scoped PATCH API /settings/observer/*.
     Читается observer_worker каждый цикл.
     """
 
@@ -49,3 +49,7 @@ class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
         nullable=False,
         server_default=text("'{}'"),
     )
+    # Presentation-only query для видимой вкладки Ads Manager. NULL означает:
+    # browser-agent применяет прежний fallback env → встроенный default.
+    # На AM_COLUMN_FIELDS / am_tabular и денежные решения поле не влияет.
+    am_columns_qs: Mapped[str | None] = mapped_column(Text, nullable=True)

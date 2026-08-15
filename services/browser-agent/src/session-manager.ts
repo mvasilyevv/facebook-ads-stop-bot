@@ -8,7 +8,10 @@ import { v4 as uuidv4 } from "uuid";
 import { VisionClient } from "./vision-client.js";
 import { STEALTH_INIT_SCRIPT } from "./stealth.js";
 import { generateHumanProfile } from "./humanizer.js";
-import { adsManagerColumnsQs } from "./am/am-columns-preset.js";
+import {
+  adsManagerColumnsQs,
+  adsManagerUrlUsesColumnsQs,
+} from "./am/am-columns-preset.js";
 import { raceWithAbort } from "./in-page-abort.js";
 import { withPageRoleLock } from "./page-lock.js";
 import type { BrowserPageRole, BrowserSession, HumanProfile } from "./types.js";
@@ -101,22 +104,28 @@ export function safeCabinetTabError(error: unknown): string {
  * Уровень КАМПАНИЙ + набор колонок пользователя (am-columns-preset) — пользователь
  * сразу видит нужные метрики; на скан (am_tabular level=ad через fetch) уровень
  * вкладки не влияет. */
-export function adsManagerUrlForAct(actId: string): string {
+export function adsManagerUrlForAct(
+  actId: string,
+  amColumnsQs?: string | null,
+): string {
   if (!/^\d{1,32}$/.test(actId)) {
     throw new Error("cabinet_not_found: ad account id must be 1..32 digits");
   }
   return (
     `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${actId}` +
-    `&${adsManagerColumnsQs()}`
+    `&${adsManagerColumnsQs(amColumnsQs)}`
   );
 }
 
 /** Collapse a live page URL to the only URL shape safe to persist or expose. */
 export function canonicalAdsManagerUrl(
   url: string | null | undefined,
+  amColumnsQs?: string | null,
 ): string | null {
   const actId = extractAdAccountId(url);
-  return actId && isAdsManagerUrl(url) ? adsManagerUrlForAct(actId) : null;
+  return actId && isAdsManagerUrl(url)
+    ? adsManagerUrlForAct(actId, amColumnsQs)
+    : null;
 }
 
 /** Найти среди ВСЕХ открытых вкладок живую вкладку Ads Manager нужного кабинета. */
@@ -637,7 +646,12 @@ export class SessionManager {
   /** Return the dedicated scan page for one cabinet. */
   async ensureScanPage(
     session: BrowserSession,
-    opts: { fallbackUrl?: string; actId?: string; signal?: AbortSignal } = {},
+    opts: {
+      fallbackUrl?: string;
+      actId?: string;
+      amColumnsQs?: string;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<Page> {
     return this.ensureRolePage(session, "scan", opts);
   }
@@ -691,7 +705,12 @@ export class SessionManager {
   private async ensureRolePage(
     session: BrowserSession,
     role: BrowserPageRole,
-    opts: { fallbackUrl?: string; actId?: string; signal?: AbortSignal },
+    opts: {
+      fallbackUrl?: string;
+      actId?: string;
+      amColumnsQs?: string;
+      signal?: AbortSignal;
+    },
   ): Promise<Page> {
     throwIfOperationAborted(opts.signal);
     session.scanPages ??= new Map();
@@ -740,8 +759,8 @@ export class SessionManager {
       isAdsManagerUrl(sourceUrl) &&
       extractAdAccountId(sourceUrl) === resolvedAct;
     const targetUrl = sourceMatchesAct
-      ? canonicalAdsManagerUrl(sourceUrl)
-      : adsManagerUrlForAct(resolvedAct);
+      ? canonicalAdsManagerUrl(sourceUrl, opts.amColumnsQs)
+      : adsManagerUrlForAct(resolvedAct, opts.amColumnsQs);
     if (!targetUrl || !isAdsManagerUrl(targetUrl)) {
       throw new Error(
         `cabinet_not_found: Основная страница браузера недоступна: ${role} кабинет не определён`,
@@ -762,6 +781,7 @@ export class SessionManager {
     const mapped = ownPages.get(cabinetKey);
     const mappedMatchesAct =
       Boolean(resolvedAct) && isConfirmedAdsManagerPage(mapped, resolvedAct);
+    let page: Page | null = null;
     if (
       mapped &&
       !isPageClosed(mapped) &&
@@ -769,10 +789,10 @@ export class SessionManager {
       mappedMatchesAct &&
       !opposite.has(mapped)
     ) {
-      throwIfOperationAborted(opts.signal);
-      return mapped;
+      page = mapped;
+    } else {
+      ownPages.delete(cabinetKey);
     }
-    ownPages.delete(cabinetKey);
 
     // A page assigned to the opposite role is never eligible. Pages assigned
     // to another cabinet of the same role are excluded as well.
@@ -791,7 +811,7 @@ export class SessionManager {
       if (key !== cabinetKey) reserved.add(page);
     }
 
-    let page: Page | null = resolvedAct
+    page ??= resolvedAct
       ? findAdsManagerPageByAct(browser, resolvedAct, reserved)
       : null;
 
@@ -815,6 +835,33 @@ export class SessionManager {
         }
       } catch (error) {
         this.poisonedPages.add(page);
+        if (!isPageClosed(page)) {
+          void page.close({ runBeforeUnload: false }).catch(() => undefined);
+        }
+        if (opts.signal?.aborted) {
+          throw new Error("Browser operation cancelled");
+        }
+        if (error instanceof Error && error.message.startsWith("cabinet_")) {
+          throw error;
+        }
+        throw new Error(
+          `cabinet_not_found: navigation failed for act=${resolvedAct}`,
+        );
+      }
+    } else if (
+      opts.amColumnsQs !== undefined &&
+      !adsManagerUrlUsesColumnsQs(safePageUrl(page), opts.amColumnsQs)
+    ) {
+      try {
+        await navigatePageWithinOperation(page, targetUrl, opts.signal);
+        if (!isConfirmedAdsManagerPage(page, resolvedAct)) {
+          throw new Error(
+            `cabinet_not_confirmed: final Ads Manager URL does not confirm act=${resolvedAct}`,
+          );
+        }
+      } catch (error) {
+        this.poisonedPages.add(page);
+        ownPages.delete(cabinetKey);
         if (!isPageClosed(page)) {
           void page.close({ runBeforeUnload: false }).catch(() => undefined);
         }

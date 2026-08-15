@@ -7,6 +7,12 @@ const api = vi.hoisted(() => ({
     default_interval_seconds: 60,
     owner_campaign_tag: "MV",
     campaign_ids: ["campaign-1"],
+    am_columns: ["name", "spend"],
+    am_columns_use_default: false,
+    am_column_options: [
+      { id: "name", label: "Название" },
+      { id: "spend", label: "Затраты" },
+    ],
   },
   preferenceData: {
     recipient_id: "00000000-0000-0000-0000-000000000001",
@@ -23,6 +29,7 @@ const api = vi.hoisted(() => ({
   updateObserverInterval: vi.fn(),
   updateOwnerTag: vi.fn(),
   setAllowlist: vi.fn(),
+  updateAdsManagerColumns: vi.fn(),
   refreshCampaigns: vi.fn(),
   scanNow: vi.fn(),
   updateToken: vi.fn(),
@@ -64,6 +71,10 @@ vi.mock("@/lib/api", () => ({
   }),
   useSetObserverCampaignAllowlist: () => ({
     mutateAsync: api.setAllowlist,
+    isPending: false,
+  }),
+  useUpdateAdsManagerColumns: () => ({
+    mutateAsync: api.updateAdsManagerColumns,
     isPending: false,
   }),
   useRefreshObserverCampaigns: () => ({
@@ -211,6 +222,7 @@ describe("TMA settings controls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     globalThis.localStorage.clear();
+    api.observerData.am_columns_use_default = false;
     for (const mutation of Object.values(api)) {
       if (typeof mutation === "function")
         mutation.mockResolvedValue({ status: "queued" });
@@ -265,6 +277,38 @@ describe("TMA settings controls", () => {
     expect(
       screen.getByRole("button", { name: /поставить scan/i }),
     ).toBeDisabled();
+  });
+
+  it("редактирует колонки чекбоксами и явно сбрасывает default", async () => {
+    api.updateAdsManagerColumns.mockResolvedValueOnce({
+      ...api.observerData,
+      am_columns_use_default: true,
+    });
+    render(<ObserverSettings canEdit />);
+
+    expect(screen.getByRole("checkbox", { name: "Название" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Затраты" })).toBeChecked();
+    expect(screen.queryByText(/columns=name/i)).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /сбросить к дефолту/i }),
+    );
+    await waitFor(() =>
+      expect(api.updateAdsManagerColumns).toHaveBeenCalledWith(null),
+    );
+  });
+
+  it("не выдаёт встроенный набор за точное env-переопределение", () => {
+    api.observerData.am_columns_use_default = true;
+
+    render(<ObserverSettings canEdit />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Fallback browser-agent",
+    );
+    expect(
+      screen.getByText(/точное env-переопределение здесь недоступно/i),
+    ).toBeInTheDocument();
   });
 
   it("sanitizes an untrusted Telegram mutation error", async () => {

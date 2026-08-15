@@ -130,6 +130,21 @@ export function useSetObserverCampaignAllowlist() {
   });
 }
 
+export function useUpdateAdsManagerColumns() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (column_ids: string[] | null) =>
+      dataOrThrow(
+        tmaFetchApi.PATCH("/api/settings/observer/ads-manager-columns", {
+          body: { column_ids },
+        }),
+      ),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: SETTINGS_KEYS.observer }),
+  });
+}
+
 export function useScanObserverNow() {
   return useMutation({
     meta: { suppressGlobalError: true },

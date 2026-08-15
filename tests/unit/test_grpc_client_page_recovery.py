@@ -89,12 +89,13 @@ def _make_client(stream_batches):
     """Клиент с замоканным scanner-stub: каждый вызов RunScanCycle отдаёт следующий батч."""
     client = BrowserAgentClient(BrowserAgentConfig())
     client._session_id = "sess-1"  # ensure_browser_session() → no-op
-    calls = {"run": 0, "timeouts": []}
+    calls = {"run": 0, "timeouts": [], "requests": []}
 
-    def _run(_req, *, timeout):
+    def _run(req, *, timeout):
         idx = calls["run"]
         calls["run"] += 1
         calls["timeouts"].append(timeout)
+        calls["requests"].append(req)
         return _FakeStream(stream_batches[idx])
 
     client._scanner_stub = types.SimpleNamespace(RunScanCycle=_run)
@@ -181,6 +182,23 @@ async def test_scan_rpc_receives_finite_absolute_deadline() -> None:
     assert any(isinstance(result, ScanResult) for result in results)
     assert len(calls["timeouts"]) == 1
     assert 0 < calls["timeouts"][0] <= 0.5
+
+
+@pytest.mark.asyncio
+async def test_scan_request_delivers_presentation_columns_without_touching_metrics() -> None:
+    client, calls = _make_client([[_complete_event()]])
+    am_columns_qs = "columns=name%2Cspend&column_preset=999"
+
+    results = [
+        event
+        async for event in client.run_scan_cycle(
+            ad_account_id="123",
+            am_columns_qs=am_columns_qs,
+        )
+    ]
+
+    assert any(isinstance(result, ScanResult) for result in results)
+    assert calls["requests"][0].am_columns_qs == am_columns_qs
 
 
 @pytest.mark.asyncio

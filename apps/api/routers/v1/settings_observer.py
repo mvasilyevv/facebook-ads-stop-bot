@@ -6,6 +6,7 @@ Endpoints под /api (благодаря auto-discovery с prefix="/api"):
 - PATCH /settings/observer/interval     — точечно меняет интервал
 - PATCH /settings/observer/scanning     — переключает is_scanning_enabled
 - PATCH /settings/observer/owner-tag    — точечно меняет owner_campaign_tag (анти лост-апдейт)
+- PATCH /settings/observer/ads-manager-columns — меняет presentation-колонки вкладки
 - POST /settings/observer/scan-now — ставит durable observer_scan в PostgreSQL
 """
 
@@ -23,6 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import DepEngine, DepSettings
 from apps.api.routers.v1.schemas.settings_observer import (
+    AdsManagerColumnOption,
+    AdsManagerColumnsPatchRequest,
     CampaignAllowlistRequest,
     CampaignOption,
     ObserverIntervalPatchRequest,
@@ -33,6 +36,11 @@ from apps.api.routers.v1.schemas.settings_observer import (
 )
 from core.commands.service import CommandService
 from core.models.settings.observer_config import ObserverConfig
+from core.observer.am_columns import (
+    KNOWN_AM_COLUMN_OPTIONS,
+    build_am_columns_qs,
+    selected_am_columns,
+)
 from core.observer.queries import campaign_matches_owner
 from core.observer.scan_tasks import observer_scan_idempotency_key
 from core.tasks.browser_fence import (
@@ -133,6 +141,12 @@ def _to_response(cfg: ObserverConfig) -> ObserverSettingsResponse:
         default_interval_seconds=cfg.interval_seconds,
         owner_campaign_tag=cfg.owner_campaign_tag,
         campaign_ids=list(cfg.campaign_ids or []),
+        am_columns=list(selected_am_columns(cfg.am_columns_qs)),
+        am_columns_use_default=not bool((cfg.am_columns_qs or "").strip()),
+        am_column_options=[
+            AdsManagerColumnOption(id=column_id, label=label)
+            for column_id, label in KNOWN_AM_COLUMN_OPTIONS
+        ],
     )
 
 
@@ -216,6 +230,24 @@ async def patch_observer_campaigns(
     async with AsyncSession(engine) as session:
         cfg = await _get_singleton(session)
         cfg.campaign_ids = list(body.campaign_ids)
+        result = _to_response(cfg)
+        await session.commit()
+        return result
+
+
+@router.patch("/ads-manager-columns", response_model=ObserverSettingsResponse)
+async def patch_ads_manager_columns(
+    body: AdsManagerColumnsPatchRequest,
+    engine: DepEngine,
+) -> ObserverSettingsResponse:
+    """Меняет только presentation-колонки видимой вкладки Ads Manager.
+
+    Сервер принимает известные IDs и сам строит query. NULL/пустой список хранится
+    как NULL, чтобы browser-agent использовал прежний fallback env → default.
+    """
+    async with AsyncSession(engine) as session:
+        cfg = await _get_singleton(session)
+        cfg.am_columns_qs = build_am_columns_qs(body.column_ids)
         result = _to_response(cfg)
         await session.commit()
         return result

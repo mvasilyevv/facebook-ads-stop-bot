@@ -104,6 +104,20 @@ export function useSetCampaignAllowlist() {
   });
 }
 
+export function useUpdateAdsManagerColumns() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (column_ids: string[] | null) =>
+      dataOrThrow(
+        generatedFetchApi.PATCH("/api/settings/observer/ads-manager-columns", {
+          body: { column_ids },
+        }),
+      ),
+    onSuccess: invalidateObserver(qc),
+  });
+}
+
 export function useScanObserverNow() {
   return useMutation({
     meta: { suppressGlobalError: true },

@@ -9,7 +9,7 @@
 // env BROWSER_AGENT_AM_COLUMNS_QS (строка query без ведущего '?'), чтобы менять набор
 // колонок/пресет без пересборки образа.
 
-const DEFAULT_COLUMNS_QS =
+export const DEFAULT_COLUMNS_QS =
   "columns=name%2Cdelivery%2Cbudget%2Cresults%2Creach%2Cimpressions%2Ccost_per_result" +
   "%2Cspend%2Cclicks%2Ccpc%2Cactions%3Alead%2Ccost_per_action_type%3Alead" +
   "%2Cactions%3Aomni_complete_registration%2Ccost_per_action_type%3Aomni_complete_registration" +
@@ -24,7 +24,7 @@ const ALLOWED_COLUMNS_QUERY_KEYS = [
   "column_preset",
 ] as const;
 
-function sanitizeColumnsQuery(raw: string): string {
+export function sanitizeColumnsQs(raw: string): string {
   if (raw.length > 16_384) return DEFAULT_COLUMNS_QS;
   const parsed = new URLSearchParams(raw);
   const safe = new URLSearchParams();
@@ -37,10 +37,45 @@ function sanitizeColumnsQuery(raw: string): string {
   return safe.size > 0 ? safe.toString() : DEFAULT_COLUMNS_QS;
 }
 
-/** Query-строка колонок Ads Manager (без ведущего '?'). Env переопределяет дефолт. */
-export function adsManagerColumnsQs(): string {
+/** Query-строка колонок Ads Manager (без ведущего '?'). DB → env → default. */
+export function adsManagerColumnsQs(
+  databaseOverride?: string | null,
+): string {
   const env = process.env.BROWSER_AGENT_AM_COLUMNS_QS;
-  return sanitizeColumnsQuery(
-    env && env.trim() ? env.trim() : DEFAULT_COLUMNS_QS,
+  return sanitizeColumnsQs(
+    databaseOverride && databaseOverride.trim()
+      ? databaseOverride.trim()
+      : env && env.trim()
+        ? env.trim()
+        : DEFAULT_COLUMNS_QS,
   );
+}
+
+/** Проверить только presentation-параметры живой вкладки, игнорируя прочий URL. */
+export function adsManagerUrlUsesColumnsQs(
+  url: string,
+  databaseOverride?: string | null,
+): boolean {
+  try {
+    const parsed = new URL(url);
+    const expected = new URLSearchParams(
+      adsManagerColumnsQs(databaseOverride),
+    );
+    for (const key of ALLOWED_COLUMNS_QUERY_KEYS) {
+      const currentValues = parsed.searchParams.getAll(key);
+      const expectedValues = expected.getAll(key);
+      if (
+        currentValues.length !== expectedValues.length ||
+        currentValues.some(
+          (value, index) =>
+            !value || value.length > 8_192 || value !== expectedValues[index],
+        )
+      ) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }

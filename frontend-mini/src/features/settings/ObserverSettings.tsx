@@ -6,7 +6,7 @@ import {
   validateObserverInterval,
 } from "@fb/features/settings";
 import { safeApiProblemMessage } from "@fb/operator-api";
-import { RefreshCw, ScanSearch } from "lucide-react";
+import { RefreshCw, RotateCcw, ScanSearch } from "lucide-react";
 
 import { Button, EmptyState, Input, Skeleton, Switch } from "@/components/ui";
 import {
@@ -16,6 +16,7 @@ import {
   useScanObserverNow,
   useSetObserverCampaignAllowlist,
   useToggleObserverScanning,
+  useUpdateAdsManagerColumns,
   useUpdateObserverOwnerTag,
   useUpdateObserverInterval,
 } from "@/lib/api";
@@ -31,10 +32,12 @@ export function ObserverSettings({ canEdit }: { canEdit: boolean }) {
   const setAllowlist = useSetObserverCampaignAllowlist();
   const refreshCampaigns = useRefreshObserverCampaigns();
   const scanNow = useScanObserverNow();
+  const updateAdsManagerColumns = useUpdateAdsManagerColumns();
 
   const [interval, setInterval] = useState("60");
   const [ownerTags, setOwnerTags] = useState("");
   const [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]);
+  const [selectedAmColumns, setSelectedAmColumns] = useState<string[]>([]);
   const [intervalError, setIntervalError] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
@@ -44,6 +47,7 @@ export function ObserverSettings({ canEdit }: { canEdit: boolean }) {
     setInterval(String(settingsQuery.data.default_interval_seconds));
     setOwnerTags(settingsQuery.data.owner_campaign_tag ?? "");
     setSelectedCampaigns(settingsQuery.data.campaign_ids ?? []);
+    setSelectedAmColumns(settingsQuery.data.am_columns ?? []);
   }, [settingsQuery.data]);
 
   function mutationProblem(error: unknown, fallback: string) {
@@ -158,6 +162,27 @@ export function ObserverSettings({ canEdit }: { canEdit: boolean }) {
     }
   }
 
+  async function saveAdsManagerColumns() {
+    if (!canEdit || !selectedAmColumns.length) return;
+    try {
+      await updateAdsManagerColumns.mutateAsync(selectedAmColumns);
+      mutationSuccess("Колонки Ads Manager сохранены");
+    } catch (error) {
+      mutationProblem(error, "Колонки Ads Manager не сохранены");
+    }
+  }
+
+  async function resetAdsManagerColumns() {
+    if (!canEdit) return;
+    try {
+      const updated = await updateAdsManagerColumns.mutateAsync(null);
+      setSelectedAmColumns(updated.am_columns);
+      mutationSuccess("Восстановлен системный набор колонок");
+    } catch (error) {
+      mutationProblem(error, "Колонки Ads Manager не сброшены");
+    }
+  }
+
   return (
     <div className="space-y-6 pb-4">
       {!canEdit ? (
@@ -249,6 +274,95 @@ export function ObserverSettings({ canEdit }: { canEdit: boolean }) {
               Поставить scan в очередь
             </Button>
           </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="mini-ads-manager-columns">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h3
+              id="mini-ads-manager-columns"
+              className="m-0 text-[15px] font-medium text-bg-11"
+            >
+              Вкладка Ads Manager
+            </h3>
+            <p className="m-0 mt-1 text-[13px] leading-5 text-bg-8">
+              Меняет только видимые человеку колонки. Метрики скана и автостопа
+              остаются фиксированными. Применится при следующем scan.
+            </p>
+          </div>
+          <span className="shrink-0 text-[12px] text-bg-8" role="status">
+            {settings.am_columns_use_default
+              ? "Fallback browser-agent"
+              : "Свой набор"}
+          </span>
+        </div>
+
+        {settings.am_columns_use_default ? (
+          <p className="m-0 mt-2 text-[13px] leading-5 text-bg-8">
+            Сначала используется env browser-agent, затем встроенный набор.
+            Галочки показывают встроенный набор; точное env-переопределение
+            здесь недоступно.
+          </p>
+        ) : null}
+
+        <fieldset className="mt-3">
+          <legend className="sr-only">
+            Колонки видимой вкладки Ads Manager
+          </legend>
+          <div className="max-h-[360px] overflow-y-auto border-y border-[var(--color-hairline)]">
+            {settings.am_column_options.map((column) => {
+              const checked = selectedAmColumns.includes(column.id);
+              return (
+                <label
+                  key={column.id}
+                  className="flex min-h-11 items-center gap-3 border-b border-[var(--color-hairline)] py-2.5 last:border-b-0"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={!canEdit}
+                    onChange={() =>
+                      setSelectedAmColumns((current) =>
+                        checked
+                          ? current.filter((id) => id !== column.id)
+                          : [...current, column.id],
+                      )
+                    }
+                    className="size-4 shrink-0 accent-[var(--color-accent)]"
+                  />
+                  <span className="min-w-0 text-[14px] leading-5 text-bg-10">
+                    {column.label}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+
+        <p className="m-0 mt-2 text-[13px] text-bg-8">
+          Выбрано: {selectedAmColumns.length} из{" "}
+          {settings.am_column_options.length}
+        </p>
+        <div className="mt-3 grid gap-2">
+          <Button
+            fullWidth
+            disabled={!canEdit || !selectedAmColumns.length}
+            loading={updateAdsManagerColumns.isPending}
+            onClick={() => void saveAdsManagerColumns()}
+          >
+            Сохранить колонки
+          </Button>
+          <Button
+            variant="ghost"
+            fullWidth
+            disabled={!canEdit}
+            loading={updateAdsManagerColumns.isPending}
+            onClick={() => void resetAdsManagerColumns()}
+          >
+            <RotateCcw size={15} aria-hidden="true" />
+            Сбросить к дефолту
+          </Button>
         </div>
       </section>
 

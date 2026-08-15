@@ -1028,6 +1028,41 @@ test("ensureScanPage принимает вкладку того же кабин�
   assert.equal(session.lastAdsManagerUrl, adsManagerUrlForAct("111"));
 });
 
+test("ensureScanPage применяет изменённые presentation-колонки к открытой вкладке", async () => {
+  const manager = new SessionManager();
+  let currentUrl = adsManagerUrlForAct("111");
+  let gotoUrl: string | null = null;
+  const sameAds = {
+    isClosed: () => false,
+    url: () => currentUrl,
+    goto: async (url: string) => {
+      gotoUrl = url;
+      currentUrl = url;
+    },
+  };
+  const context = {
+    pages: () => [sameAds],
+    newPage: async () => assert.fail("открытая вкладка должна переиспользоваться"),
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({
+    browser,
+    primaryPage: sameAds,
+    lastAdsManagerUrl: currentUrl,
+    scanPages: new Map([["111", sameAds]]),
+  });
+  const amColumnsQs = "columns=name%2Cspend&column_preset=999";
+
+  const page = await manager.ensureScanPage(session, {
+    actId: "111",
+    amColumnsQs,
+  });
+
+  assert.equal(page, sameAds);
+  assert.equal(gotoUrl, adsManagerUrlForAct("111", amColumnsQs));
+  assert.equal(currentUrl.includes("access_token"), false);
+});
+
 // ====================== Явная multi-cabinet identity ======================
 
 // URL кабинета строится детерминированно из числового act.

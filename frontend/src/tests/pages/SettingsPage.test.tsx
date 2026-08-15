@@ -18,6 +18,12 @@ const mockObserverData = {
   owner_campaign_tag: "MV",
   act_via_api: true,
   campaign_ids: [],
+  am_columns: ["name", "spend"],
+  am_columns_use_default: true,
+  am_column_options: [
+    { id: "name", label: "Название" },
+    { id: "spend", label: "Затраты" },
+  ],
   warning_percent_of_stop: null,
   cpc_warning_percent: null,
   cpl_warning_percent: null,
@@ -27,6 +33,7 @@ const mockObserverData = {
 const mockToggleScanning = vi.fn().mockResolvedValue(mockObserverData);
 const mockUpdateObserverInterval = vi.fn().mockResolvedValue(mockObserverData);
 const mockScanNow = vi.fn().mockResolvedValue({ status: "queued" });
+const mockUpdateAdsManagerColumns = vi.fn().mockResolvedValue(mockObserverData);
 const mockCreateOwnerInvite = vi.fn().mockResolvedValue({
   code: "OWNER123",
   expires_at: "2026-07-17T08:00:00Z",
@@ -71,6 +78,10 @@ vi.mock("@/lib/api/settings", () => ({
   }),
   useSetCampaignAllowlist: () => ({
     mutateAsync: vi.fn().mockResolvedValue(mockObserverData),
+    isPending: false,
+  }),
+  useUpdateAdsManagerColumns: () => ({
+    mutateAsync: mockUpdateAdsManagerColumns,
     isPending: false,
   }),
   useTelegramSettings: () => ({
@@ -273,6 +284,20 @@ describe("ObserverTab", () => {
     await user.click(screen.getByRole("button", { name: "Сохранить интервал" }));
     expect(screen.getByText(/от 30 до 600 секунд/i)).toBeInTheDocument();
     expect(mockUpdateObserverInterval).not.toHaveBeenCalled();
+  });
+
+  it("показывает читаемые колонки и сбрасывает настройку к дефолту", async () => {
+    const user = userEvent.setup();
+    render(wrap(<ObserverTab />));
+
+    expect(screen.getByRole("checkbox", { name: "Название" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Затраты" })).toBeChecked();
+    expect(screen.queryByText(/columns=name/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Fallback browser-agent")).toBeInTheDocument();
+    expect(screen.getByText(/точное env-переопределение API не видит/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /сбросить к дефолту/i }));
+    expect(mockUpdateAdsManagerColumns).toHaveBeenCalledWith(null);
   });
 
   // owner tag и «Сканировать сейчас» вынесены: owner tag → страница «Кампании»,

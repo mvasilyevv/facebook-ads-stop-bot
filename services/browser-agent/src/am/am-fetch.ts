@@ -123,17 +123,24 @@ export function invalidateGraphContext(sessionId: string, actId: string): void {
 
 // Реконструировать URL кабинета Ads Manager.
 // Explicit actId makes it deterministic; no cached/session-global fallback exists.
-export function reconstructAdsManagerUrl(sessionId: string, actId: string): string {
+export function reconstructAdsManagerUrl(
+  sessionId: string,
+  actId: string,
+  amColumnsQs?: string | null,
+): string {
   void sessionId;
-  return cabinetCampaignsUrl(normalizedActId(actId));
+  return cabinetCampaignsUrl(normalizedActId(actId), amColumnsQs);
 }
 
 // URL вкладки кабинета: уровень кампаний + колонки пользователя (единый формат со
 // session-manager.adsManagerUrlForAct). Уровень вкладки на скан не влияет.
-function cabinetCampaignsUrl(actId: string): string {
+function cabinetCampaignsUrl(
+  actId: string,
+  amColumnsQs?: string | null,
+): string {
   return (
     `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${actId}` +
-    `&${adsManagerColumnsQs()}`
+    `&${adsManagerColumnsQs(amColumnsQs)}`
   );
 }
 
