@@ -44,8 +44,6 @@ function ActionDetailPage() {
   if (actionQuery.isError && !projection) {
     return (
       <OperatorPageBoundary
-        eyebrowNum="01"
-        eyebrow="ОПЕРАЦИИ · ДЕЙСТВИЯ"
         title="Действие"
         navigation={<ActionBreadcrumb />}
       >
@@ -61,8 +59,6 @@ function ActionDetailPage() {
   if (actionQuery.isPending && !projection) {
     return (
       <OperatorPageBoundary
-        eyebrowNum="01"
-        eyebrow="ОПЕРАЦИИ · ДЕЙСТВИЯ"
         title="Действие"
         navigation={<ActionBreadcrumb />}
       >
@@ -73,8 +69,6 @@ function ActionDetailPage() {
   if (!action) {
     return (
       <OperatorPageBoundary
-        eyebrowNum="01"
-        eyebrow="ОПЕРАЦИИ · ДЕЙСТВИЯ"
         title="Действие"
         navigation={<ActionBreadcrumb />}
       >

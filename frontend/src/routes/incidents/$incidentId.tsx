@@ -42,8 +42,6 @@ function IncidentDetailPage() {
   if (incidentQuery.isError) {
     return (
       <OperatorPageBoundary
-        eyebrowNum="01"
-        eyebrow="ОПЕРАЦИИ · ИНЦИДЕНТЫ"
         title="Инцидент"
         navigation={<IncidentBreadcrumb />}
       >
@@ -59,8 +57,6 @@ function IncidentDetailPage() {
   if (incidentQuery.isPending)
     return (
       <OperatorPageBoundary
-        eyebrowNum="01"
-        eyebrow="ОПЕРАЦИИ · ИНЦИДЕНТЫ"
         title="Инцидент"
         navigation={<IncidentBreadcrumb />}
       >
@@ -70,8 +66,6 @@ function IncidentDetailPage() {
   if (!detail || !incident)
     return (
       <OperatorPageBoundary
-        eyebrowNum="01"
-        eyebrow="ОПЕРАЦИИ · ИНЦИДЕНТЫ"
         title="Инцидент"
         navigation={<IncidentBreadcrumb />}
       >

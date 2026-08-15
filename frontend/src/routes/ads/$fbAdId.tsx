@@ -36,8 +36,6 @@ function AdDetailRoute() {
   if (ads.isError && !ads.data) {
     return (
       <OperatorPageBoundary
-        eyebrowNum="02"
-        eyebrow="РЕКЛАМА · ОБЪЯВЛЕНИЯ"
         title="Карточка объявления"
         navigation={<AdBreadcrumb />}
       >
@@ -54,8 +52,6 @@ function AdDetailRoute() {
   if (ads.isPending && !ads.data) {
     return (
       <OperatorPageBoundary
-        eyebrowNum="02"
-        eyebrow="РЕКЛАМА · ОБЪЯВЛЕНИЯ"
         title="Карточка объявления"
         navigation={<AdBreadcrumb />}
       >
@@ -67,8 +63,6 @@ function AdDetailRoute() {
   if (!ad && displayPayload?.state === "empty") {
     return (
       <OperatorPageBoundary
-        eyebrowNum="02"
-        eyebrow="РЕКЛАМА · ОБЪЯВЛЕНИЯ"
         title="Карточка объявления"
         navigation={<AdBreadcrumb />}
       >
@@ -91,8 +85,6 @@ function AdDetailRoute() {
   if (!ad) {
     return (
       <OperatorPageBoundary
-        eyebrowNum="02"
-        eyebrow="РЕКЛАМА · ОБЪЯВЛЕНИЯ"
         title="Карточка объявления"
         navigation={<AdBreadcrumb />}
       >

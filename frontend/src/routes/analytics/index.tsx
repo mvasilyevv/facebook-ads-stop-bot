@@ -158,8 +158,6 @@ function AnalyticsPage() {
     return (
       <div className="min-w-0">
         <PageHeader
-          eyebrowNum="03"
-          eyebrow="АНАЛИТИКА · META × TRACKER"
           title="Аналитика"
           subtitle="Загружаем часовой пояс профиля владельца"
         />
@@ -178,8 +176,6 @@ function AnalyticsPage() {
     return (
       <div className="min-w-0">
         <PageHeader
-          eyebrowNum="03"
-          eyebrow="АНАЛИТИКА · META × TRACKER"
           title="Аналитика"
           subtitle="Часовой пояс отображения не подтверждён сервером"
         />
@@ -200,8 +196,6 @@ function AnalyticsPage() {
   return (
     <div className="min-w-0">
       <PageHeader
-        eyebrowNum="03"
-        eyebrow="АНАЛИТИКА · META × TRACKER"
         title="Аналитика"
         subtitle={
           search.period === "today"

@@ -34,7 +34,7 @@ function OperatorSystemSourcesPage() {
   if (snapshotQuery.isLoading && !snapshotQuery.data) {
     return (
       <div>
-        <PageHeader eyebrowNum="04" eyebrow="СИСТЕМА · ЕДИНЫЙ СНИМОК" title="Источники и воркеры" />
+        <PageHeader title="Источники и воркеры" />
         <div className="grid gap-4" aria-busy="true">
           <Skeleton className="h-28 w-full rounded-[var(--radius-3)]" />
           <Skeleton className="h-72 w-full rounded-[var(--radius-3)]" />
@@ -46,7 +46,7 @@ function OperatorSystemSourcesPage() {
   if (snapshotQuery.isError || !snapshotQuery.data) {
     return (
       <div>
-        <PageHeader eyebrowNum="04" eyebrow="СИСТЕМА · ЕДИНЫЙ СНИМОК" title="Источники и воркеры" />
+        <PageHeader title="Источники и воркеры" />
         <OperatorUnavailableState
           title="Операторский снимок недоступен"
           resource="операторский снимок"
@@ -63,8 +63,6 @@ function OperatorSystemSourcesPage() {
   return (
     <div>
       <PageHeader
-        eyebrowNum="04"
-        eyebrow="СИСТЕМА · ЕДИНЫЙ СНИМОК"
         title="Источники и воркеры"
         action={
           <Button

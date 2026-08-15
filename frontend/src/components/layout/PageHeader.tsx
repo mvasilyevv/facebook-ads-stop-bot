@@ -6,6 +6,10 @@
  *   [h1 — mono 30px, weight 500, ls -0.02em, БЕЗ точки]   [action-slot]
  *   [subtitle — 13px, separators]
  *
+ * Надзаголовок выводится из маршрута, а не печатается на экране руками:
+ * номер и название раздела берутся из того же места, что и меню, поэтому
+ * разойтись с ним не могут.
+ *
  * Без ghost-числа и trailing-точки — это рудимент старого макета,
  * текущая система их не использует.
  *
@@ -14,21 +18,49 @@
 
 import { type ReactNode } from "react";
 import { Eyebrow } from "@/components/data/Eyebrow";
+import { sectionForPath } from "@/lib/navigation";
 
 // ─── PageHeader ───────────────────────────────────────────────────────────────
 
 interface PageHeaderProps {
-  eyebrowNum?: string;
-  eyebrow: string;
   title: string;
   subtitle?: ReactNode;
   action?: ReactNode;
+  /**
+   * Уточнение к разделу для экранов, где заголовок называет запись:
+   * «GH_AVI» под «РЕКЛАМА · ОФФЕРЫ». Раздел и его номер задаёт маршрут.
+   */
+  detail?: string;
 }
 
-export function PageHeader({ eyebrowNum, eyebrow, title, subtitle, action }: PageHeaderProps) {
+/**
+ * Надзаголовок раздела для экранов с собственной вёрсткой шапки.
+ * Ничего не рисует за пределами продуктовых маршрутов.
+ *
+ * Адрес берётся из `location`, а не из состояния роутера: раздел — это то,
+ * где оператор находится, и знать об этом через контекст навигации незачем.
+ * Экран перерисовывается при переходе, потому что переход его и монтирует.
+ */
+export function SectionEyebrow({ detail, className }: { detail?: string; className?: string }) {
+  const pathname = typeof window === "undefined" ? "/" : window.location.pathname;
+  const section = sectionForPath(pathname);
+  const text = section
+    ? [section.name, section.crumb, detail].filter(Boolean).join(" · ")
+    : (detail ?? "");
+
+  if (!text) return null;
+
+  return (
+    <Eyebrow num={section?.num} className={className}>
+      {text}
+    </Eyebrow>
+  );
+}
+
+export function PageHeader({ title, subtitle, action, detail }: PageHeaderProps) {
   return (
     <header className="mb-8">
-      <Eyebrow num={eyebrowNum}>{eyebrow}</Eyebrow>
+      <SectionEyebrow detail={detail} />
 
       {/* Title row — канон: 30px mono, weight 500, без точки */}
       <div className="mb-1.5 mt-2 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-end sm:gap-8">
