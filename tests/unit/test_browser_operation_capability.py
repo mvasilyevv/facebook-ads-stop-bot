@@ -1039,6 +1039,50 @@ async def test_campaign_creator_accepts_exact_current_builder_bodies(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("targeting_patch", "field"),
+    [
+        ({"genders": [2]}, "genders"),
+        ({"publisher_platforms": ["facebook"]}, "publisher_platforms"),
+    ],
+)
+async def test_campaign_creator_documents_manual_targeting_capability_loss(
+    monkeypatch: pytest.MonkeyPatch,
+    targeting_patch: dict[str, object],
+    field: str,
+) -> None:
+    """The builder emits these wizard choices, but the client rejects them pre-send."""
+
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    client, _engine = _campaign_client()
+    body = adset_body(_builder_config(budget_level="campaign"), "Ad set")
+    body["campaign_id"] = "101"
+    body["targeting"].update(targeting_patch)
+
+    with client.operation_authority(
+        caller="campaign_creator",
+        task_id=1842,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        client._remember_campaign_created_object_id(
+            endpoint="/act_123/campaigns",
+            object_id="101",
+            ad_account_id="123",
+        )
+        with pytest.raises(PermanentError, match="targeting schema is not authorized"):
+            await _prepare_campaign_graph(
+                client,
+                method="POST",
+                endpoint="/act_123/adsets",
+                body=body,
+            )
+
+    assert field in body["targeting"]
+
+
+@pytest.mark.asyncio
 async def test_campaign_create_ack_records_task_local_object_provenance() -> None:
     breaker = MagicMock()
     breaker.call = AsyncMock(

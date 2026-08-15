@@ -16,9 +16,11 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 
 import pytest
 
+from apps.api.routers.v1.schemas.campaigns_create import CampaignConfigIn
 from core.campaign_builder import (
     Account,
     AdsetConfig,
@@ -318,6 +320,165 @@ def test_execute_full_success(monkeypatch):
     # Прогресс прошёл все стадии.
     stages = {p["stage"] for p in progress_log}
     assert {"uploading", "creating"} <= stages
+
+
+def test_flat_request_parameters_reach_exact_graph_create_payloads(monkeypatch):
+    """Characterize the public request -> domain -> exact Graph payload path."""
+
+    _patch_uniquify(monkeypatch)
+    public_config = CampaignConfigIn.model_validate(
+        {
+            "act_id": "act_123",
+            "page_id": "201",
+            "pixel_id": "202",
+            "offer_code": "GH_CR",
+            "byer_tag": "ZX",
+            "objective": "OUTCOME_SALES",
+            "optimization_goal": "OFFSITE_CONVERSIONS",
+            "custom_event_type": "PURCHASE",
+            "special_ad_categories": ["NONE"],
+            "destination_link": "https://tracker.example/click",
+            "cta": "SIGN_UP",
+            "text_optimizations": "OPT_OUT",
+            "start_date": "2099-01-02",
+            "ad_text": {"mode": "text", "primary": "Точный primary text"},
+            "budget_level": "campaign",
+            "daily_budget": "123.45",
+            "bid_amount": "6.78",
+            "bid_strategy": "COST_CAP",
+            "countries": ["GH"],
+            "age_min": 23,
+            "age_max": 54,
+            "advantage_audience": False,
+            # Explicit genders/placements are covered by the capability-loss
+            # characterization below; the current allowlist rejects them.
+            "genders": [],
+            "placements": [],
+            "click_through_days": 7,
+            "view_through_days": 28,
+            "naming_template": "{byer} / {offer} / {date}",
+            "url_tags": (
+                "sub2=ZX&sub3=manual&sub4=123&sub5={{campaign.name}}"
+                "&sub6={{adset.name}}&sub7={{ad.name}}"
+            ),
+            "campaigns": [
+                {
+                    "key": "campaign-a",
+                    "label": "SCALE",
+                    "adset_count": 2,
+                    "concept_refs": ["hero-a.jpg", "hero-b.jpg"],
+                }
+            ],
+            "creo_root": "upload-a",
+        }
+    )
+    cfg = public_config.to_domain(
+        timezone_name="UTC",
+        currency="USD",
+        account_context_observed_at=datetime(2099, 1, 1, 10, tzinfo=UTC),
+        now=datetime(2099, 1, 1, 12, tzinfo=UTC),
+    )
+    block = cfg.campaigns[0]
+    spec = build_campaign_spec(cfg)
+    concepts = [
+        ConceptInput(
+            concept_id=ref,
+            kind="image",
+            content=f"raw-{index}".encode(),
+            filename=ref,
+        )
+        for index, ref in enumerate(block.concept_refs)
+    ]
+    client = _FakeClient()
+    uploader = _FakeUploader()
+
+    async def run():
+        return await execute_campaign_spec(
+            cfg,
+            spec,
+            concepts_by_campaign={block.key: concepts},
+            client=client,
+            uploader=uploader,
+        )
+
+    asyncio.run(run())
+
+    campaign_calls = [call for call in client.calls if call["endpoint"].endswith("/campaigns")]
+    adset_calls = [call for call in client.calls if call["endpoint"].endswith("/adsets")]
+    creative_calls = [call for call in client.calls if call["endpoint"].endswith("/adcreatives")]
+    ad_calls = [call for call in client.calls if call["endpoint"].endswith("/ads")]
+
+    assert len(campaign_calls) == 1
+    assert len(adset_calls) == 2
+    assert len(creative_calls) == 4
+    assert len(ad_calls) == 4
+    assert all(call["act"] == "act_123" for call in client.calls)
+
+    assert campaign_calls[0]["body"] == {
+        "name": "ZX / GH_CR / 02.01 | SCALE",
+        "objective": "OUTCOME_SALES",
+        "status": "PAUSED",
+        "special_ad_categories": ["NONE"],
+        "daily_budget": 12345,
+        "bid_strategy": "COST_CAP",
+    }
+
+    first_adset = adset_calls[0]["body"]
+    assert first_adset == {
+        "name": "ZX | GH_CR | s1 | 02.01 | SCALE",
+        "billing_event": "IMPRESSIONS",
+        "optimization_goal": "OFFSITE_CONVERSIONS",
+        "destination_type": "WEBSITE",
+        "promoted_object": {
+            "pixel_id": "202",
+            "custom_event_type": "PURCHASE",
+            "smart_pse_enabled": False,
+        },
+        "attribution_spec": [
+            {"event_type": "CLICK_THROUGH", "window_days": 7},
+            {"event_type": "VIEW_THROUGH", "window_days": 28},
+        ],
+        "targeting": {
+            "geo_locations": {
+                "countries": ["GH", "AQ"],
+                "location_types": ["home", "recent"],
+            },
+            "age_min": 23,
+            "age_max": 54,
+            "targeting_automation": {"advantage_audience": 0},
+        },
+        "start_time": "2099-01-02T00:00:00+00:00",
+        "status": "PAUSED",
+        "bid_amount": 678,
+        "campaign_id": "camp-1",
+    }
+
+    first_creative = creative_calls[0]["body"]
+    assert first_creative["object_story_spec"] == {
+        "page_id": "201",
+        "link_data": {
+            "link": "https://tracker.example/click",
+            "call_to_action": {
+                "type": "SIGN_UP",
+                "value": {"link": "https://tracker.example/click"},
+            },
+            "image_hash": "hash-1",
+            "message": "Точный primary text",
+        },
+    }
+    assert first_creative["url_tags"] == (
+        "sub2=ZX&sub3=manual&sub4=123&sub5={{campaign.name}}"
+        "&sub6={{adset.name}}&sub7={{ad.name}}&sub8={{ad.id}}"
+    )
+    assert first_creative["degrees_of_freedom_spec"] == {
+        "creative_features_spec": {"text_optimizations": {"enroll_status": "OPT_OUT"}}
+    }
+    assert ad_calls[0]["body"] == {
+        "name": "GH_CR_CR001",
+        "adset_id": "adset-2",
+        "creative": {"creative_id": "creative-4"},
+        "status": "PAUSED",
+    }
 
 
 def test_execute_creation_is_all_paused(monkeypatch):
