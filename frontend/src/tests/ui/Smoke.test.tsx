@@ -88,7 +88,6 @@ describe("Skeleton", () => {
     render(<Skeleton />);
     expect(screen.getByRole("status")).toBeInTheDocument();
   });
-
 });
 
 describe("EmptyState", () => {
@@ -159,6 +158,15 @@ describe("ErrorState", () => {
     expect(alert).not.toHaveTextContent("00000000-0000-0000-0000-000000000099");
     expect(alert).not.toHaveTextContent("snapshot_unavailable");
     expect(alert).not.toHaveTextContent("{");
+  });
+
+  it("не повторяет заголовок ошибки в её теле", () => {
+    render(<ErrorState title="Офферы недоступны" error="Офферы недоступны" />);
+    const alert = screen.getByRole("alert");
+
+    expect(alert).toHaveTextContent("Офферы недоступны");
+    expect(alert).toHaveTextContent("Повторите попытку");
+    expect(alert.textContent).not.toBe("Офферы недоступныОфферы недоступны");
   });
 });
 

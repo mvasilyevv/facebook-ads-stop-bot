@@ -12,7 +12,7 @@ import {
 
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
-import { ErrorState } from "@/components/ui/ErrorState";
+import { OperatorUnavailableState } from "@/components/layout/OperatorPageBoundary";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { operatorProblemMessage, useOperatorSnapshot } from "@/lib/api/operator";
 
@@ -34,7 +34,7 @@ function OperatorSystemSourcesPage() {
   if (snapshotQuery.isLoading && !snapshotQuery.data) {
     return (
       <div>
-        <PageHeader eyebrowNum="05" eyebrow="СИСТЕМА · ЕДИНЫЙ СНИМОК" title="Источники и воркеры" />
+        <PageHeader eyebrowNum="04" eyebrow="СИСТЕМА · ЕДИНЫЙ СНИМОК" title="Источники и воркеры" />
         <div className="grid gap-4" aria-busy="true">
           <Skeleton className="h-28 w-full rounded-[var(--radius-3)]" />
           <Skeleton className="h-72 w-full rounded-[var(--radius-3)]" />
@@ -46,10 +46,11 @@ function OperatorSystemSourcesPage() {
   if (snapshotQuery.isError || !snapshotQuery.data) {
     return (
       <div>
-        <PageHeader eyebrowNum="05" eyebrow="СИСТЕМА · ЕДИНЫЙ СНИМОК" title="Источники и воркеры" />
-        <ErrorState
-          title="Снимок недоступен"
-          error={operatorProblemMessage(snapshotQuery.error)}
+        <PageHeader eyebrowNum="04" eyebrow="СИСТЕМА · ЕДИНЫЙ СНИМОК" title="Источники и воркеры" />
+        <OperatorUnavailableState
+          title="Операторский снимок недоступен"
+          resource="операторский снимок"
+          details={operatorProblemMessage(snapshotQuery.error)}
           onRetry={() => void snapshotQuery.refetch()}
         />
       </div>
@@ -62,7 +63,7 @@ function OperatorSystemSourcesPage() {
   return (
     <div>
       <PageHeader
-        eyebrowNum="05"
+        eyebrowNum="04"
         eyebrow="СИСТЕМА · ЕДИНЫЙ СНИМОК"
         title="Источники и воркеры"
         action={

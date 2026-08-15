@@ -28,8 +28,11 @@ import { DataStateBadge, DataStateNotice, OperatorIncidentStatusBadge } from "@f
 import { Button } from "@/components/ui/Button";
 import { Drawer } from "@/components/ui/Drawer";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
+import {
+  OperatorPageBoundary,
+  OperatorUnavailableState,
+} from "@/components/layout/OperatorPageBoundary";
 import { OperatorSeverityBadge } from "@/features/operator/OperatorAds";
 import {
   operatorIncidentProblemMessage,
@@ -111,11 +114,19 @@ function OperatorIncidentsPage() {
 
   if (incidents.isError && !payload) {
     return (
-      <ErrorState
-        title="Журнал инцидентов недоступен"
-        error={operatorIncidentProblemMessage(incidents.error)}
-        onRetry={() => void incidents.refetch()}
-      />
+      <OperatorPageBoundary
+        eyebrowNum="01"
+        eyebrow="ОПЕРАЦИИ · ИНЦИДЕНТЫ"
+        title="Инциденты"
+        subtitle="Полный журнал, статусы и подтверждения получения"
+      >
+        <OperatorUnavailableState
+          title="Журнал инцидентов недоступен"
+          resource="журнал инцидентов"
+          details={operatorIncidentProblemMessage(incidents.error)}
+          onRetry={() => void incidents.refetch()}
+        />
+      </OperatorPageBoundary>
     );
   }
 
@@ -155,7 +166,7 @@ function OperatorIncidentsPage() {
           open={filtersOpen}
           onOpenChange={setFiltersOpen}
           title="Фильтры инцидентов"
-          description="Кабинет, уровень и lifecycle"
+          description="Кабинет, уровень и жизненный цикл"
           width={480}
         >
           <IncidentFilterFields

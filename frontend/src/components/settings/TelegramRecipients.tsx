@@ -297,7 +297,7 @@ function RecipientPreferencesModal({
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Input
-              label="Timezone"
+              label="Часовой пояс"
               value={draft.timezone}
               errorMessage={errors.timezone}
               onChange={(event) =>

@@ -63,10 +63,10 @@ export function DisplayTab() {
   }
 
   const queryError = preferenceQuery.isError
-    ? safeApiProblemMessage(preferenceQuery.error, "Не удалось загрузить timezone отображения")
+    ? safeApiProblemMessage(preferenceQuery.error, "Не удалось загрузить часовой пояс отображения")
     : null;
   const updateError = updatePreference.isError
-    ? safeApiProblemMessage(updatePreference.error, "Не удалось сохранить timezone отображения")
+    ? safeApiProblemMessage(updatePreference.error, "Не удалось сохранить часовой пояс отображения")
     : null;
 
   return (
@@ -87,7 +87,7 @@ export function DisplayTab() {
 
         {preferenceQuery.isPending ? (
           <p role="status" className="m-0 text-[14px] text-bg-8">
-            Загружаем сохранённый timezone…
+            Загружаем сохранённый часовой пояс…
           </p>
         ) : queryError ? (
           <div role="alert" className="border-y border-danger/40 py-4">
@@ -105,7 +105,7 @@ export function DisplayTab() {
         ) : (
           <div className="border-y border-[var(--color-hairline)] py-4">
             <label htmlFor={manualInputId} className="block text-[14px] font-medium text-bg-11">
-              IANA timezone
+              Часовой пояс
             </label>
             <p id={manualHintId} className="m-0 mt-1 text-[14px] leading-5 text-bg-8">
               Например, Europe/Kaliningrad или America/New_York.
@@ -138,7 +138,7 @@ export function DisplayTab() {
             </datalist>
             {manual.length > 0 && !valid ? (
               <span id={manualErrorId} role="alert" className="mt-2 block text-[14px] text-danger">
-                Введите IANA timezone без пробелов
+                Введите часовой пояс без пробелов
               </span>
             ) : null}
 
@@ -186,11 +186,13 @@ export function DisplayTab() {
           {preview ?? "—"}
         </div>
         <div className="mt-2 break-all text-[14px] text-bg-8">
-          {effective ? `Сохранённый timezone: ${effective}` : "Timezone не подтверждён сервером"}
+          {effective
+            ? `Сохранённый часовой пояс: ${effective}`
+            : "Часовой пояс не подтверждён сервером"}
         </div>
         <div className="mt-5 border-t border-[var(--color-hairline)] pt-4 text-[14px] leading-5 text-bg-8">
-          Настройка хранится в профиле владельца. Timezone устройства используется только как явный
-          вариант для сохранения.
+          Настройка хранится в профиле владельца. Часовой пояс устройства используется только как
+          явный вариант для сохранения.
         </div>
       </Card>
     </div>

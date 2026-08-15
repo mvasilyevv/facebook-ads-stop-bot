@@ -20,7 +20,7 @@ import {
 } from "@/components/offers/OfferRulesFields";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
-import { ErrorState } from "@/components/ui/ErrorState";
+import { OperatorUnavailableState } from "@/components/layout/OperatorPageBoundary";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { toast } from "@/components/ui/Toast";
 
@@ -78,7 +78,7 @@ function OfferRulesPage() {
       {/* ── Header ── */}
       <PageHeader
         eyebrowNum="02"
-        eyebrow={offer ? `CATALOG · ${offer.code} · ПРАВИЛА` : "CATALOG · ПРАВИЛА"}
+        eyebrow={offer ? `РЕКЛАМА · ${offer.code} · ПРАВИЛА` : "РЕКЛАМА · ПРАВИЛА"}
         title={offer ? offer.code : "Правила оффера"}
       />
 
@@ -91,7 +91,14 @@ function OfferRulesPage() {
         </div>
       )}
 
-      {rulesError && <ErrorState error={error} onRetry={() => void refetch()} />}
+      {rulesError && (
+        <OperatorUnavailableState
+          title="Правила оффера недоступны"
+          resource="правила оффера"
+          details={error instanceof Error ? error.message : undefined}
+          onRetry={() => void refetch()}
+        />
+      )}
 
       {!rulesLoading && !rulesError && (
         <>

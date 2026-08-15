@@ -52,29 +52,43 @@ export function CampaignCreatePage() {
 
   if (draft.isHydrating) {
     return (
-      <div aria-busy="true" aria-label="Восстановление черновика" className="space-y-4">
-        <Skeleton className="h-10 w-64" />
-        <Skeleton className="h-12 w-full" />
-        <Skeleton className="h-72 w-full" />
-      </div>
+      <>
+        <PageHeader
+          eyebrowNum="02"
+          eyebrow="РЕКЛАМА · СОЗДАНИЕ КАМПАНИЙ"
+          title="Создание кампаний"
+        />
+        <div aria-busy="true" aria-label="Восстановление черновика" className="space-y-4">
+          <Skeleton className="h-10 w-64" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-72 w-full" />
+        </div>
+      </>
     );
   }
 
   if (draft.isHydrationError) {
     return (
-      <ErrorState
-        title="Черновик кампании недоступен"
-        error="Создание не начнётся без подтверждённого серверного черновика."
-        onRetry={() => void draft.reloadServerDraft()}
-      />
+      <>
+        <PageHeader
+          eyebrowNum="02"
+          eyebrow="РЕКЛАМА · СОЗДАНИЕ КАМПАНИЙ"
+          title="Создание кампаний"
+        />
+        <ErrorState
+          title="Черновик кампании недоступен"
+          error="Создание не начнётся без подтверждённого серверного черновика. Повторите загрузку."
+          onRetry={() => void draft.reloadServerDraft()}
+        />
+      </>
     );
   }
 
   return (
     <>
       <PageHeader
-        eyebrowNum="05"
-        eyebrow="OPERATE · СОЗДАНИЕ КАМПАНИЙ"
+        eyebrowNum="02"
+        eyebrow="РЕКЛАМА · СОЗДАНИЕ КАМПАНИЙ"
         title="Создание кампаний"
         action={
           activeTab === "wizard" ? (

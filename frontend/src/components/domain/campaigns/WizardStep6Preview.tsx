@@ -187,7 +187,7 @@ function PlanView({ plan }: { plan: ValidatePlanOut }) {
             <dd className="mt-0.5 font-mono text-bg-11">{plan.start_time}</dd>
           </div>
           <div>
-            <dt className="text-bg-8">Timezone</dt>
+            <dt className="text-bg-8">Часовой пояс</dt>
             <dd className="mt-0.5 text-bg-11">{plan.timezone_name}</dd>
           </div>
           <div>

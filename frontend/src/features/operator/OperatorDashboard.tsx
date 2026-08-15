@@ -11,7 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 import { DataStateBadge, StopProximityReadout } from "@fb/operator-ui";
@@ -68,8 +68,8 @@ import {
 } from "@fb/shared/operator/viewModel";
 
 import { Button } from "@/components/ui/Button";
-import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { OperatorUnavailableState } from "@/components/layout/OperatorPageBoundary";
 import { toast } from "@/components/ui/toastStore";
 import {
   operatorProblemMessage,
@@ -132,15 +132,22 @@ function OperatorLedgerScreen({
   const [failedIncidentId, setFailedIncidentId] = useState<string | null>(null);
 
   if (snapshotQuery.isLoading && !snapshotQuery.data) {
-    return <OperatorDashboardSkeleton />;
+    return (
+      <OperatorLedgerStateFrame cabinetId={cabinetId}>
+        <OperatorDashboardSkeleton />
+      </OperatorLedgerStateFrame>
+    );
   }
   if (snapshotQuery.isError || !snapshotQuery.data) {
     return (
-      <ErrorState
-        title={cabinetId ? "Снимок кабинета недоступен" : "Операторский снимок недоступен"}
-        error={operatorProblemMessage(snapshotQuery.error)}
-        onRetry={() => void snapshotQuery.refetch()}
-      />
+      <OperatorLedgerStateFrame cabinetId={cabinetId}>
+        <OperatorUnavailableState
+          title={cabinetId ? "Снимок кабинета недоступен" : "Операторский снимок недоступен"}
+          resource={cabinetId ? "снимок кабинета" : "операторский снимок"}
+          details={operatorProblemMessage(snapshotQuery.error)}
+          onRetry={() => void snapshotQuery.refetch()}
+        />
+      </OperatorLedgerStateFrame>
     );
   }
 
@@ -245,7 +252,7 @@ function OperatorLedgerScreen({
           <p>{headline.detail}</p>
         </div>
         <span className="ledger-proof-stamp__time">
-          as_of {formatDateTime(snapshot.meta.generated_at, displayTimezone)}
+          Снимок на {formatDateTime(snapshot.meta.generated_at, displayTimezone)}
         </span>
       </div>
 
@@ -272,6 +279,36 @@ function OperatorLedgerScreen({
         />
         <ActionJournal section={snapshot.actions} />
       </div>
+    </div>
+  );
+}
+
+function OperatorLedgerStateFrame({
+  cabinetId,
+  children,
+}: {
+  cabinetId?: string;
+  children: ReactNode;
+}) {
+  const title = cabinetId ? `Кабинет ${cabinetId}` : "Сейчас";
+  const description = cabinetId
+    ? "Состояние кабинета будет показано после подтверждения снимка."
+    : "Состояние будет показано после подтверждения операторского снимка.";
+
+  return (
+    <div className="operator-ledger">
+      <header className="operator-ledger__header">
+        <div>
+          {cabinetId ? (
+            <Link className="operator-ledger__back" to="/">
+              <ArrowLeft size={14} aria-hidden="true" /> Портфель
+            </Link>
+          ) : null}
+          <h1 id="operator-ledger-title">{title}</h1>
+          <p>{description}</p>
+        </div>
+      </header>
+      {children}
     </div>
   );
 }
@@ -427,7 +464,7 @@ function CabinetLedgerRow({
           <strong>{cabinet.name}</strong>
           <span>
             {usdConfirmed ? "$" : "валюта не подтверждена"} ·{" "}
-            {cabinet.timezone ?? "timezone не подтверждён"}
+            {cabinet.timezone ?? "часовой пояс не подтверждён"}
           </span>
         </Link>
       </div>
@@ -495,10 +532,10 @@ function AttentionLedger({
   // Счётчик считается по полному списку, а не по первым пяти карточкам.
   // Без подтверждённых данных выводим «—»: ноль означал бы «причин нет».
   const total = section.data ? section.data.items.length : null;
-  const items = collapseOperatorAttentionItems(
-    section.data?.items ?? [],
-    usdScopeConfirmed,
-  ).slice(0, 5);
+  const items = collapseOperatorAttentionItems(section.data?.items ?? [], usdScopeConfirmed).slice(
+    0,
+    5,
+  );
   return (
     <section
       className="ledger-section ledger-section--attention"

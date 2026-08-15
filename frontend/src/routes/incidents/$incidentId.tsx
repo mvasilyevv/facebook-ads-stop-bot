@@ -16,7 +16,11 @@ import { safeOperatorAttentionHref } from "@fb/shared/operator/attentionNavigati
 import { DataStateBadge, DataStateNotice } from "@fb/operator-ui";
 
 import { Button } from "@/components/ui/Button";
-import { ErrorState } from "@/components/ui/ErrorState";
+import {
+  OperatorCardSkeleton,
+  OperatorPageBoundary,
+  OperatorUnavailableState,
+} from "@/components/layout/OperatorPageBoundary";
 import {
   operatorIncidentProblemMessage,
   useAcknowledgeOperatorIncident,
@@ -37,25 +41,46 @@ function IncidentDetailPage() {
 
   if (incidentQuery.isError) {
     return (
-      <ErrorState
-        title="Инцидент недоступен"
-        error={operatorIncidentProblemMessage(incidentQuery.error)}
-        onRetry={() => void incidentQuery.refetch()}
-      />
+      <OperatorPageBoundary
+        eyebrowNum="01"
+        eyebrow="ОПЕРАЦИИ · ИНЦИДЕНТЫ"
+        title="Инцидент"
+        navigation={<IncidentBreadcrumb />}
+      >
+        <OperatorUnavailableState
+          title="Инцидент недоступен"
+          resource="инцидент"
+          details={operatorIncidentProblemMessage(incidentQuery.error)}
+          onRetry={() => void incidentQuery.refetch()}
+        />
+      </OperatorPageBoundary>
     );
   }
   if (incidentQuery.isPending)
     return (
-      <div role="status" className="py-16 text-center text-[16px] text-bg-9">
-        Загрузка инцидента…
-      </div>
+      <OperatorPageBoundary
+        eyebrowNum="01"
+        eyebrow="ОПЕРАЦИИ · ИНЦИДЕНТЫ"
+        title="Инцидент"
+        navigation={<IncidentBreadcrumb />}
+      >
+        <OperatorCardSkeleton label="Загрузка инцидента" />
+      </OperatorPageBoundary>
     );
   if (!detail || !incident)
     return (
-      <ErrorState
-        title="Инцидент не найден"
-        error="Он мог быть уже разрешён; откройте актуальную ленту внимания."
-      />
+      <OperatorPageBoundary
+        eyebrowNum="01"
+        eyebrow="ОПЕРАЦИИ · ИНЦИДЕНТЫ"
+        title="Инцидент"
+        navigation={<IncidentBreadcrumb />}
+      >
+        <OperatorUnavailableState
+          title="Инцидент не найден"
+          resource="инцидент"
+          details="Он мог быть уже разрешён; откройте актуальную ленту внимания."
+        />
+      </OperatorPageBoundary>
     );
 
   const acknowledgeIncident = async () => {
@@ -167,6 +192,17 @@ function IncidentDetailPage() {
         ) : null}
       </section>
     </article>
+  );
+}
+
+function IncidentBreadcrumb() {
+  return (
+    <Link
+      to="/incidents"
+      className="inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] px-2 text-[14px] font-semibold text-bg-9 hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-accent"
+    >
+      <ArrowLeft size={16} aria-hidden="true" /> Все инциденты
+    </Link>
   );
 }
 

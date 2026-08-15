@@ -154,6 +154,16 @@ describe("typed operator ad detail", () => {
     }
   });
 
+  it("keeps the detail heading and breadcrumb while the ad is loading", () => {
+    mockAds(undefined, { pending: true });
+
+    renderDetail();
+
+    expect(screen.getByRole("heading", { name: "Карточка объявления" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Объявления" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Загрузка объявления" })).toBeInTheDocument();
+  });
+
   it("renders exact typed identity, hierarchy and cabinet-day context", () => {
     renderDetail();
 

@@ -26,6 +26,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/ErrorState";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { BudgetLineChart } from "@/components/analytics/BudgetLineChart";
 import { FunnelChart } from "@/components/analytics/FunnelChart";
 import { DaypartHeatmap } from "@/components/analytics/DaypartHeatmap";
@@ -157,15 +158,17 @@ function AnalyticsPage() {
     return (
       <div className="min-w-0">
         <PageHeader
-          eyebrowNum="05"
-          eyebrow="PERFORMANCE · META × TRACKER"
+          eyebrowNum="03"
+          eyebrow="АНАЛИТИКА · META × TRACKER"
           title="Аналитика"
-          subtitle="Загружаем timezone профиля владельца"
+          subtitle="Загружаем часовой пояс профиля владельца"
         />
-        <Card padded className="p-5">
-          <p role="status" className="m-0 text-[14px] text-bg-8">
-            Подготавливаем подписи времени…
-          </p>
+        <Card padded className="p-5" aria-busy="true">
+          <div role="status" aria-label="Загрузка аналитики" className="grid gap-4">
+            <Skeleton className="h-6 w-2/3" />
+            <Skeleton className="h-24 w-full" />
+            <Skeleton className="h-12 w-1/2" />
+          </div>
         </Card>
       </div>
     );
@@ -175,13 +178,13 @@ function AnalyticsPage() {
     return (
       <div className="min-w-0">
         <PageHeader
-          eyebrowNum="05"
-          eyebrow="PERFORMANCE · META × TRACKER"
+          eyebrowNum="03"
+          eyebrow="АНАЛИТИКА · META × TRACKER"
           title="Аналитика"
-          subtitle="Timezone отображения не подтверждён сервером"
+          subtitle="Часовой пояс отображения не подтверждён сервером"
         />
         <ErrorState
-          title="Не удалось подготовить подписи времени. Данные не показаны в другом timezone."
+          title="Не удалось подготовить подписи времени. Данные не показаны в другом часовом поясе."
           error={safeApiProblemMessage(
             displayPreferenceQ.error,
             "Откройте настройки отображения или повторите запрос",
@@ -197,8 +200,8 @@ function AnalyticsPage() {
   return (
     <div className="min-w-0">
       <PageHeader
-        eyebrowNum="05"
-        eyebrow="PERFORMANCE · META × TRACKER"
+        eyebrowNum="03"
+        eyebrow="АНАЛИТИКА · META × TRACKER"
         title="Аналитика"
         subtitle={
           search.period === "today"
@@ -800,7 +803,7 @@ function SourceQuality({
                 : "bg-bg-6"
           }`}
         />
-        <strong className="font-display font-medium text-bg-9">TIMEZONE</strong>
+        <strong className="font-display font-medium text-bg-9">ЧАСОВОЙ ПОЯС</strong>
         <span>{`${timezoneLabel} · ${timezoneEvidenceLabel(
           scope.cabinet_timezone,
           scope.cabinet_timezone_state,

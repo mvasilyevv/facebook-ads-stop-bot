@@ -14,8 +14,11 @@ import { DataStateBadge, DataStateNotice, StopProximityReadout } from "@fb/opera
 import { useOperatorRealtimeStatus } from "@fb/operator-api";
 
 import { EmptyState } from "@/components/ui/EmptyState";
-import { ErrorState } from "@/components/ui/ErrorState";
-import { Skeleton } from "@/components/ui/Skeleton";
+import {
+  OperatorCardSkeleton,
+  OperatorPageBoundary,
+  OperatorUnavailableState,
+} from "@/components/layout/OperatorPageBoundary";
 import { AdCommandButtons, OperatorSeverityBadge } from "@/features/operator/OperatorAds";
 import { operatorProblemMessage, useOperatorAds } from "@/lib/api/operator";
 
@@ -32,45 +35,72 @@ function AdDetailRoute() {
 
   if (ads.isError && !ads.data) {
     return (
-      <ErrorState
-        title="Карточка объявления недоступна"
-        error={operatorProblemMessage(ads.error)}
-        onRetry={() => void ads.refetch()}
-      />
+      <OperatorPageBoundary
+        eyebrowNum="02"
+        eyebrow="РЕКЛАМА · ОБЪЯВЛЕНИЯ"
+        title="Карточка объявления"
+        navigation={<AdBreadcrumb />}
+      >
+        <OperatorUnavailableState
+          title="Карточка объявления недоступна"
+          resource="карточку объявления"
+          details={operatorProblemMessage(ads.error)}
+          onRetry={() => void ads.refetch()}
+        />
+      </OperatorPageBoundary>
     );
   }
 
   if (ads.isPending && !ads.data) {
     return (
-      <div role="status" aria-label="Загрузка объявления">
-        <Skeleton className="h-72 w-full" />
-      </div>
+      <OperatorPageBoundary
+        eyebrowNum="02"
+        eyebrow="РЕКЛАМА · ОБЪЯВЛЕНИЯ"
+        title="Карточка объявления"
+        navigation={<AdBreadcrumb />}
+      >
+        <OperatorCardSkeleton label="Загрузка объявления" />
+      </OperatorPageBoundary>
     );
   }
 
   if (!ad && displayPayload?.state === "empty") {
     return (
-      <EmptyState
-        title="Объявление не найдено"
-        description="Оно отсутствует в актуальном операторском каталоге или ссылка устарела."
-        action={
-          <Link
-            to="/ads"
-            className="inline-flex min-h-11 items-center rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] px-4 text-[14px] text-bg-11"
-          >
-            К объявлениям
-          </Link>
-        }
-      />
+      <OperatorPageBoundary
+        eyebrowNum="02"
+        eyebrow="РЕКЛАМА · ОБЪЯВЛЕНИЯ"
+        title="Карточка объявления"
+        navigation={<AdBreadcrumb />}
+      >
+        <EmptyState
+          title="Объявление не найдено"
+          description="Оно отсутствует в актуальном операторском каталоге или ссылка устарела."
+          action={
+            <Link
+              to="/ads"
+              className="inline-flex min-h-11 items-center rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] px-4 text-[14px] text-bg-11"
+            >
+              К объявлениям
+            </Link>
+          }
+        />
+      </OperatorPageBoundary>
     );
   }
 
   if (!ad) {
     return (
-      <EmptyState
-        title="Карточка не подтверждена"
-        description="Дождитесь сверки live-снимка. Отсутствие строки не считается подтверждённым нулём."
-      />
+      <OperatorPageBoundary
+        eyebrowNum="02"
+        eyebrow="РЕКЛАМА · ОБЪЯВЛЕНИЯ"
+        title="Карточка объявления"
+        navigation={<AdBreadcrumb />}
+      >
+        <EmptyState
+          title="Карточка не подтверждена"
+          description="Дождитесь сверки live-снимка. Отсутствие строки не считается подтверждённым нулём."
+        />
+      </OperatorPageBoundary>
     );
   }
   const scope = displayPayload?.scope;
@@ -105,7 +135,7 @@ function AdDetailRoute() {
               {ad.name}
             </h1>
             <p className="mt-2 break-all font-numeric text-[13px] text-bg-8">
-              Meta ID {ad.fb_ad_id}
+              Идентификатор объявления в Meta: {ad.fb_ad_id}
             </p>
           </div>
           <AdCommandButtons ad={ad} />
@@ -175,6 +205,17 @@ function AdDetailRoute() {
         </section>
       </div>
     </article>
+  );
+}
+
+function AdBreadcrumb() {
+  return (
+    <Link
+      to="/ads"
+      className="inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-2)] px-2 text-[14px] text-bg-9 outline-none hover:text-bg-11 focus-visible:ring-2 focus-visible:ring-accent"
+    >
+      <ArrowLeft aria-hidden="true" size={16} /> Объявления
+    </Link>
   );
 }
 

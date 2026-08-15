@@ -14,7 +14,7 @@ function CampaignsPage() {
   return (
     <>
       <PageHeader
-        eyebrowNum="05"
+        eyebrowNum="02"
         eyebrow="РЕКЛАМА · КАМПАНИИ"
         title="Кампании"
         subtitle="Создание, ход выполнения и результат"

@@ -96,6 +96,40 @@ describe("web actions realtime projection", () => {
     expect(screen.getByRole("option", { name: "PL_VIP" })).toBeInTheDocument();
   });
 
+  it("keeps the list header visible when actions are unavailable", () => {
+    useOperatorActions.mockReturnValue({
+      data: undefined,
+      isPending: false,
+      isError: true,
+      error: new Error("Очередь действий недоступна"),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+
+    renderWithRealtime(<ActionsPage />, "connected");
+
+    expect(screen.getByRole("heading", { name: "Действия" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("keeps the detail heading and breadcrumb while the action is loading", () => {
+    useOperatorAction.mockReturnValue({
+      data: undefined,
+      isPending: true,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderWithRealtime(<ActionDetailPage />, "connected");
+
+    expect(screen.getByRole("heading", { name: "Действие" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Все действия" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Загрузка действия" })).toBeInTheDocument();
+  });
+
   it("opens mobile filters as a focus-managed dialog with 44px controls and resets URL state", async () => {
     renderWithRealtime(<ActionsPage />, "connected");
 

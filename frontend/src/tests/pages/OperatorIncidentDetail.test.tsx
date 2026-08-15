@@ -83,6 +83,22 @@ describe("typed operator incident detail", () => {
     expect(screen.queryByRole("button", { name: "Подтвердить получение" })).not.toBeInTheDocument();
   });
 
+  it("keeps the detail heading and breadcrumb while the incident is loading", () => {
+    useOperatorIncident.mockReturnValue({
+      data: undefined,
+      isPending: true,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<IncidentDetail />);
+
+    expect(screen.getByRole("heading", { name: "Инцидент" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Все инциденты" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Загрузка инцидента" })).toBeInTheDocument();
+  });
+
   it("exposes the server-provided incident action instead of ending at diagnostics", () => {
     const current = useOperatorIncident();
     useOperatorIncident.mockReturnValue({
