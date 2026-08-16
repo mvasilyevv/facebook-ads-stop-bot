@@ -3884,3 +3884,66 @@ def test_channel_step_does_not_claim_a_dead_api_as_its_own_failure(tmp_path: Pat
     # Ни одной попытки лечить канал и ни одной секунды ожидания вслепую.
     assert probes.post_calls == []
     assert slept == []
+
+
+class _UnhealableChannelProbes(FakeProbes):
+    """API поднялся, но браузерный канал не встаёт ни с одной попытки."""
+
+    def __init__(self) -> None:
+        self.json_urls: list[str] = []
+
+    def json(self, url: str, *, headers=None, timeout: float = 15):
+        self.json_urls.append(url)
+        return super().json(url, headers=headers, timeout=timeout)
+
+    def post_json(self, url: str, payload, *, headers=None, timeout: float = 15):
+        del url, payload, headers, timeout
+        return 200, {
+            "ok": False,
+            "status": "UNAVAILABLE",
+            "message": "Browser-agent profile recovery failed",
+        }
+
+
+def test_unhealable_channel_stops_the_whole_deploy_before_the_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Шаг не только падает сам — он обязан остановить весь релиз.
+
+    Отдельно проверенный контракт шага ничего не говорит о его месте в
+    последовательности. Здесь идёт настоящий deploy: непожелавший подняться
+    канал должен остановить его ДО гейта verify_application (иначе владелец
+    получил бы вторичный диагноз вместо первичного), не промоутить кандидата и
+    погасить money-воркеры через failure cleanup.
+    """
+    root = _root(tmp_path)
+    runner = FakeRunner()
+    probes = _UnhealableChannelProbes()
+    clock = iter(range(0, 100_000, 100))
+    monkeypatch.setattr(
+        ProductionController,
+        "_require_caddy_credentials",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(ProductionController, "_sync_caddy", lambda *_args: None)
+    monkeypatch.setattr(
+        fbctl_controller,
+        "_retire_legacy_systemd_units",
+        lambda *_args, **_kwargs: [],
+    )
+    controller = ProductionController(
+        runner=runner,
+        probes=probes,
+        materialize=_materialize,
+        monotonic=lambda: float(next(clock)),
+        sleep=lambda _seconds: None,
+    )
+
+    with pytest.raises(FbctlError, match="Browser-agent profile recovery failed"):
+        controller.deploy(DeployOptions(root=root))
+
+    # Гейт verify_application читает /api/settings/vision — до него не дошло.
+    assert not any(url.endswith("/api/settings/vision") for url in probes.json_urls)
+    assert not (root / "runtime").exists()
+    assert any(step == "failure_cleanup" and "stop" in command for step, command in runner.commands)

@@ -974,6 +974,28 @@ async def _wait_for_durable_scan(
     return None
 
 
+# Причина отмены — единственное, что оператор увидит вместо результата скана,
+# поэтому исходы не сливаются в один текст. «Мониторить нечего» и «мониторить
+# есть что, но owner scope небезопасен» требуют противоположных действий:
+# первое чинится настройкой кабинетов, второе — owner-тегом, и до тех пор скан
+# намеренно не трогает чужую рекламу в общем кабинете.
+_OBSERVER_SKIP_CANCEL_REASONS = {
+    "no_configured_cabinets": "nothing_monitored",
+    "multi_cab_no_owner_tag": "owner_scope_unsafe",
+}
+
+
+def observer_scan_cancel_reason(scan_outcome: str, scan_reason: object) -> str:
+    """Перевести нефатальный исход скана в причину отмены задачи."""
+    if scan_outcome == "paused":
+        return "scanning_paused"
+    if isinstance(scan_reason, str):
+        mapped = _OBSERVER_SKIP_CANCEL_REASONS.get(scan_reason)
+        if mapped is not None:
+            return mapped
+    return "nothing_monitored"
+
+
 async def _run_claimed_observer_scan(
     engine: AsyncEngine,
     *,
@@ -1040,15 +1062,13 @@ async def _run_claimed_observer_scan(
         finalized = await mark_succeeded(engine, result=task_result, **fence)
     elif scan_outcome in {"paused", "skipped"}:
         # Ни один из этих исходов не провал: paused — сработал собственный
-        # выключатель оператора, skipped — сканирование включено, но
-        # мониторить нечего (кабинеты не настроены). Задача не выполнена, но
-        # и не провалена; красное в обоих случаях означало бы поломку там,
-        # где её нет. Причина отмены различает состояния для оператора.
-        # Финализируем тем же фенсом; mark_cancelled сам пишет result,
-        # отдельного аргумента у него нет.
+        # выключатель оператора, skipped — скан включён, но не состоялся.
+        # Задача не выполнена, но и не провалена; красное означало бы поломку
+        # там, где её нет. Финализируем тем же фенсом; mark_cancelled сам пишет
+        # result, отдельного аргумента у него нет.
         finalized = await mark_cancelled(
             engine,
-            reason="scanning_paused" if scan_outcome == "paused" else "nothing_monitored",
+            reason=observer_scan_cancel_reason(scan_outcome, summary.get("reason")),
             **fence,
         )
     else:

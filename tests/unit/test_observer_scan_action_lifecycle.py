@@ -204,3 +204,41 @@ async def test_skipped_outcome_is_not_recorded_as_a_failure(monkeypatch) -> None
     )
     mark_failed.assert_not_awaited()
     mark_succeeded.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unsafe_owner_scope_is_not_reported_as_nothing_to_monitor(monkeypatch) -> None:
+    """Money-гард мульти-каба — не то же самое, что ненастроенные кабинеты.
+
+    Скан пропущен потому, что в общем кабинете без owner_tag авто-стоп задел бы
+    чужую рекламу. Мониторить есть что, и чинится это owner-тегом, а не
+    добавлением кабинетов. Одинаковая причина отмены отправила бы владельца
+    настраивать то, что уже настроено.
+    """
+    engine = object()
+    task = SimpleNamespace(id=1851, lease_owner=uuid.uuid4(), lease_token=13)
+    summary = {"outcome": "skipped", "accounts": [], "reason": "multi_cab_no_owner_tag"}
+    monkeypatch.setattr(
+        observer,
+        "run_with_observer_scan_control",
+        AsyncMock(return_value=summary),
+    )
+    mark_cancelled = AsyncMock(return_value=True)
+    monkeypatch.setattr(observer, "mark_succeeded", AsyncMock(return_value=True))
+    monkeypatch.setattr(observer, "mark_failed", AsyncMock(return_value=True))
+    monkeypatch.setattr(observer, "mark_cancelled", mark_cancelled)
+
+    await observer._run_claimed_observer_scan(engine, task=task, gate=object())
+
+    assert mark_cancelled.await_args.kwargs["reason"] == "owner_scope_unsafe"
+
+
+def test_unknown_skip_reason_falls_back_without_inventing_a_diagnosis() -> None:
+    """Новый исход скана не должен молча получать чужую причину отмены."""
+    assert observer.observer_scan_cancel_reason("paused", None) == "scanning_paused"
+    # Пауза сильнее любой причины: выключатель оператора объясняет исход целиком.
+    assert observer.observer_scan_cancel_reason("paused", "multi_cab_no_owner_tag") == (
+        "scanning_paused"
+    )
+    assert observer.observer_scan_cancel_reason("skipped", "future_reason") == "nothing_monitored"
+    assert observer.observer_scan_cancel_reason("skipped", None) == "nothing_monitored"

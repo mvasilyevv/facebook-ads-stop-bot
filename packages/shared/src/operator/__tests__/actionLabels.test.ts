@@ -65,9 +65,17 @@ describe("operator action labels", () => {
     ["running", "info"],
     ["unknown", "warning"],
     ["failed", "error"],
-    ["cancelled", "error"],
+    ["cancelled", "warning"],
   ] as const)("tones %s as %s", (state, tone) => {
     expect(operatorCommandTone(state)).toBe(tone);
+  });
+
+  it("keeps the error tone for a real failure only", () => {
+    // Систему отменяет собственная защита: выключенное сканирование, пустой
+    // набор кабинетов, незаданный owner scope. Красный на таком исходе
+    // отправил бы оператора чинить то, что работает как задумано.
+    expect(operatorCommandTone("cancelled")).not.toBe("error");
+    expect(operatorCommandTone("failed")).toBe("error");
   });
 
   it("reserves the success tone for a confirmed result only", () => {

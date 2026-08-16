@@ -282,3 +282,18 @@ async def test_deleted_count_is_logged(
 
     messages = [record.getMessage() for record in caplog.records]
     assert any("task_queue" in message and "1" in message for message in messages)
+
+
+def test_production_dialect_skips_rows_locked_by_others() -> None:
+    """На PostgreSQL уборка обязана обходить занятые строки, а не ждать их.
+
+    Тесты выше гоняют SQL по SQLite, который блокировочную часть не понимает и
+    молча её теряет — то есть сами по себе они ничего не говорят о боевом
+    диалекте. Без SKIP LOCKED фоновая уборка встала бы в очередь за чужой
+    транзакцией на той же таблице, через которую идут money-команды.
+    """
+    from sqlalchemy.dialects import postgresql
+
+    compiled = str(cleanup_worker._TASK_QUEUE_DELETE_SQL.compile(dialect=postgresql.dialect()))
+
+    assert "FOR UPDATE SKIP LOCKED" in compiled

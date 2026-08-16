@@ -399,6 +399,58 @@ async def test_dependency_barrier_is_not_claimed_until_every_child_is_terminal(
 
 
 @pytest.mark.asyncio
+async def test_dependency_barrier_survives_retention_removing_its_children(
+    pg_engine,
+    clean_observer_scan_tasks,
+) -> None:
+    """Уборка очереди не должна оставлять барьер запаркованным навсегда.
+
+    Скан с зависимостями паркуется на сто лет вперёд и снимается ТОЛЬКО когда
+    все дети терминальны. Ретенция штатно удаляет терминальные задачи, и
+    удалённая строка раньше считалась незавершённой — то есть барьер, чьи дети
+    дожили до уборки, не снялся бы уже никогда. Пропавшая строка означает
+    завершённую работу: уборка не трогает pending/running/retrying.
+    """
+    child_id = await create_task(
+        pg_engine,
+        task_type="meta_api_mutation",
+        idempotency_key=f"test-observer-scan:{uuid.uuid4()}:collected",
+        payload={
+            "mutation_kind": "bulk_status_change",
+            "target_id": "auto-pause:collected",
+            "ad_account_id": "123",
+            "params": {"action": "pause", "ad_ids": ["238002"]},
+        },
+        requested_by="bot_auto_stop",
+        lane="money",
+    )
+    assert child_id is not None
+
+    receipt = await enqueue_observer_scan(
+        pg_engine,
+        requested_by="test_observer_scan",
+        reason="dependency barrier after retention",
+        idempotency_key=f"test-observer-scan:{uuid.uuid4()}",
+        dependency_task_ids=[child_id],
+    )
+
+    assert await claim_observer_scan(pg_engine, worker_id=uuid.uuid4()) is None
+
+    # Ребёнок завершился и через положенный срок был убран ретенцией.
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM task_queue WHERE id = :task_id"),
+            {"task_id": child_id},
+        )
+
+    claimed = await claim_observer_scan(pg_engine, worker_id=uuid.uuid4())
+
+    assert claimed is not None
+    assert claimed.id == receipt.task_id
+    assert claimed.payload["dependency_state"] == "ready"
+
+
+@pytest.mark.asyncio
 async def test_inflight_cancel_stops_operation_from_database_authority(
     pg_engine,
     clean_observer_scan_tasks,

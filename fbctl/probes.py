@@ -83,18 +83,7 @@ class UrllibProbeClient:
         headers: Mapping[str, str] | None = None,
         timeout: float = 15,
     ) -> tuple[int, object]:
-        request_headers = {"Content-Type": "application/json", **dict(headers or {})}
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(dict(payload), separators=(",", ":")).encode("utf-8"),
-            headers=request_headers,
-            method="PATCH",
-        )
-        status, response = self._read(request, timeout=timeout)
-        try:
-            return status, json.loads(response)
-        except (json.JSONDecodeError, UnicodeError) as exc:
-            raise FbctlError(f"endpoint returned invalid JSON: {_safe_url(url)}") from exc
+        return self._send_json("PATCH", url, payload, headers=headers, timeout=timeout)
 
     def post_json(
         self,
@@ -104,12 +93,23 @@ class UrllibProbeClient:
         headers: Mapping[str, str] | None = None,
         timeout: float = 15,
     ) -> tuple[int, object]:
+        return self._send_json("POST", url, payload, headers=headers, timeout=timeout)
+
+    def _send_json(
+        self,
+        method: str,
+        url: str,
+        payload: Mapping[str, object],
+        *,
+        headers: Mapping[str, str] | None,
+        timeout: float,
+    ) -> tuple[int, object]:
         request_headers = {"Content-Type": "application/json", **dict(headers or {})}
         request = urllib.request.Request(
             url,
             data=json.dumps(dict(payload), separators=(",", ":")).encode("utf-8"),
             headers=request_headers,
-            method="POST",
+            method=method,
         )
         status, response = self._read(request, timeout=timeout)
         try:

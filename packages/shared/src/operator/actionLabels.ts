@@ -49,14 +49,19 @@ export type OperatorCommandTone = "success" | "info" | "warning" | "error";
 /**
  * Тон уведомления о команде выводится только из подтверждённого lifecycle.
  * HTTP 202 означает queued, а не выполнено, поэтому «успех» (зелёный) доступен
- * исключительно для confirmed; queued и running — нейтральный info,
- * неизвестный итог — warning, отказ и отмена — error.
+ * исключительно для confirmed; queued и running — нейтральный info; отказ —
+ * error.
+ *
+ * Отмена — не отказ: система сама снимает задачу, когда выполнять её не нужно
+ * или небезопасно (сканирование выключено оператором, мониторить нечего,
+ * owner scope кабинетов не задан). Красный на таком исходе означал бы поломку
+ * там, где её нет, поэтому отмена — warning: команда не выполнена, но чинить
+ * нечего. Неизвестный итог остаётся warning по той же шкале внимания.
  */
 export function operatorCommandTone(state: unknown): OperatorCommandTone {
   if (state === "confirmed") return "success";
   if (state === "queued" || state === "running") return "info";
-  if (state === "unknown") return "warning";
-  if (state === "failed" || state === "cancelled") return "error";
+  if (state === "failed") return "error";
   return "warning";
 }
 

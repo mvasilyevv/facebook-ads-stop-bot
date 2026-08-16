@@ -325,15 +325,20 @@ async def claim_observer_scan(
                   AND scan.payload @> '{"dependency_state":"waiting"}'::jsonb
                   AND jsonb_typeof(scan.payload->'dependency_task_ids') = 'array'
                   AND jsonb_array_length(scan.payload->'dependency_task_ids') > 0
+                  -- Соединение внутреннее намеренно: пропавшая строка-ребёнок
+                  -- НЕ держит барьер. Уборка очереди удаляет только терминальные
+                  -- задачи, поэтому отсутствие строки означает завершённую
+                  -- работу, а не незакрытую. На внешнем соединении такая
+                  -- зависимость блокировала бы скан вечно — он запаркован на сто
+                  -- лет вперёд и снимается только этим условием.
                   AND NOT EXISTS (
                       SELECT 1
                       FROM jsonb_array_elements_text(
                           scan.payload->'dependency_task_ids'
                       ) AS dependency(task_id)
-                      LEFT JOIN task_queue AS child
+                      JOIN task_queue AS child
                         ON child.id = CAST(dependency.task_id AS BIGINT)
-                      WHERE child.id IS NULL
-                         OR child.status NOT IN ('succeeded', 'failed', 'cancelled')
+                      WHERE child.status NOT IN ('succeeded', 'failed', 'cancelled')
                   )
                 """
             ),

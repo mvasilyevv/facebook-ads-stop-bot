@@ -11,7 +11,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, column, delete, func, select, text
+from sqlalchemy import table as sql_table
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -245,21 +246,35 @@ _TASK_QUEUE_RETENTION_GROUPS: list[tuple[str, tuple[str, ...]]] = [
 # держал бы длинный лок на боевой очереди, поэтому чистим короткими батчами.
 _TASK_QUEUE_DELETE_BATCH = 1000
 
+# Запрос собран Core-конструктором, а не текстом, ровно ради SKIP LOCKED:
+# PostgreSQL получает «FOR UPDATE SKIP LOCKED», а SQLite в unit-тестах —
+# тот же SELECT без блокировочной части, которую он не понимает.
+_TASK_QUEUE = sql_table(
+    "task_queue",
+    column("id"),
+    column("status"),
+    column("completed_at"),
+    column("updated_at"),
+)
+
 # ORDER BY id — уборка идёт от самых старых задач, поэтому прерванный прогон
 # оставляет предсказуемый хвост, а не случайное подмножество.
-_TASK_QUEUE_DELETE_SQL = text(
-    """
-    DELETE FROM task_queue
-    WHERE id IN (
-        SELECT id
-        FROM task_queue
-        WHERE status IN :statuses
-          AND COALESCE(completed_at, updated_at) < :cutoff
-        ORDER BY id
-        LIMIT :batch
+# SKIP LOCKED: строку может держать чужая транзакция. Ждать её фоновой уборке
+# незачем — она обходит занятую строку и заберёт её на следующем цикле; без
+# этого уборка вставала бы в очередь за money-путём на общей таблице.
+_TASK_QUEUE_DELETE_SQL = delete(_TASK_QUEUE).where(
+    _TASK_QUEUE.c.id.in_(
+        select(_TASK_QUEUE.c.id)
+        .where(
+            _TASK_QUEUE.c.status.in_(bindparam("statuses", expanding=True)),
+            func.coalesce(_TASK_QUEUE.c.completed_at, _TASK_QUEUE.c.updated_at)
+            < bindparam("cutoff"),
+        )
+        .order_by(_TASK_QUEUE.c.id)
+        .limit(bindparam("batch"))
+        .with_for_update(skip_locked=True)
     )
-    """
-).bindparams(bindparam("statuses", expanding=True))
+)
 
 
 async def delete_task_queue_completed(
@@ -297,7 +312,10 @@ async def delete_task_queue_completed(
                     # его определить — минус в счётчике хуже, чем недоучёт.
                     deleted_batch = max(int(result.rowcount or 0), 0)
                 deleted_group += deleted_batch
-                # Неполный батч означает, что просроченных строк больше нет.
+                # Неполный батч означает, что просроченных строк больше нет
+                # либо остаток занят другой транзакцией (SKIP LOCKED). Оба
+                # случая закрывает следующий цикл уборки, крутиться здесь
+                # в ожидании чужого лока не нужно.
                 if deleted_batch < _TASK_QUEUE_DELETE_BATCH:
                     break
         except Exception:
