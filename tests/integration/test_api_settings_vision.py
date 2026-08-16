@@ -556,7 +556,16 @@ async def test_post_vision_reconnect_without_db_config_is_rejected(app_client) -
 
 
 @pytest.mark.asyncio
-async def test_post_vision_ensure_cdp_without_owner_is_unavailable(app_client) -> None:
+async def test_post_vision_ensure_cdp_without_owner_takes_its_own_fence(app_client) -> None:
+    """Без заголовка ручка сама берёт эксклюзивный maintenance-фенс.
+
+    До Task 1 отсутствие owner всегда давало "Platform maintenance ownership
+    is missing or expired" — deploy healer предъявить owner не может, поэтому
+    ручка стала недоступна ему в принципе. Теперь фенс берётся сам, и запрос
+    доходит до обычной бизнес-проверки (Vision не настроен в БД), а не
+    отклоняется на пороге из-за отсутствующего owner. Vision config тут не
+    настраивается намеренно, live browser-agent не нужен.
+    """
     resp = await app_client.post("/api/vision/ensure-cdp")
 
     assert resp.status_code == 200
@@ -564,7 +573,56 @@ async def test_post_vision_ensure_cdp_without_owner_is_unavailable(app_client) -
         "ok": False,
         "status": "UNAVAILABLE",
         "action": "none",
-        "message": "Platform maintenance ownership is missing or expired",
+        "message": "Vision is not configured in PostgreSQL",
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_vision_ensure_cdp_without_owner_reports_active_maintenance(
+    app_client,
+    pg_engine,
+) -> None:
+    """Self-fence сталкивается с ЧУЖИМ активным maintenance через реальный
+    advisory lock в Postgres — сообщение должно называть занятость канала, а
+    не "ownership is missing or expired". Каллер здесь никакого owner не
+    предъявлял, поэтому формулировка про протухший owner была бы ложной и
+    сбила бы healer с толку (он полез бы чинить владельца вместо того, чтобы
+    подождать активное обслуживание). Регрессия на Important 2 ревью Task 1.
+    """
+    other_owner = uuid.uuid4().hex
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO system_config (key, value, description)
+                VALUES (
+                  'browser_maintenance',
+                  jsonb_build_object(
+                    'owner', CAST(:owner AS text),
+                    'expires_at', clock_timestamp() + interval '5 minutes'
+                  ),
+                  'test'
+                )
+                ON CONFLICT (key) DO UPDATE
+                SET value = EXCLUDED.value,
+                    description = EXCLUDED.description,
+                    updated_at = clock_timestamp()
+                """
+            ),
+            {"owner": other_owner},
+        )
+    try:
+        resp = await app_client.post("/api/vision/ensure-cdp")
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(text("DELETE FROM system_config WHERE key = 'browser_maintenance'"))
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "ok": False,
+        "status": "UNAVAILABLE",
+        "action": "none",
+        "message": "Vision maintenance is active; CDP channel was not verified",
     }
 
 

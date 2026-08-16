@@ -25,6 +25,9 @@ def configured_vision_runtime(monkeypatch):
     class FakeMaintenanceGuard:
         def __init__(self, _engine, owner):
             assert owner == "a" * 32
+            # Зеркалим BrowserMaintenanceGuard.__post_init__: owner нормализуется
+            # (.strip().lower()) ещё до того, как guard.owner кто-то прочитает.
+            self.owner = owner.strip().lower()
 
         async def __aenter__(self):
             return self
@@ -314,3 +317,153 @@ async def test_ensure_cdp_still_adopts_an_explicit_owner(monkeypatch):
 
     assert resp.ok is True
     assert resp.status == "READY"
+
+
+# Занятый/недренированный/потерянный self-fence: ручка обязана вернуть
+# 200-совместимое тело (не бросить) и назвать РЕАЛЬНУЮ причину, а не общее
+# "owner rejected" — иначе healer примет активное чужое обслуживание за
+# протухшего владельца и полезет чинить владельца вместо того, чтобы
+# подождать (ревью Task 1, Important 2 + Important 3).
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exc_type", "expected_message"),
+    [
+        (
+            m.BrowserOperationBlocked,
+            "Vision maintenance is active; CDP channel was not verified",
+        ),
+        (
+            m.BrowserOperationDrainTimeout,
+            "Active browser work did not drain; CDP channel was not verified",
+        ),
+        (
+            m.BrowserFenceLeaseLost,
+            "Vision maintenance fence was lost; state requires reconciliation",
+        ),
+    ],
+    ids=["blocked", "drain_timeout", "lease_lost"],
+)
+async def test_ensure_cdp_reports_busy_self_fence_without_raising(
+    monkeypatch,
+    exc_type,
+    expected_message,
+):
+    class RaisingExclusiveMaintenance:
+        """Self-fence (без owner в заголовке), который не удаётся взять/удержать."""
+
+        def __init__(self, _engine, *, operation_kind):
+            assert operation_kind == "vision_ensure_cdp"
+
+        async def __aenter__(self):
+            raise exc_type("boom")
+
+        async def assert_held(self):  # pragma: no cover - не должен вызываться
+            return None
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(m, "BrowserExclusiveMaintenance", RaisingExclusiveMaintenance)
+    recover = AsyncMock()
+    monkeypatch.setattr(m, "_recover_browser_profile_under_maintenance", recover)
+
+    resp = await m.post_vision_ensure_cdp(
+        request=SimpleNamespace(headers={}),
+        engine=None,
+        settings=None,
+        meta_api_client=None,
+    )
+
+    assert resp.ok is False
+    assert resp.status == "UNAVAILABLE"
+    assert resp.action == "none"
+    assert resp.message == expected_message
+    recover.assert_not_awaited()
+
+
+# Explicit-owner путь: невалидный/просроченный owner — единственный случай,
+# где формулировка про "ownership" правдива (Important 2).
+@pytest.mark.asyncio
+async def test_ensure_cdp_reports_invalid_supplied_owner_without_raising(monkeypatch):
+    class RaisingMaintenanceGuard:
+        def __init__(self, _engine, owner):
+            assert owner == "a" * 32
+
+        async def __aenter__(self):
+            raise m.BrowserMaintenanceOwnerInvalid("browser maintenance owner is not active")
+
+        async def assert_held(self):  # pragma: no cover - не должен вызываться
+            return None
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(m, "BrowserMaintenanceGuard", RaisingMaintenanceGuard)
+
+    resp = await m.post_vision_ensure_cdp(
+        request=_request(),
+        engine=None,
+        settings=None,
+        meta_api_client=None,
+    )
+
+    assert resp.ok is False
+    assert resp.status == "UNAVAILABLE"
+    assert resp.action == "none"
+    assert resp.message == "Platform maintenance ownership is missing or expired"
+
+
+# Minor 1: guard.owner уже нормализован (.strip().lower()) — сырой заголовок
+# в другом регистре не должен уезжать в browser-agent как maintenance_owner.
+@pytest.mark.asyncio
+async def test_ensure_cdp_recovers_with_normalized_guard_owner_not_raw_header(monkeypatch):
+    class UppercaseAwareGuard:
+        def __init__(self, _engine, owner):
+            assert owner == "A" * 32  # сырой заголовок ещё не нормализован
+            self.owner = owner.strip().lower()
+
+        async def __aenter__(self):
+            return self
+
+        async def assert_held(self):
+            return None
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(m, "BrowserMaintenanceGuard", UppercaseAwareGuard)
+
+    calls = {"n": 0}
+
+    async def fake_probe(_client, *, expected_profile_id):
+        assert expected_profile_id == "profile-exact"
+        calls["n"] += 1
+        return m._BrowserChannelProbe(
+            "READY" if calls["n"] > 1 else "DEGRADED",
+            None if calls["n"] > 1 else "probe_network_down",
+            1,
+            True,
+            maintenance_recovery_allowed=calls["n"] == 1,
+        )
+
+    recovered = {"owner": None}
+
+    async def fake_recover(_engine, _settings, *, maintenance_owner):
+        recovered["owner"] = maintenance_owner
+
+    monkeypatch.setattr(m, "_probe_browser_channel", fake_probe)
+    monkeypatch.setattr(m, "_recover_browser_profile_under_maintenance", fake_recover)
+
+    resp = await m.post_vision_ensure_cdp(
+        request=SimpleNamespace(
+            headers={"X-FB-Agent-Browser-Maintenance-Owner": "A" * 32},
+        ),
+        engine=None,
+        settings=None,
+        meta_api_client=None,
+    )
+
+    assert resp.ok is True
+    assert resp.status == "RECOVERED"
+    # Не "A" * 32 (сырой заголовок) — нормализованное guard.owner.
+    assert recovered["owner"] == "a" * 32

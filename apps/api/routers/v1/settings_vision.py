@@ -752,7 +752,12 @@ async def post_vision_ensure_cdp(
             else BrowserExclusiveMaintenance(engine, operation_kind="vision_ensure_cdp")
         )
         async with fence as guard:
-            maintenance_owner = supplied_owner or guard.owner
+            # guard.owner уже нормализован (BrowserMaintenanceGuard.__post_init__
+            # делает .strip().lower(), BrowserExclusiveMaintenance генерирует hex
+            # в нижнем регистре) — supplied_owner брать не нужно, иначе в
+            # browser-agent уедет сырое значение заголовка (например, в верхнем
+            # регистре), которое там может быть отклонено.
+            maintenance_owner = guard.owner
             try:
                 runtime = await load_vision_runtime_config(engine)
             except VisionConfigurationError:
@@ -806,18 +811,61 @@ async def post_vision_ensure_cdp(
                 expected_profile_id=runtime.profile_id,
             )
             await guard.assert_held()
-    except (
-        BrowserMaintenanceOwnerInvalid,
-        BrowserFenceLeaseLost,
-        BrowserOperationBlocked,
-        BrowserOperationDrainTimeout,
-    ) as exc:
-        logger.warning("ensure-cdp: maintenance owner rejected: %s", type(exc).__name__)
+    except BrowserMaintenanceOwnerInvalid as exc:
+        # Только explicit-owner путь (BrowserMaintenanceGuard) кидает это
+        # исключение — значит caller предъявил owner из заголовка, и именно
+        # он оказался невалиден/просрочен. Формулировка про "ownership"
+        # здесь правдива только в этом случае.
+        logger.warning(
+            "ensure-cdp: supplied maintenance owner is invalid or expired: %s",
+            type(exc).__name__,
+        )
         return VisionEnsureCdpResponse(
             ok=False,
             status="UNAVAILABLE",
             action="none",
             message="Platform maintenance ownership is missing or expired",
+        )
+    except BrowserOperationBlocked as exc:
+        # Эксклюзив уже занят чужим активным обслуживанием (self-fence путь)
+        # либо explicit owner ещё не задренировал активную browser-работу.
+        # Caller ownership тут ни при чём — самовосстановлению нужно ждать
+        # активное обслуживание, а не чинить "владельца".
+        logger.warning(
+            "ensure-cdp: browser maintenance is already active: %s",
+            type(exc).__name__,
+        )
+        return VisionEnsureCdpResponse(
+            ok=False,
+            status="UNAVAILABLE",
+            action="none",
+            message="Vision maintenance is active; CDP channel was not verified",
+        )
+    except BrowserOperationDrainTimeout as exc:
+        # Self-fence взят, но активная browser-работа не задренировалась до
+        # дедлайна BrowserExclusiveMaintenance.
+        logger.warning(
+            "ensure-cdp: active browser work did not drain in time: %s",
+            type(exc).__name__,
+        )
+        return VisionEnsureCdpResponse(
+            ok=False,
+            status="UNAVAILABLE",
+            action="none",
+            message="Active browser work did not drain; CDP channel was not verified",
+        )
+    except BrowserFenceLeaseLost as exc:
+        # Фенс был удержан на входе, но потерян по ходу выполнения (renew не
+        # прошёл или assert_held не подтвердил владение).
+        logger.warning(
+            "ensure-cdp: maintenance fence was lost mid-flight: %s",
+            type(exc).__name__,
+        )
+        return VisionEnsureCdpResponse(
+            ok=False,
+            status="UNAVAILABLE",
+            action="none",
+            message="Vision maintenance fence was lost; state requires reconciliation",
         )
 
     return VisionEnsureCdpResponse(
