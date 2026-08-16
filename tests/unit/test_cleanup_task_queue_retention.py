@@ -237,6 +237,39 @@ async def test_special_retention_keeps_everything(engine: AsyncEngine) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("missing_key", "status", "default_days"),
+    [
+        ("task_queue_completed", "succeeded", 30),
+        ("task_queue_failed", "failed", 45),
+    ],
+)
+async def test_missing_policy_key_falls_back_to_default(
+    engine: AsyncEngine, missing_key: str, status: str, default_days: int
+) -> None:
+    """load_policy отдаёт сырой dict без слияния с дефолтом — ключа может не быть.
+
+    `_POLICY` во всех остальных тестах задаёт оба ключа явно, поэтому ветка
+    `policy.get(policy_key, defaults[policy_key])` в delete_task_queue_completed
+    ничем не закреплена. Здесь ключ намеренно отсутствует: граница обязана
+    взяться из get_default_policy() (task_queue_completed = 30 дней,
+    task_queue_failed = 45 дней) — ровно то поведение, которое поменяла задача.
+    """
+    policy = {key: value for key, value in _POLICY.items() if key != missing_key}
+    assert missing_key not in policy
+
+    old = _NOW - timedelta(days=default_days + 15)
+    fresh = _NOW - timedelta(days=default_days - 15)
+    await _insert(engine, "old", status, completed_at=old, updated_at=old)
+    await _insert(engine, "fresh", status, completed_at=fresh, updated_at=fresh)
+
+    deleted = await delete_task_queue_completed(engine, policy, now=_NOW)
+
+    assert deleted == 1
+    assert await _survivors(engine) == {"fresh"}
+
+
+@pytest.mark.asyncio
 async def test_deleted_count_is_logged(
     engine: AsyncEngine, caplog: pytest.LogCaptureFixture
 ) -> None:

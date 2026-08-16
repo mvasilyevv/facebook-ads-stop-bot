@@ -282,21 +282,35 @@ async def delete_task_queue_completed(
         cutoff = cutoff_datetime(retention, now=now)
 
         deleted_group = 0
-        while True:
-            async with engine.begin() as conn:
-                result = await conn.execute(
-                    _TASK_QUEUE_DELETE_SQL,
-                    {
-                        "statuses": list(statuses),
-                        "cutoff": cutoff,
-                        "batch": _TASK_QUEUE_DELETE_BATCH,
-                    },
-                )
-            deleted_batch = int(result.rowcount or 0)
-            deleted_group += deleted_batch
-            # Неполный батч означает, что просроченных строк больше нет.
-            if deleted_batch < _TASK_QUEUE_DELETE_BATCH:
-                break
+        try:
+            while True:
+                async with engine.begin() as conn:
+                    result = await conn.execute(
+                        _TASK_QUEUE_DELETE_SQL,
+                        {
+                            "statuses": list(statuses),
+                            "cutoff": cutoff,
+                            "batch": _TASK_QUEUE_DELETE_BATCH,
+                        },
+                    )
+                    # max(..., 0): rowcount может быть -1, если драйвер не смог
+                    # его определить — минус в счётчике хуже, чем недоучёт.
+                    deleted_batch = max(int(result.rowcount or 0), 0)
+                deleted_group += deleted_batch
+                # Неполный батч означает, что просроченных строк больше нет.
+                if deleted_batch < _TASK_QUEUE_DELETE_BATCH:
+                    break
+        except Exception:
+            # Уже закоммиченные батчи назад не откатить: логируем накопленное
+            # здесь, иначе оператор увидит только ошибку и ноль вместо «унесли
+            # N строк и упали».
+            logger.warning(
+                "task_queue retention: сбой после удаления %d строк (%s) старше %s",
+                deleted_group,
+                ", ".join(statuses),
+                retention,
+            )
+            raise
 
         if deleted_group:
             logger.info(
