@@ -160,9 +160,8 @@ runtime.
 
 Caddy общий с другими сайтами, поэтому `fbctl` сохраняет остальное содержимое
 общего Caddyfile и не трогает чужие site-файлы. Он управляет только точным import
-`/etc/caddy/sites-enabled/*.caddy`, двумя файлами FB Agent, собственным env и
-drop-in. Panel BasicAuth-пара сохраняется из root-owned host env; производные
-`API_KEY` и Kasm service auth заново выводятся из candidate configuration.
+`/etc/caddy/sites-enabled/*.caddy`, одним файлом сайта app.adpulse.su, собственным env и
+drop-in; ушедший сайт рабочего стола удаляется. Panel BasicAuth-пара сохраняется из root-owned host env; `API_KEY` заново выводится из candidate configuration.
 
 До записи на host управляемая пара валидируется в отдельном staging-каталоге.
 Затем целевые файлы меняются атомарно, полный общий Caddyfile валидируется уже
