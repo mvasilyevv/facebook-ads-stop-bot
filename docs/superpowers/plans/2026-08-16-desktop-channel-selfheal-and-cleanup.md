@@ -968,6 +968,275 @@ git commit -m "fix(ui): не давать длинным значениям вы
 
 ---
 
+### Task 7: Выключенное сканирование перестаёт выглядеть чередой отказов
+
+**Files:**
+- Modify: `core/observer/scan_tasks.py` (функция `enqueue_scheduled_observer_scan`, строка 191)
+- Modify: `apps/observer_worker/main.py:1032-1050` (финализация исхода скана)
+- Test: `tests/unit/test_observer_scan_action_lifecycle.py`
+
+**Interfaces:**
+- Consumes: `load_scanning_enabled(engine) -> bool` из `core/observer/queries.py:188` — единая точка чтения «глобального стопа», лёгкий одиночный SELECT, ровно для воркеров, которые должны замирать на паузе. Нет строки `observer_config` → `False` (fail-safe). Ошибку соединения не глушит.
+- Produces: ничего для последующих задач.
+
+**Что сломано (замерено на проде 16.08):** `observer_scheduler` публикует адаптивный скан каждые ~45 секунд независимо от того, включено ли сканирование. Скан немедленно возвращает исход `paused`, а финализатор считает провалом всё, что не `success` и не `empty`, — и записывает `observer scan finished without a complete snapshot: paused`. За четыре часа накопилось 216 таких записей; они попадают в операторскую ленту «Действия» красным и хоронят под собой настоящие отказы (там же лежали 7 реальных `tracker_event_process`). Выключенное владельцем сканирование — состояние, а не отказ.
+
+**Порядок лечения:** сначала не публиковать работу, которой заведомо не будет; финализация `paused` — вторая линия обороны для гонки «сканирование выключили между публикацией и запуском».
+
+- [ ] **Step 1: Написать падающий тест на то, что на паузе скан не публикуется**
+
+Добавить в `tests/unit/test_observer_scan_action_lifecycle.py`:
+
+```python
+@pytest.mark.asyncio
+async def test_paused_scanning_publishes_no_adaptive_scan(monkeypatch) -> None:
+    """Пауза владельца — это состояние, а не очередь отказов.
+
+    Планировщик тикал каждые ~45 секунд и на выключенном сканировании
+    публиковал задачу, которая гарантированно заканчивалась исходом paused.
+    За четыре часа это дало 216 красных записей в ленте оператора.
+    """
+    published: list[str] = []
+
+    async def fake_enqueue(*_args, **kwargs):
+        published.append(str(kwargs.get("reason")))
+        raise AssertionError("на паузе адаптивный скан публиковаться не должен")
+
+    async def fake_scanning_enabled(_engine) -> bool:
+        return False
+
+    monkeypatch.setattr(scan_tasks, "load_scanning_enabled", fake_scanning_enabled)
+    monkeypatch.setattr(scan_tasks, "enqueue_observer_scan", fake_enqueue)
+
+    receipt = await scan_tasks.enqueue_scheduled_observer_scan(_engine_stub())
+
+    assert receipt is None
+    assert published == []
+```
+
+Имя импортированного модуля и способ подмены подгони под то, как это уже сделано в соседних тестах файла; `_engine_stub` — тот двойник движка, который в файле уже используется. Если в файле нет готового двойника, возьми способ из ближайшего теста, который вызывает функции `scan_tasks`.
+
+- [ ] **Step 2: Написать падающий тест на то, что исход `paused` не отказ**
+
+```python
+@pytest.mark.asyncio
+async def test_paused_outcome_is_not_recorded_as_a_failure(monkeypatch) -> None:
+    """Гонка: сканирование выключили между публикацией и запуском задачи.
+
+    Такая задача не выполнена, но и не провалена — оператор не должен видеть
+    красное там, где сработал его собственный выключатель.
+    """
+    finalized: dict[str, object] = {}
+
+    async def fake_mark_failed(*_args, **kwargs):
+        raise AssertionError("исход paused не должен финализироваться как провал")
+
+    async def fake_mark_cancelled(_engine, **kwargs):
+        finalized.update(kwargs)
+        return True
+
+    # Подмена финализаторов и запуск ветки с summary={"outcome": "paused"} —
+    # способ вызова возьми из соседнего теста этого файла, который уже
+    # прогоняет финализацию скана с готовым summary.
+```
+
+Дописать тест до конца по образцу соседнего теста файла (тот, что проверяет `error="observer scan finished without a complete snapshot: partial"` на строке 85): нужен тот же способ вызова, но с исходом `paused` и проверкой, что задача финализирована как отменённая, а не проваленная.
+
+- [ ] **Step 3: Прогнать тесты и убедиться, что падают**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/test_observer_scan_action_lifecycle.py -q`
+Expected: FAIL — оба новых теста, потому что публикация безусловна, а `paused` уходит в `mark_failed`.
+
+- [ ] **Step 4: Не публиковать адаптивный скан на паузе**
+
+В `core/observer/scan_tasks.py` в начале `enqueue_scheduled_observer_scan` (сигнатура на строке 191) добавить проверку до захвата advisory-лока:
+
+```python
+    # Публиковать нечего: на паузе скан немедленно вернёт outcome=paused, и
+    # каждая такая задача осядет в ленте оператора как отказ. Точка чтения
+    # та же, что у остальных воркеров, замирающих на глобальном стопе.
+    if not await load_scanning_enabled(engine):
+        return None
+```
+
+Тип возврата функции станет `ObserverScanReceipt | None` — поправить аннотацию и докстринг. Проверить единственного вызывающего (`apps/observer_worker/main.py:1134`): он результат не использует, но убедись, что `None` там ничего не ломает.
+
+Импорт `load_scanning_enabled` добавить из `core.observer.queries`.
+
+- [ ] **Step 5: Исход `paused` финализировать как отменённую задачу**
+
+В `apps/observer_worker/main.py` в блоке финализации (строки 1032-1047) развести три случая вместо двух. Было:
+
+```python
+    if scan_outcome in {"success", "empty"}:
+        finalized = await mark_succeeded(engine, result=task_result, **fence)
+    else:
+        finalized = await mark_failed(
+            engine,
+            error=f"observer scan finished without a complete snapshot: {scan_outcome}",
+            result=task_result,
+            **fence,
+        )
+```
+
+Стало:
+
+```python
+    if scan_outcome in {"success", "empty"}:
+        finalized = await mark_succeeded(engine, result=task_result, **fence)
+    elif scan_outcome == "paused":
+        # Сканирование выключил владелец: задача не выполнена, но и не
+        # провалена. Красное здесь означало бы поломку там, где сработал
+        # собственный выключатель оператора.
+        finalized = await mark_cancelled(
+            engine,
+            reason="scanning_paused",
+            result=task_result,
+            **fence,
+        )
+    else:
+        finalized = await mark_failed(
+            engine,
+            error=f"observer scan finished without a complete snapshot: {scan_outcome}",
+            result=task_result,
+            **fence,
+        )
+```
+
+Точное имя и сигнатуру финализатора отмены возьми из того же модуля, откуда импортированы `mark_succeeded`/`mark_failed`. Если функции отмены с такой сигнатурой нет — **остановись и сообщи**, не изобретай новую финализацию задач: это money-путь.
+
+**Обязательная проверка перед коммитом:** убедись, что ни одна логика свежести снимка и ни один money-путь не выводят «снимок обновился» из статуса задачи скана. Проверь потребителей: `core/meta_api/freshness.py` (там `snapshot_is_fresh` считает свежесть по данным скана, а не по статусу задачи) и всё, что читает `task_queue.status` для `observer_scan`. Результат проверки опиши в отчёте — это условие приёмки задачи.
+
+- [ ] **Step 6: Прогнать тесты**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit -q && .venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check .`
+Expected: всё зелёное.
+
+- [ ] **Step 7: Коммит**
+
+```bash
+git add core/observer/scan_tasks.py apps/observer_worker/main.py tests/unit/test_observer_scan_action_lifecycle.py
+git commit -m "fix(observer): не превращать выключенное сканирование в череду отказов
+
+Планировщик публиковал адаптивный скан каждые ~45 секунд независимо от
+глобального стопа. Скан немедленно возвращал исход paused, а финализатор
+считал провалом всё, что не success и не empty: за четыре часа на проде
+накопилось 216 красных записей, под которыми потерялись настоящие отказы.
+
+Теперь на паузе работа не публикуется вовсе, а исход paused — если
+сканирование выключили между публикацией и запуском — финализируется как
+отменённая задача, а не как провал."
+```
+
+---
+
+### Task 8: Завершённые задачи не копятся в очереди вечно
+
+**Files:**
+- Modify: `apps/cleanup_worker/worker.py` (рядом с `_PARTITIONED`, строка 31)
+- Test: `tests/unit/` — файл тестов cleanup-воркера (найди существующий по имени модуля; если его нет, создай `tests/unit/test_cleanup_task_queue_retention.py`)
+
+**Interfaces:**
+- Consumes: `load_policy(engine)` из `apps/cleanup_worker/worker.py:44` — читает `retention_policy` из `system_config`, иначе дефолт.
+- Produces: ничего для последующих задач.
+
+**Что сломано:** `cleanup_worker` чистит только пять партиционированных таблиц (`ad_metrics`, `alert_events`, `scan_runs`, `meta_api_audit_log`, `adsetpro_postback_events`) — их список на строке 31. `task_queue` не партиционирована и не входит ни в один путь ретенции, поэтому завершённые задачи лежат вечно. На проде это уже сотни строк за сутки.
+
+- [ ] **Step 1: Написать падающий тест**
+
+Тест должен проверять поведение, а не наличие строки: завершённые задачи старше срока удаляются, а незавершённые и свежие — остаются. Работать он должен на тестовой БД тем же способом, каким тестируется остальной cleanup-воркер (посмотри существующие тесты этого модуля и повтори их устройство: фикстура движка, создание таблицы, вызов функции).
+
+Проверить минимум три случая: (1) `succeeded`/`failed`/`cancelled` старше границы — удаляются; (2) такие же, но свежие — остаются; (3) `pending`/`running`/`retrying` любого возраста — остаются всегда, даже если застряли. Третий случай — money-инвариант: незавершённую задачу удалять нельзя ни при каких условиях, иначе исчезнет след незакрытой команды.
+
+- [ ] **Step 2: Прогнать и убедиться, что падает**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit -q -k "task_queue and retention"`
+Expected: FAIL — функции ретенции для `task_queue` ещё нет.
+
+- [ ] **Step 3: Реализовать ретенцию**
+
+Добавить в `apps/cleanup_worker/worker.py` отдельную функцию ретенции для непартиционированной `task_queue` и вызвать её из того же места, откуда выполняется остальная чистка. Требования:
+
+- удаляются только терминальные статусы (`succeeded`, `failed`, `cancelled`) — список статусов возьми из модели/схемы `task_queue`, не выдумывай;
+- граница берётся по `completed_at`, а при его отсутствии по `updated_at`;
+- срок читается из `retention_policy` по собственному ключу `task_queue`, дефолт — 30 дней; поддержи то же «специальное» значение, что уже понимает `retention.py` (посмотри `is_special`);
+- удаление батчами с ограничением на батч, чтобы одна уборка не держала долгую транзакцию на боевой таблице очереди;
+- количество удалённого логируется.
+
+- [ ] **Step 4: Прогнать тесты**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit -q && .venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check .`
+Expected: всё зелёное.
+
+- [ ] **Step 5: Коммит**
+
+```bash
+git add apps/cleanup_worker/worker.py tests/unit
+git commit -m "feat(cleanup): чистить завершённые задачи очереди по ретенции
+
+task_queue не партиционирована и не входила ни в один путь ретенции, поэтому
+завершённые задачи лежали вечно. Незавершённые не удаляются никогда: пропажа
+следа незакрытой команды опаснее роста таблицы."
+```
+
+---
+
+### Task 9: Повторы в ленте действий не выглядят двадцатью разными событиями
+
+**Files:**
+- Modify: `frontend/src/features/operator/OperatorDashboard.tsx` (компонент `ActionList`, строка 743)
+- Test: `frontend/src/tests/pages/OperatorActionsRealtime.test.tsx`
+
+**Interfaces:**
+- Consumes: `ActionList({ items }: { items: OperatorActionItem[] })` — общий компонент, который используют и дашборд, и страница `/actions` (`frontend/src/routes/actions/index.tsx:141`). Правка в одном месте покрывает оба экрана.
+- Produces: ничего для последующих задач.
+
+**Зачем:** двадцать одинаковых строк подряд читаются как двадцать разных событий и вытесняют с экрана всё остальное. После Task 7 поток таких повторов иссякнет, но повторы возможны у любого типа действий, и лента должна оставаться читаемой сама по себе.
+
+- [ ] **Step 1: Написать падающий тест**
+
+В `frontend/src/tests/pages/OperatorActionsRealtime.test.tsx` добавить тест: если подряд идут несколько записей с одинаковыми заголовком, состоянием и текстом, лента показывает одну строку со счётчиком повторов, а не несколько одинаковых. Счётчик должен быть виден как текст (например «×3»), а сама строка — вести к самому свежему из повторов.
+
+Способ рендера и построения `items` возьми из соседних тестов этого файла.
+
+- [ ] **Step 2: Прогнать и убедиться, что падает**
+
+Run: `cd frontend && pnpm test -- OperatorActionsRealtime`
+Expected: FAIL — сейчас рисуются все элементы подряд.
+
+- [ ] **Step 3: Сгруппировать подряд идущие повторы**
+
+В `ActionList` сворачивать ТОЛЬКО соседние элементы с одинаковыми заголовком, состоянием и текстом. Требования:
+
+- группируются только подряд идущие: хронология не должна перемешиваться;
+- у свёрнутой группы показывается счётчик повторов и время самого свежего элемента;
+- переход по свёрнутой строке ведёт к самому свежему элементу группы;
+- одиночный элемент выглядит ровно как раньше — без счётчика и без лишней обёртки;
+- ключи React берутся от самого свежего элемента группы, а не от индекса.
+
+Не менять API, не добавлять фильтров и не трогать серверную часть: это правка представления.
+
+- [ ] **Step 4: Прогнать тесты и гейты**
+
+Run: `cd frontend && pnpm test`
+Expected: PASS.
+
+Run: `pnpm -r typecheck && pnpm -r lint`
+Expected: без ошибок.
+
+- [ ] **Step 5: Коммит**
+
+```bash
+git add frontend/src/features/operator/OperatorDashboard.tsx frontend/src/tests/pages/OperatorActionsRealtime.test.tsx
+git commit -m "feat(operator-ui): сворачивать подряд идущие повторы в ленте действий
+
+Двадцать одинаковых строк читаются как двадцать разных событий и вытесняют
+с экрана всё остальное. Сворачиваются только соседние одинаковые записи,
+чтобы хронология не перемешивалась."
+```
+
+---
+
 ## Порядок выполнения
 
 Задачи 1 → 2 строго последовательны: шаг деплоя вызывает ручку из задачи 1. Задачи 3, 4 и 6 независимы и могут идти в любом порядке. Задача 5 выполняется последней и требует смерженных 1–2.
