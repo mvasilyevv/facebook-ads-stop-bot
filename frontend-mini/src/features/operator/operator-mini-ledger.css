@@ -338,6 +338,7 @@
 
 .mini-approaching-item__meta {
   overflow: hidden;
+  min-width: 0;
   color: var(--color-bg-9);
   font-size: 12px;
   text-overflow: ellipsis;

@@ -116,7 +116,7 @@ export function WorkerPulse() {
                     }}
                   />
                   <span
-                    className={`truncate font-display text-[12px] ${
+                    className={`min-w-0 truncate font-display text-[12px] ${
                       severity === "ok" ? "text-bg-10" : "text-bg-11"
                     }`}
                   >

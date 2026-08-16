@@ -146,6 +146,20 @@ describe("OfferCard", () => {
     await userEvent.click(screen.getByRole("button", { name: /деактивировать оффер/i }));
     expect(onDeactivate).toHaveBeenCalledTimes(1);
   });
+
+  it("не обрезает длинную подпись действия на узкой карточке", () => {
+    // «Деактивировать» вдвое длиннее «Правила»: равные доли flex:1 её не вмещают,
+    // и на живом экране текст уезжал за карточку.
+    render(
+      <OfferCard offer={makeOffer()} onEditOffer={noop} onEditRules={noop} onDeactivate={noop} />,
+    );
+
+    const deactivate = screen.getByRole("button", { name: /Деактивировать оффер/ });
+    const footer = deactivate.parentElement!;
+
+    expect(footer.style.flexWrap).toBe("wrap");
+    expect(deactivate.style.flex).toBe("1 1 auto");
+  });
 });
 
 // ─── OfferFormModal тесты ─────────────────────────────────────────────────────

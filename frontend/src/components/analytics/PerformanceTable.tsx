@@ -352,7 +352,7 @@ function ObjectCell({
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1">
-          <span className="truncate text-[14px] font-medium text-bg-11" title={row.name}>
+          <span className="min-w-0 truncate text-[14px] font-medium text-bg-11" title={row.name}>
             {row.name}
           </span>
           {row.level === "ad" && row.fb_id ? (

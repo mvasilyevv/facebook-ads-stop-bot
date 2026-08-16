@@ -245,7 +245,7 @@ function CampaignPlanRow({ campaign }: { campaign: CampaignPlanOut }) {
           <ChevronRight size={13} className="text-bg-8 shrink-0" />
         )}
         <Layers size={13} className="text-bg-8 shrink-0" />
-        <span className="text-[12px] text-bg-11 flex-1 truncate" title={campaign.name}>
+        <span className="min-w-0 text-[12px] text-bg-11 flex-1 truncate" title={campaign.name}>
           {campaign.name}
         </span>
         <span className="text-[12px] text-bg-8 font-display uppercase tracking-wider shrink-0">
@@ -257,7 +257,7 @@ function CampaignPlanRow({ campaign }: { campaign: CampaignPlanOut }) {
         <div className="divide-y divide-[var(--color-hairline)]">
           {campaign.adsets.map((adset) => (
             <div key={adset.name} className="px-6 py-2 flex items-center gap-2 bg-bg-1">
-              <span className="text-[12px] text-bg-9 flex-1 truncate" title={adset.name}>
+              <span className="min-w-0 text-[12px] text-bg-9 flex-1 truncate" title={adset.name}>
                 {adset.name}
               </span>
               <span className="text-[12px] text-bg-8">{adset.ad_count} ads</span>
