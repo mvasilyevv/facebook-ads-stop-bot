@@ -62,7 +62,11 @@ from fbctl.controller import (
 from fbctl.errors import FbctlError
 from fbctl.files import parse_dotenv
 from fbctl.operations import doctor, restart
-from fbctl.probes import parse_worker_db_poll_success, parse_worker_heartbeat
+from fbctl.probes import (
+    parse_worker_db_poll_success,
+    parse_worker_heartbeat,
+    require_system_ready,
+)
 from fbctl.publish import publish
 from fbctl.runner import CommandResult
 from fbctl.vision_profile import (
@@ -523,7 +527,13 @@ class FakeProbes:
                 "browser_session_id": "session-1",
             }
         if url.endswith("/system-readyz"):
-            return 200, {"ready": True, "overall": "HEALTHY", "blockers": []}
+            return 200, {
+                "ready": True,
+                "infrastructure_ready": True,
+                "overall": "HEALTHY",
+                "blockers": [],
+                "degraded": [],
+            }
         if url.endswith("/api/settings/telegram/diagnostics"):
             return 200, {
                 "webhook_state": "configured",
@@ -3621,3 +3631,90 @@ def test_desktop_environment_is_exactly_the_channel() -> None:
     assert not any(
         key.startswith(("POSTGRES", "TELEGRAM", "ANTHROPIC", "API_KEY")) for key in DESKTOP_ENV_KEYS
     )
+
+
+class _ReadyzProbe:
+    """Отдаёт ровно то, что вернул бы /system-readyz в проверяемом состоянии."""
+
+    def __init__(self, payload: dict[str, object], status: int = 503) -> None:
+        self.payload = payload
+        self.status = status
+
+    def json(self, url: str, *, headers=None, timeout: float = 15):
+        del headers, timeout
+        assert url.endswith("/system-readyz")
+        return self.status, self.payload
+
+
+def test_owner_paused_scanning_does_not_fail_the_release() -> None:
+    """Выключенный скан — решение владельца, а не провал деплоя.
+
+    Гейт готовности money-контура нужен, чтобы не промоутить сломанный
+    рантайм. Сканирование к состоянию рантайма отношения не имеет: владелец
+    вправе держать его выключенным и при этом обновлять приложение. Раньше
+    релиз из-за этого не доходил до promote вообще.
+    """
+    probe = _ReadyzProbe(
+        {
+            "ready": False,
+            "infrastructure_ready": True,
+            "overall": "CRITICAL",
+            "blockers": ["scanning_paused"],
+            "degraded": [],
+        }
+    )
+
+    assert require_system_ready(probe, "http://api") == ("scanning_paused",)
+
+
+def test_real_money_defects_still_stop_the_release() -> None:
+    """Всё, что не осознанная пауза, по-прежнему валит деплой поимённо."""
+    probe = _ReadyzProbe(
+        {
+            "ready": False,
+            "infrastructure_ready": True,
+            "overall": "CRITICAL",
+            "blockers": ["scanning_paused", "stale_money_tasks:3"],
+            "degraded": [],
+        }
+    )
+
+    with pytest.raises(FbctlError) as error:
+        require_system_ready(probe, "http://api")
+
+    assert "stale_money_tasks:3" in str(error.value)
+    # Про паузу гейт не ругается: она не причина падения.
+    assert "scanning_paused" not in str(error.value)
+
+
+def test_broken_infrastructure_stops_the_release_even_without_blockers() -> None:
+    probe = _ReadyzProbe(
+        {
+            "ready": False,
+            "infrastructure_ready": False,
+            "overall": "CRITICAL",
+            "blockers": [],
+            "degraded": [],
+        }
+    )
+
+    with pytest.raises(FbctlError):
+        require_system_ready(probe, "http://api")
+
+
+def test_degraded_money_plane_stops_the_release() -> None:
+    probe = _ReadyzProbe(
+        {
+            "ready": True,
+            "infrastructure_ready": True,
+            "overall": "DEGRADED",
+            "blockers": [],
+            "degraded": ["cabinet_actor_error:acc-1"],
+        },
+        status=200,
+    )
+
+    with pytest.raises(FbctlError) as error:
+        require_system_ready(probe, "http://api")
+
+    assert "cabinet_actor_error:acc-1" in str(error.value)

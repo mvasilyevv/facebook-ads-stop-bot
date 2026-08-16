@@ -202,14 +202,34 @@ def require_exact_browser(client: ProbeClient, api_origin: str, api_key: str) ->
         raise FbctlError("browser channel is not READY with a concrete session")
 
 
-def require_system_ready(client: ProbeClient, api_origin: str) -> None:
+# Состояния, которыми управляет владелец, а не деплой. Выключенное
+# сканирование — его решение: обновлять приложение при выключенном скане
+# законно, и релиз не должен из-за этого зависать перед promote. Всё
+# остальное в блокерах — настоящий дефект рантайма и валит деплой.
+OWNER_CONTROLLED_BLOCKERS = frozenset({"scanning_paused"})
+
+
+def require_system_ready(client: ProbeClient, api_origin: str) -> tuple[str, ...]:
+    """Проверить money-контур и вернуть осознанные паузы как предупреждения.
+
+    Эндпоинт отвечает 503, пока есть хоть один блокер, поэтому судим по телу,
+    а не по коду: иначе выключенный владельцем скан читается как поломка.
+    """
     status, payload = client.json(f"{api_origin}/system-readyz", timeout=20)
-    if status != 200 or not isinstance(payload, dict) or payload.get("ready") is not True:
-        blockers = payload.get("blockers") if isinstance(payload, dict) else None
-        suffix = f" ({','.join(map(str, blockers))})" if isinstance(blockers, list) else ""
-        raise FbctlError(f"money control plane is not ready{suffix}")
-    if payload.get("overall") != "HEALTHY":
-        raise FbctlError("money control plane is not HEALTHY")
+    if status not in (200, 503) or not isinstance(payload, dict):
+        raise FbctlError("money control plane readiness is unavailable")
+    if payload.get("infrastructure_ready") is not True:
+        raise FbctlError("money control plane infrastructure is not ready")
+    raw_blockers = payload.get("blockers")
+    blockers = tuple(str(item) for item in raw_blockers) if isinstance(raw_blockers, list) else ()
+    defects = tuple(item for item in blockers if item not in OWNER_CONTROLLED_BLOCKERS)
+    if defects:
+        raise FbctlError(f"money control plane is not ready ({','.join(defects)})")
+    raw_degraded = payload.get("degraded")
+    degraded = tuple(str(item) for item in raw_degraded) if isinstance(raw_degraded, list) else ()
+    if degraded:
+        raise FbctlError(f"money control plane is degraded ({','.join(degraded)})")
+    return tuple(item for item in blockers if item in OWNER_CONTROLLED_BLOCKERS)
 
 
 def enable_observer_scanning(client: ProbeClient, api_origin: str, api_key: str) -> None:

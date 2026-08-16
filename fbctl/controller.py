@@ -358,10 +358,13 @@ class ProductionController:
                     options,
                     lambda: self._verify_worker_heartbeats(config),
                 )
-                self._step(
-                    "verify_system_ready",
-                    options,
-                    lambda: self._verify_system_ready(config),
+                warnings.extend(
+                    self._step(
+                        "verify_system_ready",
+                        options,
+                        lambda: self._verify_system_ready(config),
+                    )
+                    or ()
                 )
                 if not options.rehearsal:
                     caddy_change = self._step(
@@ -1077,8 +1080,13 @@ class ProductionController:
                 now=observed_now,
             )
 
-    def _verify_system_ready(self, config: RuntimeConfig) -> None:
-        wait_for(
+    def _verify_system_ready(self, config: RuntimeConfig) -> tuple[str, ...]:
+        """Дождаться готовности money-контура; осознанные паузы вернуть наверх.
+
+        Пауза владельца не отменяет деплой, но и не должна исчезнуть молча:
+        релиз с выключенным сканированием честно помечается DEGRADED.
+        """
+        return wait_for(
             "durable money control plane readiness",
             lambda: require_system_ready(self.probes, self._api_origin(config)),
             timeout=180,
