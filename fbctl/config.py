@@ -439,9 +439,11 @@ def prepare_candidate(
         # Ключи брокера RustDesk обязаны пережить пересоздание контейнера: после
         # смены ключа клиенты перестают ему верить и требуют перенастройки.
         "DESKTOP_RUSTDESK_DATA_DIR": os.fspath(layout.shared / "rustdesk-server"),
-        # Адрес, на котором брокер виден клиентам. По умолчанию петля: наружу
-        # или в приватную сеть его выставляет владелец.
-        "DESKTOP_RUSTDESK_BIND": source_values.get("DESKTOP_RUSTDESK_BIND") or "127.0.0.1",
+        # Интерфейс, на котором брокер слушает. Дефолт согласован с дефолтом
+        # DESKTOP_RUSTDESK_SERVER: публичный адрес в паре с петлёй означал бы
+        # адрес, который объявлен оператору, но никого не слушает. Приватность
+        # держится на ключе брокера и пароле стола, а не на недостижимости.
+        "DESKTOP_RUSTDESK_BIND": source_values.get("DESKTOP_RUSTDESK_BIND") or "0.0.0.0",
         "DESKTOP_READINESS_DIR": os.fspath(layout.shared / "desktop-readiness"),
         "BROWSER_AUTHORITY_CONSUME_URL": app_values["BROWSER_AUTHORITY_CONSUME_URL"],
         "BROWSER_MAINTENANCE_CONSUME_URL": app_values["BROWSER_MAINTENANCE_CONSUME_URL"],

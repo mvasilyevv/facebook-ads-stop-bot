@@ -164,7 +164,7 @@ def _validate_zipapp_preflight() -> None:
             "VISION_BOOTSTRAP_ENV_FILE": os.fspath(source),
             "VISION_CONFIG_DIR": os.fspath(temporary),
             "DESKTOP_RUSTDESK_DATA_DIR": os.fspath(temporary),
-            "DESKTOP_RUSTDESK_BIND": "127.0.0.1",
+            "DESKTOP_RUSTDESK_BIND": "0.0.0.0",
             "DESKTOP_READINESS_DIR": os.fspath(temporary),
             "BROWSER_CONTROL_ENV_FILE": os.fspath(source),
             "BROWSER_AUTHORITY_ENV_FILE": os.fspath(source),

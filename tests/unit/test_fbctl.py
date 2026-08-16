@@ -3646,6 +3646,26 @@ def test_channel_address_defaults_to_the_public_broker() -> None:
     assert values["DESKTOP_RUSTDESK_SERVER"] == "62.60.150.133"
 
 
+def test_channel_bind_default_matches_the_advertised_broker(tmp_path: Path) -> None:
+    """Интерфейс брокера согласован с адресом, который объявляют оператору.
+
+    Публичный адрес в паре с петлевым bind означал бы чистую установку,
+    которая называет оператору адрес, на котором брокер не слушает: клиент
+    RustDesk молча не соединился бы, а причина не видна ни в одном логе.
+    """
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+    )
+
+    assert config.values["DESKTOP_RUSTDESK_BIND"] == "0.0.0.0"
+    assert config.desktop_values["DESKTOP_RUSTDESK_SERVER"] == "62.60.150.133"
+
+
 def test_desktop_environment_is_exactly_the_channel() -> None:
     """Стол получает ровно пароль и адрес брокера — и ничего сверх."""
     from fbctl.config import DESKTOP_ENV_KEYS, DESKTOP_ENV_REQUIRED_KEYS
