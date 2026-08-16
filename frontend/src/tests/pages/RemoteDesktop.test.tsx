@@ -99,10 +99,11 @@ describe("RemoteDesktopPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("называет условие доступа, а не только факт приватной сети", () => {
+  it("не требует от оператора VPN — брокер доступен напрямую", () => {
     render(<RemoteDesktopPage />);
 
-    expect(screen.getByText(/Tailscale/)).toBeInTheDocument();
+    expect(screen.queryByText(/Tailscale/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/приватной сети/)).not.toBeInTheDocument();
   });
 
   it("не даёт длинному ключу разъехать строку канала", () => {
