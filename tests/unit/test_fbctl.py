@@ -129,8 +129,13 @@ def _manifest(tmp_path: Path, release_id: str = "release-1") -> Path:
     )
 
 
-def _source_env(tmp_path: Path) -> Path:
-    values = {
+def _minimal_source() -> dict[str, str]:
+    """Минимальный набор ключей, которого хватает canonicalize_source.
+
+    Тот же набор, что _source_env кладёт на диск — вынесен отдельно для
+    тестов, которым достаточно словаря значений без временного файла.
+    """
+    return {
         "ENCRYPTION_KEY": base64.urlsafe_b64encode(b"e" * 32).decode("ascii"),
         "ENCRYPTION_KEY_VERIFY": "verification-value",
         "TELEGRAM_BOT_TOKEN": "123456:test-token",
@@ -140,6 +145,10 @@ def _source_env(tmp_path: Path) -> Path:
         "API_KEY": "k" * 32,
         "DESKTOP_OWNER_TELEGRAM_USER_ID": "123456",
     }
+
+
+def _source_env(tmp_path: Path) -> Path:
+    values = _minimal_source()
     return _write(
         tmp_path / "source.env",
         "".join(f"{key}={value}\n" for key, value in values.items()),
@@ -3624,6 +3633,17 @@ def test_rustdesk_channel_survives_the_source_schema(tmp_path) -> None:
         "DESKTOP_KASM_SERVICE_USER",
         "DESKTOP_KASM_SERVICE_PASSWORD",
     }
+
+
+def test_channel_address_defaults_to_the_public_broker() -> None:
+    """Канал доступен без VPN: дефолт указывает на публичный адрес брокера.
+
+    Приватный адрес в дефолте означал бы, что чистая установка поднимает
+    стол, до которого нельзя дойти ни с одного устройства без VPN.
+    """
+    values = canonicalize_source(_minimal_source(), incumbent={})
+
+    assert values["DESKTOP_RUSTDESK_SERVER"] == "62.60.150.133"
 
 
 def test_desktop_environment_is_exactly_the_channel() -> None:

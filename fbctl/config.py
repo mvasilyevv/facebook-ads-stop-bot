@@ -547,9 +547,11 @@ def canonicalize_source(values: dict[str, str], *, incumbent: dict[str, str]) ->
         result.pop(key, None)
     result.setdefault("POSTGRES_USER", "fb_agent")
     result.setdefault("POSTGRES_DB", "fb_agent")
-    # Адрес брокера по умолчанию — Tailscale-адрес хоста: канал приватный, в
-    # интернет не выставляется. Переопределяется в source при смене сети.
-    result.setdefault("DESKTOP_RUSTDESK_SERVER", "100.73.162.127")
+    # Адрес брокера по умолчанию — публичный адрес хоста: канал должен
+    # открываться с любого устройства без VPN. Приватность держится не на
+    # недостижимости адреса, а на ключе брокера и пароле стола.
+    # Переопределяется в source при смене хоста.
+    result.setdefault("DESKTOP_RUSTDESK_SERVER", "62.60.150.133")
     result.setdefault("TELEGRAM_OIDC_REDIRECT_URI", f"{PUBLIC_URL}/auth/telegram/callback")
     for key in DURABLE_KEYS:
         old_value = incumbent.get(key, "")
