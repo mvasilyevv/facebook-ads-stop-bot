@@ -54,7 +54,7 @@ function RemoteDesktopPage() {
           </div>
           <div className="flex shrink-0 items-center gap-1.5 font-display text-[12px] uppercase tracking-[0.08em] text-success">
             <ShieldCheck size={14} strokeWidth={1.7} aria-hidden="true" />
-            Приватная сеть
+            Ключ и пароль
           </div>
         </div>
 
