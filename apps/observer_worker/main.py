@@ -1038,6 +1038,16 @@ async def _run_claimed_observer_scan(
     }
     if scan_outcome in {"success", "empty"}:
         finalized = await mark_succeeded(engine, result=task_result, **fence)
+    elif scan_outcome == "paused":
+        # Сканирование выключил владелец: задача не выполнена, но и не
+        # провалена. Красное здесь означало бы поломку там, где сработал
+        # собственный выключатель оператора. Финализируем тем же фенсом;
+        # mark_cancelled сам пишет result, отдельного аргумента у него нет.
+        finalized = await mark_cancelled(
+            engine,
+            reason="scanning_paused",
+            **fence,
+        )
     else:
         finalized = await mark_failed(
             engine,

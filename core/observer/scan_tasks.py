@@ -20,6 +20,7 @@ from typing import TypeVar
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from core.observer.queries import load_scanning_enabled
 from core.tasks.queue import Task, claim_next_task, create_task
 
 OBSERVER_SCAN_TASK_TYPE = "observer_scan"
@@ -192,7 +193,7 @@ async def enqueue_scheduled_observer_scan(
     engine: AsyncEngine,
     *,
     now: datetime | None = None,
-) -> ObserverScanReceipt:
+) -> ObserverScanReceipt | None:
     """Publish exactly one outstanding adaptive background scan.
 
     The observer may legitimately run more than once inside the 120-second
@@ -201,7 +202,16 @@ async def enqueue_scheduled_observer_scan(
     operator publishers. An already runnable pending/running scan is reused;
     after it reaches a terminal state the next adaptive tick receives a fresh
     durable task.
+
+    Returns ``None`` while the owner keeps scanning switched off: on pause there
+    is no work to publish at all.
     """
+
+    # Публиковать нечего: на паузе скан немедленно вернёт outcome=paused, и
+    # каждая такая задача осядет в ленте оператора как отказ. Точка чтения
+    # та же, что у остальных воркеров, замирающих на глобальном стопе.
+    if not await load_scanning_enabled(engine):
+        return None
 
     scheduled_at = now or datetime.now(UTC)
     async with engine.begin() as conn:
