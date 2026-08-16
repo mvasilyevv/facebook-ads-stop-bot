@@ -28,6 +28,7 @@ import {
   formatOperatorScaleTick as formatScaleTick,
   formatOperatorUsd as formatUsd,
   isActiveOperatorAction as isActiveAction,
+  collapseConsecutiveOperatorActions,
   collapseOperatorAttentionItems,
   operatorAttentionCopy,
   operatorCabinetTimezone,
@@ -740,53 +741,9 @@ function ActionJournal({ section }: { section: OperatorSnapshot["actions"] }) {
   );
 }
 
-interface CollapsedActionGroup {
-  /** Самый свежий элемент группы — он же задаёт ссылку, ключ и время строки. */
-  item: OperatorActionItem;
-  count: number;
-}
-
-/**
- * Сворачивает ТОЛЬКО подряд идущие одинаковые записи. Лента хронологическая:
- * слияние по всему списку (как для сигналов внимания в collapseOperatorAttentionItems)
- * перемешало бы порядок событий, поэтому сравниваются исключительно соседи.
- *
- * «Одинаковость» — это то, что оператор реально видит в строке: заголовок,
- * конкретная цель (иначе разные объявления с одним типом команды слились бы
- * в одну ложную запись) и состояние. Текст причины сверяется отдельно, хотя
- * сегодня он однозначно определяется состоянием — так группировка не сломается
- * молча, если текст когда-нибудь станет зависеть от чего-то ещё.
- */
-function collapseConsecutiveActions(items: OperatorActionItem[]): CollapsedActionGroup[] {
-  const groups: CollapsedActionGroup[] = [];
-  for (const item of items) {
-    const group = groups.at(-1);
-    if (group && isSameActionRow(group.item, item)) {
-      group.count += 1;
-      if (isFresherAction(item, group.item)) group.item = item;
-      continue;
-    }
-    groups.push({ item, count: 1 });
-  }
-  return groups;
-}
-
-function isSameActionRow(a: OperatorActionItem, b: OperatorActionItem): boolean {
-  return (
-    a.title === b.title &&
-    a.target_label === b.target_label &&
-    a.state === b.state &&
-    operatorActionStateReason(a.state) === operatorActionStateReason(b.state)
-  );
-}
-
-function isFresherAction(candidate: OperatorActionItem, current: OperatorActionItem): boolean {
-  return new Date(candidate.updated_at).getTime() > new Date(current.updated_at).getTime();
-}
-
 export function ActionList({ items }: { items: OperatorActionItem[] }) {
   if (!items.length) return <LedgerEmpty text="Активных действий нет." />;
-  const groups = collapseConsecutiveActions(items);
+  const groups = collapseConsecutiveOperatorActions(items);
   return (
     <ol className="ledger-action-list" aria-label="Очередь и история действий">
       {groups.map(({ item, count }) => {

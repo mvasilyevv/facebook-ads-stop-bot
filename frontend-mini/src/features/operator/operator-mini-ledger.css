@@ -658,6 +658,15 @@
   border-bottom: 0;
 }
 
+/* Счётчик повторов не сжимается и не обрезается: он и есть причина,
+   по которой двадцать одинаковых строк стали одной. */
+.mini-action-journal__repeats {
+  flex: 0 0 auto;
+  color: var(--color-bg-9);
+  font-family: var(--font-numeric);
+  font-size: 12px;
+}
+
 .mini-action-journal__meta {
   display: flex;
   gap: 10px;

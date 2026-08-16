@@ -36,6 +36,7 @@ import {
   formatOperatorScaleTick as formatScaleTick,
   formatOperatorUsd as formatUsd,
   isActiveOperatorAction as isActiveAction,
+  collapseConsecutiveOperatorActions,
   operatorAttentionCopy,
   operatorCabinetTimezone,
   operatorLedgerTimezone,
@@ -735,7 +736,7 @@ function MiniActionJournal({
         <MiniLedgerEmpty text="Активных действий нет." />
       ) : (
         <ol className="mini-action-journal">
-          {items.map((item) => {
+          {collapseConsecutiveOperatorActions(items).map(({ item, count }) => {
             const Icon = ACTION_ICON[item.state];
             return (
               <li key={item.id}>
@@ -743,6 +744,13 @@ function MiniActionJournal({
                   <span>
                     {item.title} · {item.target_label ?? "система"}
                   </span>
+                  {/* Счётчик вынесен из заголовка: в нём ellipsis, и на узком
+                      экране длинное имя цели съело бы именно его. */}
+                  {count > 1 ? (
+                    <span className="mini-action-journal__repeats">
+                      ×{count}
+                    </span>
+                  ) : null}
                   <span data-state={item.state}>
                     <Icon size={14} aria-hidden="true" />
                     {ACTION_STATE_LABEL[item.state]}
@@ -757,6 +765,12 @@ function MiniActionJournal({
                 ) : null}
                 <div className="mini-action-journal__meta">
                   <span>Задача {item.public_id}</span>
+                  {count > 1 ? (
+                    <span>
+                      Последний повтор{" "}
+                      {formatDateTime(item.updated_at, item.cabinet_timezone)}
+                    </span>
+                  ) : null}
                 </div>
                 <Link to="/actions/$actionId" params={{ actionId: item.id }}>
                   Открыть действие
@@ -930,7 +944,7 @@ export function MiniActions({ items }: { items: OperatorActionItem[] }) {
   if (!items.length) return <MiniEmpty text="Активных действий нет." />;
   return (
     <ol className="mt-3 divide-y divide-[var(--color-hairline)]">
-      {items.map((item) => (
+      {collapseConsecutiveOperatorActions(items).map(({ item, count }) => (
         <li key={item.id} className="py-3">
           <div className="flex items-baseline justify-between gap-3">
             <Link
@@ -940,8 +954,9 @@ export function MiniActions({ items }: { items: OperatorActionItem[] }) {
             >
               {item.title}
             </Link>
-            <span className="shrink-0 font-display text-[12px] text-bg-9">
-              {item.public_id}
+            <span className="flex shrink-0 items-baseline gap-2 font-display text-[12px] text-bg-9">
+              {count > 1 ? <span className="text-bg-11">×{count}</span> : null}
+              <span>{item.public_id}</span>
             </span>
           </div>
           <p className="mt-1 text-[14px] text-bg-9">
