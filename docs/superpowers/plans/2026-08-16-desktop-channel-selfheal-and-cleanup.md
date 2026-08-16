@@ -1339,6 +1339,54 @@ Expected: все три открыты.
 
 Стол при этом ходит к брокеру по внутренним именам `rustdesk-id`/`rustdesk-relay` и сменой публичного адреса не затрагивается — убедиться, что после релиза он по-прежнему зарегистрирован (в логе брокера есть его ID, либо запись о нём есть в базе брокера).
 
+- [ ] **Step 8: Убрать из UI ставшее неправдой требование VPN**
+
+Задача 4 добавила в оба фронта подсказку «на устройстве должен быть включён Tailscale» — после этого решения она вводит оператора в заблуждение. Тесты, которые её проверяют (`expect(screen.getByText(/Tailscale/))` в обоих тест-файлах), тоже должны уйти.
+
+Сначала поправить тесты: в `frontend/src/tests/pages/RemoteDesktop.test.tsx` и `frontend-mini/src/tests/Desktop.test.tsx` заменить проверку упоминания Tailscale на проверку, что экран НЕ требует VPN:
+
+```tsx
+  it("не требует от оператора VPN — брокер доступен напрямую", () => {
+    render(<RemoteDesktopPage />);
+
+    expect(screen.queryByText(/Tailscale/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/приватной сети/)).not.toBeInTheDocument();
+  });
+```
+
+Тест на сжимаемость строки канала (`min-w-0` + `truncate`) не трогать — он про другое и остаётся.
+
+Затем текст. В `frontend/src/routes/remote-desktop/index.tsx` абзац подсказки:
+
+```tsx
+                <p className="mx-auto mt-4 max-w-[460px] text-[12px] leading-5 text-bg-8">
+                  Первая настройка клиента: Settings → Network → ID/Relay Server — адрес сервера и
+                  ключ выше. Пароль канала приложение запомнит после первого подключения.
+                </p>
+```
+
+В `frontend-mini/src/routes/desktop/index.tsx` абзац под заголовком:
+
+```tsx
+              <p className="mt-1 text-[12px] leading-relaxed text-bg-9">
+                Через приложение RustDesk. Адрес и ключ вводятся один раз, пароль канала приложение
+                запомнит после первого подключения.
+              </p>
+```
+
+Прогнать: `cd frontend && pnpm test`, `cd frontend-mini && pnpm test`, затем `pnpm -r typecheck && pnpm -r lint`.
+
+Коммит:
+
+```bash
+git add frontend/src/routes/remote-desktop/index.tsx frontend-mini/src/routes/desktop/index.tsx frontend/src/tests/pages/RemoteDesktop.test.tsx frontend-mini/src/tests/Desktop.test.tsx
+git commit -m "fix(desktop-ui): убрать требование VPN — брокер доступен напрямую
+
+Подсказка про Tailscale появилась, когда брокер слушал только приватный
+адрес. После публикации брокера она отправляет оператора настраивать VPN,
+которого не нужно."
+```
+
 ---
 
 ## Порядок выполнения
