@@ -3793,3 +3793,74 @@ def test_channel_healing_runs_before_the_application_gate() -> None:
     assert "ensure_desktop_channel" in steps
     assert steps.index("start_application") < steps.index("ensure_desktop_channel")
     assert steps.index("ensure_desktop_channel") < steps.index("verify_application")
+
+
+def test_unavailable_healer_names_the_http_code() -> None:
+    """Во время простоя код ответа — единственная диагностика у владельца.
+
+    401 (протухший API_KEY), 404 (роутер не подключён) и 502 выглядели
+    одинаково, хотя чинятся по-разному.
+    """
+
+    class _RejectingProbe:
+        def post_json(self, url, payload, *, headers=None, timeout: float = 15):
+            del url, payload, headers, timeout
+            return 401, {"detail": "unauthorized"}
+
+    with pytest.raises(FbctlError) as error:
+        fbctl_probes.ensure_browser_channel(_RejectingProbe(), "http://api", "k" * 24)
+
+    assert "401" in str(error.value)
+
+
+class _DeadApiProbe(FakeProbes):
+    """API не поднялся: любой HTTP-запрос к нему обрывается на соединении."""
+
+    def __init__(self) -> None:
+        self.post_calls: list[str] = []
+
+    def status(self, url: str, *, timeout: float = 15) -> int:
+        del timeout
+        raise FbctlError(f"endpoint is unavailable: {url}")
+
+    def post_json(self, url: str, payload, *, headers=None, timeout: float = 15):
+        del payload, headers, timeout
+        self.post_calls.append(url)
+        raise FbctlError(f"endpoint is unavailable: {url}")
+
+
+def test_channel_step_does_not_claim_a_dead_api_as_its_own_failure(tmp_path: Path) -> None:
+    """Шаг стоит первым после старта API и обязан назвать чужой отказ чужим.
+
+    Без собственной проверки доступности шаг три минуты крутил бы ожидание
+    браузерного канала и завалил релиз сообщением про стол, хотя не поднялся
+    сам API. Владелец получает ложный след в момент простоя единственного слота.
+    """
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+    )
+    probes = _DeadApiProbe()
+    slept: list[float] = []
+    clock = iter(range(0, 100_000, 100))
+    controller = ProductionController(
+        runner=FakeRunner(),
+        probes=probes,
+        log=lambda _message: None,
+        monotonic=lambda: float(next(clock)),
+        sleep=slept.append,
+    )
+
+    with pytest.raises(FbctlError) as error:
+        controller._ensure_desktop_channel(config)  # noqa: SLF001 - точный контракт шага
+
+    message = str(error.value)
+    assert "/healthz" in message
+    assert "browser channel" not in message
+    # Ни одной попытки лечить канал и ни одной секунды ожидания вслепую.
+    assert probes.post_calls == []
+    assert slept == []

@@ -971,14 +971,18 @@ class ProductionController:
         Стол пересоздаётся каждым деплоем, поэтому канал после старта всегда
         нужно поднимать заново. Ручка идемпотентна, а браузер может стартовать
         не с первой попытки — отсюда ожидание, а не единичный вызов.
+
+        Шаг первым обращается к только что поднятому API, раньше гейта
+        verify_application, поэтому сначала повторяет его проверки живости: без
+        них не поднявшийся API три минуты выглядел бы упавшим браузерным
+        каналом и валил релиз чужим диагнозом.
         """
+        api = self._api_origin(config)
+        require_ok_status(self.probes, f"{api}/healthz")
+        require_ok_status(self.probes, f"{api}/readyz")
         wait_for(
             "recovered browser channel",
-            lambda: ensure_browser_channel(
-                self.probes,
-                self._api_origin(config),
-                config.api_key,
-            ),
+            lambda: ensure_browser_channel(self.probes, api, config.api_key),
             timeout=180,
             interval=5,
             monotonic=self.monotonic,

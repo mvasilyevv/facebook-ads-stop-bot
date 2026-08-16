@@ -245,7 +245,10 @@ def ensure_browser_channel(client: ProbeClient, api_origin: str, api_key: str) -
         timeout=120,
     )
     if status != 200 or not isinstance(payload, dict):
-        raise FbctlError("browser channel healer is unavailable")
+        # Код в сообщении обязателен: 401 (протухший API_KEY), 404 (роутер не
+        # подключён) и 502 чинятся по-разному, а во время простоя это
+        # единственная диагностика у владельца.
+        raise FbctlError(f"browser channel healer returned HTTP {status}")
     if payload.get("ok") is True:
         return
     message = payload.get("message")
