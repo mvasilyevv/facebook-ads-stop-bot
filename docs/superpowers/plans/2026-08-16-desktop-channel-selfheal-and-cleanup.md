@@ -1237,6 +1237,110 @@ git commit -m "feat(operator-ui): сворачивать подряд идущи
 
 ---
 
+### Task 10: Брокер доступен без VPN
+
+**Files:**
+- Modify (на прод-хосте, не в репозитории): `/opt/fb-agent/shared/source.env` — значения `DESKTOP_RUSTDESK_BIND` и `DESKTOP_RUSTDESK_SERVER`
+- Modify: `fbctl/config.py` (дефолт `DESKTOP_RUSTDESK_SERVER`)
+- Test: `tests/unit/test_fbctl.py`
+
+**Interfaces:**
+- Consumes: `DESKTOP_RUSTDESK_SERVER` — адрес, который стол публикует оператору в `rustdesk.json` и который показывают оба фронта. `DESKTOP_RUSTDESK_BIND` — интерфейс, на котором Compose публикует порты брокеров. Оба ключа durable (`DURABLE_KEYS`), то есть переживают деплой и не ротируются.
+- Produces: ничего для последующих задач.
+
+**Решение владельца:** брокер слушал только Tailscale-адрес `100.73.162.127`, из-за чего каждое устройство требовало VPN. На Mac Tailscale не установлен вовсе, и подключение не доходило: клиент спрашивал про ID у публичного `rs-ny.rustdesk.com`, который про наш стол не знает. Владелец выбрал доступность: брокер публикуется на публичном адресе, и любое устройство подключается по адресу, ключу и ID без VPN.
+
+**Что защищает канал после этого:** ключ брокера — клиент без него не зарегистрируется и стол не найдёт; и пароль канала на самом столе (56 символов, сгенерирован `fbctl`). Приватность держится на пароле, а не на том, что брокер спрятан. Так работает большинство self-hosted инсталляций RustDesk.
+
+**Проверено заранее:** цепочка `DOCKER-USER` на хосте пуста, то есть опубликованные Docker'ом порты не фильтруются ufw. Правки файрвола не требуются — достаточно сменить интерфейс публикации.
+
+- [ ] **Step 1: Написать падающий тест на дефолт адреса**
+
+Дефолт в коде указывает на Tailscale-адрес и после этого решения вводит в заблуждение при чистой установке. В `tests/unit/test_fbctl.py` найти тест, который проверяет подстановку `DESKTOP_RUSTDESK_SERVER` по умолчанию (ищи по строке `100.73.162.127`), и заменить ожидание на публичный адрес хоста `62.60.150.133`. Если такого теста нет — добавить:
+
+```python
+def test_channel_address_defaults_to_the_public_broker() -> None:
+    """Канал доступен без VPN: дефолт указывает на публичный адрес брокера.
+
+    Приватный адрес в дефолте означал бы, что чистая установка поднимает
+    стол, до которого нельзя дойти ни с одного устройства без VPN.
+    """
+    values = canonicalize_source(_minimal_source(), incumbent={})
+
+    assert values["DESKTOP_RUSTDESK_SERVER"] == "62.60.150.133"
+```
+
+`_minimal_source()` — тот способ построения минимального source, который в файле уже используется соседними тестами `canonicalize_source`; возьми его оттуда.
+
+- [ ] **Step 2: Прогнать и убедиться, что падает**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/test_fbctl.py -q -k "channel_address or rustdesk_channel"`
+Expected: FAIL — дефолт всё ещё `100.73.162.127`.
+
+- [ ] **Step 3: Поменять дефолт**
+
+В `fbctl/config.py` в `canonicalize_source` заменить подстановку по умолчанию:
+
+```python
+    result.setdefault("DESKTOP_RUSTDESK_SERVER", "62.60.150.133")
+```
+
+Рядом оставить комментарий, объясняющий выбор: адрес публичный, потому что канал должен открываться с любого устройства без VPN, а защищают его ключ брокера и пароль стола.
+
+- [ ] **Step 4: Прогнать гейты**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit -q && .venv/bin/python -m ruff check . && .venv/bin/python -m ruff format --check . && ./scripts/validate-platform-configs.sh`
+Expected: всё зелёное.
+
+- [ ] **Step 5: Коммит**
+
+```bash
+git add fbctl/config.py tests/unit/test_fbctl.py
+git commit -m "feat(desktop): публиковать брокер канала на публичном адресе
+
+Брокер слушал только Tailscale-адрес, из-за чего каждое устройство
+требовало VPN, а на Mac его не было вовсе — клиент спрашивал про ID у
+публичного rs-ny.rustdesk.com и не находил стол. Решение владельца:
+доступность важнее спрятанности. Канал защищают ключ брокера и пароль
+стола, а не недостижимость адреса."
+```
+
+- [ ] **Step 6: Переключить адрес на хосте**
+
+Значения durable и живут только на хосте, поэтому меняются там, до релиза:
+
+```bash
+ssh root@62.60.150.133 'set -e
+cp -a /opt/fb-agent/shared/source.env /opt/fb-agent/shared/source.env.bak-prePublicBroker
+sed -i "s/^DESKTOP_RUSTDESK_BIND=.*/DESKTOP_RUSTDESK_BIND=0.0.0.0/" /opt/fb-agent/shared/source.env
+sed -i "s/^DESKTOP_RUSTDESK_SERVER=.*/DESKTOP_RUSTDESK_SERVER=62.60.150.133/" /opt/fb-agent/shared/source.env
+grep -E "^DESKTOP_RUSTDESK_(BIND|SERVER)=" /opt/fb-agent/shared/source.env'
+```
+
+Expected: `DESKTOP_RUSTDESK_BIND=0.0.0.0` и `DESKTOP_RUSTDESK_SERVER=62.60.150.133`.
+
+- [ ] **Step 7: Выкатить и проверить**
+
+Релиз выполняется тем же способом, что и в задаче 5 (`gh workflow run release.yml --ref main` после мержа). После зелёного релиза проверить:
+
+```bash
+ssh root@62.60.150.133 'docker ps --format "{{.Names}} {{.Ports}}" | grep rustdesk; cat /opt/fb-agent/shared/desktop-readiness/rustdesk.json'
+```
+
+Expected: порты брокеров опубликованы на `0.0.0.0`, а не на `100.73.162.127`; в `rustdesk.json` поле `server` равно `62.60.150.133`, `device_id` — числовой.
+
+Проверить доступность снаружи (с машины владельца, вне сервера):
+
+```bash
+for p in 21115 21116 21117; do nc -z -w 5 62.60.150.133 $p && echo "$p открыт" || echo "$p закрыт"; done
+```
+
+Expected: все три открыты.
+
+Стол при этом ходит к брокеру по внутренним именам `rustdesk-id`/`rustdesk-relay` и сменой публичного адреса не затрагивается — убедиться, что после релиза он по-прежнему зарегистрирован (в логе брокера есть его ID, либо запись о нём есть в базе брокера).
+
+---
+
 ## Порядок выполнения
 
 Задачи 1 → 2 строго последовательны: шаг деплоя вызывает ручку из задачи 1. Задачи 3, 4 и 6 независимы и могут идти в любом порядке. Задача 5 выполняется последней и требует смерженных 1–2.
