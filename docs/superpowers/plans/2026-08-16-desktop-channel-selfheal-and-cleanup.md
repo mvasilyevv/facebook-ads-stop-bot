@@ -570,12 +570,21 @@ Caddy на порт 8444 снятого веб-канала. Гард держи
 
 ---
 
-### Task 4: Оператор видит, что канал живёт в приватной сети
+### Task 4: Строки канала не разъезжаются на телефоне, и оператор видит условие доступа
 
 **Files:**
-- Modify: `frontend/src/routes/remote-desktop/index.tsx:106-109`
-- Modify: `frontend-mini/src/routes/desktop/index.tsx:52-55`
+- Modify: `frontend/src/routes/remote-desktop/index.tsx` (компонент `ChannelRow` + абзац подсказки)
+- Modify: `frontend-mini/src/routes/desktop/index.tsx` (компонент `ChannelRow` + абзац подсказки)
 - Test: `frontend/src/tests/pages/RemoteDesktop.test.tsx`, `frontend-mini/src/tests/Desktop.test.tsx`
+
+**Дефект вёрстки (найден владельцем на живом телефоне):** ключ брокера —
+длинная строка без пробелов — уезжает под кнопку копирования и вылезает за
+карточку. Причина: строки канала лежат в `<dl className="grid gap-2">`, а у
+grid-элемента `min-width` по умолчанию `auto`, то есть он не может сжаться
+уже своего содержимого. Внутренний `min-w-0` при этом бесполезен, и
+`truncate` не срабатывает никогда. Лечится `min-w-0` на самом grid-элементе —
+корневом `<div>` компонента `ChannelRow`. Дефект есть в обоих фронтах; на
+широком экране он просто не заметен.
 
 **Interfaces:**
 - Consumes: `useDesktopNativeChannel()` из `frontend/src/lib/api/desktop.ts` и инлайновый `tmaApi.useQuery("get", "/api/desktop/native", ...)` в мини-аппе — оба отдают `{ available, server, key, device_id }`.
@@ -583,7 +592,7 @@ Caddy на порт 8444 снятого веб-канала. Гард держи
 
 **Почему:** брокер слушает только приватный адрес, поэтому с устройства без Tailscale подключение не состоится вообще — и без подсказки это выглядит как поломка стола, а не как отсутствующий VPN. Текущая формулировка «Сервер доступен только из приватной сети» верна, но не говорит, что именно включить.
 
-- [ ] **Step 1: Написать падающий тест веб-страницы**
+- [ ] **Step 1: Написать падающие тесты веб-страницы**
 
 В `frontend/src/tests/pages/RemoteDesktop.test.tsx` добавить внутрь `describe("RemoteDesktopPage", ...)`:
 
@@ -593,9 +602,21 @@ Caddy на порт 8444 снятого веб-канала. Гард держи
 
     expect(screen.getByText(/Tailscale/)).toBeInTheDocument();
   });
+
+  it("не даёт длинному ключу разъехать строку канала", () => {
+    render(<RemoteDesktopPage />);
+
+    // Строка канала — grid-элемент, а у него min-width по умолчанию auto:
+    // без min-w-0 он не сожмётся, и длинный ключ уедет под кнопку копирования.
+    const key = screen.getByText("QJztruGKKjvEcX9XBLMixf21wieLGYABEaWby97JP5s=");
+    const row = key.closest("div")!.parentElement!;
+
+    expect(row.className).toContain("min-w-0");
+    expect(key.className).toContain("truncate");
+  });
 ```
 
-- [ ] **Step 2: Написать падающий тест мини-аппа**
+- [ ] **Step 2: Написать падающие тесты мини-аппа**
 
 В `frontend-mini/src/tests/Desktop.test.tsx` добавить внутрь `describe("Mini App RemoteDesktopPage", ...)`:
 
@@ -604,6 +625,17 @@ Caddy на порт 8444 снятого веб-канала. Гард держи
     render(<RemoteDesktopPage />);
 
     expect(screen.getByText(/Tailscale/)).toBeInTheDocument();
+  });
+
+  it("не даёт длинному ключу разъехать строку канала", () => {
+    render(<RemoteDesktopPage />);
+
+    // На телефоне это видно глазом: ключ брокера уезжал под кнопку копирования.
+    const key = screen.getByText("QJztruGKKjvEcX9XBLMixf21wieLGYABEaWby97JP5s=");
+    const row = key.closest("div")!.parentElement!;
+
+    expect(row.className).toContain("min-w-0");
+    expect(key.className).toContain("truncate");
   });
 ```
 
@@ -638,13 +670,29 @@ Expected: FAIL — то же самое.
               </p>
 ```
 
+- [ ] **Step 5a: Починить сжатие строки канала в обоих фронтах**
+
+В обоих файлах у компонента `ChannelRow` добавить `min-w-0` в класс корневого `<div>`. Было (одинаково в вебе и мини-аппе, отличаются только скругление и размер кнопки):
+
+```tsx
+    <div className="flex items-center justify-between gap-3 rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 px-3 py-2">
+```
+
+Стало:
+
+```tsx
+    <div className="flex min-w-0 items-center justify-between gap-3 rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 px-3 py-2">
+```
+
+Больше ничего в компоненте не менять: `min-w-0` на внутреннем блоке и `truncate` на значении уже стоят и заработают, как только сожмётся сам grid-элемент.
+
 - [ ] **Step 6: Прогнать тесты обоих фронтов**
 
 Run: `cd frontend && pnpm test`
-Expected: PASS — `Test Files 55 passed`, `Tests 502 passed` (на один больше прежнего).
+Expected: PASS — `Test Files 55 passed`, `Tests 503 passed` (на два больше прежнего).
 
 Run: `cd frontend-mini && pnpm test`
-Expected: PASS — `Test Files 32 passed`, `Tests 185 passed`.
+Expected: PASS — `Test Files 32 passed`, `Tests 186 passed`.
 
 - [ ] **Step 7: Проверить типы, линт и типографский гард**
 
@@ -655,10 +703,14 @@ Expected: обе команды завершаются `Done` без ошибо�
 
 ```bash
 git add frontend/src/routes/remote-desktop/index.tsx frontend-mini/src/routes/desktop/index.tsx frontend/src/tests/pages/RemoteDesktop.test.tsx frontend-mini/src/tests/Desktop.test.tsx
-git commit -m "fix(desktop-ui): назвать условие доступа к столу, а не только приватную сеть
+git commit -m "fix(desktop-ui): починить строку канала на телефоне и назвать условие доступа
 
-Брокер слушает только приватный адрес, и с устройства без Tailscale
-подключение не доходит вовсе. Без явной подсказки это читается как
+Ключ брокера — длинная строка без пробелов — уезжал под кнопку копирования:
+строки канала лежат в grid, а grid-элемент с min-width auto не сжимается
+уже содержимого, поэтому truncate не срабатывал никогда.
+
+Заодно брокер слушает только приватный адрес, и с устройства без Tailscale
+подключение не доходит вовсе — без явной подсказки это читается как
 поломка стола, а не как выключенный VPN."
 ```
 
@@ -729,9 +781,196 @@ Expected: `removed`.
 
 ---
 
+### Task 6: Ни один экран не обрезает содержимое
+
+**Files:**
+- Modify: `frontend/src/features/operator/operator-ledger.css` (правило `.ledger-approaching-item__meta`)
+- Modify: `frontend-mini/src/features/operator/operator-mini-ledger.css` (правило `.mini-approaching-item__meta`)
+- Modify: `frontend/src/components/offers/OfferCard.tsx` (футер действий)
+- Modify: `frontend/src/components/layout/CommandPalette.tsx`, `frontend/src/components/analytics/PerformanceTable.tsx`, `frontend/src/components/domain/campaigns/WizardStep6Preview.tsx`, `frontend/src/components/domain/assistant/AssistantPanel.tsx`, `frontend/src/components/layout/WorkerPulse.tsx`, `frontend/src/components/history/HistoryTimeline.tsx`, `frontend/src/components/domain/campaigns/CampaignRunsHistory.tsx`
+- Create: `frontend/src/tests/guards/shrinkable-truncate.test.ts`
+- Test: `frontend/src/tests/routes/offers.test.tsx`
+
+**Interfaces:**
+- Consumes: ничего из предыдущих задач.
+- Produces: ничего для последующих задач.
+
+**Откуда список:** владелец прислал два скриншота с живого экрана, разведка нашла остальные места того же класса. Правило, которое здесь нарушается: у flex- и grid-элемента `min-width` по умолчанию равен `auto`, то есть элемент не может стать уже своего содержимого. Пока на нём нет `min-w-0`, стоящий внутри `truncate` не сработает никогда — контейнер просто расширится и вытолкнет содержимое за карточку. Второй вариант того же — `flex: 1` (это `flex: 1 1 0%`), который раздаёт равные доли независимо от длины подписей.
+
+- [ ] **Step 1: Написать защитный тест, который ловит весь класс разом**
+
+Создать `frontend/src/tests/guards/shrinkable-truncate.test.ts`:
+
+```ts
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+/**
+ * Сжимаемость важнее вкуса: у flex- и grid-элемента min-width по умолчанию
+ * auto, поэтому элемент не может стать уже содержимого. Пока на нём нет
+ * min-w-0, соседний truncate не срабатывает никогда — длинное имя кампании
+ * или ключ брокера выталкивает карточку за экран. Владелец находил это
+ * дважды на живом телефоне; тест держит класс дефекта закрытым.
+ */
+
+const ROOTS = [
+  resolve(__dirname, "../../.."),
+  resolve(__dirname, "../../../../frontend-mini"),
+];
+
+function sourceFiles(dir: string): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    if (entry === "node_modules" || entry === "dist" || entry === "tests") continue;
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) {
+      found.push(...sourceFiles(full));
+    } else if (full.endsWith(".tsx")) {
+      found.push(full);
+    }
+  }
+  return found;
+}
+
+/** Значения className в одном атрибуте: только строковые литералы. */
+function classNameLiterals(source: string): string[] {
+  return [...source.matchAll(/className=(?:"([^"]*)"|\{`([^`]*)`\})/g)].map(
+    (match) => match[1] ?? match[2] ?? "",
+  );
+}
+
+describe("сжимаемость обрезаемых строк", () => {
+  it("не оставляет truncate на элементе, который не умеет сжиматься", () => {
+    const offenders: string[] = [];
+
+    for (const root of ROOTS) {
+      for (const file of sourceFiles(join(root, "src"))) {
+        const source = readFileSync(file, "utf8");
+        for (const classes of classNameLiterals(source)) {
+          const words = classes.split(/\s+/);
+          const shrinks = words.includes("flex-1") || words.includes("basis-0");
+          const clips = words.includes("truncate");
+          if (shrinks && clips && !words.includes("min-w-0")) {
+            offenders.push(`${relative(root, file)}: ${classes}`);
+          }
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Прогнать защитный тест и увидеть список нарушителей**
+
+Run: `cd frontend && pnpm test -- shrinkable-truncate`
+Expected: FAIL — в списке `offenders` окажутся как минимум `src/components/layout/CommandPalette.tsx`, `src/components/domain/campaigns/WizardStep6Preview.tsx` (две строки). Выпиши получившийся список: он и есть точный объём Step 4.
+
+- [ ] **Step 3: Написать падающий тест на футер карточки оффера**
+
+В `frontend/src/tests/routes/offers.test.tsx` добавить тест (внутрь существующего describe для карточки оффера; если такого нет — в конец файла, следуя тому, как в этом файле рендерят карточку):
+
+```tsx
+  it("не обрезает длинную подпись действия на узкой карточке", () => {
+    // «Деактивировать» вдвое длиннее «Правила»: равные доли flex:1 её не вмещают,
+    // и на живом экране текст уезжал за карточку.
+    renderOffersPage();
+
+    const deactivate = screen.getByRole("button", { name: /Деактивировать оффер/ });
+    const footer = deactivate.parentElement!;
+
+    expect(footer.style.flexWrap).toBe("wrap");
+    expect(deactivate.style.flex).toBe("1 1 auto");
+  });
+```
+
+Если хелпера `renderOffersPage` в файле нет — используй тот способ рендера, который уже применяют соседние тесты этого файла.
+
+- [ ] **Step 4: Починить все найденные места**
+
+`frontend/src/components/offers/OfferCard.tsx` — футер учится переносить, кнопки перестают делить ширину поровну. Было:
+
+```tsx
+      <footer
+        style={{
+          borderTop: "1px solid var(--color-hairline)",
+          padding: "var(--space-3) var(--space-4)",
+          display: "flex",
+          gap: "var(--space-2)",
+        }}
+      >
+```
+
+Стало:
+
+```tsx
+      <footer
+        style={{
+          borderTop: "1px solid var(--color-hairline)",
+          padding: "var(--space-3) var(--space-4)",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "var(--space-2)",
+        }}
+      >
+```
+
+И у всех трёх кнопок этого футера заменить `style={{ flex: 1 }}` на `style={{ flex: "1 1 auto" }}`: базис по содержимому вместо нуля даёт длинной подписи её ширину, а свободное место по-прежнему делится.
+
+`frontend/src/features/operator/operator-ledger.css` — в правило `.ledger-approaching-item__meta` добавить `min-width: 0;`. То же в `frontend-mini/src/features/operator/operator-mini-ledger.css` для `.mini-approaching-item__meta`. Оба правила уже имеют `overflow: hidden` и `text-overflow: ellipsis`, но лежат в grid-элементе и потому не сжимаются: в мини-аппе это главный экран, где выводится реальное имя FB-кампании.
+
+В следующих местах добавить `min-w-0` в тот же `className`, ничего больше не меняя:
+
+- `frontend/src/components/layout/CommandPalette.tsx:245` — было `className="flex-1 truncate"`, стало `className="min-w-0 flex-1 truncate"`
+- `frontend/src/components/analytics/PerformanceTable.tsx:355` — было `className="truncate text-[14px] font-medium text-bg-11"`, стало `className="min-w-0 truncate text-[14px] font-medium text-bg-11"`
+- `frontend/src/components/domain/campaigns/WizardStep6Preview.tsx:248` — было `className="text-[12px] text-bg-11 flex-1 truncate"`, стало `className="min-w-0 text-[12px] text-bg-11 flex-1 truncate"`
+- `frontend/src/components/domain/campaigns/WizardStep6Preview.tsx:260` — было `className="text-[12px] text-bg-9 flex-1 truncate"`, стало `className="min-w-0 text-[12px] text-bg-9 flex-1 truncate"`
+- `frontend/src/components/domain/assistant/AssistantPanel.tsx:51` — добавить `min-w-0` в className того `span`, где стоит `truncate max-w-[120px]`
+- `frontend/src/components/layout/WorkerPulse.tsx:119` — добавить `min-w-0` в className того `span`, где стоит `truncate`
+- `frontend/src/components/history/HistoryTimeline.tsx:180` — добавить `min-w-0` в className того `span`, где стоит `truncate`
+
+`frontend/src/components/domain/campaigns/CampaignRunsHistory.tsx:240` — здесь `truncate` навешан на целое предложение, и оно обрезается на середине слова. Заменить `truncate` на `line-clamp-2`: в мини-аппе тот же текст уже так и сделан (`frontend-mini/src/routes/campaigns/RunsHistory.tsx:673`).
+
+Если защитный тест из Step 2 показал места, не перечисленные выше, — почини и их тем же способом и перечисли их в отчёте.
+
+- [ ] **Step 5: Прогнать тесты**
+
+Run: `cd frontend && pnpm test`
+Expected: PASS, включая новый `shrinkable-truncate` и новый тест футера карточки оффера.
+
+Run: `cd frontend-mini && pnpm test`
+Expected: PASS без изменений в количестве тестов (там менялся только CSS).
+
+- [ ] **Step 6: Проверить типы и линт**
+
+Run: `pnpm -r typecheck && pnpm -r lint`
+Expected: обе команды завершаются без ошибок.
+
+- [ ] **Step 7: Коммит**
+
+```bash
+git add frontend/src frontend-mini/src
+git commit -m "fix(ui): не давать длинным значениям выталкивать содержимое за карточку
+
+У flex- и grid-элемента min-width по умолчанию auto: элемент не может стать
+уже содержимого, поэтому стоящий внутри truncate не срабатывает никогда, а
+длинное имя кампании или ключ брокера выталкивает карточку за экран.
+Владелец нашёл это дважды на живом телефоне; разведка нашла остальные места
+того же класса.
+
+Футер карточки оффера чинится иначе: три кнопки делили ширину поровну
+(flex: 1 1 0%), и подпись «Деактивировать» в свою треть не влезала.
+
+Защитный тест держит класс дефекта закрытым в обоих фронтах."
+```
+
+---
+
 ## Порядок выполнения
 
-Задачи 1 → 2 строго последовательны: шаг деплоя вызывает ручку из задачи 1. Задачи 3 и 4 независимы и могут идти параллельно с 1–2 (разные файлы, пересечений нет). Задача 5 выполняется последней и требует смерженных 1–2.
+Задачи 1 → 2 строго последовательны: шаг деплоя вызывает ручку из задачи 1. Задачи 3, 4 и 6 независимы и могут идти в любом порядке. Задача 5 выполняется последней и требует смерженных 1–2.
 
 ## Definition of done
 
