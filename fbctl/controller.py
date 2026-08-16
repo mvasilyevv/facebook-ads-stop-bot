@@ -63,6 +63,7 @@ from fbctl.probes import (
     ProbeClient,
     UrllibProbeClient,
     enable_observer_scanning,
+    ensure_browser_channel,
     parse_worker_db_poll_success,
     parse_worker_heartbeat,
     require_exact_browser,
@@ -176,6 +177,7 @@ REHEARSAL_FAILPOINTS = (
     "verify_adoption",
     "start_desktop",
     "start_application",
+    "ensure_desktop_channel",
     "verify_application",
     "enable_scanning",
     "configure_telegram_webhook",
@@ -327,6 +329,11 @@ class ProductionController:
                 self._step("verify_adoption", options, lambda: self._require_adoption(config))
                 self._step("start_desktop", options, lambda: self._start_desktop(config))
                 self._step("start_application", options, lambda: self._start_application(config))
+                self._step(
+                    "ensure_desktop_channel",
+                    options,
+                    lambda: self._ensure_desktop_channel(config),
+                )
                 self._step(
                     "verify_application",
                     options,
@@ -957,6 +964,26 @@ class ProductionController:
             env=self._environment(config),
         )
         self._require_managed_resources(config, include_campaign=True)
+
+    def _ensure_desktop_channel(self, config: RuntimeConfig) -> None:
+        """Поднять браузерный канал до того, как его начнёт проверять гейт.
+
+        Стол пересоздаётся каждым деплоем, поэтому канал после старта всегда
+        нужно поднимать заново. Ручка идемпотентна, а браузер может стартовать
+        не с первой попытки — отсюда ожидание, а не единичный вызов.
+        """
+        wait_for(
+            "recovered browser channel",
+            lambda: ensure_browser_channel(
+                self.probes,
+                self._api_origin(config),
+                config.api_key,
+            ),
+            timeout=180,
+            interval=5,
+            monotonic=self.monotonic,
+            sleep=self.sleep,
+        )
 
     def _verify_application(self, config: RuntimeConfig) -> None:
         api = self._api_origin(config)
