@@ -101,7 +101,7 @@ timestamps snapshots. Ошибка scan-page не должна блокиров�
 
 ### Browser and Meta
 
-`services/browser-agent/` — Node.js gRPC слой рядом с независимым Kasm/Vision
+`services/browser-agent/` — Node.js gRPC слой рядом с независимым Vision
 desktop. DOM scan и session-tunneled Marketing API выполняются внутри нужной
 browser session. Browser-agent не владеет задачами и не подтверждает business
 success без результата внешней операции.

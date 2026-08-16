@@ -98,4 +98,23 @@ describe("RemoteDesktopPage", () => {
       screen.getByRole("heading", { name: "Подключение к рабочему столу" }),
     ).toBeInTheDocument();
   });
+
+  it("не требует от оператора VPN — брокер доступен напрямую", () => {
+    render(<RemoteDesktopPage />);
+
+    expect(screen.queryByText(/Tailscale/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/приватной сети/)).not.toBeInTheDocument();
+  });
+
+  it("не даёт длинному ключу разъехать строку канала", () => {
+    render(<RemoteDesktopPage />);
+
+    // Строка канала — grid-элемент, а у него min-width по умолчанию auto:
+    // без min-w-0 он не сожмётся, и длинный ключ уедет под кнопку копирования.
+    const key = screen.getByText("QJztruGKKjvEcX9XBLMixf21wieLGYABEaWby97JP5s=");
+    const row = key.closest("div")!.parentElement!;
+
+    expect(row.className).toContain("min-w-0");
+    expect(key.className).toContain("truncate");
+  });
 });

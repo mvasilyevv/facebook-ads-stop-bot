@@ -412,7 +412,7 @@ const CampaignColumn: FC<CampaignColumnProps> = ({
                       >
                         {video ? <Film size={11} /> : <Image size={11} />}
                       </span>
-                      <span className="text-[12px] text-bg-10 truncate flex-1">
+                      <span className="min-w-0 text-[12px] text-bg-10 truncate flex-1">
                         {c.original_name}
                       </span>
                       <Plus size={12} className="text-bg-8 shrink-0" />

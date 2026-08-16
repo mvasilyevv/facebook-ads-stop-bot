@@ -28,6 +28,7 @@ import {
   formatOperatorScaleTick as formatScaleTick,
   formatOperatorUsd as formatUsd,
   isActiveOperatorAction as isActiveAction,
+  collapseConsecutiveOperatorActions,
   collapseOperatorAttentionItems,
   operatorAttentionCopy,
   operatorCabinetTimezone,
@@ -742,15 +743,17 @@ function ActionJournal({ section }: { section: OperatorSnapshot["actions"] }) {
 
 export function ActionList({ items }: { items: OperatorActionItem[] }) {
   if (!items.length) return <LedgerEmpty text="Активных действий нет." />;
+  const groups = collapseConsecutiveOperatorActions(items);
   return (
     <ol className="ledger-action-list" aria-label="Очередь и история действий">
-      {items.map((item) => {
+      {groups.map(({ item, count }) => {
         const Icon = ACTION_ICON[item.state];
         return (
           <li className="ledger-action-item" key={item.id}>
             <div className="ledger-action-item__head">
               <span className="ledger-action-item__title">
                 {item.title} · {item.target_label ?? "система"}
+                {count > 1 ? <span> ×{count}</span> : null}
               </span>
               <span className="ledger-action-item__state" data-state={item.state}>
                 <Icon size={14} aria-hidden="true" />
@@ -763,6 +766,9 @@ export function ActionList({ items }: { items: OperatorActionItem[] }) {
             ) : null}
             <div className="ledger-action-item__meta">
               <span>Задача {item.public_id}</span>
+              {count > 1 ? (
+                <span>Последний повтор {formatDateTime(item.updated_at, item.cabinet_timezone)}</span>
+              ) : null}
             </div>
             <Link
               className="ledger-action-item__link"

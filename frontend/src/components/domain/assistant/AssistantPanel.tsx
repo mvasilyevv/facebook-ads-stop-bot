@@ -48,7 +48,7 @@ export function AssistantPanel({
         <div className="flex items-center gap-1 min-w-0">
           {lastModel ? (
             <span
-              className="font-display text-[12px] text-bg-8 truncate max-w-[120px]"
+              className="min-w-0 font-display text-[12px] text-bg-8 truncate max-w-[120px]"
               title={lastModel}
             >
               {lastModel}

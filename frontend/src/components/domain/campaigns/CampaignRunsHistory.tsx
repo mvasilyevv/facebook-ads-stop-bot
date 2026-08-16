@@ -237,7 +237,7 @@ const RunRow: FC<RunRowProps> = ({ run, onRefresh }) => {
             ) : null}
           </div>
           {run.status === "failed" ? (
-            <div className="ml-[50px] truncate text-[12px] text-danger" role="alert">
+            <div className="ml-[50px] line-clamp-2 text-[12px] text-danger" role="alert">
               Запуск завершился ошибкой. Откройте детали для безопасных действий.
             </div>
           ) : null}

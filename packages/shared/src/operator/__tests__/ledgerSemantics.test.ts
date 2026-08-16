@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { makeOperatorSnapshot } from "../testFixture";
 import {
+  collapseConsecutiveOperatorActions,
   formatOperatorDateTime,
   formatOperatorFreshness,
   collapseOperatorAttentionItems,
@@ -139,11 +140,7 @@ describe("operator ledger semantics", () => {
     });
 
     const collapsed = collapseOperatorAttentionItems(
-      [
-        source("a", "critical"),
-        source("b", "unknown"),
-        source("c", "unknown"),
-      ],
+      [source("a", "critical"), source("b", "unknown"), source("c", "unknown")],
       true,
     );
 
@@ -157,4 +154,53 @@ describe("operator ledger semantics", () => {
     ]);
   });
 
+  it("collapses only adjacent action repeats and keeps the freshest of each group", () => {
+    const base = makeOperatorSnapshot().actions.data!.items[0]!;
+    const repeat = (id: string, updatedAt: string) => ({
+      ...base,
+      id,
+      public_id: `#${id}`,
+      updated_at: updatedAt,
+    });
+    // A, A, B, A — вторая «A» не рядом с первой парой: сливать её означало бы
+    // перемешать хронологию ленты.
+    const groups = collapseConsecutiveOperatorActions([
+      repeat("1845", "2026-07-18T10:16:00Z"),
+      repeat("1844", "2026-07-18T10:15:00Z"),
+      { ...repeat("9001", "2026-07-18T10:14:00Z"), state: "failed" as const },
+      repeat("1842", "2026-07-18T10:13:00Z"),
+    ]);
+
+    expect(groups.map((group) => group.count)).toEqual([2, 1, 1]);
+    expect(groups.map((group) => group.item.public_id)).toEqual([
+      "#1845",
+      "#9001",
+      "#1842",
+    ]);
+  });
+
+  it("does not merge the same command aimed at different ads", () => {
+    const base = makeOperatorSnapshot().actions.data!.items[0]!;
+
+    const groups = collapseConsecutiveOperatorActions([
+      { ...base, id: "1", public_id: "#1", target_label: "Ad A" },
+      { ...base, id: "2", public_id: "#2", target_label: "Ad B" },
+    ]);
+
+    expect(groups.map((group) => group.count)).toEqual([1, 1]);
+  });
+
+  it("takes the freshest repeat as the row even when the list is not ordered", () => {
+    const base = makeOperatorSnapshot().actions.data!.items[0]!;
+
+    const groups = collapseConsecutiveOperatorActions([
+      { ...base, id: "1", public_id: "#1", updated_at: "2026-07-18T10:13:00Z" },
+      { ...base, id: "2", public_id: "#2", updated_at: "2026-07-18T10:19:00Z" },
+      { ...base, id: "3", public_id: "#3", updated_at: "2026-07-18T10:15:00Z" },
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.count).toBe(3);
+    expect(groups[0]!.item.public_id).toBe("#2");
+  });
 });

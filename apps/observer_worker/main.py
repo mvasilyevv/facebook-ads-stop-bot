@@ -1038,6 +1038,19 @@ async def _run_claimed_observer_scan(
     }
     if scan_outcome in {"success", "empty"}:
         finalized = await mark_succeeded(engine, result=task_result, **fence)
+    elif scan_outcome in {"paused", "skipped"}:
+        # Ни один из этих исходов не провал: paused — сработал собственный
+        # выключатель оператора, skipped — сканирование включено, но
+        # мониторить нечего (кабинеты не настроены). Задача не выполнена, но
+        # и не провалена; красное в обоих случаях означало бы поломку там,
+        # где её нет. Причина отмены различает состояния для оператора.
+        # Финализируем тем же фенсом; mark_cancelled сам пишет result,
+        # отдельного аргумента у него нет.
+        finalized = await mark_cancelled(
+            engine,
+            reason="scanning_paused" if scan_outcome == "paused" else "nothing_monitored",
+            **fence,
+        )
     else:
         finalized = await mark_failed(
             engine,

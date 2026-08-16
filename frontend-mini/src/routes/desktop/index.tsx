@@ -50,8 +50,8 @@ function RemoteDesktopPage() {
                 Подключение к рабочему столу
               </h2>
               <p className="mt-1 text-[12px] leading-relaxed text-bg-9">
-                Через приложение RustDesk и приватную сеть. Пароль канала приложение запомнит
-                после первого подключения.
+                Через приложение RustDesk. Адрес и ключ вводятся один раз, пароль канала приложение
+                запомнит после первого подключения.
               </p>
             </div>
           </div>
@@ -103,7 +103,7 @@ function RemoteDesktopPage() {
 /** Значение канала с копированием: на телефоне ввод руками — худший путь. */
 function ChannelRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 px-3 py-2">
+    <div className="flex min-w-0 items-center justify-between gap-3 rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 px-3 py-2">
       <div className="min-w-0">
         <dt className="text-[12px] uppercase tracking-[0.07em] text-bg-8">{label}</dt>
         <dd className="m-0 truncate font-numeric text-[13px] text-bg-11">{value}</dd>

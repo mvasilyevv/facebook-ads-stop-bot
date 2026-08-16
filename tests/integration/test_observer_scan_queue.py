@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import pytest
@@ -43,6 +44,68 @@ async def clean_observer_scan_tasks(pg_engine):
     await _clean()
     yield
     await _clean()
+
+
+@asynccontextmanager
+async def _observer_scanning_state(pg_engine, *, enabled: bool):
+    """Временно выставляет observer_config.is_scanning_enabled, затем откатывает.
+
+    Синглтон-строка общая на всю pytest-сессию (см. tests/integration/conftest.py
+    и test_meta_api_freshness_db.py), поэтому тест обязан вернуть то состояние,
+    что было до него, а не оставить TRUE/FALSE висеть для последующих тестов.
+    """
+    async with pg_engine.connect() as conn:
+        previous = await conn.scalar(
+            text("SELECT is_scanning_enabled FROM observer_config WHERE singleton_key = 'default'")
+        )
+    existed = previous is not None
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO observer_config (id, singleton_key, is_scanning_enabled)
+                VALUES (gen_random_uuid(), 'default', :enabled)
+                ON CONFLICT (singleton_key) DO UPDATE
+                SET is_scanning_enabled = EXCLUDED.is_scanning_enabled
+                """
+            ),
+            {"enabled": enabled},
+        )
+    try:
+        yield
+    finally:
+        async with pg_engine.begin() as conn:
+            if existed:
+                await conn.execute(
+                    text(
+                        "UPDATE observer_config SET is_scanning_enabled = :previous "
+                        "WHERE singleton_key = 'default'"
+                    ),
+                    {"previous": bool(previous)},
+                )
+            else:
+                await conn.execute(
+                    text("DELETE FROM observer_config WHERE singleton_key = 'default'")
+                )
+
+
+@pytest_asyncio.fixture
+async def scanning_enabled(pg_engine):
+    """observer_config.is_scanning_enabled = TRUE на время теста.
+
+    С #Task7 (687c0ba7) enqueue_scheduled_observer_scan возвращает None и ничего
+    не публикует, пока глобальное сканирование выключено — тестам, проверяющим
+    саму публикацию задачи, нужно явно включить сканирование.
+    """
+    async with _observer_scanning_state(pg_engine, enabled=True):
+        yield
+
+
+@pytest_asyncio.fixture
+async def scanning_disabled(pg_engine):
+    """observer_config.is_scanning_enabled = FALSE на время теста (глобальный стоп)."""
+    async with _observer_scanning_state(pg_engine, enabled=False):
+        yield
 
 
 @pytest.mark.asyncio
@@ -113,6 +176,7 @@ async def test_parallel_operator_retries_share_one_interactive_scan(
 async def test_scheduler_and_operator_retry_publish_one_interactive_scan(
     pg_engine,
     clean_observer_scan_tasks,
+    scanning_enabled,
 ) -> None:
     scheduled, manual = await asyncio.gather(
         enqueue_scheduled_observer_scan(
@@ -146,6 +210,7 @@ async def test_scheduler_and_operator_retry_publish_one_interactive_scan(
 async def test_promoted_scheduled_scan_remains_reusable_by_scheduler(
     pg_engine,
     clean_observer_scan_tasks,
+    scanning_enabled,
 ) -> None:
     now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
     scheduled = await enqueue_scheduled_observer_scan(pg_engine, now=now)
@@ -174,6 +239,7 @@ async def test_promoted_scheduled_scan_remains_reusable_by_scheduler(
 async def test_scheduled_scan_reuses_only_the_outstanding_background_task(
     pg_engine,
     clean_observer_scan_tasks,
+    scanning_enabled,
 ) -> None:
     now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
     first, duplicate = await asyncio.gather(
@@ -239,6 +305,40 @@ async def test_scheduled_scan_reuses_only_the_outstanding_background_task(
     next_tick = await enqueue_scheduled_observer_scan(pg_engine, now=now)
     assert next_tick.created is True
     assert next_tick.task_id != first.task_id
+
+
+@pytest.mark.asyncio
+async def test_scheduled_scan_publishes_nothing_while_scanning_disabled(
+    pg_engine,
+    clean_observer_scan_tasks,
+    scanning_disabled,
+) -> None:
+    """Регрессия #Task7 (687c0ba7): на глобальном стопе scheduler ничего не публикует.
+
+    До фикса каждый тик планировщика (~45с) создавал задачу, которая гарантированно
+    заканчивалась outcome='paused' и оседала в операторской ленте как отказ — на
+    проде за 4 часа накопилось 216 таких записей.
+    """
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    async with pg_engine.connect() as conn:
+        before_count = await conn.scalar(
+            text(
+                "SELECT COUNT(*) FROM task_queue "
+                "WHERE task_type = 'observer_scan' AND requested_by = 'observer_scheduler'"
+            )
+        )
+
+    result = await enqueue_scheduled_observer_scan(pg_engine, now=now)
+
+    assert result is None
+    async with pg_engine.connect() as conn:
+        after_count = await conn.scalar(
+            text(
+                "SELECT COUNT(*) FROM task_queue "
+                "WHERE task_type = 'observer_scan' AND requested_by = 'observer_scheduler'"
+            )
+        )
+    assert after_count == before_count
 
 
 @pytest.mark.asyncio

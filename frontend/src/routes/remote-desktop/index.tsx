@@ -54,7 +54,7 @@ function RemoteDesktopPage() {
           </div>
           <div className="flex shrink-0 items-center gap-1.5 font-display text-[12px] uppercase tracking-[0.08em] text-success">
             <ShieldCheck size={14} strokeWidth={1.7} aria-hidden="true" />
-            Приватная сеть
+            Ключ и пароль
           </div>
         </div>
 
@@ -105,7 +105,7 @@ function RemoteDesktopPage() {
                 </dl>
                 <p className="mx-auto mt-4 max-w-[460px] text-[12px] leading-5 text-bg-8">
                   Первая настройка клиента: Settings → Network → ID/Relay Server — адрес сервера и
-                  ключ выше. Сервер доступен только из приватной сети.
+                  ключ выше. Пароль канала приложение запомнит после первого подключения.
                 </p>
               </>
             ) : (
@@ -132,7 +132,7 @@ function RemoteDesktopPage() {
 /** Строка значения канала: подпись, само значение и копирование в один клик. */
 function ChannelRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 px-3 py-2">
+    <div className="flex min-w-0 items-center justify-between gap-3 rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 px-3 py-2">
       <div className="min-w-0">
         <dt className="text-[12px] uppercase tracking-[0.07em] text-bg-8">{label}</dt>
         <dd className="m-0 truncate font-numeric text-[13px] text-bg-11">{value}</dd>

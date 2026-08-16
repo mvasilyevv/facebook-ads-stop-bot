@@ -166,6 +166,68 @@ describe("web actions realtime projection", () => {
     expect(within(actionList).queryByText("Подтверждено")).not.toBeInTheDocument();
   });
 
+  it("collapses consecutive identical actions into one row with a visible repeat counter", () => {
+    const response = confirmedResponse();
+    const base = response.items[0]!;
+    // Порядок как в реальной ленте: новые записи первыми.
+    response.items = [
+      { ...base, id: "1844", public_id: "#1844", updated_at: "2026-07-18T10:15:00Z" },
+      { ...base, id: "1843", public_id: "#1843", updated_at: "2026-07-18T10:14:00Z" },
+      { ...base, id: "1842", public_id: "#1842", updated_at: "2026-07-18T10:13:00Z" },
+    ];
+    useOperatorActions.mockReturnValue({
+      data: { pages: [response] },
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+
+    renderWithRealtime(<ActionsPage />, "connected");
+
+    const actionList = screen.getByRole("list", { name: "Очередь и история действий" });
+    expect(within(actionList).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(actionList).getByText("×3")).toBeInTheDocument();
+    // Строка построена по самому свежему повтору, а не по первому/последнему id.
+    expect(within(actionList).getByText("Задача #1844")).toBeInTheDocument();
+    expect(within(actionList).queryByText("Задача #1843")).not.toBeInTheDocument();
+    expect(within(actionList).queryByText("Задача #1842")).not.toBeInTheDocument();
+  });
+
+  it("keeps non-adjacent repeats separate so the timeline is not reshuffled", () => {
+    const response = confirmedResponse();
+    const base = response.items[0]!;
+    // A, A, B, A — вторая «A» не рядом с первой парой и не должна с ней слиться.
+    response.items = [
+      { ...base, id: "1845", public_id: "#1845", updated_at: "2026-07-18T10:16:00Z" },
+      { ...base, id: "1844", public_id: "#1844", updated_at: "2026-07-18T10:15:00Z" },
+      { ...base, id: "9001", public_id: "#9001", state: "failed", updated_at: "2026-07-18T10:14:00Z" },
+      { ...base, id: "1842", public_id: "#1842", updated_at: "2026-07-18T10:13:00Z" },
+    ];
+    useOperatorActions.mockReturnValue({
+      data: { pages: [response] },
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+
+    renderWithRealtime(<ActionsPage />, "connected");
+
+    const actionList = screen.getByRole("list", { name: "Очередь и история действий" });
+    const rows = within(actionList).getAllByRole("listitem");
+    expect(rows).toHaveLength(3);
+    expect(within(rows[0]!).getByText("×2")).toBeInTheDocument();
+    expect(within(rows[0]!).getByText("Задача #1845")).toBeInTheDocument();
+    expect(within(rows[1]!).queryByText("×2")).not.toBeInTheDocument();
+    expect(within(rows[2]!).queryByText(/×\d/)).not.toBeInTheDocument();
+    expect(within(rows[2]!).getByText("Задача #1842")).toBeInTheDocument();
+  });
+
   it("marks cached detail stale and cannot render confirmed as success", () => {
     renderWithRealtime(<ActionDetailPage />, "reconnecting");
 

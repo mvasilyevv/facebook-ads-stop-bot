@@ -1,5 +1,6 @@
 import { formatSpend } from "../format/number";
 import { formatZonedDateTime } from "../format/time";
+import { operatorActionStateReason } from "./actionLabels";
 import type {
   OperatorActionItem,
   OperatorAttentionItem,
@@ -164,4 +165,64 @@ export function collapseOperatorAttentionItems(
     collapsed.push(entry);
   }
   return collapsed;
+}
+
+export interface CollapsedOperatorAction {
+  /** Самый свежий элемент группы — он же задаёт ссылку, ключ и время строки. */
+  item: OperatorActionItem;
+  count: number;
+}
+
+/**
+ * Сворачивает ТОЛЬКО подряд идущие одинаковые записи ленты действий.
+ *
+ * Лента хронологическая: слияние по всему списку (как для сигналов внимания
+ * в collapseOperatorAttentionItems) перемешало бы порядок событий, поэтому
+ * сравниваются исключительно соседи.
+ *
+ * «Одинаковость» — это то, что оператор реально видит в строке: заголовок,
+ * конкретная цель (иначе разные объявления с одним типом команды слились бы
+ * в одну ложную запись) и состояние. Текст причины сверяется отдельно, хотя
+ * сегодня он однозначно определяется состоянием — так группировка не сломается
+ * молча, если текст когда-нибудь станет зависеть от чего-то ещё.
+ *
+ * Живёт в shared, а не в оболочке: web и TMA показывают одну и ту же ленту,
+ * и две копии стратегии свёртки неизбежно разошлись бы.
+ */
+export function collapseConsecutiveOperatorActions(
+  items: OperatorActionItem[],
+): CollapsedOperatorAction[] {
+  const groups: CollapsedOperatorAction[] = [];
+  for (const item of items) {
+    const group = groups.at(-1);
+    if (group && isSameOperatorActionRow(group.item, item)) {
+      group.count += 1;
+      if (isFresherOperatorAction(item, group.item)) group.item = item;
+      continue;
+    }
+    groups.push({ item, count: 1 });
+  }
+  return groups;
+}
+
+function isSameOperatorActionRow(
+  a: OperatorActionItem,
+  b: OperatorActionItem,
+): boolean {
+  return (
+    a.title === b.title &&
+    a.target_label === b.target_label &&
+    a.state === b.state &&
+    operatorActionStateReason(a.state) === operatorActionStateReason(b.state)
+  );
+}
+
+function isFresherOperatorAction(
+  candidate: OperatorActionItem,
+  current: OperatorActionItem,
+): boolean {
+  return (
+    new Date(candidate.updated_at).getTime() >
+    new Date(current.updated_at).getTime()
+  );
 }

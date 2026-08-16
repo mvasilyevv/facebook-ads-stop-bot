@@ -306,6 +306,47 @@ describe("TMA operator dashboard", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("collapses consecutive repeats in the compact action journal", () => {
+    const snapshot = makeOperatorSnapshot();
+    const base = snapshot.actions.data!.items[0]!;
+    // Именно на телефоне владелец увидел двадцать одинаковых строк подряд.
+    snapshot.actions.data!.items = [
+      {
+        ...base,
+        id: "1844",
+        public_id: "#1844",
+        updated_at: "2026-07-18T10:15:00Z",
+      },
+      {
+        ...base,
+        id: "1843",
+        public_id: "#1843",
+        updated_at: "2026-07-18T10:14:00Z",
+      },
+      {
+        ...base,
+        id: "1842",
+        public_id: "#1842",
+        updated_at: "2026-07-18T10:13:00Z",
+      },
+    ];
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: snapshot,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<Dashboard />);
+
+    expect(screen.getByText("×3")).toBeInTheDocument();
+    // Строка ведёт к самому свежему повтору, а не к первому попавшемуся.
+    expect(screen.getByText("Задача #1844")).toBeInTheDocument();
+    expect(screen.queryByText("Задача #1843")).not.toBeInTheDocument();
+    expect(screen.queryByText("Задача #1842")).not.toBeInTheDocument();
+  });
+
   it("uses the selected cabinet timezone on the cabinet route", () => {
     render(<OperatorMiniCabinetDashboard cabinetId="123" />);
 

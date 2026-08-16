@@ -439,9 +439,11 @@ def prepare_candidate(
         # Ключи брокера RustDesk обязаны пережить пересоздание контейнера: после
         # смены ключа клиенты перестают ему верить и требуют перенастройки.
         "DESKTOP_RUSTDESK_DATA_DIR": os.fspath(layout.shared / "rustdesk-server"),
-        # Адрес, на котором брокер виден клиентам. По умолчанию петля: наружу
-        # или в приватную сеть его выставляет владелец.
-        "DESKTOP_RUSTDESK_BIND": source_values.get("DESKTOP_RUSTDESK_BIND") or "127.0.0.1",
+        # Интерфейс, на котором брокер слушает. Дефолт согласован с дефолтом
+        # DESKTOP_RUSTDESK_SERVER: публичный адрес в паре с петлёй означал бы
+        # адрес, который объявлен оператору, но никого не слушает. Приватность
+        # держится на ключе брокера и пароле стола, а не на недостижимости.
+        "DESKTOP_RUSTDESK_BIND": source_values.get("DESKTOP_RUSTDESK_BIND") or "0.0.0.0",
         "DESKTOP_READINESS_DIR": os.fspath(layout.shared / "desktop-readiness"),
         "BROWSER_AUTHORITY_CONSUME_URL": app_values["BROWSER_AUTHORITY_CONSUME_URL"],
         "BROWSER_MAINTENANCE_CONSUME_URL": app_values["BROWSER_MAINTENANCE_CONSUME_URL"],
@@ -547,9 +549,11 @@ def canonicalize_source(values: dict[str, str], *, incumbent: dict[str, str]) ->
         result.pop(key, None)
     result.setdefault("POSTGRES_USER", "fb_agent")
     result.setdefault("POSTGRES_DB", "fb_agent")
-    # Адрес брокера по умолчанию — Tailscale-адрес хоста: канал приватный, в
-    # интернет не выставляется. Переопределяется в source при смене сети.
-    result.setdefault("DESKTOP_RUSTDESK_SERVER", "100.73.162.127")
+    # Адрес брокера по умолчанию — публичный адрес хоста: канал должен
+    # открываться с любого устройства без VPN. Приватность держится не на
+    # недостижимости адреса, а на ключе брокера и пароле стола.
+    # Переопределяется в source при смене хоста.
+    result.setdefault("DESKTOP_RUSTDESK_SERVER", "62.60.150.133")
     result.setdefault("TELEGRAM_OIDC_REDIRECT_URI", f"{PUBLIC_URL}/auth/telegram/callback")
     for key in DURABLE_KEYS:
         old_value = incumbent.get(key, "")

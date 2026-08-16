@@ -10,12 +10,15 @@ FB Agent использует один production slot. Краткая недо�
 
 - `fb_agent_infra` — PostgreSQL и Redis;
 - `fb_agent_app` — API, web, TMA и workers;
-- `fb_agent_desktop` — Vision/KasmVNC и browser-agent;
+- `fb_agent_desktop` — Vision, browser-agent и брокеры RustDesk;
 - `fb_agent_monitoring` — Prometheus, Loki, Tempo, Grafana и Alloy.
 
-Caddy всегда направляет трафик на `18100` (API), `18080` (web), `18081`
-(TMA) и `8444` (desktop). Docker `restart: unless-stopped` отвечает за запуск
-после reboot; отдельных application systemd units нет.
+Caddy всегда направляет трафик на `18100` (API), `18080` (web) и `18081`
+(TMA). Доступ к рабочему столу веб-канала не имеет: он идёт нативным
+клиентом RustDesk через собственный брокер, опубликованный на адресе хоста.
+Защищают канал ключ брокера и пароль стола, а не недостижимость адреса. Docker
+`restart: unless-stopped` отвечает за запуск после reboot; отдельных
+application systemd units нет.
 
 ## Управление production
 
@@ -158,9 +161,8 @@ runtime.
 
 Caddy общий с другими сайтами, поэтому `fbctl` сохраняет остальное содержимое
 общего Caddyfile и не трогает чужие site-файлы. Он управляет только точным import
-`/etc/caddy/sites-enabled/*.caddy`, двумя файлами FB Agent, собственным env и
-drop-in. Panel BasicAuth-пара сохраняется из root-owned host env; производные
-`API_KEY` и Kasm service auth заново выводятся из candidate configuration.
+`/etc/caddy/sites-enabled/*.caddy`, одним файлом сайта app.adpulse.su, собственным env и
+drop-in; ушедший сайт рабочего стола удаляется. Panel BasicAuth-пара сохраняется из root-owned host env; `API_KEY` заново выводится из candidate configuration.
 
 До записи на host управляемая пара валидируется в отдельном staging-каталоге.
 Затем целевые файлы меняются атомарно, полный общий Caddyfile валидируется уже

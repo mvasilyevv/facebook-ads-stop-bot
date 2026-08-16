@@ -137,6 +137,7 @@ export function OfferCard({ offer, onEditOffer, onEditRules, onDeactivate }: Off
           borderTop: "1px solid var(--color-hairline)",
           padding: "var(--space-3) var(--space-4)",
           display: "flex",
+          flexWrap: "wrap",
           gap: "var(--space-2)",
         }}
       >
@@ -146,7 +147,7 @@ export function OfferCard({ offer, onEditOffer, onEditRules, onDeactivate }: Off
           leftIcon={<Settings size={13} />}
           onClick={() => onEditRules(offer)}
           aria-label={`Правила оффера ${offer.code}`}
-          style={{ flex: 1 }}
+          style={{ flex: "1 1 auto" }}
         >
           Правила
         </Button>
@@ -156,7 +157,7 @@ export function OfferCard({ offer, onEditOffer, onEditRules, onDeactivate }: Off
           leftIcon={<Pencil size={13} />}
           onClick={() => onEditOffer(offer)}
           aria-label={`Редактировать оффер ${offer.code}`}
-          style={{ flex: 1 }}
+          style={{ flex: "1 1 auto" }}
         >
           Изменить
         </Button>
@@ -167,7 +168,7 @@ export function OfferCard({ offer, onEditOffer, onEditRules, onDeactivate }: Off
             leftIcon={<PowerOff size={13} />}
             onClick={() => onDeactivate(offer)}
             aria-label={`Деактивировать оффер ${offer.code}`}
-            style={{ flex: 1 }}
+            style={{ flex: "1 1 auto" }}
           >
             Деактивировать
           </Button>

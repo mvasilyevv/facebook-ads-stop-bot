@@ -47,7 +47,7 @@ BASELINE_RETENTION_POLICY: dict[str, str] = {
     "meta_api_audit_log": "30 days",
     "adsetpro_postback_events": "45 days",
     "task_queue_completed": "30 days",
-    "task_queue_failed": "45 days",
+    "task_queue_failed": "90 days",
     "adset_duplicate_previews_expired": "immediate",
     "browser_operation_capabilities_expired": "immediate",
     "telegram_invites_expired": "30 days",

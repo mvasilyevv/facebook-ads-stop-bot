@@ -35,6 +35,15 @@ class ProbeClient(Protocol):
         timeout: float = 15,
     ) -> tuple[int, object]: ...
 
+    def post_json(
+        self,
+        url: str,
+        payload: Mapping[str, object],
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float = 15,
+    ) -> tuple[int, object]: ...
+
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
@@ -80,6 +89,27 @@ class UrllibProbeClient:
             data=json.dumps(dict(payload), separators=(",", ":")).encode("utf-8"),
             headers=request_headers,
             method="PATCH",
+        )
+        status, response = self._read(request, timeout=timeout)
+        try:
+            return status, json.loads(response)
+        except (json.JSONDecodeError, UnicodeError) as exc:
+            raise FbctlError(f"endpoint returned invalid JSON: {_safe_url(url)}") from exc
+
+    def post_json(
+        self,
+        url: str,
+        payload: Mapping[str, object],
+        *,
+        headers: Mapping[str, str] | None = None,
+        timeout: float = 15,
+    ) -> tuple[int, object]:
+        request_headers = {"Content-Type": "application/json", **dict(headers or {})}
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(dict(payload), separators=(",", ":")).encode("utf-8"),
+            headers=request_headers,
+            method="POST",
         )
         status, response = self._read(request, timeout=timeout)
         try:
@@ -200,6 +230,30 @@ def require_exact_browser(client: ProbeClient, api_origin: str, api_key: str) ->
         raise FbctlError("browser-agent did not confirm the required Graph probe")
     if payload.get("channel_status") != "READY" or not payload.get("browser_session_id"):
         raise FbctlError("browser channel is not READY with a concrete session")
+
+
+def ensure_browser_channel(client: ProbeClient, api_origin: str, api_key: str) -> None:
+    """Поднять браузерный канал после пересоздания стола.
+
+    Каждый деплой пересоздаёт контейнер стола, и Vision возвращается без
+    запущенного профиля. Ручка идемпотентна: готовый канал она не трогает.
+    """
+    status, payload = client.post_json(
+        f"{api_origin}/api/vision/ensure-cdp",
+        {},
+        headers=api_headers(api_key),
+        timeout=120,
+    )
+    if status != 200 or not isinstance(payload, dict):
+        # Код в сообщении обязателен: 401 (протухший API_KEY), 404 (роутер не
+        # подключён) и 502 чинятся по-разному, а во время простоя это
+        # единственная диагностика у владельца.
+        raise FbctlError(f"browser channel healer returned HTTP {status}")
+    if payload.get("ok") is True:
+        return
+    message = payload.get("message")
+    detail = str(message) if isinstance(message, str) and message else str(payload.get("status"))
+    raise FbctlError(f"browser channel is not ready ({detail})")
 
 
 # Состояния, которыми управляет владелец, а не деплой. Выключенное

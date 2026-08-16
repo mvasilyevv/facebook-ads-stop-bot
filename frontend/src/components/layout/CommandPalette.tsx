@@ -242,7 +242,7 @@ export function CommandPalette({ manageShortcut = true }: CommandPaletteProps) {
                         <span className={cn("shrink-0", isActive ? "text-accent" : "text-bg-9")}>
                           {it.icon}
                         </span>
-                        <span className="flex-1 truncate">{it.label}</span>
+                        <span className="min-w-0 flex-1 truncate">{it.label}</span>
                         {it.hint && (
                           <span className="font-display text-[12px] text-bg-8 truncate max-w-[180px]">
                             {it.hint}

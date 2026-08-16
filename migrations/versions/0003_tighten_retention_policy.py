@@ -22,7 +22,9 @@ _TIGHTENED = (
     ("ad_metrics", "90 days", "45 days"),
     ("alert_events", "365 days", "120 days"),
     ("adsetpro_postback_events", "60 days", "45 days"),
-    ("task_queue_failed", "90 days", "45 days"),
+    # task_queue_failed сюда не входит: удаление задачи каскадом уносит
+    # command_idempotency_receipts, а вместе с ними доказательство отправленной
+    # в Meta мутации. Квартал хранения остаётся кварталом на любой базе.
     ("incidents_terminal", "365 days", "180 days"),
     ("notification_events_terminal", "365 days", "90 days"),
     ("telegram_action_tokens_terminal", "90 days", "45 days"),

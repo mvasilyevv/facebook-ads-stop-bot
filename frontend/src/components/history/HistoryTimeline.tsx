@@ -177,7 +177,7 @@ function EventRow({
         style={{ background: stageDotColor(item) }}
       />
       <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
-        <span className="truncate text-[14px] font-medium text-bg-11" title={title}>
+        <span className="min-w-0 truncate text-[14px] font-medium text-bg-11" title={title}>
           {title}
         </span>
         {ruleCodes.length > 0 ? <RulePill code={ruleCodes[0]!} /> : null}

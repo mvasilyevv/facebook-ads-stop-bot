@@ -28,6 +28,7 @@ from fbctl import __main__ as fbctl_main
 from fbctl import bundle as fbctl_bundle
 from fbctl import controller as fbctl_controller
 from fbctl import operations as fbctl_operations
+from fbctl import probes as fbctl_probes
 from fbctl.adoption import MAX_ADOPTION_BUNDLE_BYTES, verify_adoption_bundle_owner
 from fbctl.bundle import (
     BUNDLE_SCHEMA,
@@ -128,8 +129,13 @@ def _manifest(tmp_path: Path, release_id: str = "release-1") -> Path:
     )
 
 
-def _source_env(tmp_path: Path) -> Path:
-    values = {
+def _minimal_source() -> dict[str, str]:
+    """Минимальный набор ключей, которого хватает canonicalize_source.
+
+    Тот же набор, что _source_env кладёт на диск — вынесен отдельно для
+    тестов, которым достаточно словаря значений без временного файла.
+    """
+    return {
         "ENCRYPTION_KEY": base64.urlsafe_b64encode(b"e" * 32).decode("ascii"),
         "ENCRYPTION_KEY_VERIFY": "verification-value",
         "TELEGRAM_BOT_TOKEN": "123456:test-token",
@@ -139,6 +145,10 @@ def _source_env(tmp_path: Path) -> Path:
         "API_KEY": "k" * 32,
         "DESKTOP_OWNER_TELEGRAM_USER_ID": "123456",
     }
+
+
+def _source_env(tmp_path: Path) -> Path:
+    values = _minimal_source()
     return _write(
         tmp_path / "source.env",
         "".join(f"{key}={value}\n" for key, value in values.items()),
@@ -546,6 +556,12 @@ class FakeProbes:
         assert url.endswith("/api/settings/observer/scanning")
         assert payload == {"enabled": True}
         return 200, {"is_scanning_enabled": True}
+
+    def post_json(self, url: str, payload, *, headers=None, timeout: float = 15):
+        del headers, timeout
+        assert url.endswith("/api/vision/ensure-cdp")
+        assert payload == {}
+        return 200, {"ok": True, "status": "READY", "action": "none", "message": ""}
 
 
 def test_bootstrap_preflight_rejects_foreign_new_resource_before_creation(
@@ -3619,6 +3635,37 @@ def test_rustdesk_channel_survives_the_source_schema(tmp_path) -> None:
     }
 
 
+def test_channel_address_defaults_to_the_public_broker() -> None:
+    """Канал доступен без VPN: дефолт указывает на публичный адрес брокера.
+
+    Приватный адрес в дефолте означал бы, что чистая установка поднимает
+    стол, до которого нельзя дойти ни с одного устройства без VPN.
+    """
+    values = canonicalize_source(_minimal_source(), incumbent={})
+
+    assert values["DESKTOP_RUSTDESK_SERVER"] == "62.60.150.133"
+
+
+def test_channel_bind_default_matches_the_advertised_broker(tmp_path: Path) -> None:
+    """Интерфейс брокера согласован с адресом, который объявляют оператору.
+
+    Публичный адрес в паре с петлевым bind означал бы чистую установку,
+    которая называет оператору адрес, на котором брокер не слушает: клиент
+    RustDesk молча не соединился бы, а причина не видна ни в одном логе.
+    """
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+    )
+
+    assert config.values["DESKTOP_RUSTDESK_BIND"] == "0.0.0.0"
+    assert config.desktop_values["DESKTOP_RUSTDESK_SERVER"] == "62.60.150.133"
+
+
 def test_desktop_environment_is_exactly_the_channel() -> None:
     """Стол получает ровно пароль и адрес брокера — и ничего сверх."""
     from fbctl.config import DESKTOP_ENV_KEYS, DESKTOP_ENV_REQUIRED_KEYS
@@ -3718,3 +3765,122 @@ def test_degraded_money_plane_stops_the_release() -> None:
         require_system_ready(probe, "http://api")
 
     assert "cabinet_actor_error:acc-1" in str(error.value)
+
+
+class _EnsureChannelProbe:
+    """Считает вызовы ensure-cdp и отдаёт заранее заданные ответы."""
+
+    def __init__(self, responses: list[dict[str, object]]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, dict[str, str]]] = []
+
+    def post_json(self, url, payload, *, headers=None, timeout: float = 15):
+        self.calls.append((url, dict(headers or {})))
+        return 200, self.responses[min(len(self.calls) - 1, len(self.responses) - 1)]
+
+
+def test_deploy_heals_the_desktop_channel_before_verifying_it() -> None:
+    """Пересоздание стола гасит браузерный канал, и деплой обязан его поднять.
+
+    Каждый деплой пересоздаёт контейнер стола, после чего Vision стартует без
+    CDP-профиля. Раньше это лечили руками между шагами деплоя, иначе
+    verify_application падал на несовпадении живого профиля с каноническим.
+    """
+    probe = _EnsureChannelProbe([{"ok": True, "status": "RECOVERED", "action": "restart"}])
+
+    fbctl_probes.ensure_browser_channel(probe, "http://api", "k" * 24)
+
+    url, headers = probe.calls[0]
+    assert url == "http://api/api/vision/ensure-cdp"
+    assert headers["X-API-Key"] == "k" * 24
+
+
+def test_unhealed_channel_stops_the_deploy_with_the_reason() -> None:
+    probe = _EnsureChannelProbe(
+        [{"ok": False, "status": "UNAVAILABLE", "message": "Browser-agent profile recovery failed"}]
+    )
+
+    with pytest.raises(FbctlError) as error:
+        fbctl_probes.ensure_browser_channel(probe, "http://api", "k" * 24)
+
+    assert "Browser-agent profile recovery failed" in str(error.value)
+
+
+def test_channel_healing_runs_before_the_application_gate() -> None:
+    """Порядок важен: сначала поднять канал, потом проверять его гейтом."""
+    steps = fbctl_controller.REHEARSAL_FAILPOINTS
+
+    assert "ensure_desktop_channel" in steps
+    assert steps.index("start_application") < steps.index("ensure_desktop_channel")
+    assert steps.index("ensure_desktop_channel") < steps.index("verify_application")
+
+
+def test_unavailable_healer_names_the_http_code() -> None:
+    """Во время простоя код ответа — единственная диагностика у владельца.
+
+    401 (протухший API_KEY), 404 (роутер не подключён) и 502 выглядели
+    одинаково, хотя чинятся по-разному.
+    """
+
+    class _RejectingProbe:
+        def post_json(self, url, payload, *, headers=None, timeout: float = 15):
+            del url, payload, headers, timeout
+            return 401, {"detail": "unauthorized"}
+
+    with pytest.raises(FbctlError) as error:
+        fbctl_probes.ensure_browser_channel(_RejectingProbe(), "http://api", "k" * 24)
+
+    assert "401" in str(error.value)
+
+
+class _DeadApiProbe(FakeProbes):
+    """API не поднялся: любой HTTP-запрос к нему обрывается на соединении."""
+
+    def __init__(self) -> None:
+        self.post_calls: list[str] = []
+
+    def status(self, url: str, *, timeout: float = 15) -> int:
+        del timeout
+        raise FbctlError(f"endpoint is unavailable: {url}")
+
+    def post_json(self, url: str, payload, *, headers=None, timeout: float = 15):
+        del payload, headers, timeout
+        self.post_calls.append(url)
+        raise FbctlError(f"endpoint is unavailable: {url}")
+
+
+def test_channel_step_does_not_claim_a_dead_api_as_its_own_failure(tmp_path: Path) -> None:
+    """Шаг стоит первым после старта API и обязан назвать чужой отказ чужим.
+
+    Без собственной проверки доступности шаг три минуты крутил бы ожидание
+    браузерного канала и завалил релиз сообщением про стол, хотя не поднялся
+    сам API. Владелец получает ложный след в момент простоя единственного слота.
+    """
+    root = _root(tmp_path)
+    config = prepare_candidate(
+        root=root,
+        release=_materialize(root / "candidate"),
+        source_env=None,
+        docker_config=None,
+        adoption_bundle=None,
+    )
+    probes = _DeadApiProbe()
+    slept: list[float] = []
+    clock = iter(range(0, 100_000, 100))
+    controller = ProductionController(
+        runner=FakeRunner(),
+        probes=probes,
+        log=lambda _message: None,
+        monotonic=lambda: float(next(clock)),
+        sleep=slept.append,
+    )
+
+    with pytest.raises(FbctlError) as error:
+        controller._ensure_desktop_channel(config)  # noqa: SLF001 - точный контракт шага
+
+    message = str(error.value)
+    assert "/healthz" in message
+    assert "browser channel" not in message
+    # Ни одной попытки лечить канал и ни одной секунды ожидания вслепую.
+    assert probes.post_calls == []
+    assert slept == []

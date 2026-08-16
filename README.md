@@ -28,7 +28,7 @@ Safety-first операторская платформа для монитори
 | Operator | FastAPI, React web, Telegram Mini App, WebSocket reconciliation |
 | Safety | `task_queue`, `CommandService`, leases, fencing, deadlines, actors |
 | Notifications | incidents, events/deliveries, Telegram webhook and delivery workers |
-| Browser | отдельный Kasm/Vision desktop и Node.js browser-agent |
+| Browser | отдельный Vision desktop и Node.js browser-agent |
 | Platform | PostgreSQL, Redis, fixed-port Caddy, Alloy, Prometheus, Loki, Tempo |
 
 Список production-сервисов и порядок переключения описаны в

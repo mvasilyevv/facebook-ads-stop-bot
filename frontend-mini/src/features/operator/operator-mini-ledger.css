@@ -63,6 +63,7 @@
 
 .mini-proof span:last-child {
   overflow: hidden;
+  min-width: 0;
   color: var(--color-bg-8);
   font-family: var(--font-numeric);
   font-size: 12px;
@@ -249,6 +250,7 @@
 
 .mini-ledger-section__proof span {
   overflow: hidden;
+  min-width: 0;
   max-width: 100%;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -338,6 +340,7 @@
 
 .mini-approaching-item__meta {
   overflow: hidden;
+  min-width: 0;
   color: var(--color-bg-9);
   font-size: 12px;
   text-overflow: ellipsis;
@@ -653,6 +656,15 @@
 
 .mini-action-journal > li:last-child {
   border-bottom: 0;
+}
+
+/* Счётчик повторов не сжимается и не обрезается: он и есть причина,
+   по которой двадцать одинаковых строк стали одной. */
+.mini-action-journal__repeats {
+  flex: 0 0 auto;
+  color: var(--color-bg-9);
+  font-family: var(--font-numeric);
+  font-size: 12px;
 }
 
 .mini-action-journal__meta {
