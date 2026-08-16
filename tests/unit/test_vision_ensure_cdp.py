@@ -65,24 +65,6 @@ async def test_settings_probe_adopts_exact_maintenance_owner(monkeypatch):
     assert probe.status == "READY"
 
 
-@pytest.mark.asyncio
-async def test_ensure_cdp_rejects_missing_platform_owner(monkeypatch):
-    from core.tasks.browser_fence import BrowserMaintenanceGuard
-
-    monkeypatch.setattr(m, "BrowserMaintenanceGuard", BrowserMaintenanceGuard)
-    resp = await m.post_vision_ensure_cdp(
-        request=SimpleNamespace(headers={}),
-        engine=None,
-        settings=None,
-        meta_api_client=None,
-    )
-
-    assert resp.ok is False
-    assert resp.status == "UNAVAILABLE"
-    assert resp.action == "none"
-    assert resp.message == "Platform maintenance ownership is missing or expired"
-
-
 # Direct browser channel ready → no profile restart.
 @pytest.mark.asyncio
 async def test_ensure_cdp_already_ready(monkeypatch):
@@ -241,3 +223,94 @@ async def test_ensure_cdp_missing_db_config_is_fail_closed(monkeypatch):
     assert resp.status == "UNAVAILABLE"
     assert resp.action == "none"
     assert resp.message == "Vision is not configured in PostgreSQL"
+
+
+class _FakeExclusiveMaintenance:
+    """Фенс, который платформа берёт сама, когда владельца ей не передали."""
+
+    instances: list[str] = []
+
+    def __init__(self, _engine, *, operation_kind):
+        self.operation_kind = operation_kind
+        self.owner = "b" * 32
+
+    async def __aenter__(self):
+        _FakeExclusiveMaintenance.instances.append(self.operation_kind)
+        return self
+
+    async def assert_held(self):
+        return None
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_ensure_cdp_claims_its_own_fence_without_a_caller_owner(monkeypatch):
+    """Деплою неоткуда взять владельца фенса: он его и не должен искать.
+
+    Эндпоинт задуман для platform healer, а healer — это fbctl между стартом
+    стола и проверкой канала. Требование готового владельца делало ручку
+    невызываемой, поэтому без заголовка она берёт эксклюзив сама.
+    """
+    _FakeExclusiveMaintenance.instances.clear()
+    recovered = {"called": False, "owner": ""}
+
+    async def fake_probe(_client, *, expected_profile_id):
+        assert expected_profile_id == "profile-exact"
+        if recovered["called"]:
+            return m._BrowserChannelProbe("READY", None, 1, True)
+        return m._BrowserChannelProbe(
+            "DEGRADED",
+            "BROWSER_UNAVAILABLE",
+            1,
+            True,
+            maintenance_recovery_allowed=True,
+        )
+
+    async def fake_recover(_engine, _settings, *, maintenance_owner):
+        recovered["called"] = True
+        recovered["owner"] = maintenance_owner
+
+    monkeypatch.setattr(m, "BrowserExclusiveMaintenance", _FakeExclusiveMaintenance)
+    monkeypatch.setattr(m, "_probe_browser_channel", fake_probe)
+    monkeypatch.setattr(m, "_recover_browser_profile_under_maintenance", fake_recover)
+
+    resp = await m.post_vision_ensure_cdp(
+        request=SimpleNamespace(headers={}),
+        engine=None,
+        settings=None,
+        meta_api_client=None,
+    )
+
+    assert resp.ok is True
+    assert resp.status == "RECOVERED"
+    assert recovered["called"] is True
+    # Восстановление идёт под тем владельцем, которого выдал захваченный фенс.
+    assert recovered["owner"] == "b" * 32
+    assert _FakeExclusiveMaintenance.instances == ["vision_ensure_cdp"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_cdp_still_adopts_an_explicit_owner(monkeypatch):
+    """Вызов с готовым владельцем не должен захватывать второй фенс."""
+
+    class UnexpectedExclusive:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("владелец передан — второй фенс брать нельзя")
+
+    async def fake_probe(_client, *, expected_profile_id):
+        return m._BrowserChannelProbe("READY", None, 1, True)
+
+    monkeypatch.setattr(m, "BrowserExclusiveMaintenance", UnexpectedExclusive)
+    monkeypatch.setattr(m, "_probe_browser_channel", fake_probe)
+
+    resp = await m.post_vision_ensure_cdp(
+        request=_request(),
+        engine=None,
+        settings=None,
+        meta_api_client=None,
+    )
+
+    assert resp.ok is True
+    assert resp.status == "READY"

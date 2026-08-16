@@ -738,13 +738,21 @@ async def post_vision_ensure_cdp(
     action=none. Иначе подтверждённый maintenance owner разрешает ровно один
     принудительный restart canonical Vision-профиля с обязательным повторным probe.
     """
-    maintenance_owner = request.headers.get(
+    supplied_owner = request.headers.get(
         "X-FB-Agent-Browser-Maintenance-Owner",
         "",
     )
     try:
-        guard = BrowserMaintenanceGuard(engine, maintenance_owner)
-        async with guard:
+        # Владельца фенса предъявляет только тот, кто уже ведёт обслуживание.
+        # Деплою предъявлять нечего, а чинить канал после пересоздания стола
+        # нужно именно ему — поэтому эксклюзив берётся здесь же.
+        fence: BrowserMaintenanceGuard | BrowserExclusiveMaintenance = (
+            BrowserMaintenanceGuard(engine, supplied_owner)
+            if supplied_owner
+            else BrowserExclusiveMaintenance(engine, operation_kind="vision_ensure_cdp")
+        )
+        async with fence as guard:
+            maintenance_owner = supplied_owner or guard.owner
             try:
                 runtime = await load_vision_runtime_config(engine)
             except VisionConfigurationError:
@@ -802,6 +810,7 @@ async def post_vision_ensure_cdp(
         BrowserMaintenanceOwnerInvalid,
         BrowserFenceLeaseLost,
         BrowserOperationBlocked,
+        BrowserOperationDrainTimeout,
     ) as exc:
         logger.warning("ensure-cdp: maintenance owner rejected: %s", type(exc).__name__)
         return VisionEnsureCdpResponse(
