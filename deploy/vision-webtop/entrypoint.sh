@@ -163,14 +163,21 @@ rustdesk_password=${DESKTOP_RUSTDESK_PASSWORD}
   install -d -o "${requested_uid}" -g "${requested_gid}" -m 0700 "${rustdesk_config_dir}"
   install -o "${requested_uid}" -g "${requested_gid}" -m 0600 /dev/null \
     "${rustdesk_config_dir}/RustDesk2.toml"
+  # Сам стол ходит к брокеру внутри своей сети, а оператор — по публичному
+  # адресу. Это разные точки обзора одного брокера: обратный путь из
+  # контейнера на published-адрес хоста закрыт файрволом, и регистрация там
+  # молча не происходит. Без внутренних имён остаётся публичный адрес —
+  # контейнер, поднятый отдельно от compose, работает как раньше.
+  rustdesk_id_server=${DESKTOP_RUSTDESK_ID_SERVER:-${DESKTOP_RUSTDESK_SERVER}}
+  rustdesk_relay_server=${DESKTOP_RUSTDESK_RELAY_SERVER:-${DESKTOP_RUSTDESK_SERVER}}
   cat >"${rustdesk_config_dir}/RustDesk2.toml" <<RUSTDESK_CONFIG
-rendezvous_server = '${DESKTOP_RUSTDESK_SERVER}'
+rendezvous_server = '${rustdesk_id_server}'
 nat_type = 0
 serial = 0
 
 [options]
-custom-rendezvous-server = '${DESKTOP_RUSTDESK_SERVER}'
-relay-server = '${DESKTOP_RUSTDESK_SERVER}'
+custom-rendezvous-server = '${rustdesk_id_server}'
+relay-server = '${rustdesk_relay_server}'
 key = '${rustdesk_key}'
 verification-method = 'use-permanent-password'
 RUSTDESK_CONFIG

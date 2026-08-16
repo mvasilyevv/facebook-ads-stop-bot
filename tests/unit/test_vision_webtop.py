@@ -220,12 +220,32 @@ def test_channel_never_reaches_the_public_broker() -> None:
 
     code = "\n".join(line for line in entrypoint.splitlines() if not line.lstrip().startswith("#"))
     assert "rustdesk.com" not in code
-    assert "custom-rendezvous-server = '${DESKTOP_RUSTDESK_SERVER}'" in entrypoint
+    assert "custom-rendezvous-server = '${rustdesk_id_server}'" in entrypoint
+    assert "relay-server = '${rustdesk_relay_server}'" in entrypoint
     assert "key = '${rustdesk_key}'" in entrypoint
     assert "verification-method = 'use-permanent-password'" in entrypoint
     # Стол настоящий, с framebuffer: headless-режим RustDesk с его известными
     # болячками не включается.
     assert "allow-linux-headless" not in entrypoint
+
+
+def test_desktop_reaches_the_broker_inside_its_own_network() -> None:
+    """Стол и оператор смотрят на один брокер с разных сторон.
+
+    Обратный путь из контейнера на published-адрес хоста закрыт файрволом:
+    стол молча не регистрировался, ID был, а подключиться было некуда.
+    Внутри compose брокер доступен по имени сервиса, а операторский адрес
+    остаётся публичным — его и публикует стол.
+    """
+    document = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    environment = document["services"]["vision-webtop"]["environment"]
+
+    assert environment["DESKTOP_RUSTDESK_ID_SERVER"] == "rustdesk-id"
+    assert environment["DESKTOP_RUSTDESK_RELAY_SERVER"] == "rustdesk-relay"
+
+    entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
+    # Оператору публикуется публичный адрес, а не внутреннее имя сервиса.
+    assert '"${DESKTOP_RUSTDESK_SERVER}" "${rustdesk_key}"' in entrypoint
 
 
 def test_channel_failure_never_takes_the_desktop_down() -> None:

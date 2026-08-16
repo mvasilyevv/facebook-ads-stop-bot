@@ -27,6 +27,12 @@ services:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       TZ: ${TZ:-Europe/Kaliningrad}
+      # Стол ходит к брокеру внутри своей же сети, а не через публикованный
+      # адрес хоста: обратный путь контейнер → host-IP закрыт файрволом, и
+      # регистрация молча не происходила. Оператору по-прежнему публикуется
+      # DESKTOP_RUSTDESK_SERVER — снаружи брокер доступен только по нему.
+      DESKTOP_RUSTDESK_ID_SERVER: rustdesk-id
+      DESKTOP_RUSTDESK_RELAY_SERVER: rustdesk-relay
     ports:
       - "127.0.0.1:${BROWSER_GRPC_HOST_PORT:?set BROWSER_GRPC_HOST_PORT}:50051"
     volumes:
