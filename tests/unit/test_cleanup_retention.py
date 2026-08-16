@@ -91,6 +91,17 @@ def test_default_policy_keys() -> None:
     assert set(policy.keys()) == expected_keys
 
 
+def test_failed_task_trace_is_kept_for_a_quarter() -> None:
+    """След упавшей денежной команды живёт 90 дней, а не 45.
+
+    Удаление строки task_queue каскадом уносит command_idempotency_receipts
+    (fk_command_idempotency_receipts_task_id_task_queue ON DELETE CASCADE),
+    то есть доказательство того, отправляли ли мы мутацию в Meta. Сокращать
+    это окно молча нельзя: восстановить его нечем.
+    """
+    assert get_default_policy()["task_queue_failed"] == "90 days"
+
+
 def test_partition_map_contains_only_current_durable_event_tables() -> None:
     assert _PARTITIONED == [
         ("ad_metrics", "cycle_ts", "ad_metrics"),

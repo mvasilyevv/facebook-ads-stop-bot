@@ -241,7 +241,7 @@ async def test_special_retention_keeps_everything(engine: AsyncEngine) -> None:
     ("missing_key", "status", "default_days"),
     [
         ("task_queue_completed", "succeeded", 30),
-        ("task_queue_failed", "failed", 45),
+        ("task_queue_failed", "failed", 90),
     ],
 )
 async def test_missing_policy_key_falls_back_to_default(
@@ -253,7 +253,7 @@ async def test_missing_policy_key_falls_back_to_default(
     `policy.get(policy_key, defaults[policy_key])` в delete_task_queue_completed
     ничем не закреплена. Здесь ключ намеренно отсутствует: граница обязана
     взяться из get_default_policy() (task_queue_completed = 30 дней,
-    task_queue_failed = 45 дней) — ровно то поведение, которое поменяла задача.
+    task_queue_failed = 90 дней) — ровно то поведение, которое поменяла задача.
     """
     policy = {key: value for key, value in _POLICY.items() if key != missing_key}
     assert missing_key not in policy

@@ -290,6 +290,23 @@ def test_retention_tightening_migration_matches_the_current_policy() -> None:
         assert old_value != new_value
 
 
+def test_clean_install_keeps_the_failed_task_trace_for_a_quarter() -> None:
+    """Чистая установка обязана получить 90 дней на след упавшей команды.
+
+    Рабочее значение читается из system_config, поэтому дефолт в коде сам по
+    себе окна не задаёт: свежая база берёт срок из baseline-сида, а потом по
+    ней проходят все ревизии. Достаточно одной сокращающей ревизии, чтобы
+    длинное окно исчезло сразу после установки, — поэтому проверяются оба
+    звена, а не только retention.py.
+    """
+    tightening = importlib.import_module("migrations.versions.0003_tighten_retention_policy")
+    baseline = importlib.import_module(REVISION_MODULE).BASELINE_RETENTION_POLICY
+
+    assert get_default_policy()["task_queue_failed"] == "90 days"
+    assert baseline["task_queue_failed"] == "90 days"
+    assert not any(name == "task_queue_failed" for name, _old, _new in tightening._TIGHTENED)
+
+
 def test_sql_splitter_preserves_functions_literals_and_nested_comments() -> None:
     migration = importlib.import_module(REVISION_MODULE)
     sql = """
