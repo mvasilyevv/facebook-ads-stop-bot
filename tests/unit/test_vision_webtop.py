@@ -350,3 +350,26 @@ def test_legacy_desktop_runtimes_cannot_reenter_release_contract() -> None:
             source = head + tail
         for token in retired_tokens:
             assert token not in source, (path.relative_to(ROOT), token)
+
+
+def test_third_party_notices_describe_the_shipped_image() -> None:
+    """Notices — документ соответствия, а не история образа.
+
+    Снятый софт в нём хуже отсутствия: он объявляет обязательства по чужим
+    лицензиям, которых образ уже не несёт.
+    """
+    notices = (WEBTOP / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    dockerfile = (WEBTOP / "Dockerfile").read_text(encoding="utf-8")
+
+    lowered = notices.lower()
+    assert "kasmvnc" not in lowered
+    assert "novnc" not in lowered
+    # Обещания про сборку веб-клиента: builder-стадии в образе больше нет.
+    assert "web client" not in lowered
+
+    # То, что реально ставится, обязано быть объявлено.
+    assert "RustDesk" in notices
+    assert "Vision" in notices
+    assert "Firefox" in notices
+    for token in ("RUSTDESK_VERSION", "FIREFOX_VERSION"):
+        assert token in dockerfile

@@ -10,12 +10,14 @@ FB Agent использует один production slot. Краткая недо�
 
 - `fb_agent_infra` — PostgreSQL и Redis;
 - `fb_agent_app` — API, web, TMA и workers;
-- `fb_agent_desktop` — Vision/KasmVNC и browser-agent;
+- `fb_agent_desktop` — Vision, browser-agent и брокеры RustDesk;
 - `fb_agent_monitoring` — Prometheus, Loki, Tempo, Grafana и Alloy.
 
-Caddy всегда направляет трафик на `18100` (API), `18080` (web), `18081`
-(TMA) и `8444` (desktop). Docker `restart: unless-stopped` отвечает за запуск
-после reboot; отдельных application systemd units нет.
+Caddy всегда направляет трафик на `18100` (API), `18080` (web) и `18081`
+(TMA). Доступ к рабочему столу веб-канала не имеет: он идёт нативным
+клиентом RustDesk через собственный брокер в приватной сети. Docker
+`restart: unless-stopped` отвечает за запуск после reboot; отдельных
+application systemd units нет.
 
 ## Управление production
 
