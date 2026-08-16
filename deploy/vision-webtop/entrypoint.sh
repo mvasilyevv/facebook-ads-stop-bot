@@ -209,12 +209,15 @@ RUSTDESK_CONFIG
   # API и показывает страница «Рабочий стол». Секретов в файле нет.
   publish_channel_info() {
     local device_id=$1
-    printf '{"server": "%s", "key": "%s", "device_id": %s}\n' \
-      "${DESKTOP_RUSTDESK_SERVER}" "${rustdesk_key}" \
-      "${device_id:+\"${device_id}\"}" > /run/desktop-readiness/rustdesk.json.tmp
-    if [[ -z "${device_id}" ]]; then
-      sed -i 's/"device_id": $/"device_id": null/' /run/desktop-readiness/rustdesk.json.tmp
+    # До первого ответа брокера ID неизвестен, и это именно null, а не пустая
+    # строка: читатель отличает «ещё не выдан» от «выдан пустой».
+    local device_field=null
+    if [[ -n "${device_id}" ]]; then
+      device_field="\"${device_id}\""
     fi
+    printf '{"server": "%s", "key": "%s", "device_id": %s}\n' \
+      "${DESKTOP_RUSTDESK_SERVER}" "${rustdesk_key}" "${device_field}" \
+      > /run/desktop-readiness/rustdesk.json.tmp
     chmod 0644 /run/desktop-readiness/rustdesk.json.tmp
     mv -f /run/desktop-readiness/rustdesk.json.tmp /run/desktop-readiness/rustdesk.json
   }

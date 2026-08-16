@@ -8,6 +8,7 @@ KasmVNC был не веб-мордой, а X-сервером стола. Ег�
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -251,6 +252,48 @@ def test_device_id_is_published_for_the_operator_ui() -> None:
     assert "mv -f /run/desktop-readiness/rustdesk.json.tmp" in entrypoint
     # Ключ и адрес публикуются сразу, ID — как только его выдаст брокер.
     assert 'publish_channel_info ""' in entrypoint
+
+
+def _run_publish_channel_info(tmp_path: Path, device_id: str) -> str:
+    """Исполняет функцию публикации прямо из entrypoint.
+
+    Проверять публикацию по наличию строк бессмысленно: файл читает не человек,
+    а операторский API, и невалидный JSON он честно превращает в «канала нет».
+    Поэтому запускаем настоящий код и смотрим на результат.
+    """
+    entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
+    start = entrypoint.index("  publish_channel_info() {")
+    end = entrypoint.index("\n  }\n", start) + len("\n  }\n")
+    function = entrypoint[start:end].replace("/run/desktop-readiness", str(tmp_path))
+
+    script = (
+        "set -Eeuo pipefail\n"
+        "DESKTOP_RUSTDESK_SERVER=100.73.162.127\n"
+        "rustdesk_key='QJztruGKKjvEcX9XBLMixf21wieLGYABEaWby97JP5s='\n"
+        f"{function}\n"
+        f'publish_channel_info "{device_id}"\n'
+    )
+    subprocess.run(["bash", "-c", script], check=True, capture_output=True)
+    return (tmp_path / "rustdesk.json").read_text(encoding="utf-8")
+
+
+def test_channel_info_is_valid_json_before_the_broker_issues_an_id(tmp_path: Path) -> None:
+    """Адрес и ключ публикуются раньше ID — оператор настраивает клиент, пока
+    стол поднимается. Если ранняя публикация ломает JSON, API отдаёт пустоту, и
+    смысл ранней публикации теряется целиком.
+    """
+    published = json.loads(_run_publish_channel_info(tmp_path, ""))
+
+    assert published["device_id"] is None
+    assert published["server"] == "100.73.162.127"
+    assert published["key"] == "QJztruGKKjvEcX9XBLMixf21wieLGYABEaWby97JP5s="
+
+
+def test_channel_info_carries_the_device_id_once_it_is_known(tmp_path: Path) -> None:
+    published = json.loads(_run_publish_channel_info(tmp_path, "253474910"))
+
+    assert published["device_id"] == "253474910"
+    assert published["server"] == "100.73.162.127"
 
 
 def test_legacy_desktop_runtimes_cannot_reenter_release_contract() -> None:
