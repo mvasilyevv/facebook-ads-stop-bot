@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import errno
 import fcntl
 import grp
@@ -50,7 +49,6 @@ from fbctl.files import (
     require_absolute_path,
     require_directory,
     require_private_file,
-    sha256_file,
     snapshot_private_file,
     trusted_shared_directory,
     unlink_unchanged_snapshot,
@@ -102,10 +100,12 @@ WORKERS: dict[str, str] = {
     "campaign_creator": "campaign_creator",
 }
 CADDY_ENV_PATH = Path("/etc/fb-agent/caddy.env")
-MANAGED_CADDY_SITE_FILES = (
-    "app.adpulse.su.caddy",
-    "desktop.adpulse.su.caddy",
-)
+MANAGED_CADDY_SITE_FILES = ("app.adpulse.su.caddy",)
+# Сайты, ушедшие из контракта. _provision_caddy сам ничего не удаляет — он
+# пишет только перечисленное, и стухший сайт продолжил бы обслуживаться:
+# Caddyfile импортирует /etc/caddy/sites-enabled/*.caddy целиком. Поэтому
+# ретированные имена вычищаются явно, по образцу RETIRED_SYSTEMD_UNITS.
+RETIRED_CADDY_SITE_FILES = ("desktop.adpulse.su.caddy",)
 CADDY_IMPORT_LINE = "import /etc/caddy/sites-enabled/*.caddy"
 APP_SERVICES = frozenset({"api", "frontend", "mini-app", *WORKERS})
 DESKTOP_SERVICES = frozenset({"vision-webtop", "browser-agent"})
@@ -131,7 +131,6 @@ MANAGED_HOST_PORT_SERVICES = (
     # и блокирует любой повторный деплой. Таблицу стережёт тест,
     # сверяющий её с ports в Compose.
     ("BROWSER_GRPC_HOST_PORT", "DESKTOP_PROJECT_NAME", "vision-webtop"),
-    ("DESKTOP_HTTPS_PORT", "DESKTOP_PROJECT_NAME", "vision-webtop"),
 )
 # Ресурсы брошенного прежнего bootstrap. Мы их не трогаем: только сообщаем
 # оператору, что они есть, чтобы он убрал их вручную после приёмки production.
@@ -919,28 +918,23 @@ class ProductionController:
         )
 
     def _publish_desktop_readiness(self, config: RuntimeConfig) -> None:
+        """Подготовить канал публикации данных нативного канала.
+
+        Секретов здесь больше нет: стол кладёт сюда ID устройства, адрес и
+        публичный ключ брокера — всё, что оператор и так вводит в клиент.
+        Каталог читаем для api-контейнера (0755), пишет в него стол.
+        Наследие веб-канала — креды KasmVNC в states/ — вычищается на месте.
+        """
         readiness = Path(config.values["DESKTOP_READINESS_DIR"])
-        states = readiness / "states"
-        readiness.mkdir(parents=True, exist_ok=True, mode=0o700)
-        states.mkdir(parents=True, exist_ok=True, mode=0o700)
-        require_directory(readiness, mode=0o700)
-        require_directory(states, mode=0o700)
-        user = config.desktop_values["DESKTOP_KASM_SERVICE_USER"]
-        password = config.desktop_values["DESKTOP_KASM_SERVICE_PASSWORD"]
-        if not user or ":" in user or len(password) < 32:
-            raise FbctlError("desktop service credentials are invalid")
-        state_id = f"{config.layout.release_id}-{sha256_file(config.layout.app_env)[:16]}"
-        state = states / f"{state_id}.env"
-        content = (
-            f"DESKTOP_KASM_SERVICE_USER={user}\nDESKTOP_KASM_SERVICE_PASSWORD={password}\n"
-        ).encode("utf-8")
-        if state.exists():
-            require_private_file(state)
-            if state.read_bytes() != content:
-                raise FbctlError("desktop readiness state conflicts with candidate credentials")
-        else:
-            atomic_write(state, content, mode=0o600)
-        atomic_symlink(target=f"states/{state.name}", link=readiness / "active.env")
+        readiness.mkdir(parents=True, exist_ok=True)
+        os.chmod(readiness, 0o755)
+        require_directory(readiness, mode=0o755)
+        legacy_active = readiness / "active.env"
+        if legacy_active.is_symlink() or legacy_active.exists():
+            legacy_active.unlink()
+        legacy_states = readiness / "states"
+        if legacy_states.is_dir():
+            shutil.rmtree(legacy_states)
 
     def _start_application(self, config: RuntimeConfig) -> None:
         self.runner.run(
@@ -1124,9 +1118,6 @@ class ProductionController:
             status = self.probes.status(f"{config.public_url}{path}")
             if status < 200 or status >= 400:
                 raise FbctlError(f"public surface returned HTTP {status}: {path}")
-        desktop_status = self.probes.status("https://desktop.adpulse.su/")
-        if desktop_status != 303:
-            raise FbctlError("public desktop did not return the canonical unauthenticated redirect")
 
     def _promote(self, config: RuntimeConfig, warnings: list[str]) -> None:
         """Commit an already-probed candidate with one runtime-pointer rename.
@@ -1653,15 +1644,10 @@ def _normalize_profile_tree(root: Path, *, uid: int, gid: int) -> None:
 
 
 def _sync_caddy_values(source: dict[str, str], target: dict[str, str]) -> None:
-    user = source.get("DESKTOP_KASM_SERVICE_USER", "")
-    password = source.get("DESKTOP_KASM_SERVICE_PASSWORD", "")
     api_key = source.get("API_KEY", "")
-    if not user or ":" in user or len(password) < 32 or len(api_key) < 24:
+    if len(api_key) < 24:
         raise FbctlError("candidate credentials cannot be synchronized to Caddy")
     target["API_KEY"] = api_key
-    target["DESKTOP_KASM_SERVICE_AUTH_B64"] = base64.b64encode(
-        f"{user}:{password}".encode("utf-8")
-    ).decode("ascii")
 
 
 def _validate_caddy_panel_credentials(values: Mapping[str, str]) -> None:
@@ -2003,9 +1989,14 @@ def _reconcile_caddy(
     _prepare_caddy_host_paths()
     expected = _expected_caddy_files(resources, source_values, panel_values)
     drifted = [target for target in expected.values() if not target.matches_host()]
-    if not drifted and not force_reload:
+    # Ретированный сайт обязан исчезнуть с хоста: Caddyfile импортирует
+    # sites-enabled/*.caddy целиком, и оставленный файл продолжил бы
+    # обслуживаться с пустыми плейсхолдерами вместо снятых значений.
+    sites_dir = Path("/etc/caddy/sites-enabled")
+    retired = [sites_dir / name for name in RETIRED_CADDY_SITE_FILES if (sites_dir / name).exists()]
+    if not drifted and not retired and not force_reload:
         return None
-    snapshots = [_HostFileSnapshot.capture(path) for path in expected]
+    snapshots = [_HostFileSnapshot.capture(path) for path in (*expected, *retired)]
     _validate_staged_caddy(resources, expected, runner, step=step)
     daemon_reload_attempted = False
     caddy_reload_attempted = False
@@ -2014,6 +2005,9 @@ def _reconcile_caddy(
         for snapshot in snapshots:
             if not snapshot.is_current():
                 raise FbctlError(f"managed Caddy host file changed during deploy: {snapshot.path}")
+        for path in retired:
+            mutation_started = True
+            path.unlink()
         for target in drifted:
             mutation_started = True
             atomic_write(target.path, target.payload, mode=target.mode)

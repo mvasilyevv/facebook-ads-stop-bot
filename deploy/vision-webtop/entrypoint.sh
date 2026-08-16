@@ -3,7 +3,6 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 readonly display=:1
-readonly password_file=/config/.kasmpasswd
 readonly runtime_user=vision
 readonly config_home=/config
 
@@ -28,14 +27,12 @@ cleanup() {
   local status=$?
   local child=""
   trap - EXIT INT TERM
-  for child in "${rustdesk_pid:-}" "${fit_pid:-}" "${vision_pid:-}" "${desktop_pid:-}"; do
+  for child in "${rustdesk_pid:-}" "${fit_pid:-}" "${vision_pid:-}" "${desktop_pid:-}" "${server_pid:-}"; do
     if [[ -n "${child}" ]]; then
       kill -TERM "${child}" 2>/dev/null || true
     fi
   done
-  gosu "${runtime_user}" env HOME="${config_home}" kasmvncserver "${display}" -kill \
-    >/dev/null 2>&1 || true
-  for child in "${rustdesk_pid:-}" "${fit_pid:-}" "${vision_pid:-}" "${desktop_pid:-}"; do
+  for child in "${rustdesk_pid:-}" "${fit_pid:-}" "${vision_pid:-}" "${desktop_pid:-}" "${server_pid:-}"; do
     if [[ -n "${child}" ]]; then
       wait "${child}" 2>/dev/null || true
     fi
@@ -44,10 +41,12 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-require_env DESKTOP_KASM_SERVICE_USER
-require_env DESKTOP_KASM_SERVICE_PASSWORD
-if ((${#DESKTOP_KASM_SERVICE_PASSWORD} < 16)); then
-  printf 'DESKTOP_KASM_SERVICE_PASSWORD must contain at least 16 characters\n' >&2
+# Веб-канала больше нет, поэтому нативный обязателен: стол без единого пути
+# доступа — недостижимая машина. Отказ на старте не даёт ей стать такой молча.
+require_env DESKTOP_RUSTDESK_PASSWORD
+require_env DESKTOP_RUSTDESK_SERVER
+if ((${#DESKTOP_RUSTDESK_PASSWORD} < 16)); then
+  printf 'DESKTOP_RUSTDESK_PASSWORD must contain at least 16 characters\n' >&2
   exit 64
 fi
 
@@ -65,8 +64,7 @@ fi
 
 install -d -o "${requested_uid}" -g "${requested_gid}" -m 0700 \
   "${config_home}" "${config_home}/.cache" "${config_home}/.config" \
-  "${config_home}/.local" "${config_home}/.vnc" "${config_home}/Desktop"
-install -d -o "${requested_uid}" -g "${requested_gid}" -m 0700 /run/kasmvnc
+  "${config_home}/.local" "${config_home}/Desktop"
 
 # Ярлык браузера прямо на столе: меню XFCE его тоже показывает, но искать там
 # оператору незачем. Раскладываем на каждом старте — ярлык наш, а не
@@ -74,19 +72,7 @@ install -d -o "${requested_uid}" -g "${requested_gid}" -m 0700 /run/kasmvnc
 install -o "${requested_uid}" -g "${requested_gid}" -m 0700 \
   /usr/share/applications/firefox.desktop "${config_home}/Desktop/firefox.desktop"
 
-# Конфиг из образа лежит в /etc/kasmvnc, но профиль монтируется поверх HOME, и
-# на пустом профиле сервер создаёт там свой дефолт — он перекрывает системный,
-# теряет путь к файлу паролей и падает с «No users configured». Раскладываем
-# управляемый конфиг в профиль на каждом старте: он наш, а не пользовательский.
-install -o "${requested_uid}" -g "${requested_gid}" -m 0600 \
-  /etc/kasmvnc/kasmvnc.yaml "${config_home}/.vnc/kasmvnc.yaml"
-
 umask 077
-printf '%s\n%s\n' \
-  "${DESKTOP_KASM_SERVICE_PASSWORD}" \
-  "${DESKTOP_KASM_SERVICE_PASSWORD}" \
-  | gosu "${runtime_user}" kasmvncpasswd \
-      -u "${DESKTOP_KASM_SERVICE_USER}" -w "${password_file}"
 
 if DISPLAY="${display}" xdpyinfo >/dev/null 2>&1; then
   printf 'Display %s is already served by another process\n' "${display}" >&2
@@ -94,25 +80,20 @@ if DISPLAY="${display}" xdpyinfo >/dev/null 2>&1; then
 fi
 rm -f -- /tmp/.X11-unix/X1 /tmp/.X1-lock
 
-gosu "${runtime_user}" env \
-  DISPLAY="${display}" HOME="${config_home}" XDG_CONFIG_HOME="${config_home}/.config" \
-  XDG_CACHE_HOME="${config_home}/.cache" \
-  kasmvncserver "${display}" -noxstartup -geometry 1366x768 -depth 24
+# Размер стола фиксирован: подстраивать его больше не под что — оператор
+# видит стол через нативный клиент, который масштабирует картинку сам.
+gosu "${runtime_user}" env HOME="${config_home}" \
+  Xvfb "${display}" -screen 0 1920x1080x24 -nolisten tcp &
+server_pid=$!
 
-readonly server_pid_file="${config_home}/.vnc/$(hostname):1.pid"
 for _ in {1..150}; do
-  if [[ -s "${server_pid_file}" ]] && DISPLAY="${display}" xdpyinfo >/dev/null 2>&1; then
+  if DISPLAY="${display}" xdpyinfo >/dev/null 2>&1; then
     break
   fi
   sleep 0.1
 done
-if [[ ! -s "${server_pid_file}" ]] || ! DISPLAY="${display}" xdpyinfo >/dev/null 2>&1; then
-  printf 'KasmVNC display %s did not become ready\n' "${display}" >&2
-  exit 1
-fi
-readonly server_pid="$(<"${server_pid_file}")"
-if [[ ! "${server_pid}" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "${server_pid}" 2>/dev/null; then
-  printf 'KasmVNC did not publish a live numeric pid\n' >&2
+if ! kill -0 "${server_pid}" 2>/dev/null || ! DISPLAY="${display}" xdpyinfo >/dev/null 2>&1; then
+  printf 'X display %s did not become ready\n' "${display}" >&2
   exit 1
 fi
 
@@ -146,32 +127,34 @@ vision_pid=$!
 gosu "${runtime_user}" env DISPLAY="${display}" /usr/local/bin/vision-window-fit.sh &
 fit_pid=$!
 
-# Нативный канал к тому же столу. Нужен ради буфера обмена: в браузере на
-# iPhone он не работает и не может — WebKit требует свежего жеста, а жест
-# протухает раньше, чем VNC-клиент сходит на сервер и вернётся.
-#
-# Пустой пароль означает «канал не нужен». Открытый наружу порт не должен
-# появляться сам по себе, поэтому включает его владелец, задав пароль.
-rustdesk_password=${DESKTOP_RUSTDESK_PASSWORD:-}
-if [[ -n "${rustdesk_password}" ]]; then
-  if ((${#rustdesk_password} < 16)); then
-    printf 'DESKTOP_RUSTDESK_PASSWORD must contain at least 16 characters\n' >&2
-    exit 64
-  fi
-
-  # Без своего брокера канал не поднимается вовсе. По умолчанию клиент
-  # регистрируется на публичных серверах rustdesk.com — проверено на живом
-  # контейнере, они видны в его логах. Для машины с открытым кабинетом чужой
-  # посредник в схеме лишний, и «как получится» здесь не вариант.
-  require_env DESKTOP_RUSTDESK_SERVER
-  require_env DESKTOP_RUSTDESK_KEY
-
+# Единственный канал к столу. Веб-канала больше нет: в браузере на iPhone
+# буфер обмена не работает и не может — WebKit требует свежего жеста, а жест
+# протухает раньше, чем клиент сходит на сервер и вернётся.
+rustdesk_password=${DESKTOP_RUSTDESK_PASSWORD}
+{
   # Стол у нас настоящий, с framebuffer, поэтому headless-режим RustDesk с его
   # известными болячками не включаем: захватывать есть что.
   rustdesk_env=(
     DISPLAY="${display}" HOME="${config_home}"
     XDG_CONFIG_HOME="${config_home}/.config" XDG_CACHE_HOME="${config_home}/.cache"
   )
+
+  # Публичный ключ брокера приходит файлом из его каталога, а не через секрет:
+  # пару генерирует сам брокер при первом старте, и передача через env была бы
+  # лишним звеном с шансом рассинхрона. Compose стартует брокер и стол
+  # одновременно, поэтому ключ ждём — на живом хосте он появляется за секунды.
+  rustdesk_key=""
+  for _ in {1..90}; do
+    if [[ -s /run/rustdesk-broker/id_ed25519.pub ]]; then
+      rustdesk_key="$(</run/rustdesk-broker/id_ed25519.pub)"
+      break
+    fi
+    sleep 1
+  done
+  if [[ -z "${rustdesk_key}" ]]; then
+    printf 'RustDesk broker public key did not appear\n' >&2
+    exit 1
+  fi
 
   # Конфиг раскладываем сами, а не через `rustdesk --option`: на живом
   # контейнере опция до файла не доехала, а запущенный клиент перезаписал файл
@@ -188,7 +171,7 @@ serial = 0
 [options]
 custom-rendezvous-server = '${DESKTOP_RUSTDESK_SERVER}'
 relay-server = '${DESKTOP_RUSTDESK_SERVER}'
-key = '${DESKTOP_RUSTDESK_KEY}'
+key = '${rustdesk_key}'
 verification-method = 'use-permanent-password'
 RUSTDESK_CONFIG
   chown "${requested_uid}:${requested_gid}" "${rustdesk_config_dir}/RustDesk2.toml"
@@ -197,8 +180,8 @@ RUSTDESK_CONFIG
     >/dev/null 2>&1 || true
 
   rustdesk_supervisor() {
-    # Второй канал — дополнение, а не опора. Если он упадёт, оператор не должен
-    # потерять рабочий стол вместе с открытым кабинетом: поднимаем на месте.
+    # Единственный канал к столу. Если он упадёт, оператор не должен потерять
+    # доступ вместе с открытым кабинетом: поднимаем на месте, не роняя стол.
     #
     # Нужны оба процесса: сервис принимает подключения, а основной клиент
     # держит сессию и показывает оператору ID прямо на столе.
@@ -218,7 +201,41 @@ RUSTDESK_CONFIG
   }
   rustdesk_supervisor &
   rustdesk_pid=$!
-fi
+
+  # Оператору для клиента нужны адрес брокера, его публичный ключ и ID стола.
+  # ID выдаёт брокер, и заранее он неизвестен: кастомные ID наш OSS-брокер не
+  # поддерживает (`--set-id` отвечает server_not_support, проверено на живом
+  # контейнере). Публикуем всё в readiness-каталог — оттуда читает операторский
+  # API и показывает страница «Рабочий стол». Секретов в файле нет.
+  publish_channel_info() {
+    local device_id=$1
+    # До первого ответа брокера ID неизвестен, и это именно null, а не пустая
+    # строка: читатель отличает «ещё не выдан» от «выдан пустой».
+    local device_field=null
+    if [[ -n "${device_id}" ]]; then
+      device_field="\"${device_id}\""
+    fi
+    printf '{"server": "%s", "key": "%s", "device_id": %s}\n' \
+      "${DESKTOP_RUSTDESK_SERVER}" "${rustdesk_key}" "${device_field}" \
+      > /run/desktop-readiness/rustdesk.json.tmp
+    chmod 0644 /run/desktop-readiness/rustdesk.json.tmp
+    mv -f /run/desktop-readiness/rustdesk.json.tmp /run/desktop-readiness/rustdesk.json
+  }
+  if [[ -d /run/desktop-readiness ]]; then
+    publish_channel_info ""
+    (
+      for _ in {1..90}; do
+        device_id="$(gosu "${runtime_user}" env "${rustdesk_env[@]}" \
+          rustdesk --get-id 2>/dev/null | tail -1)"
+        if [[ "${device_id}" =~ ^[0-9]{6,}$ ]]; then
+          publish_channel_info "${device_id}"
+          exit 0
+        fi
+        sleep 2
+      done
+    ) &
+  fi
+}
 
 while true; do
   if ! kill -0 "${desktop_pid}" 2>/dev/null; then
@@ -234,7 +251,7 @@ while true; do
     exit 1
   fi
   if ! kill -0 "${server_pid}" 2>/dev/null; then
-    printf 'KasmVNC exited unexpectedly\n' >&2
+    printf 'X display exited unexpectedly\n' >&2
     exit 1
   fi
   sleep 1

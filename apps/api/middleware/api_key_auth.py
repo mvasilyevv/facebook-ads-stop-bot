@@ -68,7 +68,6 @@ _EXEMPT_PATH_PREFIXES = (
     "/api/v1/integrations/telegram/webhook",
     "/api/v1/integrations/alertmanager/webhook",
     "/api/tma",
-    "/desktop/logout",
 )
 
 

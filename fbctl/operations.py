@@ -482,7 +482,6 @@ def _validate_runtime_ports(config: RuntimeConfig) -> None:
         "APP_TMA_PORT",
         "POSTGRES_HOST_PORT",
         "REDIS_HOST_PORT",
-        "DESKTOP_HTTPS_PORT",
         "BROWSER_GRPC_HOST_PORT",
     )
     ports: list[int] = []

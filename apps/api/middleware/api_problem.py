@@ -23,15 +23,13 @@ NON_API_PROBE_PATHS = frozenset(
         "/healthz",
         "/readyz",
         "/system-readyz",
-        "/desktop-readyz",
-        "/desktop-kasm-readyz",
         "/metrics",
     }
 )
 # These are browser-facing HTML handshakes, not JSON API resources. Preserving
 # their native error pages is part of the login UX and avoids replacing an
 # actionable explanation with a generic JSON document.
-NON_API_HTML_PREFIXES = ("/auth/", "/desktop-auth/")
+NON_API_HTML_PREFIXES = ("/auth/",)
 _STATUS_CODES = {
     400: "bad_request",
     401: "unauthorized",
