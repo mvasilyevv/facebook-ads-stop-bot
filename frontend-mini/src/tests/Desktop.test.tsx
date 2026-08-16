@@ -84,4 +84,21 @@ describe("Mini App RemoteDesktopPage", () => {
     screen.getByRole("button", { name: "Повторить" }).click();
     expect(refetch).toHaveBeenCalledOnce();
   });
+
+  it("называет условие доступа, а не только факт приватной сети", () => {
+    render(<RemoteDesktopPage />);
+
+    expect(screen.getByText(/Tailscale/)).toBeInTheDocument();
+  });
+
+  it("не даёт длинному ключу разъехать строку канала", () => {
+    render(<RemoteDesktopPage />);
+
+    // На телефоне это видно глазом: ключ брокера уезжал под кнопку копирования.
+    const key = screen.getByText("QJztruGKKjvEcX9XBLMixf21wieLGYABEaWby97JP5s=");
+    const row = key.closest("div")!.parentElement!;
+
+    expect(row.className).toContain("min-w-0");
+    expect(key.className).toContain("truncate");
+  });
 });
