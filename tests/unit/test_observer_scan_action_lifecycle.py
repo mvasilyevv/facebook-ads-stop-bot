@@ -158,3 +158,49 @@ async def test_paused_outcome_is_not_recorded_as_a_failure(monkeypatch) -> None:
     )
     mark_failed.assert_not_awaited()
     mark_succeeded.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_skipped_outcome_is_not_recorded_as_a_failure(monkeypatch) -> None:
+    """Второй источник того же шума: сканирование включено, но сканировать нечего.
+
+    run_one_cycle возвращает skipped, когда не настроено ни одного кабинета.
+    Задача не выполнена, но и не провалена — оператору важно отличать этот
+    случай от паузы, поэтому причина отмены другая.
+    """
+    engine = object()
+    task = SimpleNamespace(
+        id=1846,
+        lease_owner=uuid.uuid4(),
+        lease_token=11,
+    )
+    summary = {"outcome": "skipped", "accounts": [], "reason": "no_configured_cabinets"}
+    monkeypatch.setattr(
+        observer,
+        "run_with_observer_scan_control",
+        AsyncMock(return_value=summary),
+    )
+    mark_succeeded = AsyncMock(return_value=True)
+    mark_failed = AsyncMock(return_value=True)
+    mark_cancelled = AsyncMock(return_value=True)
+    monkeypatch.setattr(observer, "mark_succeeded", mark_succeeded)
+    monkeypatch.setattr(observer, "mark_failed", mark_failed)
+    monkeypatch.setattr(observer, "mark_cancelled", mark_cancelled)
+
+    returned = await observer._run_claimed_observer_scan(
+        engine,
+        task=task,
+        gate=object(),
+    )
+
+    assert returned == summary
+    # Fencing-контракт отмены тот же, что у остальных финализаций.
+    mark_cancelled.assert_awaited_once_with(
+        engine,
+        task_id=1846,
+        lease_owner=task.lease_owner,
+        lease_token=11,
+        reason="nothing_monitored",
+    )
+    mark_failed.assert_not_awaited()
+    mark_succeeded.assert_not_awaited()
