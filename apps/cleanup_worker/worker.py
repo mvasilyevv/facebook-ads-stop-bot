@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import IntegrityError, InternalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -230,36 +230,82 @@ async def create_next_partition_if_missing(
     return created
 
 
+# Терминальные статусы task_queue, сгруппированные по своему ключу retention.
+# Источник списка — CHECK ck_task_queue_ck_task_queue_status
+# (migrations/versions/0001_safety_first_baseline.sql): pending, running,
+# succeeded, failed, retrying, cancelled. Терминальные из них — succeeded,
+# failed, cancelled; остальные означают незакрытую работу.
+_TASK_QUEUE_RETENTION_GROUPS: list[tuple[str, tuple[str, ...]]] = [
+    ("task_queue_completed", ("succeeded",)),
+    ("task_queue_failed", ("failed", "cancelled")),
+]
+
+# Сколько строк уносит одна транзакция уборки. task_queue не партиционирована,
+# и через неё в этот момент идут money-команды: один неограниченный DELETE
+# держал бы длинный лок на боевой очереди, поэтому чистим короткими батчами.
+_TASK_QUEUE_DELETE_BATCH = 1000
+
+# ORDER BY id — уборка идёт от самых старых задач, поэтому прерванный прогон
+# оставляет предсказуемый хвост, а не случайное подмножество.
+_TASK_QUEUE_DELETE_SQL = text(
+    """
+    DELETE FROM task_queue
+    WHERE id IN (
+        SELECT id
+        FROM task_queue
+        WHERE status IN :statuses
+          AND COALESCE(completed_at, updated_at) < :cutoff
+        ORDER BY id
+        LIMIT :batch
+    )
+    """
+).bindparams(bindparam("statuses", expanding=True))
+
+
 async def delete_task_queue_completed(
     engine: AsyncEngine, policy: dict[str, str], *, now: datetime | None = None
 ) -> int:
-    """DELETE из task_queue по retention."""
-    succeeded_retention = policy.get("task_queue_completed", "30 days")
-    failed_retention = policy.get("task_queue_failed", "90 days")
+    """Удаляет из task_queue только завершённые задачи старше retention.
+
+    Money-инвариант: незавершённая задача (pending/running/retrying) не
+    удаляется ни при каком возрасте — пропажа следа незакрытой команды опаснее
+    роста таблицы. Граница берётся по completed_at, а если он не проставлен —
+    по updated_at, иначе терминальная строка без отметки жила бы вечно.
+    """
+    defaults = get_default_policy()
     deleted_total = 0
 
-    if not is_special(succeeded_retention):
-        cutoff = cutoff_datetime(succeeded_retention, now=now)
-        async with engine.begin() as conn:
-            result = await conn.execute(
-                text(
-                    "DELETE FROM task_queue WHERE status = 'succeeded' AND completed_at < :cutoff"
-                ),
-                {"cutoff": cutoff},
-            )
-            deleted_total += result.rowcount or 0
+    for policy_key, statuses in _TASK_QUEUE_RETENTION_GROUPS:
+        retention = policy.get(policy_key, defaults[policy_key])
+        if is_special(retention):
+            continue
+        cutoff = cutoff_datetime(retention, now=now)
 
-    if not is_special(failed_retention):
-        cutoff = cutoff_datetime(failed_retention, now=now)
-        async with engine.begin() as conn:
-            result = await conn.execute(
-                text(
-                    "DELETE FROM task_queue "
-                    "WHERE status IN ('failed', 'cancelled') AND completed_at < :cutoff"
-                ),
-                {"cutoff": cutoff},
+        deleted_group = 0
+        while True:
+            async with engine.begin() as conn:
+                result = await conn.execute(
+                    _TASK_QUEUE_DELETE_SQL,
+                    {
+                        "statuses": list(statuses),
+                        "cutoff": cutoff,
+                        "batch": _TASK_QUEUE_DELETE_BATCH,
+                    },
+                )
+            deleted_batch = int(result.rowcount or 0)
+            deleted_group += deleted_batch
+            # Неполный батч означает, что просроченных строк больше нет.
+            if deleted_batch < _TASK_QUEUE_DELETE_BATCH:
+                break
+
+        if deleted_group:
+            logger.info(
+                "task_queue retention: удалено %d строк (%s) старше %s",
+                deleted_group,
+                ", ".join(statuses),
+                retention,
             )
-            deleted_total += result.rowcount or 0
+        deleted_total += deleted_group
 
     return deleted_total
 
