@@ -1,104 +1,101 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type { ComponentType } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { post } = vi.hoisted(() => ({ post: vi.fn() }));
+const useDesktopNativeChannel = vi.fn();
 
-vi.mock("@/lib/api/generatedClient", () => ({ generatedFetchApi: { POST: post } }));
+vi.mock("@/lib/api/desktop", () => ({
+  useDesktopNativeChannel: () => useDesktopNativeChannel(),
+}));
 
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => options,
 }));
 
-import { desktopNavigation, Route } from "@/routes/remote-desktop/index";
+import { Route } from "@/routes/remote-desktop/index";
 
 const RemoteDesktopPage = (Route as unknown as { component: ComponentType }).component;
 
-// Переводит jsdom в режим открытой вкладки запуска (?launch=1).
-const enterLaunchMode = () => {
-  window.history.replaceState({}, "", "/remote-desktop?launch=1");
-};
+function channel(overrides: Record<string, unknown> = {}) {
+  return {
+    data: {
+      available: true,
+      server: "100.73.162.127",
+      key: "QJztruGKKjvEcX9XBLMixf21wieLGYABEaWby97JP5s=",
+      device_id: "253474910",
+      ...overrides,
+    },
+    isPending: false,
+    isError: false,
+    refetch: vi.fn(),
+  };
+}
 
-describe("RemoteDesktopPage", () => {
-  beforeEach(() => {
-    post.mockReset();
-    window.history.replaceState({}, "", "/remote-desktop");
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    window.history.replaceState({}, "", "/");
-  });
-
-  // Обычный режим: кнопка — настоящая ссылка в новую вкладку, никаких запросов
-  // на клик (браузер сам открывает вкладку, запуск идёт уже внутри неё).
-  it("показывает ссылку-подключение в новой вкладке без запроса на клик", () => {
-    render(<RemoteDesktopPage />);
-
-    const link = screen.getByRole("link", { name: /Подключиться/ });
-    expect(link).toHaveAttribute("href", "/remote-desktop?launch=1");
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", "noopener noreferrer");
-    expect(screen.getByText(/в новой вкладке/i)).toBeInTheDocument();
-    expect(post).not.toHaveBeenCalled();
-  });
-
-  // Режим запуска: на монтировании получает билет и заменяет адрес вкладки.
-  it("в режиме запуска получает билет и заменяет адрес вкладки", async () => {
-    enterLaunchMode();
-    const replace = vi.spyOn(desktopNavigation, "replace").mockImplementation(() => undefined);
-    post.mockResolvedValue({
-      data: { url: "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use", expires_at: "2026-07-17T12:00:00Z", transport: "kasm" },
-      response: { ok: true },
-    });
-
-    render(<RemoteDesktopPage />);
-
-    await waitFor(() => {
-      expect(post).toHaveBeenCalledWith("/api/desktop/launch", {
-        body: { presentation: "desktop" },
-      });
-      expect(replace).toHaveBeenCalledWith(
-        "https://desktop.adpulse.su/desktop-auth/redeem?ticket=single-use",
-      );
-    });
-  });
-
-  // Режим запуска, ошибка API: показывает сообщение и ссылку «Повторить».
-  it("в режиме запуска показывает ошибку и предлагает повторить", async () => {
-    enterLaunchMode();
-    post.mockRejectedValue(new Error("Доступ к рабочему столу запрещён."));
-
-    render(<RemoteDesktopPage />);
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("Доступ к рабочему столу запрещён.");
-    const retry = screen.getByRole("link", { name: /Повторить/ });
-    expect(retry).toHaveAttribute("href", "/remote-desktop?launch=1");
-  });
-
-  // Режим запуска, чужой origin в билете: адрес не заменяется, показывается ошибка.
-  it("в режиме запуска не переходит по URL вне production desktop origin", async () => {
-    enterLaunchMode();
-    const replace = vi.spyOn(desktopNavigation, "replace").mockImplementation(() => undefined);
-    post.mockResolvedValue({
-      data: { url: "https://evil.example/desktop-auth/redeem?ticket=stolen", expires_at: "2026-07-17T12:00:00Z", transport: "kasm" },
-      response: { ok: true },
-    });
-
-    render(<RemoteDesktopPage />);
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("некорректный билет");
-    expect(replace).not.toHaveBeenCalled();
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  useDesktopNativeChannel.mockReturnValue(channel());
 });
 
-describe("экран рабочего стола не повторяет сам себя", () => {
+describe("RemoteDesktopPage", () => {
+  it("ведёт в нативное приложение по ID стола", () => {
+    render(<RemoteDesktopPage />);
+
+    const cta = screen.getByRole("link", { name: /Открыть в приложении/ });
+    expect(cta).toHaveAttribute("href", "rustdesk://253474910");
+  });
+
+  it("показывает всё, что оператор вводит в клиент, с копированием", () => {
+    render(<RemoteDesktopPage />);
+
+    expect(screen.getByText("253474910")).toBeInTheDocument();
+    expect(screen.getByText("100.73.162.127")).toBeInTheDocument();
+    expect(screen.getByText("QJztruGKKjvEcX9XBLMixf21wieLGYABEaWby97JP5s=")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Скопировать: ID стола" })).toBeInTheDocument();
+  });
+
+  it("никогда не показывает пароль канала", () => {
+    const { container } = render(<RemoteDesktopPage />);
+
+    expect(container.textContent!.toLowerCase()).not.toContain("password");
+    expect(screen.queryByText(/пароль[^.]*:/i)).not.toBeInTheDocument();
+  });
+
+  it("честно называет состояние «стол ещё не опубликовал ID»", () => {
+    useDesktopNativeChannel.mockReturnValue(
+      channel({ available: false, device_id: null }),
+    );
+
+    render(<RemoteDesktopPage />);
+
+    expect(screen.getByText(/ещё не опубликовал ID/)).toBeInTheDocument();
+    // Адрес и ключ уже известны — их можно настроить заранее.
+    expect(screen.getByText("100.73.162.127")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Открыть в приложении/ })).not.toBeInTheDocument();
+  });
+
+  it("при ошибке предлагает повторить, не теряя шапку экрана", () => {
+    const refetch = vi.fn();
+    useDesktopNativeChannel.mockReturnValue({
+      data: undefined,
+      isPending: false,
+      isError: true,
+      refetch,
+    });
+
+    render(<RemoteDesktopPage />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Данные канала недоступны");
+    screen.getByRole("button", { name: "Повторить" }).click();
+    expect(refetch).toHaveBeenCalledOnce();
+    expect(screen.getByRole("heading", { name: "Рабочий стол" })).toBeInTheDocument();
+  });
+
   it("называет удалённую машину один раз, а не трижды", () => {
     render(<RemoteDesktopPage />);
 
-    // Раньше «Vision Desktop» стояло в шапке карточки, крупно в центре и в
-    // подписи — оператор трижды читал одно и то же вместо полезного.
     expect(screen.queryAllByText("Vision Desktop")).toHaveLength(0);
-    expect(screen.getByRole("heading", { name: "Подключение к рабочему столу" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Подключение к рабочему столу" }),
+    ).toBeInTheDocument();
   });
 });

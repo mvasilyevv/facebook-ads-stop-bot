@@ -24,7 +24,7 @@ from fbctl.files import (
     require_release_id,
 )
 
-RUNTIME_SCHEMA = "fb-agent-production-runtime/v2"
+RUNTIME_SCHEMA = "fb-agent-production-runtime/v3"
 PUBLIC_URL = "https://app.adpulse.su"
 INFRA_PROJECT_NAME = "fb_agent_infra"
 APP_PROJECT_NAME = "fb_agent_app"
@@ -39,7 +39,6 @@ MANAGED_HOST_PORTS = (
     ("APP_API_PORT", "18100"),
     ("APP_WEB_PORT", "18080"),
     ("APP_TMA_PORT", "18081"),
-    ("DESKTOP_HTTPS_PORT", "8444"),
     ("BROWSER_GRPC_HOST_PORT", "50051"),
 )
 POSTGRES_IMAGE = (
@@ -50,7 +49,7 @@ GENERATED_SECRETS = {
     "ALERTMANAGER_WEBHOOK_SECRET": 32,
     "TMA_SESSION_SECRET": 32,
     "ADSETPRO_POSTBACK_SECRET": 32,
-    "DESKTOP_KASM_SERVICE_PASSWORD": 32,
+    "DESKTOP_RUSTDESK_PASSWORD": 32,
     "BROWSER_MAINTENANCE_CAPABILITY_SECRET": 48,
     "BROWSER_OPERATION_CAPABILITY_SECRET_AUTOPAUSE": 48,
     "BROWSER_OPERATION_CAPABILITY_SECRET_META_API": 48,
@@ -64,7 +63,21 @@ DURABLE_KEYS = frozenset(
         "ENCRYPTION_KEY",
         "ENCRYPTION_KEY_VERIFY",
         "API_KEY",
+        # Адрес брокера и адрес привязки живут на хосте: транспортируемый
+        # source их не несёт, и потерять их при publish нельзя — канал к столу
+        # единственный.
+        "DESKTOP_RUSTDESK_SERVER",
+        "DESKTOP_RUSTDESK_BIND",
         *GENERATED_SECRETS,
+    }
+)
+# Ретированные ключи веб-канала: в старых секретах они ещё лежат, и валить
+# publish из-за строк, которые больше ничего не значат, незачем — они молча
+# отбрасываются. Retired-имя не может вернуться в allowlist.
+RETIRED_SOURCE_KEYS = frozenset(
+    {
+        "DESKTOP_KASM_SERVICE_USER",
+        "DESKTOP_KASM_SERVICE_PASSWORD",
     }
 )
 BOOTSTRAP_VISION_KEYS = ("VISION_X_TOKEN", "VISION_PROFILE_ID")
@@ -73,8 +86,8 @@ BOOTSTRAP_LEGACY_DROP_KEYS = frozenset(
     {
         "API_HOST",
         "API_PORT",
-        # Guacamole демонтирован: удалённый доступ идёт через KasmVNC, а его
-        # сервисная пара приходит из source как DESKTOP_KASM_SERVICE_*.
+        # Guacamole демонтирован; веб-канал KasmVNC демонтирован следом —
+        # удалённый доступ идёт нативным RustDesk через собственный брокер.
         "DESKTOP_GUACAMOLE_POSTGRES_DB",
         "DESKTOP_GUACAMOLE_POSTGRES_HOST",
         "DESKTOP_GUACAMOLE_POSTGRES_PASSWORD",
@@ -129,13 +142,11 @@ REQUIRED_SOURCE_KEYS = (
 # deliberately absent so a stale host export cannot silently alter production.
 # Стол получает ровно эти ключи и ничего сверх: он не должен наследовать
 # окружение приложения — ни базу, ни Telegram, ни ключи API.
-DESKTOP_ENV_REQUIRED_KEYS = ("DESKTOP_KASM_SERVICE_USER", "DESKTOP_KASM_SERVICE_PASSWORD")
-DESKTOP_ENV_OPTIONAL_KEYS = (
-    "DESKTOP_RUSTDESK_PASSWORD",
-    "DESKTOP_RUSTDESK_SERVER",
-    "DESKTOP_RUSTDESK_KEY",
-)
-DESKTOP_ENV_KEYS = (*DESKTOP_ENV_REQUIRED_KEYS, *DESKTOP_ENV_OPTIONAL_KEYS)
+# Ключ брокера в env не передаётся: стол читает его файлом из каталога
+# брокера — тот генерирует пару при первом старте, и передавать её через
+# секрет было бы лишним звеном с шансом рассинхрона.
+DESKTOP_ENV_REQUIRED_KEYS = ("DESKTOP_RUSTDESK_PASSWORD", "DESKTOP_RUSTDESK_SERVER")
+DESKTOP_ENV_KEYS = DESKTOP_ENV_REQUIRED_KEYS
 
 SOURCE_ALLOWED_KEYS = frozenset(
     """
@@ -145,9 +156,7 @@ SOURCE_ALLOWED_KEYS = frozenset(
     TELEGRAM_WEBHOOK_SECRET ALERTMANAGER_WEBHOOK_SECRET TMA_SESSION_SECRET
     ADSETPRO_MCP_KEY ADSETPRO_BASE_URL ADSETPRO_TIMEOUT_SECONDS
     ADSETPRO_POSTBACK_SECRET DESKTOP_OWNER_TELEGRAM_USER_ID
-    DESKTOP_KASM_SERVICE_USER DESKTOP_KASM_SERVICE_PASSWORD
-    DESKTOP_RUSTDESK_PASSWORD DESKTOP_RUSTDESK_SERVER DESKTOP_RUSTDESK_KEY
-    DESKTOP_RUSTDESK_BIND
+    DESKTOP_RUSTDESK_PASSWORD DESKTOP_RUSTDESK_SERVER DESKTOP_RUSTDESK_BIND
     BROWSER_MAINTENANCE_CAPABILITY_SECRET
     BROWSER_OPERATION_CAPABILITY_SECRET_AUTOPAUSE
     BROWSER_OPERATION_CAPABILITY_SECRET_META_API
@@ -194,7 +203,6 @@ RUNTIME_KEYS = frozenset(
         "APP_TMA_PORT",
         "POSTGRES_HOST_PORT",
         "REDIS_HOST_PORT",
-        "DESKTOP_HTTPS_PORT",
         "BROWSER_GRPC_HOST_PORT",
         "PUID",
         "PGID",
@@ -364,20 +372,10 @@ def prepare_candidate(
     # Vision gets exactly the credentials it needs.  It must never inherit the
     # API/database/Telegram/AI environment used by application containers.
     desktop_values = {key: source_values[key] for key in DESKTOP_ENV_REQUIRED_KEYS}
-    # Канал RustDesk необязателен: без него стол работает как раньше. Пустое
-    # значение — это «канал не нужен», и класть его в окружение незачем.
-    desktop_values.update(
-        {
-            key: source_values[key]
-            for key in DESKTOP_ENV_OPTIONAL_KEYS
-            if (source_values.get(key) or "").strip()
-        }
-    )
     app_values.update(
         {
             "FRONTEND_ORIGIN": PUBLIC_URL,
             "WEB_APP_URL": f"{PUBLIC_URL}/tma/",
-            "DESKTOP_PUBLIC_ORIGIN": "https://desktop.adpulse.su",
             "BROWSER_AUTHORITY_CONSUME_URL": (
                 "https://app.adpulse.su/api/v1/internal/browser-operations/consume"
             ),
@@ -536,6 +534,9 @@ def _active_runtime_payload(root: Path) -> Path:
 
 
 def canonicalize_source(values: dict[str, str], *, incumbent: dict[str, str]) -> dict[str, str]:
+    # Ретированные ключи веб-канала отбрасываются молча: они ещё лежат в старых
+    # секретах, но больше ничего не значат, и валить publish из-за них незачем.
+    values = {key: value for key, value in values.items() if key not in RETIRED_SOURCE_KEYS}
     unknown = sorted(set(values) - SOURCE_ALLOWED_KEYS)
     if unknown:
         raise FbctlError(f"source environment contains unsupported key {unknown[0]}")
@@ -546,7 +547,9 @@ def canonicalize_source(values: dict[str, str], *, incumbent: dict[str, str]) ->
         result.pop(key, None)
     result.setdefault("POSTGRES_USER", "fb_agent")
     result.setdefault("POSTGRES_DB", "fb_agent")
-    result.setdefault("DESKTOP_KASM_SERVICE_USER", "adpulse-desktop")
+    # Адрес брокера по умолчанию — Tailscale-адрес хоста: канал приватный, в
+    # интернет не выставляется. Переопределяется в source при смене сети.
+    result.setdefault("DESKTOP_RUSTDESK_SERVER", "100.73.162.127")
     result.setdefault("TELEGRAM_OIDC_REDIRECT_URI", f"{PUBLIC_URL}/auth/telegram/callback")
     for key in DURABLE_KEYS:
         old_value = incumbent.get(key, "")

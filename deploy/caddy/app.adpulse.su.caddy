@@ -25,23 +25,6 @@
 	}
 }
 
-(desktop_session_auth) {
-	forward_auth 127.0.0.1:18100 {
-		uri /desktop-auth/verify
-		header_up -Remote-User
-		header_up -Authorization
-		header_up -Proxy-Authorization
-		header_up -X-API-Key
-		header_up -X-Operator-Principal
-		header_up -X-Panel-Telegram-User-Id
-		header_up -X-Panel-Role
-		header_up -X-Desktop-Telegram-User-Id
-		header_up -X-Desktop-Role
-		header_up -Connection
-		header_up -Upgrade
-	}
-}
-
 app.adpulse.su {
 	log {
 		output file /var/log/caddy/fb-agent-access.log {
@@ -265,27 +248,7 @@ app.adpulse.su {
 			respond 404
 		}
 
-		handle /desktop-readyz {
-			import panel_session_auth
-			reverse_proxy 127.0.0.1:18100 {
-				header_up -Remote-User
-				header_up -Authorization
-				header_up -Proxy-Authorization
-				header_up -X-API-Key
-				header_up -X-Operator-Principal
-			}
-		}
 
-		handle /desktop-kasm-readyz {
-			import panel_session_auth
-			reverse_proxy 127.0.0.1:18100 {
-				header_up -Remote-User
-				header_up -Authorization
-				header_up -Proxy-Authorization
-				header_up -X-API-Key
-				header_up -X-Operator-Principal
-			}
-		}
 
 		handle /api/* {
 			import panel_session_auth

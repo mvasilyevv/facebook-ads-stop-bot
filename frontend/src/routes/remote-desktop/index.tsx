@@ -1,90 +1,32 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { MonitorUp, ShieldCheck } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Copy, MonitorUp, ShieldCheck } from "lucide-react";
 import { HeaderSep, PageHeader } from "@/components/layout/PageHeader";
 import { buttonStyles } from "@/components/ui/Button";
-import { generatedFetchApi } from "@/lib/api/generatedClient";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { toast } from "@/components/ui/Toast";
+import { useDesktopNativeChannel } from "@/lib/api/desktop";
 import { cn } from "@/lib/utils/cn";
 
-const DESKTOP_ORIGIN = "https://desktop.adpulse.su";
-// Ссылка-триггер: настоящий клик по <a target="_blank"> открывает новую вкладку
-// синхронно, а сам запуск (POST /desktop/launch + редирект на билет) происходит
-// уже ВНУТРИ новой вкладки. Так нет async-разрыва между жестом и открытием, из-за
-// которого Safari оставлял предоткрытый попап на about:blank.
-const LAUNCH_HREF = "/remote-desktop?launch=1";
+/**
+ * Доступ к столу — нативным приложением RustDesk через собственный брокер.
+ *
+ * Веб-канала больше нет: браузер на iPhone не может отдать системный буфер
+ * обмена — WebKit требует свежего жеста и считает его протухшим после любого
+ * await, а клиенту между жестом и буфером нужно сходить на сервер. Нативное
+ * приложение этим ограничением не связано.
+ *
+ * Пароль канала на страницу не попадает никогда: его задаёт владелец при
+ * деплое, приложение запоминает его после первого подключения.
+ */
 
 const ctaClassName = cn(buttonStyles({ variant: "primary", size: "lg" }), "min-w-44");
-
-function validateDesktopLaunchUrl(rawUrl: string): string {
-  const url = new URL(rawUrl, DESKTOP_ORIGIN);
-  if (
-    url.origin !== DESKTOP_ORIGIN ||
-    url.pathname !== "/desktop-auth/redeem" ||
-    !url.searchParams.get("ticket")
-  ) {
-    throw new Error("Сервер вернул некорректный билет рабочего стола.");
-  }
-  return url.toString();
-}
-
-export const desktopNavigation = {
-  replace(url: string): void {
-    window.location.replace(url);
-  },
-};
-
-function isLaunchRequested(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  return new URLSearchParams(window.location.search).get("launch") === "1";
-}
 
 export const Route = createFileRoute("/remote-desktop/")({
   component: RemoteDesktopPage,
 });
 
 function RemoteDesktopPage() {
-  const launching = isLaunchRequested();
-  const [launchError, setLaunchError] = useState<string | null>(null);
-  const startedRef = useRef(false);
-
-  useEffect(() => {
-    // Запуск исполняется только в открытой вкладке (?launch=1) и ровно один раз.
-    if (!launching || startedRef.current) {
-      return;
-    }
-    startedRef.current = true;
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const { data: payload, response } = await generatedFetchApi.POST("/api/desktop/launch", {
-          body: { presentation: "desktop" },
-        });
-        if (!response.ok || !payload?.url) {
-          throw new Error("Сервер вернул некорректный билет рабочего стола.");
-        }
-        if (payload.transport !== "kasm") {
-          throw new Error("Сервер вернул неизвестный transport рабочего стола.");
-        }
-        const launchUrl = validateDesktopLaunchUrl(payload.url);
-        if (!cancelled) {
-          desktopNavigation.replace(launchUrl);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setLaunchError(
-            error instanceof Error ? error.message : "Не удалось открыть рабочий стол.",
-          );
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [launching]);
+  const { data, isPending, isError, refetch } = useDesktopNativeChannel();
 
   return (
     <>
@@ -94,7 +36,7 @@ function RemoteDesktopPage() {
           <>
             Vision Server
             <HeaderSep />
-            доступ по текущей авторизации панели
+            нативный канал через собственный брокер
           </>
         }
       />
@@ -112,14 +54,12 @@ function RemoteDesktopPage() {
           </div>
           <div className="flex shrink-0 items-center gap-1.5 font-display text-[12px] uppercase tracking-[0.08em] text-success">
             <ShieldCheck size={14} strokeWidth={1.7} aria-hidden="true" />
-            Защищённый доступ
+            Приватная сеть
           </div>
         </div>
 
-        {/* Сетчатый фон убран: он ничего не означал, а на экране, где всё
-            остальное значит хоть что-то, украшение читается как индикатор. */}
         <div className="flex min-h-[360px] items-center justify-center px-5 py-10 sm:min-h-[420px] sm:px-10 sm:py-12">
-          <div className="max-w-[520px] text-center">
+          <div className="w-full max-w-[560px] text-center">
             <span className="mx-auto flex size-14 items-center justify-center rounded-[var(--radius-3)] border border-[var(--color-hairline-strong)] bg-bg-2 text-accent">
               <MonitorUp size={27} strokeWidth={1.45} aria-hidden="true" />
             </span>
@@ -127,52 +67,89 @@ function RemoteDesktopPage() {
               Подключение к рабочему столу
             </h2>
 
-            {launching ? (
-              launchError ? (
-                <>
-                  <p
-                    className="mx-auto mt-2 max-w-[450px] text-[13px] leading-relaxed text-danger"
-                    role="alert"
-                  >
-                    {launchError}
-                  </p>
-                  <div className="mt-6 flex justify-center">
-                    <a href={LAUNCH_HREF} className={ctaClassName}>
-                      <MonitorUp size={15} aria-hidden="true" />
-                      Повторить
-                    </a>
-                  </div>
-                </>
-              ) : (
-                <p className="mx-auto mt-2 flex max-w-[450px] items-center justify-center gap-2 text-[13px] leading-relaxed text-bg-9">
-                  <span
-                    aria-hidden="true"
-                    className="inline-block size-3.5 animate-spin rounded-full border border-current border-r-transparent"
-                  />
-                  Открываем рабочий стол…
+            {isPending ? (
+              <div role="status" aria-label="Загрузка данных канала" className="mt-6 grid gap-3">
+                <Skeleton className="mx-auto h-11 w-56" />
+                <Skeleton className="mx-auto h-24 w-full" />
+              </div>
+            ) : isError ? (
+              <>
+                <p
+                  role="alert"
+                  className="mx-auto mt-2 max-w-[450px] text-[13px] leading-relaxed text-danger"
+                >
+                  Данные канала недоступны. Повторите запрос.
                 </p>
-              )
+                <div className="mt-6 flex justify-center">
+                  <button type="button" className={ctaClassName} onClick={() => void refetch()}>
+                    Повторить
+                  </button>
+                </div>
+              </>
+            ) : data?.available && data.device_id ? (
+              <>
+                <p className="mx-auto mt-2 max-w-[460px] text-[13px] leading-relaxed text-bg-9">
+                  Откройте приложение RustDesk или подключитесь по ID вручную. Пароль канала
+                  приложение запомнит после первого подключения.
+                </p>
+                <div className="mt-6 flex justify-center">
+                  <a href={`rustdesk://${data.device_id}`} className={ctaClassName}>
+                    <MonitorUp size={15} aria-hidden="true" />
+                    Открыть в приложении
+                  </a>
+                </div>
+                <dl className="mx-auto mt-7 grid max-w-[460px] gap-2 text-left">
+                  <ChannelRow label="ID стола" value={data.device_id} />
+                  {data.server ? <ChannelRow label="Сервер (ID/Relay)" value={data.server} /> : null}
+                  {data.key ? <ChannelRow label="Ключ брокера" value={data.key} /> : null}
+                </dl>
+                <p className="mx-auto mt-4 max-w-[460px] text-[12px] leading-5 text-bg-8">
+                  Первая настройка клиента: Settings → Network → ID/Relay Server — адрес сервера и
+                  ключ выше. Сервер доступен только из приватной сети.
+                </p>
+              </>
             ) : (
               <>
                 <p className="mx-auto mt-2 max-w-[450px] text-[13px] leading-relaxed text-bg-9">
-                  Подключение откроется в новой вкладке. Дополнительный логин не потребуется.
+                  Стол ещё не опубликовал ID канала: после деплоя это занимает меньше минуты.
+                  Страница обновится сама.
                 </p>
-                <div className="mt-6 flex justify-center">
-                  <a
-                    href={LAUNCH_HREF}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={ctaClassName}
-                  >
-                    <MonitorUp size={15} aria-hidden="true" />
-                    Подключиться
-                  </a>
-                </div>
+                {data?.server ? (
+                  <dl className="mx-auto mt-6 grid max-w-[460px] gap-2 text-left">
+                    <ChannelRow label="Сервер (ID/Relay)" value={data.server} />
+                    {data.key ? <ChannelRow label="Ключ брокера" value={data.key} /> : null}
+                  </dl>
+                ) : null}
               </>
             )}
           </div>
         </div>
       </section>
     </>
+  );
+}
+
+/** Строка значения канала: подпись, само значение и копирование в один клик. */
+function ChannelRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 px-3 py-2">
+      <div className="min-w-0">
+        <dt className="text-[12px] uppercase tracking-[0.07em] text-bg-8">{label}</dt>
+        <dd className="m-0 truncate font-numeric text-[13px] text-bg-11">{value}</dd>
+      </div>
+      <button
+        type="button"
+        aria-label={`Скопировать: ${label}`}
+        className="flex size-9 shrink-0 items-center justify-center rounded-[var(--radius-2)] border border-[var(--color-hairline)] text-bg-9 hover:text-bg-11"
+        onClick={() => {
+          void navigator.clipboard
+            .writeText(value)
+            .then(() => toast.success(`${label} — скопировано`))
+            .catch(() => toast.error("Не удалось скопировать"));
+        }}
+      >
+        <Copy size={14} aria-hidden="true" />
+      </button>
+    </div>
   );
 }

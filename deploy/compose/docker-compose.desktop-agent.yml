@@ -31,6 +31,12 @@ services:
       - "127.0.0.1:${BROWSER_GRPC_HOST_PORT:?set BROWSER_GRPC_HOST_PORT}:50051"
     volumes:
       - ${VISION_CONFIG_DIR:?set VISION_CONFIG_DIR}:/config
+      # Сюда стол публикует ID канала RustDesk; операторский API читает его
+      # и показывает на странице «Рабочий стол». Секретов здесь нет.
+      - ${DESKTOP_READINESS_DIR:?set DESKTOP_READINESS_DIR}:/run/desktop-readiness
+      # Публичный ключ брокера стол читает из его каталога: пару генерирует
+      # сам брокер при первом старте, секрет для этого не нужен.
+      - ${DESKTOP_RUSTDESK_DATA_DIR:?set DESKTOP_RUSTDESK_DATA_DIR}:/run/rustdesk-broker:ro
     networks:
       platform:
         aliases: [vision-webtop]

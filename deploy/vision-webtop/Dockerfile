@@ -87,6 +87,6 @@ RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh \
       /usr/local/bin/vision-window-fit.sh \
     && chmod 0644 /usr/share/applications/firefox.desktop
 
-EXPOSE 50051/tcp 21118/tcp
+EXPOSE 50051/tcp
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]

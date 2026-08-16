@@ -2077,59 +2077,19 @@
         }
       }
     },
-    "/api/desktop/transports": {
+    "/api/desktop/native": {
       "get": {
         "tags": ["desktop"],
-        "summary": "List Desktop Transports",
-        "description": "Return owner-visible transport choices without issuing a ticket.",
-        "operationId": "list_desktop_transports_api_desktop_transports_get",
+        "summary": "Get Native Channel",
+        "description": "Адрес брокера, его публичный ключ и ID стола для клиента RustDesk.",
+        "operationId": "get_native_channel_api_desktop_native_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DesktopTransportsResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Canonical API error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiProblem"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/desktop/launch": {
-      "post": {
-        "tags": ["desktop"],
-        "summary": "Launch Desktop",
-        "description": "Issue one single-use URL bound to a predefined presentation profile.",
-        "operationId": "launch_desktop_api_desktop_launch_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DesktopLaunchRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DesktopLaunchResponse"
+                  "$ref": "#/components/schemas/DesktopNativeChannelResponse"
                 }
               }
             }
@@ -2146,26 +2106,6 @@
           },
           "403": {
             "description": "Not an active owner or invalid origin",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiProblem"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Desktop access is not configured",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiProblem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -9500,61 +9440,50 @@
         "enum": ["ready", "empty", "partial", "stale", "unavailable"],
         "title": "DataState"
       },
-      "DesktopLaunchRequest": {
+      "DesktopNativeChannelResponse": {
         "properties": {
-          "presentation": {
-            "type": "string",
-            "enum": ["desktop", "mobile"],
-            "title": "Presentation"
-          }
-        },
-        "type": "object",
-        "required": ["presentation"],
-        "title": "DesktopLaunchRequest",
-        "description": "Platform-selected presentation profile carried into the desktop session."
-      },
-      "DesktopLaunchResponse": {
-        "properties": {
-          "url": {
-            "type": "string",
-            "title": "Url"
-          },
-          "expires_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Expires At"
-          },
-          "transport": {
-            "type": "string",
-            "const": "kasm",
-            "title": "Transport"
-          }
-        },
-        "type": "object",
-        "required": ["url", "expires_at", "transport"],
-        "title": "DesktopLaunchResponse",
-        "description": "A short-lived, single-use URL that establishes a desktop session."
-      },
-      "DesktopTransportsResponse": {
-        "properties": {
-          "active": {
-            "type": "string",
-            "const": "kasm",
-            "title": "Active"
-          },
           "available": {
-            "items": {
-              "type": "string",
-              "const": "kasm"
-            },
-            "type": "array",
-            "title": "Available"
+            "type": "boolean",
+            "title": "Available",
+            "default": false
+          },
+          "server": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",
-        "required": ["active", "available"],
-        "title": "DesktopTransportsResponse",
-        "description": "Configured transport selection exposed to owner launchers."
+        "title": "DesktopNativeChannelResponse",
+        "description": "Данные для клиента RustDesk: адрес брокера, ключ, ID стола.\n\nПароля здесь нет и не будет: он задаётся владельцем при деплое и в\nоператорские поверхности не попадает. `null` означает «стол ещё не\nопубликовал значение», а не пустую строку."
       },
       "DuplicateSourceAccount": {
         "properties": {

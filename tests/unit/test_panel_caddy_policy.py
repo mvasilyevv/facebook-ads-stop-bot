@@ -3,7 +3,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SITE = ROOT / "deploy" / "caddy" / "app.adpulse.su.caddy"
-DESKTOP_SITE = ROOT / "deploy" / "caddy" / "desktop.adpulse.su.caddy"
 
 
 def _config() -> str:
@@ -66,7 +65,7 @@ def test_api_trust_boundaries_strip_client_operator_principal() -> None:
         config,
         re.MULTILINE | re.DOTALL,
     )
-    assert len(blocks) == 21
+    assert len(blocks) == 18
     assert all("header_up -X-Operator-Principal" in block for block in blocks)
 
 
@@ -181,7 +180,9 @@ def test_tma_navigation_capabilities_are_not_logged_cached_or_referred() -> None
     assert 'header Referrer-Policy "no-referrer"' in route
 
 
-def test_breakglass_is_loopback_basic_auth_with_full_panel_and_desktop_proxy() -> None:
+def test_breakglass_is_loopback_basic_auth_with_full_panel_proxy() -> None:
+    """Breakglass остаётся только у панели: веб-канала стола больше нет,
+    аварийный доступ к столу — по SSH и нативному каналу."""
     config = _config()
     breakglass = config.split("http://127.0.0.1:8099", maxsplit=1)[1]
     assert "bind 127.0.0.1" in breakglass
@@ -190,10 +191,3 @@ def test_breakglass_is_loopback_basic_auth_with_full_panel_and_desktop_proxy() -
     assert "reverse_proxy 127.0.0.1:18100" in breakglass
     api_and_ws = breakglass.split("handle {", maxsplit=1)[0]
     assert api_and_ws.count("header_up -X-Verified-Operator-Principal") == 2
-    desktop_breakglass = DESKTOP_SITE.read_text(encoding="utf-8").split(
-        "http://desktop.localhost:8099", maxsplit=1
-    )[1]
-    assert "bind 127.0.0.1" in desktop_breakglass
-    assert "import breakglass_auth" in desktop_breakglass
-    assert "reverse_proxy 127.0.0.1:8444" in desktop_breakglass
-    assert "DESKTOP_KASM_SERVICE_AUTH_B64" in desktop_breakglass

@@ -734,10 +734,10 @@ def test_preflight_rejects_occupied_app_and_desktop_ports(tmp_path: Path) -> Non
                 "Config": {"Labels": {}},
                 "NetworkSettings": {
                     "Ports": {
-                        "8444/tcp": [
+                        "50051/tcp": [
                             {
                                 "HostIp": "127.0.0.1",
-                                "HostPort": config.values["DESKTOP_HTTPS_PORT"],
+                                "HostPort": config.values["BROWSER_GRPC_HOST_PORT"],
                             }
                         ]
                     }
@@ -749,7 +749,7 @@ def test_preflight_rejects_occupied_app_and_desktop_ports(tmp_path: Path) -> Non
         runner=runner,
         port_probe=RecordingTcpPortProbe(
             int(config.values["APP_API_PORT"]),
-            int(config.values["DESKTOP_HTTPS_PORT"]),
+            int(config.values["BROWSER_GRPC_HOST_PORT"]),
         ),
     )
 
@@ -763,7 +763,9 @@ def test_preflight_rejects_occupied_app_and_desktop_ports(tmp_path: Path) -> Non
 
     message = str(caught.value)
     assert f"APP_API_PORT={config.values['APP_API_PORT']} is occupied" in message
-    assert f"DESKTOP_HTTPS_PORT={config.values['DESKTOP_HTTPS_PORT']} is occupied" in message
+    assert (
+        f"BROWSER_GRPC_HOST_PORT={config.values['BROWSER_GRPC_HOST_PORT']} is occupied" in message
+    )
     assert "sudo docker stop stray-api" in message
     assert "sudo docker stop stray-desktop" in message
 
@@ -1887,9 +1889,13 @@ def test_vision_desktop_environment_is_strictly_scoped(tmp_path: Path) -> None:
     assert desktop.stat().st_mode & 0o777 == 0o600
     values = desktop.read_text(encoding="utf-8")
     assert set(line.split("=", 1)[0] for line in values.splitlines()) == {
-        "DESKTOP_KASM_SERVICE_USER",
-        "DESKTOP_KASM_SERVICE_PASSWORD",
+        "DESKTOP_RUSTDESK_PASSWORD",
+        "DESKTOP_RUSTDESK_SERVER",
     }
+    # Пароль сгенерирован fbctl и достаточно длинный, адрес имеет дефолт.
+    parsed = dict(line.split("=", 1) for line in values.splitlines())
+    assert len(parsed["DESKTOP_RUSTDESK_PASSWORD"]) >= 32
+    assert parsed["DESKTOP_RUSTDESK_SERVER"]
     for forbidden in (
         "TELEGRAM_BOT_TOKEN",
         "POSTGRES_PASSWORD",
@@ -1897,11 +1903,9 @@ def test_vision_desktop_environment_is_strictly_scoped(tmp_path: Path) -> None:
         "ENCRYPTION_KEY",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
+        "KASM",
     ):
         assert forbidden not in values
-    app_values = config.layout.app_env.read_text(encoding="utf-8")
-    assert "DESKTOP_KASM_SERVICE_USER=adpulse-desktop" in app_values
-    assert "DESKTOP_KASM_SERVICE_PASSWORD=" in app_values
 
 
 def test_active_runtime_rejects_desktop_environment_outside_canonical_path(tmp_path: Path) -> None:
@@ -2230,14 +2234,13 @@ def test_fresh_caddy_provisioning_creates_every_host_file_and_is_repeatable(
             mapped_paths["/etc/caddy/Caddyfile"],
             mapped_paths["/etc/fb-agent/caddy.env"],
             mapped_paths["/etc/caddy/sites-enabled"] / "app.adpulse.su.caddy",
-            mapped_paths["/etc/caddy/sites-enabled"] / "desktop.adpulse.su.caddy",
             mapped_paths["/etc/systemd/system/caddy.service.d"] / "fb-agent-env.conf",
         )
     }
     # Model a process death after only part of the host state became durable.
     for path in (
         mapped_paths["/etc/fb-agent/caddy.env"],
-        mapped_paths["/etc/caddy/sites-enabled"] / "desktop.adpulse.su.caddy",
+        mapped_paths["/etc/caddy/sites-enabled"] / "app.adpulse.su.caddy",
         mapped_paths["/etc/systemd/system/caddy.service.d"] / "fb-agent-env.conf",
         mapped_paths["/var/log/caddy"] / "fb-agent-desktop-access.log",
     ):
@@ -2381,7 +2384,7 @@ def test_first_bootstrap_creates_host_tree_and_copies_external_profile_seed(
     assert stat.S_IMODE((root / "shared" / "deploy.lock").stat().st_mode) == 0o600
     assert re.fullmatch(r"[0-9a-f]{32}", canonical["FB_AGENT_BOOTSTRAP_CLUSTER_ID"])
     assert len(canonical["POSTGRES_PASSWORD"]) >= 16
-    assert len(canonical["DESKTOP_KASM_SERVICE_PASSWORD"]) >= 32
+    assert len(canonical["DESKTOP_RUSTDESK_PASSWORD"]) >= 32
     assert (root / "shared" / "vision-config" / VISION_PROFILE_MARKER).is_file()
     assert not seed.exists()
 
@@ -2662,9 +2665,9 @@ def test_real_deploy_reconciles_stale_managed_caddy_config_before_public_smoke(
 
     assert controller.deploy(DeployOptions(root=root)).status == "READY"
 
-    assert (
-        stale_desktop.read_bytes() == (ROOT / "deploy/caddy/desktop.adpulse.su.caddy").read_bytes()
-    )
+    # Ретированный сайт стола деплой удаляет: Caddyfile импортирует каталог
+    # целиком, и оставленный файл продолжил бы обслуживаться.
+    assert not stale_desktop.exists()
     assert unmanaged_site.read_bytes() == unmanaged_snapshot
     assert stat.S_IMODE(unmanaged_site.stat().st_mode) == 0o640
     assert ("sync_caddy", ("systemctl", "reload", "caddy")) in runner.commands
@@ -3580,38 +3583,41 @@ def test_port_probe_asks_the_same_way_the_runtime_binds() -> None:
 
 
 def test_rustdesk_channel_survives_the_source_schema(tmp_path) -> None:
-    """Переменные канала обязаны доезжать до стола, а не вырезаться схемой.
+    """Канал — единственный путь к столу, его переменные не вырезаются схемой.
 
-    fbctl пропускает только объявленные ключи. Пока четырёх ключей RustDesk в
-    схеме не было, владелец задавал их в PROD_ENV_B64, publish молча их
-    выбрасывал, и канал не поднимался — без единой ошибки в логе.
+    Пароль генерирует сам fbctl (как раньше пароль KasmVNC), адрес брокера
+    имеет дефолт и переживает публикации как durable; ключ брокера в source
+    не передаётся вовсе — стол читает его файлом из каталога брокера.
+    Ретированные kasm-ключи отбрасываются молча: они ещё лежат в старых
+    секретах, и валить publish из-за них незачем.
     """
-    from fbctl.config import SOURCE_ALLOWED_KEYS
+    from fbctl.config import (
+        DURABLE_KEYS,
+        GENERATED_SECRETS,
+        RETIRED_SOURCE_KEYS,
+        SOURCE_ALLOWED_KEYS,
+    )
 
-    for key in (
-        "DESKTOP_RUSTDESK_PASSWORD",
-        "DESKTOP_RUSTDESK_SERVER",
-        "DESKTOP_RUSTDESK_KEY",
-        "DESKTOP_RUSTDESK_BIND",
-    ):
+    for key in ("DESKTOP_RUSTDESK_PASSWORD", "DESKTOP_RUSTDESK_SERVER", "DESKTOP_RUSTDESK_BIND"):
         assert key in SOURCE_ALLOWED_KEYS, f"{key} вырезается из source.env"
+    assert "DESKTOP_RUSTDESK_KEY" not in SOURCE_ALLOWED_KEYS
+    assert GENERATED_SECRETS["DESKTOP_RUSTDESK_PASSWORD"] == 32
+    assert {"DESKTOP_RUSTDESK_SERVER", "DESKTOP_RUSTDESK_BIND"} <= DURABLE_KEYS
+    assert RETIRED_SOURCE_KEYS == {
+        "DESKTOP_KASM_SERVICE_USER",
+        "DESKTOP_KASM_SERVICE_PASSWORD",
+    }
 
 
-def test_desktop_environment_carries_the_channel_when_it_is_configured() -> None:
-    """Стол получает секреты канала, но не наследует окружение приложения."""
+def test_desktop_environment_is_exactly_the_channel() -> None:
+    """Стол получает ровно пароль и адрес брокера — и ничего сверх."""
     from fbctl.config import DESKTOP_ENV_KEYS, DESKTOP_ENV_REQUIRED_KEYS
 
     assert DESKTOP_ENV_REQUIRED_KEYS == (
-        "DESKTOP_KASM_SERVICE_USER",
-        "DESKTOP_KASM_SERVICE_PASSWORD",
-    )
-    # Канал необязателен: без него стол работает как раньше.
-    assert set(DESKTOP_ENV_KEYS) - set(DESKTOP_ENV_REQUIRED_KEYS) == {
         "DESKTOP_RUSTDESK_PASSWORD",
         "DESKTOP_RUSTDESK_SERVER",
-        "DESKTOP_RUSTDESK_KEY",
-    }
-    # База данных, Telegram и ключи приложения на стол не попадают.
+    )
+    assert DESKTOP_ENV_KEYS == DESKTOP_ENV_REQUIRED_KEYS
     assert not any(
         key.startswith(("POSTGRES", "TELEGRAM", "ANTHROPIC", "API_KEY")) for key in DESKTOP_ENV_KEYS
     )

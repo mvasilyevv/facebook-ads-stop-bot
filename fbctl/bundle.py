@@ -37,7 +37,6 @@ RESOURCE_FILES: dict[str, str] = {
         "deploy/compose/docker-compose.desktop-agent.yml"
     ),
     "deploy/caddy/app.adpulse.su.caddy": "deploy/caddy/app.adpulse.su.caddy",
-    "deploy/caddy/desktop.adpulse.su.caddy": "deploy/caddy/desktop.adpulse.su.caddy",
     "deploy/caddy/Caddyfile.validation": "deploy/caddy/Caddyfile.validation",
     "deploy/systemd/caddy-fb-agent-env.conf": "deploy/systemd/caddy-fb-agent-env.conf",
 }

@@ -1,33 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Public contracts for launching the protected Vision desktop."""
+"""Контракт нативного канала к рабочему столу Vision."""
 
 from __future__ import annotations
-
-from datetime import datetime
-from typing import Literal
 
 from pydantic import BaseModel
 
 
-class DesktopLaunchRequest(BaseModel):
-    """Platform-selected presentation profile carried into the desktop session."""
+class DesktopNativeChannelResponse(BaseModel):
+    """Данные для клиента RustDesk: адрес брокера, ключ, ID стола.
 
-    presentation: Literal["desktop", "mobile"]
+    Пароля здесь нет и не будет: он задаётся владельцем при деплое и в
+    операторские поверхности не попадает. `null` означает «стол ещё не
+    опубликовал значение», а не пустую строку.
+    """
 
-
-class DesktopLaunchResponse(BaseModel):
-    """A short-lived, single-use URL that establishes a desktop session."""
-
-    url: str
-    expires_at: datetime
-    transport: Literal["kasm"]
-
-
-class DesktopTransportsResponse(BaseModel):
-    """Configured transport selection exposed to owner launchers."""
-
-    active: Literal["kasm"]
-    available: list[Literal["kasm"]]
+    available: bool = False
+    server: str | None = None
+    key: str | None = None
+    device_id: str | None = None
 
 
-__all__ = ["DesktopLaunchRequest", "DesktopLaunchResponse", "DesktopTransportsResponse"]
+__all__ = ["DesktopNativeChannelResponse"]

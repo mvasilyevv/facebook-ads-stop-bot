@@ -626,7 +626,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/api/desktop/transports": {
+  "/api/desktop/native": {
     parameters: {
       query?: never;
       header?: never;
@@ -634,32 +634,12 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * List Desktop Transports
-     * @description Return owner-visible transport choices without issuing a ticket.
+     * Get Native Channel
+     * @description Адрес брокера, его публичный ключ и ID стола для клиента RustDesk.
      */
-    get: operations["list_desktop_transports_api_desktop_transports_get"];
+    get: operations["get_native_channel_api_desktop_native_get"];
     put?: never;
     post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/desktop/launch": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /**
-     * Launch Desktop
-     * @description Issue one single-use URL bound to a predefined presentation profile.
-     */
-    post: operations["launch_desktop_api_desktop_launch_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -3093,46 +3073,25 @@ export interface components {
      */
     DataState: "ready" | "empty" | "partial" | "stale" | "unavailable";
     /**
-     * DesktopLaunchRequest
-     * @description Platform-selected presentation profile carried into the desktop session.
+     * DesktopNativeChannelResponse
+     * @description Данные для клиента RustDesk: адрес брокера, ключ, ID стола.
+     *
+     *     Пароля здесь нет и не будет: он задаётся владельцем при деплое и в
+     *     операторские поверхности не попадает. `null` означает «стол ещё не
+     *     опубликовал значение», а не пустую строку.
      */
-    DesktopLaunchRequest: {
+    DesktopNativeChannelResponse: {
       /**
-       * Presentation
-       * @enum {string}
+       * Available
+       * @default false
        */
-      presentation: "desktop" | "mobile";
-    };
-    /**
-     * DesktopLaunchResponse
-     * @description A short-lived, single-use URL that establishes a desktop session.
-     */
-    DesktopLaunchResponse: {
-      /** Url */
-      url: string;
-      /**
-       * Expires At
-       * Format: date-time
-       */
-      expires_at: string;
-      /**
-       * Transport
-       * @constant
-       */
-      transport: "kasm";
-    };
-    /**
-     * DesktopTransportsResponse
-     * @description Configured transport selection exposed to owner launchers.
-     */
-    DesktopTransportsResponse: {
-      /**
-       * Active
-       * @constant
-       */
-      active: "kasm";
-      /** Available */
-      available: "kasm"[];
+      available: boolean;
+      /** Server */
+      server?: string | null;
+      /** Key */
+      key?: string | null;
+      /** Device Id */
+      device_id?: string | null;
     };
     /** DuplicateSourceAccount */
     DuplicateSourceAccount: {
@@ -6594,7 +6553,7 @@ export interface operations {
       };
     };
   };
-  list_desktop_transports_api_desktop_transports_get: {
+  get_native_channel_api_desktop_native_get: {
     parameters: {
       query?: never;
       header?: never;
@@ -6609,40 +6568,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["DesktopTransportsResponse"];
-        };
-      };
-      /** @description Canonical API error */
-      default: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["ApiProblem"];
-        };
-      };
-    };
-  };
-  launch_desktop_api_desktop_launch_post: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["DesktopLaunchRequest"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["DesktopLaunchResponse"];
+          "application/json": components["schemas"]["DesktopNativeChannelResponse"];
         };
       };
       /** @description Authentication failed */
@@ -6656,24 +6582,6 @@ export interface operations {
       };
       /** @description Not an active owner or invalid origin */
       403: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["ApiProblem"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["ApiProblem"];
-        };
-      };
-      /** @description Desktop access is not configured */
-      503: {
         headers: {
           [name: string]: unknown;
         };

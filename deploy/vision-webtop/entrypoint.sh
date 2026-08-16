@@ -45,7 +45,6 @@ trap cleanup EXIT INT TERM
 # доступа — недостижимая машина. Отказ на старте не даёт ей стать такой молча.
 require_env DESKTOP_RUSTDESK_PASSWORD
 require_env DESKTOP_RUSTDESK_SERVER
-require_env DESKTOP_RUSTDESK_KEY
 if ((${#DESKTOP_RUSTDESK_PASSWORD} < 16)); then
   printf 'DESKTOP_RUSTDESK_PASSWORD must contain at least 16 characters\n' >&2
   exit 64
@@ -128,12 +127,9 @@ vision_pid=$!
 gosu "${runtime_user}" env DISPLAY="${display}" /usr/local/bin/vision-window-fit.sh &
 fit_pid=$!
 
-# Нативный канал к тому же столу. Нужен ради буфера обмена: в браузере на
-# iPhone он не работает и не может — WebKit требует свежего жеста, а жест
-# протухает раньше, чем VNC-клиент сходит на сервер и вернётся.
-#
-# Пустой пароль означает «канал не нужен». Открытый наружу порт не должен
-# появляться сам по себе, поэтому включает его владелец, задав пароль.
+# Единственный канал к столу. Веб-канала больше нет: в браузере на iPhone
+# буфер обмена не работает и не может — WebKit требует свежего жеста, а жест
+# протухает раньше, чем клиент сходит на сервер и вернётся.
 rustdesk_password=${DESKTOP_RUSTDESK_PASSWORD}
 {
   # Стол у нас настоящий, с framebuffer, поэтому headless-режим RustDesk с его
@@ -142,6 +138,23 @@ rustdesk_password=${DESKTOP_RUSTDESK_PASSWORD}
     DISPLAY="${display}" HOME="${config_home}"
     XDG_CONFIG_HOME="${config_home}/.config" XDG_CACHE_HOME="${config_home}/.cache"
   )
+
+  # Публичный ключ брокера приходит файлом из его каталога, а не через секрет:
+  # пару генерирует сам брокер при первом старте, и передача через env была бы
+  # лишним звеном с шансом рассинхрона. Compose стартует брокер и стол
+  # одновременно, поэтому ключ ждём — на живом хосте он появляется за секунды.
+  rustdesk_key=""
+  for _ in {1..90}; do
+    if [[ -s /run/rustdesk-broker/id_ed25519.pub ]]; then
+      rustdesk_key="$(</run/rustdesk-broker/id_ed25519.pub)"
+      break
+    fi
+    sleep 1
+  done
+  if [[ -z "${rustdesk_key}" ]]; then
+    printf 'RustDesk broker public key did not appear\n' >&2
+    exit 1
+  fi
 
   # Конфиг раскладываем сами, а не через `rustdesk --option`: на живом
   # контейнере опция до файла не доехала, а запущенный клиент перезаписал файл
@@ -158,7 +171,7 @@ serial = 0
 [options]
 custom-rendezvous-server = '${DESKTOP_RUSTDESK_SERVER}'
 relay-server = '${DESKTOP_RUSTDESK_SERVER}'
-key = '${DESKTOP_RUSTDESK_KEY}'
+key = '${rustdesk_key}'
 verification-method = 'use-permanent-password'
 RUSTDESK_CONFIG
   chown "${requested_uid}:${requested_gid}" "${rustdesk_config_dir}/RustDesk2.toml"
@@ -188,6 +201,37 @@ RUSTDESK_CONFIG
   }
   rustdesk_supervisor &
   rustdesk_pid=$!
+
+  # Оператору для клиента нужны адрес брокера, его публичный ключ и ID стола.
+  # ID выдаёт брокер, и заранее он неизвестен: кастомные ID наш OSS-брокер не
+  # поддерживает (`--set-id` отвечает server_not_support, проверено на живом
+  # контейнере). Публикуем всё в readiness-каталог — оттуда читает операторский
+  # API и показывает страница «Рабочий стол». Секретов в файле нет.
+  publish_channel_info() {
+    local device_id=$1
+    printf '{"server": "%s", "key": "%s", "device_id": %s}\n' \
+      "${DESKTOP_RUSTDESK_SERVER}" "${rustdesk_key}" \
+      "${device_id:+\"${device_id}\"}" > /run/desktop-readiness/rustdesk.json.tmp
+    if [[ -z "${device_id}" ]]; then
+      sed -i 's/"device_id": $/"device_id": null/' /run/desktop-readiness/rustdesk.json.tmp
+    fi
+    chmod 0644 /run/desktop-readiness/rustdesk.json.tmp
+    mv -f /run/desktop-readiness/rustdesk.json.tmp /run/desktop-readiness/rustdesk.json
+  }
+  if [[ -d /run/desktop-readiness ]]; then
+    publish_channel_info ""
+    (
+      for _ in {1..90}; do
+        device_id="$(gosu "${runtime_user}" env "${rustdesk_env[@]}" \
+          rustdesk --get-id 2>/dev/null | tail -1)"
+        if [[ "${device_id}" =~ ^[0-9]{6,}$ ]]; then
+          publish_channel_info "${device_id}"
+          exit 0
+        fi
+        sleep 2
+      done
+    ) &
+  fi
 }
 
 while true; do
