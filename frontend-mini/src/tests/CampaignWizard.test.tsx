@@ -9,6 +9,11 @@ const api = vi.hoisted(() => ({
   runDetails: {} as Record<string, Record<string, unknown>>,
 }));
 
+// Identity в моке черновика зашита инлайном; холдер позволяет менять её по тесту.
+const identityOverride = vi.hoisted(() => ({
+  value: {} as Record<string, unknown>,
+}));
+
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const React = await import("react");
   const actual = await importOriginal<typeof import("@tanstack/react-router")>();
@@ -63,6 +68,7 @@ vi.mock("@/features/campaigns/useCampaignWizardDraft", async () => {
           account_context_issue: null,
           offer_code: "US_GAME",
           byer_tag: "MV",
+          ...identityOverride.value,
         },
         goal: {
           ...feature.createCampaignWizardState().goal,
@@ -133,6 +139,7 @@ describe("TMA campaign creator", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.runDetails = {};
+    identityOverride.value = {};
   });
 
   it("passes all seven action-first steps and keeps queued distinct from success", async () => {
@@ -226,5 +233,20 @@ describe("TMA campaign creator", () => {
     expect(await screen.findByText("Частичный результат")).toBeVisible();
     expect(screen.getByText("Контекст кабинета не подтверждён")).toBeVisible();
     expect(screen.queryByText("Все кабинеты подтверждены")).toBeNull();
+  });
+
+  // Тот же контракт в mini app: оператор видит причину, а не только факт.
+  // Блок доказательств живёт на шаге «Идентичность» — доходим до него.
+  it("показывает причину неподтверждённого контекста", async () => {
+    const user = userEvent.setup();
+    identityOverride.value = {
+      account_context_state: "unavailable",
+      account_context_issue: "Meta отклонила запрос по кабинету",
+    };
+
+    render(<CampaignWizard />);
+    await user.click(screen.getByRole("button", { name: /Далее/ }));
+
+    expect(await screen.findByText("Meta отклонила запрос по кабинету")).toBeVisible();
   });
 });

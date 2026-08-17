@@ -317,7 +317,10 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
                       : "Контекст недоступен"}
                   </div>
                   <div className="mt-1 text-[12px] text-bg-9">
-                    Запуск заблокирован до свежего подтверждения Meta.
+                    {/* Причина приходит из ответа ручки; без неё остаётся общая
+                        формулировка, а не пустая строка. */}
+                    {values.account_context_issue ??
+                      "Запуск заблокирован до свежего подтверждения Meta."}
                   </div>
                 </>
               ) : (
