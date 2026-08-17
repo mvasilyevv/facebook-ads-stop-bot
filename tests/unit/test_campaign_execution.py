@@ -445,6 +445,12 @@ def test_flat_request_parameters_reach_exact_graph_create_payloads(monkeypatch):
             },
             "age_min": 23,
             "age_max": 54,
+            # Диапазон оператора отдельным полем и мягкая фильтрация контента —
+            # так выглядят 351 и 345 живых групп из 360 (замер 17.08).
+            "age_range": [23, 54],
+            "brand_safety_content_filter_levels": ["FACEBOOK_RELAXED", "AN_RELAXED"],
+            # Advantage+ здесь выключен, поэтому расширения аудитории нет:
+            # ни targeting_optimization, ни individual_setting.
             "targeting_automation": {"advantage_audience": 0},
         },
         "start_time": "2099-01-02T00:00:00+00:00",

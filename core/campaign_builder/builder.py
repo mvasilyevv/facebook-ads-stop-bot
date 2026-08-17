@@ -113,6 +113,11 @@ def adset_body(cfg: CampaignConfig, name: str) -> dict:
             # → Invalid parameter (subcode 1870189). Advantage+ возраст расширяет сам, кап не
             # честный — поэтому при включённом Advantage+ форсим 65 (как рабочие adsets кабинета).
             "age_max": 65 if cfg.targeting.advantage_audience else cfg.targeting.age_max,
+            # Исходный диапазон оператора уезжает отдельным полем: age_max выше
+            # форсится в 65 ради Advantage+, и без age_range намерение «25-55»
+            # потерялось бы совсем. Живая группа выглядит ровно так:
+            # age_max 65 при age_range [25, 55].
+            "age_range": [cfg.targeting.age_min, cfg.targeting.age_max],
             "targeting_automation": {
                 "advantage_audience": 1 if cfg.targeting.advantage_audience else 0
             },
@@ -122,6 +127,21 @@ def adset_body(cfg: CampaignConfig, name: str) -> dict:
     }
     if cfg.targeting.genders:
         body["targeting"]["genders"] = cfg.targeting.gender_ids()
+    if cfg.targeting.brand_safety_relaxed:
+        body["targeting"]["brand_safety_content_filter_levels"] = [
+            "FACEBOOK_RELAXED",
+            "AN_RELAXED",
+        ]
+    if cfg.targeting.advantage_audience:
+        # Расширение аудитории привязано к тумблеру Advantage+, а не ставится
+        # всегда: снятый оператором тумблер не должен молча возвращаться под
+        # другим именем. Подфлаги идут вместе с advantage_audience во всех
+        # живых группах — без них Advantage+ не расширяет по возрасту и полу.
+        body["targeting"]["targeting_optimization"] = cfg.targeting.targeting_optimization
+        body["targeting"]["targeting_automation"]["individual_setting"] = {
+            "age": 1,
+            "gender": 1,
+        }
     if cfg.targeting.placements:
         body["targeting"]["publisher_platforms"] = cfg.targeting.placements
     if cfg.budget.level == "adset":  # ABO: бюджет+стратегия+cap на адсете

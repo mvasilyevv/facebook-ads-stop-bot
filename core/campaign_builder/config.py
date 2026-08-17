@@ -156,7 +156,15 @@ class Targeting(BaseModel):
     age_max: int = 65
     location_types: list[str] = Field(default_factory=lambda: ["home", "recent"])
     advantage_audience: bool = True
+    # Значения сняты с 360 живых групп кабинетов (замер 17.08): без них наша
+    # группа уходит в Meta не такой, как те, что реально откручиваются.
+    # expansion_all — расширение аудитории за пределы заданной, 360 из 360.
+    targeting_optimization: str = "expansion_all"
+    # FACEBOOK_RELAXED/AN_RELAXED — минимальная фильтрация контента, 345 из 360.
+    brand_safety_relaxed: bool = True
     # Пустой список сохраняет Meta automatic placements / all genders.
+    # publisher_platforms не встречается ни в одной из 360 живых групп:
+    # площадки там отдаются автоматике, а не перечисляются руками.
     genders: list[str] = Field(default_factory=list)
     placements: list[str] = Field(default_factory=list)
 

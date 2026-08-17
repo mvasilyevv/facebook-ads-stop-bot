@@ -620,6 +620,13 @@ def _validate_campaign_create_body(
                     # обязан доехать — иначе кампания уже создана, а adset падает.
                     "genders",
                     "publisher_platforms",
+                    # Ключи рабочего шаблона кабинета (замер 17.08 по 360 живым
+                    # группам): без них наша группа уходит в Meta не такой, как
+                    # те, что реально откручиваются. Значения проверяются ниже —
+                    # allowlist разрешает поле, но не любое его содержимое.
+                    "age_range",
+                    "targeting_optimization",
+                    "brand_safety_content_filter_levels",
                 }
             ),
             label="targeting",
@@ -636,12 +643,41 @@ def _validate_campaign_create_body(
             raise PermanentError("campaign Graph targeting location_types are invalid")
         _campaign_positive_integer(targeting.get("age_min"), label="age_min")
         _campaign_positive_integer(targeting.get("age_max"), label="age_max")
+        age_range = targeting.get("age_range")
+        if age_range is not None:
+            if not isinstance(age_range, list) or len(age_range) != 2:
+                raise PermanentError("campaign Graph targeting age_range is invalid")
+            for bound in age_range:
+                _campaign_positive_integer(bound, label="age_range bound")
+            if age_range[0] > age_range[1]:
+                raise PermanentError("campaign Graph targeting age_range is inverted")
+        optimization = targeting.get("targeting_optimization")
+        # Единственное значение, которое стоит в живых группах. Любое другое —
+        # не «новая возможность», а незамеченная правка money-пути.
+        if optimization is not None and optimization != "expansion_all":
+            raise PermanentError("campaign Graph targeting_optimization is not authorized")
+        brand_safety = targeting.get("brand_safety_content_filter_levels")
+        if brand_safety is not None and (
+            not isinstance(brand_safety, list)
+            or not set(brand_safety) <= {"FACEBOOK_RELAXED", "AN_RELAXED"}
+        ):
+            raise PermanentError("campaign Graph brand_safety levels are not authorized")
         automation = _campaign_mapping(
             targeting.get("targeting_automation"),
             required=frozenset({"advantage_audience"}),
-            allowed=frozenset({"advantage_audience"}),
+            allowed=frozenset({"advantage_audience", "individual_setting"}),
             label="targeting_automation",
         )
+        individual = automation.get("individual_setting")
+        if individual is not None:
+            individual = _campaign_mapping(
+                individual,
+                required=frozenset({"age", "gender"}),
+                allowed=frozenset({"age", "gender"}),
+                label="individual_setting",
+            )
+            if any(individual.get(axis) not in {0, 1} for axis in ("age", "gender")):
+                raise PermanentError("campaign Graph individual_setting is invalid")
         if automation.get("advantage_audience") not in {0, 1}:
             raise PermanentError("campaign Graph advantage_audience is invalid")
         _campaign_optional_closed_list(

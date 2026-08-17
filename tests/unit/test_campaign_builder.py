@@ -21,6 +21,7 @@ from core.campaign_builder import (
     build_campaign_spec,
     plan_execution_steps,
 )
+from core.campaign_builder.builder import adset_body
 from core.campaign_builder.config import (
     MAX_DAILY_BUDGET,
     MAX_LIFETIME_BUDGET,
@@ -579,3 +580,58 @@ def test_execution_steps_per_campaign():
     steps = plan_execution_steps(spec)
     assert len(steps) == 10
     assert {s.campaign_key for s in steps} == {"static", "video"}
+
+
+def test_adset_targeting_matches_the_cabinet_template() -> None:
+    """Наши группы уходили в Meta с другим таргетингом, чем 360 живых.
+
+    Замер 17.08 по кабинетам: `targeting_optimization` стоит в 360 группах из
+    360, `brand_safety_content_filter_levels` — в 345, `age_range` — в 351.
+    Мы не слали ни одного. Это money-путь: таргетинг решает, кому и почём
+    показывается реклама.
+
+    Отдельно про возраст. Advantage+ форсит `age_max` в 65 (иначе Meta
+    отвечает subcode 1870189), а исходный диапазон оператора уезжает в
+    `age_range` — ровно так выглядит живая группа: age_max 65, age_range [25, 55].
+    """
+    cfg = _config(targeting=Targeting(countries=["NG"], age_min=25, age_max=55))
+
+    targeting = adset_body(cfg, name="test")["targeting"]
+
+    assert targeting["targeting_optimization"] == "expansion_all"
+    assert targeting["brand_safety_content_filter_levels"] == ["FACEBOOK_RELAXED", "AN_RELAXED"]
+    assert targeting["age_range"] == [25, 55]
+    assert targeting["age_max"] == 65
+    assert targeting["targeting_automation"] == {
+        "advantage_audience": 1,
+        "individual_setting": {"age": 1, "gender": 1},
+    }
+
+
+def test_placements_stay_absent_when_operator_picked_none() -> None:
+    """`publisher_platforms` не встречается ни в одной из 360 живых групп.
+
+    Пустой список обязан означать «поле не слать»: площадки в рабочем шаблоне
+    отдаются автоматике, а не перечисляются руками.
+    """
+    cfg = _config(targeting=Targeting(countries=["NG"]))
+
+    assert "publisher_platforms" not in adset_body(cfg, name="test")["targeting"]
+
+
+def test_expansion_stays_off_when_operator_disabled_advantage() -> None:
+    """Снятый тумблер Advantage+ не должен возвращаться под другим именем.
+
+    `targeting_optimization: expansion_all` и подфлаги individual_setting — это
+    то же самое расширение аудитории. Ставить их всегда значило бы молча
+    отменить выбор оператора.
+    """
+    cfg = _config(targeting=Targeting(countries=["NG"], advantage_audience=False))
+
+    targeting = adset_body(cfg, name="test")["targeting"]
+
+    assert "targeting_optimization" not in targeting
+    assert targeting["targeting_automation"] == {"advantage_audience": 0}
+    # Диапазон и фильтрация контента к расширению отношения не имеют и остаются.
+    assert targeting["age_range"] == [21, 65]
+    assert targeting["brand_safety_content_filter_levels"] == ["FACEBOOK_RELAXED", "AN_RELAXED"]
