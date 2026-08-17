@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import BigInteger, Integer, String, text
+from sqlalchemy import BigInteger, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -74,6 +74,15 @@ class CampaignPreset(UUIDPrimaryKey, Timestamp, Base):
         String(16), nullable=False, server_default=text("'campaign'")
     )
     daily_budget: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Ставка и стратегия — часть заготовки: COST_CAP без bid_amount не
+    # собирается, и без них пресет был неполон в обязательном поле. Пустая
+    # строка означает «в заготовке нет», а не подтверждённый ноль.
+    bid_strategy: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'COST_CAP'")
+    )
+    bid_amount: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    # Отображаемая ссылка креатива (link_data.caption у Meta).
+    display_link: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
 
     url_tags_template: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     naming_template: Mapped[str | None] = mapped_column(String(512), nullable=True)
