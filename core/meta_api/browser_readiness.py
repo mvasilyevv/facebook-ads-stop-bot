@@ -38,6 +38,7 @@ class BrowserReadinessProbeClient(Protocol):
         *,
         full_probe: bool = False,
         expected_profile_id: str | None = None,
+        ad_account_id: str | None = None,
     ) -> dict[str, Any]: ...
 
 

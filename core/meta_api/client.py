@@ -2735,6 +2735,7 @@ class MetaApiClient:
         *,
         full_probe: bool = False,
         expected_profile_id: str | None = None,
+        ad_account_id: str | None = None,
     ) -> dict[str, Any]:
         """CheckMetaApiHealth — статус канала Marketing API для health_watchdog.
 
@@ -2756,6 +2757,8 @@ class MetaApiClient:
             session_id=self.session_id,
             full_probe=full_probe,
             expected_vision_profile_id=(expected_profile_id or "").strip(),
+            # Пусто = переиспользовать живую вкладку Ads Manager и не открывать новую.
+            ad_account_id=(ad_account_id or "").strip(),
         )
         timeout = _HEALTH_PROBE_TIMEOUT_SECONDS if full_probe else _HEALTH_CHECK_TIMEOUT_SECONDS
         try:

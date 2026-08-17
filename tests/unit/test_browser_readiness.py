@@ -12,6 +12,7 @@ import apps.health_watchdog.main as watchdog
 import core.meta_api.browser_readiness as readiness
 import core.meta_api.client as meta_client
 import core.tasks.queue as task_queue
+from clients.python_grpc.v1 import meta_api_pb2
 
 
 def _probe(**overrides):
@@ -182,3 +183,20 @@ async def test_readiness_loop_runs_immediately_without_startup_grace(
         ttl_seconds=6,
     )
     publish.assert_called_once()
+
+
+def test_check_health_contract_carries_explicit_cabinet() -> None:
+    """Проба готовности обязана называть кабинет явно, а не наследовать вкладку.
+
+    Инцидент 17.08.2026: кабинет брался из адреса текущей вкладки, и проба
+    каждые 2 секунды воскрешала вкладку кабинета, которого нет ни в одном оффере.
+    """
+    protocol_params = inspect.signature(
+        readiness.BrowserReadinessProbeClient.check_health
+    ).parameters
+    client_params = inspect.signature(meta_client.MetaApiClient.check_health).parameters
+
+    assert "ad_account_id" in protocol_params
+    assert "ad_account_id" in client_params
+    request = meta_api_pb2.CheckMetaApiHealthRequest(ad_account_id="2108857220005012")
+    assert request.ad_account_id == "2108857220005012"
