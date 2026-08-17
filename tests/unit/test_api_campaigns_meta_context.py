@@ -18,12 +18,34 @@ from core.campaign_builder.account_context import (
 )
 
 
-def _client_for(monkeypatch: pytest.MonkeyPatch, context: CampaignAccountContext) -> TestClient:
+def _client_for(
+    monkeypatch: pytest.MonkeyPatch,
+    context: CampaignAccountContext,
+    *,
+    refreshed: CampaignAccountContext | None = None,
+    refresh_issue: str | None = None,
+    refresh_calls: list[str] | None = None,
+) -> TestClient:
+    """Тестовый клиент ручки контекста.
+
+    ``refreshed`` — что вернёт ПОВТОРНОЕ чтение после живого подтягивания.
+    Без него повторное чтение отдаёт тот же контекст, что и первое.
+    """
+    reads: list[CampaignAccountContext] = [context]
+    if refreshed is not None:
+        reads.append(refreshed)
+
     async def _resolve(_engine, *, account_id: str) -> CampaignAccountContext:
-        assert account_id == "act_123"
-        return context
+        assert account_id in {"act_123", "123"}
+        return reads.pop(0) if len(reads) > 1 else reads[0]
+
+    async def _refresh(_engine, numeric_act_id: str) -> str | None:
+        if refresh_calls is not None:
+            refresh_calls.append(numeric_act_id)
+        return refresh_issue
 
     monkeypatch.setattr(mod, "resolve_campaign_account_context", _resolve)
+    monkeypatch.setattr(mod, "_refresh_account_context_once", _refresh)
     app = FastAPI()
     app.include_router(router, prefix="/api")
     app.dependency_overrides[get_engine] = lambda: object()
@@ -136,3 +158,121 @@ def test_normalize_campaign_account_id(raw: str, expected: str) -> None:
 def test_normalize_campaign_account_id_rejects_invalid_values(raw: str) -> None:
     with pytest.raises(ValueError):
         normalize_campaign_account_id(raw)
+
+
+# Готовый снимок — живое чтение не нужно: лишний поход в Meta на каждый показ
+# шага визарда дорог и ничего не уточняет.
+def test_ready_context_never_touches_meta(monkeypatch: pytest.MonkeyPatch) -> None:
+    refresh_calls: list[str] = []
+    client = _client_for(
+        monkeypatch,
+        CampaignAccountContext(
+            account_id="123",
+            state="ready",
+            timezone_name="America/New_York",
+            currency="USD",
+            currency_exponent=2,
+            observed_at=datetime(2026, 8, 17, 8, 30, tzinfo=UTC),
+            next_start_date=date(2026, 8, 18),
+            issue=None,
+        ),
+        refresh_calls=refresh_calls,
+    )
+
+    resp = client.get("/api/campaigns/ad-account-context", params={"act_id": "act_123"})
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "ready"
+    assert refresh_calls == []
+
+
+# Снимка нет — ручка подтягивает его сама и отвечает ПЕРЕЧИТАННОЙ строкой.
+def test_missing_context_is_fetched_and_reread(monkeypatch: pytest.MonkeyPatch) -> None:
+    refresh_calls: list[str] = []
+    client = _client_for(
+        monkeypatch,
+        CampaignAccountContext(
+            account_id="123",
+            state="unavailable",
+            timezone_name=None,
+            currency=None,
+            currency_exponent=None,
+            observed_at=None,
+            next_start_date=None,
+            issue=None,
+        ),
+        refreshed=CampaignAccountContext(
+            account_id="123",
+            state="ready",
+            timezone_name="America/New_York",
+            currency="USD",
+            currency_exponent=2,
+            observed_at=datetime(2026, 8, 17, 9, 0, tzinfo=UTC),
+            next_start_date=date(2026, 8, 18),
+            issue=None,
+        ),
+        refresh_calls=refresh_calls,
+    )
+
+    resp = client.get("/api/campaigns/ad-account-context", params={"act_id": "act_123"})
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert refresh_calls == ["123"]
+    assert payload["state"] == "ready"
+    assert payload["timezone_name"] == "America/New_York"
+    assert payload["currency"] == "USD"
+    assert payload["currency_exponent"] == 2
+    assert payload["issue"] is None
+
+
+# Живое чтение не удалось — это не 5xx, а состояние с внятной причиной.
+def test_failed_refresh_becomes_a_readable_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    unavailable = CampaignAccountContext(
+        account_id="123",
+        state="unavailable",
+        timezone_name=None,
+        currency=None,
+        currency_exponent=None,
+        observed_at=None,
+        next_start_date=None,
+        issue=None,
+    )
+    client = _client_for(
+        monkeypatch,
+        unavailable,
+        refreshed=unavailable,
+        refresh_issue="Meta не отдала часовой пояс и валюту по кабинету",
+    )
+
+    resp = client.get("/api/campaigns/ad-account-context", params={"act_id": "act_123"})
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["state"] == "unavailable"
+    assert payload["issue"] == "Meta не отдала часовой пояс и валюту по кабинету"
+
+
+# Собственная причина из базы важнее причины неудачного подтягивания: она
+# описывает сам снимок (например, неподдерживаемую валюту), а не поход в Meta.
+def test_durable_issue_wins_over_refresh_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    stale = CampaignAccountContext(
+        account_id="123",
+        state="stale",
+        timezone_name="America/New_York",
+        currency="USD",
+        currency_exponent=2,
+        observed_at=datetime(2026, 8, 1, 9, 0, tzinfo=UTC),
+        next_start_date=None,
+        issue="Подтверждение валюты устарело",
+    )
+    client = _client_for(
+        monkeypatch,
+        stale,
+        refreshed=stale,
+        refresh_issue="Канал Meta недоступен — снимок кабинета не обновлён",
+    )
+
+    resp = client.get("/api/campaigns/ad-account-context", params={"act_id": "act_123"})
+
+    assert resp.json()["issue"] == "Подтверждение валюты устарело"

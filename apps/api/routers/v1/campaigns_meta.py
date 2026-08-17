@@ -35,6 +35,7 @@ from core.campaign_builder.account_context import (
     normalize_campaign_account_id,
     resolve_campaign_account_context,
 )
+from core.meta_api.account_tz import fetch_account_context, persist_account_context
 from core.meta_api.audit import AuditedMetaApiClient
 from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import (
@@ -132,6 +133,85 @@ def _build_meta_client(engine: Any) -> AuditedMetaApiClient:
     )
 
 
+# Причины, которые оператор увидит в визарде вместо безликого «Контекст
+# недоступен». Набор фиксирован: raw exception и traceback в UI не попадают.
+_REFRESH_ISSUE_MAINTENANCE = "Идёт обслуживание браузера — снимок кабинета не обновлён"
+_REFRESH_ISSUE_CHANNEL = "Канал Meta недоступен — снимок кабинета не обновлён"
+_REFRESH_ISSUE_RATE_LIMIT = "Meta временно ограничила запросы — снимок кабинета не обновлён"
+_REFRESH_ISSUE_REJECTED = "Meta отклонила запрос по кабинету"
+_REFRESH_ISSUE_EMPTY = "Meta не отдала часовой пояс и валюту по кабинету"
+
+
+async def _refresh_account_context_once(engine: Any, numeric_act_id: str) -> str | None:
+    """Один живой Graph-read кабинета с записью снимка в PostgreSQL.
+
+    Возвращает None, если запись прошла, иначе — причину для оператора.
+    Никогда не бросает: контракт ручки — всегда отдать состояние, а не 5xx.
+    Порядок except важен: RateLimitedError — подкласс TemporaryError, а
+    NotFoundError/MetaPermissionError/PermanentError — подклассы MetaApiError.
+    """
+    client = _build_meta_client(engine)
+    try:
+        async with BrowserOperationFence(
+            engine,
+            operation_kind="account_context_refresh",
+            target=numeric_act_id,
+        ) as fence:
+            await client.start()
+            fetched = await fetch_account_context(client, numeric_act_id)
+            if fetched.timezone_name is None and fetched.currency is None:
+                logger.info(
+                    "ad-account-context: Meta вернула пустой контекст act_%s",
+                    numeric_act_id,
+                )
+                return _REFRESH_ISSUE_EMPTY
+            await fence.assert_held()
+            await persist_account_context(
+                engine,
+                account_id=numeric_act_id,
+                timezone_name=fetched.timezone_name,
+                currency=fetched.currency,
+            )
+            return None
+    except BrowserOperationBlocked:
+        return _REFRESH_ISSUE_MAINTENANCE
+    except RateLimitedError:
+        logger.info("ad-account-context: Meta rate-limit act_%s", numeric_act_id)
+        return _REFRESH_ISSUE_RATE_LIMIT
+    except (NotFoundError, MetaPermissionError, PermanentError) as exc:
+        logger.info(
+            "ad-account-context: Meta отвергла act_%s error_type=%s",
+            numeric_act_id,
+            type(exc).__name__,
+        )
+        return _REFRESH_ISSUE_REJECTED
+    except (
+        BrowserFenceLeaseLost,
+        SessionUnavailableError,
+        CircuitOpenError,
+        TemporaryError,
+        grpc.RpcError,
+    ) as exc:
+        logger.warning(
+            "ad-account-context: канал недоступен act_%s error_type=%s",
+            numeric_act_id,
+            type(exc).__name__,
+        )
+        return _REFRESH_ISSUE_CHANNEL
+    except MetaApiError as exc:
+        logger.info(
+            "ad-account-context: ошибка Meta act_%s error_type=%s",
+            numeric_act_id,
+            type(exc).__name__,
+        )
+        return _REFRESH_ISSUE_REJECTED
+    finally:
+        try:
+            await client.close()
+        except Exception:  # noqa: BLE001 — закрытие канала best-effort
+            pass
+
+
 @router.get("/ad-account-context", response_model=AdAccountContextResponse)
 async def get_ad_account_context(
     engine: DepEngine,
@@ -140,12 +220,28 @@ async def get_ad_account_context(
         description="ID рекламного кабинета (с префиксом act_ или без — нормализуется).",
     ),
 ) -> AdAccountContextResponse:
-    """Return durable context state without navigating or querying Meta live."""
+    """Отдать durable-состояние кабинета, подтянув снимок, если его ещё нет.
+
+    Снимок наполняет фоновый refresh в meta_api_worker по таймеру, и до его
+    первого прохода новый кабинет выглядит «Контекст недоступен» — залив
+    заблокирован без объяснимой причины. Недостающее тянем прямо здесь: живое
+    чтение сохраняется в PostgreSQL, а ответ формируется ПЕРЕЧИТАННОЙ строкой.
+    Авторитет базы не меняется: живое значение в ответ не попадает.
+    """
 
     try:
         context = await resolve_campaign_account_context(engine, account_id=act_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Некорректный Ad Account ID") from exc
+
+    refresh_issue: str | None = None
+    if context.state != "ready":
+        refresh_issue = await _refresh_account_context_once(engine, context.account_id)
+        context = await resolve_campaign_account_context(
+            engine,
+            account_id=context.account_id,
+        )
+
     return AdAccountContextResponse(
         account_id=context.account_id,
         state=context.state,
@@ -156,7 +252,8 @@ async def get_ad_account_context(
         next_start_date=(
             context.next_start_date.isoformat() if context.next_start_date is not None else None
         ),
-        issue=context.issue,
+        # Причина про сам снимок важнее причины неудачного похода в Meta.
+        issue=context.issue or (refresh_issue if context.state != "ready" else None),
     )
 
 
