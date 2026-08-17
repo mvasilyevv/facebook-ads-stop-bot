@@ -508,38 +508,66 @@ git add -A && git commit -m "feat(campaigns): пресет хранит став
 
 ## Трек B — качество видео-креатива
 
-### Task B1: Узнать, какие видео-поля отдаёт наш кабинет
+### Task B1: Снять имена колонок с самой страницы, а не подбирать их
 
-Разведка перед стройкой. Имя `video_play_curve_actions` в публичной доке Meta я подтвердить не
-смог (страницы reference отдают 404 внешнему читателю), а строить хранилище под непроверенное
-поле — это второй раз наступить на грабли этой недели.
+Считать коэффициенты самим не нужно и не следует: Meta их уже посчитала и показывает в
+карточке. Мы и так не изобретаем запросы к Ads Manager, а переиспользуем его собственные —
+`services/browser-agent/src/am/am-fetch.ts` снифает `access_token` из исходящих запросов
+страницы к `adsmanager-graph.facebook.com` (строка 52) и запрашивает метрики списком
+`column_fields` (`AM_COLUMN_FIELDS` в `am-config.ts`, сейчас 18 колонок). Задача — узнать, как
+называются колонки захвата и удержания, и добавить их в тот же список.
+
+Своя формула нужна только как сверка. Из подсказок ⓘ (прислал владелец):
+захват — «процент, сколько раз ваше видео было воспроизведено в течение как минимум 3 секунд»;
+удержание — «процент, сколько раз ваше видео было воспроизведено до конца после воспроизведения
+в течение как минимум 3 секунд», то есть досмотры ÷ трёхсекундные воспроизведения.
+**Обе метрики Meta помечает «in development»** — имя колонки и само её существование могут
+измениться, поэтому отсутствие колонки в ответе должно давать `unknown`, а не падение скана.
 
 **Files:**
+- Modify: `services/browser-agent/src/am/am-fetch.ts` (временный дамп в снифере)
 - Create: `docs/meta-video-fields-2026-08.md`
 
-- [ ] **Step 1: Запросить поля у живого кабинета**
+- [ ] **Step 1: Временно расширить снифер до полного дампа запроса**
 
-Запрос идёт через session-tunneled Marketing API browser-agent'а — тем же путём, что
-`services/browser-agent/src/am/am-fetch.ts` уже ходит за insights (см. хелпер `edgeUrl`,
-строка 421). Возьми любое объявление с видео из кампании `MV | CR2 | adset.pro | 14.08` и
-запроси у ребра `insights` ровно этот список полей:
+В `am-fetch.ts`, в обработчике `onReq` (строка ~62), рядом с существующей проверкой добавь
+временный дамп — он нужен на один прогон и снимается в Step 4:
 
+```ts
+        // ВРЕМЕННО (снять в том же PR после снятия имён колонок): полный дамп
+        // запросов страницы, чтобы увидеть, какими колонками карточка
+        // «Результативность видео» просит захват и удержание.
+        if (u.includes('am_tabular') || u.includes('insights')) {
+          console.log('[am-sniff]', decodeURIComponent(u).slice(0, 4000));
+        }
 ```
-video_play_actions,video_continuous_2_sec_watched_actions,video_thruplay_watched_actions,video_avg_time_watched_actions,video_p25_watched_actions,video_p50_watched_actions,video_p75_watched_actions,video_p95_watched_actions,video_p100_watched_actions,video_play_curve_actions,impressions
-```
 
-- [ ] **Step 2: Записать результат документом**
+- [ ] **Step 2: Открыть карточку и снять лог**
 
-Создай `docs/meta-video-fields-2026-08.md` и зафиксируй поимённо: какие поля вернулись, какие
-дали ошибку, и какой формы значение у каждого вернувшегося (скаляр, список
-`{action_type, value}` или массив чисел). Для `video_play_curve_actions` — длину массива и что
-означает индекс. Документ короткий, но это единственный источник правды для B2 и B3.
-
-- [ ] **Step 3: Коммит**
+Собери и перезапусти browser-agent, затем на столе открой вкладку «Объявления → Статистика» для
+объявления `52599529672016` за период 2026-08-10 … 2026-08-17 и сними лог:
 
 ```bash
-git add docs/meta-video-fields-2026-08.md
-git commit -m "docs(meta): какие видео-поля insights реально отдаёт кабинет"
+ssh root@62.60.150.133 'docker logs --since 5m fb_agent_desktop-browser-agent-1 2>&1 | grep "\[am-sniff\]"'
+```
+Expected: строки с `column_fields=[...]`, среди которых — колонки видео.
+
+- [ ] **Step 3: Записать результат документом**
+
+Создай `docs/meta-video-fields-2026-08.md` и зафиксируй: точные имена колонок захвата и
+удержания, имя колонки кривой досмотра (если карточка просит её тем же запросом), форму
+значения каждой и то, что обе метрики помечены «in development». Плюс контрольный замер для
+приёмки: объявление `52599529672016`, период 2026-08-10 … 2026-08-17, ожидаемые 43% и 1.48%.
+
+- [ ] **Step 4: Снять временный дамп и закоммитить**
+
+Убери добавленный в Step 1 `console.log` — сырой URL несёт `access_token`, и в логе ему не
+место.
+
+```bash
+cd services/browser-agent && npm run lint && npm test
+git add docs/meta-video-fields-2026-08.md services/browser-agent/src/am/am-fetch.ts
+git commit -m "docs(meta): имена колонок захвата и удержания сняты с самой страницы"
 ```
 
 ---
@@ -554,7 +582,7 @@ git commit -m "docs(meta): какие видео-поля insights реальн�
 
 **Interfaces:**
 - Consumes: список подтверждённых полей из `docs/meta-video-fields-2026-08.md` (B1).
-- Produces: колонки `ad_metrics.video_plays_3s`, `.video_thruplays`,
+- Produces: колонки `ad_metrics.video_plays_3s`, `.video_completions`,
   `.video_avg_time_watched_sec`, `.video_p25 … .video_p100` — все `BIGINT NULL` кроме
   `video_avg_time_watched_sec NUMERIC(10,2) NULL`.
 
@@ -575,7 +603,7 @@ def test_missing_video_metric_stays_unknown_not_zero() -> None:
     row = build_ad_metrics_row({"impressions": "100"})
 
     assert row["video_plays_3s"] is None
-    assert row["video_thruplays"] is None
+    assert row["video_completions"] is None
 
 
 def test_zero_video_plays_is_a_confirmed_zero() -> None:
@@ -587,7 +615,7 @@ def test_zero_video_plays_is_a_confirmed_zero() -> None:
 - [ ] **Step 2: Убедиться, что тест падает**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/test_ad_metrics_video.py -q`
-Expected: FAIL — ключей `video_plays_3s`/`video_thruplays` в строке нет.
+Expected: FAIL — ключей `video_plays_3s`/`video_completions` в строке нет.
 
 Если функция называется иначе — найди фактическое имя
 (`grep -n "def .*ad_metrics\|INSERT INTO ad_metrics" core/observer/writers.py`) и поправь
@@ -600,7 +628,7 @@ Expected: FAIL — ключей `video_plays_3s`/`video_thruplays` в строк
 ```python
 def upgrade() -> None:
     op.add_column("ad_metrics", sa.Column("video_plays_3s", sa.BigInteger(), nullable=True))
-    op.add_column("ad_metrics", sa.Column("video_thruplays", sa.BigInteger(), nullable=True))
+    op.add_column("ad_metrics", sa.Column("video_completions", sa.BigInteger(), nullable=True))
     op.add_column(
         "ad_metrics",
         sa.Column("video_avg_time_watched_sec", sa.Numeric(10, 2), nullable=True),
@@ -632,24 +660,19 @@ git add -A && git commit -m "feat(metrics): видео-метрики объяв
 
 ---
 
-### Task B3: Повторить две метрики Meta, а не изобрести свои
+### Task B3: Брать коэффициенты у Meta, свой расчёт — только запасной
 
-**Обязательное условие приёмки:** наша формула должна воспроизвести числа с живого экрана —
-захват 43% и удержание 1.48% для объявления `52599529672016` за 2026-08-10 … 2026-08-17.
-Если не сходится, формула неверна, и никакие рассуждения этого не отменяют. Точное определение
-обеих метрик лежит в подсказках ⓘ рядом с их названиями в карточке (см. блок «Что требуется от
-тебя», пункт 2) — возьми оттуда, а не из блогов: блоги на этот счёт ошибаются.
+Значения считает Meta и отдаёт колонками (B1). Наша формула нужна ровно на два случая: колонка
+не пришла (метрика «in development», её могут убрать) и сверка, что мы читаем то самое поле.
 
-- [ ] **Step 0: Свериться с живым замером**
+**Условие приёмки:** и колонка Meta, и запасной расчёт дают 43% и 1.48% для объявления
+`52599529672016` за 2026-08-10 … 2026-08-17. Расхождение запасного расчёта с колонкой больше
+чем на 0.1 п.п. означает, что формула понята неверно.
 
-Возьми у Meta сырые поля для этого объявления за этот период и подбери формулу, дающую 43% и
-1.48%. Кандидаты для захвата: `video_play_actions ÷ impressions`,
-`video_continuous_2_sec_watched_actions ÷ impressions`. Кандидаты для удержания:
-`video_thruplay_watched_actions ÷ impressions`, `video_p100_watched_actions ÷ impressions`,
-`video_thruplay_watched_actions ÷ video_play_actions`. Запиши в
-`docs/meta-video-fields-2026-08.md` (создан в B1), какая сошлась и с какой точностью.
-
-Дальше по шагам ниже, подставив победившую формулу вместо той, что стоит в коде примера.
+Формула запасного расчёта — прямо из подсказок Meta:
+захват = трёхсекундные воспроизведения ÷ показы; удержание = досмотры до конца ÷
+трёхсекундные воспроизведения. Ниже в коде именно она; имена полей возьми из
+`docs/meta-video-fields-2026-08.md`.
 
 **Files:**
 - Create: `core/creative_quality.py`
@@ -657,7 +680,7 @@ git add -A && git commit -m "feat(metrics): видео-метрики объяв
 
 **Interfaces:**
 - Consumes: колонки из B2.
-- Produces: `creative_quality(plays_3s, thruplays, impressions) -> CreativeQuality` с полями
+- Produces: `creative_quality(plays_3s, completions, impressions) -> CreativeQuality` с полями
   `hook_rate: Decimal | None`, `hold_rate: Decimal | None`, `verdict: Literal["ok","warning","unknown"]`.
 
 - [ ] **Step 1: Написать падающий тест**
@@ -672,10 +695,11 @@ from core.creative_quality import creative_quality
 
 def test_hook_and_hold_use_the_denominators_we_declared() -> None:
     """Знаменатель фиксируем в коде: отрасль считает hold rate тремя разными
-    способами (ThruPlay/3сек, 15сек/3сек, 15сек/показы), и «10%» без указания
-    знаменателя значит разное в разные дни.
+    Знаменатели взяты из подсказок Meta, а не выбраны нами: захват — от
+    показов, удержание — от трёхсекундных воспроизведений. Это запасной путь
+    на случай, когда колонка Meta не пришла.
     """
-    quality = creative_quality(plays_3s=400, thruplays=60, impressions=1000)
+    quality = creative_quality(plays_3s=400, completions=60, impressions=1000)
 
     assert quality.hook_rate == Decimal("40.00")  # 400 / 1000
     assert quality.hold_rate == Decimal("15.00")  # 60 / 400
@@ -684,18 +708,18 @@ def test_hook_and_hold_use_the_denominators_we_declared() -> None:
 
 def test_below_reference_is_a_warning_not_a_failure() -> None:
     """Эталоны 40% и 10% — ориентир владельца, а не отказ системы."""
-    quality = creative_quality(plays_3s=150, thruplays=10, impressions=1000)
+    quality = creative_quality(plays_3s=150, completions=10, impressions=1000)
 
     assert quality.verdict == "warning"
 
 
 def test_unknown_stays_unknown() -> None:
     """Нет данных — нет вердикта. Ноль тут соврал бы «плохой креатив»."""
-    assert creative_quality(plays_3s=None, thruplays=None, impressions=1000).verdict == "unknown"
+    assert creative_quality(plays_3s=None, completions=None, impressions=1000).verdict == "unknown"
 
 
 def test_no_impressions_is_not_a_division_by_zero() -> None:
-    assert creative_quality(plays_3s=0, thruplays=0, impressions=0).hook_rate is None
+    assert creative_quality(plays_3s=0, completions=0, impressions=0).hook_rate is None
 ```
 
 - [ ] **Step 2: Убедиться, что тест падает**
@@ -744,10 +768,10 @@ def _ratio(numerator: int | None, denominator: int | None) -> Decimal | None:
 
 
 def creative_quality(
-    *, plays_3s: int | None, thruplays: int | None, impressions: int | None
+    *, plays_3s: int | None, completions: int | None, impressions: int | None
 ) -> CreativeQuality:
     hook_rate = _ratio(plays_3s, impressions)
-    hold_rate = _ratio(thruplays, plays_3s)
+    hold_rate = _ratio(completions, plays_3s)
     if hook_rate is None or hold_rate is None:
         return CreativeQuality(hook_rate, hold_rate, "unknown")
     verdict = (
@@ -939,7 +963,7 @@ def _row(**overrides):
         "impressions": 1000,
         "spend": Decimal("10.00"),
         "video_plays_3s": 400,
-        "video_thruplays": 60,
+        "video_completions": 60,
         "video_p25": 300,
         "video_p50": 90,
         "video_p75": 80,
@@ -1032,12 +1056,12 @@ def creative_rollup(rows: list[dict]) -> list[CreativeRollup]:
         bucket = buckets.setdefault(
             key,
             {"impressions": 0, "spend": Decimal("0"), "video_plays_3s": None,
-             "video_thruplays": None, "video_p25": None, "video_p50": None,
+             "video_completions": None, "video_p25": None, "video_p50": None,
              "video_p75": None, "video_p100": None},
         )
         bucket["impressions"] += int(row["impressions"] or 0)
         bucket["spend"] += Decimal(str(row["spend"] or "0"))
-        for field in ("video_plays_3s", "video_thruplays", "video_p25", "video_p50",
+        for field in ("video_plays_3s", "video_completions", "video_p25", "video_p50",
                       "video_p75", "video_p100"):
             bucket[field] = _add(bucket[field], row.get(field))
 
@@ -1051,7 +1075,7 @@ def creative_rollup(rows: list[dict]) -> list[CreativeRollup]:
                 spend=bucket["spend"],
                 quality=creative_quality(
                     plays_3s=bucket["video_plays_3s"],
-                    thruplays=bucket["video_thruplays"],
+                    completions=bucket["video_completions"],
                     impressions=bucket["impressions"],
                 ),
                 retention=retention_profile(
@@ -1108,7 +1132,8 @@ git commit -m "feat(creatives): сводка по креативам за пер
 - Не более шести строк. Каждая строка — вывод и что с ним делать.
 - Начинай с худшего креатива: с него теряются деньги.
 - hook rate — доля показов, досмотревших до 3 секунд; ориентир 40%.
-  hold rate — доля 3-секундных просмотров, дошедших до ThruPlay; ориентир 10%.
+  Коэффициент удержания — доля 3-секундных воспроизведений, досмотренных до
+  конца; ориентир 10%.
 - Низкий hook — проблема первого кадра. Низкий hold при высоком hook — обещание
   в начале не выполнено дальше. Резкий обрыв на конкретной четверти — ролик
   стоит обрезать до этой точки.
@@ -1139,7 +1164,7 @@ def _rollups():
                 "impressions": 1000,
                 "spend": "10.00",
                 "video_plays_3s": 400,
-                "video_thruplays": 60,
+                "video_completions": 60,
                 "video_p25": 300,
                 "video_p50": 90,
                 "video_p75": 80,
@@ -1422,17 +1447,21 @@ git commit -m "feat(scripts): план переноса группы объяв�
 2. Пройди проверку, которую там попросят.
 3. Скажи мне, когда пройдёт — я проверю, что «Создать» ожила.
 
-### 2. Навести курсор на две подсказки ⓘ (10 секунд)
+### 2. Подсказки ⓘ — получены, вопрос закрыт
 
-Вопрос про знаменатель снят: обе метрики у Meta родные, я это увидел на твоём экране. Но их
-точную формулу знает только сама Meta, и она лежит в подсказках рядом с названиями.
+Ничего не требуется — владелец прислал текст подсказок 17.08, они зафиксированы дословно:
 
-1. На той же вкладке «Объявления → Статистика», в карточке «Результативность видео».
-2. Наведи курсор на ⓘ рядом с «Коэффициент захвата внимания» — пришли текст подсказки.
-3. То же для ⓘ рядом с «Коэффициент удержания».
+> **Коэффициент захвата внимания.** Процент, сколько раз ваше видео было воспроизведено в
+> течение как минимум 3 секунд. Эта метрика находится in development.
 
-Без этих двух текстов я буду подбирать формулу перебором по одному замеру (43% и 1.48%), а это
-может дать формулу, которая совпала случайно и разойдётся на других роликах.
+> **Коэффициент удержания.** Процент, сколько раз ваше видео было воспроизведено до конца
+> после воспроизведения в течение как минимум 3 секунд. Эта метрика находится in development.
+
+Отсюда два следствия, уже учтённых в треке B. Первое: удержание считается **от трёхсекундных
+воспроизведений**, а числителем идут **досмотры до конца**, а не ThruPlay — для ролика длиннее
+15 секунд это разные вещи, и ThruPlay дал бы завышенную цифру. Второе: обе метрики
+«in development», поэтому колонка может пропасть или переименоваться — её отсутствие обязано
+давать `unknown`, а не ронять скан.
 
 ### 3. Список кабинетов для сводки по креативам
 
