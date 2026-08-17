@@ -3293,8 +3293,6 @@ export interface components {
        * @description Уникальный код оффера
        */
       code: string;
-      /** Vertical */
-      vertical?: string | null;
       /**
        * Is Active
        * @default true
@@ -3321,8 +3319,6 @@ export interface components {
       code: string;
       /** Name */
       name: string;
-      /** Vertical */
-      vertical?: string | null;
       /** Pixel Id */
       pixel_id?: string | null;
       /** Is Active */
@@ -3400,8 +3396,6 @@ export interface components {
      *     All mutable fields are optional.
      */
     OfferUpdateIn: {
-      /** Vertical */
-      vertical?: string | null;
       /** Pixel Id */
       pixel_id?: string | null;
       /** Is Active */

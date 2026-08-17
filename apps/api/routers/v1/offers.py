@@ -100,7 +100,6 @@ async def list_offers(
             id=row["id"],
             code=row["code"],
             name=row["name"],
-            vertical=row["vertical"],
             pixel_id=row["pixel_id"],
             is_active=row["is_active"],
             ad_account_ids=account_ids_by_offer.get(row["id"], []),
@@ -132,7 +131,6 @@ async def create_offer(
             .values(
                 code=body.code,
                 name=body.code,  # name = code: поле «Название» убрано из UI
-                vertical=body.vertical,
                 pixel_id=(body.pixel_id or None),
                 is_active=body.is_active,
                 # Гео оффера (ISO-2 upper) — для дерайва визарда.
@@ -142,7 +140,6 @@ async def create_offer(
                 Offer.__table__.c.id,
                 Offer.__table__.c.code,
                 Offer.__table__.c.name,
-                Offer.__table__.c.vertical,
                 Offer.__table__.c.pixel_id,
                 Offer.__table__.c.is_active,
                 Offer.__table__.c.countries,
@@ -171,7 +168,6 @@ async def create_offer(
         id=row["id"],
         code=row["code"],
         name=row["name"],
-        vertical=row["vertical"],
         pixel_id=row["pixel_id"],
         is_active=row["is_active"],
         ad_account_ids=list(account_ids),
@@ -195,8 +191,6 @@ async def update_offer(
     404 если оффер не найден.
     """
     updates: dict = {}
-    if body.vertical is not None:
-        updates["vertical"] = body.vertical
     # pixel_id: None — не трогаем; строка (в т.ч. пустая → null) — заменяем.
     if body.pixel_id is not None:
         updates["pixel_id"] = body.pixel_id or None
@@ -224,7 +218,6 @@ async def update_offer(
                     Offer.__table__.c.id,
                     Offer.__table__.c.code,
                     Offer.__table__.c.name,
-                    Offer.__table__.c.vertical,
                     Offer.__table__.c.pixel_id,
                     Offer.__table__.c.is_active,
                     Offer.__table__.c.countries,
@@ -254,7 +247,6 @@ async def update_offer(
         id=row["id"],
         code=row["code"],
         name=row["name"],
-        vertical=row["vertical"],
         pixel_id=row["pixel_id"],
         is_active=row["is_active"],
         ad_account_ids=account_ids,

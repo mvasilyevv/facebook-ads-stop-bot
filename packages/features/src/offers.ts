@@ -17,12 +17,28 @@ export const DEFAULT_OFFER_RULES_VALUES: Readonly<OfferRulesValues> = {
   warning_percent_of_stop: 80,
 };
 
+/** Точность доллара. Колонка `offer_rules.cpa_threshold` — numeric(20,6). */
+const CURRENCY_FRACTION_DIGITS = 2;
+
+/**
+ * CPA в точности валюты, а не в точности колонки БД.
+ *
+ * Postgres отдаёт `3.000000`, и оператор видел шесть знаков там, где у доллара
+ * их два. Пустое значение остаётся пустым: `null` означает «ставка не задана»,
+ * а `0.00` означало бы подтверждённый ноль.
+ */
+function cpaInCurrencyPrecision(raw: string | null | undefined): string {
+  if (raw == null || raw === "") return "";
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed.toFixed(CURRENCY_FRACTION_DIGITS) : raw;
+}
+
 export function rulesValuesFromOut(
   rules: OfferRulesOut | null | undefined,
 ): OfferRulesValues {
   if (!rules) return { ...DEFAULT_OFFER_RULES_VALUES };
   return {
-    cpa: rules.cpa_threshold ?? "",
+    cpa: cpaInCurrencyPrecision(rules.cpa_threshold),
     currency: rules.currency ?? "USD",
     stop_percent_of_rule: validPercentOrDefault(rules.stop_percent_of_rule),
     warning_percent_of_stop: validPercentOrDefault(

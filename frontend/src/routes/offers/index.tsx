@@ -199,7 +199,6 @@ function OffersPage() {
           // через кнопку «Правила» (RulesDrawer), здесь их не трогаем.
           await createMutation.mutateAsync({
             code: values.code,
-            vertical: values.vertical,
             is_active: values.is_active,
             pixel_id: values.pixel_id || null, // пусто → не задан
             ad_account_ids: values.ad_account_ids, // мульти-кабинет: min 1
@@ -249,7 +248,6 @@ function EditOfferModal({ offer, onClose }: { offer: Offer; onClose: () => void 
       onSave={async (values) => {
         // Стоп-правила редактируются отдельно в «Правилах».
         await updateMutation.mutateAsync({
-          vertical: values.vertical,
           is_active: values.is_active,
           pixel_id: values.pixel_id, // строка (в т.ч. "") — форма источник истины
           ad_account_ids: values.ad_account_ids, // мульти-кабинет: замена списка

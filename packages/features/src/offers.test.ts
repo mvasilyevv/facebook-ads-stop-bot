@@ -104,3 +104,42 @@ describe("offer feature model", () => {
     expect(isOfferCpaValid("0.000")).toBe(false);
   });
 });
+
+describe("rulesValuesFromOut — точность денег", () => {
+  it("показывает CPA в точности валюты, а не в точности колонки БД", () => {
+    // cpa_threshold в БД — numeric(20,6), поэтому Postgres отдаёт «3.000000».
+    // Оператор видит шесть знаков там, где у доллара их два, и правит поле
+    // мимо реальной точности.
+    expect(
+      rulesValuesFromOut({
+        cpa_threshold: "3.000000",
+        currency: "USD",
+        stop_percent_of_rule: 100,
+        warning_percent_of_stop: 80,
+      } as never).cpa,
+    ).toBe("3.00");
+  });
+
+  it("не округляет значащие знаки", () => {
+    expect(
+      rulesValuesFromOut({
+        cpa_threshold: "3.456700",
+        currency: "USD",
+        stop_percent_of_rule: 100,
+        warning_percent_of_stop: 80,
+      } as never).cpa,
+    ).toBe("3.46");
+  });
+
+  it("пустой CPA остаётся пустым, а не превращается в 0.00", () => {
+    // Ноль — подтверждённая ставка «бесплатно», пустая строка — «не задана».
+    expect(
+      rulesValuesFromOut({
+        cpa_threshold: null,
+        currency: "USD",
+        stop_percent_of_rule: 100,
+        warning_percent_of_stop: 80,
+      } as never).cpa,
+    ).toBe("");
+  });
+});

@@ -77,7 +77,6 @@ class OfferOut(BaseModel):
     id: uuid.UUID
     code: str
     name: str
-    vertical: str | None = None
     # FB Pixel ID оффера (для создания кампаний — событие оптимизации Purchase/FTD).
     pixel_id: str | None = None
     is_active: bool
@@ -104,7 +103,6 @@ class OfferOut(BaseModel):
             id=offer.id,  # type: ignore[attr-defined]
             code=offer.code,  # type: ignore[attr-defined]
             name=offer.name,  # type: ignore[attr-defined]
-            vertical=offer.vertical,  # type: ignore[attr-defined]
             pixel_id=getattr(offer, "pixel_id", None),
             is_active=offer.is_active,  # type: ignore[attr-defined]
             ad_account_ids=sorted(ad_account_ids),
@@ -120,7 +118,6 @@ class OfferCreateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     code: str = Field(..., min_length=1, max_length=64, description="Уникальный код оффера")
-    vertical: str | None = Field(None, max_length=32)
     is_active: bool = True
     # FB Pixel ID оффера (числовой; пусто — не задан).
     pixel_id: str | None = Field(None, max_length=64)
@@ -164,7 +161,6 @@ class OfferUpdateIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    vertical: str | None = Field(None, max_length=32)
     # FB Pixel ID: None — не трогать; строка (в т.ч. пустая → null) — заменить.
     pixel_id: str | None = Field(None, max_length=64)
     is_active: bool | None = None

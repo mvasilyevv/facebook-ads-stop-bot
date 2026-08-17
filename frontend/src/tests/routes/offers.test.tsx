@@ -23,7 +23,6 @@ function makeOffer(overrides: Partial<Offer> = {}): Offer {
     id: "offer-uuid-1",
     code: "CR2",
     name: "CR2",
-    vertical: "gambling",
     is_active: true,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -199,8 +198,6 @@ describe("OfferFormModal — создание", () => {
     // Пиксель оффера
     await userEvent.type(screen.getByLabelText(/fb pixel id/i), "9988776655");
 
-    await userEvent.selectOptions(screen.getByLabelText(/вертикаль/i), "gambling");
-
     // Гео (страны): ввод кода/имени → Enter выбирает совпавшую опцию, хранится ISO-2.
     await userEvent.type(screen.getByLabelText(/страны/i), "de{Enter}br{Enter}de{Enter}");
 
@@ -210,7 +207,6 @@ describe("OfferFormModal — создание", () => {
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({
         code: "GH_AVI", // toUpperCase
-        vertical: "gambling",
         is_active: true,
         pixel_id: "9988776655",
         ad_account_ids: ["111", "222"],

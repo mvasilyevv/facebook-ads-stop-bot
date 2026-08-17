@@ -51,7 +51,6 @@ const MOCK_OFFERS: Offer[] = [
     id: "uuid-1",
     code: "GH_AVI",
     name: "GH_AVI",
-    vertical: "gambling",
     is_active: true,
     created_at: null,
     updated_at: null,
@@ -60,7 +59,6 @@ const MOCK_OFFERS: Offer[] = [
     id: "uuid-2",
     code: "NG_CR2",
     name: "NG_CR2",
-    vertical: "gambling",
     is_active: false,
     created_at: null,
     updated_at: null,
@@ -236,9 +234,6 @@ describe("OffersPage", () => {
       target: { value: "9988776655" },
     });
 
-    fireEvent.change(screen.getByLabelText(/Вертикаль/i), {
-      target: { value: "finance" },
-    });
     fireEvent.click(screen.getByRole("switch", { name: "Активен" }));
 
     fireEvent.click(screen.getByText("Создать оффер"));
@@ -247,8 +242,7 @@ describe("OffersPage", () => {
       expect(mutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           code: "DRC_NEW",
-          vertical: "finance",
-          pixel_id: "9988776655",
+            pixel_id: "9988776655",
           is_active: false,
           ad_account_ids: ["111", "222"],
         }),

@@ -24,13 +24,11 @@ import {
   Badge,
   Button,
   Input,
-  Select,
   Slider,
   Switch,
   Sheet,
   Skeleton,
   EmptyState,
-  Pill,
 } from "@/components/ui";
 import {
   useOffers,
@@ -61,18 +59,6 @@ export const Route = createFileRoute("/offers/")({
   component: OffersPage,
 });
 
-// ─── Константы вертикалей ─────────────────────────────────────────────────────
-
-const VERTICAL_OPTIONS = [
-  { value: "", label: "Не указана" },
-  { value: "gambling", label: "Gambling" },
-  { value: "nutra", label: "Nutra" },
-  { value: "finance", label: "Finance" },
-  { value: "dating", label: "Dating" },
-  { value: "crypto", label: "Crypto" },
-  { value: "other", label: "Другая" },
-];
-
 // ─── Форма создания/редактирования оффера ─────────────────────────────────────
 
 interface OfferFormProps {
@@ -85,7 +71,6 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
   const offerAccounts = offer?.ad_account_ids ?? [];
   const offerCountries = offer?.countries ?? [];
   const [code, setCode] = useState(offer?.code ?? "");
-  const [vertical, setVertical] = useState(offer?.vertical ?? "");
   const [pixelId, setPixelId] = useState(offer?.pixel_id ?? "");
   const [accountsRaw, setAccountsRaw] = useState(offerAccounts.join(", "));
   const [accountsError, setAccountsError] = useState<string | null>(null);
@@ -139,7 +124,6 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
     try {
       if (isEdit && offer) {
         const payload: OfferUpdatePayload = {
-          vertical: vertical || null,
           pixel_id: pixelId,
           is_active: isActive,
           ad_account_ids: accountIds,
@@ -150,7 +134,6 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
         const trimmedCode = code.trim().toUpperCase();
         const payload: OfferCreatePayload = {
           code: trimmedCode,
-          vertical: vertical || null,
           pixel_id: pixelId || null,
           is_active: isActive,
           ad_account_ids: accountIds,
@@ -224,14 +207,6 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
         errorMessage={countriesError ?? undefined}
         autoCapitalize="characters"
         autoCorrect="off"
-      />
-
-      {/* Вертикаль */}
-      <Select
-        label="Вертикаль"
-        value={vertical}
-        onChange={(e) => setVertical(e.target.value)}
-        options={VERTICAL_OPTIONS}
       />
 
       <div className="border-t border-[var(--color-hairline)] pt-3">
@@ -523,7 +498,6 @@ interface OfferCardProps {
 
 function OfferCard({ offer, onClick }: OfferCardProps) {
   const isActive = offer.is_active;
-  const vertical = offer.vertical;
   const accounts = offer.ad_account_ids ?? [];
 
   return (
@@ -550,11 +524,6 @@ function OfferCard({ offer, onClick }: OfferCardProps) {
           >
             {offer.code}
           </span>
-          {vertical ? (
-            <Pill variant="default" className="shrink-0">
-              {vertical}
-            </Pill>
-          ) : null}
         </div>
         {offer.name && offer.name !== offer.code ? (
           <p className="text-[12px] text-bg-9 mt-0.5 truncate">{offer.name}</p>
@@ -628,12 +597,6 @@ function OfferDetail({
             {offer.is_active ? "Активен" : "Выключен"}
           </Badge>
         </div>
-        {offer.vertical ? (
-          <div className="flex items-center gap-1.5 mt-1">
-            <Eyebrow>ВЕРТИКАЛЬ</Eyebrow>
-            <Pill variant="default">{offer.vertical}</Pill>
-          </div>
-        ) : null}
         {offer.name && offer.name !== offer.code ? (
           <p className="text-[13px] text-bg-9 mt-1">{offer.name}</p>
         ) : null}

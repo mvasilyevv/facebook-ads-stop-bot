@@ -9933,18 +9933,6 @@
             "title": "Code",
             "description": "Уникальный код оффера"
           },
-          "vertical": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 32
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Vertical"
-          },
           "is_active": {
             "type": "boolean",
             "title": "Is Active",
@@ -9998,17 +9986,6 @@
           "name": {
             "type": "string",
             "title": "Name"
-          },
-          "vertical": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Vertical"
           },
           "pixel_id": {
             "anyOf": [
@@ -10241,18 +10218,6 @@
       },
       "OfferUpdateIn": {
         "properties": {
-          "vertical": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 32
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Vertical"
-          },
           "pixel_id": {
             "anyOf": [
               {

@@ -87,13 +87,6 @@ export function OfferCard({ offer, onEditOffer, onEditRules, onDeactivate }: Off
           </Badge>
         </div>
 
-        {/* Вертикаль */}
-        {offer.vertical ? (
-          <div className="font-display text-[12px] tracking-[0.12em] uppercase text-bg-8 mt-1">
-            {offer.vertical}
-          </div>
-        ) : null}
-
         {/* Мульти-кабинет: кабинеты оффера (warning, если не заполнены — оффер вне скана) */}
         <OfferAccounts offer={offer} />
       </header>
