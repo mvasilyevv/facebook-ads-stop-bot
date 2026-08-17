@@ -612,3 +612,41 @@ def test_shadow_recovery_requires_reported_spend_to_catch_up() -> None:
 
     assert hw._shadow_reporting_caught_up(baseline, frozen) is False
     assert hw._shadow_reporting_caught_up(baseline, caught_up) is True
+
+
+@pytest.mark.asyncio
+async def test_browser_readiness_loop_logs_only_transitions(monkeypatch, caplog) -> None:
+    """Цикл раз в 2 секунды не спамит лог, но смену состояния показывает.
+
+    Урок 01.07: молчание в логах неотличимо от зависшего воркера, поэтому
+    переход публикуется явно; лог на каждом тике при этом залил бы всё остальное.
+    """
+    results = iter([True, True, False, False])
+    calls = 0
+    stop = asyncio.Event()
+
+    async def _probe(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        value = next(results)
+        if calls >= 4:
+            stop.set()
+        return value
+
+    monkeypatch.setattr(hw, "probe_and_publish_browser_readiness", _probe)
+
+    with caplog.at_level(logging.INFO, logger=hw.logger.name):
+        await hw.browser_readiness_loop(
+            SimpleNamespace(),
+            stop=stop,
+            engine=SimpleNamespace(),
+            interval=0.001,
+            ttl_seconds=6,
+        )
+
+    transitions = [r.message for r in caplog.records if "browser readiness" in r.message]
+    assert calls == 4
+    assert transitions == [
+        "browser readiness: ready",
+        "browser readiness: not ready",
+    ]

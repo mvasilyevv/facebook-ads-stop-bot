@@ -1252,13 +1252,23 @@ async def browser_readiness_loop(
     ttl_seconds: int = BROWSER_READINESS_TTL_SECONDS,
 ) -> None:
     """Continuously publish bounded v5/profile evidence for task scheduling."""
+    # Публикуем только смену состояния: цикл идёт раз в 2 секунды, и лог на
+    # каждом тике утопил бы остальные записи. Причина недоступности видна в
+    # browser_channel_readiness.reason_code и в снимке оператора.
+    last_published: bool | None = None
     while not stop.is_set():
-        await probe_and_publish_browser_readiness(
+        published_ready = await probe_and_publish_browser_readiness(
             engine,
             meta_client,
             writer_instance=_BROWSER_READINESS_WRITER_INSTANCE,
             ttl_seconds=ttl_seconds,
         )
+        if published_ready != last_published:
+            logger.info(
+                "browser readiness: %s",
+                "ready" if published_ready else "not ready",
+            )
+            last_published = published_ready
         try:
             await asyncio.wait_for(stop.wait(), timeout=max(0.1, interval))
         except asyncio.TimeoutError:
