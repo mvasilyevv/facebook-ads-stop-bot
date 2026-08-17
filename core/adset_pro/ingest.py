@@ -22,7 +22,11 @@ logger = logging.getLogger(__name__)
 
 SOURCE_ADSETPRO = "adsetpro"
 SUPPORTED_EVENT_TYPES = frozenset({"registration", "ftd", "redeposit"})
-_TRACKER_ATTEMPT_DEADLINE = timedelta(seconds=120)
+# Срок жизни постбека, а не одного захода: гейт claim'а отбрасывает задачу с
+# истёкшим deadline_at навсегда, и 120 секунд означали «переживи деплой или
+# умри». 16.08 так умерли 7 конверсий одним пакетом, не дойдя до внешнего
+# вызова. Длительность одного захода ограничивает лиз очереди (30 минут).
+_TRACKER_DELIVERY_DEADLINE = timedelta(hours=24)
 _EVENT_ALIASES = {
     "reg": "registration",
     "registration": "registration",
@@ -310,7 +314,7 @@ async def ingest_postback(
             lane="background",
             priority=0,
             available_at=queue_now,
-            deadline_at=queue_now + _TRACKER_ATTEMPT_DEADLINE,
+            deadline_at=queue_now + _TRACKER_DELIVERY_DEADLINE,
             connection=conn,
         )
         if task_id is None:

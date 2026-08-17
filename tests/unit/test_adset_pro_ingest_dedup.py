@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -198,3 +198,31 @@ async def test_one_shot_ignores_provider_delivery_id_for_dedupe_key() -> None:
     assert "click_id = :click_id" in dedupe_sql
     assert "event_type = :event_type" in dedupe_sql
     assert dedupe_params["click_id"] == "click-1"
+
+
+@pytest.mark.asyncio
+async def test_postback_outlives_a_deploy_window() -> None:
+    """Постбек — это конверсия, а не запрос пользователя.
+
+    Гейт claim'а очереди — `deadline_at > clock_timestamp()`, поэтому 120 секунд
+    означали «переживи деплой или умри». 16.08 так умерли 7 конверсий одним
+    пакетом, не дойдя до внешнего вызова. Длительность одного захода
+    ограничивает лиз очереди (30 минут), а не этот срок.
+    """
+    received_at = datetime.now(UTC)
+    engine = _Engine(
+        [
+            _Result(),  # advisory lock
+            _Result(),  # exact one-shot dedupe lookup
+            _Result([(11, received_at)]),  # event insert
+            _Result([(received_at,)]),  # PostgreSQL scheduler clock
+            _Result([(91,)]),  # durable task insert
+            _Result(),  # transactional pg_notify wakeup hint
+        ]
+    )
+
+    await ingest_postback(engine, _event(received_at=received_at))
+
+    task_params = engine.conn.executed[4][1]
+    assert task_params["tt"] == "tracker_event_process"
+    assert task_params["deadline_at"] - received_at >= timedelta(hours=6)
