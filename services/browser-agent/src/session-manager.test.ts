@@ -1837,3 +1837,35 @@ test("findLiveAdsManagerPage игнорирует закрытые вкладк�
 test("findLiveAdsManagerPage без браузера возвращает null", () => {
   assert.equal(findLiveAdsManagerPage(null), null);
 });
+
+// Вкладку кабинета мог открыть оператор руками. Проба готовности обязана её
+// переиспользовать: перезагрузка сбросила бы его фильтры и выделение.
+test("ensureInteractivePage переиспользует вкладку кабинета, не навигируя и не закрывая её", async () => {
+  const manager = new SessionManager();
+  let gotoCalls = 0;
+  let closeCalls = 0;
+  const adsPage = {
+    isClosed: () => false,
+    url: () =>
+      "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=2108857220005012",
+    goto: async () => {
+      gotoCalls += 1;
+    },
+    close: async () => {
+      closeCalls += 1;
+    },
+  };
+  const browser = {
+    isConnected: () => true,
+    contexts: () => [{ pages: () => [adsPage] }],
+  };
+  const session = makeSession({ browser });
+
+  const page = await manager.ensureInteractivePage(session, {
+    actId: "2108857220005012",
+  });
+
+  assert.equal(page, adsPage as any);
+  assert.equal(gotoCalls, 0);
+  assert.equal(closeCalls, 0);
+});
