@@ -43,6 +43,70 @@
 `QUALITY_LEAD`, `APP_INSTALLS_AND_OFFSITE_CONVERSIONS`, `IN_APP_VALUE`, `REACH`,
 `IMPRESSIONS`, `CONVERSATIONS`, `SUBSCRIBERS`.
 
+## ГЛАВНОЕ: что кабинеты используют на самом деле
+
+Счёт выше — это множество возможного, и оно почти целиком шум. Прогон по живым кабинетам
+17.08 (read-only Graph API через CDP боевой Vision-сессии; **55 кампаний и 360 групп** в
+`1855748448431929`, `1386439193678186`, `996458953428822`) даёт другую картину.
+
+| Поле | Что реально стоит | Что шлём мы |
+|---|---|---|
+| `objective` | **55 из 55** `OUTCOME_SALES` | `OUTCOME_SALES` — совпадает |
+| `buying_type` | **55 из 55** `AUCTION` | по умолчанию `AUCTION` — совпадает |
+| `special_ad_categories` | **55 из 55** пусто | `NONE` — совпадает |
+| `optimization_goal` | **360 из 360** `OFFSITE_CONVERSIONS` | совпадает |
+| `billing_event` | **360 из 360** `IMPRESSIONS` | совпадает |
+| `bid_strategy` | **41** `LOWEST_COST_WITHOUT_CAP`, **12** `COST_CAP` | только `COST_CAP` |
+| `destination_type` | 333 `UNDEFINED`, 27 `WEBSITE` | всегда `WEBSITE` |
+
+Шесть из семи зашитых значений **совпадают с практикой** — то есть замки, которые я насчитал
+по SDK, в основном мнимые. Настоящий разрыв ровно один: **три четверти живых кампаний идут на
+`LOWEST_COST_WITHOUT_CAP`, который наш билдер выпустить не может.**
+
+### Таргетинг: используется 10 ключей из 106, а не 106
+
+Сколько групп из 360 используют ключ:
+
+| Ключ | Групп | Шлём? |
+|---|---|---|
+| `age_min`, `age_max`, `geo_locations` | 360 | да |
+| `targeting_optimization` (`expansion_all`) | **360** | **нет** |
+| `targeting_automation` | 360 | частично — только `advantage_audience` |
+| `age_range` | **351** | **нет** |
+| `brand_safety_content_filter_levels` | **345** | **нет** |
+| `genders` | 60 | да |
+| `user_age_unknown` | 35 | нет |
+| `targeting_relaxation_types` | 9 | нет |
+
+Ни одна из 360 групп не использует `custom_audiences`, `interests`, `flexible_spec`, `cities`,
+`regions`, `locales`, `device_platforms` и остальные 96 ключей. Планировать их поддержку не
+нужно — это была бы работа в пустоту.
+
+**И обратное, более важное: `publisher_platforms` не использует НИ ОДНА группа из 360, а мы
+его шлём.** Наши группы получают фиксированный список площадок там, где рабочие группы
+кабинета отдают выбор площадок автоматике. Это не недостающая фича, а лишняя — и она делает
+наши группы не такими, как те, что реально крутятся.
+
+Пример живой группы (кабинет `1855748448431929`):
+
+```json
+{
+ "age_min": 25, "age_max": 65, "age_range": [25, 55], "genders": [1],
+ "geo_locations": { "countries": ["AQ", "NG"], "location_types": ["home", "recent"] },
+ "targeting_optimization": "expansion_all",
+ "brand_safety_content_filter_levels": ["FACEBOOK_RELAXED", "AN_RELAXED"],
+ "targeting_automation": { "advantage_audience": 1, "individual_setting": { "age": 1, "gender": 1 } }
+}
+```
+
+Кабинет `1282495953856981` из этого прогона выпал: `Object with ID does not exist, cannot be
+loaded due to missing permissions` — либо ID неверен, либо у профиля нет доступа.
+
+## Полное множество возможного (справочно)
+
+Ниже — то, что API допускает в принципе. Практическую ценность имеет только раздел выше;
+этот нужен, когда появится задача выйти за текущий шаблон.
+
 ## Таргетинг: 6 ключей из 106
 
 Отправляем: `geo_locations` (только `countries` + `location_types`), `age_min`, `age_max`,
