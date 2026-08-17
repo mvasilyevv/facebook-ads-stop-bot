@@ -538,6 +538,12 @@ async def refresh_account_timezones(engine: AsyncEngine, client: Any) -> int:
             ) as fence:
                 context = await fetch_account_context(client, canonical_id)
                 if context.timezone_name is None and context.currency is None:
+                    # Молчаливый пропуск скрывал реальную причину: снимка нет,
+                    # визард блокирует залив, а в логе ни строки (прод, 17.08.2026).
+                    logger.warning(
+                        "Meta не отдала пояс и валюту по кабинету act_%s — снимок не обновлён",
+                        canonical_id,
+                    )
                     continue
                 await fence.assert_held()
                 if await persist_account_context(
