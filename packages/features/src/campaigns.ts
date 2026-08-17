@@ -81,13 +81,15 @@ export interface CampaignWizardGoal {
   optimization_goal: "OFFSITE_CONVERSIONS";
   custom_event_type: "PURCHASE";
   destination_link: string;
+  /** Отображаемая ссылка под заголовком (link_data.caption у Meta). */
+  display_link: string;
   cta: string;
   text_optimizations: "OPT_OUT";
   start_date: string;
   budget_level: "campaign" | "adset";
   daily_budget: string;
   bid_amount: string;
-  bid_strategy: "COST_CAP";
+  bid_strategy: CampaignBidStrategy;
   countries: string[];
   age_min: number;
   age_max: number;
@@ -175,6 +177,7 @@ const DEFAULT_GOAL: CampaignWizardGoal = {
   optimization_goal: "OFFSITE_CONVERSIONS",
   custom_event_type: "PURCHASE",
   destination_link: "",
+  display_link: "",
   cta: "PLAY_GAME",
   text_optimizations: "OPT_OUT",
   start_date: "",
@@ -531,6 +534,7 @@ export function buildCampaignConfig(state: CampaignWizardState): CampaignConfig 
     custom_event_type: state.goal.custom_event_type,
     special_ad_categories: ["NONE"],
     destination_link: state.goal.destination_link,
+    display_link: state.goal.display_link,
     cta: state.goal.cta,
     text_optimizations: state.goal.text_optimizations,
     start_date: state.goal.start_date || null,

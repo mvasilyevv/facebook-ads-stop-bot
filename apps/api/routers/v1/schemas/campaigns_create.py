@@ -88,6 +88,9 @@ class CampaignConfigIn(BaseModel):
     custom_event_type: Literal["PURCHASE"] = "PURCHASE"
     special_ad_categories: list[str] = Field(default_factory=lambda: ["NONE"])
     destination_link: str
+    # Отображаемая ссылка (link_data.caption у Meta): «play.ghana.com»
+    # вместо сырого домена трекера. Пустая = поле не слать.
+    display_link: str = Field(default="", max_length=255)
     cta: str = "PLAY_GAME"
     text_optimizations: str = "OPT_OUT"
     start_date: str | None = None
@@ -247,6 +250,7 @@ class CampaignConfigIn(BaseModel):
             "custom_event_type": self.custom_event_type,
             "special_ad_categories": self.special_ad_categories,
             "destination_link": self.destination_link,
+            "display_link": self.display_link,
             "url_tags_template": self.url_tags,
             "cta": self.cta,
             "text_optimizations": self.text_optimizations,

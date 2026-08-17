@@ -8402,6 +8402,12 @@
             "type": "string",
             "title": "Destination Link"
           },
+          "display_link": {
+            "type": "string",
+            "maxLength": 255,
+            "title": "Display Link",
+            "default": ""
+          },
           "cta": {
             "type": "string",
             "title": "Cta",
@@ -8770,6 +8776,12 @@
             "minLength": 1,
             "title": "Cta",
             "default": "PLAY_GAME"
+          },
+          "display_link": {
+            "type": "string",
+            "maxLength": 255,
+            "title": "Display Link",
+            "default": ""
           },
           "text_optimizations": {
             "type": "string",

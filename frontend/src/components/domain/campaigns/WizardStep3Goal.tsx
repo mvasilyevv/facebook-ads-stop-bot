@@ -275,7 +275,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
             onChange={(e) => onChange({ cta: e.target.value })}
           />
         </div>
-        <div className="mt-4">
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
             label="Destination URL (трекинг-ссылка)"
             placeholder="https://tracker.example.com/click?..."
@@ -283,6 +283,16 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
             onChange={(e) => onChange({ destination_link: e.target.value })}
             errorMessage={errors.destination_link}
             helpText="Трекинг-ссылка из AdSet.pro"
+          />
+          {/* Meta показывает это вместо сырого домена трекера, но принимает
+              только настоящий URL или домен — произвольный текст отклоняется. */}
+          <Input
+            label="Отображаемая ссылка"
+            placeholder="play.ghana.com"
+            value={values.display_link}
+            onChange={(e) => onChange({ display_link: e.target.value })}
+            errorMessage={errors.display_link}
+            helpText="Пусто — Meta покажет домен трекинг-ссылки"
           />
         </div>
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">

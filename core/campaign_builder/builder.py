@@ -163,6 +163,8 @@ def _link_data(cfg: CampaignConfig, media: dict) -> dict:
         "call_to_action": {"type": cfg.cta, "value": {"link": cfg.destination_link}},
     }
     ld.update(media)
+    if cfg.display_link:
+        ld["caption"] = cfg.display_link
     if cfg.ad_text.mode == "full":
         if cfg.ad_text.message:
             ld["message"] = cfg.ad_text.message

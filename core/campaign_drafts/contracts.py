@@ -68,6 +68,7 @@ class CampaignDraftGoal(_DraftModel):
     custom_event_type: Literal["PURCHASE"] = "PURCHASE"
     destination_link: str = Field(default="", max_length=2048)
     cta: str = Field(default="PLAY_GAME", min_length=1, max_length=64)
+    display_link: str = Field(default="", max_length=255)
     text_optimizations: Literal["OPT_OUT"] = "OPT_OUT"
     start_date: str = Field(default="", max_length=10)
     budget_level: Literal["campaign", "adset"] = "campaign"
@@ -88,6 +89,20 @@ class CampaignDraftGoal(_DraftModel):
     url_tags_template: str = Field(default="", max_length=1024)
     ad_text_mode: Literal["none", "text"] = "none"
     ad_text_primary: str = Field(default="", max_length=5000)
+
+    @field_validator("display_link")
+    @classmethod
+    def validate_display_link(cls, value: str) -> str:
+        """Meta принимает в caption только настоящий URL или домен.
+
+        Произвольный текст она отклоняет уже на создании креатива, когда
+        кампания уже заведена — ловим раньше неё.
+        """
+        if not value:
+            return value
+        if re.fullmatch(r"(?:https?://)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[^\s]*)?", value) is None:
+            raise ValueError("display_link must be a URL or a domain")
+        return value
 
     @field_validator("countries")
     @classmethod

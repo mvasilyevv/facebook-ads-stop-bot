@@ -305,6 +305,11 @@ class CampaignConfig(BaseModel):
     # builder лишь гарантирует наличие стабильного Meta ad id в sub8.
     url_tags_template: str | None = Field(default=None, max_length=1024)
     cta: str = "PLAY_GAME"
+    # Отображаемая ссылка под заголовком (link_data.caption). Meta требует
+    # настоящий URL, отражающий домен назначения: «play.ghana.com» вместо
+    # сырого домена трекера. Пустая строка = поле не слать, потому что пустой
+    # caption Meta трактует как ошибку, а не как «показать домен назначения».
+    display_link: str = ""
     text_optimizations: str = "OPT_OUT"
     start_date: str
     creo_root: str = ""

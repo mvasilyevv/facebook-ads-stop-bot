@@ -21,7 +21,7 @@ from core.campaign_builder import (
     build_campaign_spec,
     plan_execution_steps,
 )
-from core.campaign_builder.builder import adset_body
+from core.campaign_builder.builder import adset_body, image_creative_body, video_creative_body
 from core.campaign_builder.config import (
     MAX_DAILY_BUDGET,
     MAX_LIFETIME_BUDGET,
@@ -635,3 +635,40 @@ def test_expansion_stays_off_when_operator_disabled_advantage() -> None:
     # Диапазон и фильтрация контента к расширению отношения не имеют и остаются.
     assert targeting["age_range"] == [21, 65]
     assert targeting["brand_safety_content_filter_levels"] == ["FACEBOOK_RELAXED", "AN_RELAXED"]
+
+
+def test_display_link_reaches_meta_as_caption() -> None:
+    """Отображаемая ссылка — это `caption` в link_data.
+
+    Дока Meta: «overwrites the caption under the title in the link», значение
+    обязано быть настоящим URL, отражающим домен назначения. Сама ссылка
+    назначения при этом остаётся трекинговой — caption только подписывает её.
+    """
+    cfg = _config(display_link="play.ghana.com")
+
+    creative = image_creative_body(cfg, name="ad", image_hash="abc", url_tags="a=1")
+    link_data = creative["object_story_spec"]["link_data"]
+
+    assert link_data["caption"] == "play.ghana.com"
+    assert link_data["link"] == "https://example.shop/x"
+
+
+def test_display_link_is_omitted_when_not_set() -> None:
+    """Пустой caption Meta трактует как ошибку, а не как «показать домен»."""
+    creative = image_creative_body(_config(), name="ad", image_hash="abc", url_tags="a=1")
+
+    assert "caption" not in creative["object_story_spec"]["link_data"]
+
+
+def test_display_link_does_not_leak_into_video_creative() -> None:
+    """Видео-креатив идёт через `video_data`, а не `link_data`.
+
+    Поддерживает ли `video_data` поле caption — не проверено по доке Meta
+    (17.08 GitHub отдавал 429 на SDK). Пока не проверено, ничего в видео-ветку
+    не кладём: непроверенное поле на money-пути дороже отсутствующей фичи.
+    """
+    cfg = _config(display_link="play.ghana.com")
+
+    creative = video_creative_body(cfg, name="ad", video_id="v1", thumb_url="u", url_tags="a=1")
+
+    assert "caption" not in creative["object_story_spec"]["video_data"]

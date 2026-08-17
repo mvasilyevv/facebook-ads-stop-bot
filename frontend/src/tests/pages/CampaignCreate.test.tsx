@@ -368,6 +368,7 @@ const DEFAULT_GOAL: WizardGoal = {
   objective: "OUTCOME_SALES",
   optimization_goal: "OFFSITE_CONVERSIONS",
   custom_event_type: "PURCHASE",
+  display_link: "",
   destination_link: "https://tracker.example.com",
   cta: "PLAY_GAME",
   text_optimizations: "OPT_OUT",

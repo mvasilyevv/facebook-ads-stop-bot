@@ -163,3 +163,22 @@ def test_draft_still_rejects_a_strategy_meta_does_not_have() -> None:
 
     with pytest.raises(ValidationError):
         CampaignDraftGoal(bid_strategy="TARGET_COST")
+
+
+def test_draft_keeps_display_link() -> None:
+    from core.campaign_drafts.contracts import CampaignDraftGoal
+
+    assert CampaignDraftGoal(display_link="play.ghana.com").display_link == "play.ghana.com"
+
+
+@pytest.mark.parametrize("value", ["играй тут", "play ghana", "http://", "ghana"])
+def test_draft_rejects_a_display_link_that_is_not_a_url(value: str) -> None:
+    """Meta отклонит такой креатив уже на создании — ловим раньше неё.
+
+    Иначе владелец узнаёт об ошибке из невнятного ответа Meta посреди залива,
+    когда кампания уже создана.
+    """
+    from core.campaign_drafts.contracts import CampaignDraftGoal
+
+    with pytest.raises(ValidationError):
+        CampaignDraftGoal(display_link=value)

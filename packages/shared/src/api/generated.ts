@@ -2537,6 +2537,11 @@ export interface components {
       /** Destination Link */
       destination_link: string;
       /**
+       * Display Link
+       * @default
+       */
+      display_link: string;
+      /**
        * Cta
        * @default PLAY_GAME
        */
@@ -2686,6 +2691,11 @@ export interface components {
        * @default PLAY_GAME
        */
       cta: string;
+      /**
+       * Display Link
+       * @default
+       */
+      display_link: string;
       /**
        * Text Optimizations
        * @default OPT_OUT
