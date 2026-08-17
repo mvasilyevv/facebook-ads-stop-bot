@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -392,3 +393,131 @@ def test_third_party_notices_describe_the_shipped_image() -> None:
     assert "Firefox" in notices
     for token in ("RUSTDESK_VERSION", "FIREFOX_VERSION"):
         assert token in dockerfile
+
+
+def _run_set_rustdesk_password(
+    tmp_path: Path,
+    *,
+    rustdesk_output: str,
+    rustdesk_exit: int,
+    writes_config: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Исполняет функцию установки пароля прямо из entrypoint.
+
+    Проверять наличие строк тут бессмысленно: болезнь была ровно в том, что
+    вызов молча проглатывал отказ. Значение имеет поведение.
+    """
+    entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
+    start = entrypoint.index("  set_rustdesk_password() {")
+    end = entrypoint.index("\n  }\n", start) + len("\n  }\n")
+    function = entrypoint[start:end]
+
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    rustdesk_stub = stub_dir / "rustdesk"
+    rustdesk_stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' {shlex.quote(rustdesk_output)}\n"
+        f"exit {rustdesk_exit}\n",
+        encoding="utf-8",
+    )
+    rustdesk_stub.chmod(0o755)
+    # chown в тесте невозможен без root, а проверяем мы не его.
+    chown_stub = stub_dir / "chown"
+    chown_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    chown_stub.chmod(0o755)
+    # В образе стола `timeout` есть (проверено на живом контейнере), а на macOS
+    # его нет — без двойника тест падал бы с «command not found» на любом
+    # сценарии и выглядел бы зелёным по неверной причине в одном из них.
+    timeout_stub = stub_dir / "timeout"
+    timeout_stub.write_text('#!/usr/bin/env bash\nshift\nexec "$@"\n', encoding="utf-8")
+    timeout_stub.chmod(0o755)
+
+    config_home = tmp_path / "config"
+    config_dir = config_home / ".config" / "rustdesk"
+    config_dir.mkdir(parents=True)
+    if writes_config:
+        (config_dir / "RustDesk.toml").write_text("password = '00NDO1a/FOg8'\n", encoding="utf-8")
+
+    script = (
+        "set -Eeuo pipefail\n"
+        f'PATH={shlex.quote(str(stub_dir))}:"$PATH"\n'
+        f"config_home={shlex.quote(str(config_home))}\n"
+        f"rustdesk_config_dir={shlex.quote(str(config_dir))}\n"
+        "rustdesk_password=ChannelPassword123456\n"
+        "requested_uid=1000\n"
+        "requested_gid=1000\n"
+        f"{function}\n"
+        "set_rustdesk_password\n"
+    )
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+
+def test_channel_password_refusal_is_loud_not_swallowed(tmp_path: Path) -> None:
+    """Стол месяцами жил со СВОИМ случайным паролем.
+
+    `rustdesk --password` от пользователя vision отвечает «Installation and
+    administrative privileges required!» и выходит с НУЛЕВЫМ кодом. Вызов был
+    прикрыт `|| true`, поэтому отказ не видел никто: оператор получал «Wrong
+    password» на верном пароле, и это выглядело его ошибкой.
+    """
+    result = _run_set_rustdesk_password(
+        tmp_path,
+        rustdesk_output="Installation and administrative privileges required!",
+        rustdesk_exit=0,
+    )
+
+    assert result.returncode != 0
+    assert "Installation and administrative privileges required!" in result.stderr
+
+
+def test_channel_password_accepted_on_confirmation(tmp_path: Path) -> None:
+    result = _run_set_rustdesk_password(tmp_path, rustdesk_output="Done!", rustdesk_exit=0)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_channel_password_survives_a_client_that_hangs_after_writing(tmp_path: Path) -> None:
+    """Клиент умеет записать пароль и остаться висеть: timeout прибьёт уже
+    сделанную работу и вернёт 124. Судим по подтверждению, а не по коду."""
+    result = _run_set_rustdesk_password(tmp_path, rustdesk_output="Done!", rustdesk_exit=124)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_channel_password_rejects_a_confirmation_without_a_file(tmp_path: Path) -> None:
+    """«Done!» без ключа в файле — не установка, а её видимость."""
+    result = _run_set_rustdesk_password(
+        tmp_path, rustdesk_output="Done!", rustdesk_exit=0, writes_config=False
+    )
+
+    assert result.returncode != 0
+    assert "RustDesk.toml остался без пароля канала" in result.stderr
+
+
+def test_channel_password_is_set_by_root_not_by_the_desktop_user() -> None:
+    """RustDesk считает постоянный пароль административным действием.
+
+    Entrypoint и так работает от root — проверка проходит. Файлы после
+    root-вызова возвращаем владельцу стола, иначе клиент под vision их не
+    перечитает.
+    """
+    entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
+    body = entrypoint.split("set_rustdesk_password() {")[1].split("\n  }\n")[0]
+
+    assert "rustdesk --password" in body
+    assert "gosu" not in body
+    assert 'chown -R "${requested_uid}:${requested_gid}" "${rustdesk_config_dir}"' in body
+
+
+def test_channel_password_failure_stops_the_start() -> None:
+    """Стол с чужим паролем — недостижимая машина, как и стол без ключа брокера.
+
+    Отказ на старте не даёт ей стать такой молча; SSH при этом остаётся всегда.
+    """
+    entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
+
+    assert "if ! set_rustdesk_password; then" in entrypoint
+    assert "Канал стола остался бы с чужим паролем" in entrypoint
+    # Прежняя болезнь дословно.
+    assert ">/dev/null 2>&1 || true" not in entrypoint

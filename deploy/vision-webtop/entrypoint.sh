@@ -189,8 +189,38 @@ approve-mode = 'password'
 RUSTDESK_CONFIG
   chown "${requested_uid}:${requested_gid}" "${rustdesk_config_dir}/RustDesk2.toml"
 
-  gosu "${runtime_user}" env "${rustdesk_env[@]}" rustdesk --password "${rustdesk_password}" \
-    >/dev/null 2>&1 || true
+  # Постоянный пароль RustDesk считает административным действием: от
+  # пользователя vision `rustdesk --password` отвечает «Installation and
+  # administrative privileges required!» и выходит с НУЛЕВЫМ кодом. Вызов был
+  # прикрыт `|| true`, поэтому отказ не видел никто — стол поднимал СВОЙ
+  # случайный пароль, а оператор получал «Wrong password» на верном. Entrypoint
+  # и так работает от root, поэтому проверка проходит; файлы после root-вызова
+  # возвращаем владельцу стола.
+  set_rustdesk_password() {
+    local config_file="${rustdesk_config_dir}/RustDesk.toml"
+    local output=""
+    local status=0
+    # Судим по подтверждению, а не по коду возврата: клиент умеет записать
+    # пароль и остаться висеть, и timeout прибил бы уже сделанную работу.
+    output="$(timeout 30 env HOME="${config_home}" \
+      XDG_CONFIG_HOME="${config_home}/.config" \
+      rustdesk --password "${rustdesk_password}" 2>&1)" || status=$?
+    if [[ "${output}" != *'Done!'* ]]; then
+      printf 'rustdesk --password не подтвердил установку (код %s): %s\n' \
+        "${status}" "${output}" >&2
+      return 1
+    fi
+    if [[ ! -s "${config_file}" ]] || ! grep -q '^password = ' "${config_file}"; then
+      printf 'RustDesk.toml остался без пароля канала\n' >&2
+      return 1
+    fi
+    chown -R "${requested_uid}:${requested_gid}" "${rustdesk_config_dir}"
+  }
+
+  if ! set_rustdesk_password; then
+    printf 'Канал стола остался бы с чужим паролем — отказываюсь стартовать\n' >&2
+    exit 1
+  fi
 
   rustdesk_supervisor() {
     # Единственный канал к столу. Если он упадёт, оператор не должен потерять
