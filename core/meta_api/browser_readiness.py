@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.meta_api.client import BROWSER_CONTRACT_VERSION
+from core.observer.accounts import resolve_scan_account_ids
 from core.tasks.browser_fence import (
     BrowserFenceLeaseLost,
     BrowserOperationBlocked,
@@ -424,6 +425,17 @@ async def persist_browser_readiness(
     return published_ready
 
 
+async def resolve_readiness_ad_account_id(engine: AsyncEngine) -> str | None:
+    """Кабинет пробы готовности — первый кабинет активных офферов.
+
+    Детерминированный выбор из конфигурации, а не из состояния браузера.
+    None означает, что настроенного кабинета нет: подтверждать готовность
+    money-канала не на чем, и открывать наугад чужую вкладку нельзя.
+    """
+    accounts = await resolve_scan_account_ids(engine)
+    return accounts[0] if accounts else None
+
+
 async def probe_and_publish_browser_readiness(
     engine: AsyncEngine,
     client: BrowserReadinessProbeClient,
@@ -447,10 +459,19 @@ async def probe_and_publish_browser_readiness(
                     reason_code="vision_config_unavailable",
                 )
                 return False
+            probe_account_id = await resolve_readiness_ad_account_id(engine)
+            if probe_account_id is None:
+                await invalidate_browser_readiness(
+                    engine,
+                    writer_instance=writer_instance,
+                    reason_code="no_configured_cabinet",
+                )
+                return False
             try:
                 probe = await client.check_health(
                     full_probe=False,
                     expected_profile_id=identity.profile_id,
+                    ad_account_id=probe_account_id,
                 )
             except Exception as exc:  # noqa: BLE001 - fail closed and age out
                 observed_at = await _database_clock(engine)
@@ -510,4 +531,5 @@ __all__ = [
     "load_vision_readiness_identity",
     "persist_browser_readiness",
     "probe_and_publish_browser_readiness",
+    "resolve_readiness_ad_account_id",
 ]

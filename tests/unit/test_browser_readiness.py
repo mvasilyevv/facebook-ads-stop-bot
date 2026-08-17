@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -200,3 +202,116 @@ def test_check_health_contract_carries_explicit_cabinet() -> None:
     assert "ad_account_id" in client_params
     request = meta_api_pb2.CheckMetaApiHealthRequest(ad_account_id="2108857220005012")
     assert request.ad_account_id == "2108857220005012"
+
+
+class _FakeFence:
+    """Заглушка BrowserOperationFence: аренда всегда наша и не теряется."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    async def __aenter__(self) -> "_FakeFence":
+        return self
+
+    async def __aexit__(self, *exc_info) -> bool:
+        return False
+
+    async def assert_held(self) -> None:
+        return None
+
+
+class _RecordingProbeClient:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def check_health(self, **kwargs) -> dict:
+        self.calls.append(kwargs)
+        return {
+            "healthy": True,
+            "browser_contract_version": 5,
+            "vision_profile_id": "profile-1",
+            "session_id": "session-1",
+            "detail": "ok",
+        }
+
+
+def _async_return(value):
+    async def _call(*_args, **_kwargs):
+        return value
+
+    return _call
+
+
+def _install_readiness_fakes(monkeypatch, *, accounts: list[str]) -> list[dict]:
+    """Общая обвязка: фенс, identity, часы и запись публикаций."""
+    published: list[dict] = []
+    observed_at = datetime(2026, 8, 17, 18, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(readiness, "BrowserOperationFence", _FakeFence)
+    monkeypatch.setattr(
+        readiness,
+        "load_vision_readiness_identity",
+        _async_return(
+            readiness.VisionReadinessIdentity(
+                config_id=uuid.UUID("00000000-0000-0000-0000-0000000000aa"),
+                profile_id="profile-1",
+                config_updated_at=observed_at,
+            )
+        ),
+    )
+    monkeypatch.setattr(readiness, "_database_clock", _async_return(observed_at))
+    monkeypatch.setattr(readiness, "resolve_scan_account_ids", _async_return(accounts))
+
+    async def _persist(_engine, *, identity, observation, writer_instance, ttl_seconds):
+        published.append({"kind": "persist", "state": observation.state})
+        return observation.state == "ready"
+
+    async def _invalidate(_engine, *, writer_instance, state="unavailable", reason_code):
+        published.append({"kind": "invalidate", "state": state, "reason_code": reason_code})
+
+    monkeypatch.setattr(readiness, "persist_browser_readiness", _persist)
+    monkeypatch.setattr(readiness, "invalidate_browser_readiness", _invalidate)
+    return published
+
+
+@pytest.mark.asyncio
+async def test_readiness_probe_uses_cabinet_from_active_offers(monkeypatch) -> None:
+    """Кабинет пробы — детерминированный первый кабинет активных офферов."""
+    published = _install_readiness_fakes(
+        monkeypatch, accounts=["2108857220005012", "3570379159805007"]
+    )
+    client = _RecordingProbeClient()
+
+    result = await readiness.probe_and_publish_browser_readiness(
+        MagicMock(),
+        client,
+        writer_instance=uuid.UUID("00000000-0000-0000-0000-0000000000bb"),
+    )
+
+    assert result is True
+    assert len(client.calls) == 1
+    assert client.calls[0]["ad_account_id"] == "2108857220005012"
+    assert published == [{"kind": "persist", "state": "ready"}]
+
+
+@pytest.mark.asyncio
+async def test_readiness_probe_without_offers_never_touches_browser(monkeypatch) -> None:
+    """Нет настроенного кабинета — нет пробы и нет вкладки, а не выдуманный кабинет."""
+    published = _install_readiness_fakes(monkeypatch, accounts=[])
+    client = _RecordingProbeClient()
+
+    result = await readiness.probe_and_publish_browser_readiness(
+        MagicMock(),
+        client,
+        writer_instance=uuid.UUID("00000000-0000-0000-0000-0000000000bb"),
+    )
+
+    assert result is False
+    assert client.calls == []
+    assert published == [
+        {
+            "kind": "invalidate",
+            "state": "unavailable",
+            "reason_code": "no_configured_cabinet",
+        }
+    ]
