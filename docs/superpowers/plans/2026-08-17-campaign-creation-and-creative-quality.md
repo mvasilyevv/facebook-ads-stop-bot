@@ -4,7 +4,7 @@
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Убрать пять отличий нашего создателя кампаний от групп, которые реально крутятся в
+**Goal:** Убрать четыре отличия нашего создателя кампаний от групп, которые реально крутятся в
 кабинетах владельца, и добавить отображаемую ссылку.
 
 **Architecture:** Один вертикальный slice создания: контракт черновика
@@ -88,7 +88,7 @@ namespace, у него есть `playwright-core`; `chromium.connectOverCDP` →
 | `core/campaign_builder/builder.py` | Тело группы и креатива для Meta | A1, A3 |
 | `core/campaign_drafts/contracts.py` | Поля черновика: стратегия, ссылка | A2, A3 |
 | `apps/api/routers/v1/schemas/campaigns_create.py` | Схема пресета | A4 |
-| `apps/api/routers/v1/campaigns_create.py` | Значения по умолчанию из оффера | A5 |
+
 | `frontend/`, `frontend-mini/` | Выбор стратегии, поле ссылки, честная подпись площадок | A2, A3 |
 
 ---
@@ -519,72 +519,19 @@ git add -A && git commit -m "feat(campaigns): пресет хранит став
 
 ---
 
-### Task A5: Оффер подставляет то, что уже про него знает
+### Task A5: ОТМЕНЕНА — подстановка из оффера уже работает
 
-`offers` хранит `pixel_id` и `countries`, а создание кампании читает оффер один раз — только
-чтобы сверить CPA-порог и валюту (`apps/api/routers/v1/campaigns_create.py:289`). Пиксель и
-гео оператор вбивает руками при каждом заливе. Ошибка в пикселе тихо уводит конверсии в чужой
-кабинет — это money-путь, а не удобство.
+Задача заводилась по ошибочному разбору: я посмотрел только бэкендовый SQL
+(`_require_offer_scope` читает оффер лишь ради сверки CPA и валюты) и заключил,
+что пиксель и гео оператор вбивает руками.
 
-**Files:**
-- Modify: `apps/api/routers/v1/campaigns_create.py:275-300`
-- Test: `tests/unit/test_campaigns_create_schemas.py`
+Это неверно. Подстановка живёт во фронте и работает:
+`frontend/src/components/domain/campaigns/WizardStep2Identity.tsx:151` кладёт
+`offer.pixel_id`, строка 155 — `offer.countries`, строка 163 — целевой CPA из
+правил оффера после точной сверки валюты кабинета. Обработчик подключён:
+`onGoalChange={store.setGoal}` в `frontend/src/routes/campaigns/create/index.tsx:312`.
 
-**Interfaces:**
-- Produces: `OfferDefaults` — dataclass с `pixel_id: str` и `countries: list[str]`; функция
-  `offer_defaults(engine, offer_code) -> OfferDefaults | None` (`None` — оффера нет).
-
-- [ ] **Step 1: Написать падающий тест**
-
-Допиши в `tests/unit/test_campaigns_create_schemas.py`:
-
-```python
-import pytest
-
-from apps.api.routers.v1.campaigns_create import OfferDefaults
-
-
-def test_offer_defaults_carry_pixel_and_countries() -> None:
-    """Оператор вбивал пиксель и гео руками, хотя они лежат в `offers`
-    рядом с выбранным оффером."""
-    defaults = OfferDefaults(pixel_id="PX1", countries=["GH"])
-
-    assert defaults.pixel_id == "PX1"
-    assert defaults.countries == ["GH"]
-```
-
-- [ ] **Step 2: Убедиться, что падает**
-
-Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/test_campaigns_create_schemas.py -q -k offer_defaults`
-Expected: FAIL — `cannot import name 'OfferDefaults'`.
-
-- [ ] **Step 3: Добавить структуру и расширить выборку**
-
-В `apps/api/routers/v1/campaigns_create.py` рядом с существующей проверкой оффера:
-
-```python
-@dataclass(frozen=True)
-class OfferDefaults:
-    """Значения по умолчанию из оффера — подсказка оператору, а не принуждение.
-
-    Жёсткая подстановка сломала бы залив на кабинет с другим пикселем.
-    """
-
-    pixel_id: str
-    countries: list[str]
-```
-
-В SQL существующей выборки оффера добавь к `SELECT` поля `offer.pixel_id, offer.countries` и
-верни их как `OfferDefaults`.
-
-- [ ] **Step 4: Прогнать и закоммитить**
-
-```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit -q
-git add -A && git commit -m "feat(campaigns): пиксель и гео подставляются из оффера"
-```
-
----
+Делать нечего. Задача снята, кода по ней не будет.
 
 ## Что требуется от тебя
 
