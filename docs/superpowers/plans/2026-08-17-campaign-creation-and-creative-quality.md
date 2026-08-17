@@ -111,6 +111,9 @@ C самый крупный и требует второго кабинета.
 | `migrations/versions/` | Видео-колонки `ad_metrics` | B2 |
 | `services/browser-agent/src/am/am-fetch.ts` | Запрос видео-полей у Meta | B2 |
 | `core/creative_quality.py` | Расчёт hook/hold rate, профиль досмотра, подсказка обрезки | B3, B4 |
+| `core/creative_report.py` | Сводка креатив×кабинет за период кампании | B5 |
+| `core/ai_assistant/creative_advice.py` | Факты для модели и короткие выводы с фолбэком | B6 |
+| `core/ai_assistant/prompts/skills/creative_report.md` | Скил-промт аналитика креативов | B6 |
 | `scripts/adset_clone.py` | Перенос группы в другой кабинет | C1 |
 
 ---
@@ -847,6 +850,377 @@ git commit -m "feat(creatives): профиль досмотра и подска�
 
 ---
 
+### Task B5: Сводка по креативам за период кампании
+
+Ты дал ссылку на вкладку Insights с готовым набором: кабинет, кампания, конкретные объявления,
+период `2026-08-14 … today`. **Скрейпить эту ссылку не нужно и не надо** — за ней стоят те же
+insights, что отдаёт API, только API берёт произвольный `time_range` и произвольный список
+объявлений сразу, без браузера и без сессии в UI. Ссылка ценна как спецификация: она называет,
+какие именно числа и за какой период ты хочешь видеть.
+
+Ключ группировки — **креатив × кабинет**, а не просто креатив. Ты сам это назвал: один и тот же
+ролик в разных кабинетах на разных аудиториях идёт по-разному, и усреднение по креативу спрятало
+бы ровно тот сигнал, ради которого сводка и делается.
+
+**Files:**
+- Create: `core/creative_report.py`
+- Test: `tests/unit/test_creative_report.py`
+
+**Interfaces:**
+- Consumes: `creative_quality` и `retention_profile` из B3/B4, колонки из B2.
+- Produces: `campaign_period(campaign_start: date, today: date) -> tuple[str, str]` и
+  `creative_rollup(rows: list[dict]) -> list[CreativeRollup]`, где `CreativeRollup` несёт
+  `creative_key: str`, `ad_account_id: str`, `impressions: int`, `spend: Decimal`,
+  `quality: CreativeQuality`, `retention: RetentionProfile`.
+
+- [ ] **Step 1: Написать падающий тест**
+
+Создай `tests/unit/test_creative_report.py`:
+
+```python
+from datetime import date
+from decimal import Decimal
+
+from core.creative_report import campaign_period, creative_rollup
+
+
+def test_period_runs_from_campaign_start_to_today() -> None:
+    """Период считается от старта кампании, а не «последние 7 дней».
+
+    Кампания от 14-го и смотрится с 14-го: фиксированное окно обрезало бы
+    ранние дни, на которых креатив как раз и разгонялся.
+    """
+    assert campaign_period(date(2026, 8, 14), date(2026, 8, 17)) == ("2026-08-14", "2026-08-17")
+
+
+def _row(**overrides):
+    values = {
+        "creative_key": "video:777",
+        "ad_account_id": "996458953428822",
+        "impressions": 1000,
+        "spend": Decimal("10.00"),
+        "video_plays_3s": 400,
+        "video_thruplays": 60,
+        "video_p25": 300,
+        "video_p50": 90,
+        "video_p75": 80,
+        "video_p100": 75,
+    }
+    values.update(overrides)
+    return values
+
+
+def test_same_creative_in_two_cabinets_stays_two_rows() -> None:
+    """Один ролик в разных кабинетах идёт по-разному — усреднение спрятало бы
+    ровно тот сигнал, ради которого сводка и собирается."""
+    rollup = creative_rollup([_row(), _row(ad_account_id="1386439193678186", video_plays_3s=150)])
+
+    assert len(rollup) == 2
+    assert {item.ad_account_id for item in rollup} == {"996458953428822", "1386439193678186"}
+
+
+def test_rollup_carries_quality_and_retention() -> None:
+    rollup = creative_rollup([_row()])
+
+    assert rollup[0].quality.hook_rate == Decimal("40.00")
+    assert rollup[0].retention.steepest_drop == "p25→p50"
+
+
+def test_rows_of_one_creative_in_one_cabinet_are_summed() -> None:
+    """Несколько объявлений с одним роликом в одном кабинете — это один
+    креатив: складываем, а не показываем четырьмя строками."""
+    rollup = creative_rollup([_row(), _row(impressions=1000, video_plays_3s=400)])
+
+    assert len(rollup) == 1
+    assert rollup[0].impressions == 2000
+    assert rollup[0].spend == Decimal("20.00")
+```
+
+- [ ] **Step 2: Убедиться, что тест падает**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/test_creative_report.py -q`
+Expected: FAIL — модуля `core/creative_report.py` нет.
+
+- [ ] **Step 3: Реализовать**
+
+Создай `core/creative_report.py`:
+
+```python
+"""Сводка по видео-креативам за период жизни кампании.
+
+Период считается от старта кампании до сегодня: фиксированное окно
+«последние N дней» обрезало бы дни разгона. Ключ группировки — креатив И
+кабинет: один ролик в разных кабинетах на разных аудиториях идёт по-разному,
+и усреднение по креативу спрятало бы этот сигнал.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
+
+from core.creative_quality import CreativeQuality, RetentionProfile, creative_quality, retention_profile
+
+
+@dataclass(frozen=True)
+class CreativeRollup:
+    creative_key: str
+    ad_account_id: str
+    impressions: int
+    spend: Decimal
+    quality: CreativeQuality
+    retention: RetentionProfile
+
+
+def campaign_period(campaign_start: date, today: date) -> tuple[str, str]:
+    return campaign_start.isoformat(), today.isoformat()
+
+
+def _add(left: int | None, right: int | None) -> int | None:
+    """Сумма, в которой unknown остаётся unknown, а не превращается в ноль."""
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left + right
+
+
+def creative_rollup(rows: list[dict]) -> list[CreativeRollup]:
+    buckets: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        key = (row["creative_key"], row["ad_account_id"])
+        bucket = buckets.setdefault(
+            key,
+            {"impressions": 0, "spend": Decimal("0"), "video_plays_3s": None,
+             "video_thruplays": None, "video_p25": None, "video_p50": None,
+             "video_p75": None, "video_p100": None},
+        )
+        bucket["impressions"] += int(row["impressions"] or 0)
+        bucket["spend"] += Decimal(str(row["spend"] or "0"))
+        for field in ("video_plays_3s", "video_thruplays", "video_p25", "video_p50",
+                      "video_p75", "video_p100"):
+            bucket[field] = _add(bucket[field], row.get(field))
+
+    result: list[CreativeRollup] = []
+    for (creative_key, ad_account_id), bucket in buckets.items():
+        result.append(
+            CreativeRollup(
+                creative_key=creative_key,
+                ad_account_id=ad_account_id,
+                impressions=bucket["impressions"],
+                spend=bucket["spend"],
+                quality=creative_quality(
+                    plays_3s=bucket["video_plays_3s"],
+                    thruplays=bucket["video_thruplays"],
+                    impressions=bucket["impressions"],
+                ),
+                retention=retention_profile(
+                    p25=bucket["video_p25"],
+                    p50=bucket["video_p50"],
+                    p75=bucket["video_p75"],
+                    p100=bucket["video_p100"],
+                    plays_3s=bucket["video_plays_3s"],
+                ),
+            )
+        )
+    return result
+```
+
+- [ ] **Step 4: Прогнать тест**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/test_creative_report.py -q`
+Expected: PASS.
+
+- [ ] **Step 5: Коммит**
+
+```bash
+git add core/creative_report.py tests/unit/test_creative_report.py
+git commit -m "feat(creatives): сводка по креативам за период кампании, ключ креатив×кабинет"
+```
+
+---
+
+### Task B6: Выводы по креативам от ассистента
+
+Ассистент в проекте уже есть и работает ровно нужным образом: `core/ai_assistant/pulse.py`
+собирает факты, грузит скил-промт через `load_skill`, зовёт `AIClient.chat` и **при
+недоступности модели отдаёт детерминированный фолбэк вместо молчания**. Повторяем этот
+контракт, а не изобретаем новый.
+
+**Files:**
+- Create: `core/ai_assistant/prompts/skills/creative_report.md`
+- Create: `core/ai_assistant/creative_advice.py`
+- Test: `tests/unit/test_creative_advice.py`
+
+**Interfaces:**
+- Consumes: `CreativeRollup` из B5, `AIClient` из `core/ai_assistant/client.py`,
+  `load_skill` из `core/ai_assistant/prompts.py`.
+- Produces: `build_creative_advice(rollups: list[CreativeRollup], *, period: tuple[str, str]) -> str`.
+
+- [ ] **Step 1: Написать промт-скил**
+
+Создай `core/ai_assistant/prompts/skills/creative_report.md`:
+
+```markdown
+Ты байер-аналитик. На входе — таблица фактов по видео-креативам за период.
+
+Правила ответа:
+- Не более шести строк. Каждая строка — вывод и что с ним делать.
+- Начинай с худшего креатива: с него теряются деньги.
+- hook rate — доля показов, досмотревших до 3 секунд; ориентир 40%.
+  hold rate — доля 3-секундных просмотров, дошедших до ThruPlay; ориентир 10%.
+- Низкий hook — проблема первого кадра. Низкий hold при высоком hook — обещание
+  в начале не выполнено дальше. Резкий обрыв на конкретной четверти — ролик
+  стоит обрезать до этой точки.
+- Один и тот же креатив в разных кабинетах сравнивай между собой: расхождение
+  означает аудиторию, а не сам ролик.
+- Не выдумывай чисел, которых нет во входных фактах. Если данных по креативу
+  нет, так и скажи одной строкой.
+- Без вступлений, без пересказа таблицы, без Markdown-разметки.
+```
+
+- [ ] **Step 2: Написать падающий тест**
+
+Создай `tests/unit/test_creative_advice.py`:
+
+```python
+import pytest
+
+from core.ai_assistant.creative_advice import build_creative_advice, facts_table
+from core.creative_report import creative_rollup
+
+
+def _rollups():
+    return creative_rollup(
+        [
+            {
+                "creative_key": "video:777",
+                "ad_account_id": "996458953428822",
+                "impressions": 1000,
+                "spend": "10.00",
+                "video_plays_3s": 400,
+                "video_thruplays": 60,
+                "video_p25": 300,
+                "video_p50": 90,
+                "video_p75": 80,
+                "video_p100": 75,
+            }
+        ]
+    )
+
+
+def test_facts_name_the_cabinet_and_both_rates() -> None:
+    """Модель не должна догадываться, из какого кабинета строка."""
+    table = facts_table(_rollups(), period=("2026-08-14", "2026-08-17"))
+
+    assert "996458953428822" in table
+    assert "video:777" in table
+    assert "40.00" in table  # hook rate
+    assert "15.00" in table  # hold rate
+    assert "2026-08-14" in table
+
+
+@pytest.mark.asyncio
+async def test_advice_falls_back_instead_of_going_silent(monkeypatch) -> None:
+    """Пульс при недоступной модели отдаёт детерминированный текст — здесь тот
+    же контракт: молчание выглядело бы как «всё в порядке»."""
+    from core.ai_assistant import creative_advice as module
+
+    class _Down:
+        is_available = False
+
+    monkeypatch.setattr(module, "get_ai_client", lambda *_a, **_k: _Down())
+
+    text = await build_creative_advice(_rollups(), period=("2026-08-14", "2026-08-17"))
+
+    assert "video:777" in text
+    assert text.strip() != ""
+```
+
+- [ ] **Step 3: Убедиться, что тест падает**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/test_creative_advice.py -q`
+Expected: FAIL — модуля `core/ai_assistant/creative_advice.py` нет.
+
+- [ ] **Step 4: Реализовать**
+
+Создай `core/ai_assistant/creative_advice.py`:
+
+```python
+"""Короткие выводы по видео-креативам от ассистента.
+
+Тот же контракт, что у пульса (`core/ai_assistant/pulse.py`): факты собираются
+детерминированно, модель только формулирует. При недоступной модели отдаём
+таблицу фактов, а не молчание — молчание выглядело бы как «всё в порядке».
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+from core.ai_assistant.client import get_ai_client
+from core.ai_assistant.prompts import PromptNotFoundError, load_skill
+from core.creative_report import CreativeRollup
+
+_AI_TIMEOUT_SECONDS = 60.0
+
+
+def facts_table(rollups: list[CreativeRollup], *, period: tuple[str, str]) -> str:
+    """Факты для модели. Пустое значение — честный прочерк, а не ноль."""
+    lines = [f"Период: {period[0]} — {period[1]}", "креатив | кабинет | показы | расход | hook % | hold % | обрыв | совет"]
+    for item in rollups:
+        hook = "—" if item.quality.hook_rate is None else f"{item.quality.hook_rate}"
+        hold = "—" if item.quality.hold_rate is None else f"{item.quality.hold_rate}"
+        drop = item.retention.steepest_drop or "—"
+        lines.append(
+            f"{item.creative_key} | {item.ad_account_id} | {item.impressions} | "
+            f"{item.spend} | {hook} | {hold} | {drop} | {item.retention.advice}"
+        )
+    return "\n".join(lines)
+
+
+async def build_creative_advice(
+    rollups: list[CreativeRollup], *, period: tuple[str, str]
+) -> str:
+    facts = facts_table(rollups, period=period)
+    client = get_ai_client()
+    if not client.is_available:
+        return facts
+
+    try:
+        system = load_skill("creative_report")
+    except PromptNotFoundError:
+        system = "Ты байер-аналитик. Дай короткие выводы по фактам о видео-креативах."
+
+    try:
+        response = await asyncio.wait_for(
+            client.chat(messages=[{"role": "user", "content": facts}], system=system),
+            timeout=_AI_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        return facts
+    return response.strip() or facts
+```
+
+Сверь сигнатуру `client.chat` и тип его ответа с фактическим кодом
+(`core/ai_assistant/client.py:40`) и с тем, как её зовёт `pulse.py:220` — если там
+возвращается не строка, приведи к строке тем же способом, что и пульс.
+
+- [ ] **Step 5: Прогнать тест**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/test_creative_advice.py -q`
+Expected: PASS.
+
+- [ ] **Step 6: Коммит**
+
+```bash
+git add core/ai_assistant/creative_advice.py core/ai_assistant/prompts/skills/creative_report.md tests/unit/test_creative_advice.py
+git commit -m "feat(creatives): короткие выводы по креативам от ассистента с фолбэком"
+```
+
+---
+
 ## Трек C — перенос группы объявлений в другой кабинет
 
 ### Task C1: Клон группы через API вместо Excel
@@ -1021,12 +1395,22 @@ git commit -m "feat(scripts): план переноса группы объяв�
 В плане пока зашит первый. Скажи, какой имел в виду ты — поменяю до реализации, менять после
 означает молча переопределить исторические значения.
 
-### 3. Второй кабинет для трека C
+### 3. Список кабинетов для сводки по креативам
+
+Ссылка, которую ты прислал, ведёт в кабинет `996458953428822`, а на столе открыт
+`1386439193678186`. При этом `cabinet_runtime` в базе пуст — система сейчас не знает ни одного
+кабинета, потому что сканирование выключено.
+
+Сводка «креатив × кабинет» из B5 имеет смысл только по полному списку. Пришли перечень
+кабинетов, которые в неё входят, в виде `act_id — название`. Если их больше двух-трёх, скажи
+просто «все из BM 120046940984429» — я вытащу список через API и покажу на подтверждение.
+
+### 4. Второй кабинет для трека C
 
 Для переноса нужен целевой кабинет: его ID, ID пикселя и ID страницы. Без них трек C
 останется чистой функцией с тестами и не будет проверен на живых данных.
 
-### 4. Ссылка на тот блог
+### 5. Ссылка на тот блог
 
 Ты спрашивал про него — у меня его нет, в репозитории тоже. Если там есть что-то про
 актуальность настроек, пришли ссылку: возможно, часть выводов этого плана придётся поправить.
