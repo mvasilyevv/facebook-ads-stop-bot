@@ -2926,3 +2926,41 @@ async def test_owner_worker_binds_bulk_task_to_exact_targets_and_action(
                 graph_query_params={"batch": tampered_batch},
                 graph_body_json="",
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strategy", ["TARGET_COST", "cost_cap", "LOWEST_COST", "не стратегия"])
+async def test_campaign_creator_rejects_a_bid_strategy_meta_does_not_have(
+    monkeypatch: pytest.MonkeyPatch,
+    strategy: str,
+) -> None:
+    """Стратегия ставок — money-поле, а проверялась только на непустоту.
+
+    Опечатка в ней уезжала бы в Meta и возвращалась невнятной ошибкой уже
+    после того, как кампания создана. Набор закрыт четырьмя значениями Meta.
+    """
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", _SECRET)
+    client, _engine = _campaign_client()
+    body = adset_body(_builder_config(budget_level="adset"), "Ad set")
+    body["campaign_id"] = "101"
+    body["bid_strategy"] = strategy
+
+    with client.operation_authority(
+        caller="campaign_creator",
+        task_id=1843,
+        lease_owner=uuid.uuid4(),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        client._remember_campaign_created_object_id(
+            endpoint="/act_123/campaigns",
+            object_id="101",
+            ad_account_id="123",
+        )
+        with pytest.raises(PermanentError, match="bid_strategy"):
+            await _prepare_campaign_graph(
+                client,
+                method="POST",
+                endpoint="/act_123/adsets",
+                body=body,
+            )

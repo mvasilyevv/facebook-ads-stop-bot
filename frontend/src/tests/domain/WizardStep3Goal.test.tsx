@@ -47,7 +47,9 @@ describe("WizardStep3Goal — currency-aware major units", () => {
     renderGoal();
 
     expect(screen.getByPlaceholderText("Введите сумму")).toHaveValue("200.00");
-    expect(screen.getByLabelText(/Целевой CPA \(USD\)/i)).toHaveValue("5.00");
+    // Подпись поля ставки — это название выбранной стратегии, а не общее
+    // «Целевой CPA»: у предельной ставки смысл поля другой.
+    expect(screen.getByLabelText(/Цель по цене за результат \(USD\)/i)).toHaveValue("5.00");
   });
 });
 
@@ -82,14 +84,31 @@ describe("WizardStep3Goal — верхняя граница возраста п�
 });
 
 describe("WizardStep3Goal — SOP-инварианты", () => {
-  it("не содержит редактируемых Objective, Optimization Goal и Bid Strategy", () => {
+  it("не содержит редактируемых Objective и Optimization Goal", () => {
     renderGoal();
 
     expect(screen.queryByLabelText(/^Objective$/i)).toBeNull();
     expect(screen.queryByLabelText(/Optimization Goal/i)).toBeNull();
-    expect(screen.queryByLabelText(/Bid Strategy/i)).toBeNull();
-    expect(screen.getByText("Cost cap")).toBeInTheDocument();
     expect(screen.getByText("IMPRESSIONS")).toBeInTheDocument();
+  });
+
+  it("стратегия ставок выбирается, а не зашита", () => {
+    // Замер 17.08 по трём кабинетам: 41 живая кампания из 55 идёт на
+    // «Максимальном количестве». «Зашито по SOP» было неправдой, и оператор
+    // не мог повторить три четверти того, что уже работает.
+    renderGoal();
+
+    expect(screen.getByLabelText("Стратегия ставок")).toBeInTheDocument();
+    expect(screen.queryByText("Cost cap")).toBeNull();
+  });
+
+  it("прячет поле ставки у стратегии без кэпа", () => {
+    // У «Максимального количества» ставки нет вовсе: пустое обязательное поле
+    // сбивало бы с толку и роняло валидацию на ровном месте.
+    renderGoal({ ...BASE_VALUES, bid_strategy: "LOWEST_COST_WITHOUT_CAP" });
+
+    expect(screen.queryByLabelText(/Цель по цене за результат/)).toBeNull();
+    expect(screen.getByLabelText("Стратегия ставок")).toHaveValue("LOWEST_COST_WITHOUT_CAP");
   });
 });
 

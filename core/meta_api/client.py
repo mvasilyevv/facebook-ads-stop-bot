@@ -490,6 +490,17 @@ def _campaign_positive_integer(value: Any, *, label: str) -> int:
 # Списки продублированы намеренно: capability — независимый рубеж, он не должен
 # доверять тому же перечислению, по которому строилось тело запроса.
 _CAMPAIGN_GENDER_IDS: frozenset[int] = frozenset({1, 2})
+# Четыре стратегии ставок Meta — тот же набор, что в контракте черновика
+# (core/campaign_drafts/contracts.py::BidStrategy). Держим списком здесь, а не
+# импортом: guard money-пути не должен зависеть от слоя черновиков.
+_CAMPAIGN_BID_STRATEGIES: frozenset[str] = frozenset(
+    {
+        "COST_CAP",
+        "LOWEST_COST_WITHOUT_CAP",
+        "LOWEST_COST_WITH_BID_CAP",
+        "LOWEST_COST_WITH_MIN_ROAS",
+    }
+)
 _CAMPAIGN_PUBLISHER_PLATFORMS: frozenset[str] = frozenset(
     {"facebook", "instagram", "messenger", "audience_network"}
 )
@@ -558,6 +569,11 @@ def _validate_campaign_create_body(
             _campaign_positive_integer(body[budget_key], label=budget_key)
     if "bid_strategy" in body:
         _campaign_nonempty_text(body["bid_strategy"], label="bid_strategy")
+        # Набор закрыт четырьмя стратегиями Meta. Раньше проверялась только
+        # непустота, и опечатка в money-поле уезжала бы в Meta, возвращаясь
+        # невнятной ошибкой уже после того, как кампания создана.
+        if body["bid_strategy"] not in _CAMPAIGN_BID_STRATEGIES:
+            raise PermanentError("campaign Graph bid_strategy is not authorized")
 
     if edge == "campaigns":
         _campaign_nonempty_text(body.get("objective"), label="campaign objective")

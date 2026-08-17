@@ -2559,8 +2559,13 @@ export interface components {
       /**
        * Bid Strategy
        * @default COST_CAP
+       * @enum {string}
        */
-      bid_strategy: string;
+      bid_strategy:
+        | "COST_CAP"
+        | "LOWEST_COST_WITHOUT_CAP"
+        | "LOWEST_COST_WITH_BID_CAP"
+        | "LOWEST_COST_WITH_MIN_ROAS";
       /** Bid Amount */
       bid_amount?: string | null;
       /** Countries */
@@ -2711,9 +2716,13 @@ export interface components {
       /**
        * Bid Strategy
        * @default COST_CAP
-       * @constant
+       * @enum {string}
        */
-      bid_strategy: "COST_CAP";
+      bid_strategy:
+        | "COST_CAP"
+        | "LOWEST_COST_WITHOUT_CAP"
+        | "LOWEST_COST_WITH_BID_CAP"
+        | "LOWEST_COST_WITH_MIN_ROAS";
       /** Countries */
       countries?: string[];
       /**

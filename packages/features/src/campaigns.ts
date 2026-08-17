@@ -8,6 +8,27 @@ export type ValidatePlan = components["schemas"]["ValidatePlanOut"];
 export type CampaignGender = "male" | "female";
 export type CampaignPlacement = "facebook" | "instagram" | "messenger" | "audience_network";
 
+export type CampaignBidStrategy = NonNullable<CampaignConfig["bid_strategy"]>;
+
+/**
+ * Подписи — как в Ads Manager, чтобы выбор здесь и там читался одинаково.
+ *
+ * Порядок не алфавитный, а по частоте в кабинетах: замер 17.08 по трём
+ * кабинетам дал 41 живую кампанию из 55 на «Максимальном количестве» и 12 на
+ * «Цели по цене за результат».
+ */
+export const CAMPAIGN_BID_STRATEGY_OPTIONS: ReadonlyArray<{
+  value: CampaignBidStrategy;
+  label: string;
+  /** Требует ли стратегия ставку (bid_amount). */
+  needsBid: boolean;
+}> = [
+  { value: "LOWEST_COST_WITHOUT_CAP", label: "Максимальное количество", needsBid: false },
+  { value: "COST_CAP", label: "Цель по цене за результат", needsBid: true },
+  { value: "LOWEST_COST_WITH_BID_CAP", label: "Предельная ставка", needsBid: true },
+  { value: "LOWEST_COST_WITH_MIN_ROAS", label: "Цель по ROAS", needsBid: false },
+];
+
 export const CAMPAIGN_GENDER_OPTIONS: ReadonlyArray<{
   value: CampaignGender;
   label: string;

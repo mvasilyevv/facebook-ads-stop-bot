@@ -50,6 +50,18 @@ class CampaignDraftIdentity(_DraftModel):
         return canonical
 
 
+# Четыре стратегии ставок Meta. Список расширяется правкой кода осознанно:
+# справочник у Meta мы не читаем, и молча появиться тут ничего не должно.
+# Замер 17.08 по трём кабинетам: 41 живая кампания из 55 идёт на
+# LOWEST_COST_WITHOUT_CAP, 12 — на COST_CAP.
+BidStrategy = Literal[
+    "COST_CAP",
+    "LOWEST_COST_WITHOUT_CAP",
+    "LOWEST_COST_WITH_BID_CAP",
+    "LOWEST_COST_WITH_MIN_ROAS",
+]
+
+
 class CampaignDraftGoal(_DraftModel):
     objective: Literal["OUTCOME_SALES"] = "OUTCOME_SALES"
     optimization_goal: Literal["OFFSITE_CONVERSIONS"] = "OFFSITE_CONVERSIONS"
@@ -61,7 +73,7 @@ class CampaignDraftGoal(_DraftModel):
     budget_level: Literal["campaign", "adset"] = "campaign"
     daily_budget: str = Field(default="", max_length=32)
     bid_amount: str = Field(default="", max_length=32)
-    bid_strategy: Literal["COST_CAP"] = "COST_CAP"
+    bid_strategy: BidStrategy = "COST_CAP"
     countries: list[str] = Field(default_factory=list, max_length=50)
     age_min: int = Field(default=21, ge=18, le=65, strict=True)
     age_max: int = Field(default=65, ge=18, le=65, strict=True)
@@ -179,6 +191,7 @@ class CampaignDraftPutIn(_DraftModel):
 
 
 __all__ = [
+    "BidStrategy",
     "CampaignDraftCampaign",
     "CampaignDraftConcept",
     "CampaignDraftCreatives",

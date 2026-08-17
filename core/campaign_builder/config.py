@@ -97,7 +97,10 @@ class Budget(BaseModel):
     currency: str
     daily_amount: str
     lifetime_amount: str | None = None
-    bid_strategy: str = "COST_CAP"  # SOP: реальные кампании кабинета всегда COST_CAP
+    # Дефолт, а не единственное значение: замер 17.08 по трём кабинетам показал
+    # 41 живую кампанию из 55 на LOWEST_COST_WITHOUT_CAP и 12 на COST_CAP.
+    # Набор допустимых закрыт в money-guard (_CAMPAIGN_BID_STRATEGIES).
+    bid_strategy: str = "COST_CAP"
     bid_amount: str | None = None
 
     @model_validator(mode="after")

@@ -8446,6 +8446,12 @@
           },
           "bid_strategy": {
             "type": "string",
+            "enum": [
+              "COST_CAP",
+              "LOWEST_COST_WITHOUT_CAP",
+              "LOWEST_COST_WITH_BID_CAP",
+              "LOWEST_COST_WITH_MIN_ROAS"
+            ],
             "title": "Bid Strategy",
             "default": "COST_CAP"
           },
@@ -8797,7 +8803,12 @@
           },
           "bid_strategy": {
             "type": "string",
-            "const": "COST_CAP",
+            "enum": [
+              "COST_CAP",
+              "LOWEST_COST_WITHOUT_CAP",
+              "LOWEST_COST_WITH_BID_CAP",
+              "LOWEST_COST_WITH_MIN_ROAS"
+            ],
             "title": "Bid Strategy",
             "default": "COST_CAP"
           },

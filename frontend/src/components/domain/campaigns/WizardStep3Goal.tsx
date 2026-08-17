@@ -3,7 +3,9 @@
  *
  * Секции:
  *   - Цель оптимизации — read-only «Зашито по SOP» (objective/optimization_goal/
- *     custom_event_type/bid_strategy/billing/text_optimizations не редактируются)
+ *     custom_event_type/billing/text_optimizations не редактируются)
+ *   - Стратегия ставок — выбор из четырёх стратегий Meta; поле ставки
+ *     показывается только для стратегий с кэпом
  *   - Бюджет (major-unit decimal strings in the confirmed cabinet currency)
  *   - Таргет (countries+AQ, age_min/max, advantage_audience)
  *   - Атрибуция (click_through_days, view_through_days)
@@ -12,6 +14,7 @@
 
 import { type FC } from "react";
 import {
+  CAMPAIGN_BID_STRATEGY_OPTIONS,
   CAMPAIGN_GENDER_OPTIONS,
   CAMPAIGN_PLACEMENT_OPTIONS,
   validateCampaignGoal,
@@ -39,14 +42,10 @@ const BUDGET_LEVEL_OPTIONS = [
 ];
 
 // Инварианты, зашитые по SOP — показываем read-only, без выбора в UI.
-const SOP_LOCKED = [
-  "Sales",
-  "OFFSITE_CONVERSIONS",
-  "Purchase",
-  "Cost cap",
-  "IMPRESSIONS",
-  "OPT_OUT",
-];
+// Стратегия ставок отсюда снята: замер 17.08 по трём кабинетам показал 41
+// живую кампанию из 55 на «Максимальном количестве» — «зашито по SOP» было
+// неправдой, и оператор не мог повторить три четверти того, что уже работает.
+const SOP_LOCKED = ["Sales", "OFFSITE_CONVERSIONS", "Purchase", "IMPRESSIONS", "OPT_OUT"];
 
 const ATTRIBUTION_DAYS_OPTIONS = [
   { value: "1", label: "1 день" },
@@ -73,6 +72,9 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
       : currencyExponent === 0
         ? "Только целые единицы"
         : `До ${currencyExponent} знаков после разделителя`;
+  const bidStrategyOption = CAMPAIGN_BID_STRATEGY_OPTIONS.find(
+    (option) => option.value === values.bid_strategy,
+  );
   return (
     <div className="space-y-7">
       {/* Заголовок */}
@@ -119,13 +121,21 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
       {/* Бюджет */}
       <section>
         <SectionLabel>БЮДЖЕТ</SectionLabel>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Select
             label="Уровень бюджета"
             options={BUDGET_LEVEL_OPTIONS}
             value={values.budget_level}
             onChange={(e) =>
               onChange({ budget_level: e.target.value as WizardGoal["budget_level"] })
+            }
+          />
+          <Select
+            label="Стратегия ставок"
+            options={CAMPAIGN_BID_STRATEGY_OPTIONS.map(({ value, label }) => ({ value, label }))}
+            value={values.bid_strategy}
+            onChange={(e) =>
+              onChange({ bid_strategy: e.target.value as WizardGoal["bid_strategy"] })
             }
           />
           <CurrencyAmountInput
@@ -140,15 +150,18 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
             }
             placeholder="Введите сумму"
           />
-          {/* Целевой CPA = bid_amount для COST_CAP (обязателен) */}
-          <CurrencyAmountInput
-            label={`Целевой CPA (${currencyLabel})`}
-            value={values.bid_amount}
-            onValue={(bid_amount) => onChange({ bid_amount })}
-            errorMessage={errors.bid_amount}
-            helpText={`Cost cap — цена за результат · ${precisionLabel}`}
-            placeholder="Из оффера или вручную"
-          />
+          {/* Ставка есть только у стратегий с кэпом: у «Максимального
+              количества» её нет вовсе, и пустое поле сбивало бы с толку. */}
+          {bidStrategyOption?.needsBid ? (
+            <CurrencyAmountInput
+              label={`${bidStrategyOption.label} (${currencyLabel})`}
+              value={values.bid_amount}
+              onValue={(bid_amount) => onChange({ bid_amount })}
+              errorMessage={errors.bid_amount}
+              helpText={`Предел цены за результат · ${precisionLabel}`}
+              placeholder="Из оффера или вручную"
+            />
+          ) : null}
         </div>
       </section>
 

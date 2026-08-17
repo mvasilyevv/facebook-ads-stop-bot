@@ -132,3 +132,34 @@ def test_campaign_draft_conflict_supports_exception_traceback_protocol() -> None
     restored = pickle.loads(pickle.dumps(conflict))
     assert restored.expected_revision == 3
     assert restored.actual_revision == 4
+
+
+def test_draft_allows_the_strategy_three_quarters_of_the_cabinet_runs() -> None:
+    """41 живая кампания из 55 идёт на «Максимальное количество».
+
+    Замок на COST_CAP означал, что наш создатель не воспроизводит три четверти
+    того, что в кабинетах уже работает (замер 17.08 по трём кабинетам).
+    """
+    from core.campaign_drafts.contracts import CampaignDraftGoal
+
+    assert (
+        CampaignDraftGoal(bid_strategy="LOWEST_COST_WITHOUT_CAP").bid_strategy
+        == "LOWEST_COST_WITHOUT_CAP"
+    )
+
+
+def test_uncapped_strategy_does_not_demand_a_bid() -> None:
+    """`bid_amount` — поле кэпа. Требовать его у стратегии без кэпа значит
+    закрыть её замком, который сам же и придумал."""
+    from core.campaign_drafts.contracts import CampaignDraftGoal
+
+    assert CampaignDraftGoal(bid_strategy="LOWEST_COST_WITHOUT_CAP", bid_amount="").bid_amount == ""
+
+
+def test_draft_still_rejects_a_strategy_meta_does_not_have() -> None:
+    """Список расширяется правкой кода осознанно: справочник у Meta мы не
+    читаем, и молча появиться в контракте ничего не должно."""
+    from core.campaign_drafts.contracts import CampaignDraftGoal
+
+    with pytest.raises(ValidationError):
+        CampaignDraftGoal(bid_strategy="TARGET_COST")

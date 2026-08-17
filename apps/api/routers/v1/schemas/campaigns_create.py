@@ -33,6 +33,7 @@ from core.campaign_builder.config import (
     Targeting,
 )
 from core.campaign_builder.money import normalize_major_amount
+from core.campaign_drafts.contracts import BidStrategy
 from core.meta_api.identity import require_ad_account_id
 
 # ────────────────────────────── flat config (контракт фронта) ──────────────────────────────
@@ -101,7 +102,9 @@ class CampaignConfigIn(BaseModel):
         pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
         max_length=32,
     )
-    bid_strategy: str = "COST_CAP"  # SOP: реальные кампании кабинета всегда COST_CAP
+    # Дефолт, а не единственное значение: в кабинетах 41 живая кампания из 55
+    # идёт на LOWEST_COST_WITHOUT_CAP (замер 17.08).
+    bid_strategy: BidStrategy = "COST_CAP"
     # Major-unit decimal string. Currency and exponent come only from durable
     # Meta account evidence; the client cannot provide or override either.
     bid_amount: str | None = Field(
