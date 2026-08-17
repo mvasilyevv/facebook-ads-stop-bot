@@ -194,9 +194,12 @@ async def test_get_vision_with_ready_browser_channel(pg_engine) -> None:
     assert payload["live_profile_id"] == "profile-ready"
     assert payload["graph_probe_performed"] is True
     assert payload["graph_probe_ok"] is True
+    # Диагностический GET кабинет не называет: он только смотрит на канал и не
+    # имеет права открывать вкладку как побочный эффект просмотра статуса.
     meta_client.check_health.assert_awaited_once_with(
         full_probe=True,
         expected_profile_id="profile-ready",
+        ad_account_id=None,
     )
 
     async with pg_engine.begin() as conn:

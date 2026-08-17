@@ -28,6 +28,7 @@ from apps.api.routers.v1.schemas.settings_vision import (
     VisionSettingsUpdateRequest,
 )
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+from core.meta_api.browser_readiness import resolve_readiness_ad_account_id
 from core.meta_api.client import BROWSER_CONTRACT_VERSION
 from core.models.settings.vision_config import VisionConfig
 from core.tasks.browser_fence import (
@@ -199,6 +200,7 @@ async def _probe_browser_channel(
     meta_api_client: object | None,
     *,
     expected_profile_id: str,
+    ad_account_id: str | None = None,
 ) -> _BrowserChannelProbe:
     """Probe the exact configured profile with a real Graph request.
 
@@ -225,6 +227,7 @@ async def _probe_browser_channel(
         result = await meta_api_client.check_health(  # type: ignore[attr-defined]
             full_probe=True,
             expected_profile_id=expected_profile_id,
+            ad_account_id=ad_account_id,
         )
     except Exception as exc:  # noqa: BLE001 - unavailable is a valid operator state
         logger.warning("browser-agent channel probe failed: %s", type(exc).__name__)
@@ -768,9 +771,23 @@ async def post_vision_ensure_cdp(
                     message="Vision is not configured in PostgreSQL",
                 )
 
+            # Стол пересоздаётся каждым деплоем, и браузер поднимается без единой
+            # вкладки Ads Manager. Кабинет для пробы называем сами — из активных
+            # офферов; адрес случайной вкладки account identity не является.
+            probe_account_id = await resolve_readiness_ad_account_id(engine)
+            if probe_account_id is None:
+                await guard.assert_held()
+                return VisionEnsureCdpResponse(
+                    ok=False,
+                    status="UNAVAILABLE",
+                    action="none",
+                    message="Нет активного оффера с кабинетом — канал не на чем проверять",
+                )
+
             probe = await _probe_browser_channel(
                 meta_api_client,
                 expected_profile_id=runtime.profile_id,
+                ad_account_id=probe_account_id,
             )
             if probe.status == "READY":
                 await guard.assert_held()
@@ -809,6 +826,7 @@ async def post_vision_ensure_cdp(
             probe = await _probe_browser_channel(
                 meta_api_client,
                 expected_profile_id=runtime.profile_id,
+                ad_account_id=probe_account_id,
             )
             await guard.assert_held()
     except BrowserMaintenanceOwnerInvalid as exc:

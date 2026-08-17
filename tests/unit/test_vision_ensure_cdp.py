@@ -22,6 +22,13 @@ def configured_vision_runtime(monkeypatch):
 
     monkeypatch.setattr(m, "load_vision_runtime_config", fake_load)
 
+    # Кабинет пробы приходит из активных офферов; тесты этого файла проверяют
+    # fail-closed контракт эндпоинта, а не резолв каталога.
+    async def fake_readiness_cabinet(_engine):
+        return "2108857220005012"
+
+    monkeypatch.setattr(m, "resolve_readiness_ad_account_id", fake_readiness_cabinet)
+
     class FakeMaintenanceGuard:
         def __init__(self, _engine, owner):
             assert owner == "a" * 32
@@ -51,7 +58,7 @@ async def test_settings_probe_adopts_exact_maintenance_owner(monkeypatch):
         def __init__(self, *_args, **_kwargs):
             raise AssertionError("maintenance-owned probe must not claim a shared fence")
 
-    async def fake_probe(_client, *, expected_profile_id):
+    async def fake_probe(_client, *, expected_profile_id, ad_account_id=None):
         assert expected_profile_id == "profile-exact"
         return m._BrowserChannelProbe("READY", None, 1, True)
 
@@ -73,7 +80,7 @@ async def test_settings_probe_adopts_exact_maintenance_owner(monkeypatch):
 async def test_ensure_cdp_already_ready(monkeypatch):
     called = {"restart": False}
 
-    async def fake_probe(_client, *, expected_profile_id):
+    async def fake_probe(_client, *, expected_profile_id, ad_account_id=None):
         assert expected_profile_id == "profile-exact"
         return m._BrowserChannelProbe("READY", None, 1, True)
 
@@ -100,7 +107,7 @@ async def test_ensure_cdp_already_ready(monkeypatch):
 async def test_ensure_cdp_profile_recovery_success(monkeypatch):
     calls = {"n": 0}
 
-    async def fake_probe(_client, *, expected_profile_id):
+    async def fake_probe(_client, *, expected_profile_id, ad_account_id=None):
         assert expected_profile_id == "profile-exact"
         calls["n"] += 1
         return m._BrowserChannelProbe(
@@ -132,7 +139,7 @@ async def test_ensure_cdp_profile_recovery_success(monkeypatch):
 # Channel unavailable and recovery raises → ok=false without leaking details.
 @pytest.mark.asyncio
 async def test_ensure_cdp_agent_down_graceful(monkeypatch):
-    async def fake_probe(_client, *, expected_profile_id):
+    async def fake_probe(_client, *, expected_profile_id, ad_account_id=None):
         assert expected_profile_id == "profile-exact"
         return m._BrowserChannelProbe(
             "UNAVAILABLE",
@@ -175,7 +182,7 @@ async def test_ensure_cdp_never_restarts_non_recoverable_states(
     message,
     contract_compatible,
 ):
-    async def fake_probe(_client, *, expected_profile_id):
+    async def fake_probe(_client, *, expected_profile_id, ad_account_id=None):
         return m._BrowserChannelProbe(
             "DEGRADED",
             message,
@@ -209,7 +216,7 @@ async def test_ensure_cdp_missing_db_config_is_fail_closed(monkeypatch):
     async def missing_config(_engine):
         raise m.VisionConfigurationError("missing")
 
-    async def unexpected_probe(_client, *, expected_profile_id):
+    async def unexpected_probe(_client, *, expected_profile_id, ad_account_id=None):
         raise AssertionError("unconfigured runtime must not probe browser-agent")
 
     monkeypatch.setattr(m, "load_vision_runtime_config", missing_config)
@@ -259,7 +266,7 @@ async def test_ensure_cdp_claims_its_own_fence_without_a_caller_owner(monkeypatc
     _FakeExclusiveMaintenance.instances.clear()
     recovered = {"called": False, "owner": ""}
 
-    async def fake_probe(_client, *, expected_profile_id):
+    async def fake_probe(_client, *, expected_profile_id, ad_account_id=None):
         assert expected_profile_id == "profile-exact"
         if recovered["called"]:
             return m._BrowserChannelProbe("READY", None, 1, True)
@@ -302,7 +309,7 @@ async def test_ensure_cdp_still_adopts_an_explicit_owner(monkeypatch):
         def __init__(self, *_args, **_kwargs):
             raise AssertionError("владелец передан — второй фенс брать нельзя")
 
-    async def fake_probe(_client, *, expected_profile_id):
+    async def fake_probe(_client, *, expected_profile_id, ad_account_id=None):
         return m._BrowserChannelProbe("READY", None, 1, True)
 
     monkeypatch.setattr(m, "BrowserExclusiveMaintenance", UnexpectedExclusive)
@@ -435,7 +442,7 @@ async def test_ensure_cdp_recovers_with_normalized_guard_owner_not_raw_header(mo
 
     calls = {"n": 0}
 
-    async def fake_probe(_client, *, expected_profile_id):
+    async def fake_probe(_client, *, expected_profile_id, ad_account_id=None):
         assert expected_profile_id == "profile-exact"
         calls["n"] += 1
         return m._BrowserChannelProbe(
@@ -467,3 +474,58 @@ async def test_ensure_cdp_recovers_with_normalized_guard_owner_not_raw_header(mo
     assert resp.status == "RECOVERED"
     # Не "A" * 32 (сырой заголовок) — нормализованное guard.owner.
     assert recovered["owner"] == "a" * 32
+
+
+# Стол пересоздаётся каждым деплоем, и браузер поднимается без единой вкладки
+# Ads Manager. Проба не имеет права угадывать кабинет из адреса вкладки, поэтому
+# деплой обязан назвать его сам — иначе шаг ensure_desktop_channel виснет на
+# «no_ads_manager_page» и релиз падает (прод, 17.08.2026).
+@pytest.mark.asyncio
+async def test_ensure_cdp_names_the_cabinet_from_active_offers(monkeypatch):
+    seen: list[str | None] = []
+
+    async def fake_probe(_client, *, expected_profile_id, ad_account_id=None):
+        seen.append(ad_account_id)
+        return m._BrowserChannelProbe("READY", None, 1, True)
+
+    async def fake_resolve(_engine):
+        return "2108857220005012"
+
+    monkeypatch.setattr(m, "_probe_browser_channel", fake_probe)
+    monkeypatch.setattr(m, "resolve_readiness_ad_account_id", fake_resolve)
+
+    resp = await m.post_vision_ensure_cdp(
+        request=_request(),
+        engine=None,
+        settings=None,
+        meta_api_client=None,
+    )
+
+    assert resp.ok is True
+    assert seen == ["2108857220005012"]
+
+
+# Без настроенного кабинета открывать наугад нечего: деплой должен получить
+# внятную причину, а не молча ждать три минуты.
+@pytest.mark.asyncio
+async def test_ensure_cdp_without_configured_cabinet_says_so(monkeypatch):
+    async def unexpected_probe(_client, *, expected_profile_id, ad_account_id=None):
+        raise AssertionError("проба не должна идти без настроенного кабинета")
+
+    async def fake_resolve(_engine):
+        return None
+
+    monkeypatch.setattr(m, "_probe_browser_channel", unexpected_probe)
+    monkeypatch.setattr(m, "resolve_readiness_ad_account_id", fake_resolve)
+
+    resp = await m.post_vision_ensure_cdp(
+        request=_request(),
+        engine=None,
+        settings=None,
+        meta_api_client=None,
+    )
+
+    assert resp.ok is False
+    assert resp.status == "UNAVAILABLE"
+    assert resp.action == "none"
+    assert "оффер" in resp.message or "offer" in resp.message.lower()
