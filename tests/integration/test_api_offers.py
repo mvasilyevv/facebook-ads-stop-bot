@@ -132,7 +132,6 @@ async def test_create_offer_happy_path(pg_engine, fake_redis_client, clean_offer
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     body = {
         "code": "TST_NEW",
-        "vertical": "casino",
         "is_active": False,
         "ad_account_ids": ["111222333"],
     }
@@ -143,7 +142,6 @@ async def test_create_offer_happy_path(pg_engine, fake_redis_client, clean_offer
     data = resp.json()
     assert data["code"] == "TST_NEW"
     assert data["name"] == "TST_NEW"  # бэк пишет name=code (поле «Название» убрано)
-    assert data["vertical"] == "casino"
     assert data["is_active"] is False
     assert data["id"] is not None
     assert data["ad_account_ids"] == ["111222333"]
@@ -253,13 +251,13 @@ async def test_update_offer_happy_path(pg_engine, fake_redis_client, clean_offer
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.put(
             f"/api/offers/{offer_id}",
-            json={"vertical": "betting"},
+            json={"is_active": False},
         )
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["name"] == "UPD_TST"  # PUT не обновляет name — всегда = code
-    assert data["vertical"] == "betting"
+    assert data["is_active"] is False
     assert data["code"] == "UPD_TST"  # code не изменился
 
 
@@ -281,12 +279,11 @@ async def test_offer_api_round_trips_and_replaces_normalized_accounts_atomically
 
         updated = await ac.put(
             f"/api/offers/{offer_id}",
-            json={"vertical": "casino", "ad_account_ids": ["333", "111", "333"]},
+            json={"ad_account_ids": ["333", "111", "333"]},
         )
         listed = await ac.get("/api/offers")
 
     assert updated.status_code == 200
-    assert updated.json()["vertical"] == "casino"
     assert updated.json()["ad_account_ids"] == ["111", "333"]
     listed_offer = next(item for item in listed.json() if item["id"] == offer_id)
     assert listed_offer["ad_account_ids"] == ["111", "333"]
@@ -318,7 +315,7 @@ async def test_update_offer_not_found(pg_engine, fake_redis_client, clean_offers
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     fake_id = uuid.uuid4()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.put(f"/api/offers/{fake_id}", json={"vertical": "betting"})
+        resp = await ac.put(f"/api/offers/{fake_id}", json={"is_active": False})
     assert resp.status_code == 404
 
 

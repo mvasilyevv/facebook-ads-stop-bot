@@ -75,6 +75,40 @@ async def _seed_config(pg_engine, *, profile_id: str = "profile-ready"):
     return identity
 
 
+async def _seed_offer_cabinet(pg_engine, *, account_id: str = "2108857220005012") -> str:
+    """Активный оффер с кабинетом — источник identity для пробы готовности.
+
+    Проба не имеет права выводить кабинет из адреса открытой вкладки, поэтому
+    без настроенного кабинета она вообще не идёт в browser-agent.
+    """
+    async with pg_engine.begin() as conn:
+        offer_id = (
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO offers (code, name, is_active)
+                    VALUES ('READINESS_TST', 'READINESS_TST', TRUE)
+                    RETURNING id
+                    """
+                )
+            )
+        ).scalar_one()
+        await conn.execute(
+            text("INSERT INTO ad_accounts (account_id) VALUES (:account_id)"),
+            {"account_id": account_id},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO offer_ad_accounts (offer_id, account_id)
+                VALUES (:offer_id, :account_id)
+                """
+            ),
+            {"offer_id": offer_id, "account_id": account_id},
+        )
+    return account_id
+
+
 async def _seed_task(pg_engine, *, max_attempts: int = 5) -> int:
     task_id = await create_task(
         pg_engine,
@@ -644,6 +678,7 @@ async def test_probe_writer_uses_token_only_exact_profile_and_db_time(
     pg_engine,
 ) -> None:
     identity = await _seed_config(pg_engine)
+    account_id = await _seed_offer_cabinet(pg_engine)
 
     class Client:
         def __init__(self) -> None:
@@ -670,6 +705,7 @@ async def test_probe_writer_uses_token_only_exact_profile_and_db_time(
         {
             "full_probe": False,
             "expected_profile_id": identity.profile_id,
+            "ad_account_id": account_id,
         }
     ]
     async with pg_engine.connect() as conn:
