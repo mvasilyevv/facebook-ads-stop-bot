@@ -45,6 +45,7 @@ import { OPERATOR_ADS_STOP_PROXIMITY_SORT } from "@fb/shared/operator/routeFilte
 import {
   operatorReloginRecovery,
   RELOGIN_RECOVERY_BUTTON_LABEL,
+  RELOGIN_RECOVERY_BUTTON_TONE,
   reloginRecoveryButtonState,
 } from "@fb/shared/operator/reloginRecovery";
 import type {
@@ -226,7 +227,11 @@ function OperatorLedgerScreen({
           </Link>
           {recovery && recoveryState ? (
             <Button
-              variant={recoveryState === "error" ? "warning" : "secondary"}
+              variant={
+                RELOGIN_RECOVERY_BUTTON_TONE[recoveryState] === "warning"
+                  ? "warning"
+                  : "secondary"
+              }
               size="lg"
               leftIcon={<RefreshCw size={16} aria-hidden="true" />}
               loading={retryScan.isPending || recoveryState === "running"}
