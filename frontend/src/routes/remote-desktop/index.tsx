@@ -20,6 +20,10 @@ import { cn } from "@/lib/utils/cn";
  */
 
 const ctaClassName = cn(buttonStyles({ variant: "primary", size: "lg" }), "min-w-44");
+// Ссылка «Открыть в приложении» работает только после шага 1, поэтому она не
+// главный акцент страницы: самый заметный элемент не должен быть тем, который
+// у неподготовленного клиента отвечает «устройство не найдено».
+const openAppClassName = cn(buttonStyles({ variant: "secondary", size: "md" }), "min-w-44");
 
 export const Route = createFileRoute("/remote-desktop/")({
   component: RemoteDesktopPage,
@@ -89,24 +93,43 @@ function RemoteDesktopPage() {
             ) : data?.available && data.device_id ? (
               <>
                 <p className="mx-auto mt-2 max-w-[460px] text-[13px] leading-relaxed text-bg-9">
-                  Откройте приложение RustDesk или подключитесь по ID вручную. Пароль канала
-                  приложение запомнит после первого подключения.
+                  Стол живёт на собственном брокере, а не на публичных серверах RustDesk. Пока
+                  клиент не переключён на него, стол для приложения не существует.
                 </p>
-                <div className="mt-6 flex justify-center">
-                  <a href={`rustdesk://${data.device_id}`} className={ctaClassName}>
-                    <MonitorUp size={15} aria-hidden="true" />
-                    Открыть в приложении
-                  </a>
+
+                <div className="mx-auto mt-7 max-w-[460px] text-left">
+                  <StepHeading index={1} title="Один раз переключите клиент" />
+                  <p className="mb-2.5 text-[12px] leading-5 text-bg-9">
+                    В приложении: Settings → Network → ID/Relay Server. Адрес — в поля ID Server и
+                    Relay Server, ключ — в поле Key.
+                  </p>
+                  <dl className="grid gap-2">
+                    {data.server ? (
+                      <ChannelRow label="Сервер (ID/Relay)" value={data.server} />
+                    ) : null}
+                    {data.key ? <ChannelRow label="Ключ брокера" value={data.key} /> : null}
+                  </dl>
                 </div>
-                <dl className="mx-auto mt-7 grid max-w-[460px] gap-2 text-left">
-                  <ChannelRow label="ID стола" value={data.device_id} />
-                  {data.server ? <ChannelRow label="Сервер (ID/Relay)" value={data.server} /> : null}
-                  {data.key ? <ChannelRow label="Ключ брокера" value={data.key} /> : null}
-                </dl>
-                <p className="mx-auto mt-4 max-w-[460px] text-[12px] leading-5 text-bg-8">
-                  Первая настройка клиента: Settings → Network → ID/Relay Server — адрес сервера и
-                  ключ выше. Пароль канала приложение запомнит после первого подключения.
-                </p>
+
+                <div className="mx-auto mt-7 max-w-[460px] text-left">
+                  <StepHeading index={2} title="Подключитесь к столу" />
+                  <p className="mb-2.5 text-[12px] leading-5 text-bg-9">
+                    Введите ID в приложении. Пароль канала оно запомнит после первого подключения.
+                  </p>
+                  <dl className="grid gap-2">
+                    <ChannelRow label="ID стола" value={data.device_id} />
+                  </dl>
+                  <div className="mt-3 flex justify-center">
+                    <a href={`rustdesk://${data.device_id}`} className={openAppClassName}>
+                      <MonitorUp size={15} aria-hidden="true" />
+                      Открыть в приложении
+                    </a>
+                  </div>
+                  <p className="mt-2 text-center text-[12px] leading-5 text-bg-8">
+                    Кнопка передаёт приложению только ID — до шага 1 она отвечает «устройство не
+                    найдено».
+                  </p>
+                </div>
               </>
             ) : (
               <>
@@ -126,6 +149,18 @@ function RemoteDesktopPage() {
         </div>
       </section>
     </>
+  );
+}
+
+/** Номер шага рядом с заголовком: порядок здесь обязателен, а не желателен. */
+function StepHeading({ index, title }: { index: number; title: string }) {
+  return (
+    <div className="mb-1.5 flex items-center gap-2">
+      <span className="flex size-[22px] shrink-0 items-center justify-center rounded-full border border-[var(--color-hairline-strong)] font-numeric text-[12px] text-bg-9">
+        {index}
+      </span>
+      <h3 className="font-display text-[14px] text-bg-11">{title}</h3>
+    </div>
   );
 }
 

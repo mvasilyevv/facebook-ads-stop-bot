@@ -54,6 +54,17 @@ describe("Mini App RemoteDesktopPage", () => {
     expect(screen.getByRole("button", { name: "Скопировать: ID стола" })).toBeInTheDocument();
   });
 
+  it("ставит настройку клиента перед кнопкой запуска", () => {
+    // Тот же контракт, что и в вебе: кнопка передаёт только ID и без
+    // переключения клиента на наш брокер отвечает «устройство не найдено».
+    const { container } = render(<RemoteDesktopPage />);
+
+    const text = container.textContent!;
+    expect(text.indexOf("переключите клиент")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("переключите клиент")).toBeLessThan(text.indexOf("Открыть в приложении"));
+    expect(screen.getByText(/до шага 1 она отвечает/)).toBeInTheDocument();
+  });
+
   it("живёт тем же эндпоинтом, что и веб — /api/desktop/native", () => {
     render(<RemoteDesktopPage />);
 

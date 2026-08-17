@@ -50,8 +50,8 @@ function RemoteDesktopPage() {
                 Подключение к рабочему столу
               </h2>
               <p className="mt-1 text-[12px] leading-relaxed text-bg-9">
-                Через приложение RustDesk. Адрес и ключ вводятся один раз, пароль канала приложение
-                запомнит после первого подключения.
+                Стол живёт на собственном брокере, а не на публичных серверах RustDesk. Пока клиент
+                не переключён на него, стол для приложения не существует.
               </p>
             </div>
           </div>
@@ -74,19 +74,37 @@ function RemoteDesktopPage() {
             </>
           ) : data?.available && data.device_id ? (
             <>
-              <a
-                href={`rustdesk://${data.device_id}`}
-                className="mb-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-[var(--radius-2)] bg-accent font-display text-[15px] font-semibold text-bg-0"
-                onClick={() => haptic.impact("medium")}
-              >
-                <MonitorUp size={17} strokeWidth={1.7} aria-hidden="true" />
-                Открыть в приложении
-              </a>
+              <StepHeading index={1} title="Один раз переключите клиент" />
+              <p className="mb-2.5 text-[12px] leading-5 text-bg-9">
+                Settings → Network → ID/Relay Server. Адрес — в поля ID Server и Relay Server, ключ
+                — в поле Key.
+              </p>
               <dl className="grid gap-2">
-                <ChannelRow label="ID стола" value={data.device_id} />
                 {data.server ? <ChannelRow label="Сервер (ID/Relay)" value={data.server} /> : null}
                 {data.key ? <ChannelRow label="Ключ брокера" value={data.key} /> : null}
               </dl>
+
+              <div className="mt-5">
+                <StepHeading index={2} title="Подключитесь к столу" />
+                <p className="mb-2.5 text-[12px] leading-5 text-bg-9">
+                  Введите ID в приложении. Пароль канала оно запомнит после первого подключения.
+                </p>
+                <dl className="grid gap-2">
+                  <ChannelRow label="ID стола" value={data.device_id} />
+                </dl>
+                <a
+                  href={`rustdesk://${data.device_id}`}
+                  className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 font-display text-[15px] font-medium text-bg-11"
+                  onClick={() => haptic.impact("medium")}
+                >
+                  <MonitorUp size={17} strokeWidth={1.7} aria-hidden="true" />
+                  Открыть в приложении
+                </a>
+                <p className="mt-2 text-[12px] leading-5 text-bg-8">
+                  Кнопка передаёт приложению только ID — до шага 1 она отвечает «устройство не
+                  найдено».
+                </p>
+              </div>
             </>
           ) : (
             <p role="status" className="text-center text-[13px] leading-relaxed text-bg-9">
@@ -96,6 +114,18 @@ function RemoteDesktopPage() {
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+/** Номер шага рядом с заголовком: порядок здесь обязателен, а не желателен. */
+function StepHeading({ index, title }: { index: number; title: string }) {
+  return (
+    <div className="mb-1.5 flex items-center gap-2">
+      <span className="flex size-[22px] shrink-0 items-center justify-center rounded-full border border-[var(--color-hairline-strong)] font-numeric text-[12px] text-bg-9">
+        {index}
+      </span>
+      <h3 className="font-display text-[14px] text-bg-11">{title}</h3>
     </div>
   );
 }

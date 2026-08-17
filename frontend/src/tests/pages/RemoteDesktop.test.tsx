@@ -106,6 +106,21 @@ describe("RemoteDesktopPage", () => {
     expect(screen.queryByText(/приватной сети/)).not.toBeInTheDocument();
   });
 
+  it("ставит настройку клиента перед кнопкой запуска", () => {
+    // Кнопка передаёт приложению только ID: без переключения клиента на наш
+    // брокер она отвечает «устройство не найдено». Оператор так и попался —
+    // самый заметный элемент экрана вёл в тупик, а условие висело мелким
+    // текстом ПОД ним. Порядок здесь обязателен, а не декоративен.
+    const { container } = render(<RemoteDesktopPage />);
+
+    const text = container.textContent!;
+    expect(text.indexOf("переключите клиент")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("переключите клиент")).toBeLessThan(text.indexOf("Открыть в приложении"));
+    expect(text.indexOf("100.73.162.127")).toBeLessThan(text.indexOf("Открыть в приложении"));
+    // Ограничение названо прямо, а не оставлено на догадку.
+    expect(screen.getByText(/до шага 1 она отвечает/)).toBeInTheDocument();
+  });
+
   it("не даёт длинному ключу разъехать строку канала", () => {
     render(<RemoteDesktopPage />);
 
