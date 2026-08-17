@@ -52,7 +52,7 @@ export function Chip({ children, onRemove, className, ...rest }: ChipProps) {
     <span
       className={cn(
         "inline-flex items-center gap-1.5",
-        "min-h-11 pl-2.5 pr-0 py-1",
+        "pl-2.5 pr-1 py-1",
         "rounded-full border",
         "bg-accent-bg border-[rgba(245,241,232,0.2)] text-accent",
         "font-display text-[12px] tracking-[0.02em]",
@@ -71,7 +71,7 @@ export function Chip({ children, onRemove, className, ...rest }: ChipProps) {
           }}
           className={cn(
             "inline-flex items-center justify-center",
-            "size-11 rounded-full",
+            "size-[18px] rounded-full",
             "bg-[rgba(245,241,232,0.1)] text-accent",
             "hover:bg-[rgba(245,241,232,0.2)]",
             "transition-colors duration-[120ms]",
