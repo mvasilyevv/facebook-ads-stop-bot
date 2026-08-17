@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # устройства; api-контейнер монтирует каталог read-only. Секретов в файле
     # нет — это ровно то, что оператор вводит в клиент RustDesk.
     desktop_native_channel_path: Path = Path("/run/fb-agent-desktop-readiness/rustdesk.json")
+    # Пароль канала. В разметку страницы он не попадает: ручка запуска отдаёт
+    # готовую ссылку владельцу в момент нажатия, а не рендерится в HTML заранее.
+    desktop_rustdesk_password: SecretStr = SecretStr("")
 
     # --- Шифрование (для хранения токенов в БД) ---
     encryption_key: SecretStr = SecretStr("")

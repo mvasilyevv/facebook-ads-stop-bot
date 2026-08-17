@@ -14,3 +14,14 @@ export function useDesktopNativeChannel() {
     { staleTime: 0, gcTime: 0, refetchOnMount: "always", refetchInterval: 15_000 },
   );
 }
+
+/**
+ * Ссылка запуска тянется ТОЛЬКО по нажатию и намеренно не кэшируется: она
+ * несёт пароль канала, и держать её в состоянии открытого экрана — то же
+ * самое, что отрендерить пароль в разметку, ради чего ручку и разделяли.
+ */
+export function useDesktopLaunchLink() {
+  return generatedApi.useMutation("post", "/api/desktop/native/launch", {
+    gcTime: 0,
+  });
+}

@@ -3,9 +3,11 @@ import type { ComponentType } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const useDesktopNativeChannel = vi.fn();
+const launchMutate = vi.fn();
 
 vi.mock("@/lib/api/desktop", () => ({
   useDesktopNativeChannel: () => useDesktopNativeChannel(),
+  useDesktopLaunchLink: () => ({ mutate: launchMutate, isPending: false }),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -37,11 +39,26 @@ beforeEach(() => {
 });
 
 describe("RemoteDesktopPage", () => {
-  it("ведёт в нативное приложение по ID стола", () => {
-    render(<RemoteDesktopPage />);
+  it("забирает ссылку запуска только по нажатию и сразу открывает её", () => {
+    // Ссылка несёт пароль канала. Отрендерить её в href значило бы держать
+    // пароль в разметке открытого экрана — ровно то, ради чего ручку и
+    // отделили от данных канала.
+    const { container } = render(<RemoteDesktopPage />);
 
-    const cta = screen.getByRole("link", { name: /Открыть в приложении/ });
-    expect(cta).toHaveAttribute("href", "rustdesk://253474910");
+    expect(launchMutate).not.toHaveBeenCalled();
+    expect(container.innerHTML).not.toContain("rustdesk://");
+
+    screen.getByRole("button", { name: /Открыть в приложении/ }).click();
+
+    expect(launchMutate).toHaveBeenCalledOnce();
+    const [, handlers] = launchMutate.mock.calls[0]!;
+    const assign = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, assign },
+    });
+    handlers.onSuccess({ url: "rustdesk://253474910?password=secret" });
+    expect(assign).toHaveBeenCalledWith("rustdesk://253474910?password=secret");
   });
 
   it("показывает всё, что оператор вводит в клиент, с копированием", () => {
@@ -70,7 +87,7 @@ describe("RemoteDesktopPage", () => {
     expect(screen.getByText(/ещё не опубликовал ID/)).toBeInTheDocument();
     // Адрес и ключ уже известны — их можно настроить заранее.
     expect(screen.getByText("100.73.162.127")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Открыть в приложении/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Открыть в приложении/ })).not.toBeInTheDocument();
   });
 
   it("при ошибке предлагает повторить, не теряя шапку экрана", () => {
@@ -107,10 +124,10 @@ describe("RemoteDesktopPage", () => {
   });
 
   it("ставит настройку клиента перед кнопкой запуска", () => {
-    // Кнопка передаёт приложению только ID: без переключения клиента на наш
-    // брокер она отвечает «устройство не найдено». Оператор так и попался —
-    // самый заметный элемент экрана вёл в тупик, а условие висело мелким
-    // текстом ПОД ним. Порядок здесь обязателен, а не декоративен.
+    // Ссылка запуска несёт ID и пароль, но адрес брокера и ключ схема
+    // rustdesk:// передать не может. Без переключения клиента кнопка отвечает
+    // «устройство не найдено» — оператор так и попался: самый заметный элемент
+    // экрана вёл в тупик, а условие висело мелким текстом ПОД ним.
     const { container } = render(<RemoteDesktopPage />);
 
     const text = container.textContent!;
@@ -118,7 +135,7 @@ describe("RemoteDesktopPage", () => {
     expect(text.indexOf("переключите клиент")).toBeLessThan(text.indexOf("Открыть в приложении"));
     expect(text.indexOf("100.73.162.127")).toBeLessThan(text.indexOf("Открыть в приложении"));
     // Ограничение названо прямо, а не оставлено на догадку.
-    expect(screen.getByText(/до шага 1 она отвечает/)).toBeInTheDocument();
+    expect(screen.getByText(/до шага 1 приложение ответит/)).toBeInTheDocument();
   });
 
   it("не даёт длинному ключу разъехать строку канала", () => {

@@ -4,7 +4,7 @@ import { MiniHeader } from "@/components/layout/MiniHeader";
 import { Button } from "@/components/ui";
 import { Eyebrow } from "@/components/data";
 import { tmaApi } from "@/lib/auth";
-import { haptic } from "@/lib/tg";
+import { haptic, tgAlert } from "@/lib/tg";
 
 /**
  * Доступ к столу — нативным приложением RustDesk через собственный брокер.
@@ -12,7 +12,8 @@ import { haptic } from "@/lib/tg";
  * Веб-канал демонтирован: браузер на iPhone не может отдать системный буфер
  * обмена, и это ограничение WebKit, а не настройка. С телефона стол
  * открывается приложением RustDesk; здесь — всё, что нужно ввести в клиент.
- * Пароль канала сюда не попадает никогда.
+ * Пароль канала не попадает в разметку: ссылку запуска отдаёт отдельная ручка
+ * по нажатию.
  */
 
 export const Route = createFileRoute("/desktop/")({
@@ -28,8 +29,34 @@ function useDesktopNativeChannel() {
   );
 }
 
+function useDesktopLaunchLink() {
+  return tmaApi.useMutation("post", "/api/desktop/native/launch", { gcTime: 0 });
+}
+
 function RemoteDesktopPage() {
   const { data, isPending, isError, refetch } = useDesktopNativeChannel();
+  const launch = useDesktopLaunchLink();
+
+  /**
+   * Ссылку запуска забираем в момент нажатия и сразу отдаём приложению: она
+   * несёт пароль канала, поэтому не должна ни попасть в разметку, ни осесть в
+   * состоянии экрана.
+   */
+  const openInApp = () => {
+    haptic.impact("medium");
+    launch.mutate(
+      {},
+      {
+        onSuccess: ({ url }) => {
+          window.location.assign(url);
+        },
+        onError: () => {
+          haptic.notify("error");
+          void tgAlert("Не удалось открыть приложение. Подключитесь по ID вручную.");
+        },
+      },
+    );
+  };
 
   return (
     <div className="flex min-h-full flex-col pb-6">
@@ -92,17 +119,18 @@ function RemoteDesktopPage() {
                 <dl className="grid gap-2">
                   <ChannelRow label="ID стола" value={data.device_id} />
                 </dl>
-                <a
-                  href={`rustdesk://${data.device_id}`}
-                  className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 font-display text-[15px] font-medium text-bg-11"
-                  onClick={() => haptic.impact("medium")}
+                <button
+                  type="button"
+                  disabled={launch.isPending}
+                  className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 font-display text-[15px] font-medium text-bg-11 disabled:opacity-60"
+                  onClick={openInApp}
                 >
                   <MonitorUp size={17} strokeWidth={1.7} aria-hidden="true" />
-                  Открыть в приложении
-                </a>
+                  {launch.isPending ? "Открываем…" : "Открыть в приложении"}
+                </button>
                 <p className="mt-2 text-[12px] leading-5 text-bg-8">
-                  Кнопка передаёт приложению только ID — до шага 1 она отвечает «устройство не
-                  найдено».
+                  Кнопка подставляет ID и пароль — вводить ничего не нужно. Адрес и ключ она
+                  передать не может, поэтому до шага 1 приложение ответит «устройство не найдено».
                 </p>
               </div>
             </>

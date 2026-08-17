@@ -646,6 +646,37 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/desktop/native/launch": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Get Native Launch Link
+     * @description Ссылка запуска клиента RustDesk: ID стола и пароль канала.
+     *
+     *     Отдельная ручка, а не поле в `/native`, ровно ради того, чтобы пароль не
+     *     оседал в разметке открытого экрана: он покидает сервер только по явному
+     *     нажатию владельца и живёт в памяти вкладки ровно до открытия приложения.
+     *
+     *     POST, а не GET, хотя ничего не меняет: ответ несёт секрет, а GET браузеры и
+     *     прокси считают безопасным для предзагрузки и кэша.
+     *
+     *     Ссылка НЕ несёт адрес брокера и ключ — схема `rustdesk://` их не принимает.
+     *     Клиент нужно один раз переключить на наш брокер, и экран стола этот шаг
+     *     показывает первым.
+     */
+    post: operations["get_native_launch_link_api_desktop_native_launch_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/offers": {
     parameters: {
       query?: never;
@@ -3073,12 +3104,25 @@ export interface components {
      */
     DataState: "ready" | "empty" | "partial" | "stale" | "unavailable";
     /**
+     * DesktopLaunchLinkResponse
+     * @description Готовая ссылка запуска клиента RustDesk — со всем, что нужно для входа.
+     *
+     *     Отдаётся ТОЛЬКО по явному нажатию владельца и только с `Cache-Control:
+     *     no-store`: ссылка содержит пароль канала, поэтому не должна ни осесть в
+     *     разметке страницы, ни попасть в кэш. Ответ не логируется.
+     */
+    DesktopLaunchLinkResponse: {
+      /** Url */
+      url: string;
+    };
+    /**
      * DesktopNativeChannelResponse
      * @description Данные для клиента RustDesk: адрес брокера, ключ, ID стола.
      *
-     *     Пароля здесь нет и не будет: он задаётся владельцем при деплое и в
-     *     операторские поверхности не попадает. `null` означает «стол ещё не
-     *     опубликовал значение», а не пустую строку.
+     *     Пароля здесь нет: этот ответ рендерится в разметку страницы и живёт в ней,
+     *     пока экран открыт. Пароль отдаёт отдельная ручка запуска — по нажатию и
+     *     без следа в HTML. `null` означает «стол ещё не опубликовал значение», а не
+     *     пустую строку.
      */
     DesktopNativeChannelResponse: {
       /**
@@ -6582,6 +6626,71 @@ export interface operations {
       };
       /** @description Not an active owner or invalid origin */
       403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_native_launch_link_api_desktop_native_launch_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DesktopLaunchLinkResponse"];
+        };
+      };
+      /** @description Authentication failed */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Not an active owner or invalid origin */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Desktop has not published its channel id yet */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Channel password is not configured */
+      503: {
         headers: {
           [name: string]: unknown;
         };

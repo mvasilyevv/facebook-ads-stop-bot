@@ -3,18 +3,24 @@ import type { ComponentType } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const useQuery = vi.hoisted(() => vi.fn());
+const launchMutate = vi.hoisted(() => vi.fn());
 const impact = vi.hoisted(() => vi.fn());
 const notify = vi.hoisted(() => vi.fn());
+const tgAlert = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => options,
 }));
 
 vi.mock("@/lib/auth", () => ({
-  tmaApi: { useQuery: (...args: unknown[]) => useQuery(...args) },
+  tmaApi: {
+    useQuery: (...args: unknown[]) => useQuery(...args),
+    useMutation: () => ({ mutate: launchMutate, isPending: false }),
+  },
 }));
 vi.mock("@/lib/tg", () => ({
   haptic: { impact, notify },
+  tgAlert,
 }));
 
 import { Route } from "@/routes/desktop/index";
@@ -42,27 +48,45 @@ beforeEach(() => {
 });
 
 describe("Mini App RemoteDesktopPage", () => {
-  it("ведёт в нативное приложение и показывает значения для ручного ввода", () => {
+  it("забирает ссылку запуска только по нажатию и сразу открывает её", () => {
+    // Тот же контракт, что и в вебе: ссылка несёт пароль канала, поэтому в
+    // разметке экрана её быть не должно.
+    const { container } = render(<RemoteDesktopPage />);
+
+    expect(launchMutate).not.toHaveBeenCalled();
+    expect(container.innerHTML).not.toContain("rustdesk://");
+
+    screen.getByRole("button", { name: /Открыть в приложении/ }).click();
+
+    expect(launchMutate).toHaveBeenCalledOnce();
+    const [, handlers] = launchMutate.mock.calls[0]!;
+    const assign = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, assign },
+    });
+    handlers.onSuccess({ url: "rustdesk://253474910?password=secret" });
+    expect(assign).toHaveBeenCalledWith("rustdesk://253474910?password=secret");
+  });
+
+  it("показывает значения для ручного ввода", () => {
     render(<RemoteDesktopPage />);
 
-    expect(screen.getByRole("link", { name: /Открыть в приложении/ })).toHaveAttribute(
-      "href",
-      "rustdesk://253474910",
-    );
     expect(screen.getByText("253474910")).toBeInTheDocument();
     expect(screen.getByText("100.73.162.127")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Скопировать: ID стола" })).toBeInTheDocument();
   });
 
   it("ставит настройку клиента перед кнопкой запуска", () => {
-    // Тот же контракт, что и в вебе: кнопка передаёт только ID и без
-    // переключения клиента на наш брокер отвечает «устройство не найдено».
+    // Тот же контракт, что и в вебе: адрес брокера и ключ схема rustdesk://
+    // передать не может, поэтому без переключения клиента кнопка отвечает
+    // «устройство не найдено».
     const { container } = render(<RemoteDesktopPage />);
 
     const text = container.textContent!;
     expect(text.indexOf("переключите клиент")).toBeGreaterThanOrEqual(0);
     expect(text.indexOf("переключите клиент")).toBeLessThan(text.indexOf("Открыть в приложении"));
-    expect(screen.getByText(/до шага 1 она отвечает/)).toBeInTheDocument();
+    expect(screen.getByText(/до шага 1 приложение ответит/)).toBeInTheDocument();
   });
 
   it("живёт тем же эндпоинтом, что и веб — /api/desktop/native", () => {
@@ -82,7 +106,7 @@ describe("Mini App RemoteDesktopPage", () => {
     render(<RemoteDesktopPage />);
 
     expect(screen.getByText(/ещё не опубликовал ID/)).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Открыть в приложении/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Открыть в приложении/ })).not.toBeInTheDocument();
   });
 
   it("при ошибке предлагает повторить", () => {

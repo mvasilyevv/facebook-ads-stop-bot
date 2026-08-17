@@ -4,7 +4,7 @@ import { HeaderSep, PageHeader } from "@/components/layout/PageHeader";
 import { buttonStyles } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { toast } from "@/components/ui/Toast";
-import { useDesktopNativeChannel } from "@/lib/api/desktop";
+import { useDesktopLaunchLink, useDesktopNativeChannel } from "@/lib/api/desktop";
 import { cn } from "@/lib/utils/cn";
 
 /**
@@ -15,8 +15,9 @@ import { cn } from "@/lib/utils/cn";
  * await, а клиенту между жестом и буфером нужно сходить на сервер. Нативное
  * приложение этим ограничением не связано.
  *
- * Пароль канала на страницу не попадает никогда: его задаёт владелец при
- * деплое, приложение запоминает его после первого подключения.
+ * Пароль канала не попадает в разметку страницы: кнопка «Открыть в приложении»
+ * запрашивает готовую ссылку запуска отдельной ручкой в момент нажатия, и та
+ * живёт в памяти вкладки ровно до открытия приложения.
  */
 
 const ctaClassName = cn(buttonStyles({ variant: "primary", size: "lg" }), "min-w-44");
@@ -31,6 +32,29 @@ export const Route = createFileRoute("/remote-desktop/")({
 
 function RemoteDesktopPage() {
   const { data, isPending, isError, refetch } = useDesktopNativeChannel();
+  const launch = useDesktopLaunchLink();
+
+  /**
+   * Ссылку запуска забираем в момент нажатия и сразу отдаём приложению: она
+   * несёт пароль канала, поэтому не должна ни попасть в разметку, ни осесть в
+   * состоянии экрана. В переменной она живёт до следующей строки.
+   */
+  const openInApp = () => {
+    launch.mutate(
+      {},
+      {
+        onSuccess: ({ url }) => {
+          window.location.assign(url);
+        },
+        onError: () => {
+          toast.error(
+            "Не удалось открыть приложение",
+            "Попробуйте ещё раз или подключитесь по ID вручную.",
+          );
+        },
+      },
+    );
+  };
 
   return (
     <>
@@ -120,14 +144,19 @@ function RemoteDesktopPage() {
                     <ChannelRow label="ID стола" value={data.device_id} />
                   </dl>
                   <div className="mt-3 flex justify-center">
-                    <a href={`rustdesk://${data.device_id}`} className={openAppClassName}>
+                    <button
+                      type="button"
+                      className={openAppClassName}
+                      disabled={launch.isPending}
+                      onClick={openInApp}
+                    >
                       <MonitorUp size={15} aria-hidden="true" />
-                      Открыть в приложении
-                    </a>
+                      {launch.isPending ? "Открываем…" : "Открыть в приложении"}
+                    </button>
                   </div>
                   <p className="mt-2 text-center text-[12px] leading-5 text-bg-8">
-                    Кнопка передаёт приложению только ID — до шага 1 она отвечает «устройство не
-                    найдено».
+                    Кнопка подставляет ID и пароль — вводить ничего не нужно. Адрес и ключ она
+                    передать не может, поэтому до шага 1 приложение ответит «устройство не найдено».
                   </p>
                 </div>
               </>

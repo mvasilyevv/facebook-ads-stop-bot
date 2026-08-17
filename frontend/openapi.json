@@ -2127,6 +2127,76 @@
         }
       }
     },
+    "/api/desktop/native/launch": {
+      "post": {
+        "tags": ["desktop"],
+        "summary": "Get Native Launch Link",
+        "description": "Ссылка запуска клиента RustDesk: ID стола и пароль канала.\n\nОтдельная ручка, а не поле в `/native`, ровно ради того, чтобы пароль не\nоседал в разметке открытого экрана: он покидает сервер только по явному\nнажатию владельца и живёт в памяти вкладки ровно до открытия приложения.\n\nPOST, а не GET, хотя ничего не меняет: ответ несёт секрет, а GET браузеры и\nпрокси считают безопасным для предзагрузки и кэша.\n\nСсылка НЕ несёт адрес брокера и ключ — схема `rustdesk://` их не принимает.\nКлиент нужно один раз переключить на наш брокер, и экран стола этот шаг\nпоказывает первым.",
+        "operationId": "get_native_launch_link_api_desktop_native_launch_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopLaunchLinkResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an active owner or invalid origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Desktop has not published its channel id yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Channel password is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Canonical API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/offers": {
       "get": {
         "tags": ["offers"],
@@ -9440,6 +9510,18 @@
         "enum": ["ready", "empty", "partial", "stale", "unavailable"],
         "title": "DataState"
       },
+      "DesktopLaunchLinkResponse": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": ["url"],
+        "title": "DesktopLaunchLinkResponse",
+        "description": "Готовая ссылка запуска клиента RustDesk — со всем, что нужно для входа.\n\nОтдаётся ТОЛЬКО по явному нажатию владельца и только с `Cache-Control:\nno-store`: ссылка содержит пароль канала, поэтому не должна ни осесть в\nразметке страницы, ни попасть в кэш. Ответ не логируется."
+      },
       "DesktopNativeChannelResponse": {
         "properties": {
           "available": {
@@ -9483,7 +9565,7 @@
         },
         "type": "object",
         "title": "DesktopNativeChannelResponse",
-        "description": "Данные для клиента RustDesk: адрес брокера, ключ, ID стола.\n\nПароля здесь нет и не будет: он задаётся владельцем при деплое и в\nоператорские поверхности не попадает. `null` означает «стол ещё не\nопубликовал значение», а не пустую строку."
+        "description": "Данные для клиента RustDesk: адрес брокера, ключ, ID стола.\n\nПароля здесь нет: этот ответ рендерится в разметку страницы и живёт в ней,\nпока экран открыт. Пароль отдаёт отдельная ручка запуска — по нажатию и\nбез следа в HTML. `null` означает «стол ещё не опубликовал значение», а не\nпустую строку."
       },
       "DuplicateSourceAccount": {
         "properties": {
