@@ -591,7 +591,13 @@ export interface paths {
     };
     /**
      * Get Ad Account Context
-     * @description Return durable context state without navigating or querying Meta live.
+     * @description Отдать durable-состояние кабинета, подтянув снимок, если его ещё нет.
+     *
+     *     Снимок наполняет фоновый refresh в meta_api_worker по таймеру, и до его
+     *     первого прохода новый кабинет выглядит «Контекст недоступен» — залив
+     *     заблокирован без объяснимой причины. Недостающее тянем прямо здесь: живое
+     *     чтение сохраняется в PostgreSQL, а ответ формируется ПЕРЕЧИТАННОЙ строкой.
+     *     Авторитет базы не меняется: живое значение в ответ не попадает.
      */
     get: operations["get_ad_account_context_api_campaigns_ad_account_context_get"];
     put?: never;

@@ -1975,7 +1975,7 @@
       "get": {
         "tags": ["campaigns"],
         "summary": "Get Ad Account Context",
-        "description": "Return durable context state without navigating or querying Meta live.",
+        "description": "Отдать durable-состояние кабинета, подтянув снимок, если его ещё нет.\n\nСнимок наполняет фоновый refresh в meta_api_worker по таймеру, и до его\nпервого прохода новый кабинет выглядит «Контекст недоступен» — залив\nзаблокирован без объяснимой причины. Недостающее тянем прямо здесь: живое\nчтение сохраняется в PostgreSQL, а ответ формируется ПЕРЕЧИТАННОЙ строкой.\nАвторитет базы не меняется: живое значение в ответ не попадает.",
         "operationId": "get_ad_account_context_api_campaigns_ad_account_context_get",
         "parameters": [
           {
