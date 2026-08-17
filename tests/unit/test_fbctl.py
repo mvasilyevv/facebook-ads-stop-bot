@@ -4,6 +4,7 @@ import base64
 import hashlib
 import importlib.util
 import io
+import ipaddress
 import json
 import os
 import re
@@ -3635,15 +3636,31 @@ def test_rustdesk_channel_survives_the_source_schema(tmp_path) -> None:
     }
 
 
-def test_channel_address_defaults_to_the_public_broker() -> None:
-    """Канал доступен без VPN: дефолт указывает на публичный адрес брокера.
+def test_channel_address_defaults_to_a_public_name_not_a_bare_address() -> None:
+    """Канал доступен без VPN, и адрес обязан быть именем, а не голым IP.
 
-    Приватный адрес в дефолте означал бы, что чистая установка поднимает
-    стол, до которого нельзя дойти ни с одного устройства без VPN.
+    Приватный адрес в дефолте означал бы стол, до которого нельзя дойти без
+    VPN. Но и публичного IP мало: этой же строкой compose объявляет реле в
+    своей сети, чтобы стол дошёл до него внутренним разрешением имени —
+    путь контейнер → опубликованный порт хоста закрыт. IP сетевым алиасом не
+    бывает, и с ним стол получал бы адрес, до которого не дотянуться, а
+    сессия рвалась бы уже после успешного рукопожатия.
     """
     values = canonicalize_source(_minimal_source(), incumbent={})
+    address = values["DESKTOP_RUSTDESK_SERVER"]
 
-    assert values["DESKTOP_RUSTDESK_SERVER"] == "62.60.150.133"
+    assert address == "desktop.adpulse.su"
+    with pytest.raises(ValueError):
+        ipaddress.ip_address(address)
+
+
+def test_channel_address_rejects_a_bare_ip() -> None:
+    """Голый IP отсекается на входе, а не всплывает разрывом сессии в проде."""
+    source = _minimal_source()
+    source["DESKTOP_RUSTDESK_SERVER"] = "62.60.150.133"
+
+    with pytest.raises(FbctlError, match="must be a DNS name"):
+        canonicalize_source(source, incumbent={})
 
 
 def test_channel_bind_default_matches_the_advertised_broker(tmp_path: Path) -> None:
@@ -3663,7 +3680,10 @@ def test_channel_bind_default_matches_the_advertised_broker(tmp_path: Path) -> N
     )
 
     assert config.values["DESKTOP_RUSTDESK_BIND"] == "0.0.0.0"
-    assert config.desktop_values["DESKTOP_RUSTDESK_SERVER"] == "62.60.150.133"
+    assert config.desktop_values["DESKTOP_RUSTDESK_SERVER"] == "desktop.adpulse.su"
+    # Тем же именем compose подставляет алиас реле — без ключа в runtime env
+    # подстановка развалилась бы уже на старте стола.
+    assert config.values["DESKTOP_RUSTDESK_SERVER"] == "desktop.adpulse.su"
 
 
 def test_desktop_environment_is_exactly_the_channel() -> None:

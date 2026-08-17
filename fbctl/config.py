@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import os
 import re
 import secrets
@@ -221,6 +222,10 @@ RUNTIME_KEYS = frozenset(
         "VISION_CONFIG_DIR",
         "DESKTOP_RUSTDESK_DATA_DIR",
         "DESKTOP_RUSTDESK_BIND",
+        # Адрес канала нужен не только столу внутри контейнера, но и самому
+        # compose: этим же именем реле объявляется в сети, чтобы одна строка
+        # разрешалась и внутри, и снаружи.
+        "DESKTOP_RUSTDESK_SERVER",
         "DESKTOP_READINESS_DIR",
         "BROWSER_AUTHORITY_CONSUME_URL",
         "BROWSER_MAINTENANCE_CONSUME_URL",
@@ -444,6 +449,9 @@ def prepare_candidate(
         # адрес, который объявлен оператору, но никого не слушает. Приватность
         # держится на ключе брокера и пароле стола, а не на недостижимости.
         "DESKTOP_RUSTDESK_BIND": source_values.get("DESKTOP_RUSTDESK_BIND") or "0.0.0.0",
+        # То же имя compose вешает сетевым алиасом на реле, поэтому оно нужно не
+        # только внутри контейнера стола, но и на этапе подстановки переменных.
+        "DESKTOP_RUSTDESK_SERVER": desktop_values["DESKTOP_RUSTDESK_SERVER"],
         "DESKTOP_READINESS_DIR": os.fspath(layout.shared / "desktop-readiness"),
         "BROWSER_AUTHORITY_CONSUME_URL": app_values["BROWSER_AUTHORITY_CONSUME_URL"],
         "BROWSER_MAINTENANCE_CONSUME_URL": app_values["BROWSER_MAINTENANCE_CONSUME_URL"],
@@ -549,11 +557,14 @@ def canonicalize_source(values: dict[str, str], *, incumbent: dict[str, str]) ->
         result.pop(key, None)
     result.setdefault("POSTGRES_USER", "fb_agent")
     result.setdefault("POSTGRES_DB", "fb_agent")
-    # Адрес брокера по умолчанию — публичный адрес хоста: канал должен
-    # открываться с любого устройства без VPN. Приватность держится не на
-    # недостижимости адреса, а на ключе брокера и пароле стола.
-    # Переопределяется в source при смене хоста.
-    result.setdefault("DESKTOP_RUSTDESK_SERVER", "62.60.150.133")
+    # Адрес брокера — DNS-имя, а НЕ голый IP, и это обязательное свойство, а не
+    # косметика. Одна и та же строка должна вести к реле с обеих сторон: снаружи
+    # она резолвится в публичный адрес хоста, внутри compose — в контейнер реле
+    # (имя объявлено сетевым алиасом). Голый IP так не умеет, а путь
+    # контейнер → публичный адрес закрыт: hairpin через опубликованный порт не
+    # работает, поэтому стол обязан дойти до реле внутренним разрешением имени.
+    # Приватность держится на ключе брокера и пароле стола, а не на адресе.
+    result.setdefault("DESKTOP_RUSTDESK_SERVER", "desktop.adpulse.su")
     result.setdefault("TELEGRAM_OIDC_REDIRECT_URI", f"{PUBLIC_URL}/auth/telegram/callback")
     for key in DURABLE_KEYS:
         old_value = incumbent.get(key, "")
@@ -674,6 +685,21 @@ def validate_source_values(values: dict[str, str]) -> None:
     vision_folder_id = values.get("VISION_FOLDER_ID", "")
     if vision_folder_id and not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", vision_folder_id):
         raise FbctlError("source environment has an invalid Vision folder id")
+    # Адрес канала обязан быть DNS-именем: внутри compose это же имя объявлено
+    # сетевым алиасом реле, снаружи оно резолвится в публичный адрес хоста.
+    # Голый IP такой двусторонности не даёт — стол не дойдёт до реле, потому что
+    # путь контейнер → опубликованный порт хоста закрыт, и сессия рвётся на
+    # ретрансляции уже после успешного рукопожатия.
+    rustdesk_server = values.get("DESKTOP_RUSTDESK_SERVER", "")
+    if rustdesk_server:
+        try:
+            ipaddress.ip_address(rustdesk_server)
+        except ValueError:
+            pass
+        else:
+            raise FbctlError("desktop channel address must be a DNS name, not a bare IP")
+        if not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", rustdesk_server):
+            raise FbctlError("source environment has an invalid desktop channel address")
     for key, minimum in GENERATED_SECRETS.items():
         if len(values.get(key, "")) < minimum:
             raise FbctlError(f"source environment has an invalid {key}")

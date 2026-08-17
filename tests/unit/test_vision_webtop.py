@@ -232,16 +232,30 @@ def test_channel_never_reaches_the_public_broker() -> None:
 def test_desktop_reaches_the_broker_inside_its_own_network() -> None:
     """Стол и оператор смотрят на один брокер с разных сторон.
 
-    Обратный путь из контейнера на published-адрес хоста закрыт файрволом:
-    стол молча не регистрировался, ID был, а подключиться было некуда.
-    Внутри compose брокер доступен по имени сервиса, а операторский адрес
-    остаётся публичным — его и публикует стол.
+    Обратный путь из контейнера на published-адрес хоста закрыт: стол молча
+    не регистрировался, ID был, а подключиться было некуда. Внутри compose
+    ID-сервер доступен по имени сервиса.
+
+    С реле так нельзя: стол сообщает его адрес брокеру при регистрации, а
+    брокер отдаёт ту же строку внешнему клиенту. Внутреннее имя означало бы
+    адрес, которого снаружи не существует, и сессия рвалась бы сразу после
+    успешного рукопожатия. Поэтому реле адресуется именем канала — снаружи
+    оно ведёт на хост, внутри его же compose вешает алиасом на контейнер реле.
     """
     document = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     environment = document["services"]["vision-webtop"]["environment"]
 
     assert environment["DESKTOP_RUSTDESK_ID_SERVER"] == "rustdesk-id"
-    assert environment["DESKTOP_RUSTDESK_RELAY_SERVER"] == "rustdesk-relay"
+    assert "DESKTOP_RUSTDESK_SERVER" in environment["DESKTOP_RUSTDESK_RELAY_SERVER"]
+    assert "rustdesk-relay" not in environment["DESKTOP_RUSTDESK_RELAY_SERVER"]
+
+    relay_aliases = document["services"]["rustdesk-relay"]["networks"]["platform"]["aliases"]
+    assert any("DESKTOP_RUSTDESK_SERVER" in alias for alias in relay_aliases)
+    # Алиас имени канала висит только на реле: два контейнера под одним именем
+    # Docker DNS раздавал бы по очереди, и часть обращений уходила бы в сервис
+    # без нужного порта.
+    id_aliases = document["services"]["rustdesk-id"]["networks"]["platform"]["aliases"]
+    assert not any("DESKTOP_RUSTDESK_SERVER" in alias for alias in id_aliases)
 
     entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
     # Оператору публикуется публичный адрес, а не внутреннее имя сервиса.
