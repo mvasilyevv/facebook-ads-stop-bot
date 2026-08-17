@@ -189,22 +189,41 @@ approve-mode = 'password'
 RUSTDESK_CONFIG
   chown "${requested_uid}:${requested_gid}" "${rustdesk_config_dir}/RustDesk2.toml"
 
-  # Постоянный пароль RustDesk считает административным действием: от
-  # пользователя vision `rustdesk --password` отвечает «Installation and
-  # administrative privileges required!» и выходит с НУЛЕВЫМ кодом. Вызов был
-  # прикрыт `|| true`, поэтому отказ не видел никто — стол поднимал СВОЙ
-  # случайный пароль, а оператор получал «Wrong password» на верном. Entrypoint
-  # и так работает от root, поэтому проверка проходит; файлы после root-вызова
-  # возвращаем владельцу стола.
+  # Постоянный пароль RustDesk ставит через IPC к собственному сервису, и
+  # ставит его только администратор. Оба условия ловились молча: от
+  # пользователя vision вызов отвечает «Installation and administrative
+  # privileges required!», а до подъёма сервиса — «No such file or directory
+  # (os error 2)», и оба раза выходит с НУЛЕВЫМ кодом. Прикрытый `|| true`,
+  # отказ не видел никто: стол поднимал СВОЙ случайный пароль, а оператор
+  # получал «Wrong password» на верном.
+  #
+  # Отсюда два требования: звать от root (entrypoint и так работает от него) и
+  # звать после supervisor'а, дождавшись сокета. Файлы после root-вызова
+  # возвращаем владельцу стола, иначе клиент под vision их не перечитает.
   set_rustdesk_password() {
     local config_file="${rustdesk_config_dir}/RustDesk.toml"
     local output=""
     local status=0
-    # Судим по подтверждению, а не по коду возврата: клиент умеет записать
-    # пароль и остаться висеть, и timeout прибил бы уже сделанную работу.
-    output="$(timeout 30 env HOME="${config_home}" \
-      XDG_CONFIG_HOME="${config_home}/.config" \
-      rustdesk --password "${rustdesk_password}" 2>&1)" || status=$?
+    local attempt=0
+    for attempt in {1..60}; do
+      status=0
+      # Судим по подтверждению, а не по коду возврата: он нулевой и при отказе,
+      # а клиент вдобавок умеет записать пароль и остаться висеть — тогда
+      # timeout прибьёт уже сделанную работу с ненулевым кодом.
+      output="$(timeout 30 env HOME="${config_home}" \
+        XDG_CONFIG_HOME="${config_home}/.config" \
+        rustdesk --password "${rustdesk_password}" 2>&1)" || status=$?
+      if [[ "${output}" == *'Done!'* ]]; then
+        break
+      fi
+      # Переждать стоит ровно одно — не поднявшийся сокет сервиса. Остальное
+      # (отказ прав, например) повторами не лечится: ждать им весь бюджет
+      # значит менять понятную ошибку на невнятно долгий старт.
+      if [[ "${output}" != *'os error 2'* ]]; then
+        break
+      fi
+      sleep 1
+    done
     if [[ "${output}" != *'Done!'* ]]; then
       printf 'rustdesk --password не подтвердил установку (код %s): %s\n' \
         "${status}" "${output}" >&2
@@ -216,11 +235,6 @@ RUSTDESK_CONFIG
     fi
     chown -R "${requested_uid}:${requested_gid}" "${rustdesk_config_dir}"
   }
-
-  if ! set_rustdesk_password; then
-    printf 'Канал стола остался бы с чужим паролем — отказываюсь стартовать\n' >&2
-    exit 1
-  fi
 
   rustdesk_supervisor() {
     # Единственный канал к столу. Если он упадёт, оператор не должен потерять
@@ -244,6 +258,14 @@ RUSTDESK_CONFIG
   }
   rustdesk_supervisor &
   rustdesk_pid=$!
+
+  # Только теперь: до подъёма сервиса ставить пароль некому. Сервис при старте
+  # генерирует свой случайный пароль, наш его перекрывает — секунда с чужим
+  # паролем безопасна, а стол без нашего пароля недостижим навсегда.
+  if ! set_rustdesk_password; then
+    printf 'Канал стола остался бы с чужим паролем — отказываюсь стартовать\n' >&2
+    exit 1
+  fi
 
   # Оператору для клиента нужны адрес брокера, его публичный ключ и ID стола.
   # ID выдаёт брокер, и заранее он неизвестен: кастомные ID наш OSS-брокер не

@@ -401,6 +401,7 @@ def _run_set_rustdesk_password(
     rustdesk_output: str,
     rustdesk_exit: int,
     writes_config: bool = True,
+    ipc_missing_first: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     """Исполняет функцию установки пароля прямо из entrypoint.
 
@@ -415,8 +416,20 @@ def _run_set_rustdesk_password(
     stub_dir = tmp_path / "bin"
     stub_dir.mkdir()
     rustdesk_stub = stub_dir / "rustdesk"
+    # Двойник умеет отвечать как настоящий клиент до подъёма сервиса: пароль он
+    # ставит через IPC-сокет, и пока сокета нет — «No such file or directory
+    # (os error 2)» с НУЛЕВЫМ кодом.
+    calls_file = tmp_path / "rustdesk-calls"
     rustdesk_stub.write_text(
         "#!/usr/bin/env bash\n"
+        f"calls_file={shlex.quote(str(calls_file))}\n"
+        'n=$(cat "$calls_file" 2>/dev/null || echo 0)\n'
+        "n=$((n + 1))\n"
+        'printf "%s" "$n" > "$calls_file"\n'
+        f'if [ "$n" -le {ipc_missing_first} ]; then\n'
+        "  printf '%s\\n' 'No such file or directory (os error 2)'\n"
+        "  exit 0\n"
+        "fi\n"
         f"printf '%s\\n' {shlex.quote(rustdesk_output)}\n"
         f"exit {rustdesk_exit}\n",
         encoding="utf-8",
@@ -521,3 +534,32 @@ def test_channel_password_failure_stops_the_start() -> None:
     assert "Канал стола остался бы с чужим паролем" in entrypoint
     # Прежняя болезнь дословно.
     assert ">/dev/null 2>&1 || true" not in entrypoint
+
+
+def test_channel_password_waits_for_the_service_socket(tmp_path: Path) -> None:
+    """Сервис поднимается не мгновенно, и одна попытка сделала бы старт гонкой.
+
+    До появления IPC-сокета клиент отвечает «No such file or directory (os
+    error 2)» с нулевым кодом — на живом столе это уронило контейнер в цикл
+    рестартов и завалило деплой.
+    """
+    result = _run_set_rustdesk_password(
+        tmp_path, rustdesk_output="Done!", rustdesk_exit=0, ipc_missing_first=2
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_channel_password_is_set_after_the_service_is_up() -> None:
+    """Пароль ставится через IPC к сервису, поэтому очередь обязательна.
+
+    До supervisor'а сокета ещё нет: вызов там отвечает «No such file or
+    directory (os error 2)», и стол отказывается стартовать — проверено
+    падением боевого деплоя.
+    """
+    entrypoint = (WEBTOP / "entrypoint.sh").read_text(encoding="utf-8")
+
+    supervisor_started = entrypoint.index("  rustdesk_supervisor &")
+    password_set = entrypoint.index("  if ! set_rustdesk_password; then")
+
+    assert supervisor_started < password_set
