@@ -50,6 +50,7 @@ import {
 import {
   operatorReloginRecovery,
   RELOGIN_RECOVERY_BUTTON_LABEL,
+  RELOGIN_RECOVERY_BUTTON_TONE,
   reloginRecoveryButtonState,
 } from "@fb/shared/operator/reloginRecovery";
 import type {
@@ -268,7 +269,11 @@ function OperatorMiniLedgerScreen({
           {recovery && recoveryState ? (
             <Button
               type="button"
-              variant={recoveryState === "error" ? "warning" : "primary"}
+              variant={
+                RELOGIN_RECOVERY_BUTTON_TONE[recoveryState] === "warning"
+                  ? "warning"
+                  : "primary"
+              }
               size="md"
               className="mini-scan"
               aria-live="polite"

@@ -108,7 +108,9 @@ function renderDashboard(status: OperatorRealtimeStatus = "connected") {
   );
 }
 
-function makeReloginSnapshot(scanState?: "queued" | "running" | "failed") {
+function makeReloginSnapshot(
+  scanState?: "queued" | "running" | "failed" | "cancelled",
+) {
   const snapshot = makeOperatorSnapshot();
   snapshot.attention.data!.items[0] = {
     ...snapshot.attention.data!.items[0]!,
@@ -615,6 +617,29 @@ describe("operator dashboard", () => {
         },
       },
     });
+  });
+
+  it("does not sell a system cancellation as a failure to fix", () => {
+    // Скан отменил сам observer — сканирование выключено оператором, нечего
+    // мониторить или owner scope небезопасен. Красная «Ошибка» тут отправила бы
+    // чинить исправную защиту, поэтому кнопка называет исход и остаётся живой:
+    // после правки настройки ручной повтор — единственный путь без ожидания.
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: makeReloginSnapshot("cancelled"),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderDashboard();
+
+    const button = screen.getByRole("button", { name: "Скан отменён системой" });
+    expect(button).toBeEnabled();
+    expect(button).toHaveAttribute("data-state", "blocked");
+    expect(
+      screen.queryByRole("button", { name: "Ошибка — повторить" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows an already-running recovery scan as executing", () => {

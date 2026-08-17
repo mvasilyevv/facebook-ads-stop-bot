@@ -4,6 +4,9 @@ import { makeOperatorSnapshot } from "../testFixture";
 import {
   operatorReloginRecovery,
   reloginRecoveryButtonState,
+  RELOGIN_RECOVERY_BUTTON_LABEL,
+  RELOGIN_RECOVERY_BUTTON_TONE,
+  type ReloginRecoveryButtonState,
 } from "../reloginRecovery";
 
 describe("operator re-login recovery", () => {
@@ -69,7 +72,76 @@ describe("operator re-login recovery", () => {
       },
       "error",
     ],
+    [
+      {
+        actionState: "unknown" as const,
+        requestPending: false,
+        requestFailed: false,
+      },
+      "error",
+    ],
   ])("maps command evidence to %s", (input, expected) => {
     expect(reloginRecoveryButtonState(input)).toBe(expected);
+  });
+
+  it("does not call a deliberate cancellation a failure", () => {
+    // Отменяет скан только сам observer: сканирование выключено оператором,
+    // мониторить нечего или owner scope мульти-каба небезопасен. Ни один из
+    // этих исходов не поломка, и повтор завершится ровно так же.
+    expect(
+      reloginRecoveryButtonState({
+        actionState: "cancelled",
+        requestPending: false,
+        requestFailed: false,
+      }),
+    ).toBe("blocked");
+    expect(
+      reloginRecoveryButtonState({
+        receiptState: "cancelled",
+        requestPending: false,
+        requestFailed: false,
+      }),
+    ).toBe("blocked");
+  });
+
+  it("keeps an in-flight request ahead of the previous cancellation", () => {
+    // Оператор уже нажал кнопку после того, как починил настройку: показывать
+    // прошлую отмену вместо отправки значило бы соврать о текущей команде.
+    expect(
+      reloginRecoveryButtonState({
+        actionState: "cancelled",
+        requestPending: true,
+        requestFailed: false,
+      }),
+    ).toBe("sent");
+    expect(
+      reloginRecoveryButtonState({
+        actionState: "cancelled",
+        requestPending: false,
+        requestFailed: true,
+      }),
+    ).toBe("error");
+  });
+
+  it("never words a blocked scan as an error and never promises a useless retry", () => {
+    const label = RELOGIN_RECOVERY_BUTTON_LABEL.blocked;
+    expect(label.toLowerCase()).not.toContain("ошибк");
+    expect(label.toLowerCase()).not.toContain("повтор");
+  });
+
+  it("keeps every unfinished outcome visually distinct from a normal button", () => {
+    // partial/stale/unavailable никогда не выглядят зелёными — не выполненный
+    // скан подчиняется той же шкале: нейтральной остаётся только рабочая ветка.
+    const tones: Record<ReloginRecoveryButtonState, "neutral" | "warning"> = {
+      ready: "neutral",
+      sent: "neutral",
+      running: "neutral",
+      blocked: "warning",
+      error: "warning",
+    };
+    expect(RELOGIN_RECOVERY_BUTTON_TONE).toEqual(tones);
+    expect(Object.keys(RELOGIN_RECOVERY_BUTTON_LABEL).sort()).toEqual(
+      Object.keys(tones).sort(),
+    );
   });
 });

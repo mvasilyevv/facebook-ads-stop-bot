@@ -101,7 +101,9 @@ function approachingRow(
   };
 }
 
-function makeReloginSnapshot(scanState?: "queued" | "running" | "failed") {
+function makeReloginSnapshot(
+  scanState?: "queued" | "running" | "failed" | "cancelled",
+) {
   const snapshot = makeOperatorSnapshot();
   snapshot.attention.data!.items[0] = {
     ...snapshot.attention.data!.items[0]!,
@@ -521,6 +523,29 @@ describe("TMA operator dashboard", () => {
     });
     expect(mockHapticNotify).toHaveBeenCalledWith("warning");
     expect(mockHapticNotify).not.toHaveBeenCalledWith("success");
+  });
+
+  it("does not sell a system cancellation as a failure to fix", () => {
+    // Тот же исход, что и в web-фронте: скан отменил observer, а не поломка.
+    // Мини-апп делит хелпер, поэтому подпись и тон обязаны совпадать.
+    mockUseOperatorSnapshot.mockReturnValue({
+      data: makeReloginSnapshot("cancelled"),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<Dashboard />);
+
+    const button = screen.getByRole("button", {
+      name: "Скан отменён системой",
+    });
+    expect(button).toBeEnabled();
+    expect(button).toHaveAttribute("data-state", "blocked");
+    expect(
+      screen.queryByRole("button", { name: "Ошибка — повторить" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows an active retry as executing", () => {
