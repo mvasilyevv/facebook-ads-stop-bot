@@ -309,6 +309,19 @@ class PresetIn(BaseModel):
         pattern=r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
         max_length=32,
     )
+    # Дефолт, а не единственное значение: в кабинетах 41 живая кампания из 55
+    # идёт на LOWEST_COST_WITHOUT_CAP (замер 17.08).
+    bid_strategy: BidStrategy = "COST_CAP"
+    # Ставка — часть заготовки, а не то, что вводят заново каждый раз: COST_CAP
+    # без неё не собирается. Пустая строка означает «в заготовке нет», а не
+    # подтверждённый ноль.
+    bid_amount: str = Field(
+        default="",
+        strict=True,
+        pattern=r"^(?:|(?:0|[1-9][0-9]*)(?:\.[0-9]+)?)$",
+        max_length=32,
+    )
+    display_link: str = Field(default="", max_length=255)
     url_tags_template: str | None = Field(default=None, max_length=1024)
     naming_template: str | None = Field(default=None, max_length=512)
 
@@ -372,6 +385,9 @@ class PresetOut(BaseModel):
     budget_level: Literal["campaign", "adset"]
     # NULL only identifies a legacy row that must be edited before it is reusable.
     daily_budget: str | None
+    bid_strategy: BidStrategy
+    bid_amount: str
+    display_link: str
     url_tags_template: str | None
     naming_template: str | None
     created_at: str

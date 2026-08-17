@@ -447,6 +447,7 @@ async def delete_campaign_draft(
 _PRESET_COLUMNS = """
     id::text AS id, name, countries, age_min, age_max, genders, placements,
     custom_event_type, budget_level, daily_budget,
+    bid_strategy, bid_amount, display_link,
     url_tags_template, naming_template,
     created_at::text AS created_at, updated_at::text AS updated_at
 """
@@ -493,11 +494,13 @@ async def create_preset(body: PresetIn, engine: DepEngine) -> PresetOut:
                     INSERT INTO campaign_preset
                         (name, countries, age_min, age_max, genders, placements,
                          custom_event_type, budget_level, daily_budget,
+                         bid_strategy, bid_amount, display_link,
                          url_tags_template, naming_template)
                     VALUES
                         (:name, CAST(:countries AS JSONB), :age_min, :age_max,
                          CAST(:genders AS JSONB), CAST(:placements AS JSONB),
                          :custom_event_type, :budget_level, :daily_budget,
+                         :bid_strategy, :bid_amount, :display_link,
                          :url_tags_template, :naming_template)
                     RETURNING """
                     + _PRESET_COLUMNS
@@ -552,6 +555,8 @@ async def update_preset(preset_id: str, body: PresetIn, engine: DepEngine) -> Pr
                         placements=CAST(:placements AS JSONB),
                         custom_event_type=:custom_event_type,
                         budget_level=:budget_level, daily_budget=:daily_budget,
+                        bid_strategy=:bid_strategy, bid_amount=:bid_amount,
+                        display_link=:display_link,
                         url_tags_template=:url_tags_template, naming_template=:naming_template,
                         updated_at=NOW()
                     WHERE id=:pid

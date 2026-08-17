@@ -12,9 +12,16 @@ def test_campaign_preset_migration_is_the_single_forward_only_head() -> None:
     chain = load_project_revision_chain()
 
     assert migration.down_revision == "0005_am_columns_setting"
-    assert chain.head == "0006_campaign_preset_snapshot"
+    # Голова уехала на 0007: пресет получил ставку, стратегию и отображаемую
+    # ссылку. Цепочка остаётся линейной и forward-only.
+    assert chain.head == "0007_preset_bid_and_link"
     with pytest.raises(RuntimeError, match="forward-only"):
         migration.downgrade()
+
+    bid_migration = importlib.import_module("migrations.versions.0007_preset_bid_and_link")
+    assert bid_migration.down_revision == "0006_campaign_preset_snapshot"
+    with pytest.raises(RuntimeError, match="forward-only"):
+        bid_migration.downgrade()
 
 
 def test_campaign_preset_migration_adds_snapshot_fields_and_purchase_guard(

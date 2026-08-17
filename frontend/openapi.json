@@ -12856,6 +12856,30 @@
             "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
             "title": "Daily Budget"
           },
+          "bid_strategy": {
+            "type": "string",
+            "enum": [
+              "COST_CAP",
+              "LOWEST_COST_WITHOUT_CAP",
+              "LOWEST_COST_WITH_BID_CAP",
+              "LOWEST_COST_WITH_MIN_ROAS"
+            ],
+            "title": "Bid Strategy",
+            "default": "COST_CAP"
+          },
+          "bid_amount": {
+            "type": "string",
+            "maxLength": 32,
+            "pattern": "^(?:|(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?)$",
+            "title": "Bid Amount",
+            "default": ""
+          },
+          "display_link": {
+            "type": "string",
+            "maxLength": 255,
+            "title": "Display Link",
+            "default": ""
+          },
           "url_tags_template": {
             "anyOf": [
               {
@@ -12949,6 +12973,24 @@
             ],
             "title": "Daily Budget"
           },
+          "bid_strategy": {
+            "type": "string",
+            "enum": [
+              "COST_CAP",
+              "LOWEST_COST_WITHOUT_CAP",
+              "LOWEST_COST_WITH_BID_CAP",
+              "LOWEST_COST_WITH_MIN_ROAS"
+            ],
+            "title": "Bid Strategy"
+          },
+          "bid_amount": {
+            "type": "string",
+            "title": "Bid Amount"
+          },
+          "display_link": {
+            "type": "string",
+            "title": "Display Link"
+          },
           "url_tags_template": {
             "anyOf": [
               {
@@ -12992,6 +13034,9 @@
           "custom_event_type",
           "budget_level",
           "daily_budget",
+          "bid_strategy",
+          "bid_amount",
+          "display_link",
           "url_tags_template",
           "naming_template",
           "created_at",

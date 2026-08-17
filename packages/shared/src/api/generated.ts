@@ -4193,6 +4193,26 @@ export interface components {
       budget_level: "campaign" | "adset";
       /** Daily Budget */
       daily_budget: string;
+      /**
+       * Bid Strategy
+       * @default COST_CAP
+       * @enum {string}
+       */
+      bid_strategy:
+        | "COST_CAP"
+        | "LOWEST_COST_WITHOUT_CAP"
+        | "LOWEST_COST_WITH_BID_CAP"
+        | "LOWEST_COST_WITH_MIN_ROAS";
+      /**
+       * Bid Amount
+       * @default
+       */
+      bid_amount: string;
+      /**
+       * Display Link
+       * @default
+       */
+      display_link: string;
       /** Url Tags Template */
       url_tags_template?: string | null;
       /** Naming Template */
@@ -4229,6 +4249,19 @@ export interface components {
       budget_level: "campaign" | "adset";
       /** Daily Budget */
       daily_budget: string | null;
+      /**
+       * Bid Strategy
+       * @enum {string}
+       */
+      bid_strategy:
+        | "COST_CAP"
+        | "LOWEST_COST_WITHOUT_CAP"
+        | "LOWEST_COST_WITH_BID_CAP"
+        | "LOWEST_COST_WITH_MIN_ROAS";
+      /** Bid Amount */
+      bid_amount: string;
+      /** Display Link */
+      display_link: string;
       /** Url Tags Template */
       url_tags_template: string | null;
       /** Naming Template */

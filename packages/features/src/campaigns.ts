@@ -607,6 +607,10 @@ export interface CampaignPresetDraft {
   custom_event_type: "PURCHASE";
   budget_level: "campaign" | "adset";
   daily_budget: string;
+  /** Ставка — часть заготовки: COST_CAP без неё не собирается. */
+  bid_strategy: CampaignBidStrategy;
+  bid_amount: string;
+  display_link: string;
   naming_template: string;
   url_tags_template: string;
 }
@@ -625,6 +629,9 @@ export function createCampaignPresetDraft(
       custom_event_type: "PURCHASE",
       budget_level: source.goal.budget_level,
       daily_budget: source.goal.daily_budget,
+      bid_strategy: source.goal.bid_strategy,
+      bid_amount: source.goal.bid_amount,
+      display_link: source.goal.display_link,
       naming_template: source.goal.naming_template,
       url_tags_template: source.goal.url_tags_template,
     };
@@ -640,6 +647,9 @@ export function createCampaignPresetDraft(
       custom_event_type: "PURCHASE",
       budget_level: source.budget_level,
       daily_budget: source.daily_budget ?? "",
+      bid_strategy: source.bid_strategy,
+      bid_amount: source.bid_amount,
+      display_link: source.display_link,
       naming_template: source.naming_template ?? "",
       url_tags_template: source.url_tags_template ?? "",
     };
@@ -654,6 +664,9 @@ export function createCampaignPresetDraft(
     custom_event_type: "PURCHASE",
     budget_level: "campaign",
     daily_budget: "",
+    bid_strategy: "COST_CAP",
+    bid_amount: "",
+    display_link: "",
     naming_template: "",
     url_tags_template: "",
   };
