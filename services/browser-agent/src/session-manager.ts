@@ -193,6 +193,31 @@ export function findPreferredPrimaryPage(browser: Browser | null): Page | null {
   return fallbackPage;
 }
 
+/** Живая вкладка Ads Manager без побочных эффектов: ничего не создаёт и не навигирует.
+ *
+ * Отличие от findPreferredPrimaryPage: здесь нет отката на первую попавшуюся
+ * вкладку. Проба здоровья без явно названного кабинета должна честно ответить
+ * «нет страницы», а не выдать за Ads Manager чужую вкладку оператора.
+ */
+export function findLiveAdsManagerPage(browser: Browser | null): Page | null {
+  if (!browser) {
+    return null;
+  }
+
+  for (const context of safeBrowserContexts(browser)) {
+    for (const page of safeContextPages(context)) {
+      if (isPageClosed(page)) {
+        continue;
+      }
+      if (isAdsManagerUrl(safePageUrl(page))) {
+        return page;
+      }
+    }
+  }
+
+  return null;
+}
+
 /** Запоминает URL живой вкладки Ads Manager на сессии — чтобы переоткрыть её при self-heal. */
 export function rememberAdsManagerUrl(
   session: BrowserSession,

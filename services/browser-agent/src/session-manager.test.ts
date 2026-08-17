@@ -6,6 +6,7 @@ import {
   canonicalAdsManagerUrl,
   extractAdAccountId,
   findAdsManagerPageByAct,
+  findLiveAdsManagerPage,
   findPreferredPrimaryPage,
   isAdsManagerUrl,
   rememberAdsManagerUrl,
@@ -1782,4 +1783,57 @@ test("закрытие scan page не заменяет и не трогает co
   assert.equal(healedScan, replacement);
   assert.notEqual(healedScan, control);
   assert.equal(session.controlPages.get("222"), control);
+});
+
+// Проба готовности читает токен с уже открытой вкладки кабинета.
+test("findLiveAdsManagerPage возвращает живую вкладку Ads Manager", () => {
+  const inboxPage = {
+    isClosed: () => false,
+    url: () => "https://www.facebook.com/messages/",
+  };
+  const adsPage = {
+    isClosed: () => false,
+    url: () => "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=123",
+  };
+  const browser = {
+    contexts: () => [{ pages: () => [inboxPage, adsPage] }],
+  };
+
+  assert.equal(findLiveAdsManagerPage(browser as any), adsPage);
+});
+
+// В отличие от findPreferredPrimaryPage здесь НЕТ отката на первую попавшуюся
+// вкладку: выдать чужую вкладку за Ads Manager значит соврать о готовности канала.
+test("findLiveAdsManagerPage не подменяет Ads Manager чужой вкладкой", () => {
+  const inboxPage = {
+    isClosed: () => false,
+    url: () => "https://www.facebook.com/messages/",
+  };
+  const browser = {
+    contexts: () => [{ pages: () => [inboxPage] }],
+  };
+
+  assert.equal(findLiveAdsManagerPage(browser as any), null);
+});
+
+// Закрытая вкладка не является доказательством живого канала.
+test("findLiveAdsManagerPage игнорирует закрытые вкладки", () => {
+  const closedAdsPage = {
+    isClosed: () => true,
+    url: () => "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=123",
+  };
+  const openAdsPage = {
+    isClosed: () => false,
+    url: () => "https://adsmanager.facebook.com/adsmanager/manage/ads?act=456",
+  };
+  const browser = {
+    contexts: () => [{ pages: () => [closedAdsPage, openAdsPage] }],
+  };
+
+  assert.equal(findLiveAdsManagerPage(browser as any), openAdsPage);
+});
+
+// Без браузера проба обязана честно ответить «нет страницы», а не упасть.
+test("findLiveAdsManagerPage без браузера возвращает null", () => {
+  assert.equal(findLiveAdsManagerPage(null), null);
 });
