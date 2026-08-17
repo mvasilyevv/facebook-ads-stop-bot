@@ -127,6 +127,11 @@ message CheckMetaApiHealthRequest {
   // browser-agent must probe that exact live session and must never fall back
   // to an unrelated preferred session.
   string expected_vision_profile_id = 3;
+
+  // Кабинет, в котором выполняется проба. Задаётся вызывающим явно.
+  // Пусто = переиспользовать любую уже открытую вкладку Ads Manager и НЕ
+  // открывать новую: адрес текущей вкладки не является account identity.
+  string ad_account_id = 4;
 }
 
 message CheckMetaApiHealthResponse {

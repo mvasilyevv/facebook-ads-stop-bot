@@ -587,7 +587,8 @@ describe('MetaApiService exact-profile health', () => {
     const session = {
       id: 'session-exact',
       visionProfileId: 'profile-exact',
-      primaryPage: { url: () => 'https://adsmanager.facebook.com/?act=123' },
+      // Случайная вкладка чужого кабинета: identity из неё браться не должна.
+      primaryPage: { url: () => 'https://adsmanager.facebook.com/?act=1855748448431929' },
     };
     let requestedProfile = '';
     let preferredCalls = 0;
@@ -631,6 +632,7 @@ describe('MetaApiService exact-profile health', () => {
           session_id: '',
           full_probe: true,
           expected_vision_profile_id: 'profile-exact',
+          ad_account_id: '2108857220005012',
         }),
         (error: unknown, value: unknown) => (error ? reject(error) : resolve(value)),
       );
@@ -638,7 +640,7 @@ describe('MetaApiService exact-profile health', () => {
 
     assert.equal(requestedProfile, 'profile-exact');
     assert.equal(preferredCalls, 0);
-    assert.deepEqual(requestedActs, ['123']);
+    assert.deepEqual(requestedActs, ['2108857220005012']);
     assert.equal(response.healthy, true);
     assert.equal(response.browser_contract_version, 5);
     assert.equal(response.session_id, 'session-exact');
@@ -681,6 +683,7 @@ describe('MetaApiService exact-profile health', () => {
       session_id: '',
       full_probe: true,
       expected_vision_profile_id: 'profile-exact',
+      ad_account_id: '123',
     });
     let callbacks = 0;
 
@@ -727,5 +730,143 @@ describe('MetaApiService exact-profile health', () => {
     assert.equal(response.vision_profile_id, '');
     assert.equal(preferredCalls, 0);
     assert.equal(pageCalls, 0);
+  });
+
+  it('health probe without a cabinet reuses a live tab and creates nothing', async () => {
+    let createdPages = 0;
+    const adsPage = {
+      isClosed: () => false,
+      url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=2108857220005012',
+    };
+    const session = {
+      id: 'session-exact',
+      visionProfileId: 'profile-exact',
+      primaryPage: { url: () => 'https://adsmanager.facebook.com/?act=1855748448431929' },
+      browser: { contexts: () => [{ pages: () => [adsPage] }] },
+    };
+    const fakeManager = {
+      getSessionForVisionProfile: () => session,
+    } as unknown as SessionManager;
+    const handlers = createMetaApiServiceHandlers(fakeManager, {
+      getInteractivePage: () => {
+        createdPages += 1;
+        return {} as any;
+      },
+      checkMetaApiHealth: async (page) => {
+        assert.equal(page, adsPage as any);
+        return {
+          healthy: true,
+          currentUrl: 'https://adsmanager.facebook.com/?act=2108857220005012',
+          tokenPresent: true,
+          tokenLength: 200,
+          detail: 'ok',
+          probePerformed: false,
+          probeOk: false,
+          probeStatusCode: 0,
+          probeDurationMs: 0,
+          probeDetail: 'not_performed',
+        };
+      },
+    });
+
+    const response = await new Promise<any>((resolve, reject) => {
+      handlers.checkMetaApiHealth(
+        unaryCall({
+          session_id: '',
+          full_probe: false,
+          expected_vision_profile_id: 'profile-exact',
+          ad_account_id: '',
+        }),
+        (error: unknown, value: unknown) => (error ? reject(error) : resolve(value)),
+      );
+    });
+
+    assert.equal(createdPages, 0);
+    assert.equal(response.healthy, true);
+  });
+
+  it('health probe without a cabinet and without a tab answers no_ads_manager_page', async () => {
+    let createdPages = 0;
+    const session = {
+      id: 'session-exact',
+      visionProfileId: 'profile-exact',
+      primaryPage: { url: () => 'https://adsmanager.facebook.com/?act=1855748448431929' },
+      browser: { contexts: () => [{ pages: () => [] }] },
+    };
+    const fakeManager = {
+      getSessionForVisionProfile: () => session,
+    } as unknown as SessionManager;
+    const handlers = createMetaApiServiceHandlers(fakeManager, {
+      getInteractivePage: () => {
+        createdPages += 1;
+        return {} as any;
+      },
+      checkMetaApiHealth: async () => {
+        throw new Error('проба не должна запускаться без страницы');
+      },
+    });
+
+    const response = await new Promise<any>((resolve, reject) => {
+      handlers.checkMetaApiHealth(
+        unaryCall({
+          session_id: '',
+          full_probe: false,
+          expected_vision_profile_id: 'profile-exact',
+          ad_account_id: '',
+        }),
+        (error: unknown, value: unknown) => (error ? reject(error) : resolve(value)),
+      );
+    });
+
+    assert.equal(createdPages, 0);
+    assert.equal(response.healthy, false);
+    assert.equal(response.detail, 'no_ads_manager_page');
+    assert.equal(response.probe_performed, false);
+    assert.equal(response.browser_contract_version, 5);
+    assert.equal(response.session_id, 'session-exact');
+  });
+
+  // Кривой кабинет — не повод угадать его из вкладки. Ошибка отдаётся штатным
+  // ответом healthy=false (как и session_not_found), потому что health_watchdog
+  // хочет видеть состояние канала, а не gRPC-исключение.
+  it('health probe reports a malformed cabinet id instead of guessing', async () => {
+    let createdPages = 0;
+    const session = {
+      id: 'session-exact',
+      visionProfileId: 'profile-exact',
+      primaryPage: { url: () => 'https://adsmanager.facebook.com/?act=1855748448431929' },
+      browser: { contexts: () => [{ pages: () => [] }] },
+    };
+    const fakeManager = {
+      getSessionForVisionProfile: () => session,
+    } as unknown as SessionManager;
+    const handlers = createMetaApiServiceHandlers(fakeManager, {
+      getInteractivePage: () => {
+        createdPages += 1;
+        return {} as any;
+      },
+      checkMetaApiHealth: async () => {
+        throw new Error('проба не должна запускаться при кривом кабинете');
+      },
+    });
+
+    const response = await new Promise<any>((resolve, reject) => {
+      handlers.checkMetaApiHealth(
+        unaryCall({
+          session_id: '',
+          full_probe: false,
+          expected_vision_profile_id: 'profile-exact',
+          ad_account_id: 'act_123abc',
+        }),
+        (error: unknown, value: unknown) => (error ? reject(error) : resolve(value)),
+      );
+    });
+
+    assert.equal(createdPages, 0);
+    assert.equal(response.healthy, false);
+    assert.equal(response.probe_performed, false);
+    assert.match(response.detail, /ad_account_id must be 1\.\.32 digits/);
+    // Кабинет из вкладки в ответ не просочился.
+    assert.equal(response.detail.includes('1855748448431929'), false);
   });
 });

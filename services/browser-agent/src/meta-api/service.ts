@@ -3,7 +3,11 @@
 import * as grpc from '@grpc/grpc-js';
 import { createHash, randomUUID } from 'crypto';
 import type { Page } from 'playwright';
-import { SessionManager, extractAdAccountId } from '../session-manager.js';
+import {
+  SessionManager,
+  extractAdAccountId,
+  findLiveAdsManagerPage,
+} from '../session-manager.js';
 import type { BrowserSession } from '../types.js';
 import { executeGraphCall, checkMetaApiHealth, type GraphApiCallParams } from './client.js';
 import { uploadImage, uploadVideoSingle } from './upload.js';
@@ -511,15 +515,51 @@ export function createMetaApiServiceHandlers(
         req.session_id,
         req.expected_vision_profile_id,
       );
-      const actId = extractAdAccountId(session.primaryPage?.url?.()) ?? '';
+      // Кабинет пробы называет вызывающий. Адрес текущей вкладки — случайное
+      // состояние браузера, а не identity: раньше проба брала act отсюда и
+      // каждые 2 секунды воскрешала вкладку произвольного кабинета, которую
+      // оператор не мог закрыть (прод, 17.08.2026).
+      const requestedAct = String(req.ad_account_id || '').trim();
+      if (requestedAct && !/^\d{1,32}$/.test(requestedAct)) {
+        throw new Error('ad_account_id must be 1..32 digits');
+      }
       const fullProbe = Boolean(req.full_probe);
+      const reusablePage = requestedAct
+        ? null
+        : findLiveAdsManagerPage(session.browser ?? null);
 
-      const result = await withPageRoleLock(session.id, 'interactive', actId, async () => {
-        const page = await _getInteractivePage(
-          session,
-          actId,
-          grpcAbort.controller.signal,
-        );
+      if (!requestedAct && !reusablePage) {
+        // Без явного кабинета проба ничего не открывает: отсутствие живой
+        // вкладки Ads Manager — честный отказ, а не повод создать вкладку.
+        if (grpcAbort.controller.signal.aborted) return;
+        callback(null, {
+          healthy: false,
+          current_url: '',
+          token_present: false,
+          token_length: 0,
+          detail: 'no_ads_manager_page',
+          probe_performed: false,
+          probe_ok: false,
+          probe_status_code: 0,
+          probe_duration_ms: 0,
+          probe_detail: 'not_performed',
+          browser_contract_version: BROWSER_CONTRACT_VERSION,
+          session_id: session.id,
+          vision_profile_id: session.visionProfileId,
+        });
+        return;
+      }
+
+      const lockAct = requestedAct || extractAdAccountId(reusablePage?.url?.()) || '';
+
+      const result = await withPageRoleLock(session.id, 'interactive', lockAct, async () => {
+        const page = requestedAct
+          ? await _getInteractivePage(
+            session,
+            requestedAct,
+            grpcAbort.controller.signal,
+          )
+          : (reusablePage as any);
         return _checkMetaApiHealth(page, {
           fullProbe,
           signal: grpcAbort.controller.signal,
