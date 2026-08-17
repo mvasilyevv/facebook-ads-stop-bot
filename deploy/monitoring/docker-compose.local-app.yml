@@ -11,7 +11,15 @@ services:
       platform:
         aliases: [alloy-agent]
 
+  # Fallback scraper only. Prometheus docker_sd already resolves a container
+  # that runs with `network_mode: container:vision-webtop` through the shared
+  # namespace, so browser-agent is discovered on the Vision IP and appears in
+  # `fb-agent-runtime` without help. Starting this service by default would
+  # remote-write the same series a second time under `node="local-app-host"`.
+  # Enable with `--profile vision-namespace-scrape` only if docker_sd stops
+  # reporting an address for the browser-agent container.
   browser-agent-metrics:
+    profiles: ["vision-namespace-scrape"]
     image: ${ALLOY_IMAGE:?set ALLOY_IMAGE to image@sha256}
     restart: unless-stopped
     command:
