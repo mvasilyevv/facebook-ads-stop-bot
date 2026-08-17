@@ -65,8 +65,8 @@ describe("Mini App RemoteDesktopPage", () => {
       configurable: true,
       value: { ...window.location, assign },
     });
-    handlers.onSuccess({ url: "rustdesk://253474910?password=secret" });
-    expect(assign).toHaveBeenCalledWith("rustdesk://253474910?password=secret");
+    handlers.onSuccess({ url: "rustdesk://connection/new/253474910?password=secret" });
+    expect(assign).toHaveBeenCalledWith("rustdesk://connection/new/253474910?password=secret");
   });
 
   it("показывает значения для ручного ввода", () => {

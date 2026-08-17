@@ -167,8 +167,17 @@ async def get_native_launch_link(
         raise HTTPException(status_code=503, detail="Пароль канала не сконфигурирован на сервере")
     # quote со стандартным safe="/" оставил бы слеш сырым, а он в query-строке
     # значим не для всех клиентов; пароль генерируется нами и может его нести.
+    #
+    # Форма каноничная, а не короткая. `rustdesk://<id>?password=` клиент
+    # разбирает наполовину: на холодном старте пароль доезжает, а на уже
+    # запущенном приложении подставляется только ID — оба состояния замерены на
+    # живом канале. Из-за этого кнопка работала через раз, а оператор видел
+    # «Wrong password» без единой подсказки, что дело в форме ссылки.
     return DesktopLaunchLinkResponse(
-        url=f"rustdesk://{quote(device_id, safe='')}?password={quote(password, safe='')}"
+        url=(
+            f"rustdesk://connection/new/{quote(device_id, safe='')}"
+            f"?password={quote(password, safe='')}"
+        )
     )
 
 

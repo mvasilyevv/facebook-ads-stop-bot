@@ -146,10 +146,11 @@ async def test_launch_link_carries_the_password_so_the_client_asks_nothing(
 ) -> None:
     """Смысл ручки — вход без единого диалога.
 
-    Схема `rustdesk://<id>?password=<pw>` разбирается клиентом и отправляется
-    столу: проверено на живом канале — с неверным паролем клиент отвечает
-    «Wrong password», а не пустым запросом. Без пароля в ссылке оператор
-    каждый раз вводил бы его руками, ради чего кнопка и заводилась.
+    Форма обязана быть каноничной. Короткую `rustdesk://<id>?password=<pw>`
+    клиент разбирает наполовину: на холодном старте пароль доезжает, а на уже
+    запущенном приложении подставляется только ID — проверено обоими замерами
+    на живом канале. Кнопка из-за этого работала через раз, и причину оператор
+    увидеть не мог.
     """
     gate_calls: list[bool] = []
 
@@ -164,7 +165,7 @@ async def test_launch_link_carries_the_password_so_the_client_asks_nothing(
     )
 
     assert gate_calls == [True]
-    assert payload.url == "rustdesk://253474910?password=s3cret-channel-pass"
+    assert payload.url == "rustdesk://connection/new/253474910?password=s3cret-channel-pass"
     # Ссылка с паролем не должна осесть ни в кэше, ни в реферере.
     assert response.headers["Cache-Control"] == "no-store"
     assert response.headers["Referrer-Policy"] == "no-referrer"
@@ -193,7 +194,7 @@ async def test_launch_link_percent_encodes_a_hostile_password(
         _launch_settings(_published(tmp_path), password="a&b#c/d e"),
     )
 
-    assert payload.url == "rustdesk://253474910?password=a%26b%23c%2Fd%20e"
+    assert payload.url == "rustdesk://connection/new/253474910?password=a%26b%23c%2Fd%20e"
 
 
 @pytest.mark.asyncio
