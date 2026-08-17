@@ -533,6 +533,56 @@ git add -A && git commit -m "feat(campaigns): пресет хранит став
 
 ---
 
+### Task A4: Оффер подставляет то, что уже про него знает
+
+Найдено 17.08 при разборе: таблица `offers` хранит `code, name, vertical, is_active,
+**pixel_id**, **countries**`, а создание кампании читает оффер ровно один раз — чтобы сверить
+CPA-порог и валюту (`apps/api/routers/v1/campaigns_create.py:289`). Пиксель и гео оператор
+вбивает руками при каждом заливе, хотя они лежат в базе рядом с выбранным оффером.
+
+**Files:**
+- Modify: `apps/api/routers/v1/campaigns_create.py` (расширить выборку оффера)
+- Test: `tests/unit/test_campaigns_create_schemas.py`
+
+**Interfaces:**
+- Produces: `offer_defaults(engine, offer_code) -> OfferDefaults` с полями
+  `pixel_id: str`, `countries: list[str]`.
+
+- [ ] **Step 1: Написать падающий тест**
+
+```python
+@pytest.mark.asyncio
+async def test_offer_supplies_pixel_and_countries() -> None:
+    """Оператор вбивал пиксель и гео руками при каждом заливе, хотя они лежат
+    в `offers` рядом с выбранным оффером. Ошибка в пикселе тихо уводит
+    конверсии в чужой кабинет — это money-путь, а не удобство."""
+    defaults = await offer_defaults(_engine_with_offer(pixel_id="PX1", countries=["GH"]), "GH_AVI")
+
+    assert defaults.pixel_id == "PX1"
+    assert defaults.countries == ["GH"]
+```
+
+- [ ] **Step 2: Убедиться, что падает**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit/test_campaigns_create_schemas.py -q -k offer_supplies`
+Expected: FAIL — функции `offer_defaults` нет.
+
+- [ ] **Step 3: Расширить выборку оффера**
+
+В существующем запросе (`campaigns_create.py:289`) добавь к `SELECT` поля
+`offer.pixel_id, offer.countries` и верни их отдельной структурой. Подставлять их в черновик —
+как значения по умолчанию, которые оператор может переопределить: жёсткая подстановка сломала
+бы залив на кабинет с другим пикселем.
+
+- [ ] **Step 4: Прогнать и закоммитить**
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/unit -q
+git add -A && git commit -m "feat(campaigns): пиксель и гео подставляются из оффера"
+```
+
+---
+
 ## Трек B — качество видео-креатива
 
 ### Task B1: Снять имена колонок с самой страницы, а не подбирать их
