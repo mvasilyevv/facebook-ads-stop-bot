@@ -224,6 +224,11 @@ def test_channel_never_reaches_the_public_broker() -> None:
     assert "relay-server = '${rustdesk_relay_server}'" in entrypoint
     assert "key = '${rustdesk_key}'" in entrypoint
     assert "verification-method = 'use-permanent-password'" in entrypoint
+    # Пароля мало: дефолтный approve-mode RustDesk — 'password-click', то есть
+    # ещё и «Accept» в живой сессии на стороне стола. Нажимать в контейнере
+    # некому, и оператор навсегда повисал на «Please wait for the remote side
+    # to accept your session request».
+    assert "approve-mode = 'password'" in entrypoint
     # Стол настоящий, с framebuffer: headless-режим RustDesk с его известными
     # болячками не включается.
     assert "allow-linux-headless" not in entrypoint

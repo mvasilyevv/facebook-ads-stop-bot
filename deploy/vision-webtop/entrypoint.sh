@@ -180,6 +180,12 @@ custom-rendezvous-server = '${rustdesk_id_server}'
 relay-server = '${rustdesk_relay_server}'
 key = '${rustdesk_key}'
 verification-method = 'use-permanent-password'
+# Вход по одному паролю, без подтверждения кликом на стороне стола. Дефолт
+# RustDesk — 'password-click', то есть пароль И нажатие «Accept» в живой сессии;
+# на headless-столе нажимать некому, и оператор вечно висел на «Please wait for
+# the remote side to accept your session request». Доступ держится на пароле
+# канала и ключе брокера, а не на том, что рядом со столом кто-то сидит.
+approve-mode = 'password'
 RUSTDESK_CONFIG
   chown "${requested_uid}:${requested_gid}" "${rustdesk_config_dir}/RustDesk2.toml"
 
