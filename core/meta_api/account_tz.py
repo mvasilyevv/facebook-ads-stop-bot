@@ -22,6 +22,7 @@ from core.money import (
     currency_exponent,
     validated_currency_code,
 )
+from core.observer.accounts import resolve_scan_account_ids
 from core.tasks.browser_fence import (
     BrowserFenceLeaseLost,
     BrowserOperationBlocked,
@@ -204,7 +205,9 @@ async def resolve_cabinet_days(
     observed_now = now or datetime.now(UTC)
     if observed_now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
-    requested = await active_account_ids(engine) if account_ids is None else list(account_ids)
+    # Дефолтный скоуп — наши кабинеты по конфигурации офферов. Следы прошлых
+    # сканов скоуп не задают: у нового кабинета их нет, и он выпадал целиком.
+    requested = await resolve_scan_account_ids(engine) if account_ids is None else list(account_ids)
     canonical_ids = tuple(
         sorted(
             {
@@ -293,7 +296,9 @@ async def resolve_account_currencies(
         raise ValueError("now must be timezone-aware")
     if max_age <= timedelta(0):
         raise ValueError("max_age must be positive")
-    requested = await active_account_ids(engine) if account_ids is None else list(account_ids)
+    # Дефолтный скоуп — наши кабинеты по конфигурации офферов. Следы прошлых
+    # сканов скоуп не задают: у нового кабинета их нет, и он выпадал целиком.
+    requested = await resolve_scan_account_ids(engine) if account_ids is None else list(account_ids)
     canonical_ids = tuple(
         sorted(
             {
@@ -503,25 +508,10 @@ async def persist_account_context(
     return True
 
 
-async def active_account_ids(engine: AsyncEngine) -> list[str]:
-    """Return explicit active cabinet identities from the campaign catalog."""
-    async with engine.connect() as conn:
-        rows = (
-            await conn.execute(
-                text(
-                    "SELECT DISTINCT ad_account_id FROM fb_campaigns "
-                    "WHERE ad_account_id IS NOT NULL AND is_active = true "
-                    "ORDER BY ad_account_id"
-                )
-            )
-        ).fetchall()
-    return [str(row[0]) for row in rows if row[0]]
-
-
 async def refresh_account_timezones(engine: AsyncEngine, client: Any) -> int:
     """Best-effort refresh of durable timezone and currency evidence."""
     try:
-        account_ids = await active_account_ids(engine)
+        account_ids = await resolve_scan_account_ids(engine)
     except Exception as exc:  # noqa: BLE001 - idle refresh never owns money decisions
         logger.warning("account timezone cabinet list failed: %s", exc)
         return 0
@@ -580,7 +570,6 @@ __all__ = [
     "CabinetTimezoneUnknownError",
     "FetchedAccountContext",
     "RequiredCabinetDay",
-    "active_account_ids",
     "cabinet_day_end_for_timezone",
     "cabinet_day_start_for_timezone",
     "canonical_account_id",

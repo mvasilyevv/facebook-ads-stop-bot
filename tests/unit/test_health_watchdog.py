@@ -421,12 +421,12 @@ class _ShadowMetaClient:
 
 
 async def test_shadow_tick_uses_postgres_clock_when_now_is_not_injected(monkeypatch) -> None:
-    from core.meta_api import account_tz
+    from core.observer import accounts as observer_accounts
 
     db_now = datetime(2026, 7, 3, 8, 40, tzinfo=timezone.utc)
     clock = AsyncMock(return_value=db_now)
     monkeypatch.setattr(hw, "_database_now", clock)
-    monkeypatch.setattr(account_tz, "active_account_ids", AsyncMock(return_value=[]))
+    monkeypatch.setattr(observer_accounts, "resolve_scan_account_ids", AsyncMock(return_value=[]))
     engine = object()
 
     assert await hw.check_shadow_spend(_ShadowMetaClient("1000"), engine=engine) is False
@@ -438,11 +438,12 @@ def _configure_shadow(monkeypatch, *, reported: str = "5.00") -> _ShadowDecision
 
     from core.dashboard import cabinet_spend
     from core.meta_api import account_tz
+    from core.observer import accounts as observer_accounts
 
     monkeypatch.setattr(hw, "_is_reported_side_live", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        account_tz,
-        "active_account_ids",
+        observer_accounts,
+        "resolve_scan_account_ids",
         AsyncMock(return_value=["111222"]),
     )
     monkeypatch.setattr(
@@ -480,12 +481,12 @@ def _configure_shadow(monkeypatch, *, reported: str = "5.00") -> _ShadowDecision
 
 
 async def test_shadow_spend_skips_when_snapshot_is_not_fresh(monkeypatch) -> None:
-    from core.meta_api import account_tz
+    from core.observer import accounts as observer_accounts
 
     monkeypatch.setattr(hw, "_is_reported_side_live", AsyncMock(return_value=False))
     monkeypatch.setattr(
-        account_tz,
-        "active_account_ids",
+        observer_accounts,
+        "resolve_scan_account_ids",
         AsyncMock(return_value=["111222"]),
     )
     client = _ShadowMetaClient("1030")
@@ -507,11 +508,12 @@ async def test_shadow_spend_hides_money_and_opens_incident_without_currency(
     monkeypatch,
 ) -> None:
     from core.meta_api import account_tz
+    from core.observer import accounts as observer_accounts
 
     monkeypatch.setattr(hw, "_is_reported_side_live", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        account_tz,
-        "active_account_ids",
+        observer_accounts,
+        "resolve_scan_account_ids",
         AsyncMock(return_value=["111222"]),
     )
     monkeypatch.setattr(

@@ -142,7 +142,7 @@ async def test_maintenance_sees_and_drains_account_context_refresh(
         await release_persistence.wait()
         return True
 
-    monkeypatch.setattr(account_tz, "active_account_ids", active_accounts)
+    monkeypatch.setattr(account_tz, "resolve_scan_account_ids", active_accounts)
     monkeypatch.setattr(account_tz, "persist_account_context", persist_context)
 
     refresh = asyncio.create_task(account_tz.refresh_account_timezones(pg_engine, BlockingClient()))
@@ -222,7 +222,7 @@ async def test_account_context_is_not_persisted_after_refresh_fence_loss(
         return ["123456"]
 
     persist_context = AsyncMock(return_value=True)
-    monkeypatch.setattr(account_tz, "active_account_ids", active_accounts)
+    monkeypatch.setattr(account_tz, "resolve_scan_account_ids", active_accounts)
     monkeypatch.setattr(account_tz, "persist_account_context", persist_context)
 
     refresh = asyncio.create_task(account_tz.refresh_account_timezones(pg_engine, BlockingClient()))
