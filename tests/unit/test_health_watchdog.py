@@ -136,7 +136,11 @@ def test_is_login_required_reason() -> None:
     assert hw.is_login_required_reason("probe_network_down") is False
 
 
-async def test_check_meta_api_channel_skips_when_scanning_off(monkeypatch) -> None:
+# При выключенном скане транспортный отказ — ожидаемое состояние, а не инцидент:
+# постоянной сессии observer'а нет, и CRITICAL был бы money-спамом.
+async def test_check_meta_api_channel_stays_quiet_on_transport_failure_when_scanning_off(
+    monkeypatch,
+) -> None:
     from core.observer import queries as observer_queries
 
     monkeypatch.setattr(
@@ -144,18 +148,55 @@ async def test_check_meta_api_channel_skips_when_scanning_off(monkeypatch) -> No
         "load_observer_config",
         AsyncMock(return_value={"is_scanning_enabled": False}),
     )
-    client = SimpleNamespace(check_health=AsyncMock(return_value={"healthy": False}))
-    notify = AsyncMock(return_value=True)
-    monkeypatch.setattr(hw, "_enqueue_critical_notification", notify)
-
-    sent = await hw.check_meta_api_channel(
-        client,
-        engine=object(),
+    client = SimpleNamespace(
+        check_health=AsyncMock(return_value={"healthy": False, "detail": "session_not_found"})
     )
+    notify = AsyncMock(return_value=True)
+    login_alert = AsyncMock(return_value=True)
+    monkeypatch.setattr(hw, "_enqueue_critical_notification", notify)
+    monkeypatch.setattr(hw, "_alert_login_required_accounts", login_alert)
+
+    sent = await hw.check_meta_api_channel(client, engine=object())
 
     assert sent is False
-    client.check_health.assert_not_awaited()
     notify.assert_not_awaited()
+    login_alert.assert_not_awaited()
+
+
+# 18.08.2026: Facebook инвалидировал сессию профиля в 13:35, и до 18:00 об этом не
+# сказал никто — проба целиком висела на тумблере сканирования. Но канал нужен и
+# заливу кампаний, а «зайди в Facebook заново» — действие оператора, к сканированию
+# отношения не имеющее. Разлогин обязан говорить всегда.
+async def test_check_meta_api_channel_reports_login_required_even_when_scanning_off(
+    monkeypatch,
+) -> None:
+    from core.observer import queries as observer_queries
+
+    monkeypatch.setattr(
+        observer_queries,
+        "load_observer_config",
+        AsyncMock(return_value={"is_scanning_enabled": False}),
+    )
+    client = SimpleNamespace(
+        check_health=AsyncMock(
+            return_value={
+                "healthy": False,
+                "probe_performed": True,
+                "probe_detail": "login_required",
+            }
+        )
+    )
+    login_alert = AsyncMock(return_value=True)
+    channel_alert = AsyncMock(return_value=True)
+    monkeypatch.setattr(hw, "_alert_login_required_accounts", login_alert)
+    monkeypatch.setattr(hw, "_enqueue_critical_notification", channel_alert)
+    monkeypatch.setattr(hw, "_resolve_critical_notification", AsyncMock(return_value=True))
+
+    sent = await hw.check_meta_api_channel(client, engine=object())
+
+    assert sent is True
+    login_alert.assert_awaited_once()
+    channel_alert.assert_not_awaited()
 
 
 async def test_check_meta_api_channel_alerts_when_scanning_on_and_down(monkeypatch) -> None:

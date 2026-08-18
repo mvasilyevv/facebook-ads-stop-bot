@@ -538,10 +538,12 @@ async def check_meta_api_channel(
     Единственный прободер: делает реальный GET /me (full_probe) через browser-agent
     и при отказе канала фиксирует CRITICAL в PostgreSQL outbox.
     Best-effort: исключения check_health трактуются как «канал мёртв».
+
+    Тумблер сканирования гасит только транспортные причины: без постоянной сессии
+    observer'а «сессия не найдена» — ожидаемое состояние, а не отказ. Разлогин
+    профиля к сканированию отношения не имеет: каналом пользуется ещё и залив
+    кампаний, а действие оператора одно и то же — зайти в Facebook заново.
     """
-    # Сканирование выключено (намеренно) → observer не держит постоянную browser-agent
-    # сессию, и «сессия не найдена» это НЕ отказ канала, а ожидаемое состояние. Не шлём
-    # ложный CRITICAL (money-спам). Логика совпадает с observer: config None / false → пауза.
     try:
         from core.observer.queries import load_observer_config
 
@@ -549,12 +551,6 @@ async def check_meta_api_channel(
         scanning_on = bool(obs_config and obs_config.get("is_scanning_enabled"))
     except Exception:  # noqa: BLE001
         logger.exception("meta probe: observer_config недоступен — probe пропущен")
-        return False
-
-    if not scanning_on:
-        # След намеренного пропуска: после 11:24 01.07 probe молчал «по дизайну»,
-        # и тишина в логах выглядела как зависание воркера.
-        logger.info("meta probe: сканирование выключено — канал авто-стопа не проверяется")
         return False
 
     expected_profile_id = ""
@@ -606,9 +602,11 @@ async def check_meta_api_channel(
         )
         return False
 
-    logger.error("канал Marketing API мёртв (probe): %s", reason)
     login_required = is_login_required_reason(reason)
     if login_required:
+        # Разлогин говорит всегда, даже при выключенном скане: 18.08.2026 Facebook
+        # инвалидировал сессию в 13:35, и до 18:00 об этом не сказал никто.
+        logger.error("канал Marketing API мёртв (probe): %s", reason)
         # Если раньше причина была транспортной, закрой старую channel-down
         # generation. Login-required имеет другой operator action и отдельный key.
         await _resolve_critical_notification(
@@ -618,6 +616,16 @@ async def check_meta_api_channel(
         )
         return await _alert_login_required_accounts(engine)
 
+    if not scanning_on:
+        # След намеренного пропуска: после 11:24 01.07 probe молчал «по дизайну»,
+        # и тишина в логах выглядела как зависание воркера.
+        logger.info(
+            "meta probe: сканирование выключено — транспортный отказ не эскалируем (%s)",
+            reason,
+        )
+        return False
+
+    logger.error("канал Marketing API мёртв (probe): %s", reason)
     return await _enqueue_critical_notification(
         incident_key=META_CHANNEL_INCIDENT_KEY,
         engine=engine,
