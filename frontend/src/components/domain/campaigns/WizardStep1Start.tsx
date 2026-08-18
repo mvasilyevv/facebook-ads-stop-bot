@@ -5,7 +5,11 @@
  * - При выборе "из пресета" — выпадающий список пресетов
  */
 
-import { campaignPresetsDataState } from "@fb/features/campaigns";
+import {
+  CAMPAIGN_GENDER_OPTIONS,
+  CAMPAIGN_PLACEMENT_OPTIONS,
+  campaignPresetsDataState,
+} from "@fb/features/campaigns";
 import { Link } from "@tanstack/react-router";
 import { type FC } from "react";
 import { Layers, Plus, RefreshCw, Settings2 } from "lucide-react";
@@ -32,7 +36,7 @@ const OPTIONS: { mode: StartMode; icon: FC<{ size: number }>; label: string; des
     mode: "preset",
     icon: Layers,
     label: "Из пресета",
-    desc: "Подставить аудиторию, бюджет, нейминг и URL tags — затем при необходимости изменить.",
+    desc: "Подставить аудиторию, бюджет, нейминг и параметры URL — затем при необходимости изменить.",
   },
 ];
 
@@ -174,17 +178,34 @@ export const WizardStep1Start: FC<WizardStep1StartProps> = ({ mode, presetId, on
                 />
                 <PresetFact
                   label="Пол"
-                  value={selectedPreset.genders.length ? selectedPreset.genders.join(" · ") : "Все"}
+                  value={
+                    selectedPreset.genders.length
+                      ? selectedPreset.genders
+                          .map(
+                            (gender) =>
+                              CAMPAIGN_GENDER_OPTIONS.find((option) => option.value === gender)
+                                ?.label ?? gender,
+                          )
+                          .join(" · ")
+                      : "Все"
+                  }
                 />
                 <PresetFact
-                  label="Плейсменты"
+                  label="Места размещения"
                   value={
                     selectedPreset.placements.length
-                      ? selectedPreset.placements.join(" · ")
+                      ? selectedPreset.placements
+                          .map(
+                            (placement) =>
+                              CAMPAIGN_PLACEMENT_OPTIONS.find(
+                                (option) => option.value === placement,
+                              )?.label ?? placement,
+                          )
+                          .join(" · ")
                       : "Авто"
                   }
                 />
-                <PresetFact label="Событие" value="Purchase · зафиксировано" />
+                <PresetFact label="Событие" value="Покупка · зафиксировано" />
               </dl>
             </div>
           ) : null}

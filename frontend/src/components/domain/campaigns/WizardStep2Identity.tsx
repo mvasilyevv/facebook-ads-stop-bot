@@ -386,7 +386,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
             // Спиннер во время фетча страниц — финальный контрол ещё неизвестен.
             <div className="flex flex-col gap-1.5">
               <label className="text-[12px] font-display tracking-wider uppercase text-bg-9">
-                Facebook Page ID
+                ID страницы Facebook
               </label>
               <div className="flex h-8 items-center gap-2 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 px-3 text-[13.5px] text-bg-9">
                 <Loader2 aria-hidden="true" size={14} className="animate-spin text-bg-9" />
@@ -399,7 +399,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
           ) : pages.length > 0 ? (
             // Страницы подтянулись — выбор из дропдауна, value=id.
             <Select
-              label="Facebook Page"
+              label="Страница Facebook"
               placeholder="Выберите страницу"
               options={pages.map((p) => ({ value: p.id, label: `${p.name} — ${p.id}` }))}
               value={values.page_id}
@@ -409,7 +409,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
           ) : (
             // Фетч упал / страниц нет — ручной ввод ID с подсказкой.
             <Input
-              label="Facebook Page ID"
+              label="ID страницы Facebook"
               placeholder="123456789"
               value={values.page_id}
               onChange={(e) => onChange({ page_id: e.target.value })}
@@ -420,7 +420,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
           {pixelsMutation.isPending ? (
             <div className="flex flex-col gap-1.5">
               <label className="text-[12px] font-display tracking-wider uppercase text-bg-9">
-                FB Pixel
+                Пиксель
               </label>
               <div className="flex items-center gap-2 min-h-11 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 px-3 text-[13px] text-bg-9">
                 <Loader2 aria-hidden="true" size={14} className="animate-spin text-bg-9" />
@@ -433,7 +433,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
           ) : pixels.length > 0 ? (
             // Пиксели подтянулись — выбор из дропдауна, value=id.
             <Select
-              label="FB Pixel"
+              label="Пиксель"
               placeholder="Выберите пиксель"
               options={pixels.map((p) => ({ value: p.id, label: `${p.name} — ${p.id}` }))}
               value={values.pixel_id}
@@ -442,7 +442,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
             />
           ) : (
             <Input
-              label="FB Pixel ID"
+              label="ID пикселя"
               placeholder="123456789"
               value={values.pixel_id}
               onChange={(e) => onChange({ pixel_id: e.target.value })}

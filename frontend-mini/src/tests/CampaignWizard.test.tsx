@@ -176,7 +176,7 @@ describe("TMA campaign creator", () => {
       ).toBeVisible();
     }
 
-    expect(await screen.findByText("ALL PAUSED")).toBeVisible();
+    expect(await screen.findByText("Всё создаётся выключенным")).toBeVisible();
     await user.click(screen.getByRole("button", { name: /Подтвердить план/ }));
     expect(screen.getByRole("region", { name: /Шаг 7:/ })).toBeVisible();
 

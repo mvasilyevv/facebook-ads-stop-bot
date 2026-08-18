@@ -58,7 +58,7 @@ describe("WizardStep3Goal — редактируемые поля пресета
   it("показывает URL tags и нейминг как обычные поля", () => {
     renderGoal();
 
-    expect(screen.getByLabelText("URL Tags")).toBeEnabled();
+    expect(screen.getByLabelText("Параметры URL")).toBeEnabled();
     expect(screen.getByLabelText("Шаблон нейминга")).toBeEnabled();
   });
 });
@@ -90,7 +90,7 @@ describe("WizardStep3Goal — SOP-инварианты", () => {
 
     expect(screen.queryByLabelText(/^Objective$/i)).toBeNull();
     expect(screen.queryByLabelText(/Optimization Goal/i)).toBeNull();
-    expect(screen.getByText("IMPRESSIONS")).toBeInTheDocument();
+    expect(screen.getByText("Показы")).toBeInTheDocument();
   });
 
   it("стратегия ставок выбирается, а не зашита", () => {

@@ -103,24 +103,27 @@ export const PIXEL_EVENT_TYPES: EnumOption[] = [
 /** Только эта оптимизация требует custom_event_type (promoted_object пикселя). */
 export const OPTIMIZATION_GOAL_REQUIRES_EVENT = "OFFSITE_CONVERSIONS";
 
-/** Валидные CTA. Дефолт гемблинга — PLAY_GAME. */
+/**
+ * Валидные CTA. Дефолт гемблинга — PLAY_GAME.
+ * Лейблы — как кнопки называются в русской версии Ads Manager; в API уходит value.
+ */
 export const CALL_TO_ACTIONS: EnumOption[] = [
-  { value: "PLAY_GAME", label: "PLAY_GAME" },
-  { value: "LEARN_MORE", label: "LEARN_MORE" },
-  { value: "SIGN_UP", label: "SIGN_UP" },
-  { value: "DOWNLOAD", label: "DOWNLOAD" },
-  { value: "GET_OFFER", label: "GET_OFFER" },
-  { value: "SHOP_NOW", label: "SHOP_NOW" },
-  { value: "SUBSCRIBE", label: "SUBSCRIBE" },
-  { value: "INSTALL_MOBILE_APP", label: "INSTALL_MOBILE_APP" },
-  { value: "USE_APP", label: "USE_APP" },
-  { value: "BOOK_TRAVEL", label: "BOOK_TRAVEL" },
-  { value: "CONTACT_US", label: "CONTACT_US" },
-  { value: "APPLY_NOW", label: "APPLY_NOW" },
-  { value: "ORDER_NOW", label: "ORDER_NOW" },
-  { value: "GET_QUOTE", label: "GET_QUOTE" },
-  { value: "SEE_MORE", label: "SEE_MORE" },
-  { value: "OPEN_LINK", label: "OPEN_LINK" },
+  { value: "PLAY_GAME", label: "Играть" },
+  { value: "LEARN_MORE", label: "Подробнее" },
+  { value: "SIGN_UP", label: "Регистрация" },
+  { value: "DOWNLOAD", label: "Скачать" },
+  { value: "GET_OFFER", label: "Получить предложение" },
+  { value: "SHOP_NOW", label: "Купить" },
+  { value: "SUBSCRIBE", label: "Подписаться" },
+  { value: "INSTALL_MOBILE_APP", label: "Установить приложение" },
+  { value: "USE_APP", label: "Использовать приложение" },
+  { value: "BOOK_TRAVEL", label: "Забронировать" },
+  { value: "CONTACT_US", label: "Свяжитесь с нами" },
+  { value: "APPLY_NOW", label: "Подать заявку" },
+  { value: "ORDER_NOW", label: "Заказать" },
+  { value: "GET_QUOTE", label: "Получить расценки" },
+  { value: "SEE_MORE", label: "Ещё" },
+  { value: "OPEN_LINK", label: "Открыть ссылку" },
 ];
 
 /** Гемблинг-дефолт по SOP (см. MEMORY: optimize Purchase). */

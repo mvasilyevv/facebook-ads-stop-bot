@@ -484,7 +484,7 @@ export function CampaignWizard() {
                       Подставлено из «{selectedPreset.name}»
                     </strong>
                     {selectedPreset.countries.join(" · ")} · {selectedPreset.age_min}–
-                    {selectedPreset.age_max} · ${selectedPreset.daily_budget ?? "—"} · Purchase
+                    {selectedPreset.age_max} · ${selectedPreset.daily_budget ?? "—"} · Покупка
                     <span className="mt-1 block text-accent">
                       Все подставленные поля можно изменить на шаге «Параметры».
                     </span>
@@ -565,7 +565,7 @@ export function CampaignWizard() {
                 />
               ) : (
                 <Input
-                  label="Page ID"
+                  label="ID страницы Facebook"
                   value={state.identity.page_id}
                   errorMessage={errors.page_id}
                   onChange={(event) =>
@@ -578,7 +578,7 @@ export function CampaignWizard() {
               )}
               {pixels.length > 0 ? (
                 <Select
-                  label="Pixel"
+                  label="Пиксель"
                   value={state.identity.pixel_id}
                   errorMessage={errors.pixel_id}
                   options={[
@@ -597,7 +597,7 @@ export function CampaignWizard() {
                 />
               ) : (
                 <Input
-                  label="Pixel ID"
+                  label="ID пикселя"
                   value={state.identity.pixel_id}
                   errorMessage={errors.pixel_id}
                   onChange={(event) =>
@@ -807,7 +807,7 @@ function GoalStep({
           </div>
         ) : null}
         <div className="rounded-[var(--radius-2)] border border-accent/25 bg-accent/5 p-3 text-[13px] text-bg-9">
-          Все денежные значения — только USD. Campaign, ad set и ad будут созданы PAUSED.
+          Все денежные значения — только USD. Кампании, группы объявлений и объявления будут созданы выключенными.
         </div>
         <Input
           label="Дневной бюджет, USD"
@@ -872,8 +872,8 @@ function GoalStep({
           label="Уровень бюджета"
           value={state.goal.budget_level}
           options={[
-            { value: "campaign", label: "CBO · на кампании" },
-            { value: "adset", label: "ABO · на ad set" },
+            { value: "campaign", label: "CBO · бюджет кампании" },
+            { value: "adset", label: "ABO · бюджет групп объявлений" },
           ]}
           onChange={(event) =>
             patch({
@@ -885,7 +885,7 @@ function GoalStep({
           }
         />
         <Select
-          label="CTA"
+          label="Призыв к действию"
           value={state.goal.cta}
           options={CTA_OPTIONS}
           onChange={(event) => patch({ type: "patchGoal", value: { cta: event.target.value } })}
@@ -934,17 +934,17 @@ function GoalStep({
           onChange={(genders) => patch({ type: "patchGoal", value: { genders } })}
         />
         <CampaignTagPicker
-          label="Плейсменты"
+          label="Места размещения"
           values={state.goal.placements}
           options={CAMPAIGN_PLACEMENT_OPTIONS}
-          emptyLabel="Автоматические плейсменты Meta"
+          emptyLabel="Места размещения Advantage+ (автоматически)"
           onChange={(placements) => patch({ type: "patchGoal", value: { placements } })}
         />
         <div className="rounded-[var(--radius-2)] border border-[var(--color-hairline)] bg-bg-2 p-3">
           <p className="text-[12px] uppercase tracking-[0.08em] text-bg-9">
             Событие оптимизации пикселя
           </p>
-          <strong className="mt-1 block text-[14px] text-bg-11">Purchase</strong>
+          <strong className="mt-1 block text-[14px] text-bg-11">Покупка (Purchase)</strong>
           <p className="mt-1 text-[12px] leading-5 text-bg-8">
             Зафиксировано правилом проекта и не меняется пресетом.
           </p>
@@ -962,7 +962,7 @@ function GoalStep({
           }
         />
         <Input
-          label="URL tags"
+          label="Параметры URL"
           value={state.goal.url_tags_template}
           placeholder="sub2=mv&sub5={{campaign.name}}"
           helpText="Строка уедет буквально: подставляет только Meta ({{campaign.name}}). sub8={{ad.id}} сервер добавит сам"
@@ -975,7 +975,7 @@ function GoalStep({
         />
         <div className="grid grid-cols-2 gap-3">
           <Select
-            label="Click-through"
+            label="После клика"
             value={String(state.goal.click_through_days)}
             options={ATTRIBUTION_OPTIONS}
             onChange={(event) =>
@@ -986,7 +986,7 @@ function GoalStep({
             }
           />
           <Select
-            label="View-through"
+            label="После просмотра"
             value={String(state.goal.view_through_days)}
             options={ATTRIBUTION_OPTIONS}
             onChange={(event) =>
@@ -1029,7 +1029,7 @@ function GoalStep({
         />
         {state.goal.ad_text_mode === "text" ? (
           <label className="block text-[12px] uppercase tracking-[.07em] text-bg-9">
-            Primary text
+            Основной текст
             <textarea
               value={state.goal.ad_text_primary}
               onChange={(event) =>
@@ -1057,7 +1057,7 @@ function StructureStep({
   onChange: (campaigns: CampaignWizardCampaign[]) => void;
 }) {
   return (
-    <Card eyebrow="ШАГ 4 · СТРУКТУРА" title="Кампании и ad set">
+    <Card eyebrow="ШАГ 4 · СТРУКТУРА" title="Кампании и группы объявлений">
       <div className="space-y-3">
         {campaigns.map((campaign, index) => (
           <div
@@ -1095,7 +1095,7 @@ function StructureStep({
               <div className="flex items-end gap-2">
                 <Input
                   className="flex-1"
-                  label="Ad set"
+                  label="Группы объявлений"
                   type="number"
                   min={1}
                   max={100}
@@ -1264,13 +1264,13 @@ function PreviewStep({
         <div className="mt-4 space-y-3" role="status">
           <div className="grid grid-cols-3 divide-x divide-[var(--color-hairline)] border-y border-[var(--color-hairline)] py-3 text-center">
             <Metric label="Кампаний" value={plan.campaign_count} />
-            <Metric label="Ad set" value={plan.adset_count} />
-            <Metric label="Ads" value={plan.ad_count} />
+            <Metric label="Групп объявлений" value={plan.adset_count} />
+            <Metric label="Объявлений" value={plan.ad_count} />
           </div>
           <div className="rounded-[var(--radius-2)] border border-success/35 bg-success/10 p-3 text-[13px] leading-5 text-bg-10">
             <strong className="flex items-center gap-2 text-success">
               <ShieldCheck size={16} aria-hidden="true" />
-              ALL PAUSED
+              Всё создаётся выключенным
             </strong>
             {plan.timezone_name} · {plan.currency} · старт {plan.start_date}
           </div>
@@ -1403,7 +1403,7 @@ function LaunchStep({
         />
         <Fact label="Бюджет" value={`$${config.daily_budget} / день`} />
         <Fact label="Кампаний" value={String(config.campaigns.length)} />
-        <Fact label="Статус объектов" value="PAUSED" />
+        <Fact label="Статус объектов" value="Выключены (PAUSED)" />
       </dl>
       {!draftReady ? (
         <p role="status" className="mt-4 text-[13px] text-warning">

@@ -1068,7 +1068,7 @@ describe("WizardStep6Preview", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("Всё создаётся на паузе");
-    expect(screen.getByText(/останутся PAUSED/)).toBeInTheDocument();
+    expect(screen.getByText(/создаются выключенными/)).toBeInTheDocument();
     expect(screen.queryByText("Кампания PAUSED, дети активны")).not.toBeInTheDocument();
   });
 });

@@ -25,7 +25,7 @@ export const CAMPAIGN_BID_STRATEGY_OPTIONS: ReadonlyArray<{
 }> = [
   { value: "LOWEST_COST_WITHOUT_CAP", label: "Максимальное количество", needsBid: false },
   { value: "COST_CAP", label: "Цель по цене за результат", needsBid: true },
-  { value: "LOWEST_COST_WITH_BID_CAP", label: "Предельная ставка", needsBid: true },
+  { value: "LOWEST_COST_WITH_BID_CAP", label: "Предел ставки", needsBid: true },
   { value: "LOWEST_COST_WITH_MIN_ROAS", label: "Цель по ROAS", needsBid: false },
 ];
 

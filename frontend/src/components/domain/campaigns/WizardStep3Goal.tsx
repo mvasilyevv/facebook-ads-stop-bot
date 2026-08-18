@@ -37,15 +37,17 @@ interface WizardStep3GoalProps {
 }
 
 const BUDGET_LEVEL_OPTIONS = [
-  { value: "campaign", label: "CBO — бюджет на кампании" },
-  { value: "adset", label: "ABO — бюджет на adset'ах" },
+  { value: "campaign", label: "CBO — бюджет кампании" },
+  { value: "adset", label: "ABO — бюджет групп объявлений" },
 ];
 
 // Инварианты, зашитые по SOP — показываем read-only, без выбора в UI.
+// Термины — как в русском Ads Manager (objective Продажи, оптимизация Конверсии,
+// событие Покупка, биллинг Показы, text_optimizations OPT_OUT).
 // Стратегия ставок отсюда снята: замер 17.08 по трём кабинетам показал 41
 // живую кампанию из 55 на «Максимальном количестве» — «зашито по SOP» было
 // неправдой, и оператор не мог повторить три четверти того, что уже работает.
-const SOP_LOCKED = ["Sales", "OFFSITE_CONVERSIONS", "Purchase", "IMPRESSIONS", "OPT_OUT"];
+const SOP_LOCKED = ["Продажи", "Конверсии", "Покупка", "Показы", "Оптимизация текста выкл."];
 
 const ATTRIBUTION_DAYS_OPTIONS = [
   { value: "1", label: "1 день" },
@@ -145,7 +147,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
             errorMessage={errors.daily_budget}
             helpText={
               currency
-                ? `Hard cap: 100 000 ${currency} / день · ${precisionLabel}`
+                ? `Максимум 100 000 ${currency} / день · ${precisionLabel}`
                 : "Сначала подтвердите кабинет"
             }
             placeholder="Введите сумму"
@@ -234,10 +236,10 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
               onChange={(genders) => onChange({ genders })}
             />
             <CampaignTagPicker
-              label="Плейсменты"
+              label="Места размещения"
               values={values.placements}
               options={CAMPAIGN_PLACEMENT_OPTIONS}
-              emptyLabel="Автоматические плейсменты Meta"
+              emptyLabel="Места размещения Advantage+ (автоматически)"
               onChange={(placements) => onChange({ placements })}
             />
           </div>
@@ -249,13 +251,13 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
         <SectionLabel>АТРИБУЦИЯ</SectionLabel>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Select
-            label="Click-through (дни)"
+            label="После клика"
             options={ATTRIBUTION_DAYS_OPTIONS}
             value={String(values.click_through_days)}
             onChange={(e) => onChange({ click_through_days: asAttributionDays(e.target.value) })}
           />
           <Select
-            label="View-through (дни)"
+            label="После просмотра"
             options={ATTRIBUTION_DAYS_OPTIONS}
             value={String(values.view_through_days)}
             onChange={(e) => onChange({ view_through_days: asAttributionDays(e.target.value) })}
@@ -276,7 +278,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
             errorMessage={errors.start_date}
           />
           <Select
-            label="CTA"
+            label="Призыв к действию"
             options={CALL_TO_ACTIONS}
             value={values.cta}
             onChange={(e) => onChange({ cta: e.target.value })}
@@ -284,7 +286,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
         </div>
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
-            label="Destination URL (трекинг-ссылка)"
+            label="URL сайта (трекинг-ссылка)"
             placeholder="https://tracker.example.com/click?..."
             value={values.destination_link}
             onChange={(e) => onChange({ destination_link: e.target.value })}
@@ -313,7 +315,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
           {/* Плейсхолдеры вида {byer} тут не подставляются: своя строка уезжает
               буквально, раскрывает её уже Meta. Пример не должен учить обратному. */}
           <Input
-            label="URL Tags"
+            label="Параметры URL"
             placeholder="sub2=mv&sub5={{campaign.name}}"
             value={values.url_tags_template}
             onChange={(event) => onChange({ url_tags_template: event.target.value })}
@@ -333,7 +335,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
           {values.ad_text_mode === "text" && (
             <div className="mt-3">
               <Input
-                label="Primary text"
+                label="Основной текст"
                 placeholder="Текст объявления..."
                 value={values.ad_text_primary}
                 onChange={(e) => onChange({ ad_text_primary: e.target.value })}

@@ -2,7 +2,7 @@
  * Шаг 4 — Структура кампаний.
  *
  * Список кампаний: каждая имеет key, label (необязательно), adset_count.
- * Добавить/удалить кампанию. Итого: сколько adset'ов всего.
+ * Добавить/удалить кампанию. Итого: сколько групп объявлений всего.
  */
 
 import { type FC } from "react";
@@ -11,6 +11,7 @@ import { Trash2, Plus, Minus, Layers } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import type { CampaignStructure } from "@/lib/api/campaigns";
+import { russianCountForm } from "@/lib/utils/russianCount";
 
 interface WizardStep4StructureProps {
   campaigns: CampaignStructure[];
@@ -46,11 +47,11 @@ export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
           ШАГ 4 · СТРУКТУРА
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
-          Кампании и adset'ы
+          Кампании и группы объявлений
         </h2>
         <p className="text-[13px] text-bg-9 mt-1">
-          Добавьте кампании и число adset'ов N. Концепты (фото и видео) привяжете на след. шаге —
-          один adset может держать и фото-, и видео-объявления. Метка позволяет различать кампании в
+          Добавьте кампании и число групп объявлений N. Концепты (фото и видео) привяжете на след.
+          шаге — одна группа может держать и фото-, и видео-объявления. Метка позволяет различать кампании в
           имени.
         </p>
       </div>
@@ -95,7 +96,7 @@ export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
           <span className="text-[12px] text-bg-8">Итого:</span>
           <span className="font-display text-[13px] text-bg-11">
             <b>{campaigns.length}</b> кампани{campaigns.length === 1 ? "я" : "и"},{" "}
-            <b>{totalAdsets}</b> adset'ов
+            <b>{totalAdsets}</b> {russianCountForm(totalAdsets, "группа объявлений", "группы объявлений", "групп объявлений")}
           </span>
         </div>
       )}
@@ -150,15 +151,15 @@ const CampaignRow: FC<CampaignRowProps> = ({ campaign, index, onUpdate, onRemove
         />
       </div>
 
-      {/* N adset'ов — степпер −/+ (по нативным стрелкам тяжело попасть) */}
+      {/* N групп объявлений — степпер −/+ (по нативным стрелкам тяжело попасть) */}
       <div className="w-36 shrink-0 mt-1">
         <div className="font-display text-[12px] tracking-wider uppercase text-bg-9 mb-1.5">
-          Число adset'ов N
+          Число групп объявлений N
         </div>
         <div className="flex items-center rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 overflow-hidden">
           <button
             type="button"
-            aria-label="Уменьшить число adset'ов"
+            aria-label="Уменьшить число групп объявлений"
             disabled={campaign.adset_count <= 1}
             onClick={() => onUpdate({ adset_count: Math.max(1, campaign.adset_count - 1) })}
             className="size-11 shrink-0 flex items-center justify-center text-bg-9 hover:bg-bg-3 hover:text-bg-11 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
@@ -168,7 +169,7 @@ const CampaignRow: FC<CampaignRowProps> = ({ campaign, index, onUpdate, onRemove
           <input
             type="text"
             inputMode="numeric"
-            aria-label="Число adset'ов N"
+            aria-label="Число групп объявлений N"
             value={String(campaign.adset_count)}
             onChange={(e) => {
               const v = parseInt(e.target.value, 10);
@@ -178,7 +179,7 @@ const CampaignRow: FC<CampaignRowProps> = ({ campaign, index, onUpdate, onRemove
           />
           <button
             type="button"
-            aria-label="Увеличить число adset'ов"
+            aria-label="Увеличить число групп объявлений"
             disabled={campaign.adset_count >= 50}
             onClick={() => onUpdate({ adset_count: Math.min(50, campaign.adset_count + 1) })}
             className="size-11 shrink-0 flex items-center justify-center text-bg-9 hover:bg-bg-3 hover:text-bg-11 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"

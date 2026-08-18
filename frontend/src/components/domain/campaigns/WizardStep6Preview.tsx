@@ -2,9 +2,9 @@
  * Шаг 6 — dry-run preview неизменяемого all-paused плана.
  *
  * Вызывает POST /tools/campaigns/validate и показывает план:
- * - число кампаний / adset'ов / ads
+ * - число кампаний / групп объявлений / объявлений
  * - нейминг
- * - явный safety-инвариант: campaign/ad set/ad создаются PAUSED
+ * - явный safety-инвариант: кампания/группа объявлений/объявление создаются выключенными
  */
 
 import { type FC, useEffect } from "react";
@@ -23,6 +23,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { useValidateConfig } from "@/lib/api/campaigns";
 import type { CampaignConfig, ValidatePlanOut, CampaignPlanOut } from "@/lib/api/campaigns";
 import type { WizardPreview } from "@/stores/campaignWizard";
+import { russianCountForm } from "@/lib/utils/russianCount";
 
 interface WizardStep6PreviewProps {
   config: CampaignConfig;
@@ -65,7 +66,7 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({ config, previe
           ШАГ 6 · ПРЕВЬЮ
         </div>
         <h2 className="font-display text-[20px] font-medium text-bg-11 leading-tight m-0">
-          Dry-run: что создастся
+          Проверка: что создастся
         </h2>
         <p className="text-[13px] text-bg-9 mt-1">
           Без реального создания в Meta — только план нейминга и подсчёт объектов.
@@ -142,8 +143,8 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({ config, previe
             Всё создаётся на паузе
           </div>
           <div className="mt-1 text-[12px] text-bg-9">
-            Кампания, ad set и ad останутся PAUSED. Активация доступна только отдельным ручным
-            действием после review.
+            Кампании, группы объявлений и объявления создаются выключенными. Включение — только
+            отдельным ручным действием после проверки.
           </div>
         </div>
       </div>
@@ -160,7 +161,7 @@ function PlanView({ plan }: { plan: ValidatePlanOut }) {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
           { label: "Кампаний", value: plan.campaign_count },
-          { label: "Adset'ов", value: plan.adset_count },
+          { label: "Групп объявлений", value: plan.adset_count },
           { label: "Объявлений", value: plan.ad_count },
           { label: "Копий/конц.", value: plan.copies_per_concept },
         ].map(({ label, value }) => (
@@ -249,8 +250,8 @@ function CampaignPlanRow({ campaign }: { campaign: CampaignPlanOut }) {
           {campaign.name}
         </span>
         <span className="text-[12px] text-bg-8 font-display uppercase tracking-wider shrink-0">
-          {campaign.adsets.length} adset
-          {campaign.adsets.length !== 1 ? "s" : ""}
+          {campaign.adsets.length}{" "}
+          {russianCountForm(campaign.adsets.length, "группа", "группы", "групп")}
         </span>
       </button>
       {expanded && (
@@ -260,10 +261,12 @@ function CampaignPlanRow({ campaign }: { campaign: CampaignPlanOut }) {
               <span className="min-w-0 text-[12px] text-bg-9 flex-1 truncate" title={adset.name}>
                 {adset.name}
               </span>
-              <span className="text-[12px] text-bg-8">{adset.ad_count} ads</span>
+              <span className="text-[12px] text-bg-8">
+                {adset.ad_count} {russianCountForm(adset.ad_count, "объявление", "объявления", "объявлений")}
+              </span>
               <span className="inline-flex items-center gap-1 rounded bg-bg-3 px-1.5 py-0.5 font-display text-[12px] uppercase tracking-wider text-bg-8">
                 <ShieldCheck size={11} aria-hidden="true" />
-                {adset.status}
+                {adset.status === "PAUSED" ? "Выключено" : adset.status}
               </span>
             </div>
           ))}
