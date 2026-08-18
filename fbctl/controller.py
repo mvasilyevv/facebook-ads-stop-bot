@@ -168,6 +168,11 @@ RETIRED_SYSTEMD_STOP_UNITS = frozenset(
     }
 )
 RETIRED_SYSTEMD_RELOAD_MARKER = ".fb-agent-retired-units-reload-pending"
+# Сколько ждём браузер профиля после пересоздания стола. Замер 18.08.2026:
+# chrome появился через 199 секунд после старта контейнера, и это ещё при
+# рестартах каждые пять секунд — непрерывный холодный старт не измерен, поэтому
+# берётся потолок с запасом, а не подогнанное под замер число.
+DESKTOP_CHANNEL_COLD_START_TIMEOUT = 300
 REHEARSAL_FAILPOINTS = (
     "preflight",
     "pull",
@@ -980,11 +985,18 @@ class ProductionController:
         api = self._api_origin(config)
         require_ok_status(self.probes, f"{api}/healthz")
         require_ok_status(self.probes, f"{api}/readyz")
+        # Лечение — действие, а не проба: ручка перезапускает Vision-профиль.
+        # Зовём её РОВНО ОДИН раз и дальше ждём чтением, иначе каждая попытка
+        # убивает браузер, который ещё поднимается, и холодный старт не может
+        # завершиться никогда — сколько бы времени шаг ни ждал.
+        ready, reason = ensure_browser_channel(self.probes, api, config.api_key)
+        if ready:
+            return
         try:
             wait_for(
-                "recovered browser channel",
-                lambda: ensure_browser_channel(self.probes, api, config.api_key),
-                timeout=180,
+                "browser channel after the requested profile start",
+                lambda: require_exact_browser(self.probes, api, config.api_key),
+                timeout=DESKTOP_CHANNEL_COLD_START_TIMEOUT,
                 interval=5,
                 monotonic=self.monotonic,
                 sleep=self.sleep,
@@ -995,10 +1007,10 @@ class ProductionController:
             # это может только человек у экрана (инцидент 18.08.2026: диагноз
             # добывали вручную, пока money-воркеры лежали).
             raise FbctlError(
-                f"{exc}. Похоже, Vision не поднял браузер профиля после "
-                "пересоздания стола: зайди на стол через RustDesk, запусти "
-                "профиль и проверь, что Facebook залогинен, затем повтори "
-                "деплой — он идемпотентен."
+                f"{exc} (последний ответ ручки: {reason}). Vision не поднял "
+                "браузер профиля за отведённое время после пересоздания стола: "
+                "зайди на стол через RustDesk, запусти профиль и проверь, что "
+                "Facebook залогинен, затем повтори деплой — он идемпотентен."
             ) from exc
 
     def _verify_application(self, config: RuntimeConfig) -> None:

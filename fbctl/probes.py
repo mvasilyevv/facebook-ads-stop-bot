@@ -232,11 +232,24 @@ def require_exact_browser(client: ProbeClient, api_origin: str, api_key: str) ->
         raise FbctlError("browser channel is not READY with a concrete session")
 
 
-def ensure_browser_channel(client: ProbeClient, api_origin: str, api_key: str) -> None:
-    """Поднять браузерный канал после пересоздания стола.
+def ensure_browser_channel(client: ProbeClient, api_origin: str, api_key: str) -> tuple[bool, str]:
+    """Запросить поднятие браузерного канала. Возвращает (готов, причина).
 
     Каждый деплой пересоздаёт контейнер стола, и Vision возвращается без
-    запущенного профиля. Ручка идемпотентна: готовый канал она не трогает.
+    запущенного профиля. Готовый канал ручка не трогает, а неготовый —
+    ПЕРЕЗАПУСКАЕТ Vision-профиль. Поэтому звать её в цикле ожидания нельзя:
+    каждый повтор убивает браузер, который ещё поднимается. Прод 18.08.2026 —
+    шаг деплоя дёргал её каждые пять секунд, тридцать шесть раз за 180 секунд,
+    и chrome появился через 199 секунд после старта контейнера, на четыре
+    секунды позже, чем шаг сдался.
+
+    Вызывающий делает ровно один вызов, а готовность потом проверяет чтением
+    через :func:`require_exact_browser`. «Ещё не готов» здесь не ошибка, а
+    ожидаемое состояние только что перезапущенного профиля.
+
+    Исключение — только транспортный отказ самой ручки: 401 (протухший
+    API_KEY), 404 (роутер не подключён) и 502 чинятся по-разному, а во время
+    простоя код ответа единственная диагностика у владельца.
     """
     status, payload = client.post_json(
         f"{api_origin}/api/vision/ensure-cdp",
@@ -245,15 +258,12 @@ def ensure_browser_channel(client: ProbeClient, api_origin: str, api_key: str) -
         timeout=120,
     )
     if status != 200 or not isinstance(payload, dict):
-        # Код в сообщении обязателен: 401 (протухший API_KEY), 404 (роутер не
-        # подключён) и 502 чинятся по-разному, а во время простоя это
-        # единственная диагностика у владельца.
         raise FbctlError(f"browser channel healer returned HTTP {status}")
     if payload.get("ok") is True:
-        return
+        return True, ""
     message = payload.get("message")
     detail = str(message) if isinstance(message, str) and message else str(payload.get("status"))
-    raise FbctlError(f"browser channel is not ready ({detail})")
+    return False, detail
 
 
 # Состояния, которыми управляет владелец, а не деплой. Выключенное

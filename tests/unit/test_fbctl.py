@@ -3815,15 +3815,23 @@ def test_deploy_heals_the_desktop_channel_before_verifying_it() -> None:
     assert headers["X-API-Key"] == "k" * 24
 
 
-def test_unhealed_channel_stops_the_deploy_with_the_reason() -> None:
+def test_unhealed_channel_reports_the_reason_without_raising() -> None:
+    """«Ещё не готов» — не отказ, а нормальное состояние после рестарта профиля.
+
+    Пока это было исключением, вызывающий не мог отличить его от транспортной
+    ошибки и повторял лечение в цикле ожидания — каждый повтор убивал браузер,
+    который ещё поднимается (прод 18.08.2026). Причину проба возвращает, чтобы
+    шаг положил её в свой отказ.
+    """
     probe = _EnsureChannelProbe(
         [{"ok": False, "status": "UNAVAILABLE", "message": "Browser-agent profile recovery failed"}]
     )
 
-    with pytest.raises(FbctlError) as error:
-        fbctl_probes.ensure_browser_channel(probe, "http://api", "k" * 24)
+    ready, reason = fbctl_probes.ensure_browser_channel(probe, "http://api", "k" * 24)
 
-    assert "Browser-agent profile recovery failed" in str(error.value)
+    assert ready is False
+    assert reason == "Browser-agent profile recovery failed"
+    assert len(probe.calls) == 1, "лечение обязано быть однократным"
 
 
 def test_channel_healing_runs_before_the_application_gate() -> None:
@@ -3914,6 +3922,20 @@ class _UnhealableChannelProbes(FakeProbes):
 
     def json(self, url: str, *, headers=None, timeout: float = 15):
         self.json_urls.append(url)
+        if url.endswith("/api/settings/vision"):
+            # Канал не встаёт и по чтению тоже — иначе это описание канала,
+            # который на самом деле поднялся, просто ручка ответила устаревшим.
+            return 200, {
+                "required_browser_contract_version": 5,
+                "browser_contract_version": 5,
+                "browser_contract_compatible": True,
+                "profile_id": "profile-1",
+                "live_profile_id": None,
+                "graph_probe_performed": False,
+                "graph_probe_ok": False,
+                "channel_status": "UNAVAILABLE",
+                "browser_session_id": None,
+            }
         return super().json(url, headers=headers, timeout=timeout)
 
     def post_json(self, url: str, payload, *, headers=None, timeout: float = 15):
@@ -3963,8 +3985,9 @@ def test_unhealable_channel_stops_the_whole_deploy_before_the_gate(
     with pytest.raises(FbctlError, match="Browser-agent profile recovery failed"):
         controller.deploy(DeployOptions(root=root))
 
-    # Гейт verify_application читает /api/settings/vision — до него не дошло.
-    assert not any(url.endswith("/api/settings/vision") for url in probes.json_urls)
+    # Гейт verify_application читает снимок оператора — до него не дошло.
+    # Само /api/settings/vision шаг читает законно: это его проба ожидания.
+    assert not any(url.endswith("/api/operator/snapshot") for url in probes.json_urls)
     assert not (root / "runtime").exists()
     assert any(step == "failure_cleanup" and "stop" in command for step, command in runner.commands)
 
@@ -3979,3 +4002,73 @@ def test_desktop_channel_failure_names_the_operator_action() -> None:
     source = inspect.getsource(fbctl_controller.ProductionController._ensure_desktop_channel)
     assert "RustDesk" in source, "в отказе не назван канал доступа к столу"
     assert "профил" in source, "в отказе не сказано, что поднимать"
+
+
+class _ColdDesktopProbes(FakeProbes):
+    """Стол только что пересоздан: браузер профиля поднимается не мгновенно.
+
+    Ручка ensure-cdp на неготовый канал делает ПРИНУДИТЕЛЬНЫЙ рестарт профиля.
+    Пока она же служила пробой ожидания, шаг перезапускал браузер каждые пять
+    секунд и убивал его раньше, чем тот успевал подняться (прод 18.08.2026:
+    тридцать шесть рестартов за 180 секунд, chrome появился через 199 секунд
+    после старта контейнера — на четыре секунды позже, чем шаг сдался).
+    """
+
+    def __init__(self, ready_after_reads: int = 4) -> None:
+        self.heal_calls = 0
+        self.vision_reads = 0
+        self._ready_after_reads = ready_after_reads
+
+    def post_json(self, url: str, payload, *, headers=None, timeout: float = 15):
+        del payload, headers, timeout
+        assert url.endswith("/api/vision/ensure-cdp")
+        self.heal_calls += 1
+        return 200, {
+            "ok": False,
+            "status": "UNAVAILABLE",
+            "action": "restart",
+            "message": "Profile restart completed but the channel is not ready",
+        }
+
+    def json(self, url: str, *, headers=None, timeout: float = 15):
+        if url.endswith("/api/settings/vision"):
+            self.vision_reads += 1
+            if self.vision_reads < self._ready_after_reads:
+                return 200, {
+                    "required_browser_contract_version": 5,
+                    "browser_contract_version": 5,
+                    "browser_contract_compatible": True,
+                    "profile_id": "profile-1",
+                    "live_profile_id": None,
+                    "graph_probe_performed": False,
+                    "graph_probe_ok": False,
+                    "channel_status": "UNAVAILABLE",
+                    "browser_session_id": None,
+                }
+        return super().json(url, headers=headers, timeout=timeout)
+
+
+def test_desktop_channel_heals_once_then_waits_by_reading() -> None:
+    """Лечение — действие, а не проба: повторять его в цикле нельзя.
+
+    Каждый повтор ensure-cdp перезапускает Vision-профиль, поэтому холодный
+    старт, который длиннее интервала опроса, не может завершиться никогда —
+    сколько бы времени шаг ни ждал.
+    """
+    probes = _ColdDesktopProbes()
+    controller = ProductionController(
+        runner=FakeRunner(),
+        probes=probes,
+        materialize=_materialize,
+        monotonic=iter(range(0, 100_000, 5)).__next__,
+        sleep=lambda _seconds: None,
+    )
+    config = SimpleNamespace(
+        values={"APP_API_PORT": "8100", "APP_WEB_PORT": "8080", "APP_TMA_PORT": "8081"},
+        api_key="k" * 24,
+    )
+
+    controller._ensure_desktop_channel(config)
+
+    assert probes.heal_calls == 1, "профиль перезапускался повторно — браузер не успевает встать"
+    assert probes.vision_reads >= 2, "готовность обязана проверяться чтением, а не лечением"
