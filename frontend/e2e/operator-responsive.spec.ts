@@ -107,7 +107,7 @@ test("cabinet ledger opens a typed cabinet snapshot", async ({ page }) => {
   expect((await requestPromise).method()).toBe("GET");
   await expect(page).toHaveURL(/\/cabinets\/123$/);
   await expect(page.getByRole("heading", { name: "GH_CR2" })).toBeVisible();
-  await expect(page.getByText("$ · Africa/Accra · контроль кабинета")).toBeVisible();
+  await expect(page.getByText("USD · Africa/Accra · контроль кабинета")).toBeVisible();
 });
 
 test("re-login recovery uses the canonical operator command", async ({ page }) => {
