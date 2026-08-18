@@ -340,6 +340,20 @@ describe('isLoginRequiredError', () => {
     );
   });
 
+  // Реальный текст Meta 18.08.2026: ни «expired», ни «log in», ни subcode — канал
+  // ослеп на 4.5 часа и считался рядовым протуханием токена.
+  it('190 «session has been invalidated ... changed their password» → true', () => {
+    assert.equal(
+      isLoginRequiredError({
+        code: 190,
+        message:
+          'Error validating access token: The session has been invalidated because the user ' +
+          'changed their password or Facebook has changed the session for security reasons.',
+      }),
+      true,
+    );
+  });
+
   // 190 без login-признаков (обычное протухание токена) → false (это не разлогин).
   it('190 без login-subcode/текста → false', () => {
     assert.equal(

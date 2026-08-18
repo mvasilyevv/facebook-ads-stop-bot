@@ -167,8 +167,12 @@ _SUBCODE_OVERRIDES: dict[int, type[MetaApiError]] = {
     1357045: TokenInvalidError,  # session re-auth required
 }
 
+# «session has been invalidated» и «changed their password» — канонический ответ Meta
+# при смене пароля или принудительном сбросе сессии (прод 18.08.2026: 4.5 часа слепого
+# канала классифицировались как рядовое протухание токена). Зеркалит browser-agent.
 _LOGIN_REQUIRED_MESSAGE_RE = re.compile(
-    r"session.*expired|log ?in|checkpoint|re-?authenticate|not logged in|logged out",
+    r"session.*(expired|invalidated)|changed (their|your) password"
+    r"|log ?in|checkpoint|re-?authenticate|not logged in|logged out",
     re.IGNORECASE,
 )
 

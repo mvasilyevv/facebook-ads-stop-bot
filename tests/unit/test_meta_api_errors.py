@@ -31,6 +31,26 @@ def test_classify_190_explicit_log_in_message_without_subcode() -> None:
     assert isinstance(exc, LoginRequiredError)
 
 
+# Реальный текст Meta 18.08.2026: канал ослеп на 4.5 часа, а классификатор считал
+# это рядовым протуханием токена — ни слова «expired», ни «log in», ни subcode.
+# Разница не косметическая: ре-логин требует человека у Vision, re-sniff не поможет.
+def test_classify_190_session_invalidated_by_password_change() -> None:
+    exc = classify_graph_error(
+        190,
+        None,
+        "Error validating access token: The session has been invalidated because the user "
+        "changed their password or Facebook has changed the session for security reasons.",
+    )
+    assert isinstance(exc, LoginRequiredError)
+
+
+# Рядовое протухание токена разлогином не считаем: действие оператора другое.
+def test_classify_190_plain_token_expiry_is_not_login_required() -> None:
+    exc = classify_graph_error(190, None, "Error validating access token")
+    assert isinstance(exc, TokenInvalidError)
+    assert not isinstance(exc, LoginRequiredError)
+
+
 # Code 17 — user request limit reached → RateLimitedError (временная, нужно подождать).
 def test_classify_17_rate_limit() -> None:
     exc = classify_graph_error(17, None, "User request limit reached")

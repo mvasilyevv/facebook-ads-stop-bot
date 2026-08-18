@@ -484,7 +484,12 @@ export function isLoginRequiredError(
   const subcode = Number(err.subcode ?? 0);
   if (_LOGIN_REQUIRED_SUBCODES.has(subcode)) return true;
   const msg = String(err.message ?? '').toLowerCase();
-  return /session.*expired|log ?in|checkpoint|re-?authenticate|not logged in|logged out/.test(msg);
+  // «session has been invalidated» / «changed their password» — канонический ответ Meta
+  // при смене пароля или принудительном сбросе сессии (прод 18.08.2026: 4.5 часа слепого
+  // канала считались рядовым протуханием токена). Зеркалит core/meta_api/errors.py.
+  return /session.*(expired|invalidated)|changed (their|your) password|log ?in|checkpoint|re-?authenticate|not logged in|logged out/.test(
+    msg,
+  );
 }
 
 /**
