@@ -190,12 +190,12 @@ describe("analytics route fail-closed state", () => {
     {
       state: "partial" as const,
       fetching: false,
-      currencyLabel: "$ · снимок неполный",
+      currencyLabel: "USD · снимок неполный",
     },
     {
       state: "stale" as const,
       fetching: true,
-      currencyLabel: "$ · снимок устарел",
+      currencyLabel: "USD · снимок устарел",
     },
   ])(
     "keeps $state analytics values neutral and exposes snapshot freshness",

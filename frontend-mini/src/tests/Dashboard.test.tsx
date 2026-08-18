@@ -352,7 +352,7 @@ describe("TMA operator dashboard", () => {
   it("uses the selected cabinet timezone on the cabinet route", () => {
     render(<OperatorMiniCabinetDashboard cabinetId="123" />);
 
-    expect(screen.getAllByText(/\$ · Africa\/Accra/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/USD · Africa\/Accra/).length).toBeGreaterThan(0);
     expect(
       screen.getAllByText(/18\.07\.2026, 10:1[45]/).length,
     ).toBeGreaterThan(0);

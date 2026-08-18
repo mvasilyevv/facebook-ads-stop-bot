@@ -38,6 +38,7 @@ import {
   isActiveOperatorAction as isActiveAction,
   collapseConsecutiveOperatorActions,
   operatorAttentionCopy,
+  operatorCabinetDisplayName,
   operatorCabinetTimezone,
   operatorLedgerTimezone,
   operatorReasonNoun as pluralReason,
@@ -179,9 +180,9 @@ function OperatorMiniLedgerScreen({
   const displayTimezone = operatorLedgerTimezone(snapshot, cabinetId);
   const usdScopeConfirmed = confirmedOperatorCurrency(snapshot.meta) === "USD";
   const pageTitle = cabinetId
-    ? (snapshot.meta.account.name ?? `Кабинет ${cabinetId}`)
+    ? (snapshot.meta.account.name ?? `Кабинет ${operatorCabinetDisplayName(cabinetId)}`)
     : "Сейчас";
-  const cabinetCurrencyLabel = usdScopeConfirmed ? "$" : "USD не подтверждён";
+  const cabinetCurrencyLabel = usdScopeConfirmed ? "USD" : "USD не подтверждён";
   const pageDetail = cabinetId
     ? `${cabinetCurrencyLabel} · ${cabinetTimezone ?? "часовой пояс не подтверждён"}`
     : "Деньги, расхождения и команды";
@@ -653,9 +654,9 @@ function MiniCabinetRow({
     >
       <button type="button" onClick={() => void onOpen(cabinet.id)}>
         <span className="mini-ledger-cabinet__identity">
-          <strong>{cabinet.name}</strong>
+          <strong>{operatorCabinetDisplayName(cabinet.name)}</strong>
           <small>
-            {usdConfirmed ? "$" : "валюта не подтверждена"} ·{" "}
+            {usdConfirmed ? "USD" : "валюта не подтверждена"} ·{" "}
             {cabinet.timezone ?? "timezone не подтверждён"}
           </small>
         </span>

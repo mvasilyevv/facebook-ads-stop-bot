@@ -1048,7 +1048,8 @@ function currencyEvidenceStatus(
 
 function currencyEvidenceLabel(scope: AnalyticsPerformance["scope"], state: DataState): string {
   if (scope.currency_state === "single" && scope.currency === "USD") {
-    const label = "$";
+    // Голый «$» не сообщал ничего: подтверждённую валюту называем кодом.
+    const label = "USD";
     if (state === "ready") return `${label} · подтверждена`;
     if (state === "partial") return `${label} · снимок неполный`;
     if (state === "stale") return `${label} · снимок устарел`;

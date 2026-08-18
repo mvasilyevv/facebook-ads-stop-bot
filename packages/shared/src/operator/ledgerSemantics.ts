@@ -98,6 +98,16 @@ export function operatorAttentionCopy(
   };
 }
 
+/**
+ * Cabinet identity as the operator reads it: без транспортного префикса `act_`.
+ *
+ * `act_` — приставка адреса Meta, а не часть идентичности кабинета: в списках она
+ * одинакова у всех строк, удлиняет их и мешает сверить номер глазами.
+ */
+export function operatorCabinetDisplayName(raw: string | null | undefined): string {
+  return String(raw ?? "").replace(/^act_/, "");
+}
+
 /** Cabinet routes use the cabinet row's timezone instead of the global display timezone. */
 export function operatorCabinetTimezone(
   snapshot: OperatorSnapshot,

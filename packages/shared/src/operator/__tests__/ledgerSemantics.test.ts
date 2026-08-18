@@ -7,6 +7,7 @@ import {
   formatOperatorFreshness,
   collapseOperatorAttentionItems,
   operatorAttentionCopy,
+  operatorCabinetDisplayName,
   operatorCabinetTimezone,
   operatorLedgerTimezone,
   operatorReasonNoun,
@@ -202,5 +203,21 @@ describe("operator ledger semantics", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]!.count).toBe(3);
     expect(groups[0]!.item.public_id).toBe("#2");
+  });
+});
+
+// act_ — приставка адреса Meta, а не часть идентичности кабинета: в списке она
+// одинакова у всех строк, удлиняет их и мешает сверить номер глазами.
+describe("operatorCabinetDisplayName", () => {
+  it("снимает транспортный префикс act_", () => {
+    expect(operatorCabinetDisplayName("act_2108857220005012")).toBe("2108857220005012");
+  });
+
+  it("оставляет чистый номер как есть", () => {
+    expect(operatorCabinetDisplayName("2108857220005012")).toBe("2108857220005012");
+  });
+
+  it("не падает на отсутствующем значении", () => {
+    expect(operatorCabinetDisplayName(null)).toBe("");
   });
 });

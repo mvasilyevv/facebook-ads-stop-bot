@@ -31,6 +31,7 @@ import {
   collapseConsecutiveOperatorActions,
   collapseOperatorAttentionItems,
   operatorAttentionCopy,
+  operatorCabinetDisplayName,
   operatorCabinetTimezone,
   operatorLedgerTimezone,
   operatorReasonNoun as pluralReason,
@@ -160,8 +161,10 @@ function OperatorLedgerScreen({
   const cabinetTimezone = cabinetId ? operatorCabinetTimezone(snapshot, cabinetId) : null;
   const displayTimezone = operatorLedgerTimezone(snapshot, cabinetId);
   const usdScopeConfirmed = confirmedOperatorCurrency(snapshot.meta) === "USD";
-  const pageTitle = cabinetId ? (snapshot.meta.account.name ?? `Кабинет ${cabinetId}`) : "Сейчас";
-  const cabinetCurrencyLabel = usdScopeConfirmed ? "$" : "USD не подтверждён";
+  const pageTitle = cabinetId
+    ? (snapshot.meta.account.name ?? `Кабинет ${operatorCabinetDisplayName(cabinetId)}`)
+    : "Сейчас";
+  const cabinetCurrencyLabel = usdScopeConfirmed ? "USD" : "USD не подтверждён";
   const pageDescription = cabinetId
     ? `${cabinetCurrencyLabel} · ${cabinetTimezone ?? "часовой пояс не подтверждён"} · контроль кабинета`
     : "Деньги, расхождения и выполняемые команды — одна проверяемая картина.";
@@ -383,7 +386,7 @@ function CurrencyLedgerGroup({
       {showLabel ? (
         <div className="ledger-section__header">
           <div className="ledger-section__title">
-            <h3>{usdConfirmed ? "Бюджет · $" : "Валюта не подтверждена"}</h3>
+            <h3>{usdConfirmed ? "Бюджет · USD" : "Валюта не подтверждена"}</h3>
           </div>
           <StateLabel state={usdConfirmed ? group.state : "partial"} />
         </div>
@@ -465,11 +468,11 @@ function CabinetLedgerRow({
         <Link
           to="/cabinets/$cabinetId"
           params={{ cabinetId: cabinet.id }}
-          aria-label={`${cabinet.action.label}: ${cabinet.name}`}
+          aria-label={`${cabinet.action.label}: ${operatorCabinetDisplayName(cabinet.name)}`}
         >
-          <strong>{cabinet.name}</strong>
+          <strong>{operatorCabinetDisplayName(cabinet.name)}</strong>
           <span>
-            {usdConfirmed ? "$" : "валюта не подтверждена"} ·{" "}
+            {usdConfirmed ? "USD" : "валюта не подтверждена"} ·{" "}
             {cabinet.timezone ?? "часовой пояс не подтверждён"}
           </span>
         </Link>

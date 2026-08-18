@@ -444,7 +444,7 @@ describe("mobile performance analytics", () => {
     expect(
       screen.getByText("Meta").closest("[data-source-status]"),
     ).toHaveAttribute("data-source-status", "degraded");
-    expect(screen.getByText(/\$ · снимок неполный/)).toBeInTheDocument();
+    expect(screen.getByText(/USD · снимок неполный/)).toBeInTheDocument();
     expect(screen.queryByText("$ · подтверждена")).not.toBeInTheDocument();
     expect(screen.getAllByText(/Снимок · 42 сек назад/).length).toBeGreaterThan(
       0,
@@ -468,7 +468,7 @@ describe("mobile performance analytics", () => {
       screen.getByText("AdSet.pro").closest("[data-source-status]"),
     ).toHaveAttribute("data-source-status", "unknown");
     expect(screen.getByText(/Сутки: снимок устарел/)).toBeInTheDocument();
-    expect(screen.getByText(/\$ · снимок устарел/)).toBeInTheDocument();
+    expect(screen.getByText(/USD · снимок устарел/)).toBeInTheDocument();
     expect(screen.queryByText("$ · подтверждена")).not.toBeInTheDocument();
     for (const label of screen.getAllByText("Δ stop")) {
       expect(label.closest("div")?.querySelector("dd")).not.toHaveClass(
