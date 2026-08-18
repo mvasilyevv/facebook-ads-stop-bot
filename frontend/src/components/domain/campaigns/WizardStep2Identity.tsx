@@ -18,7 +18,7 @@
 
 import { useEffect, useRef, useState, type FC } from "react";
 import { validateCampaignIdentity } from "@fb/features/campaigns";
-import { ChoiceTagListInput } from "@fb/operator-ui";
+import { ChoiceCheckList } from "@fb/operator-ui";
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
@@ -271,19 +271,19 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
           РЕКЛАМНЫЙ КАБИНЕТ
         </div>
         <div className="mb-4">
-          <ChoiceTagListInput
+          <ChoiceCheckList
             label="Кабинеты оффера"
             values={values.ad_account_ids ?? []}
             options={offerAccounts.map((accountId) => ({
               value: accountId,
-              label: `act_${accountId}`,
+              label: accountId,
             }))}
             onChange={handleAccountsChange}
-            placeholder="Добавить кабинет оффера"
             selectAllLabel={offerAccounts.length > 1 ? "Выбрать все" : undefined}
             errorMessage={errors.ad_account_ids ?? errors.act_id}
             disabled={offerAccounts.length === 0}
-            helpText="Каждый выбранный кабинет получит отдельный run; первый используется для preview и списка страниц."
+            emptyLabel="Сначала выберите оффер"
+            helpText="Каждый отмеченный кабинет получит отдельный run; первый отмеченный используется для preview, страниц и пикселей."
           />
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

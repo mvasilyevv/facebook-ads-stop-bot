@@ -13,7 +13,7 @@ import {
   type CampaignLaunchObservedState,
 } from "@fb/features/campaigns";
 import { safeApiProblemMessage } from "@fb/operator-api";
-import { ChoiceTagListInput } from "@fb/operator-ui";
+import { ChoiceCheckList } from "@fb/operator-ui";
 import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
@@ -519,21 +519,21 @@ export function CampaignWizard() {
                 ]}
                 onChange={(event) => chooseOffer(event.target.value)}
               />
-              <ChoiceTagListInput
+              <ChoiceCheckList
                 label="Кабинеты оффера"
                 values={state.identity.ad_account_ids ?? []}
                 options={offerAccounts.map((accountId) => ({
                   value: accountId,
-                  label: `act_${accountId}`,
+                  label: accountId,
                 }))}
                 onChange={chooseAccounts}
-                placeholder="Добавить кабинет оффера"
                 selectAllLabel={
                   offerAccounts.length > 1 ? "Выбрать все" : undefined
                 }
                 errorMessage={errors.ad_account_ids ?? errors.act_id}
                 disabled={offerAccounts.length === 0}
-                helpText="По одному независимому run на кабинет. Первый используется для preview и списка страниц."
+                emptyLabel="Сначала выберите оффер"
+                helpText="По одному независимому run на кабинет. Первый отмеченный используется для preview, страниц и пикселей."
               />
               <Button
                 variant="secondary"

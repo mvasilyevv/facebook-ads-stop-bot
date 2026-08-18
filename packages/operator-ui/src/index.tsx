@@ -22,48 +22,76 @@ export interface DataStateBadgeProps {
   compact?: boolean;
 }
 
-export interface ChoiceTagOption {
+export interface ChoiceOption {
   value: string;
   label: string;
 }
 
-export interface ChoiceTagListInputProps {
+export interface ChoiceCheckListProps {
   label: string;
   values: string[];
-  options: ChoiceTagOption[];
+  options: ChoiceOption[];
   onChange: (values: string[]) => void;
-  placeholder?: string;
   helpText?: string;
   errorMessage?: string;
   disabled?: boolean;
   selectAllLabel?: string;
+  emptyLabel?: string;
+  primaryHint?: string;
 }
 
-/** Multi-value field backed only by authoritative choices; no free-form tokens. */
-export function ChoiceTagListInput({
+/**
+ * Multi-value field over a known, short set of choices — все варианты видны сразу.
+ *
+ * Раньше здесь был список тэгов с добавлением по одному через выпадающий список:
+ * чтобы увидеть доступные кабинеты, приходилось раскрывать select, а выбранные
+ * читались отдельной строкой чипов. Для набора из двух-пяти кабинетов оффера это
+ * лишний шаг. Порядок отметок сохраняется: первый отмеченный — основной, его
+ * используют preview и справочники кабинета.
+ */
+export function ChoiceCheckList({
   label,
   values,
   options,
   onChange,
-  placeholder = "Добавить значение",
   helpText,
   errorMessage,
   disabled = false,
   selectAllLabel,
-}: ChoiceTagListInputProps) {
+  emptyLabel = "Нет доступных значений",
+  primaryHint = "основной",
+}: ChoiceCheckListProps) {
   const id = useId();
   const helpId = helpText ? `${id}-help` : undefined;
   const errorId = errorMessage ? `${id}-error` : undefined;
-  const optionByValue = new Map(
-    options.map((option) => [option.value, option]),
-  );
-  const available = options.filter((option) => !values.includes(option.value));
+  // Отмеченное значение вне списка вариантов всё равно показываем: иначе
+  // восстановленный черновик выглядел бы пустым при непустом наборе, и запуск
+  // ушёл бы в кабинет, которого оператор на экране не видел.
+  const rows: ChoiceOption[] = [
+    ...options,
+    ...values
+      .filter((value) => !options.some((option) => option.value === value))
+      .map((value) => ({ value, label: value })),
+  ];
+  const allSelected =
+    options.length > 0 && options.every((option) => values.includes(option.value));
+
+  const toggle = (value: string) => {
+    // Отметка добавляется в конец: порядок и определяет, кто основной.
+    onChange(
+      values.includes(value)
+        ? values.filter((item) => item !== value)
+        : [...values, value],
+    );
+  };
 
   return (
-    <div className="operator-choice-tags">
-      <div className="operator-choice-tags__label-row">
-        <label htmlFor={id}>{label}</label>
-        {selectAllLabel && available.length > 0 ? (
+    <div className="operator-choice-list">
+      <div className="operator-choice-list__label-row">
+        <span className="operator-choice-list__label" id={`${id}-label`}>
+          {label}
+        </span>
+        {selectAllLabel && !allSelected && options.length > 0 ? (
           <button
             type="button"
             disabled={disabled}
@@ -74,56 +102,44 @@ export function ChoiceTagListInput({
         ) : null}
       </div>
       <div
-        className="operator-choice-tags__control"
+        className="operator-choice-list__control"
+        role="group"
+        aria-labelledby={`${id}-label`}
+        aria-describedby={errorId ?? helpId}
         data-invalid={errorMessage ? "true" : "false"}
       >
-        <div className="operator-choice-tags__values" aria-live="polite">
-          {values.map((value, index) => (
-            <span className="operator-choice-tags__tag" key={value}>
-              <span>
-                {optionByValue.get(value)?.label ?? value}
-                {index === 0 && values.length > 1 ? " · основной" : ""}
-              </span>
-              <button
-                type="button"
-                disabled={disabled}
-                aria-label={`Убрать ${optionByValue.get(value)?.label ?? value}`}
-                onClick={() =>
-                  onChange(values.filter((item) => item !== value))
-                }
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-        <select
-          id={id}
-          value=""
-          disabled={disabled || available.length === 0}
-          aria-invalid={Boolean(errorMessage)}
-          aria-describedby={errorId ?? helpId}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (value) onChange([...values, value]);
-          }}
-        >
-          <option value="">
-            {available.length > 0 ? placeholder : "Все выбраны"}
-          </option>
-          {available.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+        {rows.length === 0 ? (
+          <span className="operator-choice-list__empty">{emptyLabel}</span>
+        ) : (
+          rows.map((option) => {
+            const checked = values.includes(option.value);
+            const isPrimary =
+              checked && values[0] === option.value && values.length > 1;
+            return (
+              <label className="operator-choice-list__row" key={option.value}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={disabled}
+                  onChange={() => toggle(option.value)}
+                />
+                <span>{option.label}</span>
+                {isPrimary ? (
+                  <span className="operator-choice-list__primary">
+                    {primaryHint}
+                  </span>
+                ) : null}
+              </label>
+            );
+          })
+        )}
       </div>
       {errorMessage ? (
-        <span id={errorId} className="operator-choice-tags__error" role="alert">
+        <span id={errorId} className="operator-choice-list__error" role="alert">
           {errorMessage}
         </span>
       ) : helpText ? (
-        <span id={helpId} className="operator-choice-tags__help">
+        <span id={helpId} className="operator-choice-list__help">
           {helpText}
         </span>
       ) : null}

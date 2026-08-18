@@ -8,7 +8,17 @@ vi.mock("@/lib/api/campaigns", () => ({
 }));
 
 vi.mock("@/lib/api/offers", () => ({
-  useOffers: () => ({ data: [], isLoading: false }),
+  useOffers: () => ({
+    data: [
+      {
+        code: "GH_AVI",
+        name: "GH Aviator",
+        ad_account_ids: ["2108857220005012", "3570379159805007"],
+        countries: [],
+      },
+    ],
+    isLoading: false,
+  }),
 }));
 
 import { WizardStep2Identity } from "@/components/domain/campaigns/WizardStep2Identity";
@@ -65,5 +75,25 @@ describe("WizardStep2Identity — контекст кабинета", () => {
     expect(
       screen.getByText("Запуск заблокирован до свежего подтверждения Meta."),
     ).toBeInTheDocument();
+  });
+});
+
+describe("WizardStep2Identity — кабинеты оффера", () => {
+  // Кабинеты оффера видны все сразу и отмечаются галочкой: добавление по одному
+  // через выпадающий список заставляло искать нужный кабинет вслепую.
+  it("показывает кабинеты оффера списком с отметками", () => {
+    renderStep({ offer_code: "GH_AVI", ad_account_ids: ["2108857220005012"] });
+
+    const checked = screen.getByRole("checkbox", { name: /2108857220005012/ });
+    expect(checked).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /3570379159805007/ })).not.toBeChecked();
+  });
+
+  // act_ — префикс транспорта Meta, а не часть идентичности кабинета. В интерфейсе
+  // он только удлинял строку и мешал сверить ID глазами.
+  it("не показывает префикс act_", () => {
+    renderStep({ offer_code: "GH_AVI", ad_account_ids: ["2108857220005012"] });
+
+    expect(screen.queryByText(/act_/)).toBeNull();
   });
 });
