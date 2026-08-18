@@ -267,12 +267,9 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
 
       {/* Кабинет */}
       <div>
-        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-3">
-          РЕКЛАМНЫЙ КАБИНЕТ
-        </div>
         <div className="mb-4">
           <ChoiceCheckList
-            label="Кабинеты оффера"
+            label="Рекламные кабинеты"
             values={values.ad_account_ids ?? []}
             options={offerAccounts.map((accountId) => ({
               value: accountId,
@@ -283,7 +280,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
             errorMessage={errors.ad_account_ids ?? errors.act_id}
             disabled={offerAccounts.length === 0}
             emptyLabel="Сначала выберите оффер"
-            helpText="Каждый отмеченный кабинет получит отдельный run; первый отмеченный используется для preview, страниц и пикселей."
+            helpText="Каждый кабинет запускается отдельно."
           />
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -374,8 +371,15 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
 
       {/* Страница и пиксель */}
       <div>
-        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-3">
+        <div className="font-display text-[12px] tracking-[0.14em] uppercase text-bg-8 mb-1">
           СТРАНИЦА И ПИКСЕЛЬ
+        </div>
+        {/* Списки живут в одном кабинете, поэтому источник называем здесь, а не
+            бейджем «основной» в строке выбора: там это слово ничего не значило. */}
+        <div className="mb-3 text-[12px] text-bg-9">
+          {values.act_id
+            ? `Списки из кабинета ${values.act_id}. Выбранное применится ко всем кабинетам запуска.`
+            : "Выберите кабинет — списки подтянутся из него."}
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {pagesMutation.isPending ? (

@@ -520,7 +520,7 @@ export function CampaignWizard() {
                 onChange={(event) => chooseOffer(event.target.value)}
               />
               <ChoiceCheckList
-                label="Кабинеты оффера"
+                label="Рекламные кабинеты"
                 values={state.identity.ad_account_ids ?? []}
                 options={offerAccounts.map((accountId) => ({
                   value: accountId,
@@ -533,7 +533,7 @@ export function CampaignWizard() {
                 errorMessage={errors.ad_account_ids ?? errors.act_id}
                 disabled={offerAccounts.length === 0}
                 emptyLabel="Сначала выберите оффер"
-                helpText="По одному независимому run на кабинет. Первый отмеченный используется для preview, страниц и пикселей."
+                helpText="Каждый кабинет запускается отдельно."
               />
               <Button
                 variant="secondary"

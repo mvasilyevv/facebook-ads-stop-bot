@@ -37,7 +37,6 @@ export interface ChoiceCheckListProps {
   disabled?: boolean;
   selectAllLabel?: string;
   emptyLabel?: string;
-  primaryHint?: string;
 }
 
 /**
@@ -46,8 +45,11 @@ export interface ChoiceCheckListProps {
  * Раньше здесь был список тэгов с добавлением по одному через выпадающий список:
  * чтобы увидеть доступные кабинеты, приходилось раскрывать select, а выбранные
  * читались отдельной строкой чипов. Для набора из двух-пяти кабинетов оффера это
- * лишний шаг. Порядок отметок сохраняется: первый отмеченный — основной, его
- * используют preview и справочники кабинета.
+ * лишний шаг.
+ *
+ * Порядок отметок сохраняется — вызывающий может опираться на первый элемент, —
+ * но в интерфейсе он не подписан: «основной» ничего не значит для того, кто
+ * просто выбирает кабинеты, и лишний бейдж только шумел в строке.
  */
 export function ChoiceCheckList({
   label,
@@ -59,7 +61,6 @@ export function ChoiceCheckList({
   disabled = false,
   selectAllLabel,
   emptyLabel = "Нет доступных значений",
-  primaryHint = "основной",
 }: ChoiceCheckListProps) {
   const id = useId();
   const helpId = helpText ? `${id}-help` : undefined;
@@ -111,27 +112,17 @@ export function ChoiceCheckList({
         {rows.length === 0 ? (
           <span className="operator-choice-list__empty">{emptyLabel}</span>
         ) : (
-          rows.map((option) => {
-            const checked = values.includes(option.value);
-            const isPrimary =
-              checked && values[0] === option.value && values.length > 1;
-            return (
-              <label className="operator-choice-list__row" key={option.value}>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  disabled={disabled}
-                  onChange={() => toggle(option.value)}
-                />
-                <span>{option.label}</span>
-                {isPrimary ? (
-                  <span className="operator-choice-list__primary">
-                    {primaryHint}
-                  </span>
-                ) : null}
-              </label>
-            );
-          })
+          rows.map((option) => (
+            <label className="operator-choice-list__row" key={option.value}>
+              <input
+                type="checkbox"
+                checked={values.includes(option.value)}
+                disabled={disabled}
+                onChange={() => toggle(option.value)}
+              />
+              <span>{option.label}</span>
+            </label>
+          ))
         )}
       </div>
       {errorMessage ? (
