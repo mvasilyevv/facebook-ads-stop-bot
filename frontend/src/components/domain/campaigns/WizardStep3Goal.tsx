@@ -183,7 +183,10 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 items-end sm:grid-cols-3">
+          {/* Выравнивание по верху: helpText «Возраста до» появляется только при
+              Advantage+ и не должен сдвигать соседние контролы (items-end ронял
+              весь ряд вниз на высоту подсказки). */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Input
               label="Возраст от"
               type="number"
@@ -209,12 +212,16 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({
               }
               onChange={(e) => onChange({ age_max: Number(e.target.value) })}
             />
-            <div className="pb-1">
+            {/* Колонка повторяет структуру Input (label + контрол h-11), чтобы
+                тогл стоял на одной линии с полями возраста. */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[12px] font-display tracking-wider uppercase text-bg-9">
+                Advantage+
+              </span>
               <Switch
                 checked={values.advantage_audience}
                 onChange={() => onChange({ advantage_audience: !values.advantage_audience })}
                 label="Advantage+ Audience"
-                visualLabel="Advantage+"
               />
             </div>
           </div>
