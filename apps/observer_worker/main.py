@@ -44,7 +44,7 @@ from core.meta_api.identity import require_ad_account_id
 from core.observer.accounts import (
     allowlist_blocks_scan,
     list_offers_without_accounts,
-    resolve_scan_account_ids,
+    resolve_configured_ad_account_ids,
 )
 from core.observer.adaptive_interval import (
     DEFAULT_BASE_INTERVAL_SECONDS,
@@ -761,7 +761,7 @@ async def run_one_cycle(
 
     # Кабинет обязан быть выбран явно. Неявная текущая вкладка не имеет
     # identity/fencing и может направить money-решение не в тот аккаунт.
-    accounts = await resolve_scan_account_ids(engine)
+    accounts = await resolve_configured_ad_account_ids(engine)
     if not accounts:
         orphan_offers = await list_offers_without_accounts(engine)
         logger.warning(
@@ -1239,7 +1239,7 @@ async def main_loop(
                 logger.info("cycle done: %s", summary)
             except Exception as exc:
                 # MID-6 (аудит 02.07): падение ВНЕ _run_account_scan (например DB-ошибка
-                # в load_observer_config/resolve_scan_account_ids) раньше просто
+                # в load_observer_config/resolve_configured_ad_account_ids) раньше просто
                 # пересоздавало gate и уходило на следующую итерацию молча — мимо Layer 3
                 # degraded-детектора (он считает только summary["outcome"] == "error" из
                 # штатного пути). Теперь такой краш тоже засчитывается в тот же счётчик

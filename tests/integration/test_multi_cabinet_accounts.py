@@ -2,7 +2,7 @@
 """Integration: мульти-кабинет M1 — scan set из офферов + ad_account_id в каталоге.
 
 Покрывает:
-1. resolve_scan_account_ids — union по нормализованным связям активных офферов,
+1. resolve_configured_ad_account_ids — union по нормализованным связям активных офферов,
    дедуп, сортировка; неактивные офферы игнорируются.
 2. list_offers_without_accounts — активные офферы с пустым списком кабинетов.
 3. upsert_catalog_hierarchy — требует явные account/campaign IDs и пишет
@@ -22,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.ad_account_catalog import ad_account_catalog
-from core.observer.accounts import list_offers_without_accounts, resolve_scan_account_ids
+from core.observer.accounts import list_offers_without_accounts, resolve_configured_ad_account_ids
 from core.observer.writers import upsert_catalog_hierarchy
 
 # Префикс изоляции данных этого модуля.
@@ -80,12 +80,12 @@ async def _insert_offer(
 
 # Union кабинетов активных офферов: дедуп пересечений, сортировка, неактивный игнорируется.
 @pytest.mark.asyncio
-async def test_resolve_scan_account_ids_union(pg_engine: AsyncEngine, clean_mcab) -> None:
+async def test_resolve_configured_ad_account_ids_union(pg_engine: AsyncEngine, clean_mcab) -> None:
     await _insert_offer(pg_engine, code=f"{PFX}_A", accounts=["222", "111"])
     await _insert_offer(pg_engine, code=f"{PFX}_B", accounts=["111", "333"])
     await _insert_offer(pg_engine, code=f"{PFX}_OFF", accounts=["999"], is_active=False)
 
-    result = await resolve_scan_account_ids(pg_engine)
+    result = await resolve_configured_ad_account_ids(pg_engine)
 
     # Только кабинеты активных офферов; «999» от неактивного не попал.
     for acc in ("111", "222", "333"):

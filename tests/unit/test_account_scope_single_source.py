@@ -49,7 +49,7 @@ def test_no_module_derives_cabinet_scope_from_scan_results() -> None:
     assert offenders == [], (
         "скоуп кабинетов выводится из следов сканера в: "
         + ", ".join(offenders)
-        + " — используйте резолвер конфигурации из core/observer/accounts.py"
+        + " — используйте resolve_configured_ad_account_ids из core/observer/accounts.py"
     )
 
 

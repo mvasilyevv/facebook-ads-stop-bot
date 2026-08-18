@@ -22,7 +22,7 @@ from core.money import (
     currency_exponent,
     validated_currency_code,
 )
-from core.observer.accounts import resolve_scan_account_ids
+from core.observer.accounts import resolve_configured_ad_account_ids
 from core.tasks.browser_fence import (
     BrowserFenceLeaseLost,
     BrowserOperationBlocked,
@@ -207,7 +207,11 @@ async def resolve_cabinet_days(
         raise ValueError("now must be timezone-aware")
     # Дефолтный скоуп — наши кабинеты по конфигурации офферов. Следы прошлых
     # сканов скоуп не задают: у нового кабинета их нет, и он выпадал целиком.
-    requested = await resolve_scan_account_ids(engine) if account_ids is None else list(account_ids)
+    requested = (
+        await resolve_configured_ad_account_ids(engine)
+        if account_ids is None
+        else list(account_ids)
+    )
     canonical_ids = tuple(
         sorted(
             {
@@ -298,7 +302,11 @@ async def resolve_account_currencies(
         raise ValueError("max_age must be positive")
     # Дефолтный скоуп — наши кабинеты по конфигурации офферов. Следы прошлых
     # сканов скоуп не задают: у нового кабинета их нет, и он выпадал целиком.
-    requested = await resolve_scan_account_ids(engine) if account_ids is None else list(account_ids)
+    requested = (
+        await resolve_configured_ad_account_ids(engine)
+        if account_ids is None
+        else list(account_ids)
+    )
     canonical_ids = tuple(
         sorted(
             {
@@ -511,7 +519,7 @@ async def persist_account_context(
 async def refresh_account_timezones(engine: AsyncEngine, client: Any) -> int:
     """Best-effort refresh of durable timezone and currency evidence."""
     try:
-        account_ids = await resolve_scan_account_ids(engine)
+        account_ids = await resolve_configured_ad_account_ids(engine)
     except Exception as exc:  # noqa: BLE001 - idle refresh never owns money decisions
         logger.warning("account timezone cabinet list failed: %s", exc)
         return 0

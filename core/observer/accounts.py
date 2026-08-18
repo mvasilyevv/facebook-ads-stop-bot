@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Резолв явного scan set кабинетов для observer.
+"""Резолв явного набора наших кабинетов.
 
-Scan set = объединение offer_ad_accounts всех АКТИВНЫХ офферов:
-кабинет сканируется, если привязан хотя бы к одному активному офферу.
-Пустой scan set всегда останавливает цикл fail-closed: текущая вкладка браузера
-никогда не используется как неявная account identity.
+Набор = объединение offer_ad_accounts всех АКТИВНЫХ офферов: кабинет наш, если
+привязан хотя бы к одному активному офферу. Пустой набор всегда останавливает
+цикл fail-closed: текущая вкладка браузера никогда не используется как неявная
+account identity.
 """
 
 from __future__ import annotations
@@ -43,11 +43,17 @@ def normalize_account_id(raw: str | None) -> str | None:
         return None
 
 
-async def resolve_scan_account_ids(engine: AsyncEngine) -> list[str]:
-    """Sorted DISTINCT union of accounts linked to active offers."""
+async def resolve_configured_ad_account_ids(engine: AsyncEngine) -> list[str]:
+    """Наши кабинеты: отсортированный DISTINCT-союз кабинетов активных офферов.
+
+    Это намерение оператора, а не производная от работы сканера. Множество
+    используют observer, health-проверки, операторский API, создание кампаний
+    и проба готовности канала — «scan» в имени вводило в заблуждение и однажды
+    уже привело к дублирующему запросу по fb_campaigns (17.08.2026).
+    """
 
     async with engine.connect() as conn:
-        return await ad_account_catalog.resolve_scan_set(conn)
+        return await ad_account_catalog.resolve_configured_set(conn)
 
 
 def nothing_monitored_reason_for(
@@ -76,7 +82,7 @@ async def scan_nothing_monitored_reason(engine: AsyncEngine, campaign_ids: list[
         включить скан вхолостую (он бы крутился раз в интервал и ничего не отслеживал).
     Та же логика, что в реальном цикле observer (allowlist_blocks_scan) — UI совпадает с поведением.
     """
-    account_ids = await resolve_scan_account_ids(engine)
+    account_ids = await resolve_configured_ad_account_ids(engine)
     return nothing_monitored_reason_for(account_ids, campaign_ids)
 
 

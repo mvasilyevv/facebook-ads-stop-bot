@@ -153,7 +153,7 @@ async def test_system_readyz_returns_200_only_for_live_business_contour(
         AsyncMock(return_value=_durable_scan_state(enabled=True, activity_at=now)),
     )
     monkeypatch.setattr(
-        health_router, "resolve_scan_account_ids", AsyncMock(return_value=["123456"])
+        health_router, "resolve_configured_ad_account_ids", AsyncMock(return_value=["123456"])
     )
     monkeypatch.setattr(health_router, "_load_money_task_failures", AsyncMock(return_value=(0, 0)))
 
@@ -192,7 +192,7 @@ async def test_system_readyz_does_not_consult_optional_redis(
         AsyncMock(return_value=_durable_scan_state(enabled=True, activity_at=now)),
     )
     monkeypatch.setattr(
-        health_router, "resolve_scan_account_ids", AsyncMock(return_value=["123456"])
+        health_router, "resolve_configured_ad_account_ids", AsyncMock(return_value=["123456"])
     )
     monkeypatch.setattr(health_router, "_load_money_task_failures", AsyncMock(return_value=(0, 0)))
     app = _make_app_with_overrides(engine=pg_engine, redis=unavailable_redis)
@@ -218,7 +218,7 @@ async def test_system_readyz_reports_offline_business_contour(
         AsyncMock(return_value=_durable_scan_state(enabled=True, activity_at=stale_at)),
     )
     monkeypatch.setattr(
-        health_router, "resolve_scan_account_ids", AsyncMock(return_value=["123456"])
+        health_router, "resolve_configured_ad_account_ids", AsyncMock(return_value=["123456"])
     )
     monkeypatch.setattr(health_router, "_load_money_task_failures", AsyncMock(return_value=(0, 0)))
 
@@ -246,7 +246,7 @@ async def test_system_readyz_treats_operator_pause_as_not_business_ready(
         AsyncMock(return_value=_durable_scan_state(enabled=False, activity_at=None)),
     )
     monkeypatch.setattr(
-        health_router, "resolve_scan_account_ids", AsyncMock(return_value=["123456"])
+        health_router, "resolve_configured_ad_account_ids", AsyncMock(return_value=["123456"])
     )
     monkeypatch.setattr(health_router, "_load_money_task_failures", AsyncMock(return_value=(0, 0)))
 

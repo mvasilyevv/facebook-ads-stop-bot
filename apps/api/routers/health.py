@@ -25,7 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from apps.api.deps import get_engine, get_redis
-from core.observer.accounts import resolve_scan_account_ids
+from core.observer.accounts import resolve_configured_ad_account_ids
 from core.operator.queries import fetch_operator_scan_state
 
 logger = logging.getLogger(__name__)
@@ -147,7 +147,7 @@ async def system_readyz(
         try:
             now = datetime.now(UTC)
             scan = await fetch_operator_scan_state(engine)
-            expected_accounts = await resolve_scan_account_ids(engine)
+            expected_accounts = await resolve_configured_ad_account_ids(engine)
             stale_money_tasks, expired_money_tasks = await _load_money_task_failures(engine)
         except Exception as exc:  # noqa: BLE001
             logger.warning("system-readyz: durable evidence unavailable: %s", exc)

@@ -260,7 +260,7 @@ def _install_readiness_fakes(monkeypatch, *, accounts: list[str]) -> list[dict]:
         ),
     )
     monkeypatch.setattr(readiness, "_database_clock", _async_return(observed_at))
-    monkeypatch.setattr(readiness, "resolve_scan_account_ids", _async_return(accounts))
+    monkeypatch.setattr(readiness, "resolve_configured_ad_account_ids", _async_return(accounts))
 
     async def _persist(_engine, *, identity, observation, writer_instance, ttl_seconds):
         published.append({"kind": "persist", "state": observation.state})

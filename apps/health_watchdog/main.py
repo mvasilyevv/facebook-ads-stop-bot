@@ -219,9 +219,9 @@ def is_login_required_reason(reason: str) -> bool:
 
 async def _alert_login_required_accounts(engine: AsyncEngine) -> bool:
     """Open the canonical per-cabinet incident instead of channel-down."""
-    from core.observer.accounts import resolve_scan_account_ids
+    from core.observer.accounts import resolve_configured_ad_account_ids
 
-    account_ids = await resolve_scan_account_ids(engine)
+    account_ids = await resolve_configured_ad_account_ids(engine)
     if not account_ids:
         logger.error("meta probe: login_required без активного кабинета")
         return False
@@ -1150,9 +1150,9 @@ async def check_shadow_spend(
         resolve_account_currencies,
         resolve_cabinet_days,
     )
-    from core.observer.accounts import resolve_scan_account_ids
+    from core.observer.accounts import resolve_configured_ad_account_ids
 
-    account_ids = await resolve_scan_account_ids(engine)
+    account_ids = await resolve_configured_ad_account_ids(engine)
     if not account_ids:
         return False
     if not await _is_reported_side_live(engine, account_ids=account_ids, now=now):

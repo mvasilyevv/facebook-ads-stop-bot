@@ -54,7 +54,9 @@ async def test_system_readiness_uses_only_postgres_control_plane(
             }
         ),
     )
-    monkeypatch.setattr(health, "resolve_scan_account_ids", AsyncMock(return_value=["123"]))
+    monkeypatch.setattr(
+        health, "resolve_configured_ad_account_ids", AsyncMock(return_value=["123"])
+    )
     monkeypatch.setattr(health, "_load_money_task_failures", AsyncMock(return_value=(0, 0)))
     response = Response()
 

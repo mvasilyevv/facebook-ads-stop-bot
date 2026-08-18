@@ -43,7 +43,7 @@ def test_catalog_exposes_one_complete_account_membership_interface() -> None:
         "list_by_offer",
         "create_accounts",
         "replace_offer_accounts",
-        "resolve_scan_set",
+        "resolve_configured_set",
         "list_active_offers_without_accounts",
         "offer_has_account",
     ):
@@ -77,3 +77,16 @@ def test_runtime_has_no_offer_array_or_projection_fallback() -> None:
         source = (ROOT / relative_path).read_text(encoding="utf-8")
         for token in forbidden:
             assert token not in source, f"{token!r} returned in {relative_path}"
+
+
+# Имя множества определяет, найдут его или напишут своё. «scan» обещало, что
+# это внутреннее дело observer'а, и автор meta_api-модуля написал свой запрос
+# по fb_campaigns вместо импорта (17.08.2026).
+def test_configured_scope_is_not_named_after_scanning() -> None:
+    from core.observer import accounts
+
+    # Старые имена собраны из кусков: сплошное переименование не должно
+    # переписать их и превратить проверку в тавтологию.
+    assert hasattr(accounts, "resolve_configured_ad_account_ids")
+    assert not hasattr(accounts, "resolve_scan" + "_account_ids")
+    assert not hasattr(AdAccountCatalog, "resolve_scan" + "_set")

@@ -40,7 +40,7 @@ async def test_empty_meta_answer_is_logged_not_swallowed(monkeypatch, caplog) ->
     async def _persist(*_args, **_kwargs):
         raise AssertionError("пустой контекст записывать нечем")
 
-    monkeypatch.setattr(account_tz, "resolve_scan_account_ids", _accounts)
+    monkeypatch.setattr(account_tz, "resolve_configured_ad_account_ids", _accounts)
     monkeypatch.setattr(account_tz, "fetch_account_context", _fetch)
     monkeypatch.setattr(account_tz, "persist_account_context", _persist)
     monkeypatch.setattr(account_tz, "BrowserOperationFence", _FakeFence)
@@ -75,7 +75,7 @@ async def test_refresh_scope_comes_from_offers(monkeypatch) -> None:
     async def _persist(_engine, *, account_id, timezone_name, currency):
         return True
 
-    monkeypatch.setattr(account_tz, "resolve_scan_account_ids", _configured)
+    monkeypatch.setattr(account_tz, "resolve_configured_ad_account_ids", _configured)
     monkeypatch.setattr(account_tz, "fetch_account_context", _fetch)
     monkeypatch.setattr(account_tz, "persist_account_context", _persist)
     monkeypatch.setattr(account_tz, "BrowserOperationFence", _FakeFence)

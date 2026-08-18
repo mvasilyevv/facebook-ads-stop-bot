@@ -386,7 +386,7 @@ async def test_system_section_flags_monitoring_that_covers_nothing(monkeypatch) 
         ),
     )
     monkeypatch.setattr(
-        operator_router, "resolve_scan_account_ids", AsyncMock(return_value=["123"])
+        operator_router, "resolve_configured_ad_account_ids", AsyncMock(return_value=["123"])
     )
 
     section = await operator_router._system_section(engine=object(), now=now)
@@ -429,7 +429,7 @@ async def test_system_section_uses_durable_cabinet_activity(monkeypatch) -> None
         ),
     )
     monkeypatch.setattr(
-        operator_router, "resolve_scan_account_ids", AsyncMock(return_value=["123"])
+        operator_router, "resolve_configured_ad_account_ids", AsyncMock(return_value=["123"])
     )
 
     section = await operator_router._system_section(engine=object(), now=now)
@@ -461,7 +461,7 @@ async def test_system_section_never_hides_a_missing_expected_actor(monkeypatch) 
         ),
     )
     monkeypatch.setattr(
-        operator_router, "resolve_scan_account_ids", AsyncMock(return_value=["123"])
+        operator_router, "resolve_configured_ad_account_ids", AsyncMock(return_value=["123"])
     )
 
     section = await operator_router._system_section(engine=object(), now=now)
@@ -506,7 +506,7 @@ async def test_system_section_never_false_greens_unknown_monitoring_state(
     )
     monkeypatch.setattr(
         operator_router,
-        "resolve_scan_account_ids",
+        "resolve_configured_ad_account_ids",
         AsyncMock(return_value=["123"]),
     )
 
@@ -1041,7 +1041,7 @@ async def test_system_section_isolates_cabinet_runtime_evidence(monkeypatch) -> 
     scan_state = AsyncMock(return_value=scan)
     configured_accounts = AsyncMock(return_value=["111", "222"])
     monkeypatch.setattr(operator_router, "fetch_operator_scan_state", scan_state)
-    monkeypatch.setattr(operator_router, "resolve_scan_account_ids", configured_accounts)
+    monkeypatch.setattr(operator_router, "resolve_configured_ad_account_ids", configured_accounts)
 
     section = await operator_router._system_section(
         engine=object(),
@@ -1088,7 +1088,7 @@ async def test_system_section_never_exposes_raw_cabinet_actor_error(monkeypatch)
     )
     monkeypatch.setattr(
         operator_router,
-        "resolve_scan_account_ids",
+        "resolve_configured_ad_account_ids",
         AsyncMock(return_value=["111"]),
     )
 

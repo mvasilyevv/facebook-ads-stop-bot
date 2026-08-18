@@ -12,7 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.meta_api.client import BROWSER_CONTRACT_VERSION
-from core.observer.accounts import resolve_scan_account_ids
+from core.observer.accounts import resolve_configured_ad_account_ids
 from core.tasks.browser_fence import (
     BrowserFenceLeaseLost,
     BrowserOperationBlocked,
@@ -432,7 +432,7 @@ async def resolve_readiness_ad_account_id(engine: AsyncEngine) -> str | None:
     None означает, что настроенного кабинета нет: подтверждать готовность
     money-канала не на чем, и открывать наугад чужую вкладку нельзя.
     """
-    accounts = await resolve_scan_account_ids(engine)
+    accounts = await resolve_configured_ad_account_ids(engine)
     return accounts[0] if accounts else None
 
 

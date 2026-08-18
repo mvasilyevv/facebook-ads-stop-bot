@@ -82,7 +82,7 @@ from core.meta_api.account_tz import (
     resolve_account_currencies,
     resolve_cabinet_days,
 )
-from core.observer.accounts import nothing_monitored_reason_for, resolve_scan_account_ids
+from core.observer.accounts import nothing_monitored_reason_for, resolve_configured_ad_account_ids
 from core.observer.login_required import LOGIN_REQUIRED_INCIDENT_PREFIX
 from core.operator.queries import (
     fetch_operator_actions,
@@ -908,7 +908,7 @@ async def _portfolio_section(
         account_ids = [requested_id]
     else:
         scan_ids, catalog_days = await asyncio.gather(
-            resolve_scan_account_ids(engine),
+            resolve_configured_ad_account_ids(engine),
             resolve_cabinet_days(engine, now=now),
         )
         account_ids = sorted({*scan_ids, *catalog_days.account_ids})
@@ -1039,7 +1039,9 @@ async def _system_section(
 ) -> OperatorSection[OperatorSystemData]:
     requested_id = canonical_account_id(account_id) if account_id else None
     scan = await fetch_operator_scan_state(engine, account_id=requested_id)
-    expected_accounts = [requested_id] if requested_id else await resolve_scan_account_ids(engine)
+    expected_accounts = (
+        [requested_id] if requested_id else await resolve_configured_ad_account_ids(engine)
+    )
     issues: list[OperatorIssue] = []
     workers: list[OperatorWorkerState] = []
     actors = [

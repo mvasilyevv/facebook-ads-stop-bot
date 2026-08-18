@@ -360,7 +360,7 @@ async def _refresh_observer_campaigns_unfenced(
     (в названии есть дата → свежие выше).
 
     Кабинеты: если задан явный ad_account_id — только он; иначе ВСЕ кабинеты активных
-    офферов (offer_ad_accounts, resolve_scan_account_ids). Без настроенного кабинета
+    офферов (offer_ad_accounts, resolve_configured_ad_account_ids). Без настроенного кабинета
     запрос отклоняется: текущая browser-вкладка не является identity.
     """
     import grpc
@@ -380,12 +380,15 @@ async def _refresh_observer_campaigns_unfenced(
         raise HTTPException(status_code=409, detail="Vision runtime не настроен") from exc
 
     # Кабинеты для обхода: явный ad_account_id (один) ИЛИ ВСЕ кабинеты активных офферов.
-    from core.observer.accounts import resolve_scan_account_ids
+    from core.observer.accounts import resolve_configured_ad_account_ids
 
     if ad_account_id:
         targets = [require_ad_account_id(ad_account_id)]
     else:
-        targets = [require_ad_account_id(value) for value in await resolve_scan_account_ids(engine)]
+        targets = [
+            require_ad_account_id(value)
+            for value in await resolve_configured_ad_account_ids(engine)
+        ]
     if not targets:
         raise HTTPException(
             status_code=409,

@@ -99,7 +99,7 @@ class AdAccountCatalog:
             )
         return canonical
 
-    async def resolve_scan_set(self, conn: AsyncConnection) -> list[str]:
+    async def resolve_configured_set(self, conn: AsyncConnection) -> list[str]:
         """Return the sorted union of accounts linked to active offers."""
 
         stmt = (

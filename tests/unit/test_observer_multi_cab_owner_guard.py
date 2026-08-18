@@ -68,7 +68,7 @@ def _patch_cycle_deps(monkeypatch, *, owner_tag, accounts):
         raise AssertionError("process_scan_rows не должен вызываться при сработавшем гарде")
 
     monkeypatch.setattr(observer_main, "load_observer_config", _cfg)
-    monkeypatch.setattr(observer_main, "resolve_scan_account_ids", _accounts)
+    monkeypatch.setattr(observer_main, "resolve_configured_ad_account_ids", _accounts)
     monkeypatch.setattr(observer_main, "list_offers_without_accounts", _orphans)
     monkeypatch.setattr(observer_main, "process_scan_rows", _fail_process)
 
