@@ -55,3 +55,25 @@ export function shouldHealNow(session: BrowserSession, nowMs: number): boolean {
   const last = session.lastHealAt ? session.lastHealAt.getTime() : 0;
   return nowMs - last >= HEAL_COOLDOWN_MS;
 }
+
+/**
+ * Пора ли перечитать вкладку ради свежего токена.
+ *
+ * Отдельно от shouldHealNow: серии сетевых сбоев тут нет — fetch дошёл до Meta и
+ * получил внятный отказ. Прод 18.08.2026: оператор зашёл в Facebook заново, но
+ * вкладка держала дологиновый рендер, токен читается именно из её HTML, и канал
+ * оставался мёртвым до ручного вмешательства. Ограничение — только cooldown:
+ * при настоящем разлогине reload не поможет, и долбить сессию незачем.
+ */
+export function shouldReloadForStaleToken(session: BrowserSession, nowMs: number): boolean {
+  const last = session.lastHealAt ? session.lastHealAt.getTime() : 0;
+  return nowMs - last >= HEAL_COOLDOWN_MS;
+}
+
+/** Graph-отказ по токену (190 / OAuthException) — кандидат на перечитывание вкладки. */
+export function isTokenRejectedGraphError(
+  err: { code?: number; type?: string } | undefined | null,
+): boolean {
+  if (!err) return false;
+  return Number(err.code ?? 0) === 190 || err.type === 'OAuthException';
+}

@@ -12,7 +12,12 @@ import type { BrowserSession } from '../types.js';
 import { executeGraphCall, checkMetaApiHealth, type GraphApiCallParams } from './client.js';
 import { uploadImage, uploadVideoSingle } from './upload.js';
 import { withPageRoleLock } from '../page-lock.js';
-import { recordFetchOutcome, shouldHealNow } from '../session-health.js';
+import {
+  isTokenRejectedGraphError,
+  recordFetchOutcome,
+  shouldHealNow,
+  shouldReloadForStaleToken,
+} from '../session-health.js';
 import {
   assertCanonicalGraphMethodSemantics,
   BROWSER_OPERATION_CONTRACT_VERSION,
@@ -463,6 +468,41 @@ export function createMetaApiServiceHandlers(
             console.warn(
               `[meta-api] page reload after network failure: ${healed.action} (ok=${healed.ok})`,
             );
+          }
+
+          // Токен читается из HTML вкладки на каждом вызове, поэтому после
+          // ре-логина оператора вкладка держит дологиновый рендер и канал
+          // остаётся мёртвым (прод 18.08.2026: 4.5 часа плюс ручной ensure-cdp).
+          // Перечитываем страницу и повторяем ОДИН раз — только чтение: повтор
+          // денежной мутации остаётся решением money-пути, а не побочным
+          // эффектом лечения вкладки. При настоящем разлогине повтор вернёт тот
+          // же отказ, и его увидит инцидент «нужен вход».
+          if (
+            !grpcAbort.controller.signal.aborted
+            && !netFail
+            && !moneyControl
+            && params.method.toUpperCase() === 'GET'
+            && isTokenRejectedGraphError(graphResult.error)
+            && shouldReloadForStaleToken(session, Date.now())
+          ) {
+            const healed = await sessionManager.reloadPageAfterNetworkFailureWithinRoleLock(
+              session.id,
+              {
+                role,
+                actId,
+                page: operationPage,
+                signal: grpcAbort.controller.signal,
+              },
+            );
+            console.warn(
+              `[meta-api] page reload after token rejection: ${healed.action} (ok=${healed.ok})`,
+            );
+            if (healed.ok && !grpcAbort.controller.signal.aborted) {
+              return await executeGraphCall(operationPage, params, {
+                signal: grpcAbort.controller.signal,
+                operationId,
+              });
+            }
           }
           return graphResult;
         } finally {
