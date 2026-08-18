@@ -3967,3 +3967,15 @@ def test_unhealable_channel_stops_the_whole_deploy_before_the_gate(
     assert not any(url.endswith("/api/settings/vision") for url in probes.json_urls)
     assert not (root / "runtime").exists()
     assert any(step == "failure_cleanup" and "stop" in command for step, command in runner.commands)
+
+
+# 18.08.2026 деплой упал с текстом «timed out waiting for recovered browser
+# channel: browser channel is not ready (Profile restart completed but the
+# channel is not ready)». Что делать оператору — в сообщении не было, и диагноз
+# добывали вручную шестью ssh-запросами, пока money-воркеры лежали.
+def test_desktop_channel_failure_names_the_operator_action() -> None:
+    import inspect
+
+    source = inspect.getsource(fbctl_controller.ProductionController._ensure_desktop_channel)
+    assert "RustDesk" in source, "в отказе не назван канал доступа к столу"
+    assert "профил" in source, "в отказе не сказано, что поднимать"
