@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Unit: GET /api/campaigns/ad-account-pages — список FB-страниц кабинета.
+"""Unit: справочники кабинета — FB-страницы и пиксели.
 
-Проверяем парсинг promote_pages data → [{id,name}] (включая пустой список и
-пропуск элементов без id) и маппинг ошибок: 503 (Vision/circuit/grpc/temporary),
-422 (доменная ошибка Meta), 400 (пустой act_id).
+Проверяем парсинг data → [{id,name}] (включая пустой список и пропуск элементов
+без id) и маппинг ошибок: 503 (Vision/circuit/grpc/temporary), 422 (доменная
+ошибка Meta и ненормализуемый act_id).
 
 Клиент Marketing API мокается целиком (execute_graph_call) — БЕЗ живой БД/Vision.
 """
@@ -190,4 +190,78 @@ def test_meta_not_found_422(monkeypatch) -> None:
     fake = _FakeClient(raises=NotFoundError("object does not exist", code=803))
     client = _client_for(monkeypatch, fake)
     r = client.get("/api/campaigns/ad-account-pages", params={"act_id": "act_777"})
+    assert r.status_code == 422
+
+
+# ─── Пиксели кабинета ────────────────────────────────────────────────────────
+# Пиксель — событие оптимизации кампании (Purchase/FTD). Ручной ввод ID означал
+# опечатку ценой открута в пустоту; берём список из самого кабинета.
+
+
+def test_two_pixels(monkeypatch) -> None:
+    fake = _FakeClient(
+        resp={
+            "data": [
+                {"id": 444, "name": "GH pixel"},
+                {"id": "555", "name": "AVI pixel"},
+            ]
+        }
+    )
+    client = _client_for(monkeypatch, fake)
+    r = client.get("/api/campaigns/ad-account-pixels", params={"act_id": "act_123"})
+    assert r.status_code == 200
+    assert r.json() == {
+        "pixels": [
+            {"id": "444", "name": "GH pixel"},
+            {"id": "555", "name": "AVI pixel"},
+        ]
+    }
+    assert fake.closed is True
+    assert fake.last_kwargs is not None
+    assert fake.last_kwargs["ad_account_id"] == "act_123"
+    assert fake.last_kwargs["endpoint"] == "/act_123/adspixels"
+
+
+# Кабинет без пикселей — валидный ответ, а не ошибка: остаётся ручной ввод.
+def test_pixels_empty_data(monkeypatch) -> None:
+    fake = _FakeClient(resp={"data": []})
+    client = _client_for(monkeypatch, fake)
+    r = client.get("/api/campaigns/ad-account-pixels", params={"act_id": "123"})
+    assert r.status_code == 200
+    assert r.json() == {"pixels": []}
+
+
+def test_pixels_skip_item_without_id(monkeypatch) -> None:
+    fake = _FakeClient(resp={"data": [{"name": "no id"}, {"id": "666"}]})
+    client = _client_for(monkeypatch, fake)
+    r = client.get("/api/campaigns/ad-account-pixels", params={"act_id": "act_9"})
+    assert r.status_code == 200
+    assert r.json() == {"pixels": [{"id": "666", "name": ""}]}
+
+
+def test_pixels_session_unavailable_503(monkeypatch) -> None:
+    fake = _FakeClient(raises=SessionUnavailableError("token_not_found"))
+    client = _client_for(monkeypatch, fake)
+    r = client.get("/api/campaigns/ad-account-pixels", params={"act_id": "act_1"})
+    assert r.status_code == 503
+
+
+def test_pixels_temporary_error_503(monkeypatch) -> None:
+    fake = _FakeClient(raises=TemporaryError("Failed to fetch", code=-2))
+    client = _client_for(monkeypatch, fake)
+    r = client.get("/api/campaigns/ad-account-pixels", params={"act_id": "act_1"})
+    assert r.status_code == 503
+
+
+def test_pixels_meta_not_found_422(monkeypatch) -> None:
+    fake = _FakeClient(raises=NotFoundError("object does not exist", code=803))
+    client = _client_for(monkeypatch, fake)
+    r = client.get("/api/campaigns/ad-account-pixels", params={"act_id": "act_777"})
+    assert r.status_code == 422
+
+
+def test_pixels_bad_act_id_422(monkeypatch) -> None:
+    fake = _FakeClient(resp={"data": []})
+    client = _client_for(monkeypatch, fake)
+    r = client.get("/api/campaigns/ad-account-pixels", params={"act_id": "  act_  "})
     assert r.status_code == 422

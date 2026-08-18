@@ -33,6 +33,7 @@ import { useOffers } from "@/lib/api";
 import {
   useCampaignAccountContext,
   useCampaignAccountPages,
+  useCampaignAccountPixels,
   useCampaignRunDetails,
   useCampaignPresets,
   useLaunchCampaign,
@@ -73,10 +74,12 @@ export function CampaignWizard() {
   const offers = useOffers();
   const context = useCampaignAccountContext();
   const pagesRequest = useCampaignAccountPages();
+  const pixelsRequest = useCampaignAccountPixels();
   const upload = useUploadCampaignConcepts();
   const validate = useValidateCampaignConfig();
   const launch = useLaunchCampaign();
   const [pages, setPages] = useState<Array<{ id: string; name: string }>>([]);
+  const [pixels, setPixels] = useState<Array<{ id: string; name: string }>>([]);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [problem, setProblem] = useState<string | null>(null);
   const [launchReceipt, setLaunchReceipt] = useState<LaunchOut | null>(null);
@@ -202,11 +205,14 @@ export function CampaignWizard() {
     }
     setProblem(null);
     setErrors({});
-    const [contextResult, pageResult] = await Promise.allSettled([
+    const [contextResult, pageResult, pixelResult] = await Promise.allSettled([
       context.mutateAsync(actId),
       pagesRequest.mutateAsync(actId),
+      pixelsRequest.mutateAsync(actId),
     ]);
     if (pageResult.status === "fulfilled") setPages(pageResult.value.pages);
+    // Пусто или отказ — остаётся ручной ввод pixel_id, как и у страниц.
+    setPixels(pixelResult.status === "fulfilled" ? pixelResult.value.pixels : []);
     if (contextResult.status === "rejected") {
       patchIdentity({
         type: "patchIdentity",
@@ -532,7 +538,7 @@ export function CampaignWizard() {
               <Button
                 variant="secondary"
                 fullWidth
-                loading={context.isPending || pagesRequest.isPending}
+                loading={context.isPending || pagesRequest.isPending || pixelsRequest.isPending}
                 onClick={() => void loadAccountContext()}
               >
                 Подтвердить основной кабинет
@@ -570,17 +576,38 @@ export function CampaignWizard() {
                   }
                 />
               )}
-              <Input
-                label="Pixel ID"
-                value={state.identity.pixel_id}
-                errorMessage={errors.pixel_id}
-                onChange={(event) =>
-                  patchIdentity({
-                    type: "patchIdentity",
-                    value: { pixel_id: event.target.value },
-                  })
-                }
-              />
+              {pixels.length > 0 ? (
+                <Select
+                  label="Pixel"
+                  value={state.identity.pixel_id}
+                  errorMessage={errors.pixel_id}
+                  options={[
+                    { value: "", label: "Выберите пиксель" },
+                    ...pixels.map((pixel) => ({
+                      value: pixel.id,
+                      label: pixel.name,
+                    })),
+                  ]}
+                  onChange={(event) =>
+                    patchIdentity({
+                      type: "patchIdentity",
+                      value: { pixel_id: event.target.value },
+                    })
+                  }
+                />
+              ) : (
+                <Input
+                  label="Pixel ID"
+                  value={state.identity.pixel_id}
+                  errorMessage={errors.pixel_id}
+                  onChange={(event) =>
+                    patchIdentity({
+                      type: "patchIdentity",
+                      value: { pixel_id: event.target.value },
+                    })
+                  }
+                />
+              )}
               <Input
                 label="Тег байера"
                 value={state.identity.byer_tag}

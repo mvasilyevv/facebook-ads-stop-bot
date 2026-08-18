@@ -258,6 +258,21 @@ vi.mock("@/lib/api/campaigns", () => ({
     isError: false,
     error: null,
   }),
+  useAdAccountPixels: () => ({
+    // Тот же контракт, что у страниц: непустой список → дропдаун вместо ввода ID.
+    mutate: vi.fn(
+      (
+        _actId: string,
+        opts?: { onSuccess?: (d: { pixels: { id: string; name: string }[] }) => void },
+      ) => {
+        opts?.onSuccess?.({ pixels: [{ id: "999", name: "Acme Pixel" }] });
+      },
+    ),
+    mutateAsync: vi.fn().mockResolvedValue({ pixels: [{ id: "999", name: "Acme Pixel" }] }),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
   RUN_STATUS_LABELS: {
     queued: "В очереди",
     uniquifying: "Уникализация",

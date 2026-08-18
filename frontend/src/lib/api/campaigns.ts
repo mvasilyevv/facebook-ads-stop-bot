@@ -29,6 +29,7 @@ export type RunCommandOut = components["schemas"]["RunCommandOut"];
 export type RunStatus = RunSummaryOut["status"];
 export type AdAccountContextOut = components["schemas"]["AdAccountContextResponse"];
 export type AdAccountPagesOut = components["schemas"]["AdAccountPagesResponse"];
+export type AdAccountPixelsOut = components["schemas"]["AdAccountPixelsResponse"];
 export type CampaignDraftDocument = components["schemas"]["CampaignDraftDocument"];
 export type CampaignDraftEnvelope = components["schemas"]["CampaignDraftEnvelope"];
 export type CampaignDraftPutIn = components["schemas"]["CampaignDraftPutIn"];
@@ -96,6 +97,16 @@ export function useAdAccountPages() {
     mutationFn: (act_id: string) =>
       dataOrThrow(
         generatedFetchApi.GET("/api/campaigns/ad-account-pages", { params: { query: { act_id } } }),
+      ),
+    retry: shouldRetryVisionMetadata,
+    retryDelay: visionMetadataRetryDelay,
+  });
+}
+export function useAdAccountPixels() {
+  return useMutation({
+    mutationFn: (act_id: string) =>
+      dataOrThrow(
+        generatedFetchApi.GET("/api/campaigns/ad-account-pixels", { params: { query: { act_id } } }),
       ),
     retry: shouldRetryVisionMetadata,
     retryDelay: visionMetadataRetryDelay,

@@ -4,14 +4,17 @@
 Endpoints под /api (auto-discovery, prefix="/api"):
 - GET /campaigns/ad-account-context?act_id={id} — durable timezone/currency evidence.
 - GET /campaigns/ad-account-pages?act_id={id} — список FB-страниц (promote_pages) кабинета.
+- GET /campaigns/ad-account-pixels?act_id={id} — список пикселей (adspixels) кабинета.
 
 Account context читается только из ``meta_account_snapshot``.  Ни numeric offset,
 ни live Graph fallback не могут авторизовать validate/launch.  Состояние
 ``ready`` означает валидную IANA timezone, свежую подтверждённую валюту и
 поддерживаемый minor-unit exponent.
 
-Зачем (pages): шаг «Идентичность» визарда требует page_id. Тянем доступные кабинету
-страницы (`/act_{id}/promote_pages`) → байер выбирает из дропдауна вместо ручного ввода ID.
+Зачем (справочники): шаг «Идентичность» визарда требует page_id и pixel_id. Тянем
+доступные кабинету страницы (`/act_{id}/promote_pages`) и пиксели (`/act_{id}/adspixels`)
+→ байер выбирает из дропдауна вместо ручного ввода ID. Пустой список — валидный ответ,
+а не ошибка: остаётся ручной ввод.
 
 Канал: read-only `MetaApiClient.execute_graph_call` через активную Vision-сессию (как
 durable timezone refresh в meta_api_worker). НЕ открываем новый браузер, НЕ дёргаем сессию
@@ -89,11 +92,18 @@ class AdAccountPagesResponse(BaseModel):
     pages: list[AdAccountPage]
 
 
-async def fetch_account_pages(
+class AdAccountPixelsResponse(BaseModel):
+    """Список пикселей кабинета для дропдауна pixel_id в шаге «Идентичность»."""
+
+    pixels: list[AdAccountPage]
+
+
+async def _fetch_account_edge(
     client: MetaApiClient,
     numeric_act_id: str,
-) -> AdAccountPagesResponse:
-    """GET /act_{id}/promote_pages?fields=id,name → список страниц кабинета.
+    edge: str,
+) -> list[AdAccountPage]:
+    """GET /act_{id}/{edge}?fields=id,name → справочник кабинета как [{id,name}].
 
     Доменные/транспортные ошибки пробрасываются — роутер маршрутизирует их на HTTP-коды.
     Пагинацию НЕ доходим (limit=100 достаточно для UI-дропдауна). Элементы без id
@@ -101,22 +111,41 @@ async def fetch_account_pages(
     """
     resp = await client.execute_graph_call(
         method="GET",
-        endpoint=f"/act_{numeric_act_id}/promote_pages",
+        endpoint=f"/act_{numeric_act_id}/{edge}",
         query_params={"fields": "id,name", "limit": "100"},
         # Preserve the canonical Meta account identity so the browser agent can
         # recover or select the exact cabinet page without guessing from the URL.
         ad_account_id=f"act_{numeric_act_id}",
     )
-    data = resp.get("data") or []
-    pages: list[AdAccountPage] = []
-    for item in data:
+    items: list[AdAccountPage] = []
+    for item in resp.get("data") or []:
         if not isinstance(item, dict):
             continue
         raw_id = item.get("id")
         if raw_id is None or str(raw_id) == "":
             continue
-        pages.append(AdAccountPage(id=str(raw_id), name=str(item.get("name") or "")))
-    return AdAccountPagesResponse(pages=pages)
+        items.append(AdAccountPage(id=str(raw_id), name=str(item.get("name") or "")))
+    return items
+
+
+async def fetch_account_pages(
+    client: MetaApiClient,
+    numeric_act_id: str,
+) -> AdAccountPagesResponse:
+    """Страницы, доступные кабинету для промо."""
+    return AdAccountPagesResponse(
+        pages=await _fetch_account_edge(client, numeric_act_id, "promote_pages")
+    )
+
+
+async def fetch_account_pixels(
+    client: MetaApiClient,
+    numeric_act_id: str,
+) -> AdAccountPixelsResponse:
+    """Пиксели кабинета — кандидаты на событие оптимизации кампании."""
+    return AdAccountPixelsResponse(
+        pixels=await _fetch_account_edge(client, numeric_act_id, "adspixels")
+    )
 
 
 def _build_meta_client(engine: Any) -> AuditedMetaApiClient:
@@ -257,6 +286,86 @@ async def get_ad_account_context(
     )
 
 
+_ACT_LOOKUPS: dict[str, str] = {
+    "pages": "ad-account-pages",
+    "pixels": "ad-account-pixels",
+}
+
+
+async def _read_account_lookup(
+    engine: Any,
+    *,
+    act_id: str,
+    kind: str,
+    fetch: Any,
+) -> Any:
+    """Один read-only справочник кабинета под операционным фенсом.
+
+    Единый маршрут ошибок на HTTP-коды для страниц и пикселей: 503 — канал
+    недоступен (Vision, circuit, gRPC, транзиентный сбой), 422 — Meta отвергла
+    запрос или act_id ненормализуем, 409 — идёт обслуживание браузера.
+    """
+    label = _ACT_LOOKUPS[kind]
+    try:
+        numeric = normalize_campaign_account_id(act_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Некорректный Ad Account ID") from exc
+
+    client = _build_meta_client(engine)
+    try:
+        async with BrowserOperationFence(
+            engine,
+            operation_kind=f"campaign_{kind}_read",
+            target=numeric,
+        ) as fence:
+            await client.start()
+            response = await fetch(client, numeric)
+            await fence.assert_held()
+            return response
+    except BrowserOperationBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Vision maintenance is active; lookup was not started",
+        ) from exc
+    except BrowserFenceLeaseLost as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Lookup fence was lost; retry after reconciliation",
+        ) from exc
+    except (SessionUnavailableError, CircuitOpenError) as exc:
+        # Vision-сессия не готова / circuit OPEN — канал временно недоступен.
+        logger.warning(
+            "%s: канал недоступен act_%s error_type=%s", label, numeric, type(exc).__name__
+        )
+        raise HTTPException(status_code=503, detail="browser-agent / Vision недоступны") from exc
+    except grpc.RpcError as exc:
+        logger.warning("%s: gRPC ошибка act_%s error_type=%s", label, numeric, type(exc).__name__)
+        raise HTTPException(status_code=503, detail="browser-agent недоступен") from exc
+    except RateLimitedError as exc:
+        # Meta-side rate-limit (подкласс TemporaryError) — для одного дешёвого GET
+        # ретрай не помогает; ловим РАНЬШЕ TemporaryError, отдаём 422.
+        logger.info("%s: Meta rate-limit act_%s", label, numeric)
+        raise HTTPException(status_code=422, detail="Meta временно ограничила запросы") from exc
+    except TemporaryError as exc:
+        # Транзиентный сбой канала Vision (browser-agent code -2 "Failed to fetch") —
+        # канал недоступен, не «кабинет битый». Честный 503.
+        logger.warning("%s: канал Vision недоступен act_%s: %s", label, numeric, exc)
+        raise HTTPException(status_code=503, detail="browser-agent / Vision недоступны") from exc
+    except (NotFoundError, MetaPermissionError, PermanentError) as exc:
+        # Доменная ошибка Meta: кабинет не найден / нет прав / постоянный отказ.
+        logger.info("%s: Meta отвергла act_%s error_type=%s", label, numeric, type(exc).__name__)
+        raise HTTPException(status_code=422, detail="Meta отклонила запрос") from exc
+    except MetaApiError as exc:
+        # Прочие доменные ошибки Meta — отдаём 422 как «не удалось получить».
+        logger.info("%s: ошибка Meta act_%s error_type=%s", label, numeric, type(exc).__name__)
+        raise HTTPException(status_code=422, detail="Meta отклонила запрос") from exc
+    finally:
+        try:
+            await client.close()
+        except Exception:  # noqa: BLE001 — закрытие канала best-effort
+            pass
+
+
 @router.get("/ad-account-pages", response_model=AdAccountPagesResponse)
 async def get_ad_account_pages(
     engine: DepEngine,
@@ -267,79 +376,29 @@ async def get_ad_account_pages(
 ) -> AdAccountPagesResponse:
     """Список FB-страниц кабинета (promote_pages) для дропдауна page_id.
 
-    400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула
-    ошибку или кабинет не найден. read-only: один GET /act_{id}/promote_pages через
-    Vision-сессию, без открытия браузера. Массив может быть пустым (нет страниц).
+    422 — act_id ненормализуем или Meta отвергла запрос; 503 — browser-agent /
+    Vision недоступны. read-only: один GET через Vision-сессию, без открытия
+    браузера. Массив может быть пустым (у кабинета нет страниц).
     """
-    try:
-        numeric = normalize_campaign_account_id(act_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="Некорректный Ad Account ID") from exc
+    return await _read_account_lookup(
+        engine, act_id=act_id, kind="pages", fetch=fetch_account_pages
+    )
 
-    client = _build_meta_client(engine)
-    try:
-        async with BrowserOperationFence(
-            engine,
-            operation_kind="campaign_pages_read",
-            target=numeric,
-        ) as fence:
-            await client.start()
-            response = await fetch_account_pages(client, numeric)
-            await fence.assert_held()
-            return response
-    except BrowserOperationBlocked as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="Vision maintenance is active; page lookup was not started",
-        ) from exc
-    except BrowserFenceLeaseLost as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="Page lookup fence was lost; retry after reconciliation",
-        ) from exc
-    except (SessionUnavailableError, CircuitOpenError) as exc:
-        # Vision-сессия не готова / circuit OPEN — канал временно недоступен.
-        logger.warning(
-            "ad-account-pages: канал недоступен act_%s error_type=%s",
-            numeric,
-            type(exc).__name__,
-        )
-        raise HTTPException(status_code=503, detail="browser-agent / Vision недоступны") from exc
-    except grpc.RpcError as exc:
-        logger.warning(
-            "ad-account-pages: gRPC ошибка act_%s error_type=%s",
-            numeric,
-            type(exc).__name__,
-        )
-        raise HTTPException(status_code=503, detail="browser-agent недоступен") from exc
-    except RateLimitedError as exc:
-        # Meta-side rate-limit (подкласс TemporaryError) — для одного дешёвого GET
-        # ретрай не помогает; ловим РАНЬШЕ TemporaryError, отдаём 422.
-        logger.info("ad-account-pages: Meta rate-limit act_%s", numeric)
-        raise HTTPException(status_code=422, detail="Meta временно ограничила запросы") from exc
-    except TemporaryError as exc:
-        # Транзиентный сбой канала Vision (browser-agent code -2 "Failed to fetch") —
-        # канал недоступен, не «кабинет битый». Честный 503.
-        logger.warning("ad-account-pages: канал Vision недоступен act_%s: %s", numeric, exc)
-        raise HTTPException(status_code=503, detail="browser-agent / Vision недоступны") from exc
-    except (NotFoundError, MetaPermissionError, PermanentError) as exc:
-        # Доменная ошибка Meta: кабинет не найден / нет прав / постоянный отказ.
-        logger.info(
-            "ad-account-pages: Meta отвергла act_%s error_type=%s",
-            numeric,
-            type(exc).__name__,
-        )
-        raise HTTPException(status_code=422, detail="Meta отклонила запрос") from exc
-    except MetaApiError as exc:
-        # Прочие доменные ошибки Meta — отдаём 422 как «не удалось получить».
-        logger.info(
-            "ad-account-pages: ошибка Meta act_%s error_type=%s",
-            numeric,
-            type(exc).__name__,
-        )
-        raise HTTPException(status_code=422, detail="Meta отклонила запрос") from exc
-    finally:
-        try:
-            await client.close()
-        except Exception:  # noqa: BLE001 — закрытие канала best-effort
-            pass
+
+@router.get("/ad-account-pixels", response_model=AdAccountPixelsResponse)
+async def get_ad_account_pixels(
+    engine: DepEngine,
+    act_id: str = Query(
+        ...,
+        description="ID рекламного кабинета (с префиксом act_ или без — нормализуется).",
+    ),
+) -> AdAccountPixelsResponse:
+    """Список пикселей кабинета (adspixels) для дропдауна pixel_id.
+
+    Пиксель задаёт событие оптимизации кампании, и ручной ввод ID означал опечатку
+    ценой открута в пустоту. Коды ответов те же, что у списка страниц. Массив может
+    быть пустым (у кабинета нет пикселей) — тогда остаётся ручной ввод.
+    """
+    return await _read_account_lookup(
+        engine, act_id=act_id, kind="pixels", fetch=fetch_account_pixels
+    )

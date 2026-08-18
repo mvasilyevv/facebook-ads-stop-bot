@@ -111,6 +111,17 @@ export function useCampaignAccountPages() {
   });
 }
 
+export function useCampaignAccountPixels() {
+  return useMutation({
+    mutationFn: (actId: string) =>
+      dataOrThrow(
+        tmaFetchApi.GET("/api/campaigns/ad-account-pixels", {
+          params: { query: { act_id: actId } },
+        }),
+      ),
+  });
+}
+
 export async function uploadCampaignConcepts(
   files: File[],
   uploadId?: string | null,

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/api/campaigns", () => ({
   useAdAccountContext: () => ({ mutate: vi.fn(), isPending: false }),
   useAdAccountPages: () => ({ mutate: vi.fn(), isPending: false }),
+  useAdAccountPixels: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@/lib/api/offers", () => ({

@@ -619,11 +619,35 @@ export interface paths {
      * Get Ad Account Pages
      * @description Список FB-страниц кабинета (promote_pages) для дропдауна page_id.
      *
-     *     400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула
-     *     ошибку или кабинет не найден. read-only: один GET /act_{id}/promote_pages через
-     *     Vision-сессию, без открытия браузера. Массив может быть пустым (нет страниц).
+     *     422 — act_id ненормализуем или Meta отвергла запрос; 503 — browser-agent /
+     *     Vision недоступны. read-only: один GET через Vision-сессию, без открытия
+     *     браузера. Массив может быть пустым (у кабинета нет страниц).
      */
     get: operations["get_ad_account_pages_api_campaigns_ad_account_pages_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/campaigns/ad-account-pixels": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Ad Account Pixels
+     * @description Список пикселей кабинета (adspixels) для дропдауна pixel_id.
+     *
+     *     Пиксель задаёт событие оптимизации кампании, и ручной ввод ID означал опечатку
+     *     ценой открута в пустоту. Коды ответов те же, что у списка страниц. Массив может
+     *     быть пустым (у кабинета нет пикселей) — тогда остаётся ручной ввод.
+     */
+    get: operations["get_ad_account_pixels_api_campaigns_ad_account_pixels_get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -1795,6 +1819,14 @@ export interface components {
     AdAccountPagesResponse: {
       /** Pages */
       pages: components["schemas"]["AdAccountPage"][];
+    };
+    /**
+     * AdAccountPixelsResponse
+     * @description Список пикселей кабинета для дропдауна pixel_id в шаге «Идентичность».
+     */
+    AdAccountPixelsResponse: {
+      /** Pixels */
+      pixels: components["schemas"]["AdAccountPage"][];
     };
     /**
      * AdTextIn
@@ -6627,6 +6659,47 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AdAccountPagesResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+      /** @description Canonical API error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiProblem"];
+        };
+      };
+    };
+  };
+  get_ad_account_pixels_api_campaigns_ad_account_pixels_get: {
+    parameters: {
+      query: {
+        /** @description ID рекламного кабинета (с префиксом act_ или без — нормализуется). */
+        act_id: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdAccountPixelsResponse"];
         };
       };
       /** @description Validation Error */

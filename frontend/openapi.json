@@ -2028,7 +2028,7 @@
       "get": {
         "tags": ["campaigns"],
         "summary": "Get Ad Account Pages",
-        "description": "Список FB-страниц кабинета (promote_pages) для дропдауна page_id.\n\n400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула\nошибку или кабинет не найден. read-only: один GET /act_{id}/promote_pages через\nVision-сессию, без открытия браузера. Массив может быть пустым (нет страниц).",
+        "description": "Список FB-страниц кабинета (promote_pages) для дропдауна page_id.\n\n422 — act_id ненормализуем или Meta отвергла запрос; 503 — browser-agent /\nVision недоступны. read-only: один GET через Vision-сессию, без открытия\nбраузера. Массив может быть пустым (у кабинета нет страниц).",
         "operationId": "get_ad_account_pages_api_campaigns_ad_account_pages_get",
         "parameters": [
           {
@@ -2050,6 +2050,59 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AdAccountPagesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Canonical API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/campaigns/ad-account-pixels": {
+      "get": {
+        "tags": ["campaigns"],
+        "summary": "Get Ad Account Pixels",
+        "description": "Список пикселей кабинета (adspixels) для дропдауна pixel_id.\n\nПиксель задаёт событие оптимизации кампании, и ручной ввод ID означал опечатку\nценой открута в пустоту. Коды ответов те же, что у списка страниц. Массив может\nбыть пустым (у кабинета нет пикселей) — тогда остаётся ручной ввод.",
+        "operationId": "get_ad_account_pixels_api_campaigns_ad_account_pixels_get",
+        "parameters": [
+          {
+            "name": "act_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "ID рекламного кабинета (с префиксом act_ или без — нормализуется).",
+              "title": "Act Id"
+            },
+            "description": "ID рекламного кабинета (с префиксом act_ или без — нормализуется)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdAccountPixelsResponse"
                 }
               }
             }
@@ -6272,6 +6325,21 @@
         "required": ["pages"],
         "title": "AdAccountPagesResponse",
         "description": "Список страниц кабинета для дропдауна page_id в шаге «Идентичность»."
+      },
+      "AdAccountPixelsResponse": {
+        "properties": {
+          "pixels": {
+            "items": {
+              "$ref": "#/components/schemas/AdAccountPage"
+            },
+            "type": "array",
+            "title": "Pixels"
+          }
+        },
+        "type": "object",
+        "required": ["pixels"],
+        "title": "AdAccountPixelsResponse",
+        "description": "Список пикселей кабинета для дропдауна pixel_id в шаге «Идентичность»."
       },
       "AdTextIn": {
         "properties": {

@@ -22,7 +22,7 @@ import { ChoiceTagListInput } from "@fb/operator-ui";
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { useAdAccountContext, useAdAccountPages } from "@/lib/api/campaigns";
+import { useAdAccountContext, useAdAccountPages, useAdAccountPixels } from "@/lib/api/campaigns";
 import { useOffers } from "@/lib/api/offers";
 import type { Offer } from "@fb/shared";
 import type { WizardGoal, WizardIdentity } from "@/stores/campaignWizard";
@@ -45,9 +45,12 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
 }) => {
   const contextMutation = useAdAccountContext();
   const pagesMutation = useAdAccountPages();
+  const pixelsMutation = useAdAccountPixels();
   const offersQuery = useOffers();
   // Подтянутые страницы кабинета → дропдаун выбора page_id. Пусто/ошибка → ручной ввод.
   const [pages, setPages] = useState<{ id: string; name: string }[]>([]);
+  // Пиксели кабинета — тем же blur'ом и с тем же фолбэком на ручной ввод.
+  const [pixels, setPixels] = useState<{ id: string; name: string }[]>([]);
   // Durable context read is cheap; pages still use the live read channel.
   const lastFetchedAct = useRef<string | null>(null);
 
@@ -113,6 +116,16 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
         if (lastFetchedAct.current !== actId) return;
         // Не удалось подтянуть страницы — фолбэк на ручной ввод page_id.
         setPages([]);
+      },
+    });
+    pixelsMutation.mutate(actId, {
+      onSuccess: (data) => {
+        if (lastFetchedAct.current !== actId) return;
+        setPixels(data.pixels);
+      },
+      onError: () => {
+        if (lastFetchedAct.current !== actId) return;
+        setPixels([]);
       },
     });
   };
@@ -400,13 +413,39 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
               helpText="Не удалось подтянуть — введите ID вручную"
             />
           )}
-          <Input
-            label="FB Pixel ID"
-            placeholder="123456789"
-            value={values.pixel_id}
-            onChange={(e) => onChange({ pixel_id: e.target.value })}
-            errorMessage={errors.pixel_id}
-          />
+          {pixelsMutation.isPending ? (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[12px] font-display tracking-wider uppercase text-bg-9">
+                FB Pixel
+              </label>
+              <div className="flex items-center gap-2 min-h-11 rounded-[var(--radius-2)] border border-[var(--color-hairline-strong)] bg-bg-2 px-3 text-[13px] text-bg-9">
+                <Loader2 aria-hidden="true" size={14} className="animate-spin text-bg-9" />
+                <span>Подтягиваю пиксели кабинета…</span>
+              </div>
+              {errors.pixel_id && (
+                <span className="text-[12px] text-danger font-display">{errors.pixel_id}</span>
+              )}
+            </div>
+          ) : pixels.length > 0 ? (
+            // Пиксели подтянулись — выбор из дропдауна, value=id.
+            <Select
+              label="FB Pixel"
+              placeholder="Выберите пиксель"
+              options={pixels.map((p) => ({ value: p.id, label: `${p.name} — ${p.id}` }))}
+              value={values.pixel_id}
+              onChange={(e) => onChange({ pixel_id: e.target.value })}
+              errorMessage={errors.pixel_id}
+            />
+          ) : (
+            <Input
+              label="FB Pixel ID"
+              placeholder="123456789"
+              value={values.pixel_id}
+              onChange={(e) => onChange({ pixel_id: e.target.value })}
+              errorMessage={errors.pixel_id}
+              helpText="Не удалось подтянуть — введите ID вручную"
+            />
+          )}
         </div>
       </div>
     </div>

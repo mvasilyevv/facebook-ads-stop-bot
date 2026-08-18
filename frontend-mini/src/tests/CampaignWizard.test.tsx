@@ -38,6 +38,7 @@ vi.mock("@/lib/campaigns", () => ({
   }),
   useCampaignAccountContext: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useCampaignAccountPages: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCampaignAccountPixels: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUploadCampaignConcepts: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useValidateCampaignConfig: () => ({
     mutateAsync: api.validate,
