@@ -31,6 +31,10 @@
 ## Команды
 
 ```bash
+# Всё, что гоняет CI, одной командой (перед пушем)
+scripts/preflight.sh          # полный прогон, ~12-15 минут
+scripts/preflight.sh --fast   # без Playwright, Storybook и docker-сборок
+
 # Backend
 ruff check .
 PYTHONDONTWRITEBYTECODE=1 pytest tests/unit -q
