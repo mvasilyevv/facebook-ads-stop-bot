@@ -34,6 +34,7 @@ from core.meta_api.errors import (
     SessionUnavailableError,
 )
 from core.meta_api.identity import graph_ad_account_id, require_ad_account_id
+from core.safe_diagnostics import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
 
@@ -525,18 +526,22 @@ class MediaUploader:
 
     @staticmethod
     def _grpc_to_error(exc: grpc.RpcError, *, endpoint: str) -> MetaApiError:
-        """Преобразовать gRPC-ошибку upload-вызова в доменную."""
+        """Преобразовать gRPC-ошибку upload-вызова в доменную.
+
+        `details()` может содержать токен или URL с секретом из Graph-ответа;
+        наружу уходит только машинный код gRPC status, не сырой текст.
+        """
         code = exc.code() if hasattr(exc, "code") else None  # type: ignore[union-attr]
-        details = exc.details() if hasattr(exc, "details") else str(exc)  # type: ignore[union-attr]
+        code_name = code.name if code is not None and hasattr(code, "name") else "UNKNOWN"
 
         if code == grpc.StatusCode.FAILED_PRECONDITION:
             return SessionUnavailableError(
-                f"Vision-сессия не готова к upload: {details}",
+                f"Vision-сессия не готова к upload (gRPC {code_name})",
                 endpoint=endpoint,
             )
         if code in (grpc.StatusCode.INVALID_ARGUMENT, grpc.StatusCode.PERMISSION_DENIED):
             return PermanentError(
-                f"browser operation authorization rejected: {details}",
+                f"browser operation authorization rejected (gRPC {code_name})",
                 endpoint=endpoint,
             )
         # After an upload RPC has been dispatched, a transport error is not
@@ -544,7 +549,7 @@ class MediaUploader:
         # contract preconditions are converted by
         # _controlled_presend_readiness_error before reaching this mapper.
         return AmbiguousResultError(
-            f"gRPC response lost after upload dispatch ({code.name if code else code}): {details}",
+            f"gRPC response lost after upload dispatch ({code_name})",
             endpoint=endpoint,
         )
 
@@ -556,10 +561,16 @@ class MediaUploader:
         status before browser I/O.  A normal ``ok=false`` technical response is
         therefore an invalid/legacy transport shape and cannot prove whether
         Meta accepted the upload.
+
+        `message` — технический текст ответа browser-agent, изредка содержит
+        встроенный Graph-текст с токеном; редактируем известные секреты, но не
+        глушим диагностику целиком (код GRAPH_ERROR_* и краткое описание нужны
+        оператору).
         """
+        safe_message = redact_sensitive_text(message)
         if message.startswith(("GRAPH_ERROR_", "INVALID_ARGUMENT")):
-            return PermanentError(message, endpoint=endpoint)
+            return PermanentError(safe_message, endpoint=endpoint)
         return AmbiguousResultError(
-            f"unstructured upload failure after dispatch: {message}",
+            f"unstructured upload failure after dispatch: {safe_message}",
             endpoint=endpoint,
         )

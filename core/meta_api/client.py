@@ -3082,23 +3082,26 @@ class MetaApiClient:
         - FAILED_PRECONDITION → token_not_found / session not active
         - UNAVAILABLE → browser-agent упал
         - DEADLINE_EXCEEDED → таймаут
+
+        `details()` — сырой текст от browser-agent (может содержать токен или URL
+        с секретом из Graph-ответа); наружу уходит только машинный код gRPC status.
         """
         code = exc.code() if hasattr(exc, "code") else None  # type: ignore[union-attr]
-        details = exc.details() if hasattr(exc, "details") else str(exc)  # type: ignore[union-attr]
+        code_name = code.name if code is not None and hasattr(code, "name") else "UNKNOWN"
 
         if code == grpc.StatusCode.FAILED_PRECONDITION:
             return SessionUnavailableError(
-                f"Vision-сессия не готова: {details}",
+                f"Vision-сессия не готова (gRPC {code_name})",
                 endpoint=endpoint,
             )
         if code == grpc.StatusCode.UNIMPLEMENTED:
             return SessionUnavailableError(
-                f"browser semantic contract is incompatible: {details}",
+                f"browser semantic contract is incompatible (gRPC {code_name})",
                 endpoint=endpoint,
             )
         if code in (grpc.StatusCode.INVALID_ARGUMENT, grpc.StatusCode.PERMISSION_DENIED):
             return PermanentError(
-                f"browser operation authorization rejected: {details}",
+                f"browser operation authorization rejected (gRPC {code_name})",
                 endpoint=endpoint,
             )
         # Once ExecuteGraphCallV5 has been dispatched, transport termination is
@@ -3106,6 +3109,6 @@ class MetaApiClient:
         # handled before dispatch; FAILED_PRECONDITION and UNIMPLEMENTED are
         # explicit pre-send contracts. Every other gRPC failure remains ambiguous.
         return AmbiguousResultError(
-            f"gRPC response lost after dispatch ({code.name if code else code}): {details}",
+            f"gRPC response lost after dispatch ({code_name})",
             endpoint=endpoint,
         )

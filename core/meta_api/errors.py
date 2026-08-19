@@ -205,8 +205,11 @@ def classify_graph_error(
         # сигналы browser-agent (Graph-коды положительные) → транзиентные, retry, а не
         # permanent-fail (backstop для будущих негативных кодов помимо явных в _CODE_MAP).
         exc_cls = TemporaryError if (not code or code < 0) else PermanentError
+    # message использован ТОЛЬКО для классификации выше (subcode/code/regex на полном
+    # тексте) — Graph-текст может содержать access_token или другие секреты, поэтому в
+    # тело исключения (str(exc): логи, audit, UI) он не попадает, остаётся код ошибки.
     return exc_cls(
-        message or f"Graph API error code={code} subcode={subcode}",
+        f"Graph API error code={code} subcode={subcode}",
         code=code,
         subcode=subcode,
         endpoint=endpoint,

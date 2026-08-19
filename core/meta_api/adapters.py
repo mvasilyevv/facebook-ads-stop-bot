@@ -32,7 +32,8 @@ def _to_decimal(value: Any) -> Decimal | None:
     try:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
-        logger.warning("Не удалось распарсить Decimal из %r", value)
+        # Сырое value может содержать секрет из ответа Meta — в лог только тип.
+        logger.warning("Не удалось распарсить Decimal (value_type=%s)", type(value).__name__)
         return None
 
 
@@ -43,7 +44,8 @@ def _to_int(value: Any, *, default: int = 0) -> int:
     try:
         return int(float(value))
     except (ValueError, TypeError):
-        logger.warning("Не удалось распарсить int из %r", value)
+        # Сырое value может содержать секрет из ответа Meta — в лог только тип.
+        logger.warning("Не удалось распарсить int (value_type=%s)", type(value).__name__)
         return default
 
 

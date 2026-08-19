@@ -23,11 +23,69 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import MetaApiError
+from core.safe_diagnostics import redact_sensitive_text, safe_exception_diagnostic
+from core.telemetry import sanitized_http_url
 
 logger = logging.getLogger(__name__)
 
 # Регекс для извлечения act_XXX из endpoint (/act_123/insights → "act_123").
 _AD_ACCOUNT_RE = re.compile(r"/(act_\d+)\b")
+_AUDIT_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+_AUDIT_FIELD_LIST_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.]*(?:,[A-Za-z][A-Za-z0-9_.]*)*$")
+_AUDIT_SCALAR_FIELDS = frozenset(
+    {
+        "has_body",
+        "batch",
+        "sub_total",
+        "sub_ok",
+        "sub_failed",
+        "data_items",
+        "has_paging",
+        "code",
+        "subcode",
+    }
+)
+
+
+def _safe_audit_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Оставить только ограниченные диагностические поля.
+
+    Произвольный payload от вызывающего кода (endpoint, query, ответ Meta) никогда
+    не пишется в meta_api_audit_log целиком — только явно разрешённые поля,
+    остальные заменяются меткой `<field>_omitted`.
+    """
+
+    if payload is None:
+        return None
+    safe: dict[str, Any] = {}
+    for raw_key, value in payload.items():
+        key = str(raw_key)
+        if not _AUDIT_KEY_RE.fullmatch(key):
+            continue
+        if key == "endpoint" and isinstance(value, str):
+            safe[key] = redact_sensitive_text(sanitized_http_url(value))[:256]
+        elif key == "method" and isinstance(value, str):
+            normalized_method = value.upper()
+            safe[key] = (
+                normalized_method if re.fullmatch(r"[A-Z]{1,8}", normalized_method) else "OTHER"
+            )
+        elif key == "type" and isinstance(value, str):
+            safe[key] = value if value.isidentifier() and len(value) <= 128 else "ExternalError"
+        elif key == "fields" and isinstance(value, str):
+            safe[key] = value if _AUDIT_FIELD_LIST_RE.fullmatch(value) else "<omitted>"
+        elif key in _AUDIT_SCALAR_FIELDS and (isinstance(value, (bool, int)) or value is None):
+            safe[key] = value
+        elif key == "query_keys" and isinstance(value, list):
+            safe[key] = sorted(
+                item[:64]
+                for item in (str(candidate) for candidate in value)
+                if _AUDIT_KEY_RE.fullmatch(item)
+            )
+        elif key == "error" and isinstance(value, dict):
+            safe[key] = _safe_audit_payload(value) or {}
+        else:
+            safe[f"{key}_omitted"] = value is not None
+    return safe
 
 
 def extract_ad_account_id_from_endpoint(endpoint: str) -> str | None:
@@ -54,6 +112,13 @@ async def record_audit_log(
     duration_ms: int | None = None,
 ) -> None:
     """INSERT в meta_api_audit_log. Best-effort: не падает на ошибке записи."""
+    safe_endpoint = redact_sensitive_text(sanitized_http_url(endpoint))[:128]
+    normalized_http_method = http_method.upper()
+    safe_http_method = (
+        normalized_http_method if re.fullmatch(r"[A-Z]{1,8}", normalized_http_method) else "OTHER"
+    )
+    safe_request_payload = _safe_audit_payload(request_payload)
+    safe_response_payload = _safe_audit_payload(response_payload)
     try:
         async with engine.begin() as conn:
             await conn.execute(
@@ -68,18 +133,31 @@ async def record_audit_log(
                     """
                 ),
                 {
-                    "ep": endpoint[:128],
-                    "hm": http_method.upper()[:8],
+                    "ep": safe_endpoint,
+                    "hm": safe_http_method,
                     "hs": int(http_status),
-                    "aa": ad_account_id[:32] if ad_account_id else None,
-                    "ib": initiated_by[:64],
-                    "rq": json.dumps(request_payload) if request_payload is not None else None,
-                    "rs": json.dumps(response_payload) if response_payload is not None else None,
+                    "aa": redact_sensitive_text(ad_account_id)[:32] if ad_account_id else None,
+                    "ib": redact_sensitive_text(initiated_by)[:64],
+                    "rq": (
+                        json.dumps(safe_request_payload)
+                        if safe_request_payload is not None
+                        else None
+                    ),
+                    "rs": (
+                        json.dumps(safe_response_payload)
+                        if safe_response_payload is not None
+                        else None
+                    ),
                     "dur": int(duration_ms) if duration_ms is not None else None,
                 },
             )
-    except Exception:  # noqa: BLE001 — audit не должен ронять основной запрос
-        logger.exception("Не удалось записать audit log для %s %s", http_method, endpoint)
+    except Exception as exc:  # noqa: BLE001 — audit не должен ронять основной запрос
+        logger.error(
+            "Не удалось записать audit log для %s %s (%s)",
+            safe_http_method,
+            safe_endpoint,
+            safe_exception_diagnostic(exc),
+        )
 
 
 async def count_recent_calls(
@@ -121,7 +199,9 @@ class AuditedMetaApiClient(MetaApiClient):
     - Перед вызовом — фиксирует start_time
     - После вызова (успех ИЛИ ошибка) — пишет в meta_api_audit_log
     - При ошибке Graph — записывает с http_status=error.code и пробрасывает exception
-    - Request payload содержит method/endpoint/params (тело POST НЕ пишем — может быть большим)
+    - Request payload содержит method/endpoint/query_keys (только ИМЕНА query-параметров,
+      не значения — access_token и другие секреты в значениях не пишутся; тело POST тоже
+      не пишем — может быть большим)
     """
 
     def __init__(
@@ -151,7 +231,7 @@ class AuditedMetaApiClient(MetaApiClient):
         request_payload: dict[str, Any] = {
             "method": method.upper(),
             "endpoint": endpoint,
-            "params": dict(query_params or {}),
+            "query_keys": sorted(str(key)[:64] for key in (query_params or {})),
             "has_body": body_json is not None,
         }
 
@@ -174,13 +254,15 @@ class AuditedMetaApiClient(MetaApiClient):
                 initiated_by=self._initiated_by,
                 ad_account_id=audit_account_id,
                 request_payload=request_payload,
+                # message/fbtrace_id намеренно не пишем: MetaApiError может быть
+                # построена напрямую (не через classify_graph_error) с сырым текстом
+                # Graph-ответа, который бывает содержит access_token. Наружу — только
+                # код ошибки и тип exception, этого достаточно для диагностики.
                 response_payload={
                     "error": {
                         "code": exc.code,
                         "subcode": exc.subcode,
                         "type": type(exc).__name__,
-                        "message": str(exc),
-                        "fbtrace_id": exc.fbtrace_id,
                     }
                 },
                 duration_ms=duration_ms,

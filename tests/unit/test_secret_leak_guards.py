@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import grpc
 import httpx
 import pytest
 
 import apps.api.routers.v1.settings_telegram as settings_telegram
+import core.meta_api.adapters as meta_adapters
+import core.meta_api.audit as meta_audit
+from core.meta_api.client import MetaApiClient
+from core.meta_api.errors import PermanentError, classify_graph_error
+from core.meta_api.upload import MediaUploader
 from core.public_identifiers import parse_public_uuid, public_uuid
 from core.safe_diagnostics import redact_sensitive_text, safe_exception_diagnostic
 from core.telegram.command_replies import DurableTelegramUpdateClient
@@ -188,3 +196,102 @@ def test_telegram_diagnostics_do_not_return_remote_error_or_url_query() -> None:
     assert sanitized_http_url(f"https://api.telegram.org/bot{_SECRET}/hook?token={_SECRET}") == (
         "https://api.telegram.org/bot<redacted>/hook"
     )
+
+
+def test_meta_error_drops_raw_graph_and_grpc_messages() -> None:
+    graph_error = classify_graph_error(
+        190,
+        463,
+        f"access_token={_SECRET} {_UUID}",
+        endpoint="/me",
+    )
+
+    class _SecretGrpcError(Exception):
+        def code(self):
+            return grpc.StatusCode.FAILED_PRECONDITION
+
+        def details(self):
+            return f"access_token={_SECRET} {_UUID}"
+
+    grpc_error = MetaApiClient._grpc_to_meta_error(_SecretGrpcError(), endpoint="/me")
+    upload_error = MediaUploader._grpc_to_error(_SecretGrpcError(), endpoint="upload")
+    upload_response_error = MediaUploader._upload_response_error(
+        f"GRAPH_ERROR_190 access_token={_SECRET} {_UUID}",
+        endpoint="upload",
+    )
+
+    assert str(graph_error) == "Graph API error code=190 subcode=463"
+    assert _SECRET not in str(grpc_error)
+    assert _UUID not in str(grpc_error)
+    assert "FAILED_PRECONDITION" in str(grpc_error)
+    assert _SECRET not in str(upload_error)
+    assert _UUID not in str(upload_error)
+    assert _SECRET not in str(upload_response_error)
+    assert _UUID not in str(upload_response_error)
+
+
+def test_meta_audit_boundary_omits_arbitrary_payload_and_sanitizes_endpoint() -> None:
+    payload = meta_audit._safe_audit_payload(  # noqa: SLF001
+        {
+            "method": "POST",
+            "endpoint": f"/me?access_token={_SECRET}",
+            "query_keys": ["fields", "access_token"],
+            "has_body": True,
+            "raw_response": f"Unauthorized token={_SECRET} {_UUID}",
+        }
+    )
+
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert payload == {
+        "method": "POST",
+        "endpoint": "/me",
+        "query_keys": ["access_token", "fields"],
+        "has_body": True,
+        "raw_response_omitted": True,
+    }
+    assert _SECRET not in serialized
+    assert _UUID not in serialized
+
+
+@pytest.mark.asyncio
+async def test_meta_audit_records_query_keys_and_error_codes_without_values(monkeypatch) -> None:
+    graph_error = PermanentError(
+        f"external response access_token={_SECRET}",
+        code=190,
+        subcode=463,
+        endpoint=f"/me?access_token={_SECRET}",
+        fbtrace_id=_UUID,
+    )
+    monkeypatch.setattr(
+        MetaApiClient,
+        "execute_graph_call",
+        AsyncMock(side_effect=graph_error),
+    )
+    record = AsyncMock()
+    monkeypatch.setattr(meta_audit, "record_audit_log", record)
+    client = meta_audit.AuditedMetaApiClient(engine=object(), initiated_by="unit")
+
+    with pytest.raises(PermanentError):
+        await client.execute_graph_call(
+            method="GET",
+            endpoint="/me",
+            query_params={"fields": "id", "access_token": _SECRET},
+        )
+
+    audit_call = record.await_args.kwargs
+    assert audit_call["request_payload"]["query_keys"] == ["access_token", "fields"]
+    assert audit_call["response_payload"] == {
+        "error": {"code": 190, "subcode": 463, "type": "PermanentError"}
+    }
+    assert _SECRET not in json.dumps(audit_call, default=str)
+    assert _UUID not in json.dumps(audit_call, default=str)
+
+
+def test_meta_adapter_parse_warning_does_not_log_raw_value(caplog) -> None:
+    caplog.set_level(logging.WARNING)
+
+    assert meta_adapters._to_decimal(f"access_token={_SECRET}") is None
+    assert meta_adapters._to_int(f"access_token={_SECRET}") == 0
+
+    assert "value_type=str" in caplog.text
+    assert _SECRET not in caplog.text
