@@ -519,6 +519,7 @@ async def test_campaign_worker_uses_durable_gate_without_preclaim_rpc(
             queue_empty=False,
             task=task,
             browser_profile_id="campaign-profile-1",
+            browser_session_id="campaign-session-1",
             browser_readiness_generation=4,
         )
     )
@@ -531,12 +532,24 @@ async def test_campaign_worker_uses_durable_gate_without_preclaim_rpc(
     client = MagicMock()
     client.operation_authority.return_value = nullcontext()
 
+    pinned: list[str] = []
+
+    async def process(*_args, **_kwargs) -> None:  # noqa: F811 - фиксируем пин на момент работы
+        pinned.append(client.session_id)
+        stop.set()
+
+    monkeypatch.setattr(worker, "process_one_task", process)
+
     await worker.task_loop(
         object(),
         stop,
         client=client,
         uploader=object(),
     )
+
+    # #184: залив работает в той сессии, на которой подтверждена готовность,
+    # а не в «самой свежей», выбранной browser-agent'ом на каждом вызове.
+    assert pinned == ["campaign-session-1"]
 
     claim.assert_awaited_once()
     client.operation_authority.assert_called_once_with(

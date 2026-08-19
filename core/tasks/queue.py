@@ -122,6 +122,10 @@ class Task:
     cancel_reason: str | None
     correlation_id: uuid.UUID
     browser_profile_id: str | None = None
+    # Сессия браузера, на которой подтверждена готовность. Задача обязана
+    # работать именно в ней: молчаливый переход на «самую свежую» посреди залива
+    # означает потерю привязки к странице и чужую вкладку под мутацией.
+    browser_session_id: str | None = None
     browser_readiness_generation: int | None = None
 
 
@@ -132,6 +136,10 @@ class TaskClaim:
     task: Task | None = None
     queue_empty: bool = True
     browser_profile_id: str | None = None
+    # Сессия браузера, на которой подтверждена готовность. Задача обязана
+    # работать именно в ней: молчаливый переход на «самую свежую» посреди залива
+    # означает потерю привязки к странице и чужую вкладку под мутацией.
+    browser_session_id: str | None = None
     browser_readiness_generation: int | None = None
 
 
@@ -1186,6 +1194,7 @@ _BROWSER_READY_CLAIM_SQL = text(
     WITH readiness AS MATERIALIZED (
         SELECT
             config.profile_id AS browser_profile_id,
+            channel.observed_session_id AS browser_session_id,
             channel.generation AS browser_readiness_generation
         FROM vision_config AS config
         JOIN browser_channel_readiness AS channel
@@ -1211,6 +1220,7 @@ _BROWSER_READY_CLAIM_SQL = text(
         SELECT
             task.id,
             readiness.browser_profile_id,
+            readiness.browser_session_id,
             readiness.browser_readiness_generation
         FROM task_queue AS task
         CROSS JOIN readiness
@@ -1273,6 +1283,7 @@ _BROWSER_READY_CLAIM_SQL = text(
         task.cancel_reason,
         task.correlation_id,
         candidate.browser_profile_id,
+        candidate.browser_session_id,
         candidate.browser_readiness_generation
     """
 ).bindparams(bindparam("lanes", expanding=True))
@@ -1429,11 +1440,13 @@ async def claim_browser_ready_task(
         return TaskClaim(task=None, queue_empty=True)
     task = _row_to_task(row)
     task.browser_profile_id = str(row.browser_profile_id)
+    task.browser_session_id = str(row.browser_session_id or "").strip() or None
     task.browser_readiness_generation = int(row.browser_readiness_generation)
     return TaskClaim(
         task=task,
         queue_empty=False,
         browser_profile_id=task.browser_profile_id,
+        browser_session_id=task.browser_session_id,
         browser_readiness_generation=task.browser_readiness_generation,
     )
 

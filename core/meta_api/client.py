@@ -2276,11 +2276,16 @@ class MetaApiClient:
         if remaining is not None:
             timeout = max(0.001, min(timeout, remaining))
         try:
+            # Кабинет операции называется явно. Без него browser-agent выбирал
+            # произвольную живую вкладку любого кабинета и лочил чужой
+            # interactive: проба money-операции адресовала не тот кабинет,
+            # в котором операция будет работать.
             identity = await self._stub.CheckMetaApiHealth(
                 meta_api_pb2.CheckMetaApiHealthRequest(
                     session_id=self.session_id,
                     full_probe=False,
                     expected_vision_profile_id=authority.vision_profile_id,
+                    ad_account_id=str(account_id or "").replace("act_", "").strip(),
                 ),
                 timeout=timeout,
             )

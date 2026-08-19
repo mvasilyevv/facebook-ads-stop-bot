@@ -135,6 +135,9 @@ def test_task_snapshot_is_keyword_only_and_has_no_partial_constructor() -> None:
     }
     assert optional == {
         "browser_profile_id",
+        # Сессия браузера — часть свидетельства готовности: задача обязана
+        # работать в той же сессии, где готовность подтверждена (#184).
+        "browser_session_id",
         "browser_readiness_generation",
     }
 

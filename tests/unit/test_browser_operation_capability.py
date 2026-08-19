@@ -39,6 +39,7 @@ from core.meta_api.client import (
 )
 from core.meta_api.errors import (
     AmbiguousResultError,
+    BrowserReadinessRejectedError,
     PermanentError,
     SessionUnavailableError,
 )
@@ -2964,3 +2965,92 @@ async def test_campaign_creator_rejects_a_bid_strategy_meta_does_not_have(
                 endpoint="/act_123/adsets",
                 body=body,
             )
+
+
+# #184: клиент залива строился без session_id, и сессия бралась из ответа пробы на
+# каждом money-вызове. Между вызовами одного залива предпочитаемая сессия менялась
+# (перезапуск observer'а, восстановление) — залив терял привязку к своей странице.
+@pytest.mark.asyncio
+async def test_browser_session_change_mid_task_is_rejected(monkeypatch) -> None:
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", "s" * 48)
+    health = AsyncMock(
+        return_value=SimpleNamespace(
+            healthy=True,
+            browser_contract_version=BROWSER_CONTRACT_VERSION,
+            session_id="session-другая",
+            vision_profile_id="profile-exact",
+        )
+    )
+    engine = _operation_engine(_live_row())
+    client = MetaApiClient(session_id="session-exact", operation_engine=engine)
+    graph = AsyncMock()
+    client._stub = SimpleNamespace(CheckMetaApiHealth=health, ExecuteGraphCallV5=graph)
+
+    with client.operation_authority(
+        caller="autopause",
+        task_id=1842,
+        lease_owner=uuid.UUID("2c5114e4-d921-4fc5-9986-18831eb56d5d"),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        with pytest.raises(BrowserReadinessRejectedError):
+            await client.prepare_operation_authorization(
+                rpc="execute_graph_call",
+                operation=_STATUS_OPERATION,
+                ad_account_id="act_123",
+                **_STATUS_GRAPH_SEMANTICS,
+            )
+
+    assert graph.await_count == 0, "мутация не должна уйти в чужую сессию"
+
+
+# Проба money-операции обязана называть кабинет: без него browser-agent выбирал
+# произвольную живую вкладку любого кабинета и лочил чужой interactive.
+@pytest.mark.asyncio
+async def test_identity_probe_names_the_operation_cabinet(monkeypatch) -> None:
+    monkeypatch.setenv("BROWSER_OPERATION_CAPABILITY_SECRET", "s" * 48)
+    monkeypatch.setattr("core.meta_api.client.time.time", lambda: 1_800_000_000)
+    health = AsyncMock(
+        return_value=SimpleNamespace(
+            healthy=True,
+            browser_contract_version=BROWSER_CONTRACT_VERSION,
+            session_id="session-exact",
+            vision_profile_id="profile-exact",
+        )
+    )
+    engine = _operation_engine(_live_row())
+    client = MetaApiClient(session_id="session-exact", operation_engine=engine)
+    client._stub = SimpleNamespace(CheckMetaApiHealth=health, ExecuteGraphCallV5=AsyncMock())
+
+    with client.operation_authority(
+        caller="autopause",
+        task_id=1842,
+        lease_owner=uuid.UUID("2c5114e4-d921-4fc5-9986-18831eb56d5d"),
+        lease_token=7,
+        vision_profile_id="profile-exact",
+    ):
+        await client.prepare_operation_authorization(
+            rpc="execute_graph_call",
+            operation=_STATUS_OPERATION,
+            ad_account_id="act_123",
+            **_STATUS_GRAPH_SEMANTICS,
+        )
+
+    request = health.await_args.args[0]
+    assert request.ad_account_id == "123"
+
+
+def test_campaign_claim_projects_and_pins_the_browser_session() -> None:
+    """Сессия доезжает от гейта готовности до клиента, а не выбирается заново."""
+    import inspect
+
+    import core.tasks.queue as task_queue
+    from apps.campaign_creator_worker import main as creator_main
+
+    claim_sql = str(task_queue._BROWSER_READY_CLAIM_SQL)
+    assert "channel.observed_session_id AS browser_session_id" in claim_sql
+    assert "candidate.browser_session_id" in claim_sql
+
+    loop_source = inspect.getsource(creator_main.task_loop)
+    assert "claim.browser_session_id" in loop_source
+    assert "client.session_id = claimed_session_id" in loop_source

@@ -1225,15 +1225,29 @@ async def task_loop(
                 raise RuntimeError(
                     "browser-ready campaign claim returned no canonical Vision profile"
                 )
-            with client.operation_authority(
-                caller="campaign_creator",
-                task_id=claim.task.id,
-                lease_owner=claim.task.lease_owner,
-                lease_token=claim.task.lease_token,
-                vision_profile_id=vision_profile_id,
-                browser_readiness_generation=claim.browser_readiness_generation,
-            ):
-                await process_one_task(engine, claim.task, client=client, uploader=uploader)
+            # Залив пинится к той сессии браузера, на которой подтверждена
+            # готовность. Пустой session_id означал «выбери сам самую свежую»:
+            # между вызовами одного залива предпочитаемая сессия менялась
+            # (перезапуск observer'а, восстановление), и залив терял привязку к
+            # своей странице. Смена сессии посреди задачи теперь отказ —
+            # проверку делает сам клиент перед каждой операцией.
+            claimed_session_id = str(claim.browser_session_id or "").strip()
+            if not claimed_session_id:
+                raise RuntimeError("browser-ready campaign claim returned no browser session")
+            previous_session_id = client.session_id
+            client.session_id = claimed_session_id
+            try:
+                with client.operation_authority(
+                    caller="campaign_creator",
+                    task_id=claim.task.id,
+                    lease_owner=claim.task.lease_owner,
+                    lease_token=claim.task.lease_token,
+                    vision_profile_id=vision_profile_id,
+                    browser_readiness_generation=claim.browser_readiness_generation,
+                ):
+                    await process_one_task(engine, claim.task, client=client, uploader=uploader)
+            finally:
+                client.session_id = previous_session_id
         except Exception:  # noqa: BLE001 — неожиданная ошибка (напр. БД в фазе pre-execute гардов)
             logger.exception(
                 "campaign_create: unexpected crash task id=%s — terminal UNKNOWN",
