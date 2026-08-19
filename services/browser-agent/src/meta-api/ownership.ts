@@ -15,8 +15,18 @@ type ExecuteGraph = (
   options?: GraphApiCallOptions,
 ) => Promise<GraphApiCallResult>;
 
+/**
+ * Facts of the already verified capability signature: the caller it was issued
+ * to and the cabinet it is bound to. Never raw request fields.
+ */
+export interface OwnershipProvenByCapability {
+  caller: string;
+  adAccountId: string;
+}
+
 export interface GraphOwnershipPreflightOptions extends GraphApiCallOptions {
   executeGraph?: ExecuteGraph;
+  capability?: OwnershipProvenByCapability;
 }
 
 function normalizeAccountId(value: unknown): string {
@@ -208,6 +218,35 @@ async function assertNumericTargetsOwned(
   }
 }
 
+// Владение частью числовых целей доказано ещё до того, как страница вообще
+// открыта. campaign_creator получает подписанную capability на GET по числовой
+// цели только для видео, залитого этой же задачей в этот же кабинет: всё
+// остальное Python отклоняет (core/meta_api/client.py, uploaded_video_ids).
+// Подпись связывает вызывающего, кабинет и точный endpoint, поэтому отдельный
+// GET /{id}?fields=account_id ничего не добавляет к доказательству, зато даёт
+// ещё одно окно, в котором контекст страницы может умереть, и требует поля,
+// которого у ноды Video может не быть вовсе.
+const CAPABILITY_PROVEN_OWNERSHIP_CALLERS: ReadonlySet<string> = new Set([
+  'campaign_creator',
+]);
+
+function capabilityProvesTarget(
+  params: GraphApiCallParams,
+  expectedAccountId: string,
+  capability?: OwnershipProvenByCapability,
+): boolean {
+  if (!capability) return false;
+  // Capability привязана к кабинету операции. Расхождение — не повод пойти в
+  // сеть, а отказ до отправки: доказательство и цель принадлежат разным мирам.
+  if (normalizeAccountId(capability.adAccountId) !== expectedAccountId) {
+    throw new Error('Browser operation ownership preflight rejected the capability cabinet');
+  }
+  return (
+    CAPABILITY_PROVEN_OWNERSHIP_CALLERS.has(String(capability.caller || '').trim())
+    && String(params.method || '').trim().toUpperCase() === 'GET'
+  );
+}
+
 /**
  * Prove that every Graph write/status-read target belongs to the explicitly
  * signed cabinet. No URL/session inference and no cached ownership is accepted.
@@ -231,6 +270,9 @@ export async function assertGraphOperationOwnership(
   if (firstSegment) {
     if (!/^\d+$/.test(firstSegment)) {
       throw new Error('Browser operation ownership preflight rejected the Graph target');
+    }
+    if (capabilityProvesTarget(params, accountId, options.capability)) {
+      return;
     }
     const executeGraph = options.executeGraph ?? executeGraphCall;
     const result = await executeGraph(page, {

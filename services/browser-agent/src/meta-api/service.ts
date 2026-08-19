@@ -27,7 +27,10 @@ import {
   type OperationCapabilityBinding,
 } from './operation-capability.js';
 import { consumeOperationCapability } from './operation-authority-client.js';
-import { assertGraphOperationOwnership } from './ownership.js';
+import {
+  assertGraphOperationOwnership,
+  type GraphOwnershipPreflightOptions,
+} from './ownership.js';
 
 // v5 removes URL-backed image upload and requires capability-bound bytes.
 // It retains exact task/query/body semantics for every controlled operation.
@@ -217,7 +220,7 @@ export interface MetaApiServiceDeps {
     page: Page,
     params: GraphApiCallParams,
     expectedAccountId: string,
-    options?: { signal?: AbortSignal; operationId?: string },
+    options?: GraphOwnershipPreflightOptions,
   ) => Promise<void>;
   poisonRolePage?: (
     session: BrowserSession,
@@ -434,6 +437,12 @@ export function createMetaApiServiceHandlers(
               {
                 signal: grpcAbort.controller.signal,
                 operationId,
+                // Подпись capability уже проверена выше, поэтому вызывающий и
+                // кабинет здесь — доказанные факты, а не поля запроса.
+                capability: {
+                  caller: String(req.authorized_caller || '').trim(),
+                  adAccountId: capabilityBinding!.adAccountId,
+                },
               },
             );
             await _consumeOperationCapability(

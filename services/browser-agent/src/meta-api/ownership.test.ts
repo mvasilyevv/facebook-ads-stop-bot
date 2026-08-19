@@ -285,6 +285,102 @@ describe('authoritative Meta object ownership preflight', () => {
     assert.equal(seenReasons.size, 3);
   });
 
+  it('accepts a target already proven by the signed capability without any read', async () => {
+    // campaign_creator получает подпись на числовой GET только для видео,
+    // залитого этой же задачей в этот же кабинет. Сетевое доказательство здесь
+    // избыточно и удваивает число page.evaluate на шаг.
+    for (const endpoint of ['/555', '/555/thumbnails']) {
+      let graphReads = 0;
+      await assertGraphOperationOwnership(
+        PAGE,
+        {
+          method: 'GET',
+          endpoint,
+          queryParams: { fields: 'status' },
+        },
+        '123',
+        {
+          capability: { caller: 'campaign_creator', adAccountId: '123' },
+          executeGraph: async () => {
+            graphReads += 1;
+            throw new Error('unexpected read');
+          },
+        },
+      );
+      assert.equal(graphReads, 0);
+    }
+  });
+
+  it('still requires a network proof for a target outside the capability', async () => {
+    const unproven: Array<{
+      params: GraphApiCallParams;
+      capability?: { caller: string; adAccountId: string };
+    }> = [
+      // Статус-мутация: провенанса у цели нет ни у одного вызывающего.
+      {
+        params: { method: 'POST', endpoint: '/111', queryParams: { status: 'PAUSED' } },
+        capability: { caller: 'campaign_creator', adAccountId: '123' },
+      },
+      {
+        params: { method: 'GET', endpoint: '/111', queryParams: { fields: 'status' } },
+        capability: { caller: 'autopause', adAccountId: '123' },
+      },
+      {
+        params: { method: 'GET', endpoint: '/111', queryParams: { fields: 'status' } },
+      },
+    ];
+    for (const probe of unproven) {
+      let graphReads = 0;
+      await assert.rejects(
+        () => assertGraphOperationOwnership(PAGE, probe.params, '123', {
+          capability: probe.capability,
+          executeGraph: async () => {
+            graphReads += 1;
+            return {
+              statusCode: 200,
+              responseJson: '{"account_id":"999"}',
+              durationMs: 1,
+            };
+          },
+        }),
+        /ownership preflight rejected the Meta target/,
+      );
+      // Ровно одно обращение к странице на доказательство и ни одного лишнего.
+      assert.equal(graphReads, 1);
+    }
+  });
+
+  it('rejects a capability bound to another cabinet before any read', async () => {
+    let graphReads = 0;
+    await assert.rejects(
+      () => assertGraphOperationOwnership(
+        PAGE,
+        {
+          method: 'GET',
+          endpoint: '/555',
+          queryParams: { fields: 'status' },
+        },
+        '123',
+        {
+          capability: { caller: 'campaign_creator', adAccountId: '999' },
+          executeGraph: async () => {
+            graphReads += 1;
+            throw new Error('unexpected read');
+          },
+        },
+      ),
+      (err: unknown) => {
+        assert.match(
+          String((err as Error).message),
+          /ownership preflight rejected the capability cabinet/,
+        );
+        assert.equal(grpcCodeForError(err), grpc.status.PERMISSION_DENIED);
+        return true;
+      },
+    );
+    assert.equal(graphReads, 0);
+  });
+
   it('rejects encoded or path-shaped batch targets before lookup', async () => {
     for (const relativeUrl of [
       '111/../999?status=PAUSED',
