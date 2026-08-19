@@ -201,6 +201,9 @@ def test_ui_evidence_is_a_release_gate() -> None:
         f"{locked.group('version')} из pnpm-lock.yaml"
     )
     assert "--ipc=host" in evidence, "Chromium без общей IPC падает по разделяемой памяти"
+    assert "HOME: /root" in evidence, (
+        "без своего HOME Firefox не стартует: каталог Actions принадлежит pwuser из образа"
+    )
     executable = "\n".join(
         line for line in evidence.splitlines() if not line.lstrip().startswith("#")
     )

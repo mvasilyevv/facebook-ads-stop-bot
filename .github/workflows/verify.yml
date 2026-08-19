@@ -161,6 +161,12 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
       # Chromium в контейнере без общей IPC падает по нехватке разделяемой памяти.
       options: --ipc=host
+    env:
+      # Actions подставляет в контейнере HOME=/github/home, а этот каталог
+      # принадлежит pwuser из образа — джоба же идёт от root. Firefox отказывается
+      # стартовать в чужом доме («Running as root in a regular user's session is
+      # not supported»), и без этой строки все 27 его проверок падают на запуске.
+      HOME: /root
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
