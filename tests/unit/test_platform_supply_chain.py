@@ -97,6 +97,35 @@ def test_ci_installs_nothing_from_ubuntu_package_mirrors() -> None:
         )
 
 
+def test_every_external_workflow_dependency_is_immutable() -> None:
+    """Внешнее в CI закреплено неизменяемо: action — по SHA, образ — по digest.
+
+    Тег переезжает без нашего ведома, и проверка начинает мерить не тот код,
+    который мы читаем. Локальные `uses: ./…` — наш же файл в этом коммите,
+    им закрепление не нужно.
+    """
+    action_sha = re.compile(r"@[0-9a-f]{40}$")
+
+    for workflow in (VERIFY_WORKFLOW, IMAGE_WORKFLOW, RELEASE_WORKFLOW):
+        source = workflow.read_text(encoding="utf-8")
+
+        for match in re.finditer(r"(?m)^\s*uses:\s*(\S+)", source):
+            ref = match.group(1)
+            if ref.startswith("./"):
+                continue
+            assert action_sha.search(ref), f"{workflow.name}: action не закреплён по SHA — {ref}"
+
+        for match in re.finditer(r"(?m)^\s*image:\s*(\S+)", source):
+            ref = match.group(1)
+            assert "@sha256:" in ref, f"{workflow.name}: образ не закреплён по digest — {ref}"
+
+        # `docker run` тянет образ мимо ключа image: и обязан быть закреплён так же.
+        for block in re.finditer(r"docker run(?P<body>(?:.|\n)*?)(?=\n\s*- name:|\n\n|\Z)", source):
+            assert "@sha256:" in block.group("body"), (
+                f"{workflow.name}: docker run без digest — образ может переехать между прогонами"
+            )
+
+
 def test_ci_full_pytest_uses_complete_test_only_secret_contract() -> None:
     test_job = _job_block(VERIFY_WORKFLOW.read_text(encoding="utf-8"), "backend")
 
