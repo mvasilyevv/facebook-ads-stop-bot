@@ -131,7 +131,14 @@ def test_production_ssh_cannot_hang_forever() -> None:
 
     Без ConnectTimeout и ServerAliveInterval умерший посреди сессии хост держит
     шаг до предела джобы, а шаги вокруг деплоя работают с временными кредами
-    GHCR на production — их снятие ждать не должно.
+    GHCR на production — их снятие ждать не должно. BatchMode закрывает вторую
+    дыру: ConnectTimeout ограничивает только установление соединения, а отказ
+    аутентификации отправляет ssh спрашивать пароль и вешает шаг на приглашении.
+
+    Молчание хоста терпится полторы минуты (интервал 15 × 6), а не минуту: весь
+    удалённый apply идёт одной длинной ssh-сессией, и минутный столл sshd на
+    дешёвом VPS во время docker pull оборвал бы исправную выкатку — а оборванная
+    выкатка оставляет app и desktop остановленными.
     """
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
@@ -139,13 +146,23 @@ def test_production_ssh_cannot_hang_forever() -> None:
         "ConnectTimeout задан не во всех двух местах, где собирается ~/.ssh/config"
     )
     assert release.count("'  ServerAliveInterval 15'") == 2
-    assert release.count("'  ServerAliveCountMax 4'") == 2
+    assert release.count("'  ServerAliveCountMax 6'") == 2
+    assert release.count("'  BatchMode yes'") == 2, (
+        "BatchMode задан не во всех двух местах, где собирается ~/.ssh/config: "
+        "без него ssh при отказе аутентификации ждёт пароль от несуществующего человека"
+    )
 
+    # Окно режется внутри джобы deploy, а не по всему файлу: `Remove temporary
+    # GHCR credentials` — последний шаг деплоя, и поиск «до следующего - name:»
+    # по всему release.yml утыкался бы в начало следующей джобы вместе с её
+    # собственным timeout-minutes. Гард при этом оставался бы зелёным, даже если
+    # предел у самого шага удалить.
+    deploy = _job_block(release, "deploy")
     for step in (
         "Install temporary GHCR credentials on production",
         "Remove temporary GHCR credentials",
     ):
-        body = release.split(f"- name: {step}", maxsplit=1)[1].split("- name:", maxsplit=1)[0]
+        body = deploy.split(f"- name: {step}", maxsplit=1)[1].split("- name:", maxsplit=1)[0]
         assert "timeout-minutes: 5" in body, f"шаг «{step}» без собственного предела времени"
 
 
@@ -693,29 +710,89 @@ def test_called_verify_cannot_cancel_a_manual_release() -> None:
     assert "cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}" in verify
 
 
+# Всё, что джобе отчёта разрешено подставлять из контекста GitHub. Список
+# закрытый, а не запретительный: денилист пропустил бы, например,
+# `github.event.head_commit.message` — подконтрольный автору коммита текст
+# прямиком в Telegram.
+_REPORT_ALLOWED_EXPRESSIONS = frozenset(
+    {
+        "!cancelled()",
+        "secrets.TELEGRAM_BOT_TOKEN",
+        "secrets.TELEGRAM_ALERT_CHAT_ID",
+        "needs.verify.result",
+        "needs.bootstrap-source-preflight.result",
+        "needs.images.result",
+        "needs.control-bundle.result",
+        "needs.docker-rehearsal.result",
+        "needs.deploy.result",
+        "github.server_url",
+        "github.repository",
+        "github.run_id",
+    }
+)
+
+
 def test_release_reports_its_outcome_without_leaking_details() -> None:
     """О провале деплоя узнаёт Telegram, а не человек, открывший GitHub.
 
     Сообщение шлёт сам CI: случай, ради которого всё делается, — «приложение не
     поднялось», и outbox в этот момент недоступен. В текст идут только исход,
-    имя джобы и ссылка на прогон.
+    имя провалившейся джобы и ссылка на прогон.
+
+    Исход ровно трёхзначный, и skipped не считается выкаткой: обычный push в
+    main деплой не запускает, и «Релиз выкачен» на таком прогоне было бы прямой
+    ложью — ровно тем, ради чего отчёт и заводился.
     """
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     report = _job_block(release, "report")
 
-    assert "if: always()" in report
-    assert "needs: [verify, images, control-bundle, docker-rehearsal, deploy]" in report
+    # Отменённый прогон — не провал: push-прогоны отменяют друг друга на каждом
+    # следующем коммите, и always() слал бы «не выкачен» после каждой пары.
+    assert "if: ${{ !cancelled() }}" in report
+    assert "if: always()" not in report
+    # Провал предполётной проверки делает skipped всё, что ниже: без неё в
+    # needs отчёт рапортовал бы об успехе выкатки, которой не было.
+    assert (
+        "needs: [verify, bootstrap-source-preflight, images, control-bundle, "
+        "docker-rehearsal, deploy]" in report
+    )
     assert "timeout-minutes: 5" in report
-    # Пустой секрет не роняет релиз: пока владелец не завёл токен, шаг молчит.
-    assert 'test -n "$TELEGRAM_BOT_TOKEN"' in report
-    assert 'test -n "$TELEGRAM_CHAT_ID"' in report
+
+    # Пустой секрет не роняет релиз, но и не молчит: у джобы нет environment,
+    # и владелец, положивший токен в окружение production, обязан узнать об
+    # этом из предупреждения, а не из вечной тишины.
+    assert '[ -n "$TELEGRAM_BOT_TOKEN" ]' in report
+    assert '[ -n "$TELEGRAM_CHAT_ID" ]' in report
+    assert "::warning::" in report
+    assert "Repository secrets" in report
+
+    # Три исхода и ни одного четвёртого.
+    assert 'text="Релиз не выкачен. Встало на: ${failed}. ${RUN_URL}"' in report
+    assert 'text="Релиз выкачен. ${RUN_URL}"' in report
+    assert 'text="Релиз собран, выкатка не запускалась. ${RUN_URL}"' in report
+    assert '[ "$result" = "failure" ]' in report, "провалом считается только failure"
+    assert '[ "$DEPLOY" = "success" ]' in report, (
+        "«Релиз выкачен» обязано опираться на успех выкатки, а не на отсутствие провалов"
+    )
+    assert "success|skipped" not in report, "skipped не является успехом выкатки"
 
     assert "api.telegram.org/bot" in report
+    # Предел времени остаётся пределом: ретрай его не подменяет, а лишь
+    # переживает 429 и транзиентную 5xx, не теряя единственный алерт.
     assert "--max-time 20" in report
+    assert "--retry 3 --retry-all-errors --retry-max-time 60" in report
+    # Правда о выкатке важнее судьбы уведомления: упавший curl не красит релиз.
+    assert "continue-on-error: true" in report
 
     # Наружу уходит исход, имя джобы и ссылка — и ничего больше.
     assert (
         "github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" in report
     )
-    for leaked in ("toJSON(", "steps.", "::error", "$GITHUB_STEP_SUMMARY"):
-        assert leaked not in report, f"в сообщение утекает лишнее: {leaked}"
+    used = {expression.strip() for expression in re.findall(r"\$\{\{(.*?)\}\}", report, re.DOTALL)}
+    extra = sorted(used - _REPORT_ALLOWED_EXPRESSIONS)
+    assert extra == [], (
+        "в джобе отчёта появились неразрешённые выражения контекста: "
+        + ", ".join(extra)
+        + " — текст уходит в Telegram, и подставлять туда можно только исход, "
+        "имена джоб и ссылку на прогон"
+    )

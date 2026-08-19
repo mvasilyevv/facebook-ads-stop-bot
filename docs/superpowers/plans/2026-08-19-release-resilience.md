@@ -589,6 +589,15 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 прогон. Сырой текст ошибки, путь на хосте, содержимое лога и любые секреты —
 никогда.
 
+> **Правка по итогам ревью волны 1.** Черновик джобы ниже приравнивал `skipped`
+> к успеху и не держал `bootstrap-source-preflight` в `needs`, из-за чего обычный
+> push в `main` слал «Релиз выкачен», хотя деплой требует `workflow_dispatch`.
+> Итоговая форма живёт в `.github/workflows/release.yml` и отличается от
+> черновика: исход трёхзначный (`не выкачен` / `выкачен` / `собран, выкатка не
+> запускалась`), `always()` заменён на `!cancelled()`, у шага есть
+> `continue-on-error` и ретрай `curl`. Гард в
+> `tests/unit/test_platform_supply_chain.py` утверждает именно итоговую форму.
+
 - [ ] **Шаг 1: Написать падающий гард**
 
 Добавить в `tests/unit/test_platform_supply_chain.py`:
@@ -735,8 +744,12 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ## Что требуется от владельца
 
-- Завести в секретах GitHub `TELEGRAM_BOT_TOKEN` и `TELEGRAM_ALERT_CHAT_ID` —
-  без них джоба `report` молчит.
+- Завести `TELEGRAM_BOT_TOKEN` и `TELEGRAM_ALERT_CHAT_ID` именно **репозиторными**
+  секретами: Settings → Secrets and variables → Actions → Repository secrets.
+  У джобы `report` нет `environment:`, поэтому секрет, положенный в окружение
+  `production` (как все остальные секреты этого workflow), ей не виден — шаг
+  тихо вышел бы с кодом 0, и отчёт не заработал бы никогда. Пока секретов нет,
+  джоба печатает `::warning::` и не роняет релиз.
 - Решить судьбу PR #127 (перекрыт коммитом `9f94964f`, предлагается закрыть).
 - Три вопроса из описания PR #101, которые кодом не закрываются: постбек
   AdSet.pro идёт GET с токеном в query; одноразовый ticket стола остаётся в

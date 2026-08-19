@@ -58,14 +58,18 @@ jobs:
           install -d -m 700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # BatchMode запрещает спрашивать пароль: без него отказ аутентификации
+          # вешает шаг на приглашении ввода. Полторы минуты молчания хоста
+          # (интервал 15 × 6) переживает дешёвый VPS, занятый выкладкой образов.
           printf '%s\n' \
             'Host *' \
             '  StrictHostKeyChecking yes' \
             '  UserKnownHostsFile ~/.ssh/known_hosts' \
             '  IdentitiesOnly yes' \
+            '  BatchMode yes' \
             '  ConnectTimeout 15' \
             '  ServerAliveInterval 15' \
-            '  ServerAliveCountMax 4' > ~/.ssh/config
+            '  ServerAliveCountMax 6' > ~/.ssh/config
           chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts ~/.ssh/config
           ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts >/dev/null
       - name: Validate bootstrap source and existing host identity
@@ -266,14 +270,20 @@ jobs:
           install -d -m 700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # BatchMode запрещает спрашивать пароль: без него отказ аутентификации
+          # вешает шаг на приглашении ввода. Полторы минуты молчания хоста
+          # (интервал 15 × 6) переживает дешёвый VPS: весь удалённый apply идёт
+          # одной ssh-сессией, и минутный столл sshd во время docker pull оборвал
+          # бы исправную выкатку, оставив app и desktop остановленными.
           printf '%s\n' \
             'Host *' \
             '  StrictHostKeyChecking yes' \
             '  UserKnownHostsFile ~/.ssh/known_hosts' \
             '  IdentitiesOnly yes' \
+            '  BatchMode yes' \
             '  ConnectTimeout 15' \
             '  ServerAliveInterval 15' \
-            '  ServerAliveCountMax 4' > ~/.ssh/config
+            '  ServerAliveCountMax 6' > ~/.ssh/config
           chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts ~/.ssh/config
           ssh-keygen -F "$DEPLOY_HOST" -f ~/.ssh/known_hosts >/dev/null
       - name: Install temporary GHCR credentials on production
@@ -346,47 +356,72 @@ jobs:
     name: Report release outcome
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: always()
-    needs: [verify, images, control-bundle, docker-rehearsal, deploy]
+    # Отменённый прогон — не провал. Прогоны от push отменяют друг друга на
+    # каждом следующем коммите, и always() рапортовал бы серию cancelled как
+    # «релиз не выкачен» после каждой пары коммитов подряд.
+    if: ${{ !cancelled() }}
+    needs: [verify, bootstrap-source-preflight, images, control-bundle, docker-rehearsal, deploy]
     steps:
       # Наружу уходит только исход, имя провалившейся джобы и ссылка на прогон.
       # Сырой текст ошибки, пути на хосте и содержимое лога — никогда: сообщение
       # уходит в Telegram, а он хранит его дольше, чем живёт инцидент.
       - name: Notify Telegram
+        # Судьба уведомления не решает судьбу релиза: провалившийся отчёт
+        # покрасил бы успешную выкатку, и человек пошёл бы передеплоивать зря.
+        continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
           VERIFY: ${{ needs.verify.result }}
+          PREFLIGHT: ${{ needs.bootstrap-source-preflight.result }}
           IMAGES: ${{ needs.images.result }}
           BUNDLE: ${{ needs.control-bundle.result }}
           REHEARSAL: ${{ needs.docker-rehearsal.result }}
           DEPLOY: ${{ needs.deploy.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # Пока владелец не завёл секреты, релиз молчит, но не падает.
-          test -n "$TELEGRAM_BOT_TOKEN" || { echo "токен не задан — отчёт пропущен"; exit 0; }
-          test -n "$TELEGRAM_CHAT_ID" || { echo "чат не задан — отчёт пропущен"; exit 0; }
+          # Пока владелец не завёл секреты, релиз молчит, но не падает. Секреты
+          # обязаны быть репозиторными: у этой джобы нет environment, и токен,
+          # положенный в окружение production, сюда не приедет — шаг молча
+          # вышел бы с кодом 0, а отчёт не заработал бы никогда.
+          missing=""
+          [ -n "$TELEGRAM_BOT_TOKEN" ] || missing="TELEGRAM_BOT_TOKEN"
+          [ -n "$TELEGRAM_CHAT_ID" ] || missing="${missing:+$missing, }TELEGRAM_ALERT_CHAT_ID"
+          if [ -n "$missing" ]; then
+            echo "::warning::Отчёт о релизе не отправлен: пусты репозиторные секреты ${missing}. Заводить их надо в Settings -> Secrets and variables -> Actions -> Repository secrets: у джобы отчёта нет environment, и секрет окружения production ей не виден."
+            exit 0
+          fi
 
+          # Исход ровно трёхзначный. skipped — не успех выкатки: обычный push в
+          # main деплой не запускает (он требует workflow_dispatch), и «Релиз
+          # выкачен» на таком прогоне было бы прямой ложью. Но skipped и не
+          # провал: пропущенное звено ни на чём не встало.
           failed=""
-          for pair in "проверка:$VERIFY" "образы:$IMAGES" "бандл:$BUNDLE" "репетиция:$REHEARSAL" "выкатка:$DEPLOY"; do
+          for pair in "проверка:$VERIFY" "предполёт:$PREFLIGHT" "образы:$IMAGES" "бандл:$BUNDLE" "репетиция:$REHEARSAL" "выкатка:$DEPLOY"; do
             name="${pair%%:*}"
             result="${pair##*:}"
-            case "$result" in
-              success|skipped) ;;
-              *) failed="${failed:+$failed, }$name ($result)" ;;
-            esac
+            if [ "$result" = "failure" ]; then
+              failed="${failed:+$failed, }$name ($result)"
+            fi
           done
 
-          if [ -z "$failed" ]; then
+          if [ -n "$failed" ]; then
+            text="Релиз не выкачен. Встало на: ${failed}. ${RUN_URL}"
+          elif [ "$DEPLOY" = "success" ]; then
             text="Релиз выкачен. ${RUN_URL}"
           else
-            text="Релиз не выкачен. Встало на: ${failed}. ${RUN_URL}"
+            text="Релиз собран, выкатка не запускалась. ${RUN_URL}"
           fi
 
           # Токен в пути — требование Bot API, обойти его нечем. Наружу он не
           # утекает: GitHub маскирует значения секретов в логах, curl идёт с
           # --silent, а тело ответа отправляется в /dev/null.
+          #
+          # Ретрай здесь не подменяет предел времени: --max-time остаётся, а
+          # --retry-max-time держит суммарный потолок. Это единственный алерт,
+          # и терять его из-за 429 или транзиентной 5xx нельзя.
           curl --silent --show-error --fail --max-time 20 \
+            --retry 3 --retry-all-errors --retry-max-time 60 \
             --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
             --data-urlencode "text=${text}" \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" > /dev/null
