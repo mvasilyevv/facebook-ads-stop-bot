@@ -763,3 +763,35 @@ def test_upload_failure_of_second_ad_names_uploading(monkeypatch):
     with pytest.raises(PartialCreateError) as ei:
         asyncio.run(run())
     assert ei.value.failed_step == "uploading"
+
+
+# 19.08.2026 залив 538 оборвался на загрузке видео: id видео жил только в памяти
+# операции, и осиротевшее видео в кабинете не видел ни оператор, ни автоматика.
+def test_upload_orphans_are_visible_in_created_ids(monkeypatch):
+    _patch_uniquify(monkeypatch)
+    block = _image_block(n_adsets=1, concept_count=2)
+    cfg = _config(block)
+    spec = build_campaign_spec(cfg)
+    concepts = _concepts("image", count=2)
+
+    class _SecondUploadFails(_FakeUploader):
+        async def upload_image(self, ad_account_id, image_bytes, *, filename="upload.jpg", **kw):
+            self.images.append(image_bytes)
+            if len(self.images) == 2:
+                raise PermanentError("upload rejected")
+            return f"hash-{len(self.images)}"
+
+    async def run():
+        return await execute_campaign_spec(
+            cfg,
+            spec,
+            concepts_by_campaign={block.key: concepts},
+            client=_FakeClient(),
+            uploader=_SecondUploadFails(),
+        )
+
+    with pytest.raises(PartialCreateError) as ei:
+        asyncio.run(run())
+    created = ei.value.created_ids
+    assert created["images"] == ["hash-1"], "загруженное медиа обязано быть видно"
+    assert created["campaigns"], "кампания уже создана"

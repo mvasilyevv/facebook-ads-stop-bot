@@ -163,7 +163,11 @@ def _assert_all_paused_spec(spec: CampaignSpec) -> None:
 # ====================== результат ======================
 
 
-CREATED_ID_KINDS = ("campaigns", "adsets", "creatives", "ads")
+# videos и images — загруженные в кабинет медиа. Они создаются в Meta так же
+# необратимо, как кампания, но жили только в памяти операции: при обрыве на
+# шаге загрузки (залив 538 от 19.08.2026) осиротевшее видео не видел ни
+# оператор, ни какая-либо будущая автоматика сверки.
+CREATED_ID_KINDS = ("campaigns", "adsets", "creatives", "ads", "videos", "images")
 
 
 def _empty_ids() -> dict[str, list[str]]:
@@ -379,6 +383,7 @@ async def _execute_block(
                 video_id = await uploader.upload_video_from_bytes(
                     act, ad.media_bytes or b"", filename=f"{ad.code}.mp4"
                 )
+                created["videos"].append(video_id)
                 # Ждём транскодинг (status=ready) ДО создания creative: иначе Meta
                 # отклонит adcreative по «video is still being processed» и авто-кадр
                 # ещё недоступен → PartialCreateError → orphan-залив. Best-effort: по
@@ -396,6 +401,7 @@ async def _execute_block(
                 image_hash = await uploader.upload_image(
                     act, ad.media_bytes or b"", filename=f"{ad.code}.jpeg"
                 )
+                created["images"].append(image_hash)
                 state.uploads_done += 1
                 await _emit(on_progress, state)
                 creative_body = image_creative_body(
