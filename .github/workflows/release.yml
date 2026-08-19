@@ -341,3 +341,52 @@ jobs:
           # shellcheck disable=SC2029
           ssh "$DEPLOY_TARGET" \
             "test ! -d '$DEPLOY_DOCKER_CONFIG' || { find '$DEPLOY_DOCKER_CONFIG' -type f -delete; rmdir '$DEPLOY_DOCKER_CONFIG'; }"
+
+  report:
+    name: Report release outcome
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: [verify, images, control-bundle, docker-rehearsal, deploy]
+    steps:
+      # Наружу уходит только исход, имя провалившейся джобы и ссылка на прогон.
+      # Сырой текст ошибки, пути на хосте и содержимое лога — никогда: сообщение
+      # уходит в Telegram, а он хранит его дольше, чем живёт инцидент.
+      - name: Notify Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+          VERIFY: ${{ needs.verify.result }}
+          IMAGES: ${{ needs.images.result }}
+          BUNDLE: ${{ needs.control-bundle.result }}
+          REHEARSAL: ${{ needs.docker-rehearsal.result }}
+          DEPLOY: ${{ needs.deploy.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Пока владелец не завёл секреты, релиз молчит, но не падает.
+          test -n "$TELEGRAM_BOT_TOKEN" || { echo "токен не задан — отчёт пропущен"; exit 0; }
+          test -n "$TELEGRAM_CHAT_ID" || { echo "чат не задан — отчёт пропущен"; exit 0; }
+
+          failed=""
+          for pair in "проверка:$VERIFY" "образы:$IMAGES" "бандл:$BUNDLE" "репетиция:$REHEARSAL" "выкатка:$DEPLOY"; do
+            name="${pair%%:*}"
+            result="${pair##*:}"
+            case "$result" in
+              success|skipped) ;;
+              *) failed="${failed:+$failed, }$name ($result)" ;;
+            esac
+          done
+
+          if [ -z "$failed" ]; then
+            text="Релиз выкачен. ${RUN_URL}"
+          else
+            text="Релиз не выкачен. Встало на: ${failed}. ${RUN_URL}"
+          fi
+
+          # Токен в пути — требование Bot API, обойти его нечем. Наружу он не
+          # утекает: GitHub маскирует значения секретов в логах, curl идёт с
+          # --silent, а тело ответа отправляется в /dev/null.
+          curl --silent --show-error --fail --max-time 20 \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${text}" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" > /dev/null

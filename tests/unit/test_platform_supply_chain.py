@@ -691,3 +691,31 @@ def test_called_verify_cannot_cancel_a_manual_release() -> None:
         "group: verify-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}" in verify
     )
     assert "cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}" in verify
+
+
+def test_release_reports_its_outcome_without_leaking_details() -> None:
+    """О провале деплоя узнаёт Telegram, а не человек, открывший GitHub.
+
+    Сообщение шлёт сам CI: случай, ради которого всё делается, — «приложение не
+    поднялось», и outbox в этот момент недоступен. В текст идут только исход,
+    имя джобы и ссылка на прогон.
+    """
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    report = _job_block(release, "report")
+
+    assert "if: always()" in report
+    assert "needs: [verify, images, control-bundle, docker-rehearsal, deploy]" in report
+    assert "timeout-minutes: 5" in report
+    # Пустой секрет не роняет релиз: пока владелец не завёл токен, шаг молчит.
+    assert 'test -n "$TELEGRAM_BOT_TOKEN"' in report
+    assert 'test -n "$TELEGRAM_CHAT_ID"' in report
+
+    assert "api.telegram.org/bot" in report
+    assert "--max-time 20" in report
+
+    # Наружу уходит исход, имя джобы и ссылка — и ничего больше.
+    assert (
+        "github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" in report
+    )
+    for leaked in ("toJSON(", "steps.", "::error", "$GITHUB_STEP_SUMMARY"):
+        assert leaked not in report, f"в сообщение утекает лишнее: {leaked}"
