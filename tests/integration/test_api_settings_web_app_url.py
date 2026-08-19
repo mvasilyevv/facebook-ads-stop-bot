@@ -43,17 +43,21 @@ async def clean_web_app_url(pg_engine):
     await _wipe()
 
 
-# PUT https-URL → GET возвращает его (round-trip через system_config)
+# PUT https-URL → GET возвращает его канонический вид (round-trip через system_config)
 @pytest.mark.asyncio
 async def test_web_app_url_put_get_roundtrip(pg_engine, clean_web_app_url):
     app = _make_app(pg_engine)
+    # Хвостовой слэш срезается на границе: из этой базы собирается ссылка на
+    # мини-приложение, и два написания одного адреса дали бы две разные ссылки
+    # на один экран. Раньше значение проходило насквозь — это была дыра.
     url = "https://app.example.com/tma/"
+    normalized = "https://app.example.com/tma"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
         put = await ac.put("/api/settings/telegram/web-app-url", json={"web_app_url": url})
         get = await ac.get("/api/settings/telegram")
     assert put.status_code == 200, put.text
-    assert put.json()["web_app_url"] == url
-    assert get.json()["web_app_url"] == url
+    assert put.json()["web_app_url"] == normalized
+    assert get.json()["web_app_url"] == normalized
 
 
 # PUT не-HTTPS → 422 (требование Telegram Mini Apps)
@@ -93,7 +97,9 @@ async def test_web_app_url_env_bootstrap_is_idempotent_and_concurrency_safe(
     )
 
     assert results.count(True) == 1
-    assert await load_web_app_url(pg_engine) == url
+    # Значение из окружения тоже приводится к каноническому виду — иначе
+    # написание в .env определяло бы форму ссылки на мини-приложение.
+    assert await load_web_app_url(pg_engine) == "https://bootstrap.example/tma"
 
 
 @pytest.mark.asyncio
