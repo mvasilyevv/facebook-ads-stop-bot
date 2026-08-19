@@ -9,6 +9,7 @@ import {
   findLiveAdsManagerPage,
   findPreferredPrimaryPage,
   isAdsManagerUrl,
+  isFacebookLoginUrl,
   rememberAdsManagerUrl,
   safeCabinetTabError,
   SessionManager,
@@ -1340,55 +1341,209 @@ test("ensureScanPage (actId): нет нейтральной вкладки → �
   assert.equal(page, newPage as any);
 });
 
-for (const [name, finalUrl] of [
+test("auto-open fails closed and does not map wrong act", async () => {
+  const manager = new SessionManager();
+  let currentUrl = "about:blank";
+  let closeCalls = 0;
+  const createdPage = {
+    isClosed: () => closeCalls > 0,
+    url: () => currentUrl,
+    goto: async () => {
+      currentUrl =
+        "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=999";
+    },
+    close: async () => {
+      closeCalls += 1;
+    },
+  };
+  const manualPage = {
+    isClosed: () => false,
+    url: () => "https://www.facebook.com/messages/",
+  };
+  const context = {
+    pages: () => [manualPage],
+    newPage: async () => createdPage,
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: manualPage });
+
+  await assert.rejects(
+    manager.ensureScanPage(session, { actId: "111" }),
+    /cabinet_not_confirmed: final Ads Manager URL does not confirm act=111/,
+  );
+
+  assert.equal(session.scanPages.has("111"), false);
+  assert.equal(
+    closeCalls,
+    1,
+    "only the failed page created by the agent is closed",
+  );
+  assert.equal(session.primaryPage, manualPage);
+});
+
+// Разлогин Facebook: вкладку не закрываем и не пересоздаём. Раньше каждая попытка
+// вызывающего открывала вкладку, получала страницу входа и закрывала её — на
+// рабочем столе это выглядело как бесконечно перезапускающаяся вкладка.
+for (const [name, loginUrl] of [
   [
-    "wrong act",
-    "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=999",
-  ],
-  [
-    "login redirect",
+    "business loginpage",
     "https://business.facebook.com/business/loginpage/?next=https%3A%2F%2Fadsmanager.facebook.com",
   ],
+  ["login.php", "https://www.facebook.com/login.php?next=x"],
+  ["checkpoint", "https://www.facebook.com/checkpoint/?next"],
 ] as const) {
-  test(`auto-open fails closed and does not map ${name}`, async () => {
+  test(`разлогин (${name}) называется своим именем и не закрывает вкладку`, async () => {
     const manager = new SessionManager();
     let currentUrl = "about:blank";
     let closeCalls = 0;
+    let newPageCalls = 0;
     const createdPage = {
       isClosed: () => closeCalls > 0,
       url: () => currentUrl,
       goto: async () => {
-        currentUrl = finalUrl;
+        currentUrl = loginUrl;
       },
       close: async () => {
         closeCalls += 1;
       },
     };
-    const manualPage = {
-      isClosed: () => false,
-      url: () => "https://www.facebook.com/messages/",
-    };
     const context = {
-      pages: () => [manualPage],
-      newPage: async () => createdPage,
+      pages: () => [],
+      newPage: async () => {
+        newPageCalls += 1;
+        return createdPage;
+      },
     };
     const browser = { isConnected: () => true, contexts: () => [context] };
-    const session = makeSession({ browser, primaryPage: manualPage });
+    const session = makeSession({ browser, primaryPage: null });
 
     await assert.rejects(
       manager.ensureScanPage(session, { actId: "111" }),
-      /cabinet_not_confirmed: final Ads Manager URL does not confirm act=111/,
+      /^Error: cabinet_login_required: Vision profile is signed out \(act=111\)$/,
     );
-
+    assert.equal(closeCalls, 0, "страница входа остаётся открытой для оператора");
     assert.equal(session.scanPages.has("111"), false);
-    assert.equal(
-      closeCalls,
-      1,
-      "only the failed page created by the agent is closed",
+
+    // Вторая попытка вообще не трогает браузер: пауза держит до истечения интервала.
+    await assert.rejects(
+      manager.ensureControlPage(session, { actId: "111" }),
+      /cabinet_login_required/,
     );
-    assert.equal(session.primaryPage, manualPage);
+    assert.equal(newPageCalls, 1, "новых вкладок под разлогином не создаём");
+    assert.equal(closeCalls, 0);
   });
 }
+
+test("защёлка разлогина держится по профилю, а не по gRPC-сессии", async () => {
+  const manager = new SessionManager();
+  let newPageCalls = 0;
+  const makeLoginPage = () => {
+    let currentUrl = "about:blank";
+    return {
+      isClosed: () => false,
+      url: () => currentUrl,
+      goto: async () => {
+        currentUrl = "https://www.facebook.com/login.php?next=x";
+      },
+      close: async () => {
+        throw new Error("страницу входа закрывать нельзя");
+      },
+    };
+  };
+  const loginPage = makeLoginPage();
+  const context = {
+    pages: () => [],
+    newPage: async () => {
+      newPageCalls += 1;
+      return loginPage;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const first = makeSession({ id: "session-1", browser, primaryPage: null });
+  const second = makeSession({ id: "session-2", browser, primaryPage: null });
+
+  await assert.rejects(
+    manager.ensureScanPage(first, { actId: "111" }),
+    /cabinet_login_required/,
+  );
+  await assert.rejects(
+    manager.ensureScanPage(second, { actId: "111" }),
+    /cabinet_login_required/,
+  );
+  assert.equal(newPageCalls, 1);
+});
+
+test("после входа кабинет открывается и пауза снимается", async () => {
+  const manager = new SessionManager();
+  let signedIn = false;
+  let newPageCalls = 0;
+  let currentUrl = "about:blank";
+  const page = {
+    isClosed: () => false,
+    url: () => currentUrl,
+    goto: async (url: string) => {
+      currentUrl = signedIn ? url : "https://www.facebook.com/login.php?next=x";
+    },
+    close: async () => {
+      throw new Error("страницу входа закрывать нельзя");
+    },
+  };
+  const context = {
+    pages: () => [],
+    newPage: async () => {
+      newPageCalls += 1;
+      return page;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null });
+
+  await assert.rejects(
+    manager.ensureScanPage(session, { actId: "111" }),
+    /cabinet_login_required/,
+  );
+
+  // Человек вошёл в удержанной вкладке, интервал паузы истёк — одна проба.
+  signedIn = true;
+  (manager as any).loginRequired.get("profile-1").at -= 10 * 60_000;
+
+  const resolved = await manager.ensureScanPage(session, { actId: "111" });
+  assert.equal(resolved, page as any);
+  assert.equal(session.scanPages.get("111"), page as any);
+  assert.equal(
+    newPageCalls,
+    1,
+    "удержанная страница входа переиспользуется, вторая вкладка не открывается",
+  );
+  assert.equal(
+    (manager as any).loginRequired.has("profile-1"),
+    false,
+    "подтверждённый кабинет снимает паузу",
+  );
+});
+
+test("isFacebookLoginUrl отделяет вход от кабинета и чужих хостов", () => {
+  assert.equal(
+    isFacebookLoginUrl("https://www.facebook.com/login.php?next=x"),
+    true,
+  );
+  assert.equal(isFacebookLoginUrl("https://www.facebook.com/checkpoint/"), true);
+  assert.equal(
+    isFacebookLoginUrl("https://business.facebook.com/business/loginpage/"),
+    true,
+  );
+  assert.equal(
+    isFacebookLoginUrl(
+      "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111",
+    ),
+    false,
+  );
+  // Чужой хост с похожим путём и хост, лишь заканчивающийся на facebook.com.
+  assert.equal(isFacebookLoginUrl("https://evil.test/login.php"), false);
+  assert.equal(isFacebookLoginUrl("https://notfacebook.com/login"), false);
+  assert.equal(isFacebookLoginUrl("http://www.facebook.com/login.php"), false);
+  assert.equal(isFacebookLoginUrl(""), false);
+});
 
 test("auto-open normalizes raw Playwright failures without leaking URL or token", async () => {
   const manager = new SessionManager();
@@ -1441,7 +1596,8 @@ test("failed agent-owned navigation leaves an existing about:blank untouched", a
   let createdClose = 0;
   const createdPage = {
     isClosed: () => createdClose > 0,
-    url: () => "https://www.facebook.com/login/",
+    url: () =>
+      "https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=999",
     goto: async () => undefined,
     close: async () => {
       createdClose += 1;

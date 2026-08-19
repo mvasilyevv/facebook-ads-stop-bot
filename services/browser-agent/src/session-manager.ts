@@ -21,6 +21,10 @@ const START_PROFILE_PORT_WAIT_SECONDS = 20;
 const CDP_READY_WAIT_SECONDS = 20;
 const RECOVERY_STOP_TIMEOUT_SECONDS = 20;
 const RECOVERY_SETTLE_DELAY_MS = 1_000;
+// Разлогиненный профиль чинит человек. Пока защёлка держит паузу, вкладки не
+// создаются и не навигируются: повторная попытка не вернёт сессию Facebook, она
+// только откроет и закроет ещё одну вкладку. Раз в этот интервал — одна проба.
+const LOGIN_REQUIRED_RETRY_COOLDOWN_MS = 5 * 60_000;
 
 export function isAdsManagerUrl(url: string | null | undefined): boolean {
   try {
@@ -40,6 +44,38 @@ export function isAdsManagerUrl(url: string | null | undefined): boolean {
     const isFacebookHost =
       hostname === "facebook.com" || hostname.endsWith(".facebook.com");
     return isFacebookHost && hasAdsManagerPath;
+  } catch {
+    return false;
+  }
+}
+
+/** Facebook увёл навигацию на вход/чекпоинт — профиль разлогинен.
+ *
+ * Отличать это от «кабинет не подтверждён» обязательно: не подтверждённый act —
+ * ошибка адресации, которую чинит следующая попытка, а страница входа означает,
+ * что попыток может быть сколько угодно и ни одна не сработает. */
+export function isFacebookLoginUrl(url: string | null | undefined): boolean {
+  try {
+    const parsed = new URL(String(url || ""));
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+      return false;
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    const isFacebookHost =
+      hostname === "facebook.com" || hostname.endsWith(".facebook.com");
+    if (!isFacebookHost) {
+      return false;
+    }
+    const pathname = parsed.pathname.toLowerCase().replace(/\/+$/, "");
+    return (
+      pathname === "/login" ||
+      pathname === "/login.php" ||
+      pathname.startsWith("/login/") ||
+      pathname === "/checkpoint" ||
+      pathname.startsWith("/checkpoint/") ||
+      pathname === "/business/loginpage" ||
+      pathname.startsWith("/business/loginpage/")
+    );
   } catch {
     return false;
   }
@@ -90,6 +126,7 @@ const SAFE_CABINET_TAB_ERRORS = [
   /^cabinet_not_found: ad account id must be 1\.\.32 digits$/,
   /^cabinet_not_found: (?:could not create page|navigation failed) for act=\d+$/,
   /^cabinet_not_confirmed: (?:final Ads Manager URL does not confirm|selected page does not confirm) act=\d+$/,
+  /^cabinet_login_required: Vision profile is signed out \(act=\d+\)$/,
 ];
 
 /** Return an incident-safe OpenCabinetTabs error without raw browser details. */
@@ -244,6 +281,17 @@ export class SessionManager {
    * manager retain every historical Playwright Page object graph forever.
    */
   private poisonedPages = new WeakSet<Page>();
+  /**
+   * Профили, у которых Facebook увёл навигацию на вход. Ключ — Vision-профиль,
+   * а не сессия: одна физическая вкладка переживает пересоздание gRPC-сессии, и
+   * защёлка, живущая в сессии, снималась бы вместе с ней — вкладка снова начала
+   * бы открываться и закрываться по кругу.
+   *
+   * ``page`` — удержанная страница входа. Её не закрываем: подключившись к
+   * рабочему столу, оператор входит прямо в ней, а следующая проба переиспользует
+   * ту же вкладку вместо новой.
+   */
+  private loginRequired = new Map<string, { at: number; page: Page | null }>();
   async startBrowser(options: {
     visionXToken: string;
     visionApiUrl: string;
@@ -466,6 +514,7 @@ export class SessionManager {
   ): Promise<BrowserSession> {
     const signal = options?.signal;
     throwIfOperationAborted(signal);
+    const previousLatchKey = this.loginLatchKey(session);
     // Старый CDP-клиент — отвяжем его ПОСЛЕ успешного нового подключения (H-6/BA-2),
     // чтобы не копить ws-соединения и listeners под recovery-нагрузкой.
     const oldBrowser = session.browser;
@@ -546,6 +595,11 @@ export class SessionManager {
     session.visionApiUrl = visionApiUrl;
     session.visionProfileId = visionProfileId;
     session.visionFolderId = resolvedFolderId;
+    // Переподключение — явное действие человека или maintenance: он мог войти
+    // заново. Страницы прежнего CDP-соединения всё равно мертвы, держать по ним
+    // паузу нечем — снимаем и проверяем вход первой же операцией.
+    this.loginRequired.delete(previousLatchKey);
+    this.clearLoginRequired(session);
 
     // H-6 (BA-2): отвязываем старый CDP-клиент. browser.close() звать НЕЛЬЗЯ — для
     // connectOverCDP он закрыл бы удалённый Vision-профиль, к которому мы только что
@@ -727,6 +781,91 @@ export class SessionManager {
     void page.close().catch(() => undefined);
   }
 
+  private loginLatchKey(session: BrowserSession): string {
+    return String(session.visionProfileId || "").trim() || session.id;
+  }
+
+  /** Сколько ещё держим паузу по разлогину. 0 — пауза истекла или её не было. */
+  private loginRequiredRemainingMs(session: BrowserSession, now: number): number {
+    const latch = this.loginRequired.get(this.loginLatchKey(session));
+    if (!latch) {
+      return 0;
+    }
+    return Math.max(0, LOGIN_REQUIRED_RETRY_COOLDOWN_MS - (now - latch.at));
+  }
+
+  /** Забрать удержанную страницу входа для повторной пробы (одна вкладка на профиль). */
+  private takeRetainedLoginPage(session: BrowserSession): Page | null {
+    const key = this.loginLatchKey(session);
+    const latch = this.loginRequired.get(key);
+    const page = latch?.page ?? null;
+    if (latch) {
+      this.loginRequired.set(key, { at: latch.at, page: null });
+    }
+    if (!page || isPageClosed(page) || this.poisonedPages.has(page)) {
+      return null;
+    }
+    return page;
+  }
+
+  private markLoginRequired(session: BrowserSession, page: Page | null): void {
+    this.loginRequired.set(this.loginLatchKey(session), {
+      at: Date.now(),
+      page: page && !isPageClosed(page) ? page : null,
+    });
+  }
+
+  /** Вход состоялся: снимаем паузу, удержанную страницу больше не помним. */
+  private clearLoginRequired(session: BrowserSession): void {
+    this.loginRequired.delete(this.loginLatchKey(session));
+  }
+
+  /**
+   * Единственный выход из неудавшейся навигации role-страницы.
+   *
+   * Страница входа обрабатывается отдельно от остальных отказов: вкладка
+   * остаётся жить, взводится защёлка, а причина названа своим именем. Всё
+   * прочее — прежнее поведение: карантин, закрытие своей вкладки, безопасный
+   * текст без URL и токенов.
+   */
+  private failRolePageNavigation(
+    session: BrowserSession,
+    opts: {
+      page: Page;
+      resolvedAct: string;
+      ownPages: Map<string, Page>;
+      cabinetKey: string;
+      error: unknown;
+      signal?: AbortSignal;
+    },
+  ): never {
+    const { page, resolvedAct, ownPages, cabinetKey, error } = opts;
+    ownPages.delete(cabinetKey);
+    if (opts.signal?.aborted) {
+      this.poisonedPages.add(page);
+      if (!isPageClosed(page)) {
+        void page.close({ runBeforeUnload: false }).catch(() => undefined);
+      }
+      throw new Error("Browser operation cancelled");
+    }
+    if (isFacebookLoginUrl(safePageUrl(page))) {
+      this.markLoginRequired(session, page);
+      throw new Error(
+        `cabinet_login_required: Vision profile is signed out (act=${resolvedAct})`,
+      );
+    }
+    this.poisonedPages.add(page);
+    if (!isPageClosed(page)) {
+      void page.close({ runBeforeUnload: false }).catch(() => undefined);
+    }
+    if (error instanceof Error && error.message.startsWith("cabinet_")) {
+      throw error;
+    }
+    throw new Error(
+      `cabinet_not_found: navigation failed for act=${resolvedAct}`,
+    );
+  }
+
   private async ensureRolePage(
     session: BrowserSession,
     role: BrowserPageRole,
@@ -779,6 +918,14 @@ export class SessionManager {
       );
     }
     const cabinetKey = resolvedAct;
+    // Профиль разлогинен: не трогаем браузер вообще. Ни новой вкладки, ни
+    // навигации, ни закрытия — иначе каждая попытка вызывающего превращается в
+    // ещё один цикл «открыл вкладку → Facebook отдал вход → закрыл вкладку».
+    if (this.loginRequiredRemainingMs(session, Date.now()) > 0) {
+      throw new Error(
+        `cabinet_login_required: Vision profile is signed out (act=${resolvedAct})`,
+      );
+    }
     const sourceMatchesAct =
       resolvedAct &&
       isAdsManagerUrl(sourceUrl) &&
@@ -841,15 +988,20 @@ export class SessionManager {
       : null;
 
     if (!page) {
-      try {
-        page = await createPageWithinOperation(context, opts.signal);
-      } catch {
-        if (opts.signal?.aborted) {
-          throw new Error("Browser operation cancelled");
+      // Проба после паузы переиспользует удержанную страницу входа: если человек
+      // уже вошёл в ней, там теперь живая сессия, а вкладка остаётся одна.
+      page = this.takeRetainedLoginPage(session);
+      if (!page) {
+        try {
+          page = await createPageWithinOperation(context, opts.signal);
+        } catch {
+          if (opts.signal?.aborted) {
+            throw new Error("Browser operation cancelled");
+          }
+          throw new Error(
+            `cabinet_not_found: could not create page for act=${resolvedAct}`,
+          );
         }
-        throw new Error(
-          `cabinet_not_found: could not create page for act=${resolvedAct}`,
-        );
       }
       try {
         await navigatePageWithinOperation(page, targetUrl, opts.signal);
@@ -859,19 +1011,14 @@ export class SessionManager {
           );
         }
       } catch (error) {
-        this.poisonedPages.add(page);
-        if (!isPageClosed(page)) {
-          void page.close({ runBeforeUnload: false }).catch(() => undefined);
-        }
-        if (opts.signal?.aborted) {
-          throw new Error("Browser operation cancelled");
-        }
-        if (error instanceof Error && error.message.startsWith("cabinet_")) {
-          throw error;
-        }
-        throw new Error(
-          `cabinet_not_found: navigation failed for act=${resolvedAct}`,
-        );
+        this.failRolePageNavigation(session, {
+          page,
+          resolvedAct,
+          ownPages,
+          cabinetKey,
+          error,
+          signal: opts.signal,
+        });
       }
     } else if (
       opts.amColumnsQs !== undefined &&
@@ -885,20 +1032,14 @@ export class SessionManager {
           );
         }
       } catch (error) {
-        this.poisonedPages.add(page);
-        ownPages.delete(cabinetKey);
-        if (!isPageClosed(page)) {
-          void page.close({ runBeforeUnload: false }).catch(() => undefined);
-        }
-        if (opts.signal?.aborted) {
-          throw new Error("Browser operation cancelled");
-        }
-        if (error instanceof Error && error.message.startsWith("cabinet_")) {
-          throw error;
-        }
-        throw new Error(
-          `cabinet_not_found: navigation failed for act=${resolvedAct}`,
-        );
+        this.failRolePageNavigation(session, {
+          page,
+          resolvedAct,
+          ownPages,
+          cabinetKey,
+          error,
+          signal: opts.signal,
+        });
       }
     }
 
@@ -914,6 +1055,9 @@ export class SessionManager {
         `Нарушение изоляции: ${role} page уже принадлежит другой роли`,
       );
     }
+    // Кабинет открылся — значит сессия Facebook жива: паузу снимаем сразу, не
+    // дожидаясь конца интервала.
+    this.clearLoginRequired(session);
     ownPages.set(cabinetKey, page);
     session.status = "connected";
     rememberAdsManagerUrl(session, page);

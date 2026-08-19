@@ -58,6 +58,13 @@ export function grpcCodeForError(err: any): number {
   if (message.includes('ownership preflight')) {
     return grpc.status.FAILED_PRECONDITION;
   }
+  if (message.includes('cabinet_login_required')) {
+    // Профиль разлогинен: вкладка кабинета не открылась, до Meta не дошли и не
+    // дойдём, пока человек не войдёт. Это отказ ДО отправки, а не потерянный
+    // ответ — INTERNAL здесь означал бы UNKNOWN, и каждый залив под разлогином
+    // оставлял бы «требуется ручная сверка» там, где ничего не отправлялось.
+    return grpc.status.FAILED_PRECONDITION;
+  }
   if (message.includes('authority is unavailable')) {
     return grpc.status.UNAVAILABLE;
   }

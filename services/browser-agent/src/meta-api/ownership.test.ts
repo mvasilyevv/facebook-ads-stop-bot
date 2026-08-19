@@ -407,3 +407,15 @@ describe('authoritative Meta object ownership preflight', () => {
     }
   });
 });
+
+describe('классификация отказа вкладки кабинета', () => {
+  // Разлогин ловится до навигации и до Meta: это отказ ДО отправки. INTERNAL
+  // здесь означал бы AmbiguousResultError, то есть «требуется ручная сверка»
+  // после залива, в котором наружу не ушло ни одного запроса.
+  it('cabinet_login_required — pre-send FAILED_PRECONDITION, а не потерянный ответ', () => {
+    const error = new Error(
+      'cabinet_login_required: Vision profile is signed out (act=111)',
+    );
+    assert.equal(grpcCodeForError(error), grpc.status.FAILED_PRECONDITION);
+  });
+});
